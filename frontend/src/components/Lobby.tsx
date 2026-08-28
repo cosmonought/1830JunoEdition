@@ -80,6 +80,7 @@ import {
   STANDARD_VARIANTS,
   type GameLength,
   type GameVariants,
+  VARIANT_BLURB,
 } from "../utils/gameVariants";
 
 // Design note #3: THE SILENT-BUTTON BUG, AND THE RULE THAT REPLACED IT. Reported: clicking "Create Room" did
@@ -868,10 +869,7 @@ function RoomBrowser({
           />
           <span>
             <strong>Unpredictable revenue</strong>
-            <span style={styles.variantNote}>
-              Every train rolls a d6 against its printed run: 1 pays 80%, 6 pays 120%. Averages out to
-              exactly 100% over a game, so it adds drama without changing how long the bank lasts.
-            </span>
+            <span style={styles.variantNote}>{VARIANT_BLURB.unpredictableRevenue}</span>
           </span>
         </label>
 
@@ -888,11 +886,7 @@ function RoomBrowser({
           />
           <span>
             <strong>Dynamic stock market</strong>
-            <span style={styles.variantNote}>
-              The share price moves by how much was paid, not just that it was. A dividend under the share
-              price does not move the token at all; twice the price moves it two cells. Rewards running big
-              and punishes token payouts.
-            </span>
+            <span style={styles.variantNote}>{VARIANT_BLURB.dynamicStockMarket}</span>
           </span>
         </label>
 
@@ -906,10 +900,7 @@ function RoomBrowser({
           />
           <span>
             <strong>Gentle rust</strong>
-            <span style={styles.variantNote}>
-              A rusting train gets one last Operating Round turn before it goes, and stops counting against
-              the train limit the moment it is doomed &mdash; so its replacement can be bought straight away.
-            </span>
+            <span style={styles.variantNote}>{VARIANT_BLURB.gentleRust}</span>
           </span>
         </label>
 
@@ -923,12 +914,7 @@ function RoomBrowser({
           />
           <span>
             <strong>Delayed auction</strong>
-            <span style={styles.variantNote}>
-              The game opens on Stock Round 1 with no private companies; they are auctioned at the end of the
-              Operating Round set in which the first 3-train is bought. Corporations must float on share
-              capital alone until then, and the B&amp;O cannot be traded until the auction concludes. End the
-              game before a 3-train is bought and the privates never come out at all.
-            </span>
+            <span style={styles.variantNote}>{VARIANT_BLURB.delayedAuction}</span>
           </span>
         </label>
 

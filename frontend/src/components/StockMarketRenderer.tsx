@@ -22,6 +22,7 @@ import { FONT_SIZE } from "../styles/typography";
 import { corporationLabel } from "../utils/corporationNames";
 import { bestContrastTextColor, corporationLiveryColor } from "../styles/corporationLivery";
 import { CorporateLogo } from "./CorporateLogo";
+import { resolveVariants, type GameVariants } from "../utils/gameVariants";
 
 /* ------------------------------------------------------------------ */
 /* Contract data mirrors -- see design note #1                        */
@@ -684,6 +685,46 @@ export const COMPASS_ARMS: Readonly<Record<"up" | "right" | "left" | "down", Com
   },
 };
 
+/* ==================================================================
+ *  DESIGN NOTE 962: THE ROSE HAS TO KNOW WHICH GAME IS BEING PLAYED
+ * ==================================================================
+ *
+ * ASKED: "For Dynamic stock market: we need to update the compass rose on the Stock Market tab to reflect the
+ * new movement mechanics."
+ *
+ * AND THE ROSE WAS A CONSTANT, which is exactly why it went stale. #908 changed what a paid dividend does to
+ * the token -- nothing, one cell, or two, depending on the payout against the share price -- and this legend
+ * kept saying "one column right" for every table, including the ones playing the variant. #746c already
+ * recorded the shape of that failure in this very file: "The caption was accurate about the code as it then
+ * stood, which is precisely why a wrong rule reaches a player: the legend agreed with the bug."
+ *
+ * ONE ARM CHANGES, AND ONLY UNDER THE VARIANT. Sold out, withheld and each-10%-sold are untouched by #908, so
+ * they are shared between both roses rather than duplicated -- a second copy of "one row down per 10% share
+ * sold" is a second thing to keep in step for no gain.
+ *
+ * THE SENTENCE IS THE VARIANT'S OWN, in the sense that matters: `dividendStepsFor` is the authority on how
+ * many cells a payout moves, and this rule text states the same three bands in the same order. It cannot be
+ * DERIVED from that function -- a legend describes the rule, not one evaluation of it -- so what keeps them
+ * together is that both are named in this note and in `gameVariants`. Recording that plainly, because it is
+ * the one join here that a test cannot close.
+ *
+ * THE LABEL GROWS A QUALIFIER rather than staying "Paid". At 168px "Paid" beside an arrow that might not move
+ * the token is the same wrong-legend problem in fewer words. */
+export function compassArmsFor(
+  variants: GameVariants,
+): Readonly<Record<"up" | "right" | "left" | "down", CompassArm>> {
+  if (!variants.dynamicStockMarket) return COMPASS_ARMS;
+  return {
+    ...COMPASS_ARMS,
+    right: {
+      glyph: "→",
+      label: "Paid (varies)",
+      rising: true,
+      rule: "Dynamic Stock Market: the corporation paid dividends. Under its own share price the token does not move; once the price, one column right; twice the price or more, two columns.",
+    },
+  };
+}
+
 function CompassTip({ arm, stacked }: { arm: CompassArm; stacked?: boolean }) {
   return (
     <span
@@ -715,28 +756,31 @@ function CompassGlyph({ arm }: { arm: CompassArm }) {
   );
 }
 
-export function MarketCompassRose() {
+export function MarketCompassRose({ variants }: { variants?: Partial<GameVariants> } = {}) {
+  /* Design note #962: `undefined` reads as the standard game, which is `resolveVariants`' own rule for a
+     missing config (#902) and is what every caller that has not been threaded yet will pass. */
+  const arms = compassArmsFor(resolveVariants(variants));
   return (
     <aside style={styles.compass}>
       <span style={styles.compassTitle}>Which way a token moves</span>
 
-      <CompassTip arm={COMPASS_ARMS.up} stacked />
-      <CompassGlyph arm={COMPASS_ARMS.up} />
+      <CompassTip arm={arms.up} stacked />
+      <CompassGlyph arm={arms.up} />
 
       {/* The horizontal arms share one line, labels outboard of their arrows, which is what lets the whole
           rose read as a compass inside a column this narrow. */}
       <div style={styles.compassRow}>
-        <CompassTip arm={COMPASS_ARMS.left} />
-        <CompassGlyph arm={COMPASS_ARMS.left} />
+        <CompassTip arm={arms.left} />
+        <CompassGlyph arm={arms.left} />
         <span style={styles.compassHub} aria-hidden="true">
           &#9679;
         </span>
-        <CompassGlyph arm={COMPASS_ARMS.right} />
-        <CompassTip arm={COMPASS_ARMS.right} />
+        <CompassGlyph arm={arms.right} />
+        <CompassTip arm={arms.right} />
       </div>
 
-      <CompassGlyph arm={COMPASS_ARMS.down} />
-      <CompassTip arm={COMPASS_ARMS.down} stacked />
+      <CompassGlyph arm={arms.down} />
+      <CompassTip arm={arms.down} stacked />
 
       {/* #651's rule: rules belong on screen, not only in tooltips. The one arm whose trigger is not an
           action a player takes gets its condition spelled out here rather than left to a hover. */}
@@ -827,6 +871,13 @@ export interface StockMarketRendererProps {
    *  Reads `PublicCompanyState.par_value`. Optional so the placeholder path renders an empty track. */
   parredCompanies?: ReadonlyArray<{ company_id: number; ticker: string; par_value: string | null }>;
   className?: string;
+  /** Design note #962: which game is being played, so the compass rose can state the movement rule this
+   *  table is actually using. Optional, and `undefined` reads as the standard game -- `resolveVariants`'
+   *  own rule for a missing config (#902), which is also what a live chain that predates the field returns.
+   *  PARTIAL, because that is what `GameStateResponse` actually carries -- #232's rule is that a chain
+   *  reports what it reports, and a type demanding all four fields would have forced a cast at the one call
+   *  site rather than admitting the shape. `resolveVariants` exists precisely to fill the gaps. */
+  variants?: Partial<GameVariants>;
 }
 
 /** Fallback/default cell size, used only until the `ResizeObserver` below
@@ -1000,7 +1051,12 @@ interface CellOccupantGroup {
   occupants: MarketPositionEntry[];
 }
 
-export function StockMarketRenderer({ marketGrid, parredCompanies, className }: StockMarketRendererProps) {
+export function StockMarketRenderer({
+  marketGrid,
+  parredCompanies,
+  className,
+  variants,
+}: StockMarketRendererProps) {
   // Viewport maximization (design note #19), un-clamped from HEIGHT by #21/item 3: a `ResizeObserver`
   // measures available WIDTH and derives the largest cell size that fits every column. A CSS grid needs
   // no explicit pixel height -- its content-driven height cascades up `App.tsx`'s unclamped flex chain.
@@ -1289,7 +1345,7 @@ export function StockMarketRenderer({ marketGrid, parredCompanies, className }: 
           tray's six rows leave under it beside an eleven-row matrix -- so it costs no height at all. */}
       <div style={styles.traySlot}>
         <ParIpoTray markersByPrice={parMarkersByPrice} />
-        <MarketCompassRose />
+        <MarketCompassRose variants={variants} />
       </div>
       </div>
       <MarketCellLegend />

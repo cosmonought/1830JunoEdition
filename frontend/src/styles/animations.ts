@@ -169,3 +169,102 @@ export const TURN_HANDOFF_SWEEP_CSS = `
 /* App shell -- everything below here renders inside both providers   */
 /* ------------------------------------------------------------------ */
 
+
+/* ==================================================================
+ *  DESIGN NOTE 953: ARROWS THAT SAY WHICH WAY, WITHOUT SAYING IT TWICE
+ * ==================================================================
+ *
+ * RULED: "Add some CSS keyframe animation to the overlay. For bonuses (green), include subtle up-arrows
+ * floating upward around the text. For maluses (red), include down-arrows floating downward."
+ *
+ * THE DIRECTION IS ALREADY IN THE SIGN AND THE COLOUR, so a third channel has to earn its place by being the
+ * one that reads pre-attentively. It does: motion is the channel the eye resolves before it resolves a glyph,
+ * so an arrow drifting upward is legible in the moment before "+20%" has been read at all -- which matters
+ * more now that #954 cuts the window to 700ms.
+ *
+ * `translateY` AND `opacity` ONLY, deliberately. Both are compositor properties, so the whole overlay animates
+ * off the main thread -- this fires immediately after a dispatch loop that has just rewritten the board, and
+ * an animation that forced layout would stutter exactly when it is on screen.
+ *
+ * THE ARROWS ARE `aria-hidden` DECORATION. The figure beside them already carries the fact, and a screen
+ * reader announcing six arrows around a percentage would be strictly worse than announcing the percentage.
+ *
+ * STAGGERED BY `animation-delay` RATHER THAN BY SIX KEYFRAME SETS. One pair of keyframes, six elements, six
+ * delays -- and the delays are what make it read as drift rather than as a single pulse. Kept under the
+ * display window: an arrow whose delay exceeds the overlay's life would never be seen. */
+export const REVENUE_FLASH_ARROWS_CSS = `
+@keyframes app-revenue-arrow-up {
+  0%   { opacity: 0; transform: translateY(14px); }
+  30%  { opacity: 0.85; }
+  100% { opacity: 0; transform: translateY(-46px); }
+}
+@keyframes app-revenue-arrow-down {
+  0%   { opacity: 0; transform: translateY(-14px); }
+  30%  { opacity: 0.85; }
+  100% { opacity: 0; transform: translateY(46px); }
+}
+/* The figure's own entrance -- a small settle rather than a zoom. At 700ms a large scale change reads as a
+   lurch; this is enough to register as "something arrived" and finishes well inside the window. */
+@keyframes app-revenue-figure-in {
+  0%   { opacity: 0; transform: scale(0.82); }
+  55%  { opacity: 1; transform: scale(1.04); }
+  100% { opacity: 1; transform: scale(1); }
+}
+.app-revenue-arrow {
+  position: absolute;
+  font-weight: 800;
+  /* SIZED FROM THE FIGURE, not fixed: the overlay's own type scales with the viewport, and a 20px arrow
+     beside a 104px numeral on a wide screen would read as debris rather than as part of the same object.
+     Design note #957: the em VALUE is written inline per arrow now -- critical swings take a larger one --
+     so this class no longer sets it. */
+  line-height: 1;
+  pointer-events: none;
+  opacity: 0;
+  animation-duration: 700ms;
+  animation-timing-function: ease-out;
+  animation-fill-mode: forwards;
+  animation-iteration-count: 1;
+}
+.app-revenue-figure {
+  animation: app-revenue-figure-in 260ms ease-out 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  /* THE ONE CASE WHERE MOTION IS THE WHOLE FEATURE AND STILL HAS TO YIELD. The figure and its colour carry
+     the fact without any of this; what is removed is decoration, so removing it costs nothing a player
+     needs. The arrows stay VISIBLE and stop MOVING, rather than vanishing -- an empty space beside the
+     number would be a different layout for these users, not a calmer one. */
+  .app-revenue-arrow { animation: none; opacity: 0.5; }
+  .app-revenue-figure { animation: none; }
+}
+`;
+
+/* Design note #960: the glow behind the figure. Sized from the figure's own em so it scales with the type,
+   centred on it, and BEHIND both the numeral and the arrows -- `z-index: -1` inside the relative wrapper,
+   which is what keeps it from washing out the glyphs it exists to lift off the board.
+   IT FADES ON THE SAME CURVE AS THE FIGURE and finishes inside the display window; a glow outliving the text
+   would be a coloured smudge over the board with nothing in it. */
+export const REVENUE_FLASH_GLOW_CSS = `
+@keyframes app-revenue-glow-in {
+  0%   { opacity: 0; transform: translate(-50%, -50%) scale(0.6); }
+  40%  { opacity: 1; transform: translate(-50%, -50%) scale(1.05); }
+  100% { opacity: 0; transform: translate(-50%, -50%) scale(1.15); }
+}
+.app-revenue-glow {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 2.6em;
+  height: 2.6em;
+  transform: translate(-50%, -50%);
+  z-index: -1;
+  pointer-events: none;
+  opacity: 0;
+  animation: app-revenue-glow-in 700ms ease-out 1 forwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  /* Held still rather than removed, for the reason the arrows are: the glow is doing legibility work over a
+     multi-coloured board, and deleting it would change what these users can READ rather than only what
+     moves. */
+  .app-revenue-glow { animation: none; opacity: 0.75; }
+}
+`;

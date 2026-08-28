@@ -64,25 +64,57 @@ describe("the payload's shape (design note #944)", () => {
     }
   });
 
-  it("starts the four clause buckets lower-case and the unchanged bucket upper-case", () => {
-    /* WHICH IS WHAT MAKES THE TWO JOINS DIFFERENT. "because The railway enjoys..." would be wrong, and so
-       would a bare sentence fragment appended after a full stop. The payload's own casing is what decides
-       which branch each bucket belongs in, so it is asserted rather than trusted. */
-    for (const bucket of ["criticalMalus", "minorMalus", "minorBonus", "criticalBonus"] as const) {
-      for (const line of UNPREDICTABLE_REVENUE_FLAVOR[bucket]) {
-        const first = line[0];
-        /* Proper nouns are legitimately capitalised mid-clause -- "Wall Street was firmly advised..." -- so
-           this asks that the line is not a SENTENCE, which is what a trailing full stop plus a capital would
-           make it. Checked as "does not begin with a capitalised common word". */
-        if (first !== first.toLowerCase()) {
-          expect(["Wall", "Pinkertons", "Morse"]).toContain(line.split(" ")[0].replace(/[^A-Za-z]/g, ""));
-        }
+  it("sentence-cases every line in every bucket", () => {
+    /* ==================================================================
+        SUPERSEDED BY #949, AND THE OLD RULE IS RECORDED RATHER THAN DELETED
+       ==================================================================
+       THIS USED TO ASSERT THE OPPOSITE for four of the five buckets -- "starts the four clause buckets
+       lower-case and the unchanged bucket upper-case" -- because those four were joined to the sentence with
+       "because" and a capital mid-clause would have read as a typo. It even carried an allow-list for the
+       three lines that legitimately open on a proper noun.
+       REPORTED: "a bit too clunky as a single run-on sentence. We need to separate the mechanical result from
+       the flavor text." The join is a full stop now, so every line is a standalone sentence and the casing
+       rule inverts with it.
+       ONE RULE FOR ALL FIVE BUCKETS NOW, which is simpler than what it replaces AND is the thing that would
+       break if a future line were added in the old style -- a lower-case sentence after a full stop reads as
+       a mistake in exactly the way the old capital did. */
+    for (const [bucket, lines] of Object.entries(UNPREDICTABLE_REVENUE_FLAVOR)) {
+      for (const line of lines) {
+        expect([bucket, line.slice(0, 18), line[0]]).toEqual([
+          bucket,
+          line.slice(0, 18),
+          line[0].toUpperCase(),
+        ]);
       }
     }
-    for (const line of UNPREDICTABLE_REVENUE_FLAVOR.unchanged) {
-      expect(line[0]).toBe(line[0].toUpperCase());
+  });
+
+  it("shows no sign of a botched bulk edit", () => {
+    /* ==================================================================
+        WRITTEN AFTER A CONTROL EXPOSED THE FIRST VERSION AS DECORATIVE
+       ==================================================================
+       #949 re-cased 100 strings in one pass, which is exactly where a script clips or doubles a character.
+       MY FIRST VERSION OF THIS CASE asserted `line.length > 20` and `line[1]` is lower-case, and a control
+       that clipped a first letter -- "The accountants" to "he accountants" -- was caught by the CASING case
+       beside it, not by this one. It was describing nothing the other cases did not already cover.
+       SO IT ASKS FOR THE ACTUAL SLIPS a first-character edit produces, none of which any other case here can
+       see: a doubled initial ("TThe"), a leading or doubled space, or a line that lost enough to stop being a
+       sentence. A clip that leaves a plausible capital -- "The" to "Xhe" -- remains undetectable by anything
+       short of the original text, and saying so is more useful than a case that pretends otherwise. */
+    for (const [bucket, lines] of Object.entries(UNPREDICTABLE_REVENUE_FLAVOR)) {
+      for (const line of lines) {
+        const label = [bucket, line.slice(0, 18)];
+        expect([...label, line.startsWith(" ")]).toEqual([...label, false]);
+        expect([...label, line.includes("  ")]).toEqual([...label, false]);
+        /* A doubled initial is the other half of the same slip -- upper-casing by PREPENDING rather than
+           replacing. Two identical letters can open a real word ("llama"), so it is asked as
+           "capital followed by the same letter in lower case", which no English word does. */
+        expect([...label, line[0] === line[1]?.toUpperCase()]).toEqual([...label, false]);
+        expect([...label, line.trim().split(/\s+/).length >= 4]).toEqual([...label, true]);
+      }
     }
   });
+
 });
 
 describe("the bucket follows the outcome, not the percentage (design note #944)", () => {
@@ -244,29 +276,44 @@ describe("the sentence the log actually prints (design note #944)", () => {
     expect(normals.length).toBeGreaterThan(0);
     for (const line of normals) {
       expect(line).toMatch(/^B&O ran for \$\d+\. [A-Z]/);
-      expect(line).not.toContain("because");
+      /* Design note #949: "because" is gone from every branch now, so its absence no longer distinguishes
+         this one -- the mechanical clause does. RULED: "The `unchanged` array mapping remains exactly as it
+         is", and what that means concretely is that no modifier is ever announced here. */
       expect(line).not.toContain("bonus");
       expect(line).not.toContain("malus");
     }
   });
 
-  it("prints the four modifier forms with their clause", () => {
-    const modified = lines.filter((line) => line.includes("because"));
+  it("prints the four modifier forms as two sentences", () => {
+    /* #949'S SHAPE, pinned exactly: `"[Corp] ran for $X. It [suffered/enjoyed] a [Y]% [malus/bonus]. " +
+       <line>`. The regex asserts the FULL STOP between the mechanical half and the flavour, which is the
+       whole of the change -- "because" here would still read plausibly and be the reported bug. */
+    const modified = lines.filter((line) => /(bonus|malus)/.test(line));
     expect(modified.length).toBeGreaterThan(0);
     for (const line of modified) {
       expect(line).toMatch(
-        /^B&O ran for \$\d+\. It (enjoyed|suffered) a (10|20)% (bonus|malus) because .+\.$/,
+        /^B&O ran for \$\d+\. It (enjoyed|suffered) a (10|20)% (bonus|malus)\. [A-Z].+\.$/,
       );
+      expect(line).not.toContain("because");
     }
   });
 
   it("pairs enjoyed with bonus and suffered with malus", () => {
-    /* The two words are chosen from one `outcome`, so crossing them would take a deliberate edit -- pinned
-       because it is the kind of edit that reads as a tidy-up. */
+    /* ==================================================================
+        ANCHORED ON THE CLAUSE, BECAUSE THE BARE WORD IS THE PAYLOAD'S TOO
+       ==================================================================
+       The two words are chosen from one `outcome`, so crossing them would take a deliberate edit -- pinned
+       because it is the kind of edit that reads as a tidy-up.
+       THIS FAILED THE MOMENT #950 PUT THE `unchanged` LINES INTO PAST TENSE. "The railway enjoyed the rare
+       luxury of normality" contains "enjoyed" and no "bonus", and the first version of this case searched for
+       the bare word -- so it flagged a correct sentence.
+       THE FLAVOUR AND THE MECHANICAL CLAUSE SHARE A VOCABULARY, inevitably: both are about a railway having a
+       good or bad day. So the assertion has to name the CLAUSE it is about rather than a word that appears in
+       it, which is also what makes it a test of the pairing rather than of the prose. */
     for (const line of lines) {
-      if (line.includes("enjoyed")) expect(line).toContain("bonus");
-      if (line.includes("suffered")) expect(line).toContain("malus");
-      expect(line.includes("bonus") && line.includes("malus")).toBe(false);
+      if (/It enjoyed a \d+%/.test(line)) expect(line).toMatch(/It enjoyed a \d+% bonus\./);
+      if (/It suffered a \d+%/.test(line)) expect(line).toMatch(/It suffered a \d+% malus\./);
+      expect(/% bonus\./.test(line) && /% malus\./.test(line)).toBe(false);
     }
   });
 

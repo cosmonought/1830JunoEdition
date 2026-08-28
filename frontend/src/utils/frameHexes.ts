@@ -61,6 +61,24 @@ export interface BoardPoint {
  *  A SET IS RETURNED AS AN ARRAY because the caller iterates it once; `ReadonlySet` in and out would make
  *  the empty-check and the mapping two passes over the same three cases. */
 export function chooseFrameKeys(input: {
+  /* ==================================================================
+      DESIGN NOTE 955: THE HOME STATION FIRST, ON REPORT
+     ==================================================================
+     REPORTED: "Clicking this button currently scrolls the user to the absolute top of the Rail Map container.
+     Update the pan/scroll calculation to instead target the specific DOM node (or grid coordinate) of that
+     corporation's Home Station hex, centering that hex in the viewport."
+     WHICH REVERSES #888'S ORDERING, and that note's argument is worth keeping in view rather than deleting:
+     "a network mid-game is a sprawl, and framing its bounding box can land the camera on a fully-built
+     stretch with nothing to do in it", so it preferred the BUILDABLE set -- the decision the player is
+     standing in front of.
+     THE ARGUMENT IS SOUND AND ANSWERS A DIFFERENT QUESTION. "Where may I build" changes every turn and can
+     be anywhere on the board; "where is this corporation" is fixed for the whole game. A jump button whose
+     destination moves is one a player cannot form a habit about, and the report is from someone who pressed
+     it expecting to be taken somewhere they recognised.
+     THE BUILDABLE SET IS STILL HERE, one rung down, because it is the better answer when a corporation has
+     no home to name -- and because #888's reasoning would be the right reasoning again if this were ever
+     re-scoped to "show me my options" rather than "take me to my railway". */
+  home?: string | null;
   /** `layTrackFocus.highlighted` -- where a tile fits this turn. */
   buildable?: ReadonlySet<string>;
   /** `layTrackFocus.network` -- the hexes that actually carry this corporation's track. */
@@ -76,6 +94,10 @@ export function chooseFrameKeys(input: {
     set.forEach((key) => out.push(key));
     return out;
   };
+  /* Design note #955: ONE HEX, WHICH IS WHY THE ZOOM LOCK MATTERS. `frameHexes` sizes a single point from
+     the padding alone -- and under #911's locked zoom it does not resize at all, it only centres. That is
+     exactly "centering that hex in the viewport" and is why this needed no new arithmetic. */
+  if (input.home) return [input.home];
   if (input.buildable && input.buildable.size > 0) return drain(input.buildable);
   if (input.network && input.network.size > 0) return drain(input.network);
   return input.stations ?? [];

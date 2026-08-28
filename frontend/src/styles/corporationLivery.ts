@@ -89,3 +89,81 @@ export function bestContrastTextColor(backgroundHex: string): string {
   const contrastWithBlack = (bgLuminance + 0.05) / 0.05;
   return contrastWithWhite >= contrastWithBlack ? "#FFFFFF" : "#000000";
 }
+
+/* ==================================================================
+ *  DESIGN NOTE 945: A LIVERY THAT IDENTIFIES WITHOUT COMPETING
+ * ==================================================================
+ *
+ * REPORTED: "update the inactive corporation badges in the OR Action Bar. The acronym text for the inactive
+ * corporations should be rendered in their respective corporate colors, but appropriately desaturated so they
+ * don't compete with the active corporation's badge."
+ *
+ * WHICH PARTLY REVERSES #930, so the reversal is recorded rather than quietly performed. That note took the
+ * livery OFF every inactive chip: "Every chip used to carry its corporation's colour on both border and ink,
+ * which turned a sequence into eight unrelated objects and left no way to scan the row for a position."
+ * BOTH THINGS ARE TRUE, AND THE FIX IS THE CHANNEL RATHER THAN THE COLOUR. #930's complaint was about BORDER
+ * AND FILL -- eight differently-outlined boxes stop reading as one strip. Ink is a different channel: the
+ * strip keeps its uniform border and background, so it still reads as one control, while the letters carry
+ * identity. Only the acting chip is filled.
+ *
+ * MIXED TOWARD THE ROW'S OWN GREY, not merely faded. `opacity` was tried on this strip once already and #930
+ * records why it failed -- it dimmed the border too. Blending toward `#8a90a0` keeps the inactive chips at the
+ * neutral's brightness while letting the hue through, which is what "desaturated so they don't compete"
+ * describes.
+ *
+ * INTEGER MATH, per the project's standing rule. Colour is not money and nothing here reaches the chain, but
+ * a channel computed with floats would round differently between engines and this is trivially integer. */
+
+/** The neutral these chips sit at today -- `orTurnOrderChipUpcoming`'s ink. Exported so the blend target and
+ *  the unblended default cannot drift apart. */
+export const TURN_ORDER_NEUTRAL_INK = "#8a90a0";
+
+/** `hex` blended `percent` of the way toward `toward`, per channel, in integers.
+ *
+ *  `percent` IS HOW MUCH OF `toward` SURVIVES: 0 returns `hex` unchanged, 100 returns `toward`. Stated because
+ *  a blend factor is ambiguous by nature and the two readings are indistinguishable at the midpoint -- which
+ *  is exactly where a caller would test it. */
+export function mixHex(hex: string, toward: string, percent: number): string {
+  const parse = (value: string): [number, number, number] => {
+    const clean = value.replace("#", "");
+    const full =
+      clean.length === 3
+        ? clean
+            .split("")
+            .map((character) => character + character)
+            .join("")
+        : clean;
+    return [
+      parseInt(full.slice(0, 2), 16),
+      parseInt(full.slice(2, 4), 16),
+      parseInt(full.slice(4, 6), 16),
+    ];
+  };
+  const from = parse(hex);
+  const to = parse(toward);
+  if (from.some(Number.isNaN) || to.some(Number.isNaN)) return hex;
+  const clamped = Math.max(0, Math.min(100, Math.round(percent)));
+  const channel = (a: number, b: number) =>
+    /* `+ 50` before the divide is the same round-half-up-in-integers trick #922 uses for money, for the same
+       reason: the division is the only place a fraction could appear. */
+    Math.floor((a * (100 - clamped) + b * clamped + 50) / 100);
+  const hexed = from
+    .map((value, index) => channel(value, to[index]).toString(16).padStart(2, "0"))
+    .join("");
+  return `#${hexed}`;
+}
+
+/** A corporation's colour as it should appear on an INACTIVE turn-order chip.
+ *
+ *  55% toward the neutral: enough hue to tell ERIE's yellow from PRR's green at a glance, not enough to pull
+ *  the eye off the one filled chip. The figure is a judgement, which is why it is a named constant with this
+ *  sentence beside it rather than a number inline at the call site. */
+export const TURN_ORDER_DESATURATION_PERCENT = 55;
+
+export function desaturatedLiveryInk(companyId: number): string {
+  return mixHex(
+    corporationLiveryColor(companyId),
+    TURN_ORDER_NEUTRAL_INK,
+    TURN_ORDER_DESATURATION_PERCENT,
+  );
+}

@@ -18,10 +18,7 @@ import type { GameplayExecuteMsg } from "./sessionKey";
 import type { MapGridResponse } from "../components/hexContractTypes";
 import type { TileColorTier } from "../components/hexTileCatalog";
 import { boardHexLabel } from "../components/hexGeometry";
-import {
-  OPERATING_SUB_PHASE_LABELS,
-  type OperatingSubPhase,
-} from "../components/OperatingSubPhaseStepper";
+import type { OperatingSubPhase } from "../components/OperatingSubPhaseStepper";
 import { depotInventory } from "./gamePhase";
 import { hasActedThisTurn } from "./turnAction";
 import { sandboxRouteBreakdown } from "./sandboxSession";
@@ -90,13 +87,19 @@ export function actingActor(context: ActionLogContext): string {
   return actingPlayer(context);
 }
 
-/** The verb-led name of the step the cursor is on -- "Lay Track", not
- *  "Track". Design note #478: the strip's own `stepLabel`, so the log and
- *  the stepper cannot describe the same step differently. */
-function stepName(context: ActionLogContext): string | null {
-  const step = context.orSubPhase;
-  return step ? OPERATING_SUB_PHASE_LABELS[step].stepLabel : null;
-}
+/* ==================================================================
+    DESIGN NOTE 958: `stepName` IS GONE, AND `orSubPhase` IS NOT
+   ==================================================================
+   #478 built this to put the step in the sentence -- "the strip's own `stepLabel`, so the log and the stepper
+   cannot describe the same step differently." Its two callers now say "passed." and let the tag carry the
+   step, so the helper had no reader left. Removed rather than kept warm: a function nothing calls is a
+   standing invitation to put the duplication back.
+   `orSubPhase` STAYS ON THE CONTEXT and is still read -- the pass line asks whether the cursor is on a step
+   at all, to choose between "passed." and "passed its turn." The field carries a fact this file still needs;
+   only the formatting of that fact moved.
+   AND THE STEPPER'S LABELS ARE STILL THE ONE SOURCE. `roundStampFor` reads `OPERATING_SUB_PHASE_LABELS`
+   itself, so #478's actual rule -- one table, so the log and the strip cannot disagree -- survives the move
+   intact; what changed is which file does the reading. */
 
 /** " Treasury now $X." for a corporation that just spent, or "" when the
  *  resolved state is not available (a live chain -- design note #2). */
@@ -289,9 +292,34 @@ export function describeGameplayAction(
   if ("AdvanceOperatingSubPhase" in msg) {
     /* The one message whose whole content IS which step, and the step was the only part left out. The cursor has not moved at dispatch time.
        See docs/ai_architecture/ui_shell_layout.md - actionLog.ts #478 */
+    /* ==================================================================
+        DESIGN NOTE 958: THE STEP LEFT THE SENTENCE FOR THE TAG
+       ==================================================================
+       REPORTED: "instead of, e.g., `[3:06 PM] [OR 2.1] NNH passed Buy Trains.` it would read
+       `[3:06 PM] [OR 2.1--Buy Trains] NNH passed.`"
+       WHICH RETIRES #478'S SENTENCE, and that note's own reasoning is why the move is safe rather than a
+       loss: "The one message whose whole content IS which step, and the step was the only part left out." The
+       step is still the whole content -- it has moved to the column where it can be scanned instead of read.
+       SAYING IT IN BOTH PLACES WOULD BE THE REGRESSION. "[OR 2.1--Buy Trains] NNH passed Buy Trains." is the
+       duplication #775 keeps finding in a new currency, and the tag is the copy that lands in one column. */
     const ticker = corp(gameState, msg.AdvanceOperatingSubPhase.protocol_id);
-    const step = stepName(context);
-    return step ? `${ticker} passed ${step}.` : `${ticker} skipped a step.`;
+    /* ==================================================================
+        #478'S FALLBACK SURVIVES -- AND MY FIRST REASON FOR KEEPING IT WAS WRONG
+       ==================================================================
+       I WROTE that with no step in the tag either, "PRR passed." "names nothing at all". CORRECTED: "if it's
+       in the context of [OR 2.1--Lay Tracks] then 'PRR passed' DOES tell everyone what happened." That is
+       right, and it is right in the fallback case too -- "[OR 2.1] PRR passed." says a corporation passed
+       during OR 2.1, which is not nothing.
+       THE REASON THAT ACTUALLY HOLDS is narrower and is about the MESSAGE rather than the step. When the
+       cursor is known, `PassTurn` and `AdvanceOperatingSubPhase` produce the same sentence -- and they did
+       before #958 as well, both reading "PRR passed <step>." (verified against the previous revision). The
+       no-cursor branch is the one place the two ever read differently: "skipped a step" is a step boundary
+       crossed, "passed its turn" is the turn ending. That distinction costs one ternary and is the whole of
+       what this fallback earns.
+       RECORDING THE CORRECTION rather than quietly swapping the sentence, because a note that argues for a
+       branch on a reason that does not hold is worse than no note -- the next reader would delete the branch
+       AND the real reason with it. */
+    return context.orSubPhase ? `${ticker} passed.` : `${ticker} skipped a step.`;
   }
 
   /* ---- Stock Round and the auction: the player acts. ---- */
@@ -379,9 +407,11 @@ export function describeGameplayAction(
     /* In an OR, Pass ends the CORPORATION's turn from a step; outside one it really is a seated player passing and the original wording is right.
        See docs/ai_architecture/ui_shell_layout.md - actionLog.ts #478 */
     if (gameState?.current_round_type === "OperatingRound") {
-      const step = stepName(context);
-      return step
-        ? `${actingActor(context)} passed ${step}.`
+      /* Design note #958: the step is in the tag now. "passed its turn" stays as the fallback for a state
+         with no cursor on it -- the two sentences said different things and only the first was duplicating
+         the stamp. */
+      return context.orSubPhase
+        ? `${actingActor(context)} passed.`
         : `${actingActor(context)} passed its turn.`;
     }
     /* Design note #745: a turn the player already acted in is ENDED, not passed, and the log must say so --

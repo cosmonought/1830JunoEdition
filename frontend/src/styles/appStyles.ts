@@ -1285,21 +1285,40 @@ export const styles: Record<string, React.CSSProperties> = {
      family still sitting in the button rail.
      `flexWrap` SO A NARROW WINDOW DROPS THE ORDER BELOW rather than crushing the trail -- #590's rule again:
      wrap or scale, never decide which facts the player may keep. */
+  /* ==================================================================
+      DESIGN NOTE 946: ONE LINE, AND IT HAS TO STAY ONE LINE
+     ==================================================================
+     RULED: "the Round Title, subphase sequence, and corporation turn order must all sit on the exact same
+     horizontal line", to save vertical space in the Action Bar.
+     SO THE WRAP IS GONE. `flexWrap: "wrap"` was the house answer to a narrow window (#590: "wrapping or a
+     smaller type scale, not deciding for the player which facts they may keep") -- and it is the one thing
+     that can silently give the row back the second line this change exists to remove. A window narrow enough
+     to need it would reintroduce the reported bug rather than degrade gracefully.
+     WHAT REPLACES IT IS THE TREATMENT #930 ALREADY CHOSE for the turn order beside it: the row scrolls rather
+     than wrapping, so every fact stays reachable and the height is fixed. That is #590's rule honoured by a
+     different mechanism, not overruled -- nothing is dropped. */
   orProgressRow: {
     display: "flex",
     flexDirection: "row",
     alignItems: "center",
     gap: "10px",
-    flexWrap: "wrap",
+    flexWrap: "nowrap",
     width: "100%",
+    minWidth: 0,
+    overflowX: "auto",
   },
   subPhaseTrail: {
     display: "inline-flex",
     flexDirection: "row",
-    flexWrap: "wrap",
+    /* Design note #946: `nowrap`, for the row's reason. A trail that wrapped INSIDE a no-wrap row would grow
+       the row's height, which is the vertical space this change was asked to reclaim -- so the two must agree
+       about wrapping or the outer rule is decorative. */
+    flexWrap: "nowrap",
     alignItems: "center",
     marginLeft: "10px",
     borderRadius: "6px",
+    minWidth: 0,
+    flexShrink: 0,
   },
   /* THE DEFAULT IS THE MUTED ONE. Five of the six steps are inactive at any
      moment, so the quiet treatment is the base and emphasis is what gets

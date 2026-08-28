@@ -1,0 +1,278 @@
+/** @jest-environment node */
+//
+// ==================================================================
+//  DESIGN NOTES 956-958 (harness): A POSITIONING FIX I CANNOT DEMONSTRATE, AND TWO I CAN
+// ==================================================================
+//
+// #958 IS A FUNCTION and is driven directly -- `roundStampFor` has a defined answer for every state, and its
+// failure modes are all "wrong round, wrong step, or a suffix where there should be none".
+//
+// #957's arrow sizing is a source scan, because the size is a style literal.
+//
+// #956 IS THE AWKWARD ONE AND WORTH NAMING AS SUCH. The overlay already carried `position: fixed; inset: 0`
+// and a `zIndex` far above the Action Bar's 50 -- the configuration that is meant to make the reported bug
+// impossible -- and a search of the shell's styles found no ancestor with a `transform`, `filter` or
+// stacking context to explain it. The fix is a PORTAL, which makes the symptom impossible whatever the cause
+// was, and the cases below can only assert that the portal is there. They cannot prove it fixed the report,
+// and this comment exists so nobody later reads them as if they had.
+
+import { roundStampFor, roundLabelFor } from "./roundLabel";
+import { describeGameplayAction } from "./actionLog";
+import type { GameStateResponse } from "./gameState";
+import { readStripped, sliceBetween } from "./sourceScan";
+
+const operating = (subPhase?: string): GameStateResponse =>
+  ({
+    current_round_type: "OperatingRound",
+    macro_round_number: 2,
+    sub_round_index: 1,
+    operating_sub_phase: subPhase,
+    active_operating_order: [4],
+    active_corporation_index: 0,
+    player_addresses: ["p1"],
+    active_player_index: 0,
+    public_companies: [{ company_id: 4, ticker: "NNH", station_token_hexes: [] }],
+  }) as unknown as GameStateResponse;
+
+describe("the log stamp carries the step (design note #958)", () => {
+  it("writes round and step, joined as specified", () => {
+    /* REPORTED: "`[3:06 PM] [OR 2.1--Buy Trains] NNH passed.`" -- the separator is `--`, verbatim. */
+    expect(roundStampFor(operating("Hardware"))).toBe("OR 2.1--Buy Trains");
+  });
+
+  it("uses the stepper's own labels", () => {
+    /* #478'S RULE SURVIVES THE MOVE: one table, so the log and the strip cannot describe a step two ways.
+       "Hardware" is the state's word and "Buy Trains" is the player's; a stamp inventing its own vocabulary
+       would put a third name on one step. */
+    expect(roundStampFor(operating("Track"))).toBe("OR 2.1--Lay Track");
+    expect(roundStampFor(operating("Routes"))).toBe("OR 2.1--Run Routes");
+    expect(roundStampFor(operating("BuyPrivate"))).toBe("OR 2.1--Buy Private");
+  });
+
+  it("adds no suffix outside an Operating Round, even on a stale cursor", () => {
+    /* ==================================================================
+        THE FIXTURE HAD TO CARRY A STALE STEP, BECAUSE A CONTROL PASSED WITHOUT ONE
+       ==================================================================
+       MY FIRST VERSION built the Stock Round with no `operating_sub_phase` at all -- and a control that
+       deleted the round-type guard entirely PASSED, because the `!step` guard below it caught the undefined.
+       The case was describing the fixture rather than the function.
+       AND THE GUARD IS NOT REDUNDANT IN REALITY. #656 has the sandbox reducer CLEAR the cursor outside an
+       Operating Round -- but #232's rule is that a live chain reports whatever it reports, and a build that
+       left the field populated would stamp "SR3--Buy Trains" on every Stock Round entry. That is precisely
+       the log inventing structure a round does not have.
+       SO THE FIXTURE CARRIES THE STALE STEP the guard exists to ignore. */
+    const stock = {
+      current_round_type: "StockRound",
+      macro_round_number: 3,
+      operating_sub_phase: "Hardware",
+    } as unknown as GameStateResponse;
+    expect(roundStampFor(stock)).toBe("SR3");
+    const auction = {
+      current_round_type: "WaterfallAuction",
+      operating_sub_phase: "Track",
+    } as unknown as GameStateResponse;
+    expect(roundStampFor(auction)).toBe("Auction");
+  });
+
+  it("adds no suffix when the cursor is between steps", () => {
+    /* `operating_sub_phase` is optional (#232) and absent between turns. `OR 2.1--undefined` is what a
+       missing guard produces, and it would reach the screen as those exact letters. */
+    expect(roundStampFor(operating(undefined))).toBe("OR 2.1");
+  });
+
+  it("survives an unknown step rather than printing undefined", () => {
+    /* A step the label table does not know is a build mismatch, not a crash -- the round is still true and is
+       the half worth keeping. */
+    expect(roundStampFor(operating("NotAStep"))).toBe("OR 2.1");
+  });
+
+  it("is null before the first poll, like the label it wraps", () => {
+    expect(roundStampFor(null)).toBeNull();
+    expect(roundStampFor(undefined)).toBeNull();
+  });
+
+  it("leaves roundLabelFor alone for the announcements", () => {
+    /* THE REASON THIS IS A SECOND FUNCTION. `roundLabelFor` also writes round-TRANSITION announcements, and a
+       step name in "The next Stock Round begins" would be meaningless -- no corporation is on a step at the
+       moment a round starts. Two callers, two questions. */
+    expect(roundLabelFor(operating("Hardware"))).toBe("OR 2.1");
+  });
+});
+
+describe("the pass line stopped repeating the step (design note #958)", () => {
+  const line = (msg: unknown, subPhase: string | null) =>
+    describeGameplayAction(msg as never, {
+      gameState: operating(subPhase ?? undefined),
+      mapGrid: { hexes: [] } as never,
+      era: "yellow" as never,
+      labelForAddress: (address: string) => address,
+      orSubPhase: subPhase,
+    } as never) ?? "";
+
+  it("says only that the corporation passed", () => {
+    /* THE DUPLICATION THIS PREVENTS: "[OR 2.1--Buy Trains] NNH passed Buy Trains." The tag is the copy that
+       lands in one column down the feed, so the sentence gives it up. */
+    expect(line({ PassTurn: {} }, "Hardware")).toBe("NNH passed.");
+    expect(line({ AdvanceOperatingSubPhase: { protocol_id: 4 } }, "Hardware")).toBe("NNH passed.");
+  });
+
+  it("names no step in any Operating Round pass line", () => {
+    /* Swept over every step, because one arm keeping the old wording is the plausible half-done state and
+       reads perfectly well on its own. */
+    for (const step of ["BuyPrivate", "Track", "Tokens", "Routes", "Dividends", "Hardware"]) {
+      for (const msg of [{ PassTurn: {} }, { AdvanceOperatingSubPhase: { protocol_id: 4 } }]) {
+        const text = line(msg, step);
+        expect([step, text.includes("Buy Trains") || text.includes("Lay Track")]).toEqual([
+          step,
+          false,
+        ]);
+      }
+    }
+  });
+
+  it("still distinguishes a pass with no cursor on it", () => {
+    /* "passed its turn" and "passed <step>" said different things, and only the second was duplicating the
+       stamp. The fallback is the one that survives. */
+    expect(line({ PassTurn: {} }, null)).toBe("NNH passed its turn.");
+  });
+
+  it("keeps a Stock Round pass unchanged", () => {
+    /* THE HALF THIS BATCH MUST NOT TOUCH. Outside an Operating Round a seat really is passing, and #745's
+       wording there is about a different thing entirely. */
+    const stock = describeGameplayAction({ PassTurn: {} } as never, {
+      gameState: {
+        current_round_type: "StockRound",
+        macro_round_number: 3,
+        player_addresses: ["alice"],
+        active_player_index: 0,
+        public_companies: [],
+      } as unknown as GameStateResponse,
+      mapGrid: { hexes: [] } as never,
+      era: "yellow" as never,
+      labelForAddress: (address: string) => address,
+    } as never);
+    expect(stock).not.toContain("passed.");
+  });
+});
+
+describe("the overlay renders outside the app subtree (design note #956)", () => {
+  const FLASH = readStripped("components/RevenueModifierFlash.tsx");
+
+  it("portals to document.body", () => {
+    /* THE STRUCTURAL GUARANTEE. A portal renders outside the App tree entirely, so no ancestor's containing
+       block or stacking context can reach it -- which is what makes this a fix rather than a patch on a cause
+       I could not identify. */
+    expect(FLASH).toContain('import { createPortal } from "react-dom";');
+    expect(FLASH).toContain("createPortal(overlay, document.body)");
+  });
+
+  it("guards the portal for an environment with no document", () => {
+    /* Rendering in place is a worse position and a working component; throwing is neither. */
+    expect(FLASH).toContain('typeof document === "undefined" || !document.body');
+  });
+
+  it("keeps the fixed full-viewport box", () => {
+    /* THE PORTAL ALONE DOES NOT CENTRE ANYTHING -- it only changes where the node lives. The ruling names the
+       box explicitly: "position: fixed; inset: 0; pointer-events: none" with the content centred. */
+    expect(FLASH).toContain('position: "fixed"');
+    expect(FLASH).toContain("inset: 0");
+    expect(FLASH).toContain('alignItems: "center"');
+    expect(FLASH).toContain('justifyContent: "center"');
+  });
+
+  it("sits above every z-index in the shell's sheet", () => {
+    /* READ FROM BOTH FILES rather than asserting a literal. A new modal at 9500 would put the overlay back
+       underneath something, and the number here would still look right on its own. */
+    const declared = Number(FLASH.match(/REVENUE_FLASH_Z_INDEX = (\d+)/)?.[1]);
+    const shell = readStripped("styles/appStyles.ts");
+    const others = (shell.match(/zIndex: \d+/g) ?? []).map((entry) =>
+      Number(entry.replace(/\D/g, "")),
+    );
+    expect(others.length).toBeGreaterThan(0);
+    for (const other of others) expect(declared).toBeGreaterThan(other);
+  });
+
+  it("still cannot swallow a click", () => {
+    /* #940'S RULE, re-asked because a portal moves the node to `body` where it covers the whole document --
+       if anything, the stakes went up. */
+    expect(FLASH.match(/pointerEvents: "none"/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
+  });
+
+  it("keeps the timer and its constant intact", () => {
+    /* RULED: "ensure the animation and timer remain intact." A portal changes where a component renders, not
+       what it does -- but the effect and the render moved in the same edit, which is where a timer gets lost. */
+    expect(FLASH).toContain("setTimeout(() => setVisible(false), REVENUE_FLASH_MS)");
+    expect(FLASH).toContain("export const REVENUE_FLASH_MS = 700;");
+  });
+});
+
+describe("arrow size follows the swing (design note #957)", () => {
+  const FLASH = readStripped("components/RevenueModifierFlash.tsx");
+  const ANIM = readStripped("styles/animations.ts");
+
+  it("sizes critical swings larger than minor ones", () => {
+    /* ==================================================================
+        #957 SET ONE SIZE PER TIER; #959 MADE EACH TIER A SPREAD
+       ==================================================================
+       THIS USED TO READ THE TWO ARMS OF A TERNARY -- `fontSize: critical ? "0.42em" : "0.24em"` -- and compare
+       them. RULED SINCE: "the animation arrows should be a mix of sizes, but skew larger on the critical and
+       smaller on the malus. They shouldn't all be one size."
+       SO THE COMPARISON MOVED TO THE BASE. The tier scalar is what carries the magnitude cue now; the
+       per-arrow multipliers are what stop six glyphs reading as a widget. Both figures are read out and
+       compared, so a swap still fails here. */
+    expect(Number(FLASH.match(/critical: ([\d.]+)/)?.[1])).toBeGreaterThan(
+      Number(FLASH.match(/minor: ([\d.]+)/)?.[1]),
+    );
+  });
+
+  it("gives the six arrows a genuine spread, not one size", () => {
+    /* THE RULING'S OTHER HALF, and the one a tier comparison cannot see. Six equal multipliers would satisfy
+       every other case here and put the uniform set straight back. */
+    const scales = (FLASH.match(/scale: [\d.]+/g) ?? []).map((entry) =>
+      Number(entry.replace(/[^\d.]/g, "")),
+    );
+    expect(scales.length).toBe(6);
+    expect(new Set(scales).size).toBeGreaterThan(3);
+    expect(Math.max(...scales)).toBeGreaterThan(Math.min(...scales) * 1.5);
+  });
+
+  it("keeps every arrow visible at both tiers", () => {
+    /* THE FAILURE A SPREAD INTRODUCES: a small multiplier on the minor base is the smallest glyph in the
+       system, and below roughly a tenth of the figure's em an arrow at 40px type is a speck. Checked as the
+       PRODUCT, because neither factor is wrong on its own. */
+    const scales = (FLASH.match(/scale: [\d.]+/g) ?? []).map((entry) =>
+      Number(entry.replace(/[^\d.]/g, "")),
+    );
+    const minor = Number(FLASH.match(/minor: ([\d.]+)/)?.[1]);
+    for (const scale of scales) expect(minor * scale).toBeGreaterThan(0.1);
+  });
+
+  it("keys on the magnitude rather than the bucket name", () => {
+    /* `criticalBonus`/`criticalMalus` ARE the 20% buckets, so this is the same test one step closer to the
+       thing that matters -- and it stays right if a face is ever re-tabled, where a name check would have to
+       be found and updated. */
+    expect(FLASH).toContain("Math.abs(shown.delta) >= CRITICAL_SWING_PERCENT");
+    expect(FLASH).toContain("const CRITICAL_SWING_PERCENT = 20;");
+  });
+
+  it("scales from the figure's em, not from pixels", () => {
+    /* A FIXED PX SIZE would make the tiers indistinguishable on a small screen and absurd on a large one --
+       the failure the numeral's own `clamp` already exists to avoid. Design note #959: the em is now
+       composed from a base and a multiplier, so the assertion is on the unit rather than on a literal. */
+    expect(FLASH).toContain("* offset.scale");
+    expect(FLASH).toContain("}em`");
+  });
+
+  it("no longer sets one size in the stylesheet", () => {
+    /* THE OVERRIDE HAZARD, as an absence. A surviving `font-size` on `.app-revenue-arrow` would not break the
+       inline style -- inline wins -- but it would sit there reading as the arrow's size and be wrong, which is
+       the note-describing-something-the-code-does-not-do fault in a stylesheet. */
+    const arrow = sliceBetween(ANIM, ".app-revenue-arrow {", ".app-revenue-figure");
+    expect(arrow).not.toContain("font-size:");
+  });
+
+  it("still animates every arrow in the ruled direction", () => {
+    /* #953, re-asked because this batch touched the same element list. */
+    expect(FLASH).toContain('animationName: bonus ? "app-revenue-arrow-up" : "app-revenue-arrow-down"');
+  });
+});

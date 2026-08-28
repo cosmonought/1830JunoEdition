@@ -18,6 +18,7 @@ import {
   STANDARD_VARIANTS,
   type GameLength,
   type GameVariants,
+  VARIANT_BLURB,
 } from "../utils/gameVariants";
 
 import { FONT_SIZE, LINE_HEIGHT } from "../styles/typography";
@@ -34,29 +35,26 @@ const VARIANT_TOGGLES: ReadonlyArray<{
   label: string;
   blurb: string;
 }> = [
+  /* Design note #961: THE BLURBS ARE NO LONGER WRITTEN HERE. This table kept its own copy of all four, and
+     the Unpredictable Revenue one had drifted a whole sentence away from the Lobby's -- two surfaces
+     describing one rule and disagreeing, with nothing to notice it. The labels stay: they are this table's
+     own business. `VARIANT_BLURB` is keyed by the same flag names, so a renamed variant is a compile error
+     here rather than a blurb that quietly stops matching. */
   {
     key: "unpredictableRevenue",
     label: "Unpredictable revenue",
-    blurb:
-      "Every train rolls a d6 against its printed run: 1 pays 80%, 6 pays 120%. Averages to exactly 100% over a game, so it adds drama without changing how long the bank lasts. Dividend payouts are calculated from your total percentage owned and rounded to the nearest whole dollar.",
+    blurb: VARIANT_BLURB.unpredictableRevenue,
   },
   {
     key: "dynamicStockMarket",
     label: "Dynamic stock market",
-    blurb:
-      "The share price moves by how much was paid, not just that it was. A dividend under the share price does not move the token at all; twice the price moves it two cells.",
+    blurb: VARIANT_BLURB.dynamicStockMarket,
   },
-  {
-    key: "gentleRust",
-    label: "Gentle rust",
-    blurb:
-      "A rusting train gets one last Operating Round turn before it goes, and stops counting against the train limit the moment it is doomed — so its replacement can be bought straight away.",
-  },
+  { key: "gentleRust", label: "Gentle rust", blurb: VARIANT_BLURB.gentleRust },
   {
     key: "delayedAuction",
     label: "Delayed private auction",
-    blurb:
-      "The game opens on Stock Round 1 with no private companies; they are auctioned at the end of the Operating Round set in which the first 3-train is bought. The B&O cannot be traded until then.",
+    blurb: VARIANT_BLURB.delayedAuction,
   },
 ];
 

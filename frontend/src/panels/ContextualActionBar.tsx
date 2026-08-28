@@ -52,6 +52,7 @@ import {
   bestContrastTextColor,
   stationTickerColor,
 } from "../components/hexContractTypes";
+import { desaturatedLiveryInk } from "../styles/corporationLivery";
 import type { StationTokenSlot } from "../utils/stationTokens";
 import type { PrivateCompanyState } from "../utils/gameState";
 import type { RoundType, TileColor } from "../utils/gameState";
@@ -1982,17 +1983,33 @@ export default function ContextualActionBar({
       {/* Design note #517: the round's own number. "Operating Round" alone named the KIND of round in a game
          that runs several back to back, so a player reading a log line about "OR 3.2" had nothing to match it
          against. `cycle.index` is the board's own notation and the same pair `ContextualSubPanel` prints. */}
-      <span style={styles.actionBarRoundLabel}>
-        {roundType === "OperatingRound"
-          ? orSequence
-            ? `Operating Round ${orSequence.cycle}.${orSequence.index}`
-            : "Operating Round"
-          : roundType === "StockRound"
-            ? "Stock Round"
-            : roundType === "WaterfallAuction"
-              ? "Auction Round"
-              : "No live round"}
-      </span>
+      {/* ==================================================================
+           DESIGN NOTE 946: THE TITLE JOINED THE ROW IT WAS SITTING ABOVE
+          ==================================================================
+          REPORTED: "We need to save vertical space in the Action Bar. Currently, 'Operating Round 1.1' sits on
+          its own line, with the subphase sequence and corporation turn order on a separate line below it.
+          Consolidate these: the Round Title, subphase sequence, and corporation turn order must all sit on
+          the exact same horizontal line."
+          THE TITLE WAS A BARE `<span>` BESIDE A `<div>`, which is the whole of the bug: `orProgressRow` is a
+          block, so it broke the line however narrow its contents were. Nothing about the two facts wanted
+          separating -- #920 had already argued the trail and the order belong together, and the label is the
+          third member of that family for the same reason (#630: "one place to look for 'how far through are
+          we'").
+          THE ROW RENDERS IN EVERY ROUND NOW, not only an Operating Round, because the label does. Its two
+          Operating-Round children keep their own conditions, so a Stock Round gets a row with one child in it
+          -- which lays out identically to the bare span it replaces. */}
+      <div style={styles.orProgressRow}>
+        <span style={styles.actionBarRoundLabel}>
+          {roundType === "OperatingRound"
+            ? orSequence
+              ? `Operating Round ${orSequence.cycle}.${orSequence.index}`
+              : "Operating Round"
+            : roundType === "StockRound"
+              ? "Stock Round"
+              : roundType === "WaterfallAuction"
+                ? "Auction Round"
+                : "No live round"}
+        </span>
       {/* Design note #481: the sub-phase, inline. Operating Round only -- there is no sub-phase sequence in a
          Stock Round or the auction, and a step counter beside those titles would invent structure.
          IT SURVIVES THE COLLAPSE, unlike the strip it replaces. #298 dropped the stepper when pinned as
@@ -2038,8 +2055,6 @@ export default function ContextualActionBar({
           FLUSH RIGHT VIA `marginLeft: auto` ON THE ORDER, not `justify-content: space-between` on the row --
           the trail must stay left-anchored when the order is absent (a Stock Round, or a round with no queue),
           and `space-between` would centre a lone trail. */}
-      {roundType === "OperatingRound" && (orSubPhaseProgress || operatingOrder.length > 0) && (
-        <div style={styles.orProgressRow}>
       {roundType === "OperatingRound" && orSubPhaseProgress && (
         <span
           style={styles.subPhaseTrail}
@@ -2093,6 +2108,22 @@ export default function ContextualActionBar({
                     ...(entry.done
                       ? styles.orTurnOrderChipDone
                       : styles.orTurnOrderChipUpcoming),
+                    /* ==================================================================
+                        DESIGN NOTE 945: THE INK CARRIES IDENTITY; THE BOX STILL CARRIES ORDER
+                       ==================================================================
+                       REPORTED: "The acronym text for the inactive corporations should be rendered in their
+                       respective corporate colors, but appropriately desaturated so they don't compete with
+                       the active corporation's badge."
+                       WHICH PARTLY REVERSES #930, and the reversal is narrower than it looks. That note
+                       stripped the livery from every inactive chip because "eight unrelated objects" left no
+                       way to scan the row -- but its evidence was about BORDER AND FILL, which stay uniform
+                       here. Only the letters take colour, so the strip still reads as one control.
+                       WRITTEN AFTER THE `done`/`upcoming` SPREADS so it overrides their flat `#8a90a0`, and
+                       BEFORE the acting-chip block below so a filled chip's computed contrast ink still wins.
+                       Order is the whole mechanism; a reader moving this line changes which colour survives. */
+                    ...(entry.companyId === activeCorporation?.companyId
+                      ? {}
+                      : { color: desaturatedLiveryInk(entry.companyId) }),
                     ...(entry.companyId === activeCorporation?.companyId
                       ? {
                           backgroundColor: entry.color,
@@ -2117,9 +2148,8 @@ export default function ContextualActionBar({
                 </span>
               ))}
             </span>
-              )}
-        </div>
       )}
+      </div>
       {/* Design note #630: BOTH ROUNDS PUT THEIR TRACK IN THE SAME PLACE. It was in the BUTTON row because that
          is where the roster pills it replaced sat (#342) -- and a pill carrying spendable cash did belong next
          to the controls that spend it. `SeatOrderTrail` is not that: it answers "where are we in the rotation",

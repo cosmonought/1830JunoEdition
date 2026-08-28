@@ -78,6 +78,7 @@ import {
   CARD_SURFACE,
   CARD_SURFACE_MUTED,
 } from "../styles/palette";
+import { BO_LOCKED_CARD_NOTE } from "../utils/gameVariants";
 
 export interface StockRoundPanelProps {
   publicCompanies: readonly PublicCompanyState[];
@@ -153,6 +154,9 @@ export interface StockRoundPanelProps {
   /** Design note #464: the round, so the card order is recomputed at the
    *  Operating Round boundary and held through the Stock Round. */
   roundType: RoundType | null;
+  /** Design note #948: corporations whose whole card is inert -- the delayed auction's B&O lock. Forwarded
+   *  to the roster; empty in a standard game. */
+  lockedCompanyIds?: readonly number[];
 }
 
 // Design note #8: the corporation roster -- a card each, so "who controls what, and what would it
@@ -198,6 +202,7 @@ function CorporationRoster({
   controlsBlockedReason,
   actingSeatColor,
   tradingOpen,
+  lockedCompanyIds = [],
 }: {
   publicCompanies: readonly PublicCompanyState[];
   /** Design note #713: why this SALE is illegal, or `null`. Resolved by `App` for the same reason
@@ -250,6 +255,10 @@ function CorporationRoster({
   /** Design note #417: `false` outside a Stock Round -- each card then
    *  renders no trading controls at all. */
   tradingOpen: boolean;
+  /** Design note #948: corporations whose whole card is inert. Passed as DATA rather than derived here --
+   *  `boIsLocked` already answers this in `sharePurchase`, and a panel re-asking it would be the second
+   *  implementation of a rule, which is the fault this codebase keeps finding. Empty in a standard game. */
+  lockedCompanyIds?: readonly number[];
 }) {
   /* Design note #464: recomputed at the Operating Round BOUNDARY. `null` until the first one
      establishes an order, leaving the contract's own table order as a neutral start. `prevRoundRef`
@@ -357,9 +366,17 @@ function CorporationRoster({
                    clicking it again deactivates -- so there is always a way back to a board with no controls on it. */}
                 <button
                   type="button"
+                  /* Design note #948: a locked card's face is not a control. The wrapper already refuses the
+                     pointer; this refuses the KEYBOARD, which `pointerEvents` does not touch -- a tab-and-enter
+                     would otherwise expand a card the mouse cannot. */
+                  disabled={lockedCompanyIds.includes(company.company_id)}
                   onClick={() => onActivateCompany(isActive ? null : company.company_id)}
                   aria-expanded={isActive}
-                  aria-label={`${company.ticker} — ${isActive ? "hide" : "show"} share actions`}
+                  aria-label={
+                    lockedCompanyIds.includes(company.company_id)
+                      ? `${company.ticker} — ${BO_LOCKED_CARD_NOTE}`
+                      : `${company.ticker} — ${isActive ? "hide" : "show"} share actions`
+                  }
                   style={styles.rosterCardToggle}
                 >
                 {/* Design note #389: THE HEADER IS THE LIVERY. A corporation's colour was a 16px tint on the ticker
@@ -807,6 +824,24 @@ function CorporationRoster({
              The front deletes the parallel render, the guard and the fixed 460px frame; the reflow is handled by
              cards keeping their own height, with actions rendering for the EXPANDED card only. */
 
+          /* ==================================================================
+              DESIGN NOTE 948: A LOCKED CARD IS DEAD, NOT MERELY REFUSING
+             ==================================================================
+             REPORTED: "the B&O corporation card is clickable/expandable, but the 'Buy' button is greyed out
+             with a tooltip. This is a false affordance."
+             AND IT IS THE SECOND TIME THIS EXACT SHAPE HAS BEEN REPORTED HERE. #417's own note in this file
+             already settled the principle -- "a disabled control claims the action is available here and
+             fixable" -- and chose absence over disabling for out-of-round controls. #904b then made the B&O
+             refusal loud, which was right for a player who ACTS, and left the card itself fully alive for a
+             player who has not: expandable, clickable, offering a panel whose every control refuses.
+             SO THE WHOLE SURFACE GOES QUIET. Not the button, not the panel -- the card. It cannot be expanded,
+             it does not take a click, and it says why in its own footer instead of in a tooltip nobody hovers.
+             `pointerEvents: "none"` ON THE CARD rather than `disabled` on the toggle, because the toggle is
+             the entire card face (#16/#26) and a disabled button inside a live card still shows a cursor and
+             a focus ring. `aria-disabled` carries the same fact to a screen reader, which `pointerEvents`
+             alone cannot. */
+          const locked = lockedCompanyIds.includes(company.company_id);
+
           return (
             <div
               key={company.company_id}
@@ -815,9 +850,17 @@ function CorporationRoster({
                 ...(company.is_floated ? {} : styles.rosterCardUnfloated),
                 ...(isActive ? styles.rosterCardActive : {}),
                 borderColor: isActive ? CARD_BORDER_ACTIVE : CARD_BORDER,
+                ...(locked ? styles.rosterCardLocked : {}),
               }}
+              aria-disabled={locked ? true : undefined}
             >
               {cardFace}
+              {locked && (
+                /* THE NOTE IS PART OF THE CARD, not a tooltip and not a toast: it is a standing fact about
+                   this corporation for the whole of the early game, and the player it is for is the one who
+                   has NOT clicked. */
+                <p style={styles.rosterCardLockedNote}>{BO_LOCKED_CARD_NOTE}</p>
+              )}
               {/* Design note #396: ONE CARD HOLDS THE CONTROLS. This reverses #388, left standing above rather than
                  edited away. That note argued a control needing a click to reveal is one the player must remember is
                  there -- sound, and it did not weigh the MULTIPLIER: eight corporations x ~twenty controls is roughly
@@ -825,7 +868,10 @@ function CorporationRoster({
                  The reversal is narrow and #388's real point survives: the actions still render on the FRONT, in place,
                  under the numbers they act on. Only eight copies became one. Clicking again clears it, which is one
                  fewer control than a close button. */}
-              {isActive && cardActions}
+              {/* Design note #948: and never the panel, even if something else set this card active -- a
+                  `RevertTo` that rewinds into a round where it was open would otherwise restore controls the
+                  lock has since taken away. */}
+              {isActive && !locked && cardActions}
             </div>
           );
         })}
@@ -1389,68 +1435,29 @@ function CompanyActions({
             )}
             seatColor={actingSeatColor}
             action="sale"
+            /* Design note #951: the price move joins the cash move rather than sitting under it. `after`
+               equal to the current price IS the floor case -- `projectShareSaleMove` returns today's price
+               when the token cannot drop -- so it is normalised to `null` here and the row says so. */
+            marketMove={(() => {
+              if (!salePriceAfter || marketPrice === null) return null;
+              const after = salePriceAfter(
+                company.company_id,
+                certificatesIn(sellPercentage),
+              );
+              if (after === null) return null;
+              return {
+                ticker: company.ticker,
+                before: marketPrice,
+                after: after === marketPrice ? null : after,
+              };
+            })()}
           />
       )}
 
-      {/* Design note #713: THE OTHER CONSEQUENCE. Reported: "we have the effect on the player's treasury
-          listed, but we don't list the effect on the stock price."
-          It is the more interesting of the two. Cash is a figure a player can add up in their head; where
-          the token lands is the reason they might not sell at all -- a drop through a zone boundary changes
-          what everyone at the table may buy (#712), and a drop off the bottom of a column is how a
-          corporation dies.
-          THE SAME GRAMMAR AS THE DIVIDEND MOVE LINE (#197): two zone-tinted prices and one arrow. A player
-          should read "what this does to the price" as one shape wherever they meet it, and the tint carries
-          the zone rule as a tooltip on both ends -- so a sale that drops a corporation INTO the Yellow zone
-          says so.
-          ONE ROW PER CERTIFICATE, walked by `projectShareSaleMove` through `salePriceAfter`. */}
-      {showSellProjection && salePriceAfter && (() => {
-        const after = salePriceAfter(company.company_id, certificatesIn(sellPercentage));
-        /* ==================================================================
-             DESIGN NOTE 743a: "NOWHERE LEFT TO FALL" IS AN ANSWER
-           ==================================================================
-
-           REPORTED: "the Sell action shows what happens to the player's treasury but not what happens to the
-           corporation's share price."
-
-           The row #713 built was already here -- and it RENDERED NOTHING whenever `after` came back equal to
-           the current price, which on this chart means the token is on the bottom row of its column and cannot
-           drop. So the one board position where a seller most wants reassurance about the price showed them
-           the same blank as a feature that had never been built.
-
-           AN ABSENT ROW CANNOT BE TOLD FROM A MISSING FEATURE, which is why this now says the thing out loud
-           rather than returning `null`. A player who sees "Share price $65 — already at the bottom of its
-           column" has learnt a fact about the board; a player who sees nothing concludes the app forgot. */
-        if (after === null) return null;
-        if (after === marketPrice) {
-          return (
-            <div style={styles.saleMarketMove}>
-              <span style={styles.saleMarketLabel}>Share price</span>
-              <ZonedPrice price={marketPrice} />
-              <span style={styles.saleMarketFloor}>
-                already at the bottom of its column — this sale cannot lower it
-              </span>
-            </div>
-          );
-        }
-        return (
-          <div style={styles.saleMarketMove}>
-            <span style={styles.saleMarketLabel}>Share price</span>
-            <ZonedPrice price={marketPrice} />
-            {/* Design note #713: DOWN, not right. The dividend line's arrow is horizontal because a
-                declaration moves the token one column left or right; a sale moves it one row DOWN per
-                certificate. Using the same glyph for both would flatten the one difference between them
-                that a player has to know. */}
-            <span
-              style={styles.saleMarketArrow}
-              role="img"
-              aria-label={`falls to $${after}`}
-            >
-              &#8595;
-            </span>
-            <ZonedPrice price={after} />
-          </div>
-        );
-      })()}
+      {/* Design note #951: THE STANDALONE PRICE ROW LIVED HERE. #713 built it and #743a taught it to speak
+          at the floor; both survive, inside `TreasuryProjectionBlock` above. What is gone is the separate div
+          and its `saleMarket*` styles -- two rows about one transaction, styled by two rule sets, which is
+          how the reported "unformatted, lacks spacing, default system font" happened. */}
       </div>
 
     </div>
@@ -1567,6 +1574,7 @@ function TreasuryProjectionBlock({
   projection,
   seatColor,
   action,
+  marketMove = null,
 }: {
   projection: TreasuryProjection;
   /** The acting seat's colour, or `null` when it is not known -- the block then
@@ -1574,6 +1582,30 @@ function TreasuryProjectionBlock({
   seatColor: string | null;
   /** "purchase" or "sale", for the sentence a tooltip and a screen reader get. */
   action: string;
+  /* ==================================================================
+      DESIGN NOTE 951: THE OTHER CONSEQUENCE MOVED INTO THE SAME TABLE
+     ==================================================================
+     REPORTED: "Below the 'Sell' buttons, the string `Share price$76↓$71` is unformatted, lacks spacing, and
+     renders in a default system font. Move this information directly into the single-row transaction table
+     that currently shows the player's cash changes ... so all consequences of the sale (personal cash and
+     corporate stock value) are unified in one readable transaction preview."
+     AND THE FORMATTING COMPLAINT AND THE PLACEMENT COMPLAINT HAVE ONE CAUSE. #713 built the price move as a
+     SEPARATE div below the block, with its own `saleMarket*` styles -- which never picked up the block's
+     figure treatment (tabular numerals, sized label, the gap between label and figures). Two rows that were
+     always about one transaction were styled by two sets of rules, so they drifted immediately.
+     ONE BLOCK, TWO ROWS, ONE SET OF STYLES. The price row reuses `projectionLabel` and `projectionFigures`
+     exactly, which is what makes it inherit the app's font and spacing rather than needing its own copy.
+     PASSED AS DATA, NOT AS A NODE. The block renders `ZonedPrice` itself so the zone tooltip #713 argued for
+     survives the move -- handing in a ready-made element would have put the formatting back at the call site,
+     which is the thing being fixed. */
+  marketMove?: {
+    /** The corporation, so the row can say WHOSE share value moved -- the cash row above it is the player's,
+     *  and two unlabelled rows in one block would be ambiguous about that. */
+    ticker: string;
+    before: number;
+    /** `null` when the token cannot fall any further; the row then says so instead of drawing an arrow. */
+    after: number | null;
+  } | null;
 }) {
   const tint =
     projection.direction === "short"
@@ -1626,6 +1658,43 @@ function TreasuryProjectionBlock({
       {projection.short !== null && (
         <span style={styles.projectionShortNote}>${projection.short} short</span>
       )}
+      {marketMove && (
+        /* Design note #951: the second row, in the same block and the same styles. `width: 100%` breaks the
+           line so the two rows stack inside a `flexWrap` container that was built for one -- the alternative
+           was a second nested flex, which would have given the price row its own box model again. */
+        <span style={styles.projectionRowBreak}>
+          <span style={styles.projectionLabel}>{marketMove.ticker} Share Value</span>
+          <span style={styles.projectionFigures}>
+            <span style={styles.projectionBefore}>
+              <ZonedPrice price={marketMove.before} />
+            </span>
+            {marketMove.after === null ? (
+              /* #743a'S RULE, KEPT WORD FOR WORD: "An absent row cannot be told from a missing feature." The
+                 token is on the bottom of its column and the sale cannot lower it, and that is a fact about
+                 the board rather than a reason to render nothing. */
+              <span style={styles.projectionFloorNote}>
+                already at the bottom of its column — this sale cannot lower it
+              </span>
+            ) : (
+              <>
+                {/* Design note #713: DOWN, not right. The cash row's arrow is horizontal because money moves
+                    along a line; a sale moves the token one row DOWN per certificate. Using one glyph for
+                    both would flatten the only difference between them a player has to know. */}
+                <span
+                  style={{ ...styles.projectionArrow, ...styles.projectionDown }}
+                  role="img"
+                  aria-label={`falls to $${marketMove.after}`}
+                >
+                  ↓
+                </span>
+                <span style={styles.projectionAfter}>
+                  <ZonedPrice price={marketMove.after} />
+                </span>
+              </>
+            )}
+          </span>
+        </span>
+      )}
     </div>
   );
 }
@@ -1660,6 +1729,7 @@ export function StockRoundPanel({
   outlook,
   actionsLockedReason,
   roundType,
+  lockedCompanyIds,
 }: StockRoundPanelProps) {
   /* Design note #32: out of phase counts as "controls disabled" exactly the
      same way an unready session does -- one flag, so no control can be
@@ -1745,6 +1815,7 @@ export function StockRoundPanel({
       )}
 
       <CorporationRoster
+        lockedCompanyIds={lockedCompanyIds}
         publicCompanies={publicCompanies}
         phase={phase}
         outlook={outlook}
@@ -2086,6 +2157,35 @@ const styles: Record<string, React.CSSProperties> = {
     lineHeight: 1.45,
     color: CARD_INK_MUTED,
   },
+  /* ==================================================================
+      DESIGN NOTE 948: DESATURATED AND DEAF
+     ==================================================================
+     RULED: "Change it so the entire card is desaturated and entirely unclickable/unexpandable."
+     `filter: grayscale` RATHER THAN A FLAT OVERLAY, because the card's identity IS its colour -- the livery
+     header, the market chip, the president crown. Draining the saturation leaves every one of those legible
+     as shape and position while removing the thing that makes the card look live beside seven that are.
+     `opacity` ON TOP, lightly: grayscale alone leaves a card at full contrast, which still competes for the
+     eye even after the hue has gone.
+     `pointerEvents: "none"` IS THE UNCLICKABLE HALF, and it is on the CARD rather than the button. The whole
+     face is the toggle (#16/#26), so disabling the button alone would leave the padding around it live and
+     the cursor still changing over it. The button is `disabled` as well -- that one is for the keyboard,
+     which pointer events cannot reach. */
+  rosterCardLocked: {
+    filter: "grayscale(1)",
+    opacity: 0.55,
+    pointerEvents: "none",
+  },
+  /** The standing sentence, sized as a footnote rather than a warning: this is a fact about the game's
+   *  shape, not something the player did wrong. Muted amber keeps it findable without reading as an error --
+   *  the same reasoning #619 gives for the must-buy-a-train notice being amber and not red. */
+  rosterCardLockedNote: {
+    margin: 0,
+    padding: "6px 10px 8px",
+    fontSize: FONT_SIZE.micro,
+    lineHeight: 1.35,
+    color: "#c8b070",
+    textAlign: "center",
+  },
   /** Design note #396: the active card carries the controls, so it is
    *  lifted off the grid rather than merely outlined. */
   rosterCardActive: {
@@ -2169,6 +2269,22 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "5px",
     fontVariantNumeric: "tabular-nums",
     whiteSpace: "nowrap",
+  },
+  /* Design note #951: the line break inside the block's `flexWrap` row, so the price row stacks under the
+     cash row rather than needing a nested flex of its own. `width: 100%` is the whole mechanism. */
+  projectionRowBreak: {
+    width: "100%",
+    display: "flex",
+    alignItems: "baseline",
+    gap: "8px",
+    flexWrap: "wrap",
+  },
+  /* #743a's sentence, at the label's own scale -- it is an explanation, not a figure. */
+  projectionFloorNote: {
+    fontSize: FONT_SIZE.micro,
+    color: CARD_INK_MUTED,
+    fontStyle: "italic",
+    whiteSpace: "normal",
   },
   projectionBefore: { fontSize: FONT_SIZE.small, fontWeight: 700, color: CARD_INK_MUTED },
   projectionArrow: { fontSize: FONT_SIZE.small, fontWeight: 700 },

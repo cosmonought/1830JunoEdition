@@ -249,7 +249,9 @@ describe("the turn's one line reads as prose (design notes #939 -> #941)", () =>
        WHAT IS STILL BEING ASKED is the half that matters and has never changed: a turn whose modifier the
        rounding swallowed must claim NO modifier. "completely ignoring the die if the rounding swallowed the
        modifier" is the ruling, and it is about what the line must not say. */
-    const normals = lines.filter((line) => !line.includes("because"));
+    /* Design note #949: the discriminator changed with the join. "because" is gone from every branch, so
+       what separates an ordinary turn from a modified one is whether a modifier was ANNOUNCED. */
+    const normals = lines.filter((line) => !/(bonus|malus)/.test(line));
     expect(normals.length).toBeGreaterThan(0);
     for (const line of normals) {
       expect(line).toMatch(/^B&O ran for \$\d+\. [A-Z]/);
@@ -262,7 +264,9 @@ describe("the turn's one line reads as prose (design notes #939 -> #941)", () =>
     const bonuses = lines.filter((line) => line.includes("bonus"));
     expect(bonuses.length).toBeGreaterThan(0);
     for (const line of bonuses) {
-      expect(line).toMatch(/^B&O ran for \$\d+\. It enjoyed a \d+% bonus because .+\.$/);
+      /* Design note #949: a full stop after the modifier, then a standalone sentence. */
+      expect(line).toMatch(/^B&O ran for \$\d+\. It enjoyed a \d+% bonus\. [A-Z].+\.$/);
+      expect(line).not.toContain("because");
       expect(line).not.toContain("malus");
     }
   });
@@ -271,7 +275,9 @@ describe("the turn's one line reads as prose (design notes #939 -> #941)", () =>
     const maluses = lines.filter((line) => line.includes("malus"));
     expect(maluses.length).toBeGreaterThan(0);
     for (const line of maluses) {
-      expect(line).toMatch(/^B&O ran for \$\d+\. It suffered a \d+% malus because .+\.$/);
+      /* Design note #949: a full stop after the modifier, then a standalone sentence. */
+      expect(line).toMatch(/^B&O ran for \$\d+\. It suffered a \d+% malus\. [A-Z].+\.$/);
+      expect(line).not.toContain("because");
       expect(line).not.toContain("bonus");
     }
   });

@@ -51,6 +51,58 @@ export const GAME_LENGTH_BLURB: Readonly<Record<GameLength, string>> = {
     "$20,000 bank. Runs well past the Diesels, with time for late corporations to matter.",
 };
 
+/* ==================================================================
+ *  DESIGN NOTE 961: THE BLURBS LIVE WITH THE RULES, IN ONE COPY
+ * ==================================================================
+ *
+ * ASKED: "we altered the way Unpredictable Revenue works, so our text description on the Lobby page likely
+ * still needs updating."
+ *
+ * AND THERE WERE TWO DESCRIPTIONS TO UPDATE, WHICH HAD ALREADY DRIFTED. `Lobby.tsx` wrote them inline as JSX
+ * and `SandboxWaitingRoom.tsx` kept its own `VARIANT_TOGGLES` table -- and the waiting room's Unpredictable
+ * Revenue text carried a whole extra sentence about dividend rounding that the Lobby's did not. Two surfaces
+ * describing one rule, already disagreeing, and nothing pointing that out.
+ * SO THEY MOVE HERE, beside the rules they describe and beside `GAME_LENGTH_BLURB`, which has been doing
+ * exactly this since #902. It is also #848's standing rule -- a component "writes no rules and no copy" --
+ * applied to the one place in this feature that had escaped it.
+ * AND THE STALENESS WAS INEVITABLE UNDER THE OLD ARRANGEMENT. Every batch since #903 has changed how this
+ * variant works: per-train to per-turn (#941), the $10 rounding (#938), the flavour buckets (#944). A
+ * description sitting two files away from the rule cannot survive that, and did not.
+ *
+ * THE NEW COPY IS DELIBERATELY NOT A SPECIFICATION. Requested: "Rather than explaining the math/system behind
+ * it, it could be something more lighthearted." The Lobby is where a table decides what KIND of game to play,
+ * which is a question about feel; the mechanism belongs in the Rules Reference, where a player goes having
+ * already chosen. The two difficulty parentheticals do the work the old paragraphs were failing at. */
+export const VARIANT_BLURB: Readonly<
+  Record<"unpredictableRevenue" | "dynamicStockMarket" | "gentleRust" | "delayedAuction", string>
+> = {
+  /* NO DIE AND NO PERCENTAGES TABLE -- and "up to" rather than a promise, because the roll can also land on
+     no change at all, which the old text's "1 pays 80%, 6 pays 120%" implied was impossible.
+     ==================================================================
+      THE ROUNDING CLAUSE IS NOT DECORATION -- WITHOUT IT THE SENTENCE IS FALSE
+     ==================================================================
+     CORRECTED: "a corporation that runs for $80 with a 20% malus ends up only paying out $60, which is
+     actually a -25%." Exactly so: $80 x 0.8 is $64, and #938 rounds that to $60.
+     AND IT GOES FURTHER THAN THE ONE EXAMPLE, which is worth recording so nobody later trims the clause as
+     redundant. The rounding moves a figure by up to $5 either way, so the smaller the printed run the larger
+     the proportional swing: a $30 route at 80% pays $20, a full third less. It can also cancel the modifier
+     outright -- a $20 route at 80% is $16, which rounds back to $20.
+     SO THE CLAUSE IS DOING THE WORK OF THE MISSING PARAGRAPH. "+/-20%" describes the DIE; the payout is the
+     die and then the rounding, and naming the second step is what stops the first from reading as a
+     guarantee. It is also the honest short version: it says the mechanism exists without spending the
+     Lobby's four lines on the arithmetic. */
+  unpredictableRevenue:
+    "Running railways is risky. In this variant, runs can produce up to +/-20% their standard revenue, rounded to the nearest $10.",
+  dynamicStockMarket:
+    "The share price moves by how much was paid, not just that it was. A dividend under the share price does not move the token at all; twice the price moves it two cells. Rewards running big and punishes token payouts.",
+  /* THE PARENTHETICALS ARE THE POINT OF THIS PAIR. A table choosing variants wants to know which way each one
+     pushes before it reads what it does, and these two push in opposite directions. */
+  gentleRust:
+    "(Lessens difficulty.) A rusting train gets one last Operating Round turn before it goes, and stops counting against the train limit the moment it is doomed — so its replacement can be bought straight away.",
+  delayedAuction:
+    "(Increases difficulty.) The game opens on Stock Round 1 with no private companies; they are auctioned at the end of the Operating Round set in which the first 3-train is bought. Corporations must float on share capital alone until then, and the B&O cannot be traded until the auction concludes. Watch your cash carefully or your rivals might get the advantage!",
+};
+
 export interface GameVariants {
   /** Design note #902: the bank, and therefore the length. */
   length: GameLength;
@@ -256,6 +308,27 @@ export function boIsLocked(
  *  come to explain the same refusal three ways. */
 export const BO_LOCKED_REASON =
   "The B&O is not available yet. Its President's Certificate is the prize in the private company auction, which this table has delayed until the end of the Operating Round set in which the first 3-train is bought — the B&O cannot be parred, bought or sold until that auction concludes.";
+
+/** The footer a locked corporation card carries.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 948: THE CARD SAYS WHY, INSTEAD OF A BUTTON REFUSING
+ *  ==================================================================
+ *
+ *  REPORTED: "Currently, the B&O corporation card is clickable/expandable, but the 'Buy' button is greyed out
+ *  with a tooltip. This is a false affordance."
+ *
+ *  SHORTER THAN `BO_LOCKED_REASON`, DELIBERATELY, and both survive. That one is a refusal sentence: it fires
+ *  when a player has tried something and is owed the whole rule. This is a standing label on a card nobody has
+ *  touched yet, read at a glance beside seven cards that are live -- and the full paragraph at that size is a
+ *  wall a player skips.
+ *  WRITTEN HERE RATHER THAN IN THE PANEL, per #848: the component "writes no rules and no copy". The rule that
+ *  makes the card dead and the sentence explaining it belong in one file, or they drift.
+ *  "BO" WITHOUT THE AMPERSAND, exactly as specified -- and #364's own note records the same choice for the map
+ *  badges, so the two surfaces agree by accident rather than by coordination. Worth stating so a later tidy-up
+ *  does not "fix" one of them. */
+export const BO_LOCKED_CARD_NOTE =
+  "Inactive until the BO private company is purchased in the Auction Round.";
 
 /* ------------------------------------------------------------------ */
 /* Unpredictable revenue -- design note #903                           */
@@ -567,7 +640,20 @@ export function turnRevenueSentence(
   const swing = Math.abs(revenueDeltaPercent(roll));
   const verb = outcome === "bonus" ? "enjoyed" : "suffered";
   const noun = outcome === "bonus" ? "bonus" : "malus";
-  return `${opening} It ${verb} a ${swing}% ${noun} because ${clause}`;
+  /* ==================================================================
+      DESIGN NOTE 949: THE RESULT AND THE JOKE ARE TWO SENTENCES
+     ==================================================================
+     REPORTED: "a bit too clunky as a single run-on sentence. We need to separate the mechanical result from
+     the flavor text."
+     AND THE TWO HALVES ANSWER DIFFERENT QUESTIONS, which is why splitting them reads better rather than just
+     shorter. "It suffered a 10% malus" is the fact a player needs to reconcile the figure on their chips;
+     the line after it is colour. Subordinating the first to the second with "because" made the mechanical
+     half read as a preamble to a joke -- and #907's whole argument for having flavour at all was that the
+     joke has a JOB, which it cannot do while it is grammatically the point of the sentence.
+     THE PAYLOAD MOVED WITH THE JOIN. All 100 lines in the four modifier buckets are capitalised now, because
+     they are standalone sentences rather than clauses. `unchanged` was already sentence-cased and is
+     untouched -- its branch never used "because" and did not change. */
+  return `${opening} It ${verb} a ${swing}% ${noun}. ${clause}`;
 }
 
 /** The turn's one roll, resolved against the aggregated printed revenue of every train that ran.

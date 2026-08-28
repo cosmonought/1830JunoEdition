@@ -322,6 +322,7 @@ import { bankIsBroken, rankPlayers, PLACEHOLDER_TOTAL_ANTE, type PlayerStanding 
 import { turnGuardKey } from "./utils/turnGuardKey";
 import type { GameVariants } from "./utils/gameVariants";
 import {
+  boIsLocked,
   dividendStepsFor,
   resolveVariants,
   revenueDeltaPercent,
@@ -349,7 +350,7 @@ import {
   refusalReasonFor,
   refusedActionLineWithReason,
 } from "./utils/refusedAction";
-import { roundLabelFor } from "./utils/roundLabel";
+import { roundLabelFor, roundStampFor } from "./utils/roundLabel";
 
 import {
   EmergencyTrainPurchaseModal,
@@ -1749,7 +1750,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
 
   /* The round as a short tag, lifted to utils/roundLabel.ts (#643/#659) so a log writer can ask about the state an action resolved to.
      See docs/ai_architecture/state_machine.md - App.tsx #343 */
-  const roundLabel = useMemo(() => roundLabelFor(gameState), [gameState]);
+  /* Design note #958: the STAMP, which carries the Operating Round's step. `roundLabelFor` is still what the
+     round-transition announcements below use -- they are about a round starting, where no step applies. */
+  const roundLabel = useMemo(() => roundStampFor(gameState), [gameState]);
 
   /* Read through a ref so the stamp is taken at write time, not closed over when the callback was built.
      See docs/ai_architecture/state_machine.md - App.tsx #343 */
@@ -2139,7 +2142,18 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     const corporation = gameState?.public_companies.find(
       (entry) => entry.company_id === actingProtocolId,
     );
+    /* Design note #955: the home station, from the label the chain reports. Converted to the `"q,r"` key the
+       frame set speaks in via the board's own table -- the same `STATIC_BOARD_HEXES` every other label lookup
+       in this file uses, rather than a second map. An unknown or absent label falls through to #888's
+       ordering below, which is the honest answer when the board cannot say where home is. */
+    const homeKey = (() => {
+      const label = corporation?.home_hex_label;
+      if (!label) return null;
+      const hex = STATIC_BOARD_HEXES.find((entry) => entry.label === label);
+      return hex ? `${hex.q},${hex.r}` : null;
+    })();
     return chooseFrameKeys({
+      home: homeKey,
       buildable: layTrackFocus?.highlighted,
       network: layTrackFocus?.network,
       /* THE SAME `stationTokensOf` THE GLOW USES (#686: the recorded city slot travels with the token), so
@@ -5004,7 +5018,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             timestampMs,
             /* Stamp the entry with the round the action was taken IN (before), not the one it resolved to.
                See docs/ai_architecture/state_machine.md - App.tsx #659 */
-            round: roundLabelFor(before) ?? undefined,
+            /* Design note #958: stamped with the step the action was taken ON, from the same `before` state
+               #659 chose for the round -- an action that advances the cursor must not be filed under the step
+               it moved to. */
+            round: roundStampFor(before) ?? undefined,
           },
           ...log,
         ]);
@@ -9044,6 +9061,27 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                    controls are separately gated, so an out-of-phase viewer reads but cannot act. */}
                 {activeMainTab === "corps" && (
                   <StockRoundPanel
+                    /* ==================================================================
+                        DESIGN NOTE 948: THE LOCK IS RESOLVED ONCE, HERE
+                       ==================================================================
+                       `boIsLocked` is the authority (#904) and `sharePurchase` already asks it on the dispatch
+                       path. The panel is handed the ANSWER rather than the inputs, so there is one place that
+                       decides whether the B&O is tradeable -- a card that re-derived it from `variants` and
+                       `private_auction_complete` would be the second implementation of a rule, and this
+                       codebase's recurring fault is exactly that.
+                       MATCHED BY TICKER, not by a hard-coded id: `BO_TICKER` is what `grantBOPresidency` and
+                       `boPresidencyRefusal` both key on, and company ids are the sandbox's own numbering. */
+                    lockedCompanyIds={
+                      gameState &&
+                      boIsLocked(
+                        resolveVariants(gameState.variants),
+                        gameState.private_auction_complete,
+                      )
+                        ? gameState.public_companies
+                            .filter((entry) => entry.ticker === BO_TICKER)
+                            .map((entry) => entry.company_id)
+                        : []
+                    }
                     publicCompanies={gameState?.public_companies ?? []}
                     // Design note #395 in that file: each card lists the
                     // privates its own corporation holds, expandable to
@@ -9234,6 +9272,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                     />
                   ) : (
                     <StockMarketRenderer
+                      /* Design note #962: the compass rose states the movement rule for THIS table's variant
+                         set, not the printed one. `resolveVariants` inside the rose turns an absent config
+                         into the standard game, so this passes the raw field. */
+                      variants={gameState?.variants}
                       marketGrid={marketGrid}
                       // The par track is fed by par_value, so a parred but unfloated company appears on it.
                       // See docs/ai_architecture/stock_market.md - App.tsx #530

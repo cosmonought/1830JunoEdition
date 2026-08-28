@@ -106,8 +106,25 @@ const SKIP = { AdvanceOperatingSubPhase: { game_id: 1, protocol_id: 1 } } as con
 const UNDO = { UndoLastAction: { game_id: 1 } } as const;
 
 describe("passing in an Operating Round", () => {
+  /* ==================================================================
+      SUPERSEDED BY #958, AND THE OLD SENTENCES ARE RECORDED RATHER THAN DELETED
+     ==================================================================
+     THIS BLOCK PINNED #478'S WORDING, in which the step was named IN the sentence:
+         expect(describeGameplayAction(PASS, context())).toBe("PRR passed Lay Track.");
+         ["BuyPrivate", "PRR passed Buy Private."], ["Tokens", "PRR passed Station Tokens."] ...
+         expect(describeGameplayAction(SKIP, context())).toBe("PRR passed Lay Track.");
+     REPORTED SINCE: "During operating rounds, I think it might be better to have [time] [round--subphase] ...
+     So instead of `[3:06 PM] [OR 2.1] NNH passed Buy Trains.` it would read `[3:06 PM] [OR 2.1--Buy Trains]
+     NNH passed.`" The step moved into the log's ROUND TAG, where it lands in one column and can be scanned
+     rather than read.
+     TWO OF #478'S THREE RULES SURVIVE UNTOUCHED and are still asserted below: the line names the CORPORATION
+     rather than its president, and it follows the OPERATING QUEUE rather than the seat pointer. Those were the
+     report #478 was actually built for. What it also did -- put the step in the sentence -- is what moved.
+     THE THIRD RULE MOVED WITH IT rather than being lost: "the stepper's own verb-led label, so the log and the
+     strip cannot name one step two ways" is now `roundStampFor`'s job, and `polishWave7.test.ts` asserts it
+     there against the same table. */
   it("reads exactly as the requirement's worked example", () => {
-    expect(describeGameplayAction(PASS, context())).toBe("PRR passed Lay Track.");
+    expect(describeGameplayAction(PASS, context())).toBe("PRR passed.");
   });
 
   it("names the corporation and NOT its president", () => {
@@ -126,26 +143,25 @@ describe("passing in an Operating Round", () => {
       PASS,
       context({ gameState: state({ active_corporation_index: 1 }) }),
     );
-    expect(line).toBe("B&O passed Lay Track.");
+    expect(line).toBe("B&O passed.");
   });
 
-  it("names the step the cursor is actually on", () => {
-    // Not a fixed word. Each step has to reach the sentence.
-    const steps: Array<[ActionLogContext["orSubPhase"], string]> = [
-      ["BuyPrivate", "PRR passed Buy Private."],
-      ["Track", "PRR passed Lay Track."],
-      ["Tokens", "PRR passed Station Tokens."],
-      ["Dividends", "PRR passed Dividends."],
+  it("reads the same whichever step the cursor is on", () => {
+    /* Design note #958: THE INVERSE OF WHAT THIS USED TO ASSERT. It required each step to reach the sentence;
+       the sentence now says none of them, because the tag does. Swept over the same four steps so a single arm
+       keeping the old wording -- which reads perfectly well on its own -- cannot survive. */
+    const steps: ActionLogContext["orSubPhase"][] = [
+      "BuyPrivate",
+      "Track",
+      "Tokens",
+      "Dividends",
     ];
-    for (const [step, expected] of steps) {
-      expect(describeGameplayAction(PASS, context({ orSubPhase: step }))).toBe(expected);
+    for (const step of steps) {
+      expect([step, describeGameplayAction(PASS, context({ orSubPhase: step }))]).toEqual([
+        step,
+        "PRR passed.",
+      ]);
     }
-  });
-
-  it("uses the stepper's own verb-led label, not the enum name", () => {
-    // "Lay Track", not "Track" -- and the value comes from the strip's
-    // table, so the log and the strip cannot name one step two ways.
-    expect(describeGameplayAction(PASS, context())).not.toContain("passed Track");
   });
 
   it("falls back to a shorter sentence when no step is known", () => {
@@ -181,12 +197,15 @@ describe("passing outside an Operating Round", () => {
 });
 
 describe("skipping a sub-phase", () => {
-  it("says which step was skipped", () => {
-    // It was "PRR skipped a step" -- the one message whose entire content
-    // is WHICH step, with that part left out.
-    expect(describeGameplayAction(SKIP, context({ orSubPhase: "Tokens" }))).toBe(
-      "PRR passed Station Tokens.",
-    );
+  it("says only that the corporation passed", () => {
+    /* ==================================================================
+        #478 PUT THE STEP IN; #958 MOVED IT TO THE TAG
+       ==================================================================
+       THIS ASSERTED `"PRR passed Station Tokens."`, and #478's reason was sound: "the one message whose entire
+       content is WHICH step, with that part left out." The step is still the entire content -- it has moved to
+       the log's round tag, where it lands in one column instead of mid-sentence.
+       SAYING IT TWICE WOULD BE THE REGRESSION: "[OR 2.1--Station Tokens] PRR passed Station Tokens." */
+    expect(describeGameplayAction(SKIP, context({ orSubPhase: "Tokens" }))).toBe("PRR passed.");
   });
 
   it("names the corporation the message carries, not the queue cursor", () => {
@@ -196,7 +215,7 @@ describe("skipping a sub-phase", () => {
       { AdvanceOperatingSubPhase: { game_id: 1, protocol_id: 4 } },
       context(),
     );
-    expect(line).toBe("B&O passed Lay Track.");
+    expect(line).toBe("B&O passed.");
   });
 
   it("degrades to the old wording rather than inventing a step", () => {

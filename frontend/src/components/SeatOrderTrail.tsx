@@ -135,13 +135,26 @@ export function SeatOrderTrail({
                        so the two cues agree. A strike alone would be ambiguous (eliminated? bankrupt?); the tag alone is four
                        small capitals in a crowded row. */
                     ...(seat.passed && !isCurrent ? styles.seatNamePassed : {}),
+                    /* ==================================================================
+                        DESIGN NOTE 947: EVERY SEAT WEARS ITS OWN COLOUR, NOT JUST THE ACTING ONE
+                       ==================================================================
+                       REPORTED: "the inactive players are all the same default text color. Update the inactive
+                       players so their names and cash amounts are rendered in their specific player colors to
+                       improve at-a-glance scanning."
+                       AND #599 IS WHY THEY WERE NOT. That note removed each seat's colour DOT -- "it was doing
+                       identity work the fill now does for the one seat that matters, and on the four seats it
+                       survived on it was a third token in a segment the request asks to hold two." Correct
+                       about the DOT, which was a separate glyph competing for space; the ink costs no room at
+                       all, which is the difference.
+                       THE ACTING SEAT IS UNTOUCHED. It is filled with its colour and its ink is computed by
+                       `bestContrastTextColor` against that fill -- writing a livery ink over it would be
+                       unreadable on half the palette, which is #389's lesson. So this applies only when the
+                       seat is not current, and the fill still marks whose turn it is. */
+                    ...(isCurrent ? {} : { color: seat.color }),
                   }}
                 >
                   {seat.label}
                 </span>
-                {seat.passed && !isCurrent && (
-                  <span style={styles.passedTag}>PASSED</span>
-                )}
                 {/* Design note #639 suppressed these on the LIT segment: the acting seat's own money was on the
                     card directly below, labelled, and repeating it compressed two inches away was the duplication
                     #637 removed.
@@ -163,7 +176,11 @@ export function SeatOrderTrail({
                   /* Design note #342: AVAILABLE cash, not the total -- during
                      an auction the total is the one figure that cannot be
                      spent. */
-                  <span style={styles.cash}>${seat.available}</span>
+                  /* Design note #947: the figure takes the seat's colour too -- "their names AND cash amounts".
+                     Name and money in two different inks would read as two different subjects. */
+                  <span style={{ ...styles.cash, ...(isCurrent ? {} : { color: seat.color }) }}>
+                    ${seat.available}
+                  </span>
                 )}
                 {typeof seat.escrowed === "number" && seat.escrowed > 0 && (
                   <span
@@ -172,6 +189,22 @@ export function SeatOrderTrail({
                   >
                     +${seat.escrowed}
                   </span>
+                )}
+                {seat.passed && !isCurrent && (
+                  /* ==================================================================
+                      DESIGN NOTE 952: THE BADGE GOES LAST, SO THE RHYTHM SURVIVES
+                     ==================================================================
+                     REPORTED: "the UI currently mashes the text together as `P1[PASSED]$176`. Reorder this to
+                     preserve the Name-to-Cash visual rhythm, formatting it as `P1 $176 [PASSED]`."
+                     #610 PUT IT "IMMEDIATELY AFTER THE STRUCK-THROUGH NAME" and gave a real reason -- the tag
+                     and the strike are two halves of one cue and wanted to be adjacent. What that missed is
+                     that the row's PRIMARY rhythm is name-then-money, repeated down every seat, and a tag
+                     wedged between them breaks the column a reader is scanning. The strike is still on the
+                     name; the two cues are simply at opposite ends of one short segment rather than touching.
+                     AND IT IS THE LAST THING IN THE SEGMENT, not merely later: a passed seat may or may not
+                     carry an escrow figure, so anchoring the badge to the END is what keeps it in one place
+                     down the column. */
+                  <span style={styles.passedTag}>PASSED</span>
                 )}
               </span>
             </li>
@@ -310,16 +343,29 @@ const styles: Record<string, React.CSSProperties> = {
      AMBER, NOT RED. Passing is an ordinary move in both these rounds -- in the Stock Round very often the correct
      one -- and red would grade it. Amber marks a state without judging it, and stays clear of the green this app
      spends on positive figures. */
+  /* ==================================================================
+      DESIGN NOTE 952: OUTLINED, NEVER FILLED
+     ==================================================================
+     RULED: "style the `[PASSED]` indicator as a clean, small badge aligned to the end of the string. Do not
+     use background color changes to indicate passing, as that will conflict with the player text colors."
+     WHICH #947 MADE TRUE RATHER THAN HYPOTHETICAL. Every inactive seat now renders its name and cash in its
+     own player colour, so a filled badge would put an arbitrary field behind one seat's palette and not the
+     others -- six seats, six different collisions. The outline carries the same "this is a badge" reading at
+     this size and touches no colour but its own.
+     `marginLeft: auto` IS WHAT "ALIGNED TO THE END" MEANS MECHANICALLY, inside the segment's own flex. The
+     `gap` on `seat` supplies the spacing the report asked for; nothing here needs its own margin. */
   passedTag: {
     flex: "none",
+    marginLeft: "auto",
     fontSize: "9px",
     fontWeight: 900,
     letterSpacing: "0.08em",
     color: "#e0b050",
     border: "1px solid #6b5a2a",
     borderRadius: "3px",
-    padding: "0 3px",
+    padding: "0 4px",
     lineHeight: 1.5,
+    backgroundColor: "transparent",
   },
   /* Design note #639: back, and inactive-only. `escrow` stays deliberately
      quiet -- it qualifies the figure beside it rather than competing with

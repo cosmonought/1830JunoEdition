@@ -23,7 +23,12 @@
 // see -- which is the whole reason the bug survived four batches of green suites.
 
 import { readStripped, sliceBetween } from "./sourceScan";
-import { resolveVariants, STANDARD_VARIANTS, type GameVariants } from "./gameVariants";
+import {
+  resolveVariants,
+  STANDARD_VARIANTS,
+  VARIANT_BLURB,
+  type GameVariants,
+} from "./gameVariants";
 
 /** Every boolean flag in the schema, derived from the standard config rather than typed out -- so a sixth
  *  variant is covered by these cases the day it is added rather than the day somebody remembers. */
@@ -137,10 +142,23 @@ describe("the waiting room offers every variant the schema defines (design note 
     expect(note).toContain("#c8cdd8");
   });
 
-  it("tells a table what the rounding rule does to their dividends (design note #922)", () => {
-    /* The variant changes how money is divided, and the one place a player agrees to it is this description.
-       A rule that only appears in a design note is a rule nobody at the table has read. */
-    expect(source).toContain("rounded to the nearest whole dollar");
+  it("tells a table what the rounding rule does to their dividends (design notes #922 -> #961)", () => {
+    /* ==================================================================
+        THE RULE SURVIVES; THE SENTENCE IT NAMED DOES NOT
+       ==================================================================
+       THIS ASSERTED `"rounded to the nearest whole dollar"`, which was #922's per-share rounding -- and that
+       is not how the variant has worked since #938 replaced it with rounding the TURN TOTAL to the nearest
+       ten. The assertion was pinning a sentence that had become false about the game, which is worse than
+       pinning nothing: it would have blocked the correction.
+       AND THE SENTENCE WAS ONLY EVER IN ONE OF THE TWO PLACES. #961 found this text in the waiting room and a
+       shorter version in the Lobby, already a whole clause apart. The blurbs now live in `gameVariants`
+       beside the rules, in one copy that both surfaces read.
+       #922'S ACTUAL RULE IS UNCHANGED AND IS WHAT IS ASSERTED NOW: "The variant changes how money is divided,
+       and the one place a player agrees to it is this description." So the description must still name the
+       rounding -- and `variantCopy.test.ts` checks that the figure it names is the one the arithmetic
+       produces, which is the half this case could never have caught. */
+    expect(source).toContain("VARIANT_BLURB.unpredictableRevenue");
+    expect(VARIANT_BLURB.unpredictableRevenue).toContain("rounded to the nearest $10");
   });
 
   it("stops accepting changes once the game is running", () => {

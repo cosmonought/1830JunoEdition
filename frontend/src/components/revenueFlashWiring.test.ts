@@ -21,9 +21,19 @@ import { readStripped, sliceBetween } from "../utils/sourceScan";
 describe("the overlay is floating text, not a window (design note #940)", () => {
   const FLASH = readStripped("components/RevenueModifierFlash.tsx");
 
-  it("shows for exactly two seconds", () => {
-    expect(FLASH).toContain("export const REVENUE_FLASH_MS = 2000;");
+  it("times out on its own constant", () => {
+    /* ==================================================================
+        SUPERSEDED BY #954, AND THE OLD FIGURE IS RECORDED RATHER THAN DELETED
+       ==================================================================
+       THIS ASSERTED `REVENUE_FLASH_MS = 2000`, on #940's ruling of "exactly 2 seconds". REPORTED since: "too
+       large and hangs on screen too long", refined to a rule of thumb -- "a juice notification should be
+       readable ~1.5x before it goes away, and it doesn't take long to read a two-digit number." It is 700 now,
+       and `polishWave6.test.ts` owns the arithmetic behind that figure.
+       WHAT IS LEFT HERE IS THE MECHANISM, which never changed and is the half that can silently break: the
+       timer must read the exported constant rather than a literal, or the two can disagree and the exported
+       value becomes documentation of something the component does not do. */
     expect(FLASH).toContain("setTimeout(() => setVisible(false), REVENUE_FLASH_MS)");
+    expect(FLASH).toMatch(/export const REVENUE_FLASH_MS = \d+;/);
   });
 
   it("sits in the dead centre of the viewport", () => {
@@ -34,15 +44,39 @@ describe("the overlay is floating text, not a window (design note #940)", () => 
   });
 
   it("wears no box, pill, or plate", () => {
-    /* THE RULING, AS AN ABSENCE. Every property that would give this a window is named, because "floating
-       text ONLY" is a constraint on what must NOT appear and a positive assertion cannot express it.
-       `textShadow` is deliberately not in this list -- a halo is not a box, and it is the same trick #364
-       uses on the hex badge for the same reason: legibility over a board of four different colours. */
+    /* ==================================================================
+        THE RULING, AS AN ABSENCE -- AND #960 HAD TO BE LET THROUGH DELIBERATELY
+       ==================================================================
+       Every property that would give this a window is named, because "floating text ONLY" is a constraint on
+       what must NOT appear and a positive assertion cannot express it.
+       `textShadow` WAS ALWAYS EXEMPT -- a halo is not a box, and it is the same trick #364 uses on the hex
+       badge for the same reason: legibility over a board of four different colours.
+       #960'S GLOW IS THE SAME FAMILY AND WOULD HAVE PASSED THIS CASE UNTOUCHED, which is why it is called out
+       here instead. It sets `background` with a radial gradient, not `backgroundColor`, so every assertion
+       below would still have held while a coloured field appeared behind the figure. Slipping past an absence
+       test on a technicality makes the test worthless for everything it still guards.
+       THE LINE THAT ACTUALLY MATTERS IS THE EDGE. A box has a rim; this reaches full transparency inside its
+       own bounds, so no rectangle is visible at any opacity. The case below asserts that directly rather than
+       trusting the distinction to prose. */
     expect(FLASH).not.toContain("backgroundColor");
     expect(FLASH).not.toContain("borderRadius");
     expect(FLASH).not.toContain("boxShadow");
     expect(FLASH).not.toContain("border:");
     expect(FLASH).not.toContain("padding");
+  });
+
+  it("keeps the glow edgeless (design note #960)", () => {
+    /* THE PROPERTY THAT SEPARATES A GLOW FROM A PLATE. `radial-gradient` with a fully transparent stop before
+       the boundary has no rim to read as a shape; a solid `background`, or a gradient whose last stop still
+       carries alpha, is a coloured rectangle with soft corners. */
+    const ANIM = readStripped("styles/animations.ts");
+    expect(FLASH).toContain("radial-gradient(closest-side");
+    expect(FLASH).toContain("rgba(0, 0, 0, 0) 70%");
+    /* AND IT SITS BEHIND THE GLYPHS. Without the negative stacking it would wash out the figure it exists to
+       lift off the board -- the exact opposite of the job. */
+    const glow = sliceBetween(ANIM, ".app-revenue-glow {", "}");
+    expect(glow).toContain("z-index: -1");
+    expect(glow).toContain("pointer-events: none");
   });
 
   it("cannot swallow a click", () => {

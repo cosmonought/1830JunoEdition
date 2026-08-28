@@ -80,7 +80,7 @@ import {
   STANDARD_VARIANTS,
   type GameLength,
   type GameVariants,
-  VARIANT_BLURB,
+  VARIANT_COPY,
 } from "../utils/gameVariants";
 
 // Design note #3: THE SILENT-BUTTON BUG, AND THE RULE THAT REPLACED IT. Reported: clicking "Create Room" did
@@ -868,8 +868,8 @@ function RoomBrowser({
             }
           />
           <span>
-            <strong>Unpredictable revenue</strong>
-            <span style={styles.variantNote}>{VARIANT_BLURB.unpredictableRevenue}</span>
+            <strong>{VARIANT_COPY.unpredictableRevenue.label}</strong>
+            <span style={styles.variantNote}>{VARIANT_COPY.unpredictableRevenue.blurb}</span>
           </span>
         </label>
 
@@ -885,8 +885,8 @@ function RoomBrowser({
             }
           />
           <span>
-            <strong>Dynamic stock market</strong>
-            <span style={styles.variantNote}>{VARIANT_BLURB.dynamicStockMarket}</span>
+            <strong>{VARIANT_COPY.dynamicStockMarket.label}</strong>
+            <span style={styles.variantNote}>{VARIANT_COPY.dynamicStockMarket.blurb}</span>
           </span>
         </label>
 
@@ -899,8 +899,8 @@ function RoomBrowser({
             }
           />
           <span>
-            <strong>Gentle rust</strong>
-            <span style={styles.variantNote}>{VARIANT_BLURB.gentleRust}</span>
+            <strong>{VARIANT_COPY.gentleRust.label}</strong>
+            <span style={styles.variantNote}>{VARIANT_COPY.gentleRust.blurb}</span>
           </span>
         </label>
 
@@ -913,8 +913,8 @@ function RoomBrowser({
             }
           />
           <span>
-            <strong>Delayed auction</strong>
-            <span style={styles.variantNote}>{VARIANT_BLURB.delayedAuction}</span>
+            <strong>{VARIANT_COPY.delayedAuction.label}</strong>
+            <span style={styles.variantNote}>{VARIANT_COPY.delayedAuction.blurb}</span>
           </span>
         </label>
 

@@ -18,7 +18,8 @@ import {
   STANDARD_VARIANTS,
   type GameLength,
   type GameVariants,
-  VARIANT_BLURB,
+  VARIANT_COPY,
+  type VariantCopyKey,
 } from "../utils/gameVariants";
 
 import { FONT_SIZE, LINE_HEIGHT } from "../styles/typography";
@@ -30,33 +31,23 @@ import { SEAT_COLORS, SEAT_COLOR_NAMES } from "../utils/playerLabels";
  *  hand-written block that could be forgotten -- which is exactly the failure this note is fixing, at the
  *  scale of a whole panel. `key` is typed against `GameVariants`, so a renamed flag is a compile error here
  *  rather than a toggle that silently stops binding. */
+/* ==================================================================
+    DESIGN NOTE 961a: NEITHER THE LABELS NOR THE BLURBS ARE WRITTEN HERE
+   ==================================================================
+   This table used to carry both, and BOTH had drifted from the Lobby's: the blurb by a whole sentence about
+   dividend rounding, and the label by a word -- "Delayed private auction" here against "Delayed auction"
+   there. One variant with two names, on the two screens a table reads before agreeing to it.
+   THE ORDER IS STILL THIS FILE'S OWN, which is why the keys are listed rather than taken from
+   `Object.keys`: the sequence a host reads the toggles in is a presentation decision, and the record is a
+   dictionary rather than a running order. Typed as `VariantCopyKey`, so a renamed flag is a compile error
+   here rather than a toggle that silently stops binding. */
 const VARIANT_TOGGLES: ReadonlyArray<{
-  key: "delayedAuction" | "gentleRust" | "unpredictableRevenue" | "dynamicStockMarket";
+  key: VariantCopyKey;
   label: string;
   blurb: string;
-}> = [
-  /* Design note #961: THE BLURBS ARE NO LONGER WRITTEN HERE. This table kept its own copy of all four, and
-     the Unpredictable Revenue one had drifted a whole sentence away from the Lobby's -- two surfaces
-     describing one rule and disagreeing, with nothing to notice it. The labels stay: they are this table's
-     own business. `VARIANT_BLURB` is keyed by the same flag names, so a renamed variant is a compile error
-     here rather than a blurb that quietly stops matching. */
-  {
-    key: "unpredictableRevenue",
-    label: "Unpredictable revenue",
-    blurb: VARIANT_BLURB.unpredictableRevenue,
-  },
-  {
-    key: "dynamicStockMarket",
-    label: "Dynamic stock market",
-    blurb: VARIANT_BLURB.dynamicStockMarket,
-  },
-  { key: "gentleRust", label: "Gentle rust", blurb: VARIANT_BLURB.gentleRust },
-  {
-    key: "delayedAuction",
-    label: "Delayed private auction",
-    blurb: VARIANT_BLURB.delayedAuction,
-  },
-];
+}> = (
+  ["unpredictableRevenue", "dynamicStockMarket", "gentleRust", "delayedAuction"] as const
+).map((key) => ({ key, ...VARIANT_COPY[key] }));
 
 export interface SandboxWaitingRoomProps {
   roomCode: string;

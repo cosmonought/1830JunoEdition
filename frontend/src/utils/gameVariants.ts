@@ -73,9 +73,30 @@ export const GAME_LENGTH_BLURB: Readonly<Record<GameLength, string>> = {
  * it, it could be something more lighthearted." The Lobby is where a table decides what KIND of game to play,
  * which is a question about feel; the mechanism belongs in the Rules Reference, where a player goes having
  * already chosen. The two difficulty parentheticals do the work the old paragraphs were failing at. */
-export const VARIANT_BLURB: Readonly<
-  Record<"unpredictableRevenue" | "dynamicStockMarket" | "gentleRust" | "delayedAuction", string>
-> = {
+export type VariantCopyKey =
+  | "unpredictableRevenue"
+  | "dynamicStockMarket"
+  | "gentleRust"
+  | "delayedAuction";
+
+/* ==================================================================
+ *  DESIGN NOTE 961a: THE TITLES HAD DRIFTED TOO
+ * ==================================================================
+ *
+ * CORRECTED: "for the parentheticals, I meant for you to add them on the titles, not on the descriptions...
+ * so the title would read `Gentle rust (easier)` and `Delayed private auction (harder)`."
+ *
+ * AND GOING LOOKING FOR THE TITLES FOUND THE SAME FAULT ONE LEVEL UP. The Lobby's fourth toggle read "Delayed
+ * auction" and the waiting room's read "Delayed private auction" -- one variant, two names, on the two screens
+ * a table looks at before agreeing to it. #961 had just consolidated the blurbs and left the labels in the two
+ * places they had always been, which is half a fix.
+ * SO LABEL AND BLURB TRAVEL TOGETHER, in one record keyed by flag. They are one piece of copy about one rule
+ * and there was never a reason to separate them; keeping them apart is exactly what let them disagree.
+ *
+ * THE QUALIFIER BELONGS ON THE TITLE, and the correction is right about why. A parenthetical mid-paragraph is
+ * read after the decision; on the title it is read WITH the name, which is when a table is choosing. It also
+ * shortens the blurbs back to describing the rule, which is all they were ever for. */
+export const VARIANT_COPY: Readonly<Record<VariantCopyKey, { label: string; blurb: string }>> = {
   /* NO DIE AND NO PERCENTAGES TABLE -- and "up to" rather than a promise, because the roll can also land on
      no change at all, which the old text's "1 pays 80%, 6 pays 120%" implied was impossible.
      ==================================================================
@@ -87,20 +108,35 @@ export const VARIANT_BLURB: Readonly<
      redundant. The rounding moves a figure by up to $5 either way, so the smaller the printed run the larger
      the proportional swing: a $30 route at 80% pays $20, a full third less. It can also cancel the modifier
      outright -- a $20 route at 80% is $16, which rounds back to $20.
-     SO THE CLAUSE IS DOING THE WORK OF THE MISSING PARAGRAPH. "+/-20%" describes the DIE; the payout is the
+     THE SYMBOL IS U+00B1, not "+/-". The ASCII pair was a transcription of the request's own shorthand and
+     survived into the shipped string; this file already carries em dashes, curly apostrophes and arrow
+     glyphs, so there was never a reason for the fallback.
+     SO THE CLAUSE IS DOING THE WORK OF THE MISSING PARAGRAPH. "±20%" describes the DIE; the payout is the
      die and then the rounding, and naming the second step is what stops the first from reading as a
      guarantee. It is also the honest short version: it says the mechanism exists without spending the
      Lobby's four lines on the arithmetic. */
-  unpredictableRevenue:
-    "Running railways is risky. In this variant, runs can produce up to +/-20% their standard revenue, rounded to the nearest $10.",
-  dynamicStockMarket:
-    "The share price moves by how much was paid, not just that it was. A dividend under the share price does not move the token at all; twice the price moves it two cells. Rewards running big and punishes token payouts.",
-  /* THE PARENTHETICALS ARE THE POINT OF THIS PAIR. A table choosing variants wants to know which way each one
-     pushes before it reads what it does, and these two push in opposite directions. */
-  gentleRust:
-    "(Lessens difficulty.) A rusting train gets one last Operating Round turn before it goes, and stops counting against the train limit the moment it is doomed — so its replacement can be bought straight away.",
-  delayedAuction:
-    "(Increases difficulty.) The game opens on Stock Round 1 with no private companies; they are auctioned at the end of the Operating Round set in which the first 3-train is bought. Corporations must float on share capital alone until then, and the B&O cannot be traded until the auction concludes. Watch your cash carefully or your rivals might get the advantage!",
+  unpredictableRevenue: {
+    label: "Unpredictable revenue",
+    blurb:
+      "Running railways is risky. In this variant, runs can produce up to ±20% their standard revenue, rounded to the nearest $10.",
+  },
+  dynamicStockMarket: {
+    label: "Dynamic stock market",
+    blurb:
+      "The share price moves by how much was paid, not just that it was. A dividend under the share price does not move the token at all; twice the price moves it two cells. Rewards running big and punishes token payouts.",
+  },
+  /* Design note #961a: the difficulty qualifiers moved to the LABELS above. A table choosing variants wants
+     to know which way each one pushes as it reads the name, not three lines into the description. */
+  gentleRust: {
+    label: "Gentle rust (easier)",
+    blurb:
+      "A rusting train gets one last Operating Round turn before it goes, and stops counting against the train limit the moment it is doomed — so its replacement can be bought straight away.",
+  },
+  delayedAuction: {
+    label: "Delayed private auction (harder)",
+    blurb:
+      "The game opens on Stock Round 1 with no private companies; they are auctioned at the end of the Operating Round set in which the first 3-train is bought. Corporations must float on share capital alone until then, and the B&O cannot be traded until the auction concludes. Watch your cash carefully or your rivals might get the advantage!",
+  },
 };
 
 export interface GameVariants {

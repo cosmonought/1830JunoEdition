@@ -26,7 +26,7 @@ import { readStripped, sliceBetween } from "./sourceScan";
 import {
   resolveVariants,
   STANDARD_VARIANTS,
-  VARIANT_BLURB,
+  VARIANT_COPY,
   type GameVariants,
 } from "./gameVariants";
 
@@ -95,9 +95,15 @@ describe("the waiting room offers every variant the schema defines (design note 
     /* THE COUNT IS THE ASSERTION, and it is derived from the schema rather than fixed at four. The reported
        bug was two flags rendered out of five -- a number nobody would notice being wrong in a review, and
        one this case makes impossible to get wrong silently. */
+    /* Design note #961a: RE-ANCHORED, because the toggle table changed shape. It used to spell out
+       `key: "gentleRust"` per entry; the labels and blurbs now come from `VARIANT_COPY` and the file keeps
+       only the ORDER, as a list of flag names. The rule is untouched -- every boolean flag must reach a
+       control -- and it is asked of the ordered list rather than of the whole file, so a flag mentioned in a
+       comment somewhere cannot satisfy it. */
+    const order = sliceBetween(source, "const VARIANT_TOGGLES", ").map((key)");
     expect(BOOLEAN_FLAGS.length).toBeGreaterThan(0);
     for (const flag of BOOLEAN_FLAGS) {
-      expect([flag, source.includes(`key: "${flag}"`)]).toEqual([flag, true]);
+      expect([flag, order.includes(`"${flag}"`)]).toEqual([flag, true]);
     }
   });
 
@@ -157,8 +163,8 @@ describe("the waiting room offers every variant the schema defines (design note 
        and the one place a player agrees to it is this description." So the description must still name the
        rounding -- and `variantCopy.test.ts` checks that the figure it names is the one the arithmetic
        produces, which is the half this case could never have caught. */
-    expect(source).toContain("VARIANT_BLURB.unpredictableRevenue");
-    expect(VARIANT_BLURB.unpredictableRevenue).toContain("rounded to the nearest $10");
+    expect(source).toContain("VARIANT_COPY");
+    expect(VARIANT_COPY.unpredictableRevenue.blurb).toContain("rounded to the nearest $10");
   });
 
   it("stops accepting changes once the game is running", () => {

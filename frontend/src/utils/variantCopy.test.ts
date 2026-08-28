@@ -18,7 +18,7 @@
 // the code as it then stood, which is precisely why a wrong rule reaches a player: the legend agreed with the
 // bug."
 
-import { VARIANT_BLURB, STANDARD_VARIANTS, dividendStepsFor } from "./gameVariants";
+import { VARIANT_COPY, STANDARD_VARIANTS, dividendStepsFor } from "./gameVariants";
 import { COMPASS_ARMS, compassArmsFor } from "../components/StockMarketRenderer";
 import { readStripped } from "./sourceScan";
 
@@ -29,7 +29,7 @@ describe("the variant blurbs have one home (design note #961)", () => {
     const lobby = readStripped("components/Lobby.tsx");
     const waiting = readStripped("components/SandboxWaitingRoom.tsx");
     for (const source of [lobby, waiting]) {
-      expect(source).toContain("VARIANT_BLURB");
+      expect(source).toContain("VARIANT_COPY");
       /* The old texts, by their most distinctive fragments. Any of these still in a component means that
          component is writing its own copy again. */
       expect(source).not.toContain("rolls a d6 against its printed run");
@@ -41,21 +41,34 @@ describe("the variant blurbs have one home (design note #961)", () => {
   it("covers all four variants", () => {
     /* A blurb missing from the record is a toggle with no description at all -- and the components read by
        key, so the failure is `undefined` rendered as empty rather than an error. */
-    expect(Object.keys(VARIANT_BLURB).sort()).toEqual([
+    expect(Object.keys(VARIANT_COPY).sort()).toEqual([
       "delayedAuction",
       "dynamicStockMarket",
       "gentleRust",
       "unpredictableRevenue",
     ]);
-    for (const blurb of Object.values(VARIANT_BLURB)) {
-      expect(blurb.length).toBeGreaterThan(40);
-      expect(blurb.trim()).toBe(blurb);
+    for (const entry of Object.values(VARIANT_COPY)) {
+      expect(entry.blurb.length).toBeGreaterThan(40);
+      expect(entry.blurb.trim()).toBe(entry.blurb);
+      expect(entry.label.trim()).toBe(entry.label);
+      expect(entry.label.length).toBeGreaterThan(0);
     }
   });
 });
 
 describe("the Unpredictable Revenue copy is true (design note #961)", () => {
-  const blurb = VARIANT_BLURB.unpredictableRevenue;
+  const blurb = VARIANT_COPY.unpredictableRevenue.blurb;
+
+  it("uses the real plus-minus sign", () => {
+    /* NOTICED IN REVIEW: "you actually wrote +/-, can you not create the combined symbol?"
+       I COULD, AND HAD NO REASON NOT TO. The ASCII pair was a transcription of the request's own shorthand
+       that survived into the shipped string -- this file already carries em dashes, curly apostrophes and
+       arrow glyphs, so the fallback was never buying anything.
+       ASSERTED BOTH WAYS, because the failure is a silent regression: a later editor retyping the line on a
+       keyboard without the glyph puts "+/-" back and nothing else here would object. */
+    expect(blurb).toContain("\u00B120%");
+    expect(blurb).not.toContain("+/-");
+  });
 
   it("names the rounding, without which the percentage is false", () => {
     /* CORRECTED MID-BATCH: "a corporation that runs for $80 with a 20% malus ends up only paying out $60,
@@ -90,26 +103,60 @@ describe("the Unpredictable Revenue copy is true (design note #961)", () => {
   });
 });
 
-describe("the difficulty parentheticals (design note #961)", () => {
-  it("marks gentle rust as easier and the delayed auction as harder", () => {
-    /* ASKED for both, and they are asserted together because they are a PAIR -- the value to a table choosing
-       variants is that the two point opposite ways, which one assertion alone does not express. */
-    expect(VARIANT_BLURB.gentleRust).toContain("(Lessens difficulty.)");
-    expect(VARIANT_BLURB.delayedAuction).toContain("(Increases difficulty.)");
+describe("the difficulty qualifiers ride on the titles (design note #961a)", () => {
+  /* ==================================================================
+      CORRECTED: THEY WERE ON THE DESCRIPTIONS
+     ==================================================================
+     MY FIRST VERSION opened each blurb with "(Lessens difficulty.)" / "(Increases difficulty.)" and these
+     cases asserted that. CORRECTED: "I meant for you to add them on the titles, not on the descriptions...so
+     the title would read `Gentle rust (easier)` and `Delayed private auction (harder)`."
+     AND THE CORRECTION IS RIGHT ABOUT WHY. A parenthetical inside a paragraph is read after the decision; on
+     the title it is read WITH the name, which is when a table is choosing. */
+
+  it("marks gentle rust easier and the delayed auction harder, in the label", () => {
+    /* ASSERTED AS A PAIR, because the value to a table is that the two point opposite ways -- which one
+       assertion alone does not express. */
+    expect(VARIANT_COPY.gentleRust.label).toBe("Gentle rust (easier)");
+    expect(VARIANT_COPY.delayedAuction.label).toBe("Delayed private auction (harder)");
   });
 
-  it("opens with the parenthetical rather than burying it", () => {
-    /* A reader scanning four blurbs sees the first few words of each. A difficulty marker in the last
-       sentence is a marker they find after deciding. */
-    expect(VARIANT_BLURB.gentleRust.startsWith("(")).toBe(true);
-    expect(VARIANT_BLURB.delayedAuction.startsWith("(")).toBe(true);
+  it("leaves the qualifiers out of the descriptions", () => {
+    /* THE OTHER HALF OF THE MOVE. Saying it in both places is the duplication this whole note is about, one
+       scale down. */
+    for (const entry of Object.values(VARIANT_COPY)) {
+      expect(entry.blurb).not.toContain("difficulty");
+      expect(entry.blurb).not.toContain("(easier)");
+      expect(entry.blurb).not.toContain("(harder)");
+    }
+  });
+
+  it("qualifies only the two variants that were ruled on", () => {
+    /* THE OTHER TWO ARE NOT NEUTRAL SO MUCH AS UNRULED, and inventing a qualifier for them would be this
+       file deciding a balance question nobody asked it to. */
+    expect(VARIANT_COPY.unpredictableRevenue.label).toBe("Unpredictable revenue");
+    expect(VARIANT_COPY.dynamicStockMarket.label).toBe("Dynamic stock market");
+  });
+
+  it("gives every variant one name across both screens", () => {
+    /* THE DRIFT THIS FOUND. The Lobby's fourth toggle read "Delayed auction" and the waiting room's read
+       "Delayed private auction" -- one variant, two names, on the two screens a table reads before agreeing
+       to it. Neither may write its own now. */
+    const lobby = readStripped("components/Lobby.tsx");
+    const waiting = readStripped("components/SandboxWaitingRoom.tsx");
+    for (const source of [lobby, waiting]) {
+      expect(source).not.toContain('"Delayed auction"');
+      expect(source).not.toContain('"Delayed private auction"');
+      expect(source).not.toContain("<strong>Gentle rust</strong>");
+    }
+    expect(lobby).toContain("VARIANT_COPY.gentleRust.label");
+    expect(waiting).toContain("VARIANT_COPY[key]");
   });
 
   it("closes the delayed auction with the warning it was given", () => {
-    expect(VARIANT_BLURB.delayedAuction).toContain(
+    expect(VARIANT_COPY.delayedAuction.blurb).toContain(
       "Watch your cash carefully or your rivals might get the advantage!",
     );
-    expect(VARIANT_BLURB.delayedAuction.trimEnd().endsWith("advantage!")).toBe(true);
+    expect(VARIANT_COPY.delayedAuction.blurb.trimEnd().endsWith("advantage!")).toBe(true);
   });
 });
 

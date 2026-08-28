@@ -224,3 +224,69 @@ describe("chooseFrameKeys", () => {
     expect(chooseFrameKeys({ stations: ["5,5"] })).toEqual(["5,5"]);
   });
 });
+
+describe("the frame pans but never zooms (design note #911)", () => {
+  /* ==================================================================
+      REPORTED: "The viewport auto-zooming is jarring ... it must strictly maintain the player's current
+      zoom level."
+     ==================================================================
+     THE PAN IS COMPUTED FROM THE ZOOM, which is why this is an option inside the module rather than a
+     subtraction at the call site: a caller that kept its own zoom and took this pan would centre at a
+     magnification the pan was never solved for. These cases pin that the two stay one answer. */
+  const viewport = { width: 800, height: 600 };
+  const options = { padding: 30, minZoom: 0.5, maxZoom: 4 };
+  const spread = [
+    { x: 0, y: 0 },
+    { x: 400, y: 300 },
+  ];
+
+  it("returns exactly the zoom it was given", () => {
+    for (const lockedZoom of [0.25, 0.5, 1, 2.75, 4, 9]) {
+      expect(frameHexes(spread, viewport, { ...options, lockedZoom })?.zoom).toBe(lockedZoom);
+    }
+  });
+
+  it("does not clamp a locked zoom back up to the default pose", () => {
+    /* THE CASE A NAIVE IMPLEMENTATION GETS WRONG. Running the lock through the existing
+       `Math.max(minZoom, ...)` would silently raise a player who had zoomed OUT past the default -- which is
+       a zoom change, which is the thing being removed. `0.25` is below `minZoom` on purpose. */
+    expect(frameHexes(spread, viewport, { ...options, lockedZoom: 0.25 })?.zoom).toBe(0.25);
+  });
+
+  it("does not clamp a locked zoom down to the buttons' ceiling either", () => {
+    expect(frameHexes(spread, viewport, { ...options, lockedZoom: 9 })?.zoom).toBe(9);
+  });
+
+  it("still centres the set, at that zoom", () => {
+    /* THE HALF THAT MUST KEEP WORKING. "Pan but do not zoom" is only useful if the pan is right: the set's
+       own centre has to land on the canvas centre, solved at the LOCKED magnification rather than at the
+       fit. Checked by transforming the centre through the returned pose. */
+    const lockedZoom = 2;
+    const framed = frameHexes(spread, viewport, { ...options, lockedZoom })!;
+    const centreX = (spread[0].x + spread[1].x) / 2;
+    const centreY = (spread[0].y + spread[1].y) / 2;
+    expect(centreX * framed.zoom + framed.panX).toBeCloseTo(viewport.width / 2, 6);
+    expect(centreY * framed.zoom + framed.panY).toBeCloseTo(viewport.height / 2, 6);
+  });
+
+  it("ignores a nonsense lock rather than blanking the canvas", () => {
+    /* A zero or negative zoom collapses the board to a point. Falling back to the fit is visible and
+       diagnosable; honouring it is an empty canvas with no error. */
+    for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const framed = frameHexes(spread, viewport, { ...options, lockedZoom: bad });
+      expect(framed).not.toBeNull();
+      expect(framed!.zoom).toBeGreaterThan(0);
+      expect(Number.isFinite(framed!.zoom)).toBe(true);
+    }
+  });
+
+  it("keeps fitting the set when no lock is given", () => {
+    /* THE CONTROL. #888's behaviour is still reachable and still clamped between the default pose and the
+       ceiling -- a lock that had quietly become mandatory would satisfy every case above. */
+    const fitted = frameHexes(spread, viewport, options)!;
+    expect(fitted.zoom).toBeGreaterThanOrEqual(options.minZoom);
+    expect(fitted.zoom).toBeLessThanOrEqual(options.maxZoom);
+    expect(frameHexes(spread, viewport, { ...options, lockedZoom: null })!.zoom).toBe(fitted.zoom);
+  });
+});
+

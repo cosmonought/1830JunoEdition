@@ -2642,12 +2642,18 @@ export function HexGridRenderer({
       .filter((point): point is { x: number; y: number } => point !== null);
     /* Design note #888: a hex-radius and a half of slack, so the outermost hex of the set is not flush
        against the canvas edge and its neighbours read as context rather than as a crop. */
+    /* Design note #911: THE PLAYER'S OWN ZOOM, PASSED IN. `view.zoom` is the effective magnification whether
+       the camera is locked or free -- the effect at #13 keeps `view` synced to `fitView` while locked -- so
+       this is the number on screen at the moment of the press, and the frame keeps it. */
     const framed = frameHexes(points, { width, height }, {
       padding: hexSize * 1.5,
       minZoom,
       maxZoom: minZoom * MAX_ZOOM_MULTIPLIER,
+      lockedZoom: view.zoom,
     });
     if (!framed) return;
+    /* STILL UNLOCKS THE CAMERA, and that is not a zoom change: `view` already holds `fitView`'s zoom while
+       locked, so flipping to the free view at the same magnification only makes the pan below stick. */
     setDetailedView(true);
     const clamped = clampPanToBoard(
       framed.panX,
@@ -2659,7 +2665,9 @@ export function HexGridRenderer({
     );
     setView({ zoom: framed.zoom, panX: clamped.panX, panY: clamped.panY });
     scheduleDraw();
-  }, [frameHexRequest, hexSize, width, height, minZoom, boardContentBounds, scheduleDraw]);
+    /* `view.zoom` rather than `view`: this effect must not re-run when the player pans, or a frame would be
+       re-applied on top of their own drag. The token guard above already makes it once-per-press. */
+  }, [frameHexRequest, hexSize, width, height, minZoom, view.zoom, boardContentBounds, scheduleDraw]);
 
   /* THE THIRD TOOLTIP -- the one armed but not yet fired. #269 handled "already showing" and "about to be set"; a click during #365's dwell fires the timer ON TOP of the open ring. It survived because both natural ways to test it pass.
      See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #505 */

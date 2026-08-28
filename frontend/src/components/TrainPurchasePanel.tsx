@@ -103,6 +103,19 @@ export interface TrainPurchasePanelProps {
   onProposeTrade: (proposal: TrainTradeProposal) => void;
   /** Renders a wallet as a readable name. */
   labelForAddress: (address: string) => string;
+  /* ==================================================================
+      DESIGN NOTE 914: THE PRESIDENT WEARS THEIR OWN COLOUR
+     ==================================================================
+     REPORTED: "the president's name in the list (next to the crown icon) must be rendered in that specific
+     player's designated color to quickly visually distinguish them."
+     THE SELLER ROSTER IS THE ONE PLACE A PLAYER SCANS FOR A PERSON rather than for a corporation. Every other
+     column in this row is about the company -- ticker, token dot, train badges -- and the president is the
+     only human fact in it, so it is the only one that benefits from the table's own colour language.
+     `null` FOR AN ADDRESS OFF THE ROSTER, and the caller decides that rather than this panel: #779 made the
+     same call one panel over -- "on a table where colour identifies a person, a wrong colour is worse than
+     none" -- and a fallback tint invented here would be a second answer to whose colour is whose.
+     OPTIONAL, so a caller that has no roster to colour by simply gets the default ink. */
+  colorForAddress?: (address: string) => string | null;
   /** Whether the corporate-trade accordion starts open. Defaults closed, per #0's argument that the bank is
    *  the common case. Exists so the section can be rendered without a DOM to click it open with -- a test
    *  that cannot reach a surface cannot check it, and this section carries the train-limit gate. */
@@ -128,6 +141,7 @@ export function TrainPurchasePanel({
   emergencyAvailable,
   onProposeTrade,
   labelForAddress,
+  colorForAddress,
   defaultCorporateOpen = false,
   condensed = false,
 }: TrainPurchasePanelProps) {
@@ -782,11 +796,29 @@ export function TrainPurchasePanel({
                     AFTER, and that is the one the press turns on.
                     COMPUTED INLINE from two values already in scope -- a subtraction is not a rule, and
                     `bankTotal` is already "the only place a multi-buy is priced" (#740 in this file). */}
-                {/* ON ONE LINE, per #814 and because two suites anchor on this exact ternary: wrapping it
-                    preserved the words and broke the string, which is that note's rule reaching a JSX
-                    expression rather than a comment. */}
-                {atTrainLimit ? "Train Limit Reached" : `Pay $${bankTotal || nextTier.cost} (Treasury: $${treasury - (bankTotal || nextTier.cost)})`}
+                {/* ==================================================================
+                     DESIGN NOTE 913: THE PRICE IS THE BUTTON; THE CONSEQUENCE IS BESIDE IT
+                   ==================================================================
+                   REPORTED: "change the purchase button text to simply read 'Pay $X'. Move the treasury
+                   impact to the side of the button using our standard projection format."
+                   AND #889'S REASONING SURVIVES THE MOVE, which is why this is a relocation rather than a
+                   removal: the figure AFTER is the one the press turns on, and no other surface carries it.
+                   What was wrong was putting it INSIDE the control -- a button whose label is a sentence
+                   reads as a paragraph with a border, and the player has to parse it to find the price.
+                   THE PROJECTION FORMAT IS THE HOUSE ONE, `$before > $after`, which #509a's withhold column
+                   and #705's payout column already use. A third spelling of the same idea here would make
+                   the arrow mean something different in one place. */}
+                {/* ON ONE LINE, per #814 and because two suites anchor on this exact ternary. */}
+                {atTrainLimit ? "Train Limit Reached" : `Pay $${bankTotal || nextTier.cost}`}
               </button>
+              {/* Design note #913: outside the button, and hidden at the train limit -- there is no purchase
+                  to project when the control refuses one, and a projection beside a refusal reads as a
+                  promise the button is not making. */}
+              {!atTrainLimit && (
+                <span style={styles.treasuryProjection}>
+                  Treasury: ${treasury} &gt; ${treasury - (bankTotal || nextTier.cost)}
+                </span>
+              )}
             </div>
             {bankProblem && <p style={styles.problem}>{bankProblem}</p>}
             {/* ==================================================================
@@ -944,7 +976,17 @@ export function TrainPurchasePanel({
                         aria-hidden="true"
                       />
                       <span style={styles.rosterTicker}>{corporationLabel(company.ticker)}</span>
-                      <span style={styles.rosterPresident}>
+                      <span
+                        style={{
+                          ...styles.rosterPresident,
+                          /* Design note #914: the colour rides on the NAME, crown included -- the crown is
+                             the marker that a name follows, and colouring one without the other would read
+                             as two separate marks rather than one identity. */
+                          ...(company.president && colorForAddress?.(company.president)
+                            ? { color: colorForAddress(company.president) as string }
+                            : {}),
+                        }}
+                      >
                         {company.president
                           ? `\u{1F451} ${labelForAddress(company.president)}`
                           : "no president"}
@@ -1777,6 +1819,14 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     fontFamily: "inherit",
     cursor: "pointer",
+  },
+  /* Design note #913: the projection sits beside the button in the muted note ink this app uses for a reason
+     attached to a control -- the same treatment `AutoPassModal`'s captions and the dividend ledge use. */
+  treasuryProjection: {
+    fontSize: FONT_SIZE.micro,
+    color: "#8a90a0",
+    whiteSpace: "nowrap",
+    alignSelf: "center",
   },
   problem: { margin: 0, fontSize: FONT_SIZE.small, color: "#fb7185", lineHeight: 1.45 },
   note: { margin: 0, fontSize: FONT_SIZE.small, lineHeight: 1.5, color: "#8a919e" },

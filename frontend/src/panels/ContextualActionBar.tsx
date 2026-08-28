@@ -14,7 +14,7 @@
 // Design notes: shell/layout in `docs/ai_architecture/ui_shell_layout.md`, economics in
 // `contract_economy.md`, the market-move line in `stock_market.md`.
 
-import React from "react";
+import React, { useEffect, useRef, useState } from "react";
 
 import { TrainChips } from "../components/TrainBadges";
 import { RouteChipDetail } from "../components/RouteChipDetail";
@@ -840,6 +840,9 @@ export default function ContextualActionBar({
     emergencyAvailable?: boolean;
     onProposeTrade: (proposal: TrainTradeProposal) => void;
     labelForAddress: (address: string) => string;
+    /** Design note #914: the seller roster paints each president in their own seat colour. Conduit only --
+     *  the bar has no roster to resolve a seat from, so the shell answers it. */
+    colorForAddress?: (address: string) => string | null;
   } | null;
   /** Design note #188: the acting corporation's last route revenue, and the
    *  per-10%-share split of it. */
@@ -1246,6 +1249,49 @@ export default function ContextualActionBar({
   const treasuryAfterWithhold = treasuryNow + declaredRevenue;
   const corporationInk = "#e2e6ee";
 
+  /* ==================================================================
+      DESIGN NOTE 915: "BUY TRAINS" IS A DISCLOSURE, NOT A SUBMISSION
+     ==================================================================
+     REPORTED: "The 'Buy Trains' button on the Action Bar looks like a submission button, which is confusing.
+     Convert this button into a functional toggle that expands and collapses the Depot/Corporation purchase
+     subpanel below it."
+     AND IT NEVER SUBMITTED ANYTHING -- #793 built it to SCROLL, which is the confusion: it sits in a row of
+     controls that commit moves, wearing their shape, and doing something a player cannot predict from the
+     label. A press that scrolls and a press that buys a train are the same gesture in the same place.
+     OPEN ONLY ON AN OBLIGATION -- design note #918, correcting this note's first version. It said "open by
+     default ... hiding its only means of getting one behind a closed disclosure would bury an obligation",
+     and the second half of that sentence is the whole rule: the obligation is what earns the space, and a
+     corporation that already owns a train has no obligation. Defaulting open for everybody spent eight
+     corporations' worth of vertical space (#418) on a step most turns pass through.
+     DERIVED, NOT REMEMBERED. The default is a function of the acting corporation's CURRENT train count, so
+     it is re-answered whenever that count changes rather than carried between turns -- which is what stops a
+     player's collapse on one corporation deciding the next corporation's opening state.
+     RE-SEEDED ON THE CORPORATION, NOT ON THE COUNT, and the difference is the whole of why this is safe. An
+     effect watching the TRAIN COUNT would fight the player: they collapse the panel, they buy the train, the
+     count changes and it reopens under their hand at the moment they are done with it. An effect watching
+     WHOSE TURN IT IS re-seeds only when a new corporation starts operating, which is exactly when a fresh
+     default is wanted and when no player has expressed a preference yet.
+     THE FIRST DRAFT OF THIS NOTE CLAIMED A `key` AT THE CALL SITE that did not exist -- a note describing a
+     mechanism the code does not have, which is this project's third recurring bug shape written by the person
+     who keeps naming it. Recorded rather than quietly corrected.
+     LOCAL STATE, NOT THE LOG. Whether a panel is open is this browser's business; it changes nothing another
+     client replays, so it is one of the few pieces of UI state that legitimately lives here. */
+  const [trainPanelOpen, setTrainPanelOpen] = useState(mustBuyTrain);
+  /* Design note #919: the private step's own disclosure. Closed by default and not re-seeded per corporation
+     -- buying a private is never compulsory, so there is no obligation for a default to answer to. */
+  const [privatePanelOpen, setPrivatePanelOpen] = useState(false);
+  const seededForRef = useRef<number | string | null>(null);
+  useEffect(() => {
+    const acting = activeCorporation?.companyId ?? null;
+    if (seededForRef.current === acting) return;
+    seededForRef.current = acting;
+    setTrainPanelOpen(mustBuyTrain);
+    /* `mustBuyTrain` is deliberately NOT a dependency: this fires on the corporation changing and reads the
+       obligation as it stands at that moment. Listing it would re-run the seed every time the fleet changed,
+       which is the effect-fighting-the-player case above. */
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeCorporation?.companyId]);
+
   let contextualButtons: ActionBarButton[];
   if (roundType === "OperatingRound") {
     switch (orSubPhase) {
@@ -1358,13 +1404,31 @@ export default function ContextualActionBar({
           ? [
               {
                 key: "go-to-privates",
-                label: "Buy Private Company",
-                onClick: scrollToStepPanel,
-                // Design note #797: same rule, same panel wrapper.
-                disabled: stepPanelInView,
-                title: stepPanelInView
-                  ? "The Buy Private Company panel is already on screen."
-                  : "Scrolls to the Buy Private Company panel below.",
+                /* ==================================================================
+                    DESIGN NOTE 919: THE SAME DISCLOSURE, ONE STEP OVER
+                   ==================================================================
+                   REPORTED: "Mirror the fix you just did for Buy Trains."
+                   AND IT IS THE SAME COMPLAINT FOR THE SAME REASON: this button sits in a row of controls
+                   that commit moves, wearing their shape, and scrolls. #915 argued that at length for the
+                   trains step; nothing about the argument was specific to trains.
+                   CLOSED BY DEFAULT AND STAYS THAT WAY, which is where it differs from #918's contextual
+                   rule. Buying a private is never compulsory -- there is no state in 1830 where a
+                   corporation MUST buy one -- so there is no obligation for a default to respond to, and
+                   "open it when you want it" is the whole rule. #918's exception exists because a trainless
+                   corporation genuinely has no choice; this step always does. */
+                label: privatePanelOpen ? "Hide Privates" : "Buy Private Company",
+                onClick: () => {
+                  setPrivatePanelOpen((open: boolean) => {
+                    if (!open) scrollToStepPanel();
+                    return !open;
+                  });
+                },
+                /* Design note #919: never disabled, per #915 -- #797's "nothing to scroll to" is right for a
+                   scroll button and backwards for a toggle, because a panel on screen is the one you want to
+                   collapse. */
+                title: privatePanelOpen
+                  ? "Collapse the Buy Private Company panel below."
+                  : "Expands the Buy Private Company panel below.",
               },
             ]
           : [];
@@ -1448,17 +1512,33 @@ export default function ContextualActionBar({
             ? [
                 {
                   key: "go-to-trains",
-                  /* Design note #793: one label, no glyph. The obligation lives in the `title` and in End
-                     Turn's greying beside it; the button's job is to be findable and to say where it goes. */
-                  label: "Buy Trains",
-                  onClick: scrollToStepPanel,
-                  // Design note #797: nothing to scroll to means nothing to press.
-                  disabled: stepPanelInView,
-                  title: stepPanelInView
-                    ? "The Buy Trains panel is already on screen."
+                  /* Design note #915: the label SAYS WHICH STATE IT IS IN, because a toggle whose text never
+                     changes is indistinguishable from a button that did nothing. #793's "one label, no
+                     glyph" was right for a control with one behaviour; this one has two.
+                     STILL NO GLYPH, and that is #793 honoured rather than worked around. A disclosure
+                     triangle would be the obvious reach and it would claim a DIRECTION -- and the panel is
+                     below the bar in document order and anywhere at all relative to the viewport, which is
+                     the only direction a player experiences. Two words carry the state without asserting
+                     something the button cannot know. */
+                  label: trainPanelOpen ? "Hide Trains" : "Buy Trains",
+                  /* Design note #915: OPENING ALSO SCROLLS, which is #793's job kept rather than replaced --
+                     a panel that expands below the fold has not been shown to anybody. Closing does not
+                     scroll: the player just asked for the space back. */
+                  onClick: () => {
+                    setTrainPanelOpen((open: boolean) => {
+                      if (!open) scrollToStepPanel();
+                      return !open;
+                    });
+                  },
+                  /* Design note #915: NEVER DISABLED NOW. #797's "nothing to scroll to means nothing to
+                     press" was right about a scroll button and wrong about a toggle -- a panel already on
+                     screen is exactly the one a player wants to collapse, and greying the control then would
+                     take the feature away in the only state it is for. */
+                  title: trainPanelOpen
+                    ? "Collapse the Buy Trains panel below."
                     : mustBuyTrain
-                      ? "This corporation must own a train. Scrolls to the Buy Trains panel below."
-                      : "Scrolls to the Buy Trains panel below.",
+                      ? "This corporation must own a train. Expands the Buy Trains panel below."
+                      : "Expands the Buy Trains panel below.",
                 },
               ]
             : []),
@@ -1883,6 +1963,22 @@ export default function ContextualActionBar({
          IF A NARROW WINDOW EVER MAKES THIS TIGHT the trail wraps -- `subPhaseTrail` is `flexWrap` already -- which
          is #590's stated answer: wrapping or a smaller type scale, not deciding for the player which facts they
          may keep. */}
+      {/* ==================================================================
+           DESIGN NOTE 920: TWO PROGRESS TRACKS, ONE ROW
+          ==================================================================
+          REPORTED: "The corporation turn order in the OR is rendering on the same row as the Action Bar
+          buttons and warning badges, creating clutter. Move the corporation turn order to the same row as the
+          subphase order, aligned flush right."
+          AND THEY ARE THE SAME KIND OF FACT, which is why this reads as tidier rather than merely rearranged.
+          #630 already made this argument for the seat trail: "it answers 'where are we in the rotation', the
+          same question the sub-phase trail answers for a corporation's turn. So it moves under the round
+          label. One place to look for 'how far through are we'." The corporation order is the third member of
+          that family and was the one left in the button row.
+          FLUSH RIGHT VIA `marginLeft: auto` ON THE ORDER, not `justify-content: space-between` on the row --
+          the trail must stay left-anchored when the order is absent (a Stock Round, or a round with no queue),
+          and `space-between` would centre a lone trail. */}
+      {roundType === "OperatingRound" && (orSubPhaseProgress || operatingOrder.length > 0) && (
+        <div style={styles.orProgressRow}>
       {roundType === "OperatingRound" && orSubPhaseProgress && (
         <span
           style={styles.subPhaseTrail}
@@ -1915,6 +2011,47 @@ export default function ContextualActionBar({
             );
           })}
         </span>
+      )}
+          {/* Design note #889: the turn order, beside the phase. `done` dims rather than removes -- a
+              row that shortens as the round goes on stops being an ORDER and becomes a queue, and the
+              question "have they gone yet" is the one a player asks about the corporations behind them.
+              The acting corporation is already named across the top of this bar, so it is not marked
+              again here; what this row adds is everyone else. */}
+          {operatingOrder.length > 0 && (
+            <span style={styles.orTurnOrder} aria-label="Corporation turn order this Operating Round">
+              {operatingOrder.map((entry) => (
+                <span
+                  key={entry.companyId}
+                  style={{
+                    ...styles.orTurnOrderChip,
+                    borderColor: entry.color,
+                    color: entry.color,
+                    ...(entry.done ? styles.orTurnOrderChipDone : {}),
+                    ...(entry.companyId === activeCorporation?.companyId
+                      ? {
+                          backgroundColor: entry.color,
+                          /* Design note #889: the ink is COMPUTED, not a constant. A livery fill with a
+                             livery-coloured label is invisible on half the roster, and a fixed dark ink
+                             is invisible on the other half -- `bestContrastTextColor` is the same
+                             helper the acting-seat badge below uses for the same reason. */
+                          color: bestContrastTextColor(entry.color),
+                        }
+                      : {}),
+                  }}
+                  title={
+                    entry.companyId === activeCorporation?.companyId
+                      ? `${entry.ticker} is operating now.`
+                      : entry.done
+                        ? `${entry.ticker} has already operated this Operating Round.`
+                        : `${entry.ticker} operates later this Operating Round.`
+                  }
+                >
+              {entry.ticker}
+                </span>
+              ))}
+            </span>
+              )}
+        </div>
       )}
       {/* Design note #630: BOTH ROUNDS PUT THEIR TRACK IN THE SAME PLACE. It was in the BUTTON row because that
          is where the roster pills it replaced sat (#342) -- and a pill carrying spendable cash did belong next
@@ -2321,45 +2458,11 @@ export default function ContextualActionBar({
                   {phase.label}
                 </span>
               )}
-              {/* Design note #889: the turn order, beside the phase. `done` dims rather than removes -- a
-                  row that shortens as the round goes on stops being an ORDER and becomes a queue, and the
-                  question "have they gone yet" is the one a player asks about the corporations behind them.
-                  The acting corporation is already named across the top of this bar, so it is not marked
-                  again here; what this row adds is everyone else. */}
-              {operatingOrder.length > 0 && (
-                <span style={styles.orTurnOrder} aria-label="Corporation turn order this Operating Round">
-                  {operatingOrder.map((entry) => (
-                    <span
-                      key={entry.companyId}
-                      style={{
-                        ...styles.orTurnOrderChip,
-                        borderColor: entry.color,
-                        color: entry.color,
-                        ...(entry.done ? styles.orTurnOrderChipDone : {}),
-                        ...(entry.companyId === activeCorporation?.companyId
-                          ? {
-                              backgroundColor: entry.color,
-                              /* Design note #889: the ink is COMPUTED, not a constant. A livery fill with a
-                                 livery-coloured label is invisible on half the roster, and a fixed dark ink
-                                 is invisible on the other half -- `bestContrastTextColor` is the same
-                                 helper the acting-seat badge below uses for the same reason. */
-                              color: bestContrastTextColor(entry.color),
-                            }
-                          : {}),
-                      }}
-                      title={
-                        entry.companyId === activeCorporation?.companyId
-                          ? `${entry.ticker} is operating now.`
-                          : entry.done
-                            ? `${entry.ticker} has already operated this Operating Round.`
-                            : `${entry.ticker} operates later this Operating Round.`
-                      }
-                    >
-                      {entry.ticker}
-                    </span>
-                  ))}
-                </span>
-              )}
+              {/* Design note #920: THE TURN ORDER MOVED OUT OF THIS RAIL. It sat beside the phase badge,
+                  on the same row as the contextual buttons and the rust/limit warnings -- three unrelated
+                  kinds of thing competing for one line. It now shares the sub-phase trail's row, which is
+                  where it belongs by SUBJECT: both answer "how far through are we", one within a
+                  corporation's turn and one across the round. See the trail above. */}
               {/* Design note #325: TWO POCKETS, ONE ROW, CONSTANT CONFUSION. #300 added personal cash here so a
                  president facing an emergency buy could see what they can cover -- true, and the placement was still
                  wrong: this rail sits directly under the corporation strip, which shows `Treasury $X` in the same
@@ -3386,7 +3489,9 @@ export default function ContextualActionBar({
           be a subpanel like 'Buy Trains' instead of something you only see by actively clicking into it."
           Rendered on the same condition as the depot below it -- acting player, right sub-phase, data
           present -- so the two purchase steps of a turn have one shape. */}
-      {mayActThisTurn && orStep === "BuyPrivate" && privatePurchase && (
+      {/* Design note #919: unmounted when collapsed, like the trains panel -- a disclosure that leaves its
+          contents tabbable has not collapsed anything. */}
+      {mayActThisTurn && orStep === "BuyPrivate" && privatePurchase && privatePanelOpen && (
         <ProposePrivatePurchase
           embedded
           open
@@ -3400,7 +3505,10 @@ export default function ContextualActionBar({
           onClose={() => undefined}
         />
       )}
-      {mayActThisTurn && orStep === "Hardware" && trainPurchase && (
+      {/* Design note #915: the toggle's subject. Unmounted rather than hidden, so a collapsed panel costs no
+          layout and cannot be tabbed into -- a disclosure that leaves its contents reachable is the "hidden
+          behind disabled CSS" shape this project has been asked to avoid elsewhere. */}
+      {mayActThisTurn && orStep === "Hardware" && trainPurchase && trainPanelOpen && (
         <TrainPurchasePanel
           depot={trainPurchase.depot}
           buyer={trainPurchase.buyer}
@@ -3413,6 +3521,7 @@ export default function ContextualActionBar({
           emergencyAvailable={trainPurchase.emergencyAvailable}
           onProposeTrade={trainPurchase.onProposeTrade}
           labelForAddress={trainPurchase.labelForAddress}
+          colorForAddress={trainPurchase.colorForAddress}
           /* Design note #785: still `condensed` when the BAR is condensed. The panel is no longer inside the
              sticky element, but the two are read together and a bar that has shed its prose beside a panel
              that has not would look like a rendering fault rather than a density choice. */

@@ -68,7 +68,11 @@ export const styles: Record<string, React.CSSProperties> = {
      `flexWrap` BECAUSE EIGHT TICKERS IS A REAL COUNT. #590's rule for this rail: "If a narrow window ever
      makes this tight, the answer is wrapping or a smaller type scale, not deciding for the player which
      facts they may keep." */
+  /* Design note #920: pushed to the right end of the progress row by its OWN margin rather than by
+     `space-between` on the row -- the sub-phase trail must stay left-anchored on a round with no queue, and
+     `space-between` would centre it there. */
   orTurnOrder: {
+    marginLeft: "auto",
     display: "flex",
     flexDirection: "row",
     alignItems: "center",
@@ -1233,6 +1237,23 @@ export const styles: Record<string, React.CSSProperties> = {
      (`marginLeft: -1px` collapses the doubled border), so it reads as a SEQUENCE rather than a set of tags --
      the same construction the par ladder uses, and for the same reason. `flexWrap` because a wrapped trail
      still reads in order where a clipped one loses its tail. */
+  /* ==================================================================
+      DESIGN NOTE 920: THE TWO PROGRESS TRACKS SHARE A LINE
+     ==================================================================
+     The sub-phase trail and the corporation turn order answer the same question at two scales -- "how far
+     through are we", within a turn and across the round -- so they belong on one row. #630 made exactly this
+     argument when it moved the seat trail under the round label; the corporation order was the member of that
+     family still sitting in the button rail.
+     `flexWrap` SO A NARROW WINDOW DROPS THE ORDER BELOW rather than crushing the trail -- #590's rule again:
+     wrap or scale, never decide which facts the player may keep. */
+  orProgressRow: {
+    display: "flex",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: "10px",
+    flexWrap: "wrap",
+    width: "100%",
+  },
   subPhaseTrail: {
     display: "inline-flex",
     flexDirection: "row",

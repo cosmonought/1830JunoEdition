@@ -131,10 +131,24 @@ export function HomeStationPrompt({
            have to START at a token, nor involve this hex at all once further tokens are
            placed. The surviving half, that the hex is printed and fixed, is the fact
            this prompt exists to convey. */}
-        <span style={styles.consequence}>
-          Printed on the board and fixed by the rules — the {pending.ticker} has no other
-          legal home.
-        </span>
+        {/* ==================================================================
+             DESIGN NOTE 912: THE RULE IS FOR WHOEVER HAS TO OBEY IT
+            ==================================================================
+            REPORTED: remove this line for players who are not the president of the floating corporation.
+            IT ANSWERS A QUESTION ONLY THE PRESIDENT IS ASKING. "The hex is fixed and you have no choice" is
+            the sentence that stops a president hunting for an alternative before they click -- and #440 kept
+            it for exactly that. A watcher is not choosing anything; for them it is a rules lecture attached
+            to somebody else's turn, on a modal #783 already trimmed to "who is doing what, and why you are
+            waiting".
+            SAME GATE AS THE BUTTON, deliberately. `viewerIsPresident` already decides whether this modal
+            offers an action; the explanation of why the action has no alternatives belongs with the action.
+            Two different conditions for "is this mine to do" is how the two come apart. */}
+        {viewerIsPresident && (
+          <span style={styles.consequence}>
+            Printed on the board and fixed by the rules — the {pending.ticker} has no other
+            legal home.
+          </span>
+        )}
 
         {/* Design note #440: this OPENS THE MAP; it does not place. The
             caller arms the placement cursor, veils the board down to this

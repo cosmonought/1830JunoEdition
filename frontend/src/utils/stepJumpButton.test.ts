@@ -2,6 +2,8 @@
 
 // No runtime imports: this file reads source text. `export {}` makes it a module for `--isolatedModules`.
 export {};
+import { readSource, stripComments } from "./sourceScan";
+
 //
 // The sticky bar offers the step before it offers the exit.
 //
@@ -80,8 +82,11 @@ describe("the Hardware step offers the panel, not only the exit", () => {
   it("says Buy Trains whether or not one is compulsory", () => {
     /* #793 collapsed the two labels into one. The first draft varied it -- "Buy Trains" when compulsory,
        "Trains" otherwise -- which made the button change wording for a reason the player could not see, and
-       #293's greying of End Turn beside it already carries the obligation. The `title` says the rest. */
-    expect(hardwareCase).toContain('label: "Buy Trains"');
+       #293's greying of End Turn beside it already carries the obligation. The `title` says the rest.
+       DESIGN NOTE 915 GAVE IT A SECOND LABEL, and the rule above survives that: it varies by whether the
+       panel is OPEN -- a state the player can see and just caused -- and still not by `mustBuyTrain`, which
+       they cannot. That distinction is the whole of what this case was protecting. */
+    expect(hardwareCase).toContain('trainPanelOpen ? "Hide Trains" : "Buy Trains"');
     expect(hardwareCase).not.toContain('mustBuyTrain ? "Buy Trains');
     expect(hardwareCase).toContain("This corporation must own a train.");
   });
@@ -119,7 +124,21 @@ describe("a jump is not an action", () => {
        answers the doubt raised with the request: "sometimes a grayed out button means an action can't be
        taken, but here it means 'Resolve this action elsewhere'." It does not -- it means pressing it would
        do nothing, because the destination is already on screen. */
-    expect(CODE.match(/onClick: scrollToStepPanel/g)?.length).toBe(2);
+    /* Design note #915: ONE, not two. The Buy Trains control is a disclosure now -- it toggles the panel and
+       scrolls only on the way OPEN -- so its scroll is inside a callback rather than being the whole handler.
+       The private-purchase jump is unchanged and is the one this still counts.
+       THE PROPERTY IN THIS CASE'S NAME IS UNTOUCHED: no jump dispatches. That is asserted below, across all
+       three controls, rather than by the shape of one handler. */
+    /* Design note #919: ZERO now, not one. Both step jumps are disclosures -- #915 for trains, #919 for
+       privates -- so neither is a bare scroll handler any more; each scrolls only on the way OPEN, from
+       inside its toggle. Counted at zero rather than deleted, because a bare `onClick: scrollToStepPanel`
+       reappearing would mean one of the two had been reverted to a submission-shaped button. */
+    expect(CODE.match(/onClick: scrollToStepPanel/g)?.length ?? 0).toBe(0);
+    expect(CODE.match(/if \(!open\) scrollToStepPanel\(\);/g)?.length).toBe(2);
+    /* THE ORIGINAL #263 CLAIM, RE-ASSERTED DIRECTLY. None of these controls is wired to a buy or a lay --
+       which is what "a jump is not an action" means, and it stayed true when one of them became a toggle. */
+    expect(CODE).not.toContain("onClick: onBuyFromBank");
+    expect(CODE).not.toContain("onClick: onProposeTrade");
     /* Design note #888: was `expect(CODE).toContain("onClick: goToMap,");`. The press now does two things --
        travel, then frame -- so the assertion moved to `layTrackJump.test.ts`, which pins BOTH and their
        order. What this file still guards is the property in its own name: the click is navigation and
@@ -260,8 +279,9 @@ describe("a jump is not an action", () => {
     /* The label says where it goes, and the `title` says what it does. What keeps this from reading as a
        second buy control is that the panel's own button carries a tier and a price and this one carries
        neither -- not, as the first draft had it, a glyph. */
-    expect(CODE).toContain('label: "Buy Trains"');
-    expect(CODE).toContain('label: "Buy Private Company"');
+    expect(CODE).toContain('"Hide Trains" : "Buy Trains"');
+    // Design note #919: the private jump became a toggle too, and its label names the same destination.
+    expect(CODE).toContain('"Hide Privates" : "Buy Private Company"');
     expect(CODE).not.toContain('"Buy a Train"');
   });
 
@@ -277,7 +297,16 @@ describe("a jump is not an action", () => {
 
   it("leaves the direction to prose that can hedge it", () => {
     // "below" in a sentence is a document-order statement a reader can interpret; an arrowhead is not.
-    expect(CODE).toContain("Scrolls to the Buy Trains panel below.");
+    /* Design note #915: the trains control expands rather than scrolls, so its prose changed verb and kept
+       the hedge. The private jump still scrolls and still says so -- which is why both are asserted: the
+       property is about the WORDS carrying the direction, not about which verb is in them. */
+    /* Design note #919: both controls expand rather than scroll now, and both kept the hedge. The property
+       is that the WORDS carry the direction -- "below" is a document-order statement a reader can interpret,
+       an arrowhead is not -- and it survives the verb changing under it. */
+    expect(CODE).toContain("Expands the Buy Trains panel below.");
+    expect(CODE).toContain("Collapse the Buy Trains panel below.");
+    expect(CODE).toContain("Expands the Buy Private Company panel below.");
+    expect(CODE).toContain("Collapse the Buy Private Company panel below.");
   });
 
   it("scrolls to the top of the panel, below the bar", () => {
@@ -376,19 +405,33 @@ describe("there is exactly one destination", () => {
   });
 });
 
-describe("the jump greys out with nothing to reach (design note #797)", () => {
-  it("disables both buttons when the panel is in view", () => {
-    /* REPORTED: "'Buy Trains' should be grayed out when there's no need to scroll them to the subpanel."
-       the alignment already made the click harmless -- it scrolls by zero -- and a control that responds
-       to a press by doing nothing is indistinguishable from a broken one. */
-    expect(CODE).toContain("disabled: stepPanelInView");
-    expect(CODE.match(/disabled: stepPanelInView/g)?.length).toBe(2);
+describe("the greying is retired, and deliberately (design notes #797 / #915 / #919)", () => {
+  it("greys neither jump, because neither is a jump any more", () => {
+    /* ==================================================================
+        A RULE WHOSE SUBJECT STOPPED EXISTING
+       ==================================================================
+       #797 was right: "pressing it would do nothing, because the destination is already on screen", so a
+       scroll button with its panel in view should be grey. Both controls have since become DISCLOSURES
+       (#915, #919), and for a disclosure the rule inverts -- a panel already on screen is precisely the one
+       a player wants to collapse, so greying it would remove the feature in the only state it is for.
+       ASSERTED AS AN ABSENCE, AND COUNTED, because this is the shape that gets "restored" by a later reader
+       who finds #797's note and not this one: a guard that looks like a missing safety check. It is not
+       missing; it was retired with the button type it protected. */
+    expect(CODE.match(/disabled: stepPanelInView/g)?.length ?? 0).toBe(0);
   });
 
-  it("says why it is grey", () => {
-    // A disabled control with no reason is the complaint #784 was raised about, one panel over.
-    expect(CODE).toContain("The Buy Trains panel is already on screen.");
-    expect(CODE).toContain("The Buy Private Company panel is already on screen.");
+  it("drops the sentences that explained a greying that no longer happens", () => {
+    /* A reason for a disabled state the code cannot enter is a note describing a mechanism it does not have
+       -- this project's third recurring bug shape, and cheap to avoid by deleting the copy with the rule. */
+    expect(CODE).not.toContain("The Buy Trains panel is already on screen.");
+    expect(CODE).not.toContain("The Buy Private Company panel is already on screen.");
+  });
+
+  it("still measures the panel, because the scroll still needs it", () => {
+    /* THE CONTROL ON THE RETIREMENT. `stepPanelInView` fed the greying AND nothing else would justify the
+       measurement -- but opening a collapsed panel still scrolls to it, so the machinery below stays earned.
+       If this ever goes, the scroll-on-open goes with it. */
+    expect(CODE).toContain("scrollToStepPanel");
   });
 
   it("measures rather than computing offsets", () => {
@@ -457,3 +500,37 @@ describe("the purchase button says what it does (design note #796)", () => {
     expect(PANEL).toContain("-train" + dollar + "{quantity === 1 ? \"\" : \"s\"} from the Bank for " + dollar);
   });
 });
+
+describe("the disclosures default by obligation (design notes #918 / #919)", () => {
+  /* ==================================================================
+      REQUESTED: "make it contextually aware ... default to CLOSED, unless the acting corporation currently
+      has exactly 0 trains ... derive it purely from the corporation's current train count."
+     ==================================================================
+     ADDED BECAUSE A CONTROL WALKED PAST. Replacing the seed with `useState(true)` -- the unconditional
+     default this replaced -- left every case in this file green, which is the same integration gap #911 and
+     #917 both fell into. The default is a real rule and needs a real assertion. */
+  const bar = stripComments(readSource("panels/ContextualActionBar.tsx"));
+
+  it("seeds the trains panel from the obligation, not from a constant", () => {
+    expect(bar).toContain("useState(mustBuyTrain)");
+    /* Scoped to the trains state rather than to the whole file: `mayPin` is an unrelated `useState(true)`,
+       and the first draft of this case failed on it -- an assertion about one declaration written as a
+       claim about the module. */
+    expect(bar).not.toContain("[trainPanelOpen, setTrainPanelOpen] = useState(true)");
+  });
+
+  it("re-seeds when the acting corporation changes, not when its fleet does", () => {
+    /* THE DISTINCTION THAT KEEPS IT FROM FIGHTING THE PLAYER. Watching the train COUNT would reopen the
+       panel under their hand the moment they bought the train and were done with it; watching WHOSE TURN it
+       is re-seeds only when nobody has expressed a preference yet. */
+    expect(bar).toContain("[activeCorporation?.companyId]");
+    expect(bar).not.toContain("[mustBuyTrain]");
+  });
+
+  it("leaves the privates panel closed, because that step is never compulsory", () => {
+    /* #919: there is no state in 1830 where a corporation MUST buy a private, so there is no obligation for
+       a default to answer to. Asserted so the two defaults cannot be "tidied" into one rule. */
+    expect(bar).toContain("[privatePanelOpen, setPrivatePanelOpen] = useState(false)");
+  });
+});
+

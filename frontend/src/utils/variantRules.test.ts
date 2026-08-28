@@ -515,14 +515,19 @@ describe("the die gets a sentence (design note #907)", () => {
     expect(revenueFlavour({ face: 3, percent: 100, printed: 200, adjusted: 200 }, seed)).toBeNull();
   });
 
-  it("names the figures and the direction before it is funny", () => {
-    /* THE JOKE HAS A JOB. A corporation that banked $230 on a $255 route has a discrepancy on its chips, and
-       this project has twice had that reported as a broken route tracer. */
+  it("names the figures before it is funny", () => {
+    /* THE JOKE HAS A JOB. A corporation that banked $204 on a $255 route has a discrepancy on its chips, and
+       this project has twice had that reported as a broken route tracer.
+       DESIGN NOTE 907a REMOVED THE DIE FACE AND THE DIRECTION WORD. The figures and the percentage are what
+       reconcile the chips; the face explained only the machinery, and "down on a 1" invited the reading that
+       a face is a thing a player could influence. Asserted as an absence as well as a presence, because a
+       recited die roll is exactly the kind of detail that gets added back as colour. */
     const line = revenueFlavour({ face: 1, percent: 80, printed: 255, adjusted: 204 }, seed);
     expect(line).toContain("255");
     expect(line).toContain("204");
     expect(line).toContain("80%");
-    expect(line).toContain("down");
+    expect(line).not.toMatch(/on a [1-6]/);
+    expect(line).not.toContain("down");
   });
 
   it("picks the same line every time, for the same roll", () => {

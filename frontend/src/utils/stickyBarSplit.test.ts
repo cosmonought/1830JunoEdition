@@ -29,6 +29,8 @@
 // rather than children of it. Whether the bar now travels is a playtest question and nothing else.
 
 import { canPinWithoutTrapping, STICKY_MAX_VIEWPORT_SHARE } from "./stickyCollapse";
+import { readSource, sliceBetween, stripComments } from "./sourceScan";
+
 // (This file DOES import, so it is a module without an `export {}` -- unlike #779's and #783's harnesses,
 // where the empty export was the only thing making them one. Putting one here anyway is what tripped
 // `import/first`.)
@@ -169,8 +171,15 @@ describe("the panels are back inside the bar, on a measurement (design note #828
 
   it("keeps the panels rendering at all", () => {
     /* THE CONTROL. Deleting them would satisfy every assertion above and remove two steps of a turn. */
-    expect(CODE).toContain('orStep === "Hardware" && trainPurchase && (');
-    expect(CODE).toContain('orStep === "BuyPrivate" && privatePurchase && (');
+    /* Design note #915: `&& trainPanelOpen` joined this condition when the bar's Buy Trains button became a
+       disclosure. The property here is that the panel RENDERS FROM THIS BAR at all -- #828's subject -- so it
+       is asserted as the clause that decides the STEP rather than as the whole expression, which now also
+       carries a piece of local view state #828 has no opinion about. */
+    expect(CODE).toContain('orStep === "Hardware" && trainPurchase');
+    /* Design note #919: `&& privatePanelOpen` joined this when the private jump became a disclosure, exactly
+       as #915 did for trains. The property is that the panel renders FROM THIS BAR -- #828's subject -- so it
+       is asserted as the clause that decides the step. */
+    expect(CODE).toContain('orStep === "BuyPrivate" && privatePurchase');
   });
 
   it("still condenses the depot with the bar", () => {
@@ -237,11 +246,16 @@ describe("the lifted panels kept the gate their nesting used to give them (desig
   });
 
   it("gates Buy Private on it", () => {
-    expect(CODE).toContain('{mayActThisTurn && orStep === "BuyPrivate" && privatePurchase && (');
+    expect(CODE).toContain('{mayActThisTurn && orStep === "BuyPrivate" && privatePurchase');
+    expect(CODE).toContain('privatePurchase && privatePanelOpen && (');
   });
 
   it("gates Buy Trains on it", () => {
-    expect(CODE).toContain('{mayActThisTurn && orStep === "Hardware" && trainPurchase && (');
+    /* Design note #915: the gate is unchanged and a fourth clause now follows it. Asserted up to
+       `trainPurchase` -- the three conditions #803 is actually about -- and then separately that the toggle
+       was ADDED to that gate rather than replacing any of it, which is how this could really regress. */
+    expect(CODE).toContain('{mayActThisTurn && orStep === "Hardware" && trainPurchase');
+    expect(CODE).toContain('trainPurchase && trainPanelOpen && (');
   });
 
   it("leaves no lifted panel testing the raw cursor", () => {
@@ -259,3 +273,40 @@ describe("the lifted panels kept the gate their nesting used to give them (desig
     );
   });
 });
+
+describe("the two progress tracks share a row (design note #920)", () => {
+  /* REPORTED: "The corporation turn order in the OR is rendering on the same row as the Action Bar buttons
+     and warning badges, creating clutter. Move it to the same row as the subphase order, flush right." */
+  const bar = stripComments(readSource("panels/ContextualActionBar.tsx"));
+
+  it("puts the turn order in the progress row", () => {
+    expect(bar).toContain("orProgressRow");
+    /* #490a: the copy being sliced has had its COMMENTS STRIPPED, so a comment cannot be an anchor -- the
+       first draft of this case anchored on "Design note #630" and sliced an empty string, which then
+       "contained" nothing and failed for the wrong reason. Anchored on code either side instead. */
+    const row = sliceBetween(bar, "styles.orProgressRow", "seatOrderTrail");
+    expect(row).toContain("styles.orTurnOrder");
+    expect(row).toContain("styles.subPhaseTrail");
+  });
+
+  it("takes it out of the button rail it was cluttering", () => {
+    /* THE HALF THAT MATTERS. Rendering it in the new row while leaving the old one would show it twice --
+       the failure mode a "moved it" change actually has. */
+    const leftRail = sliceBetween(bar, "styles.orPanelRailLeft", "styles.orPanelRailRight");
+    expect(leftRail).not.toContain("styles.orTurnOrder");
+  });
+
+  it("pushes it right with its own margin rather than spacing the row", () => {
+    /* `space-between` would centre a lone trail on rounds with no queue; a margin on the order leaves the
+       trail left-anchored whether or not the order is there. */
+    /* The styles live in `appStyles.ts`, not in the panel -- which the first draft of this case did not
+       know, and which is why the `marginLeft` it was asserting had silently landed nowhere. */
+    const sheet = stripComments(readSource("styles/appStyles.ts"));
+    expect(sliceBetween(sheet, "orTurnOrder: {", "},")).toContain('marginLeft: "auto"');
+    /* AND THE ROW ITSELF EXISTS. `styles.orProgressRow` was referenced by the render while being defined in
+       no stylesheet at all -- an undefined style object is not a type error and not a runtime error; it is a
+       div with no layout, which is exactly what this whole item was trying to fix. */
+    expect(sheet).toContain("orProgressRow: {");
+  });
+});
+

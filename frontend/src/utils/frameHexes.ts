@@ -106,6 +106,23 @@ export interface FrameOptions {
   /** `minZoom * MAX_ZOOM_MULTIPLIER` at the call site -- the same ceiling the zoom buttons obey, so a frame
    *  cannot reach a magnification the player has no control to return from. */
   maxZoom: number;
+  /* ==================================================================
+      DESIGN NOTE 911: THE CAMERA MAY MOVE; IT MAY NOT ZOOM
+     ==================================================================
+     REPORTED: "The viewport auto-zooming is jarring ... The camera should still pan/scroll to the network,
+     but it must strictly maintain the player's current zoom level."
+     AND THE ZOOM WAS THE WHOLE OF #888'S ARITHMETIC, which is why this is an option here rather than a
+     subtraction at the call site. The pan is computed FROM the zoom -- `panX: width / 2 - centerX * zoom` --
+     so a caller that took the pan and kept its own zoom would be centring at a magnification the pan was
+     never solved for, and the network would land off-centre by exactly the ratio between them. The two
+     numbers are one answer.
+     SO THE CALLER STATES THE ZOOM and this centres at it. `null` keeps #888's fit-to-the-set behaviour, which
+     nothing uses today and which is kept because the arithmetic is the interesting part of this module and
+     deleting a branch to make a caller tidier is how a module stops being able to answer the next question.
+     WHY NOT `minZoom === maxZoom` INSTEAD: it would work, and it would be a lie about what those two fields
+     mean -- they are the default pose and the buttons' ceiling, and a reader would have to reverse-engineer
+     the intent from two equal numbers. */
+  lockedZoom?: number | null;
 }
 
 /** The camera pose that puts `points` on screen, or `null` when there is nothing to frame.
@@ -148,10 +165,19 @@ export function frameHexes(
      canvas while reporting success. */
   const fit = Math.min(viewport.width / spanX, viewport.height / spanY);
 
+  /* Design note #911: a locked zoom skips the fit entirely rather than being clamped to it. Clamping would
+     put it back through `Math.max(minZoom, ...)` and silently raise a player who had zoomed OUT past the
+     default pose -- which is a zoom change, which is the thing being removed.
+     A NON-FINITE OR NON-POSITIVE LOCK IS IGNORED, because a zero zoom divides the board into a point and a
+     caller passing one has already lost track of its own view state. Falling back to the fit is visible;
+     honouring it is a blank canvas. */
+  const locked = options.lockedZoom;
+  const useLocked = locked != null && Number.isFinite(locked) && locked > 0;
+
   /* CLAMPED BETWEEN THE DEFAULT POSE AND THE ZOOM BUTTONS' CEILING. The floor matters more than it looks:
      a network spanning most of the board would otherwise frame BELOW `minZoom`, showing less than the
      locked default and reading as a control that zoomed out when asked to zoom in. */
-  const zoom = Math.min(options.maxZoom, Math.max(options.minZoom, fit));
+  const zoom = useLocked ? locked : Math.min(options.maxZoom, Math.max(options.minZoom, fit));
 
   /* CENTRED AFTER THE ZOOM IS DECIDED. Doing it the other way -- centring on a provisional zoom and then
      clamping -- leaves the pan describing a magnification the view no longer has, which is off-centre by

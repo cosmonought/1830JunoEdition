@@ -425,8 +425,13 @@ export function revenueFlavour(roll: RevenueRoll, parts: RevenueSeedParts): stri
      bits so the line is not correlated with the face it is explaining -- which would show up as the same
      joke every time a corporation rolled a 1. */
   const line = lines[Math.floor(revenueSeedHash(parts) / 6) % lines.length];
-  const direction = roll.percent < 100 ? "down" : "up";
-  return `${roll.printed} → ${roll.adjusted} (${roll.percent}%, ${direction} on a ${roll.face}) — ${line}.`;
+  /* Design note #907a: THE DIE FACE IS GONE FROM THE SENTENCE. It read "(120%, up on a 6)", and the face is
+     the one number in it a player can do nothing with -- the figures and the percentage explain the
+     discrepancy on the chips, which is the whole job (#907), and the face explains only the machinery.
+     Naming it also invited the reading that a face is a thing to be influenced.
+     THE ROLL STILL CARRIES IT. `RevenueRoll.face` is unchanged and still what selects the percentage; what
+     changed is that the log stopped reciting it. */
+  return `${roll.printed} → ${roll.adjusted} (${roll.percent}%) — ${line}.`;
 }
 
 /** One train's roll, resolved. */

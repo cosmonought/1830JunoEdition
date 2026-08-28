@@ -111,3 +111,34 @@ describe("the board answers it once, and the way back survives", () => {
     expect(fit).toContain("setView(fitView);");
   });
 });
+
+describe("the framing keeps the player's own zoom (design note #911)", () => {
+  /* ==================================================================
+      THE WIRING, NOT THE ARITHMETIC
+     ==================================================================
+     `frameHexes.test.ts` proves a locked zoom is honoured. It cannot prove the RENDERER passes one -- and a
+     negative control that replaced `lockedZoom: view.zoom` with `null` left every case in that file green,
+     which is #910's shape exactly: both sides correct, the join between them open and untested.
+     A SOURCE SCAN, because "which value is handed to this option" is a wiring question, and wiring is what a
+     unit test of either side cannot see. */
+  const RENDERER = stripComments(readSource("components/HexGridRenderer.tsx"));
+
+  it("is really the renderer", () => {
+    expect(RENDERER).toContain("frameHexes(points");
+  });
+
+  it("hands the frame the player's current zoom", () => {
+    /* `view.zoom` rather than `fitView.zoom` or `minZoom`: the effect at #13 keeps `view` synced to `fitView`
+       while the camera is locked, so this one value is the magnification on screen in BOTH camera modes. */
+    expect(RENDERER).toContain("lockedZoom: view.zoom");
+  });
+
+  it("does no zoom arithmetic of its own at the call site", () => {
+    /* THE MUTATION BEING REMOVED. `setView` here takes the framed pan and the zoom it was handed back; any
+       arithmetic on the zoom here would be a second place the camera decides magnification, which is how the
+       two come to disagree. */
+    expect(RENDERER).toContain("setView({ zoom: framed.zoom");
+    expect(RENDERER).not.toContain("setView({ zoom: minZoom");
+  });
+});
+

@@ -22,7 +22,7 @@
 // render a control per flag" are questions about wiring, and wiring is what a unit test of either side cannot
 // see -- which is the whole reason the bug survived four batches of green suites.
 
-import { readStripped } from "./sourceScan";
+import { readStripped, sliceBetween } from "./sourceScan";
 import { resolveVariants, STANDARD_VARIANTS, type GameVariants } from "./gameVariants";
 
 /** Every boolean flag in the schema, derived from the standard config rather than typed out -- so a sixth
@@ -136,3 +136,77 @@ describe("the schema still resolves what the panel writes", () => {
     expect(resolveVariants(chosen)).toEqual(chosen);
   });
 });
+
+describe("the dividend pays what was banked (design note #917)", () => {
+  /* ==================================================================
+      THE DISCONNECT, AND WHY NO EXISTING TEST SAW IT
+     ==================================================================
+     REPORTED: "the Unpredictable Revenue variant is calculating the +/- modifier for the Activity Log, but
+     the actual Dividends phase is still paying out based on the standard printed route value."
+     TWO CORRECT MODULES, ONE OPEN JOIN -- #910's shape again. The reducer applies the die and banks the
+     modified figure in `last_route_revenue`; `dividendDeclaration` prefers a COMMITTED total; and the shell
+     was building that total by summing `draft.value`, the planner's printed figure. Every unit test of every
+     piece passed while the log said $84 and the treasury received $70.
+     A SOURCE SCAN, because this is a wiring question: which of two available figures the shell hands on. */
+  const APP = readStripped("App.tsx");
+
+  it("reads the banked total off the reducer's own field", () => {
+    expect(APP).toContain("?.last_route_revenue,");
+    expect(APP).toContain("const committedTotal = Number.isFinite(bankedTotal)");
+  });
+
+  it("does not roll the die a second time in the shell", () => {
+    /* THE FIX THAT WOULD HAVE LOOKED RIGHT. Applying the modifier here too would make the figures agree and
+       put two implementations of one rule in the codebase, one of which moves money -- #775's exact failure.
+       Asserted as an absence: the shell may READ the reducer's answer and must not compute its own. */
+    const commitBlock = sliceBetween(APP, "const bankedTotal = Number(", "setCommittedRouteRevenue(");
+    expect(commitBlock).not.toContain("rollRouteRevenue");
+    expect(commitBlock).not.toContain("applyRevenuePercent");
+  });
+
+  it("keeps the planner sum as the fallback and not as the answer", () => {
+    /* #232: a chain that does not report `last_route_revenue` cannot say, and an unmodified figure is right
+       under standard rules and wrong under the variant -- the better of the two ways to be wrong. It must be
+       the fallback arm, though, or the bug returns for every game. */
+    const commitBlock = sliceBetween(APP, "const bankedTotal = Number(", "setCommittedRouteRevenue(");
+    expect(commitBlock).toContain("runnable.reduce");
+    expect(commitBlock.indexOf("bankedTotal")).toBeLessThan(commitBlock.indexOf("runnable.reduce"));
+  });
+});
+
+describe("a batch of actions gets a batch of indices (design note #916)", () => {
+  /* ==================================================================
+      REPORTED AS A LOG BUG; IT IS AN ACTION-LOG BUG
+     ==================================================================
+     "When a corporation runs multiple trains in a single turn, the Activity Log is only printing the run for
+     one train." The cause is that `appliedIndexRef.current` advances on the SNAPSHOT, while
+     `appendSandboxAction` awaits only the write -- so three routes dispatched in one loop were appended at
+     one index. `index` is what `orderBy` sorts on and what `effectiveActions` matches a `RevertTo` against,
+     so this was an ambiguous ordering in the structure #522 calls the game itself. */
+  const APP = readStripped("App.tsx");
+
+  it("advances the cursor on a successful append", () => {
+    expect(APP).toContain("appliedIndexRef.current = appendAt + 1;");
+  });
+
+  it("appends at a captured index rather than re-reading the ref", () => {
+    /* The write and the advance must agree about which slot was taken; reading the ref twice would let a
+       snapshot landing mid-await move it between them. */
+    expect(APP).toContain("const appendAt = appliedIndexRef.current;");
+    expect(APP).toContain("            appendAt,");
+  });
+
+  it("does not advance on a failed write", () => {
+    /* A refused append must leave the slot free, or the next action skips a position and the log carries a
+       hole that `effectiveActions` would read as a missing entry. */
+    expect(APP).toContain("} else if (appliedIndexRef.current === appendAt) {");
+  });
+
+  it("still lets the snapshot be the authority", () => {
+    /* THE CONTROL ON THE OPTIMISM. The ref is recomputed from the log on every snapshot; this only fills the
+       gap between writes in one tick. If that recomputation went, the client would drift from the log it is
+       supposed to be replaying. */
+    expect(APP).toContain("actions.length > 0 ? actions[actions.length - 1].index + 1 : 0");
+  });
+});
+

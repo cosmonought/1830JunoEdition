@@ -3813,9 +3813,27 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           /* actor is the SEAT the action acts for, not the browser that sent it - a nickname could never match player_addresses.
              See docs/ai_architecture/firebase_middleware.md - App.tsx #549 */
           const authorId = localPlayerId();
+          /* ==================================================================
+              DESIGN NOTE 916: A BATCH OF ACTIONS NEEDS A BATCH OF INDICES
+             ==================================================================
+             REPORTED as a log bug: "when a corporation runs multiple trains in a single turn, the Activity
+             Log is only printing the run for one train and dropping the rest."
+             IT IS NOT A LOGGING BUG. `appliedIndexRef.current` is advanced by the SNAPSHOT handler, and
+             `appendSandboxAction` awaits only the write -- so a loop that dispatches three routes before the
+             first snapshot returns appends all three AT THE SAME INDEX. The log then carries three entries
+             claiming one position.
+             AND THE CONSEQUENCES REACH FURTHER THAN THE FEED. `index` is what `orderBy` sorts on, what
+             `effectiveActions` matches a `RevertTo` against (#892's seventeen reverts), and what the next
+             append is computed from. Three actions at one index is an ambiguous ordering in the one structure
+             this whole architecture treats as the source of truth -- "the log is the game" (#522).
+             OPTIMISTIC, AND THE SNAPSHOT STILL CORRECTS IT. This advances the ref on a successful write so
+             the next dispatch in the same tick lands one further on; when the snapshot arrives it recomputes
+             from the log itself, which stays the authority. A failed write does not advance, so a refused
+             append leaves the position free for a retry. */
+          const appendAt = appliedIndexRef.current;
           const ok = await appendSandboxAction(
             roomCode,
-            appliedIndexRef.current,
+            appendAt,
             options?.automatic === true
               ? actingAddressRef.current ?? authorId
               : authorId,
@@ -3829,6 +3847,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           ).catch(() => false);
           if (!ok) {
             setSandboxRoomError("Could not reach the room — that action was not sent.");
+          } else if (appliedIndexRef.current === appendAt) {
+            /* Design note #916: only when nothing else has moved it. A snapshot may already have landed
+               during the await and advanced it past this write; overwriting that with `appendAt + 1` would
+               walk the cursor BACKWARDS and re-apply actions the client had already taken in. */
+            appliedIndexRef.current = appendAt + 1;
           }
           /* ==================================================================
            *  DESIGN NOTE 794: THE RECEIPT MOVED TO WHERE THE TRUTH IS
@@ -5884,9 +5907,34 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       );
     }
 
-    /* Record the total from the list actually dispatched, so the Dividends step spends the number the player watched being assembled.
-       See docs/ai_architecture/routing_pathfinding.md - App.tsx #492 */
-    const committedTotal = runnable.reduce((sum, draft) => sum + (draft.value ?? 0), 0);
+    /* ==================================================================
+        DESIGN NOTE 917: THE DIVIDEND PAYS WHAT WAS BANKED, NOT WHAT WAS PLANNED
+       ==================================================================
+       REPORTED: "the Unpredictable Revenue variant is calculating the +/- modifier for the Activity Log, but
+       the actual Dividends phase is still paying out based on the standard printed route value."
+       AND #903 IS WHERE I INTRODUCED IT. The die is applied in the reducer, which writes the modified figure
+       into `last_route_revenue` -- correct. This line then summed `draft.value`, the PLANNER's printed
+       figure, and `dividendDeclaration` prefers a committed total over `last_route_revenue`. So the log said
+       $84 and the treasury received $70, from two numbers that were both right about different questions.
+       READ FROM THE REDUCER RATHER THAN RE-DERIVED. The obvious fix was to roll the die again here and sum
+       the modified values, and that is the bug this project keeps finding: two implementations of one rule,
+       one of which moves money (#775's exact words). The reducer has already accumulated the authoritative
+       total across every train in this batch; this reads it.
+       #492'S REASON SURVIVES INTACT. It exists so the Dividends step spends "the number the player watched
+       being assembled" rather than a stale figure from a previous turn -- and `last_route_revenue` is no
+       longer stale, because #777 made the turn change clear it. What is read here is this turn's running
+       total, which is exactly what #492 wanted and could not safely have then.
+       THE PLANNER SUM IS THE FALLBACK, for a build whose chain does not report the field at all (#232): an
+       unmodified figure is wrong under the variant and right under standard rules, which is the better of the
+       two ways to be wrong when the state cannot say. */
+    const bankedTotal = Number(
+      sandboxStateRef.current?.public_companies.find(
+        (entry) => entry.company_id === actingProtocolId,
+      )?.last_route_revenue,
+    );
+    const committedTotal = Number.isFinite(bankedTotal)
+      ? bankedTotal
+      : runnable.reduce((sum, draft) => sum + (draft.value ?? 0), 0);
     setCommittedRouteRevenue({ protocolId: actingProtocolId, total: committedTotal });
 
     // Design note #278: this corporation HAS run, so any revenue on it is
@@ -8759,6 +8807,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                           onProposeTrade: handleProposeTrainTrade,
                           labelForAddress: (address: string) =>
                             sandboxPlayerLabel(address) ?? truncateAddress(address),
+                          /* Design note #914: the SAME resolution #779 already does for the private-purchase
+                             panel -- `seatColor` wants a roster index and the panel asks by address, so it
+                             happens here where both exist. `null` off the roster rather than a fallback: a
+                             wrong colour on a table where colour identifies a person is worse than none. */
+                          colorForAddress: (address: string) => {
+                            const seat = gameState?.player_addresses.indexOf(address) ?? -1;
+                            return seat === -1 ? null : seatColor(address, seat);
+                          },
                         }
                       : null
                   }

@@ -23,6 +23,12 @@ import type { GameplayExecuteMsg } from "./sessionKey";
    a structural generic was the first attempt and it widened the corporation and private arrays to
    `Record<string, unknown>`, which no caller could then use. */
 import type { GameStateResponse, WaterfallStateResponse } from "./gameState";
+import {
+  BANK_SIZE_BY_LENGTH,
+  bankStartFor,
+  resolveVariants,
+  type GameVariants,
+} from "./gameVariants";
 
 /** The printed 1830 tables. Sourced from the physical rulebook's own setup
  *  chart; `RulesReference.tsx`'s Core Limits section renders these. */
@@ -42,9 +48,16 @@ export const STARTING_CASH_BY_PLAYER_COUNT: Readonly<Record<number, number>> = {
   6: 400,
 };
 
-/** 1830's bank is a fixed $12,000 however many are playing -- the player
- *  count changes what is dealt OUT of it, not its size. */
-export const BANK_START = 12000;
+/** 1830's printed bank -- $12,000 however many are playing, because the player count changes what is dealt OUT
+ *  of it, not its size.
+ *
+ *  Design note #902: RE-EXPORTED FROM `gameVariants`, NOT RESTATED. The length variant's `standard` entry is
+ *  the same $12,000, and this file's own #526 is about exactly this hazard: "this codebase already held each
+ *  of them twice, one a hand-kept mirror whose own doc comment said so -- a correctness requirement enforced
+ *  by a sentence." Two literals would be that again, one variant later.
+ *  KEPT AS A NAME because it means something the table does not choose: the printed figure. A caller wanting
+ *  "whatever this game is playing with" wants `bankStartFor(variants)` instead. */
+export const BANK_START = BANK_SIZE_BY_LENGTH.standard;
 
 /** The player counts the printed tables cover. */
 export const MIN_PLAYERS = 2;
@@ -81,6 +94,9 @@ export interface SetupPlayer {
  *  rather than each shuffling the same list differently. */
 export interface SandboxSetup {
   players: readonly SetupPlayer[];
+  /** Design note #902: the house rules this table agreed. Optional so an older log with no config deals the
+   *  standard game rather than failing to deal at all. */
+  variants?: Partial<GameVariants>;
 }
 
 export interface DealtGame {
@@ -90,6 +106,12 @@ export interface DealtGame {
   playerCash: Array<{ player: string; cash_vgp: string }>;
   /** What the bank has left after dealing. */
   bankRemaining: number;
+  /** Design note #902: what it STARTED with, which the length variant decides. Returned rather than left to
+   *  the caller to re-derive: `App.tsx` writes both `virtual_bank_vgp` and `virtual_bank_start`, and two
+   *  surfaces computing one number is how they come to disagree. */
+  bankStart: number;
+  /** The resolved config, so state can record what was actually played. */
+  variants: GameVariants;
   /** The room's certificate ceiling. */
   certLimit: number;
   startingCash: number;
@@ -106,16 +128,23 @@ export function dealSandboxGame(setup: SandboxSetup): DealtGame | null {
   if (startingCash === null || certLimit === null) return null;
 
   const playerAddresses = setup.players.map((player) => player.id);
+  /* Design note #902: the length variant decides the bank, and the STARTING CASH IS UNCHANGED BY IT. Both are
+     printed 1830 tables and only one of them is the clock -- shrinking the bank to $4,500 while also cutting
+     what players are dealt would change the opening game as well as its length, which is a different variant
+     nobody asked for. Six players at $400 take $2,400, which the short bank still covers. */
+  const variants = resolveVariants(setup.variants);
+  const bankStart = bankStartFor(variants);
   return {
     playerAddresses,
     playerCash: playerAddresses.map((player) => ({
       player,
       cash_vgp: String(startingCash),
     })),
-    /* The bank pays the players out of its own $12,000 -- it is not topped
-       up per head. Floored at zero defensively; the real tables never come
-       close (six at $400 is $2,400 of $12,000). */
-    bankRemaining: Math.max(0, BANK_START - startingCash * count),
+    /* The bank pays the players out of its own pool -- it is not topped up per head. Floored at zero
+       defensively; the real tables never come close. */
+    bankRemaining: Math.max(0, bankStart - startingCash * count),
+    bankStart,
+    variants,
     certLimit,
     startingCash,
   };
@@ -149,6 +178,10 @@ export interface SetupGameMsg {
   SetupGame: {
     /** Already shuffled, by the host, once -- design note #526b. */
     players: SetupPlayer[];
+    /** Design note #902: the variants, IN THE LOG. They have to travel with the setup action for the same
+     *  reason the shuffled order does -- every client deals from this message, and a table's house rules held
+     *  only by the host would give the other clients a different game from the same log. */
+    variants?: Partial<GameVariants>;
   };
 }
 

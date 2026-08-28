@@ -73,6 +73,14 @@ import {
   type RoomDoc,
   type SeatDoc,
 } from "../utils/lobby";
+import {
+  BANK_SIZE_BY_LENGTH,
+  bankStartFor,
+  GAME_LENGTH_BLURB,
+  STANDARD_VARIANTS,
+  type GameLength,
+  type GameVariants,
+} from "../utils/gameVariants";
 
 // Design note #3: THE SILENT-BUTTON BUG, AND THE RULE THAT REPLACED IT. Reported: clicking "Create Room" did
 // nothing -- no UI change, no error banner, and NOTHING in the console. Cause: the button was `disabled`, so
@@ -339,8 +347,11 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
 
   /* ---------------- Room list actions ---------------- */
 
+  /* Design note #902: the variants come UP from the form rather than being held here. `RoomBrowser` owns every
+     other field of this form -- name, players, ante -- and splitting one of them into the parent would mean
+     two components had to agree about which. */
   const handleCreate = useCallback(
-    (name: string, maxPlayers: number, anteDisplay: string) =>
+    (name: string, maxPlayers: number, anteDisplay: string, variants: GameVariants) =>
       runAction("create", async () => {
         if (!address) throw new Error("Connect a wallet before creating a room.");
         const anteUjuno = toBaseAmount(anteDisplay);
@@ -356,7 +367,11 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
           hostAddress: address,
           hostDisplayName: displayName,
           anteUjuno,
-          virtualBankStart: DEFAULT_VIRTUAL_BANK_START,
+          /* Design note #902: THE VARIANT'S BANK, not the constant. This figure is what the room advertises
+             to joiners, so a short game must say $4,500 here or players sit down expecting a different game
+             from the one that will be dealt. */
+          virtualBankStart: String(bankStartFor(variants)),
+          variants,
         });
         setActiveRoomId(roomId);
       }),
@@ -716,7 +731,12 @@ function RoomBrowser({
   available: boolean;
   address: string | null;
   busy: string | null;
-  onCreate: (name: string, maxPlayers: number, anteDisplay: string) => void;
+  onCreate: (
+    name: string,
+    maxPlayers: number,
+    anteDisplay: string,
+    variants: GameVariants,
+  ) => void;
   onJoin: (room: RoomDoc) => void;
   onSpectate: (room: RoomDoc) => void;
   /** Raises a precondition failure into the parent's error banner --
@@ -725,6 +745,10 @@ function RoomBrowser({
 }) {
   const [name, setName] = useState("");
   const [maxPlayers, setMaxPlayers] = useState(4);
+  /* Design note #902: the house rules, chosen before the room exists. Held as one object rather than four
+     `useState`s so what gets written to the room is the same shape the reducer resolves -- four separate
+     pieces of state assembled at the call site is where a fifth variant gets forgotten. */
+  const [variants, setVariants] = useState<GameVariants>(STANDARD_VARIANTS);
   const [ante, setAnte] = useState(DEFAULT_ANTE_DISPLAY);
   const [tab, setTab] = useState<BrowserTab>("open");
 
@@ -799,6 +823,115 @@ function RoomBrowser({
           </select>
         </label>
 
+        {/* ==================================================================
+             DESIGN NOTE 902: THE HOUSE RULES, AGREED BEFORE THE DEAL
+            ==================================================================
+            AT ROOM CREATION rather than in a settings panel, because these are not preferences -- they are
+            terms. A player taking a seat is agreeing to a game, and a variant discovered after the deal is
+            not something they chose. The room list shows them for the same reason.
+            ALL FIVE ARE LIVE NOW. Two of them shipped disabled for one batch, labelled "not built yet" -- a
+            toggle that silently does nothing is a lie the table only discovers three hours in, and saying so
+            in the label was the cheap honest option while they were being built. Both are implemented, so
+            both are switches again. */}
+        <label style={styles.label}>
+          Game length
+          <select
+            value={variants.length}
+            onChange={(event) =>
+              setVariants((current) => ({
+                ...current,
+                length: event.target.value as GameLength,
+              }))
+            }
+            style={styles.input}
+          >
+            {(Object.keys(BANK_SIZE_BY_LENGTH) as GameLength[]).map((option) => (
+              <option key={option} value={option}>
+                {option === "short" ? "Short" : option === "long" ? "Long" : "Standard"} &mdash; $
+                {BANK_SIZE_BY_LENGTH[option].toLocaleString()} bank
+              </option>
+            ))}
+          </select>
+        </label>
+        <p style={styles.panelNote}>{GAME_LENGTH_BLURB[variants.length]}</p>
+
+        <label style={styles.variantRow}>
+          <input
+            type="checkbox"
+            checked={variants.unpredictableRevenue}
+            onChange={(event) =>
+              setVariants((current) => ({
+                ...current,
+                unpredictableRevenue: event.target.checked,
+              }))
+            }
+          />
+          <span>
+            <strong>Unpredictable revenue</strong>
+            <span style={styles.variantNote}>
+              Every train rolls a d6 against its printed run: 1 pays 80%, 6 pays 120%. Averages out to
+              exactly 100% over a game, so it adds drama without changing how long the bank lasts.
+            </span>
+          </span>
+        </label>
+
+        <label style={styles.variantRow}>
+          <input
+            type="checkbox"
+            checked={variants.dynamicStockMarket}
+            onChange={(event) =>
+              setVariants((current) => ({
+                ...current,
+                dynamicStockMarket: event.target.checked,
+              }))
+            }
+          />
+          <span>
+            <strong>Dynamic stock market</strong>
+            <span style={styles.variantNote}>
+              The share price moves by how much was paid, not just that it was. A dividend under the share
+              price does not move the token at all; twice the price moves it two cells. Rewards running big
+              and punishes token payouts.
+            </span>
+          </span>
+        </label>
+
+        <label style={styles.variantRow}>
+          <input
+            type="checkbox"
+            checked={variants.gentleRust}
+            onChange={(event) =>
+              setVariants((current) => ({ ...current, gentleRust: event.target.checked }))
+            }
+          />
+          <span>
+            <strong>Gentle rust</strong>
+            <span style={styles.variantNote}>
+              A rusting train gets one last Operating Round turn before it goes, and stops counting against
+              the train limit the moment it is doomed &mdash; so its replacement can be bought straight away.
+            </span>
+          </span>
+        </label>
+
+        <label style={styles.variantRow}>
+          <input
+            type="checkbox"
+            checked={variants.delayedAuction}
+            onChange={(event) =>
+              setVariants((current) => ({ ...current, delayedAuction: event.target.checked }))
+            }
+          />
+          <span>
+            <strong>Delayed auction</strong>
+            <span style={styles.variantNote}>
+              The game opens on Stock Round 1 with no private companies; they are auctioned at the end of the
+              Operating Round set in which the first 3-train is bought. Corporations must float on share
+              capital alone until then, and the B&amp;O cannot be traded until the auction concludes. End the
+              game before a 3-train is bought and the privates never come out at all.
+            </span>
+          </span>
+        </label>
+
         <label style={styles.label}>
           Ante per player ({NATIVE_DENOM_DISPLAY})
           <input
@@ -827,7 +960,7 @@ function RoomBrowser({
               onBlocked(createBlockedReason);
               return;
             }
-            onCreate(name, maxPlayers, ante);
+            onCreate(name, maxPlayers, ante, variants);
           }}
         >
           {busy === "create" ? "Creating..." : "Create room"}
@@ -1350,6 +1483,17 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "12px",
   },
   panelTitle: { margin: 0, fontSize: FONT_SIZE.heading, fontWeight: 700, color: "#F8FAFC" },
+  /* Design note #902: the variant rows. Same rhythm as `AutoPassModal`'s condition list -- a label, then what
+     it costs you -- because both are asking a player to agree to something before it happens. */
+  variantRow: {
+    display: "flex",
+    flexDirection: "row",
+    gap: "10px",
+    alignItems: "flex-start",
+    cursor: "pointer",
+    marginTop: "2px",
+  },
+  variantNote: { display: "block", fontSize: "11px", color: "#8a90a0", lineHeight: 1.4, marginTop: "2px" },
   panelNote: { margin: 0, fontSize: FONT_SIZE.small, color: "#6f7480", lineHeight: LINE_HEIGHT.normal },
   label: { display: "flex", flexDirection: "column", gap: "6px", fontSize: FONT_SIZE.body, color: "#9aa0ac" },
   input: {

@@ -336,21 +336,40 @@ export interface MarketProjection {
 function dividendStepFrom(
   from: { x: number; y: number },
   choice: "pay" | "withhold",
+  /* Design note #908: HOW MANY CELLS, defaulting to 1830's one. Dynamic Stock Market changes only this
+     number -- a payout under the share price moves none, one at twice the price moves two -- so the ledge
+     rule, the direction and the zones below are reached identically however far the token travels.
+     ONE PLACE, WHICH IS THE POINT. Both projections call this, and #891 exists because they once did not
+     share a rule: "the bar promising a rise the board does not perform". A variant implemented in the two
+     callers instead of here would recreate that split exactly. */
+  steps = 1,
 ): PriceCell | undefined {
-  const along = cellAt(from.x + (choice === "pay" ? 1 : -1), from.y);
-  if (along) return along;
-  /* THE LEDGE. Nothing further along the row, so the token turns -- up on a payout, down on a withhold. */
-  return cellAt(from.x, from.y + (choice === "pay" ? 1 : -1));
+  let at: PriceCell | undefined = cellAt(from.x, from.y);
+  let moved: PriceCell | undefined;
+  for (let taken = 0; taken < steps; taken += 1) {
+    if (!at) break;
+    const along = cellAt(at.x + (choice === "pay" ? 1 : -1), at.y);
+    /* THE LEDGE. Nothing further along the row, so the token turns -- up on a payout, down on a withhold. */
+    const next = along ?? cellAt(at.x, at.y + (choice === "pay" ? 1 : -1));
+    /* A SECOND STEP THAT CANNOT BE TAKEN IS NOT AN ERROR. The token is at the chart's corner; it stops
+       there, keeping whatever the first step won, rather than the whole move being refused. */
+    if (!next) break;
+    at = next;
+    moved = next;
+  }
+  return moved;
 }
 
 export function projectDividendFrom(
   from: { x: number; y: number; price?: string | null } | null | undefined,
   choice: "pay" | "withhold",
+  /** Design note #908: the readout takes the same step count the board will take. */
+  steps = 1,
 ): MarketProjection | null {
   if (!from) return null;
   const start = cellAt(from.x, from.y);
   if (!start) return null;
-  const next = dividendStepFrom(start, choice);
+  const next = dividendStepFrom(start, choice, steps);
   return next ? { price: next.price, moves: true } : { price: start.price, moves: false };
 }
 
@@ -404,6 +423,8 @@ export function projectRiseMove(from: {
 export function projectDividendCellMove(
   from: { x: number; y: number },
   choice: "pay" | "withhold",
+  /** Design note #908: and so does the move the reducer performs. */
+  steps = 1,
 ): { price: number; x: number; y: number } | null {
   const start = cellAt(from.x, from.y);
   if (!start) return null;
@@ -411,7 +432,7 @@ export function projectDividendCellMove(
      (`App.tsx`: `projectDividend: (from, choice) => projectDividendCellMove(from, choice)`), so the two
      sharing one rule is what stops the bar promising a rise the board does not perform -- which is the
      failure the report describes from both ends in one sentence. */
-  const next = dividendStepFrom(start, choice);
+  const next = dividendStepFrom(start, choice, steps);
   return next ? { price: next.price, x: next.x, y: next.y } : start;
 }
 

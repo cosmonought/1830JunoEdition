@@ -34,6 +34,8 @@
 // See docs/ai_architecture/stock_market.md, sharePurchase.ts #712.
 
 import { certificateBreakdown, type GameStateResponse } from "./gameState";
+import { BO_LOCKED_REASON, boIsLocked, resolveVariants } from "./gameVariants";
+import { BO_TICKER } from "./gameConstants";
 // Design note #759: the expiry of #7 and #712's zone exemptions.
 import { divestmentDebt, divestmentRefusal } from "./forcedDivestment";
 import { PLAYER_HOLDING_CAP_PERCENT } from "./privateExchange";
@@ -97,6 +99,17 @@ export function sharePurchaseBlock(input: SharePurchaseInput): string | null {
   const company = state.public_companies.find((entry) => entry.company_id === companyId);
   // A corporation this build cannot see is not a corporation this build may reason about.
   if (!company) return null;
+
+  /* ---- 0. The B&O, under a delayed auction -- design note #904a ------------------------------- */
+  /* FIRST OF ALL THE REFUSALS, because it is the only one that is about whether this company can be traded at
+     all rather than about whether THIS trade is legal. Telling a player they are over the 60% cap on a
+     corporation that does not exist yet would be answering a question they did not ask. */
+  if (
+    company.ticker === BO_TICKER &&
+    boIsLocked(resolveVariants(state.variants), state.private_auction_complete)
+  ) {
+    return BO_LOCKED_REASON;
+  }
 
   const taking = Math.max(1, Math.floor(quantity)) * SHARE_PERCENT;
 

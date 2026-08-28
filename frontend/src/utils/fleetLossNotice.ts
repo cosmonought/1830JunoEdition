@@ -53,6 +53,10 @@ export interface FleetLossNotice {
   companyId: number;
   ticker: string;
   cause: FleetLossCause;
+  /** Design note #906: this table plays Gentle Rust, so the trains named here are not gone -- they have one
+   *  more Operating Round turn in them. The COPY changes and nothing else does: the same notice, the same
+   *  toggle, a different tense. */
+  gentleRust?: boolean;
   /** The models this cause took, in the order the reducer took them. */
   trains: readonly string[];
   /** The tier whose arrival did it -- "4" for the first 4-train. `null` when the chain did not say. */
@@ -82,9 +86,10 @@ export function fleetLossNotices(
   loss: FleetLoss,
   arrivingTier: string | null,
   trainLimit: number | null,
+  gentleRust = false,
 ): FleetLossNotice[] {
   const notices: FleetLossNotice[] = [];
-  const base = { companyId: loss.companyId, ticker: loss.ticker, arrivingTier, trainLimit };
+  const base = { companyId: loss.companyId, ticker: loss.ticker, arrivingTier, trainLimit, gentleRust };
   if (loss.rusted.length > 0) {
     notices.push({ ...base, cause: "rust", trains: [...loss.rusted] });
   }
@@ -111,6 +116,17 @@ export function noticeBody(notice: FleetLossNotice): string {
       notice.arrivingTier === null
         ? "A new train tier reached the board"
         : `The first ${notice.arrivingTier}-train was bought`;
+    if (notice.gentleRust) {
+      /* Design note #906: THE GRACE PERIOD, STATED AS A DEADLINE. "One final run" is the good news and the
+         bad news at once, and a player who reads only the first half will plan a turn around a train that
+         will not be there. So the sentence ends on when it goes, not on what it is still worth. */
+      return (
+        `${trigger}, and every ${notice.trains[0]}-train in the game is now obsolete. This table plays ` +
+        `Gentle Rust, so ${notice.ticker}'s ${trains} ${count(notice)} NOT gone yet: it runs once more, on ` +
+        `this turn, and is scrapped the moment that turn ends. It no longer counts against the train limit, ` +
+        `so its replacement can be bought now.`
+      );
+    }
     return (
       `${trigger}, and every ${notice.trains[0]}-train in the game was destroyed with it. ` +
       `${notice.ticker}'s ${trains} ${count(notice)} gone from its fleet.`
@@ -138,6 +154,9 @@ const count = (notice: FleetLossNotice) => (notice.trains.length === 1 ? "is" : 
  *  been avoided and is about to change what you do next; it is an insult when it is news you could have read.
  *  Both causes qualify -- neither is refusable and both happened while this corporation was not acting. */
 export function noticeConsequence(notice: FleetLossNotice): string {
+  if (notice.cause === "rust" && notice.gentleRust) {
+    return "This happened between your turns and could not be refused. Run it while you still have it — after this turn the fleet is one train smaller.";
+  }
   return notice.cause === "rust"
     ? "This happened between your turns and could not be refused. Check whether this corporation can still run a route before you spend its treasury."
     : "This happened between your turns and could not be refused. The train is already back in the depot and may be bought again by anyone.";

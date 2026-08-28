@@ -320,6 +320,12 @@ import { GameOverModal, type GameEndReason } from "./components/GameOverModal";
 import { bankIsBroken, rankPlayers, PLACEHOLDER_TOTAL_ANTE, type PlayerStanding } from "./utils/endgame";
 import { turnGuardKey } from "./utils/turnGuardKey";
 import {
+  dividendStepsFor,
+  resolveVariants,
+  revenueFlavour,
+  rollRouteRevenue,
+} from "./utils/gameVariants";
+import {
   AUTO_CLOSE_MS,
   formatCountdown,
   settleRoomPayout,
@@ -367,6 +373,8 @@ import {
   // Design note #624: counts a drafted route's paying STOPS against the
   // train's capacity. `isRouteTerminusHex` answers a different question --
   // towns pay but cannot end a route -- so the two are not interchangeable.
+  boPresidencyRefusal,
+  sandboxRouteRevenue,
   grantBOPresidency,
   sandboxRouteBreakdown,
   SANDBOX_NOMINAL_TOKEN_COST,
@@ -1389,6 +1397,25 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     if (autoCloseRemaining === null || autoCloseRemaining > 0) return;
     closeRoom("timer");
   }, [autoCloseRemaining, closeRoom]);
+
+  /* ==================================================================
+      DESIGN NOTE 905: THE SHELL'S AUCTION ATOM FOLLOWS THE REDUCER'S ROUND
+     ==================================================================
+     `waterfall_auction_active` lives on the shell's own atom rather than on `GameStateResponse`, so the
+     reducer cannot set it when it moves the round to `WaterfallAuction` before Stock Round 3. This is the
+     shell catching up -- the same direction #542 already runs in, with the reducer as the authority.
+     A CONDITION, NOT AN EVENT, which is what makes it safe under #656's rule. It asks "is the round an
+     auction that has not concluded" rather than watching for an edge, so a replay, a refresh and a late
+     joiner all arrive at the same answer without anything having had to observe the transition happen. */
+  useEffect(() => {
+    if (gameState?.current_round_type !== "WaterfallAuction") return;
+    if (gameState.private_auction_complete === true) return;
+    const atom = sandboxWaterfallRef.current;
+    if (!atom || atom.waterfall_auction_active) return;
+    const armed = { ...atom, waterfall_auction_active: true };
+    sandboxWaterfallRef.current = armed;
+    setSandboxWaterfall(armed);
+  }, [gameState?.current_round_type, gameState?.private_auction_complete]);
 
   /* Design note #900: dismissed, not destroyed. Re-armed whenever a NEW ending arrives so an Undo back into
      play and a second ending does not open silently behind a dismissal from the first. */
@@ -3882,6 +3909,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           const { player, par_value: parValue } = msg.SetBoPar;
           const base = sandboxStateRef.current;
           if (!base) return;
+          /* Design note #904b: A REFUSAL THAT SAYS SO. This was a bare `if (granted === base) return;` and it
+             swallowed the whole event -- a player who had just paid for the B&O private got no certificate, no
+             par and no line anywhere. Asked before the grant so the sentence names the actual cause. */
+          const refusal = boPresidencyRefusal(base, BO_TICKER);
+          if (refusal !== null) {
+            logInfo("B&O Presidency", refusal);
+            setBoParPrompt(null);
+            return;
+          }
           const granted = grantBOPresidency(base, player, parValue, BO_TICKER);
           if (granted === base) return;
           sandboxStateRef.current = granted;
@@ -4088,10 +4124,25 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
              correctness requirement. */
           const base = sandboxStateRef.current;
           if (!base || base.current_round_type !== "WaterfallAuction") return;
+          /* ==================================================================
+              DESIGN NOTE 905: THE ONE EVENT THAT CLOSES THE AUCTION, WHENEVER IT RAN
+             ==================================================================
+             This handler was written for the genesis auction and is now reached twice over: at the top of a
+             standard game, and mid-game under the delayed variant. Reusing it rather than writing a second
+             closer is the point -- `private_auction_complete` is what unlocks the B&O (#904a), and two events
+             that both had to remember to set it is precisely how one of them comes not to.
+             THE ROUND IT OPENS IS DERIVED, not assumed to be Stock Round 1. `macro_round_number` already says
+             which one this is, so the sentence and the state agree without a second counter. */
+          const openingRound = base.macro_round_number ?? 1;
           const opened: GameStateResponse = {
             ...base,
             current_round_type: "StockRound",
             consecutive_passes: 0,
+            private_auction_complete: true,
+            /* Design note #905: the Priority Deal holder opens the Stock Round the auction hands off to, which
+               under the delayed variant is the holder as SR2 closed -- the ruling given. In a standard game
+               `priority_deal_index` is 0 at genesis, so this is the same seat it always was. */
+            active_player_index: base.priority_deal_index ?? 0,
           };
           sandboxStateRef.current = opened;
           setSandboxState(opened);
@@ -4100,7 +4151,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             : null;
           sandboxWaterfallRef.current = closed;
           setSandboxWaterfall(closed);
-          logInfo("Round", "The Waterfall Auction is complete \u2014 Stock Round 1 begins.");
+          logInfo(
+            "Round",
+            openingRound > 1
+              ? `The delayed private auction is complete \u2014 Stock Round ${openingRound} begins, and the B&O is now open for trading.`
+              : "The Waterfall Auction is complete \u2014 Stock Round 1 begins.",
+          );
           return;
         }
 
@@ -4141,7 +4197,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         }
 
         if (isSetupGameMsg(msg)) {
-          const dealt = dealSandboxGame({ players: msg.SetupGame.players });
+          const dealt = dealSandboxGame({
+            players: msg.SetupGame.players,
+            /* Design note #902: FROM THE MESSAGE, not from local state. The host chose the variants and every
+               client deals from this action -- reading a local selection here would give the host's browser
+               one game and everybody else's another, which is #550's rule stated for house rules. */
+            variants: msg.SetupGame.variants,
+          });
           if (!dealt) {
             logInfo("Room", "That roster cannot be dealt — Project 18XX seats two to six players.");
             return;
@@ -4157,7 +4219,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             player_addresses: dealt.playerAddresses,
             player_cash: dealt.playerCash,
             virtual_bank_vgp: String(dealt.bankRemaining),
-            virtual_bank_start: String(BANK_START),
+            /* Design note #902: what THIS game started with, not the printed constant -- a short game's
+               ledger has to read $4,500 or the bank gauge measures against a pool that was never there. */
+            virtual_bank_start: String(dealt.bankStart),
+            /* Design note #902: recorded on state so the reducer can read it -- Unpredictable Revenue asks it
+               on every run, and a replay must find the same answer the live game did. */
+            variants: dealt.variants,
             max_players: dealt.playerAddresses.length,
             active_player_index: 0,
             priority_deal_index: 0,
@@ -4191,8 +4258,25 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                 .map((player) => [player.id, player.color as string]),
             ),
           );
-          sandboxStateRef.current = seated;
-          setSandboxState(seated);
+          /* ==================================================================
+              DESIGN NOTE 905: A DELAYED-AUCTION GAME OPENS ON STOCK ROUND 1
+             ==================================================================
+             RULED: "Straight to SR1; no privates exist yet ... corporations must float on share capital alone
+             for two Stock Rounds", and that balance shift is intended rather than tolerated.
+             THE AUCTION IS NOT SKIPPED, IT IS MOVED, so `private_auction_complete` stays FALSE here -- which is
+             what keeps the B&O locked (#904a) and what tells `settleRoundTransitions` there is still an
+             auction owing before Stock Round 3. Marking it complete would open on SR1 and never run it. */
+          const opensOnStockRound = dealt.variants.delayedAuction;
+          const dealtState: GameStateResponse = opensOnStockRound
+            ? {
+                ...seated,
+                current_round_type: "StockRound",
+                private_auction_complete: false,
+                macro_round_number: 1,
+              }
+            : seated;
+          sandboxStateRef.current = dealtState;
+          setSandboxState(dealtState);
 
           /* The auction atom is dealt in the same handler from the same roster, read from the ref with no fallback.
              See docs/ai_architecture/firebase_middleware.md - App.tsx #542 */
@@ -4200,8 +4284,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             sandboxWaterfallRef.current,
             dealt.playerAddresses,
           );
-          sandboxWaterfallRef.current = dealtWaterfall;
-          setSandboxWaterfall(dealtWaterfall);
+          /* Design note #905: DEALT NOW, RUN LATER. The auction's own atom is built from this roster at setup
+             whichever variant is playing -- it is the same lots in the same order -- and only `active` decides
+             whether it is happening. Deferring the deal as well would mean the roster it was built from could
+             have changed by Stock Round 3, which is a different auction from the one the table agreed to. */
+          const armedWaterfall =
+            dealtWaterfall && opensOnStockRound
+              ? { ...dealtWaterfall, waterfall_auction_active: false }
+              : dealtWaterfall;
+          sandboxWaterfallRef.current = armedWaterfall;
+          setSandboxWaterfall(armedWaterfall);
           logInfo(
             "Room",
             `Game dealt for ${dealt.playerAddresses.length} players — $${dealt.startingCash} each, certificate limit ${dealt.certLimit}.`,
@@ -4395,8 +4487,26 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
            reaching into wallets, so one number is charged and logged. */
         const marketResult = applySandboxMarketAction(sandboxMarketRef.current, msg, {
           projectSale: (from, blocks) => projectShareSaleMove(from, blocks),
-          // Design note #291: the dividend decision moves the marker too.
-          projectDividend: (from, choice) => projectDividendCellMove(from, choice),
+          /* Design note #291: the dividend decision moves the marker too.
+             Design note #908: BY AS MANY CELLS AS THE PAYOUT EARNED. The step count is computed from the
+             corporation's own revenue and its CURRENT price, read off `before` -- the board the payout was
+             declared against. Reading the price after the move would be measuring the multiple against the
+             cell the multiple just chose. */
+          projectDividend: (from, choice) => {
+            const declaring =
+              "DeclareDividends" in msg
+                ? before?.public_companies.find(
+                    (entry) => entry.company_id === msg.DeclareDividends.protocol_id,
+                  )
+                : undefined;
+            const payout = Number(declaring?.last_route_revenue ?? 0) || 0;
+            const steps = dividendStepsFor(
+              payout,
+              marketPriceForCompany(declaring?.company_id ?? -1),
+              resolveVariants(before?.variants),
+            );
+            return projectDividendCellMove(from, choice, steps);
+          },
           /* Design note #748a: the SAME rule the reducer applies below, asked here because this atom runs
              first. Without it a refused sale still walked the token down and the chart and the board parted
              company for the rest of the game. `before` is the board the reducer will judge it against. */
@@ -4431,6 +4541,37 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                 : (["fell", "on the share sale"] as const);
           logInfo("Market Move", `${ticker} ${verb} from $${from} to $${to} ${cause}.`);
         }
+
+        /* ==================================================================
+            DESIGN NOTE 907: THE DIE, NARRATED
+           ==================================================================
+           Computed from the BEFORE state, which is the same state the reducer's own roll reads -- the seed is
+           the turn and the train ordinal, and the ordinal is incremented by the arm itself. Reading it after
+           would name the NEXT train's face.
+           THE REDUCER STILL ROLLS ITS OWN. This does not pass a figure in; it recomputes the same one from the
+           same inputs, which is #400's division kept honest -- the reducer settles, the shell narrates, and a
+           narration that carried the number would be a second authority on what a corporation earned. */
+        const rollNarration: string | null = (() => {
+          if (!after || !("RunManualRoute" in msg)) return null;
+          if (!resolveVariants(after.variants).unpredictableRevenue) return null;
+          const company = after.public_companies.find(
+            (entry) => entry.company_id === msg.RunManualRoute.protocol_id,
+          );
+          if (!company) return null;
+          const seed = {
+            macroRound: after.macro_round_number ?? 0,
+            subRound: after.sub_round_index ?? 0,
+            companyId: msg.RunManualRoute.protocol_id,
+            trainOrdinal: company.routes_run_this_turn ?? 0,
+          };
+          const printed = sandboxRouteRevenue(
+            mapGrid,
+            msg.RunManualRoute.path,
+            ERA_FOR_PHASE_TINT[currentPhase?.tint ?? "yellow"],
+          );
+          const flavour = revenueFlavour(rollRouteRevenue(printed, seed), seed);
+          return flavour === null ? null : `${company.ticker}: ${flavour}`;
+        })();
 
         if (after) {
           after = applySandboxAction(after, msg, {
@@ -4674,7 +4815,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
               const sentence = describeFleetLoss(loss, limitNow);
               if (sentence) logInfo("Phase Change", sentence);
 
-              for (const notice of fleetLossNotices(loss, arrivingTier, limitNow)) {
+              for (const notice of fleetLossNotices(
+                loss,
+                arrivingTier,
+                limitNow,
+                /* Design note #906: the same variants the reducer just applied, so the modal's tense and the
+                   reducer's behaviour cannot disagree about whether the train is actually gone. */
+                resolveVariants(after.variants).gentleRust,
+              )) {
                 /* IDEMPOTENT, for #706's reason one function over: the Undo path replays the whole log, so
                    this block runs again for a phase change the player already saw. Keyed by CONTENT rather
                    than by position -- two different phase changes carry different arriving tiers and both
@@ -4731,6 +4879,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
 
           sandboxStateRef.current = after;
           setSandboxState(after);
+
+          /* Design note #907: the die's sentence, after the state it describes has landed. Computed from the
+             BEFORE state above, logged here, so the line and the treasury a player is looking at agree. */
+          if (rollNarration) logInfo("Run Routes", rollNarration);
 
           /* settleRoundTransitions performs the transition; the shell only logs it. Detected by comparing state, silent on a replay, and no tab navigation here (#213 owns that).
              See docs/ai_architecture/state_machine.md - App.tsx #642 */
@@ -7836,11 +7988,30 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     () => (dividendCell?.price != null ? Number(dividendCell.price) : null),
     [dividendCell],
   );
+  /* Design note #908: THE READOUT TAKES THE SAME COUNT THE BOARD WILL TAKE. #891 is the whole reason this is
+     not computed independently here -- "the readout came to promise a rise the board did not make" -- so the
+     payout and the price go through `dividendStepsFor` on both sides and the only difference between them is
+     which function they hand the answer to. */
+  const dividendSteps = useMemo(
+    () =>
+      dividendStepsFor(
+        Number(
+          gameState?.public_companies.find((entry) => entry.company_id === actingProtocolId)
+            ?.last_route_revenue ?? 0,
+        ) || 0,
+        dividendPrice,
+        resolveVariants(gameState?.variants),
+      ),
+    [gameState, actingProtocolId, dividendPrice],
+  );
   const payProjection = useMemo(
-    () => projectDividendFrom(dividendCell, "pay"),
-    [dividendCell],
+    () => projectDividendFrom(dividendCell, "pay", dividendSteps),
+    [dividendCell, dividendSteps],
   );
   const withholdProjection = useMemo(
+    /* A WITHHOLD IS ALWAYS ONE CELL. The variant is about how much was PAID OUT, and a corporation that
+       withholds paid nothing -- scaling the drop by a dividend that did not happen would be a rule nobody
+       asked for. */
     () => projectDividendFrom(dividendCell, "withhold"),
     [dividendCell],
   );

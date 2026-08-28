@@ -20,6 +20,11 @@ import type {
   WaterfallStateResponse,
 } from "./gameState";
 import { bankIsBroken } from "./endgame";
+import {
+  DELAYED_AUCTION_TRIGGER_TIER,
+  resolveVariants,
+  rollRouteRevenue,
+} from "./gameVariants";
 // Design note #723: the terrain fee is charged on the FIRST build of a hex and never again.
 import { terrainFeeDue, withTerrainPaid } from "./terrainFee";
 // Design note #736: which arriving tier closes the private companies.
@@ -30,7 +35,7 @@ import type { GameplayExecuteMsg } from "./sessionKey";
 import type { MapGridResponse, MapTileEntry } from "../components/hexContractTypes";
 import { TILE_CATALOG_BY_ID, type TileColorTier } from "../components/hexTileCatalog";
 import { archetypeForHex, hexValueForEra } from "../components/hexGeometry";
-import { depotInventory, derivePhase, type GamePhase } from "./gamePhase";
+import { depotInventory, derivePhase, TIER_ORDER, type GamePhase } from "./gamePhase";
 // Design note #712: the market-zone purchase rules, shared with the Stock Round panel.
 import { sharePurchaseBlock, type PriceZone } from "./sharePurchase";
 import { hasActedThisTurn } from "./turnAction";
@@ -692,6 +697,32 @@ export function applyPhaseChange(
    * the one it did not mention.
    *
    * See docs/ai_architecture/sandbox_reducer.md, sandboxSession.ts #897. */
+  /* ==================================================================
+   *  DESIGN NOTE 906: GENTLE RUST GIVES THE TRAIN A REPRIEVE, NOT AN EXEMPTION
+   * ==================================================================
+   *
+   * REQUESTED: "trains that would normally rust instead enter a 'pending rust' state, granting them exactly
+   * one final Operating Round run before obsolescence."
+   * RULED: the pending train "dies at the exact end of that specific corporation's next Operating Round turn
+   * (immediately after it generates its final revenue)", and it does NOT occupy a train-limit slot.
+   *
+   * SO THE RUST ARM SPLITS AND THE TRIM ARM DOES NOT. A doomed train is moved out of `owned_trains` and into
+   * `pending_rust_trains` rather than destroyed -- it is still run, still priced, and still gone at the end of
+   * that turn. Everything downstream that counts trains keeps counting `owned_trains`, which is what makes the
+   * ruling "no limit slot" fall out of the move instead of needing a rule of its own.
+   *
+   * AND THAT IS WHY THE TRIM STILL SEES THE SMALLER FLEET. The two consequences of a phase change are ordered
+   * -- rust, then trim to the limit (#284) -- and under this variant the rust step removes the doomed trains
+   * from the countable fleet just the same. A corporation holding three 2-trains and a 4 when the first 4
+   * arrives is at one countable train afterwards either way; the difference is that three of them still run
+   * once more.
+   *
+   * THE DEATH IS NOT HERE. This function only marks; `settleRoundTransitions` clears the marks at the end of
+   * that corporation's turn -- see #906a -- because "the end of its next turn" is a fact about the cursor and
+   * this function does not know where the cursor is. */
+  const variants = resolveVariants(state.variants);
+  const gentle = variants.gentleRust;
+
   let changed = false;
   const companies = (state.public_companies ?? []).map((company) => {
     const owned = company.owned_trains;
@@ -700,7 +731,14 @@ export function applyPhaseChange(
     if (owned == null) return company;
 
     // 1. Rust.
+    const rustedNow = doomed.size === 0 ? [] : owned.filter((model) => doomed.has(model));
     let fleet = doomed.size === 0 ? [...owned] : owned.filter((model) => !doomed.has(model));
+    /* Design note #906: under Gentle Rust the doomed trains are MOVED rather than destroyed. Appended to any
+       existing marks rather than replacing them, because two phase changes can land between one
+       corporation's turns and the older reprieve is still owed its run. */
+    const reprieved = gentle && rustedNow.length > 0
+      ? [...(company.pending_rust_trains ?? []), ...rustedNow]
+      : company.pending_rust_trains;
 
     // 2. Trim, cheapest first.
     if (Number.isFinite(limit) && fleet.length > limit) {
@@ -714,9 +752,13 @@ export function applyPhaseChange(
       }
     }
 
-    if (fleet.length === owned.length) return company;
+    if (fleet.length === owned.length && reprieved === company.pending_rust_trains) return company;
     changed = true;
-    return { ...company, owned_trains: fleet };
+    return {
+      ...company,
+      owned_trains: fleet,
+      ...(reprieved === company.pending_rust_trains ? {} : { pending_rust_trains: reprieved }),
+    };
   });
 
   /* ==================================================================
@@ -1579,11 +1621,44 @@ function settleOperatingCursor(
   after: GameStateResponse,
   msg: GameplayExecuteMsg,
 ): GameStateResponse {
+  /* ==================================================================
+     DESIGN NOTE 906a: THE REPRIEVE EXPIRES ON THE WAY OUT TOO
+     ==================================================================
+     Lifted ABOVE the early return below, and finding out why is the whole of this note. The reprieve clear
+     started life inside the `turnChanged` block further down, beside the route-revenue reset -- which is
+     unreachable when an Operating Round SET ends, because the guard below returns first for any `after` that
+     is not an Operating Round.
+     SO THE LAST CORPORATION OF EVERY SET GOT TWO RUNS out of a train that was owed one: its turn ended into a
+     Stock Round, the clear never ran, and the mark was still there when the next set opened. Caught by the
+     case that ends a single-corporation set; the sibling case, which advances between two corporations WITHIN
+     a round, passed the whole time and hid it.
+     THE OUTGOING CORPORATION IS `before`'S, in both paths, for the same reason: it is the one that was acting
+     when this transition began, and by the time the round type has changed `after` no longer says who that
+     was. */
+  const outgoingCorporation =
+    before.current_round_type === "OperatingRound"
+      ? (before.active_operating_order ?? [])[before.active_corporation_index] ?? null
+      : null;
+  const expireReprieve = (state: GameStateResponse): GameStateResponse => {
+    if (outgoingCorporation === null) return state;
+    const done = (company: (typeof state.public_companies)[number]) =>
+      company.company_id === outgoingCorporation &&
+      (company.pending_rust_trains?.length ?? 0) > 0;
+    if (!(state.public_companies ?? []).some(done)) return state;
+    return {
+      ...state,
+      public_companies: state.public_companies.map((company) =>
+        done(company) ? { ...company, pending_rust_trains: [] } : company,
+      ),
+    };
+  };
+
   /* Outside an OR the cursor is CLEARED, not frozen -- a stale Hardware would be handed to the next round's first corporation.
      See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #656 */
   if (after.current_round_type !== "OperatingRound") {
-    if (after.operating_sub_phase === undefined) return after;
-    return { ...after, operating_sub_phase: undefined };
+    const expired = expireReprieve(after);
+    if (expired.operating_sub_phase === undefined) return expired;
+    return { ...expired, operating_sub_phase: undefined };
   }
 
   const turnChanged =
@@ -1615,15 +1690,35 @@ function settleOperatingCursor(
      * ALL CORPORATIONS, NOT JUST THE OUTGOING ONE. The field is only ever read for the corporation currently
      * operating, so clearing the rest costs nothing and removes the question of which one to clear -- and a
      * round transition changes the queue itself, where "the outgoing one" is not well defined. */
-    const cleared = after.public_companies.some(
-      (company) => (company.last_route_revenue ?? "0") !== "0",
-    )
-      ? after.public_companies.map((company) =>
-          (company.last_route_revenue ?? "0") === "0"
-            ? company
-            : { ...company, last_route_revenue: "0" },
+    /* Design note #903: AND THE TRAIN COUNTER GOES WITH IT. `routes_run_this_turn` is what gives each train
+       its own die -- a corporation running two 4-trains rolls twice -- and it describes THIS turn for exactly
+       the reason above. Cleared in the same expression rather than in a second pass, because two resets of
+       one turn-scoped idea drifting apart is the bug #777 is about. */
+    /* ==================================================================
+       DESIGN NOTE 906a: AND THE REPRIEVE ENDS HERE, WITH THE TURN
+       ==================================================================
+       RULED: a pending-rust train "dies at the exact end of that specific corporation's next Operating Round
+       turn (immediately after it generates its final revenue)".
+       THIS IS THAT MOMENT, AND IT IS ALREADY BEING COMPUTED. `turnChanged` is what clears the route revenue
+       above, for the same reason: the turn that earned it is over. The doomed train earned its last revenue
+       during that turn, that revenue has been recorded and paid, and now the train goes. Putting the death
+       anywhere else would need a second answer to "whose turn just ended", which is #777's whole lesson.
+       ONLY THE CORPORATION WHOSE TURN ENDED, unlike the revenue clear beside it. That one clears every
+       corporation because the field is only ever read for the acting one, so over-clearing is free. This is
+       not free: clearing another corporation's marks would destroy trains that have not had their run. The
+       outgoing corporation is `before`'s cursor -- the one that was acting when this transition began. */
+    /* Design note #906a: the reprieve expires through the SAME helper the non-Operating path uses, so a
+       corporation whose turn ends mid-set and one whose turn ends the set are answered identically. */
+    const withReprieveExpired = expireReprieve(after);
+    const staleRun = (company: (typeof after.public_companies)[number]) =>
+      (company.last_route_revenue ?? "0") !== "0" || (company.routes_run_this_turn ?? 0) !== 0;
+    const cleared = withReprieveExpired.public_companies.some(staleRun)
+      ? withReprieveExpired.public_companies.map((company) =>
+          staleRun(company)
+            ? { ...company, last_route_revenue: "0", routes_run_this_turn: 0 }
+            : company,
         )
-      : after.public_companies;
+      : withReprieveExpired.public_companies;
     return {
       ...after,
       public_companies: cleared,
@@ -1771,6 +1866,63 @@ function settleRoundTransitions(
         current_round_type: "GameEnd" as const,
       };
     }
+
+    /* ==================================================================
+     *  DESIGN NOTE 905: THE DELAYED AUCTION IS INSERTED, NOT SUBSTITUTED
+     * ==================================================================
+     *
+     * REQUESTED: move the private auction "from the start of the game to immediately before Stock Round 3".
+     *
+     * SO IT SITS IN THE SAME TRANSITION THE STOCK ROUND WOULD HAVE OPENED FROM. The OR set that precedes
+     * Stock Round 3 hands off to `WaterfallAuction` instead, and when that auction closes, `OpenStockRound`
+     * -- the event that has always closed it -- opens Stock Round 3. Nothing else in the round machine learns
+     * a new shape: the auction is a round, and this puts a round where a round already went.
+     *
+     * THE CALENDAR STILL ADVANCES HERE. `macro_round_number` is incremented on this transition whether the
+     * next round is a Stock Round or the auction, because it is the ROUND NUMBER and the auction occupies
+     * that slot -- leaving it behind would mean the auction ran "during" the Stock Round just past, and
+     * `OpenStockRound` would then re-open a round the table had already played.
+     *
+     * THE TRIGGER IS THE 3-TRAIN, NOT A ROUND NUMBER -- corrected mid-build. It was "immediately before Stock
+     * Round 3"; the rule is "at the exact end of the Operating Round set in which the first 3-train is
+     * purchased". The B&O lock is untouched by that change, which is the whole reason #904a asked the auction
+     * rather than the calendar: the timing became dynamic and the lock did not have to notice.
+     *
+     * AND NO FLAG IS NEEDED, which is the substantive departure from the instructions. The request said "you
+     * will need to flag the state when the first 3-train is purchased", and the flag would be derivable from
+     * two facts already on the state, so it would be a third thing to keep in step with them:
+     *   The phase reaches tier 3 exactly once, and only a 3-train purchase takes it there.
+     *   `private_auction_complete` is false until the auction runs, and this is the only thing that runs it.
+     * So "the phase is at or past 3 and the auction is still owed" IS "the first 3-train was bought during
+     * the set that just ended" -- if it had been bought in an EARLIER set, the auction would have fired at
+     * that set's end and the completion flag would be true. #898's collapse, one variant over.
+     * A `RevertTo` that rewinds past the purchase un-flags it for free, too, because there is no flag: the
+     * rebuilt state simply has no 3-train in it and the phase drops back on its own.
+     *
+     * THE PRIORITY DEAL IS UNTOUCHED and that is the ruling: seeded by whoever holds it going into the
+     * auction. It is already in `priority_deal_index`, and `OpenStockRound` seats it when the auction hands
+     * off to the Stock Round that follows.
+     *
+     * IF NO 3-TRAIN IS EVER BOUGHT, no auction ever happens and the privates never enter play. That is the
+     * honest consequence of a dynamic trigger rather than a bug, and it is reachable on a short bank -- see
+     * the report accompanying this note. */
+    const variants = resolveVariants(state.variants);
+    if (variants.delayedAuction && state.private_auction_complete !== true) {
+      const tier = derivePhase(state)?.tier ?? null;
+      const reachedThreeTrain =
+        tier !== null && TIER_ORDER.indexOf(tier) >= TIER_ORDER.indexOf(DELAYED_AUCTION_TRIGGER_TIER);
+      if (reachedThreeTrain) {
+        return {
+          ...state,
+          operating_round_just_ended: false,
+          current_round_type: "WaterfallAuction" as const,
+          macro_round_number: state.macro_round_number + 1,
+          sub_round_index: 0,
+          consecutive_passes: 0,
+        };
+      }
+    }
+
     return {
       ...state,
       operating_round_just_ended: false,
@@ -2284,9 +2436,44 @@ function applyOneAction(
     // figure comes from the stops the player actually selected, so building
     // a longer route through richer cities visibly pays more -- which is the
     // entire point of a route tester. See `sandboxRouteRevenue`.
-    const earned = ctx?.mapGrid
+    const printed = ctx?.mapGrid
       ? sandboxRouteRevenue(ctx.mapGrid, path, ctx.era ?? "Yellow")
       : SANDBOX_NOMINAL_ROUTE_REVENUE;
+
+    /* ==================================================================
+     *  DESIGN NOTE 903: THE DIE IS ROLLED HERE, AND IT CANNOT BE RE-ROLLED
+     * ==================================================================
+     *
+     * REQUESTED: "every running train rolls a d6 modifying its printed route revenue" under a deterministic
+     * RNG "seeded by the actionId or state hash so the event ledger replays identically".
+     *
+     * THE ACTION-ID SEED WOULD HAVE BEEN AN EXPLOIT and this is the one place it shows. Undo a bad run and
+     * re-run the same train: that is a NEW action with a NEW index, so an action-seeded die hands out a fresh
+     * face, and a player can sit there undoing until they roll a 6. The ledger would replay identically the
+     * whole time.
+     * SO THE SEED IS THE TURN. Macro round, sub round, corporation, and how many trains this corporation has
+     * already run this turn -- all four read off state, so a rebuild reproduces them and a retry lands on the
+     * same face. Re-routing through different cities changes the PRINTED figure and not the multiplier, which
+     * is right: the die is the railway's luck this round, not a property of the hexes chosen.
+     *
+     * ONE SEAM, DELIBERATELY. Revenue is computed in several places for PREVIEW -- the route planner, the
+     * dividend projection, the auto-tracer -- and none of them may roll. This arm is the only one that
+     * COMMITS a figure to state, so it is the only one that applies the modifier; a preview showing an
+     * unmodified figure and the commit applying the die is honest, where a preview that rolled would be
+     * showing a number the player could then re-roll by looking away. */
+    const variants = resolveVariants(state.variants);
+    const ordinalBefore =
+      state.public_companies.find((entry) => entry.company_id === protocol_id)
+        ?.routes_run_this_turn ?? 0;
+    const roll = variants.unpredictableRevenue
+      ? rollRouteRevenue(printed, {
+          macroRound: state.macro_round_number ?? 0,
+          subRound: state.sub_round_index ?? 0,
+          companyId: protocol_id,
+          trainOrdinal: ordinalBefore,
+        })
+      : null;
+    const earned = roll ? roll.adjusted : printed;
     /* The treasury credit moved to DeclareDividends, or Withhold credited it twice. #492a: a turn's routes ADD
        (one message per train).
        Design note #777: THE ZEROING MOVED TO THE TURN CHANGE and `ctx.resetRouteRevenue` is gone. It was a
@@ -2303,7 +2490,14 @@ function applyOneAction(
       ...state,
       public_companies: state.public_companies.map((company) =>
         company.company_id === protocol_id
-          ? { ...company, last_route_revenue: String(running) }
+          ? {
+              ...company,
+              last_route_revenue: String(running),
+              /* Design note #903: incremented WITH the revenue, in the same object, so the next train on this
+                 turn gets the next die. Two writes that could fall out of step would mean two trains sharing
+                 one face -- which is exactly what keying by model would have done. */
+              routes_run_this_turn: ordinalBefore + 1,
+            }
           : company,
       ),
     };
@@ -2651,6 +2845,34 @@ export function applyPrivateRevenue(state: GameStateResponse | null): PrivatePay
 
 /* The B&O private grants the 20% President's Certificate free and sets par from the winner's choice; it does NOT float the corporation. #399: the par is taken WITH the grant, because an unparred presided company is a broken state.
    See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #354 */
+/** Why the B&O President's Certificate cannot be granted right now, or `null` when it can.
+ *
+ *  Design note #904b: SEPARATE FROM THE GRANT so the shell can say it. `grantBOPresidency` has to stay a pure
+ *  `state -> state` function whose refusal is "the same state back"; a reason is a second return value, and
+ *  bolting one on would make every existing caller destructure a tuple to ignore half of it. Asked here, once,
+ *  by both the grant and the narration -- so the sentence a player reads and the decision the reducer makes
+ *  cannot disagree. */
+export function boPresidencyRefusal(
+  state: GameStateResponse,
+  boTicker = "B&O",
+): string | null {
+  const bo = state.public_companies.find((entry) => entry.ticker === boTicker);
+  if (!bo) {
+    return "This game has no B&O corporation, so its President's Certificate cannot be awarded.";
+  }
+  if (bo.president !== null) {
+    /* THE COLLISION #904 IS ABOUT, named rather than swallowed. Under a delayed auction this is what a player
+       who just paid for the B&O private would otherwise hit in total silence. */
+    return `${boTicker} already has a President, so the certificate from the private auction has nowhere to go. This is the collision the B&O lock exists to prevent — the corporation should not have been buyable before the auction concluded.`;
+  }
+  if (bo.ipo_pool_percentage < SANDBOX_PRESIDENT_PERCENTAGE) {
+    /* THE INVENTED-SHARES CASE. Reached when the IPO has been drawn down below the 20% the certificate is cut
+       from -- which the old `Math.max(0, ...)` clamp would have absorbed while still crediting the winner. */
+    return `${boTicker}'s initial offering holds only ${bo.ipo_pool_percentage}%, which is less than the ${SANDBOX_PRESIDENT_PERCENTAGE}% President's Certificate. Granting it would create shares that do not exist.`;
+  }
+  return null;
+}
+
 export function grantBOPresidency(
   state: GameStateResponse,
   winner: string,
@@ -2660,7 +2882,22 @@ export function grantBOPresidency(
   boTicker = "B&O",
 ): GameStateResponse {
   const bo = state.public_companies.find((entry) => entry.ticker === boTicker);
-  if (!bo || bo.president !== null) return state;
+  /* ==================================================================
+     DESIGN NOTE 904b: THE REFUSAL SAYS WHY, BECAUSE THE ALTERNATIVE IS A CERTIFICATE THAT EVAPORATES
+     ==================================================================
+     This was `if (!bo || bo.president !== null) return state;` and the caller bails on `granted === base`
+     BEFORE it logs -- so a grant that could not be made produced no certificate, no par, no error and not one
+     line in the Activity Log. Unreachable under standard rules, where the auction resolves before anybody can
+     buy anything; reachable the moment #904's delayed auction exists, and reachable exactly when somebody has
+     just PAID for the B&O private.
+     THE THIRD COLLISION IS THE ONE TO WATCH and it is why "already presided" is not the only guard here. The
+     grant does `ipo_pool_percentage - SANDBOX_PRESIDENT_PERCENTAGE` under a `Math.max(0, ...)`; with the IPO
+     already drawn down, that clamp under-removes from the pool while still adding 20% to the winner, which
+     invents shares. So the pool is checked BEFORE the subtraction rather than clamped after it.
+     STILL RETURNS THE STATE UNCHANGED on refusal -- the reducer stays pure and the caller keeps its identity
+     check. What is new is `boPresidencyRefusal`, which the shell asks so it can say something. */
+  const refusal = boPresidencyRefusal(state, boTicker);
+  if (refusal !== null || !bo) return state;
 
   return {
     ...state,

@@ -21,6 +21,7 @@
 // table as dropped. See `docs/ai_architecture/firebase_middleware.md`.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { resolveVariants, type GameVariants } from "./gameVariants";
 import {
   Timestamp,
   addDoc,
@@ -102,6 +103,9 @@ export interface RoomDoc {
   anteUjuno: string;
   /** `CreateGameRoom { virtual_bank_start }`, integer string, same reason. */
   virtualBankStart: string;
+  /** Design note #902: the house rules, resolved. A room created before variants existed has none recorded
+   *  and reads as the standard game, which is what it was. */
+  variants: GameVariants;
   createdAtMs: number;
   /** Surfaced to every player in the room, not just the host, so a failed
    *  launch explains itself to the people waiting on it. */
@@ -215,6 +219,9 @@ function decodeRoom(snapshot: QueryDocumentSnapshot<DocumentData>): RoomDoc {
     chainGameId: typeof chainGameId === "number" && Number.isSafeInteger(chainGameId) ? chainGameId : null,
     anteUjuno: toIntegerString(data.anteUjuno, "0"),
     virtualBankStart: toIntegerString(data.virtualBankStart, "0"),
+    /* Through `resolveVariants` rather than cast: this is untrusted document data, and an unknown length from
+       a newer client must degrade to the standard game rather than reach the reducer. */
+    variants: resolveVariants(data.variants as Partial<GameVariants> | undefined),
     createdAtMs: toMillis(data.createdAt) ?? 0,
     launchError: typeof data.launchError === "string" && data.launchError ? data.launchError : null,
   };
@@ -465,6 +472,10 @@ export interface CreateRoomInput {
   /** Base-denom integer strings -- see `RoomDoc.anteUjuno`. */
   anteUjuno: string;
   virtualBankStart: string;
+  /** Design note #902: the house rules the host chose. Stored on the room so joining players can SEE them
+   *  before they sit down -- a table's variants are part of what somebody is agreeing to when they take a
+   *  seat, and finding out after the deal is not a choice. */
+  variants: GameVariants;
 }
 
 /** Creates a STAGING room. Touches no chain and costs no gas -- see design
@@ -486,6 +497,7 @@ export async function createStagingRoom(input: CreateRoomInput): Promise<string>
     chainGameId: null,
     anteUjuno: input.anteUjuno,
     virtualBankStart: input.virtualBankStart,
+    variants: input.variants,
     createdAt: serverTimestamp(),
     launchError: null,
   });

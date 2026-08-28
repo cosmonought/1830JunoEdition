@@ -20,6 +20,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 // Design note #526: the one printed-limits table.
 import { certLimitForPlayers } from "./gameSetup";
 import type { OperatingSubPhase } from "../components/OperatingSubPhaseStepper";
+import type { GameVariants } from "./gameVariants";
 
 /* ------------------------------------------------------------------ */
 /* Contract data mirror -- see design note #1                         */
@@ -98,6 +99,19 @@ export interface PublicCompanyState {
    *  contract predating the field, i.e. UNKNOWN, not "owns nothing". Conflating the two would grey out every
    *  train on every corporation against an older chain and make trading look broken rather than unsupported. */
   owned_trains?: string[] | null;
+  /** Design note #903: how many trains this corporation has already run THIS turn. It exists to give each
+   *  train its own die under Unpredictable Revenue -- two 4-trains are two runs and may roll differently, and
+   *  keying the roll by train MODEL would hand both the same face.
+   *  Turn-scoped, and cleared beside `last_route_revenue` by the same turn-change rule (#777). */
+  routes_run_this_turn?: number;
+  /** Design note #906: trains under Gentle Rust that are living on borrowed time.
+   *
+   *  NOT IN `owned_trains`, and that is the whole mechanism: every surface that counts a corporation's trains
+   *  counts that array, so moving a doomed train here is what implements the ruling that a pending-rust train
+   *  occupies no train-limit slot -- without a single one of those surfaces learning a new rule.
+   *  They still RUN. `settleRoundTransitions` clears them at the end of that corporation's next Operating
+   *  Round turn (#906a), which is after its revenue has been recorded. */
+  pending_rust_trains?: readonly string[];
 }
 
 export interface PrivateCompanyState {
@@ -190,6 +204,18 @@ export interface GameStateResponse {
    *  NOT `?? false` ANYWHERE IT IS WRITTEN BACK -- #232's rule and #897's correction. Absent means an older
    *  log that predates room closure, which is a different thing from a room that is open. */
   room_closed?: boolean;
+  /** Design note #902: the house rules this game is being played under, recorded at setup so a replay uses
+   *  the same ones. Absent on every game logged before variants existed, which `resolveVariants` reads as the
+   *  standard game. */
+  variants?: Partial<GameVariants>;
+  /** Design note #904a: whether the private company auction has concluded.
+   *
+   *  Written by the one transition that closes it (`OpenStockRound`), so it is true from the first Stock
+   *  Round of a standard game and stays false through SR1 and SR2 of a delayed-auction game. It is what the
+   *  B&O lock asks -- see `boIsLocked` for why the auction and not the round number.
+   *  ABSENT MEANS COMPLETE, for logs written before the field existed: those are standard games whose auction
+   *  did happen, and reading absence as "incomplete" would lock the B&O across every historical replay. */
+  private_auction_complete?: boolean;
   /** Design note #656: WHICH STEP of its turn the acting corporation is on. This was React state in `App.tsx`
    *  re-seeded by an effect keyed on the era and phase tier -- so buying a train that advanced the phase sent
    *  the buying corporation back to the top of its own turn. A cursor held outside the reducer is also not in

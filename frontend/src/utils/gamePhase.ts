@@ -23,7 +23,9 @@ import type { GameStateResponse } from "./gameState";
 /** Phase tiers in ascending order. `"D"` sorts last deliberately. */
 export type TrainTier = "2" | "3" | "4" | "5" | "6" | "D";
 
-const TIER_ORDER: readonly TrainTier[] = ["2", "3", "4", "5", "6", "D"];
+/** Design note #905: exported so the delayed-auction trigger can ask "is the phase at or past 3" against
+ *  the same ordering everything else uses, rather than restating it. */
+export const TIER_ORDER: readonly TrainTier[] = ["2", "3", "4", "5", "6", "D"];
 
 /** How many of each train the Bank Depot starts with -- the printed 1830
  *  roster, mirroring `RulesReference.tsx`'s `TRAIN_ROSTER`. `D` is

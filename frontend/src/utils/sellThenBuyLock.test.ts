@@ -38,6 +38,18 @@ function board(): GameStateResponse {
     private_companies: [],
     current_round_type: "StockRound",
     macro_round_number: 3,
+    /* ==================================================================
+        DESIGN NOTE 909: A BANK, BECAUSE A SALE PAYS OUT OF ONE
+       ==================================================================
+       ADDED, NOT ADJUSTED-TO-PASS. This fixture carried no bank at all, so the sale below paid the seller out
+       of nothing and left `virtual_bank_vgp` negative -- and #898 then correctly read that as a broken bank
+       and ended the game at the next Operating Round set boundary. Two cases here failed for that reason and
+       not because the lockout was broken.
+       A BOARD WITH NO BANK IS NOT A BOARD 1830 CAN REACH: the bank is $12,000 at deal time and every sale
+       draws on it. Giving the fixture one is correcting a state that never existed, which is why the case
+       below ALSO asserts that the game did not end -- so a future edit cannot quietly put it back into the
+       terminal state and read the resulting failure as a lockout bug again. */
+    virtual_bank_vgp: "10000",
     active_player_index: 0,
     consecutive_passes: 0,
     operating_round_just_ended: false,
@@ -162,6 +174,10 @@ describe("the lockout ends when the next Stock Round opens", () => {
     const locked = sell(board(), PRR);
     expect(soldThisRound(locked, ME, PRR)).toBe(true);
     const next = openNextStockRound(locked);
+    /* THE PREMISE, PINNED FIRST. If the bank has run dry the game ends instead of opening a Stock Round, and
+       "the lockout did not clear" would be the right answer to the wrong question -- which is exactly how
+       this case was misread once already. */
+    expect(next.current_round_type).toBe("StockRound");
     expect(soldThisRound(next, ME, PRR)).toBe(false);
   });
 

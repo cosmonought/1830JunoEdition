@@ -31,6 +31,8 @@ import {
   type QueryDocumentSnapshot,
 } from "firebase/firestore";
 
+import { resolveVariants, STANDARD_VARIANTS, type GameVariants } from "./gameVariants";
+
 import { getFirestoreDb } from "../config/firebase";
 /* Design note #530: `GameplayExecuteMsg` is no longer imported here --
    `SandboxLogMsg` is the union of it and the setup event, and this module
@@ -187,6 +189,8 @@ export async function hostSandboxRoom(hostId: string, nickname: string): Promise
        it. */
     status: "waiting" as SandboxRoomStatus,
     players: [{ id: hostId, nickname, isReady: false }],
+    // Design note #910: opens on the printed game; the host changes it in the waiting room.
+    variants: STANDARD_VARIANTS,
     createdAt: serverTimestamp(),
   });
   return code;
@@ -288,6 +292,20 @@ export interface SandboxRoomDoc {
   hostId: string;
   status: SandboxRoomStatus;
   players: SandboxRoomPlayer[];
+  /* ==================================================================
+      DESIGN NOTE 910: THE HOUSE RULES BELONG TO THE ROOM, NOT TO THE HOST'S BROWSER
+     ==================================================================
+     REPORTED: "there are no options visible in the Lobby to actually select them."
+     AND THE CONTROLS WERE REAL -- in the wrong lobby. #902 put them on `Lobby.tsx`'s create-room form, which
+     builds a `RoomDoc` for the on-chain staging path. The screen a table actually starts a sandbox game from
+     is `SandboxWaitingRoom`, backed by THIS document, and `handleStartSandboxGame` dispatched
+     `SetupGame: { players: seated }` with no variants at all. So the schema was wired end to end along a road
+     nobody drives, and the road they do drive carried nothing.
+     ON THE ROOM DOCUMENT, which is the part worth stating as a rule: every seat is subscribed to it, so the
+     variants are visible to everyone BEFORE they ready up. A table's house rules are terms rather than
+     preferences -- #902 -- and terms only one person can see are not terms. Holding them in the host's React
+     state would show them to the host alone and hand everybody else a different game at the deal. */
+  variants: GameVariants;
 }
 
 function toRoomDoc(code: string, data: DocumentData | undefined): SandboxRoomDoc | null {
@@ -297,6 +315,10 @@ function toRoomDoc(code: string, data: DocumentData | undefined): SandboxRoomDoc
     code,
     hostId: typeof data.hostId === "string" ? data.hostId : "",
     status: data.status === "playing" ? "playing" : "waiting",
+    /* Through `resolveVariants` rather than cast: untrusted document data, and a room written by a newer
+       client must degrade to the standard game rather than reaching the reducer with a length it cannot
+       price. A room created before variants existed reads as 1830, which is what it was. */
+    variants: resolveVariants(data.variants as Partial<GameVariants> | undefined),
     players: players
       .filter((entry: unknown): entry is DocumentData => typeof entry === "object" && entry !== null)
       .map((entry: DocumentData) => ({
@@ -353,6 +375,24 @@ export async function upsertSandboxPlayer(
 }
 
 /** Latches the room into play. Design note #527: the handover. */
+/** Design note #910: the host rewrites the table's house rules while the room is waiting.
+ *
+ *  WHOLE OBJECT, NOT A FIELD PATCH. The variants are one agreement rather than five independent settings, and
+ *  a per-field update would let two rapid clicks interleave into a config neither player chose. The caller
+ *  already holds the complete resolved object.
+ *  NOT GUARDED HERE. Whether the caller may write this is the SHELL's question -- it knows who the host is and
+ *  whether the room is still waiting -- and duplicating that judgement in the writer would put the rule in two
+ *  places. Firestore rules are the authority that matters, and `firestore.rules` still has no `sandbox_rooms`
+ *  match at all, which is flagged for the Phase 5 audit rather than papered over here. */
+export async function setSandboxRoomVariants(
+  roomCode: string,
+  variants: GameVariants,
+): Promise<void> {
+  const db = getFirestoreDb();
+  if (!db) return;
+  await updateDoc(doc(db, SANDBOX_ROOMS_COLLECTION, roomCode), { variants });
+}
+
 export async function markSandboxRoomPlaying(roomCode: string): Promise<void> {
   const db = getFirestoreDb();
   if (!db) return;

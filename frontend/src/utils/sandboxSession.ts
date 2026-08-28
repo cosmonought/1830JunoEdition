@@ -654,6 +654,55 @@ function limitForTier(state: GameStateResponse, tier: string): number {
   return depotInventory(state).find((row) => row.tier === tier)?.trainLimit ?? Infinity;
 }
 
+/* ==================================================================
+ *  DESIGN NOTE 909: WHAT A STOCK ROUND OPENING WIPES, IN ONE PLACE
+ * ==================================================================
+ *
+ * REPORTED: "If the sell-then-buy lock does not clear when a new Stock Round opens, players are permanently
+ * locked out of legal purchases for the remainder of the game."
+ *
+ * AND THERE WERE TWO OPENINGS, WHICH IS THE ACTUAL BUG. `settleRoundTransitions` has cleared `sold_this_round`
+ * at the end of an Operating Round set since #744 -- correct, and for a long time the only way a Stock Round
+ * could begin. #905 added a second: under the delayed-auction variant the private auction hands off to Stock
+ * Round 3 through `OpenStockRound`, which set the round type and cleared nothing. A player who sold PRR in
+ * Stock Round 2 would have been refused the buy-back for the rest of the game, and the refusal names the
+ * sell-then-buy rule, so it would have read as a correct rule misfiring rather than as a missing reset.
+ *
+ * THE SHAPE IS THIS PROJECT'S COMMONEST: one rule, two authorities, and the newer one never told. So the
+ * answer is not to add a second copy of the reset but to name the SET OF FACTS a Stock Round opening
+ * invalidates, once, and have both openings spread it.
+ *
+ * WHY THESE FIVE. Each is scoped to "the round that just finished" and means something false the moment a new
+ * one begins: the sell-then-buy lock (#744) bars a rebuy within ONE Stock Round; the pass streak counts toward
+ * one round's termination; the last trader decides that round's Priority Deal; the turn flag belongs to a seat
+ * that is being moved; and the Priority Deal holder opens the new round (#353).
+ *
+ * See docs/ai_architecture/sandbox_reducer.md, sandboxSession.ts #909. */
+export function openingStockRoundReset(
+  state: GameStateResponse,
+): Pick<
+  GameStateResponse,
+  | "sold_this_round"
+  | "consecutive_passes"
+  | "last_trader_index"
+  | "turn_action_taken"
+  | "active_player_index"
+> {
+  return {
+    /* Design note #744: THE LOCKOUT ENDS HERE, and this is the only event that ends it. A player who sold PRR
+       last round may buy it again now -- the rule bars a sell-then-rebuy within ONE Stock Round, which is the
+       window in which the price crater they made is still there to exploit. */
+    sold_this_round: {},
+    consecutive_passes: 0,
+    last_trader_index: null,
+    /* Design note #745: the seat is being MOVED without going through either seat-moving function. A stale
+       `true` here would let the Priority Deal holder's opening Pass slip out of the streak. */
+    turn_action_taken: false,
+    // The Priority Deal holder opens the Stock Round -- design note #353.
+    active_player_index: state.priority_deal_index,
+  };
+}
+
 /** Applies a phase change's consequences; unchanged state when the purchase triggers nothing.
  *  See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #284 */
 export function applyPhaseChange(
@@ -1931,21 +1980,9 @@ function settleRoundTransitions(
       // Design note #621: the cycle counter resets, and the next
       // `beginOperatingRound` stamps it back to 1.
       sub_round_index: 0,
-      consecutive_passes: 0,
-      last_trader_index: null,
-      /* Design note #744: THE LOCKOUT ENDS HERE, and this is the only event that ends it. A player who sold
-         PRR last round may buy it again now -- the rule bars a sell-then-rebuy within ONE Stock Round, which
-         is the window in which the price crater they made is still there to exploit.
-         Cleared rather than aged: "which round was this sale in" would be a second fact to keep in step with
-         `macro_round_number`, and the round opening is exactly when the answer changes. */
-      sold_this_round: {},
-      /* Design note #745: and the turn flag, because the seat below is being MOVED without going through
-         either seat-moving function. A stale `true` here would let the Priority Deal holder's opening Pass
-         slip out of the streak, so the round could not reach its own termination condition. */
-      turn_action_taken: false,
-      // The Priority Deal holder opens the Stock Round -- design note #353,
-      // and the whole point of holding it.
-      active_player_index: state.priority_deal_index,
+      /* Design note #909: everything a Stock Round opening invalidates, from the one place that names it --
+         so this opening and `OpenStockRound`'s cannot drift about what a new round wipes. */
+      ...openingStockRoundReset(state),
     };
   }
 

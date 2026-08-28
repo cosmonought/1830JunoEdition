@@ -12,11 +12,53 @@
 // See docs/ai_architecture/firebase_middleware.md, SandboxWaitingRoom.tsx #529.
 
 import React, { useState } from "react";
+import {
+  BANK_SIZE_BY_LENGTH,
+  GAME_LENGTH_BLURB,
+  STANDARD_VARIANTS,
+  type GameLength,
+  type GameVariants,
+} from "../utils/gameVariants";
 
 import { FONT_SIZE, LINE_HEIGHT } from "../styles/typography";
 import { waitingRoomBlock, waitingRoomNotice, type SandboxRoomDoc } from "../utils/sandboxRoom";
 import { MAX_PLAYERS, MIN_PLAYERS, certLimitForPlayers, startingCashForPlayers } from "../utils/gameSetup";
 import { SEAT_COLORS, SEAT_COLOR_NAMES } from "../utils/playerLabels";
+
+/** Design note #910: the four boolean variants as DATA, so adding a fifth is one row rather than a fifth
+ *  hand-written block that could be forgotten -- which is exactly the failure this note is fixing, at the
+ *  scale of a whole panel. `key` is typed against `GameVariants`, so a renamed flag is a compile error here
+ *  rather than a toggle that silently stops binding. */
+const VARIANT_TOGGLES: ReadonlyArray<{
+  key: "delayedAuction" | "gentleRust" | "unpredictableRevenue" | "dynamicStockMarket";
+  label: string;
+  blurb: string;
+}> = [
+  {
+    key: "unpredictableRevenue",
+    label: "Unpredictable revenue",
+    blurb:
+      "Every train rolls a d6 against its printed run: 1 pays 80%, 6 pays 120%. Averages to exactly 100% over a game, so it adds drama without changing how long the bank lasts.",
+  },
+  {
+    key: "dynamicStockMarket",
+    label: "Dynamic stock market",
+    blurb:
+      "The share price moves by how much was paid, not just that it was. A dividend under the share price does not move the token at all; twice the price moves it two cells.",
+  },
+  {
+    key: "gentleRust",
+    label: "Gentle rust",
+    blurb:
+      "A rusting train gets one last Operating Round turn before it goes, and stops counting against the train limit the moment it is doomed — so its replacement can be bought straight away.",
+  },
+  {
+    key: "delayedAuction",
+    label: "Delayed private auction",
+    blurb:
+      "The game opens on Stock Round 1 with no private companies; they are auctioned at the end of the Operating Round set in which the first 3-train is bought. The B&O cannot be traded until then.",
+  },
+];
 
 export interface SandboxWaitingRoomProps {
   roomCode: string;
@@ -31,6 +73,9 @@ export interface SandboxWaitingRoomProps {
   onToggleReady: (isReady: boolean) => void;
   onStart: () => void;
   onLeave: () => void;
+  /** Design note #910: the host rewrites the table's house rules; every seat sees them. `undefined` for a
+   *  guest, which is what makes the controls read-only rather than absent for them. */
+  onSetVariants?: (variants: GameVariants) => void;
 }
 
 export function SandboxWaitingRoom({
@@ -44,10 +89,14 @@ export function SandboxWaitingRoom({
   onToggleReady,
   onStart,
   onLeave,
+  onSetVariants,
 }: SandboxWaitingRoomProps) {
   const players = room?.players ?? [];
   const me = players.find((player) => player.id === localPlayerId) ?? null;
   const isHost = room?.hostId === localPlayerId;
+  /* Design note #910: read off the ROOM, so a guest and the host are looking at one answer. */
+  const variants = room?.variants ?? STANDARD_VARIANTS;
+  const canEditVariants = isHost && room?.status === "waiting" && !busy && onSetVariants !== undefined;
   const [nicknameText, setNicknameText] = useState(me?.nickname ?? "");
 
   const enough = players.length >= MIN_PLAYERS;
@@ -182,6 +231,65 @@ export function SandboxWaitingRoom({
           ) : (
             <span style={styles.note}>
               Project 18XX is dealt for {MIN_PLAYERS}–{MAX_PLAYERS} players. Waiting for more.
+            </span>
+          )}
+        </div>
+
+        {/* ==================================================================
+             DESIGN NOTE 910: THE HOUSE RULES, WHERE THE GAME IS ACTUALLY STARTED
+            ==================================================================
+            REPORTED: "there are no options visible in the Lobby to actually select them."
+            THEY WERE VISIBLE, ON A SCREEN NOBODY USES. #902 built this same panel on `Lobby.tsx`'s
+            create-room form -- the on-chain staging path -- while a sandbox table starts its game from HERE.
+            SHOWN TO EVERY SEAT, EDITABLE BY THE HOST. A guest sees the same five rows, disabled: they are
+            about to agree to this game by pressing Ready, and a table's terms that only the host can read are
+            not terms. That is also why they live on the room document rather than in the host's component
+            state -- see `sandboxRoom.ts` #910.
+            LOCKED ONCE THE GAME STARTS. `status !== "waiting"` closes the controls, because the variants
+            travel in the `SetupGame` action and changing them afterwards would describe a game that is not
+            the one being played. */}
+        <div style={styles.variantPanel}>
+          <span style={styles.variantHeading}>House rules</span>
+          <label style={styles.variantRow}>
+            <span style={styles.variantLabel}>Game length</span>
+            <select
+              value={variants.length}
+              disabled={!canEditVariants}
+              onChange={(event) =>
+                onSetVariants?.({ ...variants, length: event.target.value as GameLength })
+              }
+              style={styles.variantSelect}
+            >
+              {(Object.keys(BANK_SIZE_BY_LENGTH) as GameLength[]).map((option) => (
+                <option key={option} value={option}>
+                  {option === "short" ? "Short" : option === "long" ? "Long" : "Standard"} &mdash; $
+                  {BANK_SIZE_BY_LENGTH[option].toLocaleString()} bank
+                </option>
+              ))}
+            </select>
+          </label>
+          <span style={styles.variantNote}>{GAME_LENGTH_BLURB[variants.length]}</span>
+
+          {VARIANT_TOGGLES.map((toggle) => (
+            <label key={toggle.key} style={styles.variantToggle}>
+              <input
+                type="checkbox"
+                checked={variants[toggle.key]}
+                disabled={!canEditVariants}
+                onChange={(event) =>
+                  onSetVariants?.({ ...variants, [toggle.key]: event.target.checked })
+                }
+              />
+              <span style={styles.variantToggleText}>
+                <span style={styles.variantToggleLabel}>{toggle.label}</span>
+                <span style={styles.variantNote}>{toggle.blurb}</span>
+              </span>
+            </label>
+          ))}
+
+          {!isHost && (
+            <span style={styles.variantNote}>
+              Only the host can change these. You are agreeing to them when you press Ready.
             </span>
           )}
         </div>
@@ -370,6 +478,43 @@ const styles: Record<string, React.CSSProperties> = {
     marginLeft: "auto",
   },
   buttonDisabled: { opacity: 0.4, cursor: "not-allowed" },
+  /* Design note #910: a panel rather than loose rows, because these five belong together as one agreement. */
+  variantPanel: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "8px",
+    padding: "12px 14px",
+    borderRadius: "10px",
+    border: "1px solid #2b3040",
+    backgroundColor: "#141a26",
+    marginTop: "10px",
+  },
+  variantHeading: {
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 800,
+    letterSpacing: "0.08em",
+    color: "#8a90a0",
+    textTransform: "uppercase",
+  },
+  variantRow: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px" },
+  variantLabel: { fontSize: FONT_SIZE.small, fontWeight: 700, color: "#e2e6ee" },
+  variantSelect: {
+    fontSize: FONT_SIZE.small,
+    padding: "5px 8px",
+    borderRadius: "6px",
+    border: "1px solid #3a4055",
+    backgroundColor: "#0f1420",
+    color: "#e2e6ee",
+    minWidth: "220px",
+  },
+  variantToggle: { display: "flex", flexDirection: "row", gap: "9px", alignItems: "flex-start" },
+  variantToggleText: { display: "flex", flexDirection: "column", gap: "1px", minWidth: 0 },
+  variantToggleLabel: { fontSize: FONT_SIZE.small, fontWeight: 700, color: "#e2e6ee" },
+  variantNote: {
+    fontSize: FONT_SIZE.micro,
+    color: "#8a90a0",
+    lineHeight: LINE_HEIGHT.normal,
+  },
   /* Design note #857: calm, not alarmed. #707's distinction between a refusal and a status -- this reports
      that the player has finished and the room has not, which is neither an error nor an instruction. */
   notice: {

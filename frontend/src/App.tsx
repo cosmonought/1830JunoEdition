@@ -95,6 +95,7 @@ import {
   hostSandboxRoom,
   localPlayerId,
   markSandboxRoomPlaying,
+  setSandboxRoomVariants,
   parseRoomCode,
   readSandboxLog,
   subscribeSandboxLog,
@@ -319,6 +320,7 @@ import { privateHexFor } from "./utils/privateReservations";
 import { GameOverModal, type GameEndReason } from "./components/GameOverModal";
 import { bankIsBroken, rankPlayers, PLACEHOLDER_TOTAL_ANTE, type PlayerStanding } from "./utils/endgame";
 import { turnGuardKey } from "./utils/turnGuardKey";
+import type { GameVariants } from "./utils/gameVariants";
 import {
   dividendStepsFor,
   resolveVariants,
@@ -374,6 +376,7 @@ import {
   // train's capacity. `isRouteTerminusHex` answers a different question --
   // towns pay but cannot end a route -- so the two are not interchangeable.
   boPresidencyRefusal,
+  openingStockRoundReset,
   sandboxRouteRevenue,
   grantBOPresidency,
   sandboxRouteBreakdown,
@@ -4137,12 +4140,20 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           const opened: GameStateResponse = {
             ...base,
             current_round_type: "StockRound",
-            consecutive_passes: 0,
             private_auction_complete: true,
-            /* Design note #905: the Priority Deal holder opens the Stock Round the auction hands off to, which
-               under the delayed variant is the holder as SR2 closed -- the ruling given. In a standard game
-               `priority_deal_index` is 0 at genesis, so this is the same seat it always was. */
-            active_player_index: base.priority_deal_index ?? 0,
+            /* ==================================================================
+                DESIGN NOTE 909: THE SECOND OPENING, WHICH WIPED NOTHING
+               ==================================================================
+               This handler set the round type and cleared `consecutive_passes` and nothing else -- correct
+               for the genesis auction, where there is no previous Stock Round to have left anything behind,
+               and WRONG the moment #905 gave it a second job. Under the delayed-auction variant it opens
+               Stock Round 3 mid-game, so a player who sold PRR in Stock Round 2 would have carried the
+               sell-then-buy lock (#744) into it and been refused the buy-back for the rest of the game.
+               `openingStockRoundReset` is the one place that names what a Stock Round opening invalidates.
+               It also seats the Priority Deal holder, which is the ruling for this auction: seeded by
+               whoever holds it going in. In a standard game `priority_deal_index` is 0 at genesis, so that
+               is the seat it always was. */
+            ...openingStockRoundReset(base),
           };
           sandboxStateRef.current = opened;
           setSandboxState(opened);
@@ -7646,6 +7657,21 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
 
   /* Append the setup event FIRST, then latch status to playing - the flag is what sends every client to the board.
      See docs/ai_architecture/firebase_middleware.md - App.tsx #532 */
+  /** Design note #910: the host rewrites the table's house rules while the room is waiting. */
+  const handleSetSandboxVariants = useCallback(
+    async (next: GameVariants) => {
+      if (!sandboxRoomCode) return;
+      try {
+        await setSandboxRoomVariants(sandboxRoomCode, next);
+      } catch (error) {
+        setSandboxRoomError(
+          error instanceof Error ? error.message : "Could not save the house rules.",
+        );
+      }
+    },
+    [sandboxRoomCode],
+  );
+
   const handleStartSandboxGame = useCallback(async () => {
     if (!sandboxRoomCode || !sandboxRoom) return;
     if (!canStartSandboxGame(sandboxRoom, MIN_PLAYERS)) return;
@@ -7654,7 +7680,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     try {
       const seated = shuffleForTurnOrder(toSetupPlayers(sandboxRoom));
       const ok = await appendSandboxAction(sandboxRoomCode, appliedIndexRef.current, localId, {
-        SetupGame: { players: seated },
+        /* ==================================================================
+            DESIGN NOTE 910: THE VARIANTS TRAVEL WITH THE SETUP, OR THEY DO NOT EXIST
+           ==================================================================
+           This read `SetupGame: { players: seated }` and carried no config at all, which is why every table
+           played the printed game however the room was configured -- the schema (#902) was wired end to end
+           and nothing ever put anything into it on this path.
+           FROM THE ROOM DOCUMENT, exactly like the roster beside it. Every client deals from this one action,
+           so the variants have to be IN it: reading a local selection at deal time would give the host's
+           browser one game and every other browser another, which is #550's rule and the deepest desync
+           available here. */
+        SetupGame: { players: seated, variants: sandboxRoom.variants },
       });
       if (!ok) {
         setSandboxRoomError("Could not reach the room — the game was not started.");
@@ -8088,6 +8124,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         onSetColor={handleSetSandboxColor}
         onToggleReady={handleToggleSandboxReady}
         onStart={handleStartSandboxGame}
+        /* Design note #910: host-only, and `undefined` for a guest -- which is what renders the controls
+           read-only for them rather than hiding the terms they are about to agree to. */
+        onSetVariants={
+          sandboxRoom?.hostId === localId ? handleSetSandboxVariants : undefined
+        }
         onLeave={handleLeaveSandboxRoom}
       />
     );

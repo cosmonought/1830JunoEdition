@@ -15,6 +15,7 @@ import {
   applySandboxAction,
   boPresidencyRefusal,
   grantBOPresidency,
+  openingStockRoundReset,
   operatingRoundSequenceLength,
 } from "./sandboxSession";
 import { sharePurchaseBlock } from "./sharePurchase";
@@ -261,6 +262,54 @@ describe("the delayed auction fires on the 3-train (design note #905)", () => {
       }),
     );
     expect(after.current_round_type).toBe("WaterfallAuction");
+  });
+});
+
+describe("a Stock Round opening wipes what the last one left (design note #909)", () => {
+  /* ==================================================================
+      TWO OPENINGS, AND THE NEWER ONE WIPED NOTHING
+     ==================================================================
+     REPORTED: "If the sell-then-buy lock does not clear when a new Stock Round opens, players are permanently
+     locked out of legal purchases for the remainder of the game."
+     THE SELL-THEN-BUY LOCK IS THE ONE THAT BITES, but it is not the only turn-scoped fact a new round
+     invalidates, and the bug was structural rather than specific: `settleRoundTransitions` had cleared these
+     since #744, and #905's delayed auction added a SECOND way into a Stock Round -- `OpenStockRound`, opening
+     Stock Round 3 mid-game -- which set the round type and cleared none of them.
+     SO THE ASSERTION IS ABOUT THE SHARED RULE, not about one field. `openingStockRoundReset` is what both
+     openings spread; a field added to one opening and not the other is the shape this replaces. */
+
+  const closingRound = {
+    priority_deal_index: 1,
+    player_addresses: ["a", "b", "c"],
+    active_player_index: 0,
+    consecutive_passes: 2,
+    last_trader_index: 2,
+    turn_action_taken: true,
+    sold_this_round: { a: [1, 4], c: [2] },
+  } as unknown as GameStateResponse;
+
+  it("clears every fact the finished round owned", () => {
+    const reset = openingStockRoundReset(closingRound);
+    expect(reset.sold_this_round).toEqual({});
+    expect(reset.consecutive_passes).toBe(0);
+    expect(reset.last_trader_index).toBeNull();
+    expect(reset.turn_action_taken).toBe(false);
+  });
+
+  it("seats the Priority Deal holder, not whoever was acting", () => {
+    /* #353: the Priority Deal holder opens the Stock Round, and that is the whole point of holding it. The
+       closing round left the cursor on seat 0; the deal is with seat 1. */
+    expect(openingStockRoundReset(closingRound).active_player_index).toBe(1);
+  });
+
+  it("is spread by the Operating Round set boundary", () => {
+    /* THE OPENING THAT ALREADY WORKED, asserted so the shared helper cannot regress it while fixing the
+       other one. */
+    const after = endOfSet(
+      operating({ sold_this_round: { p1: [1] }, priority_deal_index: 0 } as never),
+    );
+    expect(after.current_round_type).toBe("StockRound");
+    expect(after.sold_this_round).toEqual({});
   });
 });
 

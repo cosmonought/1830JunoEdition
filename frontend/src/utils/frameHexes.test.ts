@@ -290,3 +290,43 @@ describe("the frame pans but never zooms (design note #911)", () => {
   });
 });
 
+describe("a locked frame still moves the camera (design note #911a)", () => {
+  /* ==================================================================
+      REPORTED: clicking "Lay 1 Track" scrolls to the top of the page instead of panning to the network.
+     ==================================================================
+     THE FIRST THING TO ESTABLISH IS WHETHER THE PAN IS THE CULPRIT, because "the zoom lock broke the scroll
+     target" is a diagnosis and these cases are the check on it. `minZoom` fits the board to the pane's WIDTH
+     (`width / boundsWidth`), so at the default pose the board is generally TALLER than the viewport and there
+     is real vertical room to pan into. A frame at that zoom must therefore still move the camera.
+     IF THESE PASS, the pan math is not the fault and the page scroll is `scrollToMap`, which this batch did
+     not touch. */
+  const viewport = { width: 800, height: 400 };
+  const options = { padding: 20, minZoom: 1, maxZoom: 4 };
+
+  it("pans vertically to a network below the fold, at the locked zoom", () => {
+    /* A set far down the board, framed at exactly the fit zoom. The pan must differ from the pan that centres
+       the whole board, or the press does nothing visible -- which is the reported symptom. */
+    const network = [{ x: 400, y: 1200 }];
+    const framed = frameHexes(network, viewport, { ...options, lockedZoom: 1 })!;
+    expect(framed.zoom).toBe(1);
+    /* Centred on the set: y = 1200 must land at the viewport's middle. */
+    expect(1200 * framed.zoom + framed.panY).toBeCloseTo(viewport.height / 2, 6);
+    /* AND IT IS NOT THE BOARD-CENTRED POSE. Framing a set at y=1200 while the board centres near y=0 has to
+       produce a different pan, or nothing moved. */
+    expect(framed.panY).not.toBeCloseTo(viewport.height / 2, 6);
+  });
+
+  it("moves horizontally too when the set is off to one side", () => {
+    const framed = frameHexes([{ x: 1500, y: 0 }], viewport, { ...options, lockedZoom: 1 })!;
+    expect(1500 * framed.zoom + framed.panX).toBeCloseTo(viewport.width / 2, 6);
+  });
+
+  it("returns a different pose for two different networks", () => {
+    /* THE PROPERTY IN ONE LINE. If the lock had collapsed the pan -- the failure the report describes -- every
+       set would frame to the same pose and the button would be inert whatever the player pressed it on. */
+    const a = frameHexes([{ x: 0, y: 0 }], viewport, { ...options, lockedZoom: 1 })!;
+    const b = frameHexes([{ x: 900, y: 900 }], viewport, { ...options, lockedZoom: 1 })!;
+    expect({ x: a.panX, y: a.panY }).not.toEqual({ x: b.panX, y: b.panY });
+  });
+});
+

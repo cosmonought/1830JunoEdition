@@ -26,6 +26,8 @@
  *
  * See docs/ai_architecture/sandbox_reducer.md, gameVariants.ts #902. */
 
+import { UNPREDICTABLE_REVENUE_FLAVOR } from "../constants/flavorText";
+
 /** How long the table wants the game to run, expressed as the only thing that actually decides it: the bank.
  *
  *  THE BANK IS THE CLOCK IN 1830, which is what makes this the right knob rather than a round limit. The game
@@ -312,7 +314,27 @@ export interface RevenueSeedParts {
   macroRound: number;
   subRound: number;
   companyId: number;
-  trainOrdinal: number;
+  /* ==================================================================
+      DESIGN NOTE 941: `trainOrdinal` IS GONE, AND THE SEED IS THE TURN
+     ==================================================================
+     REPORTED: "Your logic for applying the modifier per run has created a UX nightmare where a 4-train
+     corporation forces the player to sit through 8 seconds of consecutive UI flashes (+10%, -20%, etc.), with
+     no clear idea of which modifier applies to which train."
+     RULED: "The Unpredictable Revenue die must be rolled exactly ONCE per corporation's operating turn,
+     applied to the total aggregated printed revenue of all trains combined ... scope the RNG seed to the turn
+     identity (e.g., Round, Sub-round, Corp)."
+     WHAT #903 GOT WRONG, STATED PLAINLY. That note argued the ordinal in on solid grounds -- "a corporation
+     running two 4-trains rolls twice and may roll differently, and keying by model would give both the same
+     face" -- and every word of it is correct about the mechanism it was building. It was answering the wrong
+     question: whether two trains should share a face, rather than whether two trains should produce two
+     events at all. The right unit is the TURN, because that is the unit the player experiences and the unit
+     the dividend is paid on.
+     REMOVING THE FIELD RATHER THAN PASSING ZERO. A seed part that every caller sets to the same value is a
+     parameter that has stopped meaning anything, and leaving it would let a future caller reintroduce
+     per-train rolls without touching a line of rules code. The turn is the identity now, and the type says so.
+     THE HASH IS UNCHANGED, so a given turn's face is whatever the FNV of those three parts always was. Games
+     logged before this batch replay to different figures than they were played at -- unavoidable when the
+     seeding unit changes, and worth stating rather than discovering. */
 }
 
 /** A 32-bit FNV-1a hash of the seed parts.
@@ -326,7 +348,11 @@ export interface RevenueSeedParts {
  *  negative accumulator would make the modulo below negative too. Phase 5's Rust version gets this for free
  *  with `u32`, which is the shape this is written to match. */
 export function revenueSeedHash(parts: RevenueSeedParts): number {
-  const key = `${parts.macroRound}.${parts.subRound}.${parts.companyId}.${parts.trainOrdinal}`;
+  /* Design note #941: THREE PARTS, NOT FOUR. The train ordinal left the seed when the die became a
+     once-per-turn roll -- see `RevenueSeedParts`. The key's SHAPE changed with it, so a turn's face today is
+     not the face the same turn produced before this batch; that is inherent in re-scoping the seed and is
+     recorded rather than papered over with a padding field. */
+  const key = `${parts.macroRound}.${parts.subRound}.${parts.companyId}`;
   let hash = 0x811c9dc5;
   for (let index = 0; index < key.length; index += 1) {
     hash ^= key.charCodeAt(index);
@@ -371,72 +397,195 @@ export function applyRevenuePercent(revenue: number, percent: number): number {
 }
 
 /* ==================================================================
- *  DESIGN NOTE 907: WHAT THE DIE DID, IN WORDS
+ *  DESIGN NOTE 944: WHAT THE DIE DID, IN WORDS -- 120 OF THEM
  * ==================================================================
  *
- * REQUESTED: "a battery of humorous ActivityLog lines to explain the modifiers (e.g., derailments for 80%,
- * making excellent time for 120%)."
+ * #907 BUILT THIS WITH FOUR LINES PER PERCENTAGE, keyed by `percent` (80/90/110/120) and returning `null` on
+ * a 100 face. That table is gone; the supplied 120-line payload replaces it, and the keying changed with it.
  *
- * THE JOKE HAS A JOB, which is what keeps this from being decoration. A corporation that ran a $255 route and
- * banked $230 has a discrepancy on its chips, and without a sentence the player's first thought is that the
- * route tracer is broken -- this project has had that exact report twice (#702, #704). So every line names
- * the direction before it is funny, and the figures travel beside it.
+ * KEYED BY OUTCOME, NOT BY PERCENTAGE, and the author's reason is the one that matters: "Because your base-10
+ * rounding logic occasionally swallows a 10% modifier and returns the payout to 100%, we cannot map the flavor
+ * text strictly to the raw die face. We must map it to the effective outcome." A $50 turn at 90% pays $45,
+ * rounds back to $50, and a line about evaporating fares would be explaining a loss that did not happen.
+ * #938'S `revenueOutcome` IS THAT PREDICATE and is asked here rather than re-derived.
  *
- * PICKED DETERMINISTICALLY, from the same seed as the face. A line chosen with `Math.random` would differ
- * between clients replaying one log and change under Undo -- the Activity Log is a shared record, and two
- * players reading different explanations of one event is worse than no explanation. The hash is already
- * computed; dividing it by six lifts a second independent choice out of the same number.
+ * THE FACE STILL CHOOSES BETWEEN THE TWO BUCKETS ON EACH SIDE, because "minor" and "critical" are about
+ * MAGNITUDE and the outcome only carries direction. Faces 5 and 6 are the two bonuses, 2 and 1 the two
+ * maluses -- exactly as specified.
  *
- * NOTHING FOR A 100% FACE, deliberately. Two of the six faces change nothing, and a line saying "the trains
- * ran normally" on a third of all runs would train players to stop reading the log. */
+ * AND THERE IS NO LONGER A `null` CASE. #907 deliberately said nothing on a 100 face, reasoning that a line
+ * on a third of all runs "would train players to stop reading the log". The `unchanged` bucket overrules that:
+ * twenty distinct lines about an ordinary day are not the same thing as one repeated one, and the variant
+ * having said SOMETHING every turn is what stops a swallowed modifier reading as a broken feature -- which is
+ * the report that started this whole thread.
+ *
+ * PICKED DETERMINISTICALLY, from the same hash as the face, which #907 argued and this keeps: a line chosen
+ * with `Math.random` would differ between clients replaying one log and change under Undo. */
 
-const RUST_FREE_FLAVOUR: Readonly<Record<number, readonly string[]>> = {
-  80: [
-    "a derailment outside the yard limits ate most of the morning",
-    "a washout on the mainline forced a long detour",
-    "an axle failure stranded half the consist at a passing siding",
-    "the dispatcher lost the timetable and nobody admitted it for hours",
-  ],
-  90: [
-    "signal trouble held them at every junction",
-    "a coal shortage meant slow running all day",
-    "livestock on the line, twice",
-    "the brakeman's brother-in-law rode free and told everyone",
-  ],
-  110: [
-    "a clean run with a following wind",
-    "the freight made its connection for once",
-    "an unexpected excursion party filled the rear carriages",
-    "the new fireman turned out to be worth every cent",
-  ],
-  120: [
-    "making excellent time on every division",
-    "a record run — the papers sent a photographer",
-    "every signal green from end to end",
-    "the timetable was rewritten that evening to match",
-  ],
-};
+/** Which bucket of the payload a resolved roll draws from.
+ *
+ *  THE FIVE CASES ARE THE FIVE THAT WERE SPECIFIED, and they are exhaustive against today's modifier table --
+ *  only faces 5 and 6 exceed 100, only 1 and 2 fall below it. That exhaustiveness is a fact about
+ *  `REVENUE_MODIFIER_BY_FACE`, not a guarantee of this function, so a face that moved the figure without being
+ *  one of those four falls back to `unchanged` rather than indexing `undefined` into the Activity Log. If that
+ *  fallback ever fires, the table and this selector have come apart, and the case named for it will say so. */
+export type FlavorBucket = keyof typeof UNPREDICTABLE_REVENUE_FLAVOR;
 
-/** The sentence for one roll, or `null` when the die changed nothing. */
-export function revenueFlavour(roll: RevenueRoll, parts: RevenueSeedParts): string | null {
-  const lines = RUST_FREE_FLAVOUR[roll.percent];
-  if (!lines || lines.length === 0) return null;
-  /* A SECOND DRAW FROM THE SAME HASH. `% 6` chose the face; integer-dividing by 6 first discards those low
-     bits so the line is not correlated with the face it is explaining -- which would show up as the same
-     joke every time a corporation rolled a 1. */
-  const line = lines[Math.floor(revenueSeedHash(parts) / 6) % lines.length];
-  /* Design note #907a: THE DIE FACE IS GONE FROM THE SENTENCE. It read "(120%, up on a 6)", and the face is
-     the one number in it a player can do nothing with -- the figures and the percentage explain the
-     discrepancy on the chips, which is the whole job (#907), and the face explains only the machinery.
-     Naming it also invited the reading that a face is a thing to be influenced.
-     THE ROLL STILL CARRIES IT. `RevenueRoll.face` is unchanged and still what selects the percentage; what
-     changed is that the log stopped reciting it. */
-  return `${roll.printed} → ${roll.adjusted} (${roll.percent}%) — ${line}.`;
+export function flavorBucketFor(roll: RevenueRoll): FlavorBucket {
+  const outcome = revenueOutcome(roll);
+  if (outcome === "bonus") {
+    if (roll.face === 6) return "criticalBonus";
+    if (roll.face === 5) return "minorBonus";
+    return "unchanged";
+  }
+  if (outcome === "malus") {
+    if (roll.face === 1) return "criticalMalus";
+    if (roll.face === 2) return "minorMalus";
+    return "unchanged";
+  }
+  return "unchanged";
 }
 
-/** One train's roll, resolved. */
-export function rollRouteRevenue(printed: number, parts: RevenueSeedParts): RevenueRoll {
+/** The line itself, drawn from the bucket by the turn's own seed.
+ *
+ *  `seed % length` EXACTLY AS SPECIFIED -- `% 20` for `unchanged` and `% 25` for the other four -- taken from
+ *  the array's own length rather than from a literal, so the modulus cannot come apart from the payload the
+ *  way a hard-coded 25 would the first time a line is added or removed. */
+export function revenueFlavourClause(roll: RevenueRoll, parts: RevenueSeedParts): string {
+  const bucket = flavorBucketFor(roll);
+  const lines = UNPREDICTABLE_REVENUE_FLAVOR[bucket];
+  return lines[revenueSeedHash(parts) % lines.length];
+}
+
+/* ==================================================================
+ *  DESIGN NOTE 938: THE VARIANT PAYS IN TENS
+ * ==================================================================
+ *
+ * RULED: "Instead of rounding the per-player share, round the total modified route revenue to the nearest $10
+ * before any dividend math or log output occurs. This forces the variant's output back into a clean multiple
+ * of 10, resolving all per-share fractional issues natively."
+ *
+ * AND IT RESOLVES THEM COMPLETELY, not approximately, which is worth showing rather than asserting. 1830's
+ * holdings are all multiples of 10%, and `dividendSplit` pays `floor((revenue * pct + 50) / 100)`. With
+ * `revenue = 10k` and `pct = 10m`, that quotient is `k * m` exactly -- an integer before the rounding term
+ * ever matters. So every split becomes exact, the ten certificates of a sold-out corporation sum to precisely
+ * what it earned, and #922's $3 overpayment cannot arise at all rather than being made smaller.
+ *
+ * ROUNDED PER RUN, NOT PER TURN, AND THAT IS A CHOICE WORTH NAMING. "The total modified route revenue" admits
+ * two readings: round each train's figure as it is banked, or bank the raw figures and round the turn's sum.
+ * Both make the DIVIDEND a multiple of ten. Only the first makes the Activity Log's per-train lines add up to
+ * it -- under the second, a turn of three runs would print three unrounded figures beside a rounded total,
+ * which is the "two surfaces answering one question two ways" fault this project keeps finding. The per-run
+ * reading also makes the ROUNDING deterministic per train, so an Undo that replays the log reaches the same
+ * figures; a turn-level round would depend on how many trains had been replayed so far.
+ *
+ * AND IT IS WHAT ITEMS 2 AND 3 REQUIRE ANYWAY: both the new log sentence and the floating modifier ask
+ * "did THIS run's payout actually change", which is a question about one run.
+ *
+ * INTEGERS THROUGHOUT. `value + 5` and the division are the whole of it; `Math.floor` on the quotient is the
+ * rounding, exactly as `applyRevenuePercent` does it one step earlier. */
+export function roundToTen(value: number): number {
+  return Math.floor((value + 5) / 10) * 10;
+}
+
+/** Whether a roll's payout ended up above, below, or exactly at the printed figure.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 938: THE ONE ANSWER TO "DID THE DIE ACTUALLY MATTER"
+ *  ==================================================================
+ *
+ *  RULED, for the log: "completely ignoring the die if the rounding swallowed the modifier". And for the
+ *  overlay: "Do not show it if a 110% or 90% roll was mathematically rounded away."
+ *
+ *  THAT IS ONE PREDICATE SERVING TWO SURFACES, so it is written once. A $50 run at 90% is $45, which rounds
+ *  back to $50 -- the die fired, the percentage was real, and the corporation received exactly what the board
+ *  printed. Both surfaces must agree that nothing happened, and the only way they cannot drift is to ask the
+ *  same function.
+ *
+ *  ASKED OF THE FIGURES, NOT OF THE PERCENT. `percent !== 100` is the tempting test and it is the bug: it is
+ *  true for a swallowed 90% and would put a "-10% malus" on a run that lost nothing. */
+export type RevenueOutcome = "bonus" | "malus" | "normal";
+
+export function revenueOutcome(roll: RevenueRoll): RevenueOutcome {
+  if (roll.adjusted > roll.printed) return "bonus";
+  if (roll.adjusted < roll.printed) return "malus";
+  return "normal";
+}
+
+/** The die's nominal swing, as a signed whole percentage -- `+20`, `-10`, `0`.
+ *
+ *  THE NOMINAL SWING, NOT THE EFFECTIVE ONE. After rounding, a 110% roll on $70 pays $80, an effective
+ *  +14.3% -- a fraction, on a variant whose entire point is to avoid them, and a number no player could
+ *  reconcile with anything. The die's own figure is round, is what the flavour line explains, and is what the
+ *  overlay was specified to flash. */
+export function revenueDeltaPercent(roll: RevenueRoll): number {
+  return roll.percent - 100;
+}
+
+/** The Activity Log's one sentence for a corporation's whole turn of running.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 941: ONE LINE FOR ONE TURN, AND #939'S STRINGS MOVED INTO IT
+ *  ==================================================================
+ *
+ *  RULED: "The Activity Log should likewise produce a single consolidated line for the total payout."
+ *
+ *  #939 PUT THESE THREE SENTENCES ON THE PER-ROUTE LINE, which was right when the die was per-route and is
+ *  wrong now that it is per turn: a four-train corporation would have printed four bonus sentences about one
+ *  roll. The strings are unchanged and their location is not -- they describe a TURN, so they belong on a
+ *  sentence about the turn.
+ *
+ *  AND THE PER-ROUTE LINE GOES BACK TO BEING FACTUAL: "B&O ran a $70 route through F2 -> A9." It names which
+ *  track was run, which is the thing only it can say, and makes no claim about the die.
+ *
+ *  BUILT HERE RATHER THAN IN `actionLog`, because the shell raises this line (the reducer cannot see the end
+ *  of the dispatch loop) and `actionLog` describes single messages. One implementation either way.
+ *
+ *  THE PERCENTAGE NAMED IS THE DIE'S NOMINAL SWING -- #938 records why: after rounding, a 110% roll on a $70
+ *  turn is an effective +14.3%, and a fraction is what this variant exists not to produce. */
+export function turnRevenueSentence(
+  ticker: string,
+  roll: RevenueRoll,
+  parts: RevenueSeedParts,
+): string {
+  const clause = revenueFlavourClause(roll, parts);
+  const opening = `${ticker} ran for $${roll.adjusted}.`;
+  const outcome = revenueOutcome(roll);
+  /* ==================================================================
+      DESIGN NOTE 944: THE FIVE SENTENCES, EXACTLY AS SPECIFIED
+     ==================================================================
+     THE `unchanged` LINES ARE WHOLE SENTENCES of their own -- "Nothing unexpected happens. The accountants are
+     suspicious." -- so that branch appends rather than completing a clause. The other four are subordinate
+     clauses beginning lower-case, which is why they are joined with "because".
+     #941'S "had a normal run for $X" IS SUPERSEDED. It was one sentence saying nothing twenty different ways
+     could now say, and the specified format drops it.
+     THE PERCENTAGE IS DERIVED, NOT TYPED. The spec pairs face 5 with "10%" and face 6 with "20%", which is
+     exactly `|percent - 100|` on today's table -- so it is computed from the roll rather than written beside
+     each branch, and a case in `flavorText.test.ts` asserts the derived figure matches the bucket the same
+     face selects. Two hand-written constants that must agree is how a 20% bonus comes to be announced as 10%. */
+  if (outcome === "normal") return `${opening} ${clause}`;
+  const swing = Math.abs(revenueDeltaPercent(roll));
+  const verb = outcome === "bonus" ? "enjoyed" : "suffered";
+  const noun = outcome === "bonus" ? "bonus" : "malus";
+  return `${opening} It ${verb} a ${swing}% ${noun} because ${clause}`;
+}
+
+/** The turn's one roll, resolved against the aggregated printed revenue of every train that ran.
+ *
+ *  Design note #938: `adjusted` is the FINAL figure -- percentage applied, then rounded to the nearest ten.
+ *  Rounding here rather than at the call sites is what makes it impossible for the reducer to bank one number
+ *  while the log reports another: there is only one `adjusted`, and everything reads it.
+ *
+ *  Design note #941: `printed` IS NOW A TURN TOTAL, not one train's route. The function is unchanged --
+ *  a percentage and a rounding do not care what they are given -- but every caller had to move, and the name
+ *  kept saying "route". Callers pass the sum; the reducer keeps the sum so it can re-apply on each train. */
+export function rollTurnRevenue(printed: number, parts: RevenueSeedParts): RevenueRoll {
   const face = revenueDieFace(parts);
   const percent = REVENUE_MODIFIER_BY_FACE[face - 1];
-  return { face, percent, printed, adjusted: applyRevenuePercent(printed, percent) };
+  return {
+    face,
+    percent,
+    printed,
+    adjusted: roundToTen(applyRevenuePercent(printed, percent)),
+  };
 }

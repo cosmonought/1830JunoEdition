@@ -597,6 +597,9 @@ export interface PrivateTradePromptProps {
   consentIsBinding: boolean;
   onAccept: () => void;
   onReject: () => void;
+  /** Design note #932: the answering player's cash before the sale, for the projection. `null` when the shell
+   *  cannot say, which renders no projection rather than one with a guessed end. */
+  recipientCash?: number | null;
 }
 
 /* Design note #2: WHY SANDBOX LETS ONE PERSON ANSWER THEIR OWN OFFER. A hotseat sandbox has one wallet and one
@@ -611,6 +614,7 @@ export function PrivateTradePrompt({
   consentIsBinding,
   onAccept,
   onReject,
+  recipientCash = null,
 }: PrivateTradePromptProps) {
   if (!proposal) return null;
 
@@ -633,6 +637,24 @@ export function PrivateTradePrompt({
           ? `This is ${proposal.ownerLabel}'s decision.`
           : `Waiting on ${proposal.ownerLabel}.`}
       </p>
+
+      {/* ==================================================================
+           DESIGN NOTE 932: WHAT ACCEPTING DOES TO THE MONEY
+          ==================================================================
+          REQUESTED: "include a standard financial projection on the recipient's modal: Cash: $current > $new."
+          THE HOUSE FORMAT, `$before > $after`, which #509a's withhold column, #705's payout column and #913's
+          train button all use -- a fourth spelling of one idea here would make the arrow mean something
+          different in one place.
+          THE SELLER RECEIVES, so this ADDS. The projection is shown to whoever is being asked to answer, and
+          the answer they are weighing is "what do I get" -- which is exactly the fact a bottom-right prompt
+          was too quiet to carry.
+          ABSENT RATHER THAN GUESSED when the cash is unknown: #670's rule, the same one the dividend toast
+          follows. A figure with an invented end is worse than no figure. */}
+      {viewerIsOwner && recipientCash !== null && (
+        <p style={styles.promptProjection}>
+          Cash: ${recipientCash} &gt; ${recipientCash + proposal.price}
+        </p>
+      )}
 
       {/* Design note #0: stated plainly rather than implied by a greyed
           control. A player told this is a negotiation, whose counterparty
@@ -1016,6 +1038,22 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#6b7280",
   },
 
+  /* ==================================================================
+      DESIGN NOTE 932: IT STAYS IN THE CORNER AND STOPS WHISPERING
+     ==================================================================
+     REPORTED: "we want to keep it there so it doesn't block the board, but it is currently too
+     inconspicuous. Change its background color or styling to make it explicitly read as an Action Required
+     alert."
+     THE POSITION IS RIGHT AND THE PALETTE WAS THE PROBLEM. `#141a26` on a `#3a5a8a` hairline is this app's
+     ordinary PANEL treatment -- the same ink every quiet surface uses -- so a prompt that blocks the game
+     until somebody answers looked like a status card. Keeping it out of the board's way was never the thing
+     that made it easy to miss.
+     AMBER, WHICH IS THIS APP'S "SOMETHING IS WAITING ON YOU". #817 chose it for the armed-power escape hatch
+     and #896's consequence line uses it for the same register; red is reserved for the broken bank (#901) and
+     for refusals, and an offer is neither an error nor a danger.
+     THE GLOW IS THE OTHER HALF. A stronger border alone still competes with every other bordered panel on the
+     screen; a coloured shadow makes it the only lit object in that corner, which is what "conspicuous in the
+     periphery" actually requires. */
   promptRoot: {
     position: "fixed",
     right: "20px",
@@ -1027,27 +1065,35 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "8px",
     padding: "14px 16px",
     borderRadius: "12px",
-    border: "1px solid #3a5a8a",
-    backgroundColor: "#141a26",
-    boxShadow: "0 10px 34px rgba(0,0,0,0.6)",
+    border: "2px solid #c9a227",
+    backgroundColor: "#2a2415",
+    boxShadow: "0 10px 34px rgba(0,0,0,0.6), 0 0 18px rgba(201, 162, 39, 0.35)",
   },
   promptHeader: { display: "flex", flexDirection: "row", alignItems: "center", gap: "8px" },
   promptDot: {
     width: "9px",
     height: "9px",
     borderRadius: "999px",
-    backgroundColor: "#38bdf8",
+    // Design note #932: the dot and the title move with the panel, or the header keeps the old register.
+    backgroundColor: "#e6cf7a",
     flexShrink: 0,
   },
   promptTitle: {
     fontSize: FONT_SIZE.small,
     fontWeight: 800,
-    color: "#9ec5ff",
+    color: "#e6cf7a",
     textTransform: "uppercase",
     letterSpacing: "0.06em",
   },
-  promptBody: { margin: 0, fontSize: FONT_SIZE.body, color: "#e2e6ee", lineHeight: 1.5 },
-  promptWho: { margin: 0, fontSize: FONT_SIZE.small, color: "#9aa0ac" },
+  promptBody: { margin: 0, fontSize: FONT_SIZE.body, color: "#f0e6cc", lineHeight: 1.5 },
+  promptWho: { margin: 0, fontSize: FONT_SIZE.small, color: "#c4b384" },
+  /* Design note #932: the projection, in the same register as the body it qualifies. */
+  promptProjection: {
+    margin: 0,
+    fontSize: FONT_SIZE.small,
+    fontWeight: 700,
+    color: "#f0e6cc",
+  },
   promptCaveat: {
     margin: 0,
     fontSize: FONT_SIZE.small,

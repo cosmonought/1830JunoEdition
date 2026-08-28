@@ -33,19 +33,31 @@ const BASE = {
   ticker: "C&O",
   distribute: true,
   perShare: 27,
+  revenue: 270,
   viewerPercentage: 20,
   amount: 54,
   cashBefore: 412,
 };
 
 describe("a shareholder is told what arrived", () => {
-  it("names the corporation, the per-share figure and the amount", () => {
+  it("names the corporation, the route total, the holding and the amount", () => {
+    /* ==================================================================
+        DESIGN NOTE 923: "PER SHARE" LEFT THE SENTENCE
+       ==================================================================
+       This asserted `"$27 per share"`, and the figure stopped being safe to quote the moment #903's die made
+       revenues that are not multiples of ten: a rounded tenth multiplied back up by a holding does not
+       reconcile with what the player was actually paid, so the headline was arithmetic a player could check
+       and find wrong.
+       THE THREE FACTS REPLACE THE ONE RATE. Route total, holding, amount -- none of them invites a
+       multiplication, and all three come from the same `dividendSplit`. Asserted as an absence too, because
+       a per-share figure is exactly the kind of familiar phrasing that gets reinstated. */
     const receipt = dividendReceipt(BASE);
     expect(receipt?.headline).toContain("C&O");
-    expect(receipt?.headline).toContain("$27 per share");
-    // 20% is two shares at $27.
+    expect(receipt?.headline).toContain("ran for $270");
+    expect(receipt?.headline).toContain("20% share");
     expect(receipt?.amount).toBe(54);
     expect(receipt?.headline).toContain("$54");
+    expect(receipt?.headline).not.toContain("per share");
   });
 
   it("shows the treasury transition beneath it", () => {

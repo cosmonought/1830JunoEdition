@@ -27,7 +27,8 @@ import {
   resolveVariants,
   REVENUE_MODIFIER_BY_FACE,
   revenueDieFace,
-  rollRouteRevenue,
+  rollTurnRevenue,
+  roundToTen,
   STANDARD_VARIANTS,
   type GameVariants,
 } from "./gameVariants";
@@ -116,7 +117,7 @@ describe("the bank is the clock (design note #902)", () => {
 });
 
 describe("the d6 cannot be re-rolled (design note #903)", () => {
-  const turn = { macroRound: 3, subRound: 1, companyId: 6, trainOrdinal: 0 };
+  const turn = { macroRound: 3, subRound: 1, companyId: 6 };
 
   it("gives the same face for the same turn, corporation and train", () => {
     /* ==================================================================
@@ -136,7 +137,6 @@ describe("the d6 cannot be re-rolled (design note #903)", () => {
       macroRound: 1 + (at % 7),
       subRound: 1 + (at % 2),
       companyId: 1 + (at % 8),
-      trainOrdinal: at % 3,
     }));
     const firstPass = seeds.map(revenueDieFace);
     const secondPass = seeds.map(revenueDieFace);
@@ -147,19 +147,30 @@ describe("the d6 cannot be re-rolled (design note #903)", () => {
     expect(revenueDieFace(seeds[0])).toBe(firstPass[0]);
   });
 
-  it("gives each train on a turn its own face to draw from", () => {
-    /* TWO 4-TRAINS ARE TWO RUNS. Keying by train MODEL would hand both the same face, which is why the seed
-       carries an ORDINAL. Asserted as "the inputs differ", not "the faces differ" -- two independent d6 rolls
-       landing on the same number is not a bug, and asserting otherwise would make this case flaky by design. */
-    const first = revenueDieFace({ ...turn, trainOrdinal: 0 });
-    const second = revenueDieFace({ ...turn, trainOrdinal: 1 });
-    expect([first, second].every((face) => face >= 1 && face <= 6)).toBe(true);
-    /* What IS asserted: the seed is actually consumed. Across a spread of ordinals the faces must not all be
-       identical, which is what a seed that ignored `trainOrdinal` would produce. */
-    const spread = new Set(
-      Array.from({ length: 12 }, (_, at) => revenueDieFace({ ...turn, trainOrdinal: at })),
-    );
-    expect(spread.size).toBeGreaterThan(1);
+  it("gives every train on a turn the SAME face (design note #941)", () => {
+    /* ==================================================================
+        SUPERSEDED BY #941, AND THE OLD CASE IS RECORDED RATHER THAN DELETED
+       ==================================================================
+       THIS USED TO ASSERT THE OPPOSITE -- "gives each train on a turn its own face to draw from" -- on #903's
+       reasoning that "two 4-trains are two runs. Keying by train MODEL would hand both the same face, which
+       is why the seed carries an ORDINAL." It checked that a spread of ordinals produced more than one face:
+           const spread = new Set(Array.from({ length: 12 }, (_, at) =>
+             revenueDieFace({ ...turn, trainOrdinal: at })));
+           expect(spread.size).toBeGreaterThan(1);
+       THE MECHANISM WAS CORRECT AND THE UNIT WAS WRONG. Reported: "a 4-train corporation forces the player to
+       sit through 8 seconds of consecutive UI flashes (+10%, -20%, etc.), with no clear idea of which
+       modifier applies to which train." Four independent faces is precisely what that describes. The die is
+       now rolled once per TURN and applied to the aggregated printed revenue, so the ordinal has left the
+       seed entirely.
+       WHAT IS ASSERTED NOW is that the turn is the whole identity: nothing about how many trains ran, or in
+       what order, can reach the hash. Driven through the public seed type, so a reintroduced ordinal field
+       would fail to compile here rather than quietly re-splitting the roll. */
+    const face = revenueDieFace(turn);
+    expect([face, face >= 1 && face <= 6]).toEqual([face, true]);
+    /* CALLED AS MANY TIMES AS A FOUR-TRAIN TURN WOULD, and every answer identical -- which is the whole of
+       "exactly ONCE per corporation's operating turn" as the seed can express it. */
+    const everyTrain = new Set(Array.from({ length: 8 }, () => revenueDieFace(turn)));
+    expect(everyTrain.size).toBe(1);
   });
 
   it("separates corporations and turns", () => {
@@ -208,8 +219,10 @@ describe("the d6 cannot be re-rolled (design note #903)", () => {
        32-bit values, so a hash that forgot its `>>> 0` would go negative and `% 6` would return 0 or a
        negative face -- indexing off the end of the modifier table and yielding `undefined` revenue. */
     for (let macroRound = 1; macroRound <= 40; macroRound += 1) {
-      for (let ordinal = 0; ordinal < 4; ordinal += 1) {
-        const face = revenueDieFace({ ...turn, macroRound, trainOrdinal: ordinal });
+      /* Design note #941: swept over corporations rather than train ordinals -- the ordinal is no longer a
+         seed part, and the sweep still has to cross enough distinct keys to catch a sign error. */
+      for (let companyId = 0; companyId < 4; companyId += 1) {
+        const face = revenueDieFace({ ...turn, macroRound, companyId });
         expect(Number.isInteger(face)).toBe(true);
         expect(face).toBeGreaterThanOrEqual(1);
         expect(face).toBeLessThanOrEqual(6);
@@ -281,11 +294,10 @@ describe("the modifier table and its arithmetic (design note #903)", () => {
       ...base,
       variants: { ...STANDARD_VARIANTS, unpredictableRevenue: true },
     });
-    const expected = rollRouteRevenue(printed, {
+    const expected = rollTurnRevenue(printed, {
       macroRound: 3,
       subRound: 1,
       companyId: 6,
-      trainOrdinal: 0,
     });
     expect(Number(varied.public_companies[0].last_route_revenue)).toBe(expected.adjusted);
     /* AND THE COUNTER MOVED, which is what gives the turn's SECOND train a different die. A modifier applied
@@ -296,9 +308,13 @@ describe("the modifier table and its arithmetic (design note #903)", () => {
   it("reports what it did, not just the result", () => {
     /* The roll carries its face and percentage because the Activity Log has to explain the number -- a
        corporation that ran for $230 when the board says $255 needs the sentence, not just the figure. */
-    const roll = rollRouteRevenue(255, { macroRound: 3, subRound: 1, companyId: 6, trainOrdinal: 0 });
+    const roll = rollTurnRevenue(255, { macroRound: 3, subRound: 1, companyId: 6 });
     expect(roll.printed).toBe(255);
     expect(REVENUE_MODIFIER_BY_FACE[roll.face - 1]).toBe(roll.percent);
-    expect(roll.adjusted).toBe(applyRevenuePercent(255, roll.percent));
+    /* Design note #938: AND THE ROUNDING IS PART OF THE ANSWER. This asserted `applyRevenuePercent` alone and
+       failed at 306 against 310 once the roll started rounding to the nearest ten -- correctly, because
+       `adjusted` is now the FINAL banked figure rather than the mid-calculation one. Composed from the two
+       steps in order, so it cannot pass against an implementation that dropped either. */
+    expect(roll.adjusted).toBe(roundToTen(applyRevenuePercent(255, roll.percent)));
   });
 });

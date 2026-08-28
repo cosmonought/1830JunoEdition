@@ -19,12 +19,14 @@ import {
   operatingRoundSequenceLength,
 } from "./sandboxSession";
 import { sharePurchaseBlock } from "./sharePurchase";
+import { dividendSplit } from "./dividendSplit";
+import { readStripped } from "./sourceScan";
 import {
   boIsLocked,
   dividendStepsExplanation,
   dividendStepsFor,
-  revenueFlavour,
-  rollRouteRevenue,
+  turnRevenueSentence,
+  rollTurnRevenue,
   STANDARD_VARIANTS,
 } from "./gameVariants";
 import {
@@ -506,50 +508,117 @@ describe("the market rewards the size of the dividend (design note #908)", () =>
   });
 });
 
-describe("the die gets a sentence (design note #907)", () => {
-  const seed = { macroRound: 3, subRound: 1, companyId: 6, trainOrdinal: 0 };
+describe("the die gets a sentence (design notes #907 -> #944)", () => {
+  /* ==================================================================
+      SUPERSEDED BY #944, AND THE OLD CASES ARE RECORDED RATHER THAN DELETED
+     ==================================================================
+     #907 BUILT A FOUR-LINE TABLE PER PERCENTAGE and a `revenueFlavour` that returned a whole sentence with
+     the figures baked in -- `"255 → 204 (80%) — a washout on the mainline forced a long detour."` These cases
+     pinned it:
+         expect(revenueFlavour({ face: 3, percent: 100, ... }, seed)).toBeNull();
+         expect(line).toContain("255");  expect(line).toContain("204");  expect(line).toContain("80%");
+         ... and a determinism case, and one asserting more than one line could be drawn.
+     THREE THINGS REPLACED IT.
+       #941 moved the sentence to `turnRevenueSentence`, because the die became one roll per TURN and
+       `revenueFlavour` was building a per-route line.
+       #944 replaced the four-line table with the supplied 120-line payload, keyed by OUTCOME rather than by
+       percentage -- "we cannot map the flavor text strictly to the raw die face. We must map it to the
+       effective outcome."
+       AND THE `null` CASE IS GONE ON PURPOSE. #907 said nothing on a 100 face, reasoning that a line on a
+       third of all runs "would train players to stop reading the log". Twenty distinct `unchanged` lines are
+       not that, and a variant that says nothing at all is what produced the original "the variant completely
+       failed to trigger" report.
+     WHAT SURVIVES: every rule these cases protected is asserted in `flavorText.test.ts` -- determinism, the
+     spread of lines drawn, and the figures, which now travel in `turnRevenueSentence`'s own opening rather
+     than inside the flavour. This block is a signpost so the next reader finds the move rather than the gap. */
 
-  it("says nothing when the die changed nothing", () => {
-    /* Two faces in six are 100%, and a line reading "the trains ran normally" on a third of all runs teaches
-       players to stop reading the log. */
-    expect(revenueFlavour({ face: 3, percent: 100, printed: 200, adjusted: 200 }, seed)).toBeNull();
+  it("still explains the discrepancy the player can see", () => {
+    /* #907'S ACTUAL JOB, re-asked at its new address: "a corporation that ran a $255 route and banked $230
+       has a discrepancy on its chips, and without a sentence the player's first thought is that the route
+       tracer is broken". The figure and the reason must both be in the line. */
+    const parts = { macroRound: 3, subRound: 1, companyId: 6 };
+    const line = turnRevenueSentence("PRR", rollTurnRevenue(255, parts), parts);
+    expect(line).toContain("PRR ran for $");
+    expect(line.length).toBeGreaterThan("PRR ran for $260.".length);
+  });
+});
+
+describe("a share of the revenue, rounded (design note #922)", () => {
+  /* REQUESTED: "calculate the fractional share and round the total payout per player/treasury to the nearest
+     whole dollar ... use pure integer arithmetic: Math.floor((revenue * percent_owned + 50) / 100)." */
+  const paying = (revenue: number, holdings: Array<[string, number]>, pool = 0) =>
+    dividendSplit(
+      {
+        public_companies: [
+          {
+            company_id: 1,
+            ticker: "PRR",
+            bank_pool_percentage: pool,
+            player_holdings: holdings.map(([player, percentage]) => ({ player, percentage })),
+          },
+        ],
+      } as unknown as GameStateResponse,
+      1,
+      String(revenue),
+      true,
+    );
+
+  it("pays the reported case correctly", () => {
+    /* THE REPORT'S OWN NUMBERS: a $27 route paid a 10% holder $2 under the old floor-the-tenth arithmetic.
+       `floor((27 * 10 + 50) / 100)` is 3. */
+    expect(paying(27, [["a", 10]])?.players[0].amount).toBe(3);
+    expect(paying(27, [["a", 20]])?.players[0].amount).toBe(5);
   });
 
-  it("names the figures before it is funny", () => {
-    /* THE JOKE HAS A JOB. A corporation that banked $204 on a $255 route has a discrepancy on its chips, and
-       this project has twice had that reported as a broken route tracer.
-       DESIGN NOTE 907a REMOVED THE DIE FACE AND THE DIRECTION WORD. The figures and the percentage are what
-       reconcile the chips; the face explained only the machinery, and "down on a 1" invited the reading that
-       a face is a thing a player could influence. Asserted as an absence as well as a presence, because a
-       recited die roll is exactly the kind of detail that gets added back as colour. */
-    const line = revenueFlavour({ face: 1, percent: 80, printed: 255, adjusted: 204 }, seed);
-    expect(line).toContain("255");
-    expect(line).toContain("204");
-    expect(line).toContain("80%");
-    expect(line).not.toMatch(/on a [1-6]/);
-    expect(line).not.toContain("down");
+  it("rounds at the halfway point rather than truncating", () => {
+    /* $25 at 10% is exactly $2.50 and must land on $3 -- the boundary the `+ 50` exists for, and the one a
+       plain `floor(revenue * pct / 100)` gets wrong. */
+    expect(paying(25, [["a", 10]])?.players[0].amount).toBe(3);
+    expect(paying(24, [["a", 10]])?.players[0].amount).toBe(2);
   });
 
-  it("picks the same line every time, for the same roll", () => {
-    /* DETERMINISTIC, for the same reason the face is: the Activity Log is a shared record, and two players
-       replaying one log must not read two different explanations of one event. */
-    const roll = rollRouteRevenue(255, seed);
-    const first = revenueFlavour(roll, seed);
-    for (let attempt = 0; attempt < 20; attempt += 1) {
-      expect(revenueFlavour(roll, seed)).toBe(first);
+  it("is unchanged for every revenue 1830 actually prints", () => {
+    /* THE CONTROL THAT PROTECTS THE STANDARD GAME. Printed revenues are multiples of ten, where the old
+       arithmetic and the new one agree exactly -- so this change must be invisible to a table not playing the
+       variant. Checked across a spread rather than at one figure. */
+    for (const revenue of [10, 60, 130, 250, 420, 800]) {
+      for (const percentage of [10, 20, 30, 50, 60]) {
+        const expected = (revenue / 10) * (percentage / 10);
+        expect([revenue, percentage, paying(revenue, [["a", percentage]])?.players[0].amount]).toEqual([
+          revenue,
+          percentage,
+          expected,
+        ]);
+      }
     }
   });
 
-  it("draws on more than one line", () => {
-    /* Otherwise the battery is one joke told forever. Asserted as a spread over turns rather than as
-       "different from each other", which two independent draws are not obliged to be. */
-    const lines = new Set(
-      Array.from({ length: 30 }, (_, at) => {
-        const parts = { ...seed, macroRound: at + 1 };
-        const roll = rollRouteRevenue(200, parts);
-        return revenueFlavour(roll, parts);
-      }).filter((line): line is string => line !== null),
-    );
-    expect(lines.size).toBeGreaterThan(2);
+  it("pays the bank pool on the same rule", () => {
+    /* The pool is a holder like any other (#706 settled WHICH pool); it must not keep the old arithmetic
+       while the players get the new one, or the two halves of one payout round differently. */
+    expect(paying(27, [["a", 10]], 20)?.poolSlice).toBe(5);
+  });
+
+  it("can exceed the revenue, which is the accepted cost", () => {
+    /* ==================================================================
+        RECORDED AS A PROPERTY, NOT DISCOVERED AS A BUG
+       ==================================================================
+       Ten 10% holders of a $27 route take $3 each: $30 paid against $27 earned, the extra coming from the
+       bank. The old comment refused rounding for exactly this reason; the trade is being taken deliberately
+       now. Pinned so the size of it is visible -- at most half a dollar per certificate -- and so a future
+       reader meets it as a decision rather than as an anomaly in a ledger. */
+    const split = paying(27, Array.from({ length: 10 }, (_, at) => [`p${at}`, 10] as [string, number]));
+    expect(split?.totalPaid).toBe(30);
+    expect(split!.totalPaid).toBeGreaterThan(27);
+    expect(split!.totalPaid - 27).toBeLessThanOrEqual(5);
+  });
+
+  it("uses no floating point on the way there", () => {
+    /* The project rule. Asserted on the SOURCE because a correct answer can still be reached through a float
+       -- `revenue * pct / 100` rounds correctly for these cases and would violate the constraint silently. */
+    const source = readStripped("utils/dividendSplit.ts");
+    expect(source).toContain("Math.floor((revenue * percentage + 50) / 100)");
+    expect(source).not.toContain("Math.round(");
   });
 });
+

@@ -87,6 +87,13 @@ import {
   tileCityAnchors,
   tileMarkerPoints,
 } from "./TileGraphics";
+import {
+  PRIVATE_POWER_STAR_FILL,
+  starCentreOffset,
+  starRadiusForHeight,
+  starVertices,
+  starWidthForHeight,
+} from "./privatePowerStar";
 
 /** One train's traced route, for the map overlay -- design note #137 (F-1). */
 export interface RouteOverlay {
@@ -1306,11 +1313,46 @@ export function drawReservationBadgeAt(
   ctx.save();
   ctx.font = `bold ${fontPx}px ${FONT_FAMILY_STACK}`;
   ctx.textAlign = "left";
-  ctx.textBaseline = "middle";
 
-  const markW = fontPx * 0.62;
+  /* ==================================================================
+      DESIGN NOTE 937: THE STAR IS AS TALL AS THE LETTERS BESIDE IT
+     ==================================================================
+     REPORTED: "On the hexes themselves, the star is currently too small. Scale its height up so it exactly
+     matches the cap-height of the private company acronym text next to it."
+     AND IT WAS SHORTER THAN IT LOOKED IN THE SOURCE, by two compounding amounts. The mark was allotted
+     `fontPx * 0.62` and the star given half of that as its circumradius -- but a five-pointed star does not
+     fill its circumcircle vertically: the top point reaches a full radius while the lower pair stop at
+     `sin(54deg)`, about 0.809. So the drawn height was `0.31 * 1.809 = 0.56` of the font size, against a
+     cap-height nearer 0.72. The star was roughly three-quarters of the height it appeared to be asking for.
+     MEASURED, NOT ASSUMED. `actualBoundingBoxAscent` on an all-caps string IS its cap-height, for whatever
+     font actually loaded -- which is the only way "exactly matches" can be true across the stack's fallbacks
+     rather than for the one font I happened to check. The 0.72 ratio is the FALLBACK, for jsdom and for the
+     older engines that do not report the metric.
+     AND THE SLOT GROWS WITH IT. `markW` used to be the input to the star's size; it is now an output of it,
+     because a star sized independently of its slot overlaps the acronym the moment it grows. The width comes
+     from the same construction as the height (#936) rather than from a second guess. */
+  /* ------------------------------------------------------------------
+      AND THE MEASUREMENT HAS TO BE TAKEN FROM THE ALPHABETIC BASELINE
+     ------------------------------------------------------------------
+     `actualBoundingBoxAscent` is the distance from the line named by `textBaseline` to the top of the glyphs
+     -- NOT from the alphabetic baseline. This function draws with `textBaseline = "middle"`, and measuring
+     under that setting returns the distance from the em-box's middle instead: a number roughly a third
+     smaller than the cap-height, which would have made the star SHORTER while this note claimed it had grown.
+     CAUGHT BEFORE IT SHIPPED, AND ONLY BY READING THE SPEC -- every test in the suite passed with it, because
+     jsdom does not implement the metric at all and so exercised the fallback branch on every run. Recording
+     that plainly: the harness could not have found this, and a green suite was not evidence.
+     SO THE BASELINE IS SET TWICE, deliberately: alphabetic to measure, middle to draw. */
+  ctx.textBaseline = "alphabetic";
+  const capMetrics = ctx.measureText(initials);
+  ctx.textBaseline = "middle";
+  const capHeight =
+    typeof capMetrics.actualBoundingBoxAscent === "number" && capMetrics.actualBoundingBoxAscent > 0
+      ? capMetrics.actualBoundingBoxAscent
+      : fontPx * 0.72;
+  const starH = capHeight;
+  const markW = starWidthForHeight(starH);
   const gap = fontPx * 0.28;
-  const textW = ctx.measureText(initials).width;
+  const textW = capMetrics.width;
   // Centred on the point the caller gave us, so a slot direction puts the
   // whole mark where it was aimed rather than its left edge.
   const startX = badgeCenter.x - (markW + gap + textW) / 2;
@@ -1321,23 +1363,21 @@ export function drawReservationBadgeAt(
   ctx.shadowColor = "rgba(0, 0, 0, 0.9)";
   ctx.shadowBlur = Math.max(2, 3 * scale);
 
-  /* Design note #714: the five-pointed star, plotted rather than typed for the reason above. Ten vertices
-     alternating between an outer and an inner radius -- the standard construction, starting at the top so the
-     point sits upright at every scale. */
-  const outer = markW * 0.5;
-  const inner = outer * 0.42;
+  /* Design note #714: the five-pointed star, plotted rather than typed for the reason above.
+     Design note #936: and the plotting itself now lives in `privatePowerStar`, because the action bar's
+     button draws the same shape as SVG and two copies of this loop would be two stars one edit apart. What
+     is left here is the canvas-specific half -- walking the vertices into a path and filling it.
+     CENTRED ON THE SHAPE, NOT ON THE CIRCUMCIRCLE (#936). The star's mass sits above its circumcircle centre,
+     so aligning `cy` with the text's midpoint would ride the star high by about a twentieth of its height --
+     small, and exactly the kind of small that reads as "not quite lined up" at the size this renders. */
   const cx = startX + markW / 2;
-  const cy = badgeCenter.y + fontPx * 0.05;
-  ctx.fillStyle = "#f0d074";
+  const cy = badgeCenter.y + fontPx * 0.05 + starCentreOffset(starH);
+  ctx.fillStyle = PRIVATE_POWER_STAR_FILL;
   ctx.beginPath();
-  for (let point = 0; point < 10; point += 1) {
-    const radius = point % 2 === 0 ? outer : inner;
-    const angle = -Math.PI / 2 + (point * Math.PI) / 5;
-    const x = cx + radius * Math.cos(angle);
-    const y = cy + radius * Math.sin(angle);
-    if (point === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  }
+  starVertices(cx, cy, starRadiusForHeight(starH)).forEach((point, index) => {
+    if (index === 0) ctx.moveTo(point.x, point.y);
+    else ctx.lineTo(point.x, point.y);
+  });
   ctx.closePath();
   ctx.fill();
 

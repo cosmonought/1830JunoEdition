@@ -38,7 +38,7 @@ const VARIANT_TOGGLES: ReadonlyArray<{
     key: "unpredictableRevenue",
     label: "Unpredictable revenue",
     blurb:
-      "Every train rolls a d6 against its printed run: 1 pays 80%, 6 pays 120%. Averages to exactly 100% over a game, so it adds drama without changing how long the bank lasts.",
+      "Every train rolls a d6 against its printed run: 1 pays 80%, 6 pays 120%. Averages to exactly 100% over a game, so it adds drama without changing how long the bank lasts. Dividend payouts are calculated from your total percentage owned and rounded to the nearest whole dollar.",
   },
   {
     key: "dynamicStockMarket",
@@ -270,7 +270,19 @@ export function SandboxWaitingRoom({
           </label>
           <span style={styles.variantNote}>{GAME_LENGTH_BLURB[variants.length]}</span>
 
-          {VARIANT_TOGGLES.map((toggle) => (
+          {/* ==================================================================
+               DESIGN NOTE 924: A GUEST READS THE TERMS, NOT THE MENU
+              ==================================================================
+              REPORTED: "for joining players (guests), hide the descriptions (or the entire rows) of any
+              variants that the host has toggled OFF. Guests only need to see the terms/variants that are
+              actively enabled."
+              AND #910 WAS RIGHT ABOUT THE WRONG AUDIENCE. It argued that terms only the host can read are not
+              terms -- true, and it made every seat read the whole MENU, including four rules that are not in
+              force. A guest is agreeing to a game, not reviewing a settings screen: what they need is the
+              list of rules that will actually apply, and an unticked box is not one of them.
+              THE HOST STILL SEES ALL FIVE, because the host is choosing rather than agreeing. Same panel, two
+              audiences, and the difference is which question they are answering. */}
+          {VARIANT_TOGGLES.filter((toggle) => canEditVariants || variants[toggle.key]).map((toggle) => (
             <label key={toggle.key} style={styles.variantToggle}>
               <input
                 type="checkbox"
@@ -287,9 +299,14 @@ export function SandboxWaitingRoom({
             </label>
           ))}
 
-          {!isHost && (
+          {!canEditVariants && (
             <span style={styles.variantNote}>
-              Only the host can change these. You are agreeing to them when you press Ready.
+              {VARIANT_TOGGLES.some((toggle) => variants[toggle.key])
+                ? "Only the host can change these. You are agreeing to them when you press Ready."
+                : /* Design note #924: SILENCE WOULD READ AS A LOADING STATE. With every toggle off the list
+                     above renders nothing, and a heading with an empty body looks broken rather than
+                     settled. This says the same thing the empty list means. */
+                  "No variants are switched on — this table is playing 1830 as printed."}
             </span>
           )}
         </div>
@@ -510,9 +527,19 @@ const styles: Record<string, React.CSSProperties> = {
   variantToggle: { display: "flex", flexDirection: "row", gap: "9px", alignItems: "flex-start" },
   variantToggleText: { display: "flex", flexDirection: "column", gap: "1px", minWidth: 0 },
   variantToggleLabel: { fontSize: FONT_SIZE.small, fontWeight: 700, color: "#e2e6ee" },
+  /* ==================================================================
+      DESIGN NOTE 924: THE RULES ARE THE CONTENT, NOT A CAPTION
+     ==================================================================
+     REPORTED: "the variant rules text in the Lobby is too small and too gray against the dark background."
+     AND THE TREATMENT WAS BORROWED FROM THE WRONG PLACE. `AutoPassModal`'s captions are `micro` in `#8a90a0`
+     because they explain a control whose LABEL already carries the decision. Here the description IS the
+     decision -- a player agreeing to Gentle Rust has to read the sentence, because the two words above it do
+     not say what the rule does.
+     `small` ON `#c8cdd8`, which is this app's body treatment for text meant to be read rather than glanced
+     at: the same pairing the fleet-loss modal and the Auto-Pass body use. */
   variantNote: {
-    fontSize: FONT_SIZE.micro,
-    color: "#8a90a0",
+    fontSize: FONT_SIZE.small,
+    color: "#c8cdd8",
     lineHeight: LINE_HEIGHT.normal,
   },
   /* Design note #857: calm, not alarmed. #707's distinction between a refusal and a status -- this reports

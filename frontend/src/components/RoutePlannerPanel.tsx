@@ -234,10 +234,22 @@ export function RunRoutesButton({
       }
     >
       {/* Design note #623: the figure is on the button when there is one, so
-          the bar's copy is never the vaguer control. `Run Routes` alone while
+          the bar's copy is never the vaguer control. `Run Trains` alone while
           nothing is runnable, because "$0" reads as a route that pays
-          nothing rather than as no route at all. */}
-      {runnable > 0 ? `Run Routes for $${totalRevenue}` : "Run Routes"}
+          nothing rather than as no route at all.
+          ==================================================================
+           DESIGN NOTE 942: "PROJECTED", BECAUSE ONE DIE IS STILL TO COME
+          ==================================================================
+          RULED: "update the submission button in the Action Bar to read: `Run Trains for Projected Revenue:
+          $X`, where $X is the standard 100% printed total of all valid routes currently plotted."
+          AND THE WORD IS DOING REAL WORK NOW THAT #941 ROLLS ONCE PER TURN. The old copy promised a figure
+          the corporation would receive; under Unpredictable Revenue it is a figure the die has not yet seen.
+          `totalRevenue` is unchanged -- `runnableRouteSummary` has always summed the drafts' printed values,
+          which is exactly the "standard 100% printed total" asked for.
+          IT SAYS "PROJECTED" IN A STANDARD GAME TOO, where the figure is exact. Two labels differing by
+          variant would put a rules fork in a button, and a player who never enables the variant loses
+          nothing by reading a promise as an estimate. */}
+      {runnable > 0 ? `Run Trains for Projected Revenue: $${totalRevenue}` : "Run Trains"}
     </button>
   );
 }
@@ -510,7 +522,10 @@ export function RoutePlannerPanel({
               : (blockedReason ?? "Draw a route worth more than $0 to run it.")
           }
         >
-          Run Selected Route(s) for ${totalRevenue}
+          {/* Design note #942: THE SAME SENTENCE AS THE BAR'S BUTTON, and #623's rule is why. Both controls
+              call `onRunRoute`, which runs every runnable draft -- so "Selected Route(s)" was describing a
+              selection this button does not have, and the two copies of one action read as two actions. */}
+          {`Run Trains for Projected Revenue: $${totalRevenue}`}
         </button>
       </div>
     </div>

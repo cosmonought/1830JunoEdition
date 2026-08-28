@@ -156,6 +156,21 @@ export function describeGameplayAction(
     const stops = path
       .map((stop) => stop.hex)
       .filter((hex, index, all) => all.indexOf(hex) === index);
+
+    /* ==================================================================
+     *  DESIGN NOTE 941: THIS LINE NAMES THE TRACK; THE TURN'S LINE NAMES THE MONEY
+     * ==================================================================
+     *
+     * #939 PUT THE VARIANT'S THREE SENTENCES HERE, and that was right while the die was rolled per route.
+     * The die is now rolled once per TURN (#941), so a four-train corporation would have printed four bonus
+     * sentences about one roll -- the reported complaint in a second currency.
+     * SO THIS ARM GOES BACK TO BEING FACTUAL and says the only thing it is uniquely placed to say: which
+     * track this train ran, and what that track prints. `turnRevenueSentence` carries the modifier, once,
+     * from the shell -- which is the only place that can see the end of the dispatch loop.
+     * THE FIGURE IS THE PRINTED ONE, deliberately, and it is not a return to #935's bug. That note found the
+     * log quoting a printed figure while the reducer banked a modified one FOR THE SAME QUANTITY. These are
+     * two different quantities now: this sentence is about one route, the turn's sentence is about the sum.
+     * A route's printed value is a fact about the board and is not modified by anything. */
     return (
       `${corp(gameState, protocol_id)} ran a $${breakdown.revenue} route` +
       (train ? ` with a ${train}-train` : "") +

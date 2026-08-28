@@ -310,3 +310,37 @@ describe("the two progress tracks share a row (design note #920)", () => {
   });
 });
 
+describe("the turn order is one strip, not eight chips (design note #930)", () => {
+  /* REPORTED: "the corporation turn order badges are rendering staggered (uneven vertical alignment) instead
+     of in a straight line. Consolidate them: model this component after the subphase sequence UI." */
+  const sheet = stripComments(readSource("styles/appStyles.ts"));
+  const bar = stripComments(readSource("panels/ContextualActionBar.tsx"));
+
+  it("butts the chips together the way the sub-phase trail does", () => {
+    /* THE CONSTRUCTION IS THE FIX. Rounded independent chips have no shared baseline; a strip of butted
+       rectangles with collapsed borders does. Asserted against the sub-phase trail's own mechanism so the two
+       cannot drift into different answers for one idea. */
+    const chip = sliceBetween(sheet, "orTurnOrderChip: {", "},");
+    expect(chip).toContain('marginLeft: "-1px"');
+    expect(chip).not.toContain("borderRadius");
+  });
+
+  it("stops wrapping, which is where the stagger came from", () => {
+    const strip = sliceBetween(sheet, "orTurnOrder: {", "},");
+    expect(strip).not.toContain("flexWrap");
+    /* #590's rule is honoured rather than dropped: nothing decides which corporations a player may see, so
+       the strip scrolls instead. */
+    expect(strip).toContain('overflow: "auto"');
+  });
+
+  it("gives the livery to the active corporation alone", () => {
+    /* Eight simultaneous brand colours is what made this a row of unrelated objects rather than a sequence
+       with a position in it. Asserted as the ABSENCE of the per-chip colouring as well as the presence of the
+       active one, because the two lines sat adjacent and only one was removed. */
+    const chips = sliceBetween(bar, "styles.orTurnOrderChip,", "title={");
+    expect(chips).not.toContain("borderColor: entry.color,\n                    color: entry.color,");
+    expect(chips).toContain("orTurnOrderChipUpcoming");
+    expect(chips).toContain("backgroundColor: entry.color");
+  });
+});
+

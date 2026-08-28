@@ -196,9 +196,22 @@ describe("the sentence and the money come from one calculation", () => {
     expect(split.totalPaid).toBe(80);
   });
 
-  it("floors the per-share figure rather than rounding up", () => {
-    // $97 is $9 a certificate, not $9.70: 1830 pays whole units and a corporation cannot overpay its run.
-    expect(dividendSplit(board(), CO, "97", true)!.perShare).toBe(9);
+  it("rounds the per-share figure half up", () => {
+    /* ==================================================================
+        SUPERSEDED BY DESIGN NOTE 922, AND THE OLD RULE IS RECORDED HERE
+       ==================================================================
+       THIS CASE USED TO ASSERT 9, with the reasoning: "$97 is $9 a certificate, not $9.70: 1830 pays whole
+       units and a corporation cannot overpay its run."
+       #922 REPLACED THE FLOOR WITH ROUND-HALF-UP on the instruction "Do not use floating-point math. Use pure
+       integer arithmetic: `Math.floor((revenue * percent_owned + 50) / 100)`", and `dividendSplit` applies
+       that one expression to every holder including the 10% certificate. $97 therefore pays $10.
+       AND THE OLD REASONING HAS A SURVIVING POINT WORTH FLAGGING RATHER THAN BURYING: ten shares at $10 is
+       $100 against a $97 run, so a corporation CAN now pay out marginally more than it earned. That is a
+       rules decision, not an arithmetic one, and it was not what the rounding instruction was asked about --
+       it was asked about a player's percentage share under the revenue variant. Pinned at the CURRENT
+       behaviour so the suite is honest about what the code does, and raised in the report so the choice is
+       made deliberately rather than inherited from a helper's reuse. */
+    expect(dividendSplit(board(), CO, "97", true)!.perShare).toBe(10);
   });
 });
 

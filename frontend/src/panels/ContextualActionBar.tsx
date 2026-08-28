@@ -95,6 +95,7 @@ import {
   describeDividendRow,
   type DividendPayoutProjection,
 } from "../utils/dividendProjection";
+import { PrivatePowerStar } from "../components/privatePowerStar";
 
 /* ------------------------------------------------------------------ */
 /* Contextual Top Action Bar -- see design note #8/item 5              */
@@ -106,6 +107,18 @@ interface ActionBarButton {
   onClick: () => void;
   disabled?: boolean;
   title?: string;
+  /* ==================================================================
+      DESIGN NOTE 936: A SLOT FOR THE MARK, BESIDE THE WORDS
+     ==================================================================
+     ASKED FOR: the board's private-power star on the Buy Private Company button, "to bridge the visual
+     vocabulary."
+     A SEPARATE FIELD RATHER THAN WIDENING `label` TO A NODE. `label` is read as TEXT elsewhere -- it is what
+     the collapsed bar measures and what a test asserts on -- and turning it into a `ReactNode` would make
+     every one of those readers accept something they cannot read. The icon is a different thing from the
+     name, so it gets a different field.
+     DECORATIVE BY CONSTRUCTION. The button says "Buy Private Company" in words; the star repeats that rather
+     than adding to it, so it is rendered `aria-hidden` (#936) and the accessible name is unchanged. */
+  icon?: React.ReactNode;
 }
 
 /** Design note #805: the herald's height, in one place because TWO things now depend on it.
@@ -546,8 +559,6 @@ export default function ContextualActionBar({
   maxRouteRevenue = null,
   activeCorporation,
   pendingTreasury = null,
-  tokenTargetMode,
-  setTokenTargetMode,
   onSkipSubPhase,
   orSequence = null,
   operatingOrder = [],
@@ -671,8 +682,6 @@ export default function ContextualActionBar({
    *  setter behind the banner's own Cancel. Passed rather than owned here
    *  because the CANVAS is the other half of this mode and lives in the
    *  parent. */
-  tokenTargetMode: boolean;
-  setTokenTargetMode: (on: boolean) => void;
   /** Design note #144: dispatches the real `AdvanceOperatingSubPhase`, so every skip is an on-chain,
    *  replayable event. The old client-only `setOrSubPhase` advanced the UI while the contract's cursor
    *  stayed put, which under G-14 enforcement would desync the bar from what the chain accepts. */
@@ -1276,21 +1285,38 @@ export default function ContextualActionBar({
      who keeps naming it. Recorded rather than quietly corrected.
      LOCAL STATE, NOT THE LOG. Whether a panel is open is this browser's business; it changes nothing another
      client replays, so it is one of the few pieces of UI state that legitimately lives here. */
-  const [trainPanelOpen, setTrainPanelOpen] = useState(mustBuyTrain);
+  const [trainPanelOpen, setTrainPanelOpen] = useState(false);
   /* Design note #919: the private step's own disclosure. Closed by default and not re-seeded per corporation
      -- buying a private is never compulsory, so there is no obligation for a default to answer to. */
   const [privatePanelOpen, setPrivatePanelOpen] = useState(false);
-  const seededForRef = useRef<number | string | null>(null);
+  const seededForRef = useRef<string | null>(null);
   useEffect(() => {
-    const acting = activeCorporation?.companyId ?? null;
-    if (seededForRef.current === acting) return;
-    seededForRef.current = acting;
-    setTrainPanelOpen(mustBuyTrain);
-    /* `mustBuyTrain` is deliberately NOT a dependency: this fires on the corporation changing and reads the
-       obligation as it stands at that moment. Listing it would re-run the seed every time the fleet changed,
-       which is the effect-fighting-the-player case above. */
+    /* ==================================================================
+        DESIGN NOTE 921: SEEDED WHEN THE STEP ARRIVES, NOT WHEN THE TURN DOES
+       ==================================================================
+       REPORTED: "the Buy Trains panel is starting CLOSED even when the corporation has a mandatory obligation
+       to buy a train (the warning badge is visible, but the panel is shut)."
+       AND #918 SEEDED AT THE WRONG MOMENT, which is the whole bug. It re-seeded when the acting CORPORATION
+       changed -- the top of the turn, at the Track step -- and read `mustBuyTrain` there. A corporation is
+       almost never trainless at the top of its turn: it becomes trainless MID-turn, when a phase change rusts
+       its fleet, and at the top of the turn it is not standing in the Hardware step at all. So the seed
+       sampled the obligation several steps before the obligation could exist, got `false`, and the panel was
+       shut by the time the badge appeared beside it.
+       THE KEY IS THE TURN AND THE STEP TOGETHER, as one composite string rather than two refs -- "have I
+       already seeded for this situation" is then one comparison and cannot be half-updated. Arriving at
+       Hardware is exactly when "must this corporation buy?" first has a meaningful answer.
+       STILL NOT A DEPENDENCY ON `mustBuyTrain`: once seeded for this step the player's own toggle stands, so
+       buying the train does not slam the panel shut under their hand while they weigh a second one. */
+    /* `orSubPhase` rather than `orStep`, which is derived two hundred lines below this effect. Same value
+       inside an Operating Round, and `roundType` is checked here instead -- reading the later binding would
+       be a temporal-dead-zone error, which is how this landed the first time. */
+    const inOperatingRound = roundType === "OperatingRound";
+    const key = `${activeCorporation?.companyId ?? "none"}:${inOperatingRound ? orSubPhase : "none"}`;
+    if (seededForRef.current === key) return;
+    seededForRef.current = key;
+    setTrainPanelOpen(inOperatingRound && orSubPhase === "Hardware" && mustBuyTrain);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeCorporation?.companyId]);
+  }, [activeCorporation?.companyId, orSubPhase, roundType]);
 
   let contextualButtons: ActionBarButton[];
   if (roundType === "OperatingRound") {
@@ -1417,6 +1443,17 @@ export default function ContextualActionBar({
                    "open it when you want it" is the whole rule. #918's exception exists because a trainless
                    corporation genuinely has no choice; this step always does. */
                 label: privatePanelOpen ? "Hide Privates" : "Buy Private Company",
+                /* ==================================================================
+                    DESIGN NOTE 943: THE STAR CAME OFF THIS BUTTON
+                   ==================================================================
+                   CORRECTED: "In Batch 13, I mistakenly instructed you to put the `<PrivatePowerIcon/>` on
+                   the 'Buy Private Companies' button. The star represents the physical location of a private
+                   company's power."
+                   AND THE CORRECTION IS RIGHT ABOUT THE MARK'S MEANING. #714 put the star on hexes where a
+                   power TAKES EFFECT -- it answers "something can be done here", not "a company can be
+                   bought". Buying a private is a transaction in a list; using its power is an act on the
+                   board, and only the second is what the board's star has ever meant. It now marks the
+                   power chips (#943 on `powerChips`), which is the control that does that act. */
                 onClick: () => {
                   setPrivatePanelOpen((open: boolean) => {
                     if (!open) scrollToStepPanel();
@@ -1673,6 +1710,21 @@ export default function ContextualActionBar({
       ? powerOffers.map((offer) => ({
           key: `power-${offer.abilityKey}`,
           label: offer.chipLabel,
+          /* ==================================================================
+              DESIGN NOTE 943: THE BOARD'S MARK, ON THE CONTROL THAT ACTS ON THE BOARD
+             ==================================================================
+             CORRECTED from #936: the star belongs on "Use Power", not on "Buy Private Company". #714 draws it
+             on the hex where a power takes effect, so the semantic link is between that hex and the button
+             that spends the power -- a player who has seen a star on Scranton should recognise the mark on
+             the chip that acts there.
+             ON THE M&H CHIP TOO, ruled explicitly: "It's okay to apply the star to the MH power button as
+             well. It keeps private powers consistent." My own reading had been to withhold it, since the
+             M&H's exchange has no hex and the star is a LOCATION mark -- but a glyph that appears on three
+             of four private powers teaches nothing except that it is unreliable, and "this is a private
+             power" is the more useful thing for it to mean at the size it renders. Recorded because the
+             narrower reading is the one #714's note supports, and a later reader deserves to know it was
+             considered and overruled rather than missed. */
+          icon: <PrivatePowerStar height={11} />,
           onClick: () => onUsePowerOffer(offer.abilityKey),
           disabled: false,
           title: offer.chipTitle ?? "Opens the question — nothing is spent until you answer it.",
@@ -1707,7 +1759,16 @@ export default function ContextualActionBar({
           border cannot carry it. `aria-hidden` because the acronym in the label already says which company
           this is -- the gradient is a second channel for sighted players, not a fact of its own. */}
       <span style={styles.actionBarPowerChipMark} aria-hidden="true" />
-      {chip.label}
+      {/* Design note #943: the star sits INSIDE the chip's own row, after the identity gradient and before
+          the words. The gradient says WHICH company; the star says what kind of thing this is. */}
+      {chip.icon ? (
+        <span style={styles.actionBarButtonWithIcon}>
+          {chip.icon}
+          {chip.label}
+        </span>
+      ) : (
+        chip.label
+      )}
     </button>
   ));
 
@@ -2023,13 +2084,19 @@ export default function ContextualActionBar({
                 <span
                   key={entry.companyId}
                   style={{
+                    /* Design note #930: THE LIVERY IS THE ACTIVE STATE'S ALONE. Every chip used to carry its
+                       corporation's colour on both border and ink, which turned a sequence into eight
+                       unrelated objects and left no way to scan the row for a position. The inactive ones
+                       take the sub-phase trail's neutral treatment now; only the operating corporation is in
+                       full colour. */
                     ...styles.orTurnOrderChip,
-                    borderColor: entry.color,
-                    color: entry.color,
-                    ...(entry.done ? styles.orTurnOrderChipDone : {}),
+                    ...(entry.done
+                      ? styles.orTurnOrderChipDone
+                      : styles.orTurnOrderChipUpcoming),
                     ...(entry.companyId === activeCorporation?.companyId
                       ? {
                           backgroundColor: entry.color,
+                          borderColor: entry.color,
                           /* Design note #889: the ink is COMPUTED, not a constant. A livery fill with a
                              livery-coloured label is invisible on half the roster, and a fixed dark ink
                              is invisible on the other half -- `bestContrastTextColor` is the same
@@ -2068,23 +2135,22 @@ export default function ContextualActionBar({
          Design note #212: READ-ONLY in every mode now, sandbox included. Its only control is Skip, which
          dispatches the real `AdvanceOperatingSubPhase` -- see that component's #1 for why a clickable sandbox
          strip made the one place that tests turn order unable to test it. */}
-      {/* Design note #159: the targeting badge. A crosshair on the canvas
-          only reads while the pointer is OVER the canvas -- a player who
-          armed the mode and then looked at a panel has no way to tell it is
-          still on. This says so where the controls are. */}
-      {tokenTargetMode && (
-        <div style={styles.tokenTargetBanner} role="status">
-          <span style={styles.tokenTargetDot} aria-hidden="true" />
-          Placing station token — click a city hex on the Rail Map.
-          <button
-            type="button"
-            style={styles.tokenTargetCancel}
-            onClick={() => setTokenTargetMode(false)}
-          >
-            Cancel
-          </button>
-        </div>
-      )}
+      {/* ==================================================================
+           DESIGN NOTE 925: THE TARGETING BANNER IS GONE
+          ==================================================================
+          REPORTED: "a new text panel pops up saying 'Placing station token — click a city hex on the Rail
+          Map.' Remove this panel entirely. The player's cursor already changes to a herald icon; we do not
+          want to sacrifice screen real estate for redundant text."
+          AND #159'S PREMISE EXPIRED. It argued "a crosshair on the canvas only reads while the pointer is
+          OVER the canvas -- a player who armed the mode and then looked at a panel has no way to tell it is
+          still on." The cursor is a HERALD now rather than a crosshair, which is legible at a glance and
+          specific to this corporation, and the veil lights the placeable hexes at the same time. Two signals
+          the banner was compensating for the absence of.
+          NOBODY IS STRANDED BY LOSING ITS CANCEL. `handlePlaceStationTokenHint` is a real toggle -- pressing
+          the arming button again disarms it, and its own log line says so -- and #388's effect drops the mode
+          on leaving the Tokens step. The banner's Cancel was a third way out, not the only one, which is what
+          makes this a removal rather than a trade. */}
+
       {/* Design note #164: THE OPERATING ROUND PANEL IS TWO ROWS. It was one wrapping strip, and because the
          number of contextual buttons CHANGES with the sub-phase, the badges moved every time the turn advanced
          -- a warning that relocates as the game progresses is one players stop tracking.
@@ -2561,7 +2627,16 @@ export default function ContextualActionBar({
                   disabled={btn.disabled || !sessionReady}
                   title={btn.title}
                 >
-                  {btn.label}
+                  {/* Design note #936: matched to the collapsed bar below, per #619's rule that the two
+                      forms of this bar must not disagree about a control. */}
+                  {btn.icon ? (
+                    <span style={styles.actionBarButtonWithIcon}>
+                      {btn.icon}
+                      {btn.label}
+                    </span>
+                  ) : (
+                    btn.label
+                  )}
                 </button>
               ))}
 
@@ -3337,7 +3412,16 @@ export default function ContextualActionBar({
               disabled={btn.disabled || !sessionReady}
               title={btn.title}
             >
-              {btn.label}
+              {/* Design note #936: the mark and the words are one row, so a wrapping label cannot leave the
+                  star orphaned on the line above. */}
+              {btn.icon ? (
+                <span style={styles.actionBarButtonWithIcon}>
+                  {btn.icon}
+                  {btn.label}
+                </span>
+              ) : (
+                btn.label
+              )}
             </button>
           ))}
           {/* Design note #881: THE DIVIDER GOES WITH UNDO, for #540's reason applied one step further. That

@@ -112,13 +112,43 @@ export function dividendSplit(
     };
   }
 
-  // Floored: 1830 pays whole units, and rounding up would have the corporation pay out more than it earned.
-  const perShare = Math.floor(revenue / 10);
+  /* ==================================================================
+   *  DESIGN NOTE 922: A SHARE OF THE REVENUE, NOT A MULTIPLE OF A TENTH OF IT
+   * ==================================================================
+   *
+   * REPORTED: "Under the Unpredictable Revenue variant, route totals are no longer guaranteed to be multiples
+   * of 10 (e.g. a $27 route). The current Dividends logic is strictly truncating per-share (paying $2 for a
+   * 10% share), which is too harsh."
+   *
+   * AND THE OLD ARITHMETIC WAS RIGHT FOR THE GAME IT WAS WRITTEN FOR. 1830's printed revenues are all
+   * multiples of ten, so `floor(revenue / 10)` lost nothing and the whole payout reconciled exactly. #903's
+   * die broke that premise -- 80% of $210 is $168 -- and a rule that had never rounded anything suddenly
+   * rounded twice: once flooring the tenth, then again multiplying it back up. A 10% holder of a $27 route
+   * was paid $2 and the remaining $7 went nowhere at all.
+   *
+   * SO THE SHARE IS COMPUTED FROM THE REVENUE DIRECTLY, per holder, at the requested formula:
+   *   `Math.floor((revenue * percent + 50) / 100)`
+   * Integer throughout, per the project rule -- `revenue` and `percent` are both integers, so the only
+   * fraction is the final division, and adding half the divisor before truncating IS the rounding.
+   *
+   * IT CAN PAY OUT MORE THAN THE ROUTE EARNED, and that is a real consequence rather than a rounding artefact
+   * to wave at. Ten 10% holders of a $27 route take $3 each: $30 against $27 earned, with the extra $3 coming
+   * from the bank. The ceiling is half a dollar per certificate, so at most $5 on a fully-distributed
+   * corporation -- always in the players' favour, and always against the bank, which is the clock this game
+   * ends on (#898). Accepted as instructed and recorded here because it makes games marginally shorter, which
+   * is the kind of drift that is invisible per-turn and obvious over a campaign.
+   * THE OLD COMMENT SAID SO -- "rounding up would have the corporation pay out more than it earned" -- and it
+   * was describing exactly this trade. It is being taken deliberately now rather than avoided. */
+  const shareOf = (percentage: number) => Math.floor((revenue * percentage + 50) / 100);
+  /* Design note #922: kept as the 10% figure and computed the same way, so the number a panel prints beside
+     a single share and the number that holder is actually paid cannot disagree. It is no longer the unit the
+     payouts are built from -- nothing multiplies it any more. */
+  const perShare = shareOf(10);
   const players = company.player_holdings.map((holding) => ({
     player: holding.player,
-    amount: perShare * (holding.percentage / 10),
+    amount: shareOf(holding.percentage),
   }));
-  const poolSlice = perShare * (company.bank_pool_percentage / 10);
+  const poolSlice = shareOf(company.bank_pool_percentage);
   const totalPaid = players.reduce((sum, share) => sum + share.amount, 0) + poolSlice;
 
   return { revenue, perShare, players, poolSlice, totalPaid, distributed: true };

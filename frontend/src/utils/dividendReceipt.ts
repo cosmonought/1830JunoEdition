@@ -40,6 +40,9 @@ export interface DividendReceiptInput {
   perShare: number;
   /** The viewer's holding in that corporation, as a percentage. `0` when they hold none. */
   viewerPercentage: number;
+  /** Design note #923: what the corporation ran for, which the headline now leads with. From the same
+   *  `dividendSplit` the amount comes from, so the two figures in one sentence cannot come from two places. */
+  revenue: number;
   /** The viewer's cash before the payout. `null` when it is not known. */
   cashBefore: number | null;
   /** Design note #795: what the viewer actually received, from `dividendSplit` -- the same value the reducer
@@ -49,7 +52,7 @@ export interface DividendReceiptInput {
 }
 
 export interface DividendReceipt {
-  /** "C&O paid $27 per share" -- the headline. */
+  /** "PRR ran for $27. Your 20% share paid $5." -- the headline (#923). */
   headline: string;
   /** "$412 → $520", or `null` when the balance is unknown. */
   transition: string | null;
@@ -64,6 +67,9 @@ export interface DividendReceipt {
  *  would be the toast flood #718 removed, wearing a different hat. */
 export function dividendReceipt(input: DividendReceiptInput): DividendReceipt | null {
   if (!input.distribute) return null;
+  /* Design note #923: the GATE is still `perShare`, because it is the cheapest test for "did this
+     corporation pay anything at all" and a corporation that paid nothing has no receipt to show. What changed
+     is that the number no longer appears in the sentence. */
   if (!Number.isFinite(input.perShare) || input.perShare <= 0) return null;
   if (!Number.isFinite(input.viewerPercentage) || input.viewerPercentage <= 0) return null;
 
@@ -92,7 +98,18 @@ export function dividendReceipt(input: DividendReceiptInput): DividendReceipt | 
   const known = before !== null && Number.isFinite(before);
 
   return {
-    headline: `${input.ticker} paid $${input.perShare} per share — you received $${amount}.`,
+    /* ==================================================================
+        DESIGN NOTE 923: A PERCENTAGE, BECAUSE "PER SHARE" STOPPED BEING A WHOLE NUMBER
+       ==================================================================
+       REPORTED: "because the variant breaks clean per-share integers, the toast reading 'XXX paid out $5 per
+       share' is no longer accurate."
+       AND IT IS THE SAME PREMISE #922 BROKE ONE MODULE OVER. 1830's printed revenues are multiples of ten, so
+       "per share" was an exact figure a player could multiply by their own holding; under #903's die it is a
+       rounded tenth, and multiplying it back up gives a number that does not match what they were paid. A
+       headline quoting it was arithmetic the player could check and find wrong.
+       SO IT QUOTES WHAT IS TRUE AT EVERY REVENUE: the route's total, the holding, and the amount. All three
+       are facts rather than rates, and none of them invites a multiplication that will not reconcile. */
+    headline: `${input.ticker} ran for $${input.revenue}. Your ${input.viewerPercentage}% share paid $${amount}.`,
     /* Design note #670's arrow, and its rule: an unknown balance shows NOTHING rather than a figure with a
        guess on one end. The headline still carries the amount, so the toast is never empty. */
     transition: known ? `$${before} → $${(before as number) + amount}` : null,

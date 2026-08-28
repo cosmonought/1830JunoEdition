@@ -62,40 +62,67 @@ export const styles: Record<string, React.CSSProperties> = {
   /* ==================================================================
       DESIGN NOTE 889: THE OPERATING ORDER, AS A ROW OF TICKERS
      ==================================================================
-     LONGHAND BORDERS, per #732/#840: the chip's `borderColor` is written inline from the corporation's
-     livery and two sibling states override other properties, which is exactly the pairing that makes React
-     blank a shorthand's colour on the render that drops an override.
-     `flexWrap` BECAUSE EIGHT TICKERS IS A REAL COUNT. #590's rule for this rail: "If a narrow window ever
-     makes this tight, the answer is wrapping or a smaller type scale, not deciding for the player which
-     facts they may keep." */
+     DESIGN NOTE 930 REPLACED BOTH HALVES OF THIS NOTE, and they are kept because each states a rule that is
+     still true somewhere else.
+     THE LONGHAND BORDERS ARE GONE with the per-chip livery border: only the ACTIVE chip is coloured now, and
+     it carries a complete `border` shorthand of its own, so #732/#840's shorthand-beside-longhand hazard no
+     longer has two properties to fight over.
+     `flexWrap` IS GONE TOO, and #590's rule about it is what forced the alternative rather than being
+     overruled by it: the strip must not decide which corporations a player may see, so at eight tickers it
+     SCROLLS horizontally instead of wrapping -- every corporation still reachable, and the row still one
+     line high. Wrapping was what produced the reported stagger. */
   /* Design note #920: pushed to the right end of the progress row by its OWN margin rather than by
      `space-between` on the row -- the sub-phase trail must stay left-anchored on a round with no queue, and
      `space-between` would centre it there. */
   orTurnOrder: {
     marginLeft: "auto",
-    display: "flex",
+    /* Design note #930: ONE UNBROKEN RECTANGLE. `inline-flex` with no wrap, and the strip's own rounding
+       clipping the first and last chip's square corners, is what makes eight boxes read as one control -- a
+       wrapped strip of butted rectangles is exactly where the reported stagger came from.
+       IT SCROLLS RATHER THAN WRAPPING at eight tickers, which is #590's rule honoured rather than dropped:
+       every corporation stays reachable and the row stays one line high. */
+    overflow: "auto",
+    display: "inline-flex",
     flexDirection: "row",
     alignItems: "center",
-    gap: "3px",
-    flexWrap: "wrap",
     minWidth: 0,
   },
+  /* ==================================================================
+      DESIGN NOTE 930: ONE RECTANGLE, NOT EIGHT FLOATING CHIPS
+     ==================================================================
+     REPORTED: "the corporation turn order badges are rendering staggered (uneven vertical alignment) instead
+     of in a straight line. Consolidate them: model this component after the subphase sequence UI."
+     AND THE STAGGER WAS `flexWrap` ON THE ROW plus per-chip borders in eight different livery colours. Rounded
+     independent chips have no shared baseline to sit on, so any wrap or any difference in border weight reads
+     as a jog -- the sub-phase trail never had that problem because it is one strip of butted rectangles.
+     SO IT BORROWS THAT CONSTRUCTION EXACTLY: square corners, `marginLeft: -1px` so adjacent borders collapse
+     into one hairline, and the strip itself carrying the rounding. Same vocabulary in both places, which is
+     also #575's rule -- a player should not learn two layouts for one idea.
+     THE LIVERY SURVIVES ON THE ACTIVE ONE ONLY. Eight simultaneous brand colours is what made this a row of
+     unrelated objects; desaturating the inactive ones turns it back into a sequence with a position in it,
+     which is the question this element answers. */
   orTurnOrderChip: {
     fontSize: FONT_SIZE.micro,
-    fontWeight: 800,
+    fontWeight: 700,
     letterSpacing: "0.03em",
-    padding: "2px 6px",
-    borderRadius: "4px",
-    borderWidth: "1px",
-    borderStyle: "solid",
-    backgroundColor: "transparent",
+    padding: "2px 8px",
+    marginLeft: "-1px",
+    border: "1px solid #2f3542",
+    backgroundColor: "#191d27",
+    color: "#6f7480",
     whiteSpace: "nowrap",
     flexShrink: 0,
     cursor: "help",
   },
+  /* Design note #930: still to come. The same treatment the sub-phase trail gives an unreached step -- it is
+     the same fact about a sequence. */
+  orTurnOrderChipUpcoming: { color: "#8a90a0" },
   /* DIMMED, NOT REMOVED. A row that shortens as the round goes on stops being an ORDER and becomes a queue,
      and "have they gone yet" is the question a player asks about the corporations behind them. */
-  orTurnOrderChipDone: { opacity: 0.4 },
+  /* Design note #930: `opacity` dimmed the BORDER as well as the text, which on a livery-coloured chip made
+     "already operated" look like a rendering fault. An explicit ink and fill instead, matching
+     `subPhaseStepDone`. */
+  orTurnOrderChipDone: { color: "#8a90a0", backgroundColor: "#1c212c" },
   /* THE ACTING ONE IS FILLED, and both its background and its ink are written INLINE at the call site --
      the fill from the corporation's livery, the ink from `bestContrastTextColor` against it. Neither can be
      a static entry here, so there is no `orTurnOrderChipActing` to define; saying so is worth a line,
@@ -746,13 +773,37 @@ export const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     gap: "7px",
   },
+  /* ==================================================================
+      DESIGN NOTE 931: THE MARK GROWS; IT DOES NOT BECOME A BORDER, AND IT IS NOT A STAR
+     ==================================================================
+     REPORTED: "the thin rainbow gradient bar ... is too subtle to clearly link it to the map elements. Add
+     the Star icon (currently used on the map for private company hexes) directly to this button, and/or
+     expand the gradient to be a border around the button."
+
+     THERE IS NO STAR ON THE MAP TO BORROW. The powered hexes are marked by the rainbow GLOW HALO #727 draws
+     -- three blurred strokes of `PRIVATE_POWER_GLOW_STOPS` around the hex -- and nothing anywhere renders a
+     star. Adding one here would invent a second private-power symbol and put the button in a vocabulary the
+     board does not speak, which is the opposite of the connection being asked for.
+
+     AND THE BORDER IS STILL REFUSED, for #884's two reasons, both of which still hold: `actionBarButtonDisabled`
+     overrides `borderColor` and `actionBarCancelErrand` paints it amber, so the border is a STATE channel and a
+     rainbow on it would be #732's identity-and-state collision; and a gradient border needs `borderImage`,
+     which cannot participate in a `borderColor` longhand at all.
+
+     SO THE SHARED SIGNATURE GETS LOUDER INSTEAD. Wider, and carrying the same halo the canvas draws -- a
+     `boxShadow` in the palette's own mid stop, which is the glow's effect expressed in the medium CSS has.
+     Card -> hex -> chip now share a colour AND a glow rather than a colour alone, which is the association
+     #884 was building and the subtlety the report is about. */
   actionBarPowerChipMark: {
     flexShrink: 0,
-    width: "4px",
+    width: "7px",
     alignSelf: "stretch",
-    minHeight: "12px",
-    borderRadius: "2px",
+    minHeight: "16px",
+    borderRadius: "3px",
     backgroundImage: `linear-gradient(180deg, ${PRIVATE_POWER_GLOW_STOPS.join(", ")})`,
+    /* The canvas halo, in the medium available here. `PRIVATE_POWER_GLOW_STOPS[4]` is the same stop
+       `HexGridRenderer` uses for its `shadowColor`, imported rather than retyped for #727's stated reason. */
+    boxShadow: `0 0 6px ${PRIVATE_POWER_GLOW_STOPS[4]}`,
   },
   /* Design note #426: nudged back up. #31 slimmed these on the reasoning that a chrome strip only has to be
      comfortably clickable, which took them below comfortable. These are the primary actions of a turn and
@@ -785,6 +836,21 @@ export const styles: Record<string, React.CSSProperties> = {
      A `Record<string, T>` style sheet cannot catch this. One audit found one phantom key, so the sweep is
      done -- but nothing stops the next one, and the failure is invisible by construction. */
   actionBarButtonDisabled: { opacity: 0.4, cursor: "not-allowed" },
+  /* ==================================================================
+      DESIGN NOTE 936: THE MARK AND THE WORDS ARE ONE ROW
+     ==================================================================
+     The Buy Private Company button carries the board's private-power star (#936). Inline-flex rather than a
+     margin on the glyph: the star is an `<svg>` with `display: block`, and a bare sibling would sit on the
+     text baseline with its own line-height, which puts a 11px shape a pixel or two low and makes the pairing
+     look accidental. `center` aligns the two by their middles, which is what the eye reads.
+     ADDED HERE AND NOT IN THE PANEL, which is the whole of #619's lesson one file over: `styles` is typed
+     `Record<string, React.CSSProperties>`, so a key defined in the component that renders it is `undefined`
+     at the call site and spreads to nothing, silently, with `tsc` and ESLint content. */
+  actionBarButtonWithIcon: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 6,
+  },
   /* Design note #619: the standing "you must buy a train" notice. Amber, not
      red -- an obligation the rules impose is not an error the player has
      made, and this appears the moment the step opens rather than in response
@@ -1001,37 +1067,10 @@ export const styles: Record<string, React.CSSProperties> = {
   },
   orContextFactAside: { fontSize: FONT_SIZE.micro, fontWeight: 400 },
   orContextFactNone: { fontSize: FONT_SIZE.small, fontStyle: "italic" },
-  tokenTargetBanner: {
-    display: "flex",
-    flexDirection: "row",
-    alignItems: "center",
-    gap: "10px",
-    padding: "7px 14px",
-    borderRadius: "8px",
-    border: "1px solid #3a5a8a",
-    backgroundColor: "#16202e",
-    color: "#9ec5ff",
-    fontSize: FONT_SIZE.control,
-    fontWeight: 700,
-  },
-  tokenTargetDot: {
-    width: "9px",
-    height: "9px",
-    borderRadius: "999px",
-    backgroundColor: "#38bdf8",
-    flexShrink: 0,
-  },
-  tokenTargetCancel: {
-    marginLeft: "auto",
-    padding: "3px 10px",
-    borderRadius: "6px",
-    border: "1px solid #4a5163",
-    backgroundColor: "#232936",
-    color: "#c8cdd8",
-    fontSize: FONT_SIZE.small,
-    fontFamily: "inherit",
-    cursor: "pointer",
-  },
+  /* Design note #925: `tokenTargetBanner`, `tokenTargetDot` and `tokenTargetCancel` were deleted with the
+     banner they dressed. Recorded rather than silently removed because an unreferenced style is invisible to
+     the type checker -- #29's "dead props are a type error waiting for the real implementation to move",
+     applied to a stylesheet, where there is no type error to wait for at all. */
   /* Design note #164: the two-row Operating Round panel.
      Design note #299: three stacked rows at 6px each is 18px of pure separation in a panel whose own rows
      are ~30px -- halved, which still reads as three distinct bands. */

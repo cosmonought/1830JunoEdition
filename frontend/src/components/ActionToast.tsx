@@ -64,8 +64,49 @@ export interface ActionToastProps {
   token: number;
   onDismiss: () => void;
   /** How long it stays. Long enough to read a sentence, short enough that a
-   *  player taking four actions in a row is not reading a queue. */
+   *  player taking four actions in a row is not reading a queue.
+   *
+   *  Design note #928: 2600 -> 3700. REPORTED as "too short for players to read the financial details", and
+   *  the receipts grew into that complaint rather than starting there: #923's headline now carries a route
+   *  total, a percentage and an amount, and #738's detail line adds a treasury transition underneath. The
+   *  original figure was set for a one-clause receipt.
+   *  THE SECOND HALF OF THE OLD SENTENCE STILL BINDS. A queue of four is still the failure mode at the other
+   *  end, and the token-keyed timer below is what stops it: a second action restarts the clock rather than
+   *  stacking, so a longer window costs a fast player nothing.
+   *  (The request said 2.7s; the value in the code was 2.6s. Moved to the stated TARGET of 3.7s rather than
+   *  by the stated delta, since the target is the thing that was actually judged against a screen.) */
   durationMs?: number;
+  /** Design note #929: the era transition this toast is announcing, when it is announcing one. A DESCRIPTOR
+   *  rather than a node, so the toast's state stays plain data and this component keeps sole ownership of how
+   *  a hex is drawn -- a caller passing JSX would be a second place that decides what Green looks like. */
+  eraTransition?: { from: string; to: string } | null;
+}
+
+/** Design note #929: one flat-top hex in an era's own colour.
+ *
+ *  THE FILLS ARE THIS TOAST'S OWN and deliberately not `PRINTED_HEX_FILL` or the tile catalog's palette:
+ *  those are the colours a hex is DRAWN on a dark board at map scale, and a 16px glyph inside a toast needs
+ *  to read against the toast's background instead. Borrowing them would couple a notification's legibility to
+ *  a rendering decision made about the canvas. */
+const ERA_HEX_FILL: Readonly<Record<string, string>> = {
+  Yellow: "#d9b64a",
+  Green: "#4e9d5f",
+  Brown: "#8a6242",
+};
+
+function EraHex({ tone }: { tone: string }) {
+  const fill = ERA_HEX_FILL[tone] ?? "#6d7382";
+  return (
+    <svg width="16" height="18" viewBox="0 0 16 18" role="presentation">
+      {/* A pointy-top hex, the orientation the board draws (#1's unit hex). */}
+      <path
+        d="M8 0.6 L15.2 4.8 V13.2 L8 17.4 L0.8 13.2 V4.8 Z"
+        fill={fill}
+        stroke="rgba(0,0,0,0.35)"
+        strokeWidth="1"
+      />
+    </svg>
+  );
 }
 
 export function ActionToast({
@@ -73,7 +114,8 @@ export function ActionToast({
   detail = null,
   token,
   onDismiss,
-  durationMs = 2600,
+  durationMs = 3700,
+  eraTransition = null,
 }: ActionToastProps) {
   useEffect(() => {
     if (message === null) return undefined;
@@ -107,6 +149,34 @@ export function ActionToast({
         </span>
         <span style={styles.body}>
           <span style={styles.text}>{message}</span>
+          {/* ==================================================================
+               DESIGN NOTE 929: THE ERA CHANGE, SHOWN AS WELL AS SAID
+              ==================================================================
+              REPORTED: the text-only era notification "is a bit dry. Add a simple inline graphic ... a plain
+              yellow hex shape, an arrow, and a plain green hex shape."
+              AND IT IS THE ONE TOAST WHOSE SUBJECT IS A PICTURE. Every other receipt reports a number; this
+              one reports that a colour of TILE is now legal, and the player is about to go looking for that
+              colour in the tile picker. Two hexes and an arrow say "this becomes that" in the same vocabulary
+              the board uses.
+              PLAIN HEXES, NO TRACK, per the request. A tile drawn with track would claim a specific tile is
+              available, which is not what an era change means -- it unlocks a whole colour.
+              `aria-hidden`, because the sentence beside it already says the same thing in words. */}
+          {eraTransition && (
+            <span style={styles.eraGraphic} aria-hidden="true">
+              <EraHex tone={eraTransition.from} />
+              <svg width="14" height="10" viewBox="0 0 14 10" style={styles.eraArrow}>
+                <path
+                  d="M0 5 H10 M6.5 1.5 L10 5 L6.5 8.5"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+              <EraHex tone={eraTransition.to} />
+            </span>
+          )}
           {/* Design note #738: the transition, under the sentence rather than beside it. Money moving is two
               facts -- what arrived and where it left you -- and #670 settled that they read as a before and an
               after rather than as one run-on line. */}
@@ -140,6 +210,17 @@ const styles: Record<string, React.CSSProperties> = {
   body: { display: "flex", flexDirection: "column", gap: "2px", minWidth: 0 },
   /* Quieter than the headline and monospaced, because it is a pair of figures rather than a sentence -- the
      same treatment the Ledger gives every before/after in this app. */
+  /* Design note #929: under the sentence, on the same left margin as the detail line -- the graphic is a
+     restatement of the message rather than an ornament beside it. */
+  eraGraphic: {
+    display: "flex",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: "6px",
+    marginTop: "6px",
+    color: "#8a90a0",
+  },
+  eraArrow: { flex: "none" },
   detail: {
     fontSize: FONT_SIZE.micro,
     color: "#9fb8a4",

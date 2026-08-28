@@ -23,7 +23,7 @@ import { bankIsBroken } from "./endgame";
 import {
   DELAYED_AUCTION_TRIGGER_TIER,
   resolveVariants,
-  rollRouteRevenue,
+  rollTurnRevenue,
 } from "./gameVariants";
 // Design note #723: the terrain fee is charged on the FIRST build of a hex and never again.
 import { terrainFeeDue, withTerrainPaid } from "./terrainFee";
@@ -1759,12 +1759,25 @@ function settleOperatingCursor(
     /* Design note #906a: the reprieve expires through the SAME helper the non-Operating path uses, so a
        corporation whose turn ends mid-set and one whose turn ends the set are answered identically. */
     const withReprieveExpired = expireReprieve(after);
+    /* Design note #941: AND THE PRINTED SUM GOES WITH THEM. It is the third turn-scoped figure on a
+       corporation, and the one whose survival would be least visible: a stale `printed_route_revenue` does
+       not show anywhere on screen, it simply makes the NEXT turn's single roll apply to last turn's routes as
+       well as this turn's. The corporation would be paid for track it did not run, from a field nobody was
+       looking at. Cleared in the same expression as its two siblings for exactly #777's reason -- two resets
+       of one turn-scoped idea are two things that can drift. */
     const staleRun = (company: (typeof after.public_companies)[number]) =>
-      (company.last_route_revenue ?? "0") !== "0" || (company.routes_run_this_turn ?? 0) !== 0;
+      (company.last_route_revenue ?? "0") !== "0" ||
+      (company.printed_route_revenue ?? "0") !== "0" ||
+      (company.routes_run_this_turn ?? 0) !== 0;
     const cleared = withReprieveExpired.public_companies.some(staleRun)
       ? withReprieveExpired.public_companies.map((company) =>
           staleRun(company)
-            ? { ...company, last_route_revenue: "0", routes_run_this_turn: 0 }
+            ? {
+                ...company,
+                last_route_revenue: "0",
+                printed_route_revenue: "0",
+                routes_run_this_turn: 0,
+              }
             : company,
         )
       : withReprieveExpired.public_companies;
@@ -2502,40 +2515,52 @@ function applyOneAction(
     const ordinalBefore =
       state.public_companies.find((entry) => entry.company_id === protocol_id)
         ?.routes_run_this_turn ?? 0;
+    /* ==================================================================
+        DESIGN NOTE 941: ONE DIE FOR THE TURN, RE-APPLIED TO THE WHOLE SUM
+       ==================================================================
+       RULED: "The Unpredictable Revenue die must be rolled exactly ONCE per corporation's operating turn,
+       applied to the total aggregated printed revenue of all trains combined, not per train."
+       AND THE ARM CANNOT SEE THE END OF THE LOOP, which is the constraint that shapes this. One
+       `RunManualRoute` is dispatched per train and the reducer is handed them one at a time; nothing tells it
+       which is last. So instead of waiting for the final train, every dispatch RECOMPUTES the whole turn:
+       add this route to the printed sum, then apply the turn's one roll to that sum from scratch.
+       WHICH IS CORRECT AT EVERY PREFIX, not just at the end. After two of four trains the figure is the die
+       applied to those two trains' total -- a true statement about what has run so far -- and the fourth
+       dispatch leaves exactly the die applied to all four. No "is this the last train" signal exists, and
+       none is needed.
+       THE PRINTED SUM IS KEPT SEPARATELY (#941 on `printed_route_revenue`) because #938's rounding is lossy:
+       the modified figure cannot be turned back into the printed one.
+       THE SEED NO LONGER CARRIES THE ORDINAL. Round, sub-round and corporation identify the turn, which is
+       now the unit of the roll -- so all four trains consult one face, by construction rather than by
+       agreement. `routes_run_this_turn` survives, because the LOG still counts runs and #777 still clears it;
+       it simply no longer feeds the die. */
+    const company = state.public_companies.find((entry) => entry.company_id === protocol_id);
+    const previousPrinted = Math.max(0, Number(company?.printed_route_revenue ?? 0) || 0);
+    const printedTotal = previousPrinted + printed;
     const roll = variants.unpredictableRevenue
-      ? rollRouteRevenue(printed, {
+      ? rollTurnRevenue(printedTotal, {
           macroRound: state.macro_round_number ?? 0,
           subRound: state.sub_round_index ?? 0,
           companyId: protocol_id,
-          trainOrdinal: ordinalBefore,
         })
       : null;
-    const earned = roll ? roll.adjusted : printed;
-    /* The treasury credit moved to DeclareDividends, or Withhold credited it twice. #492a: a turn's routes ADD
-       (one message per train).
-       Design note #777: THE ZEROING MOVED TO THE TURN CHANGE and `ctx.resetRouteRevenue` is gone. It was a
-       dispatch-time option, and the log carries only the message -- so it was absent on every replay, which
-       is every path that reaches this arm. The figure accumulated across turns for the whole game.
-       See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #192 */
-    const previous =
-      Number(
-        state.public_companies.find((entry) => entry.company_id === protocol_id)
-          ?.last_route_revenue ?? 0,
-      ) || 0;
-    const running = Math.max(0, previous) + earned;
+    /* Design note #777's zeroing still lives on the turn change; what changed is that there are now TWO
+       turn-scoped figures to clear rather than one. */
+    const running = roll ? roll.adjusted : printedTotal;
     return {
       ...state,
-      public_companies: state.public_companies.map((company) =>
-        company.company_id === protocol_id
+      public_companies: state.public_companies.map((entry) =>
+        entry.company_id === protocol_id
           ? {
-              ...company,
+              ...entry,
               last_route_revenue: String(running),
-              /* Design note #903: incremented WITH the revenue, in the same object, so the next train on this
-                 turn gets the next die. Two writes that could fall out of step would mean two trains sharing
-                 one face -- which is exactly what keying by model would have done. */
+              printed_route_revenue: String(printedTotal),
+              /* Design note #903, amended by #941: still incremented with the revenue and still in the same
+                 object, because the log counts runs and the turn-change clear pairs the two fields. It no
+                 longer selects a die face -- the turn does. */
               routes_run_this_turn: ordinalBefore + 1,
             }
-          : company,
+          : entry,
       ),
     };
   }

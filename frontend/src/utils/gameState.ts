@@ -66,6 +66,22 @@ export interface PublicCompanyState {
    *  Optional because a contract predating the field returns no key, and `undefined` must stay distinguishable
    *  from a real `"0"`: the first means "this build cannot tell you", the second "it earned nothing". */
   last_route_revenue?: string;
+  /* ==================================================================
+      DESIGN NOTE 941: THE PRINTED SUM, KEPT BECAUSE THE ROLL IS ON THE TOTAL
+     ==================================================================
+     RULED: one die per corporation's turn, "applied to the total aggregated printed revenue of all trains
+     combined".
+     WHICH THE ARM CANNOT DO FROM `last_route_revenue` ALONE. That field holds the MODIFIED figure, and the
+     modification is lossy -- #938 rounds to the nearest ten, so $77 and $80 and $84 all become $80 and no
+     amount of arithmetic recovers the printed total from it. A turn's second train therefore has nothing to
+     add to.
+     SO THE RAW SUM IS KEPT BESIDE IT. Each `RunManualRoute` adds this train's printed value here, then
+     recomputes `last_route_revenue` as the turn's one roll applied to the WHOLE of it. That makes every
+     dispatch produce the correct aggregate for the trains run so far, with no train needing to know whether
+     it is the last -- which is the only way this works over a loop the reducer cannot see the end of.
+     OPTIONAL, AND #232'S RULE APPLIES: `undefined` means "this build does not report it", never "zero".
+     Turn-scoped, and cleared beside `last_route_revenue` by #777's turn-change rule. */
+  printed_route_revenue?: string;
   president: string | null;
   ipo_pool_percentage: number;
   bank_pool_percentage: number;

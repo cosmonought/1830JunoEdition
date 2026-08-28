@@ -486,6 +486,15 @@ function clampPanToBoard(
   };
 }
 
+/* Design note #927: the camera the player last left, outliving one mounting of this component. See the
+   `useState` initialisers for why it is module scope rather than a prop or a ref.
+   MUTABLE ON PURPOSE and deliberately not exported: nothing else may write a camera pose, and a second writer
+   is how the board would start disagreeing with itself about where it is looking. */
+const rememberedCamera: { view: ViewTransform | null; detailedView: boolean } = {
+  view: null,
+  detailedView: false,
+};
+
 /** One shared module-level empty array: a fresh [] in the destructuring default would be a new reference every render and rebuild draw's useCallback.
  *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #36 */
 const EMPTY_PUBLIC_COMPANIES: StationTokenCompany[] = [];
@@ -640,11 +649,32 @@ export function HexGridRenderer({
    *  result is ever reported to `onHexClickQuery`. */
   const clickQuerySeqRef = useRef(0);
 
-  const [view, setView] = useState<ViewTransform>({
-    panX: width / 2,
-    panY: height / 2,
-    zoom: 1,
-  });
+  /* ==================================================================
+      DESIGN NOTE 927: THE CAMERA SURVIVES AN UNMOUNT, BECAUSE THE ROUND CHANGE CAUSES ONE
+     ==================================================================
+     REPORTED: "the start of OR 3.1 triggered an extreme zoom-out on the map ... find the unguarded
+     `fitBounds` or zoom trigger in the round transition logic and strip it."
+     THERE IS NO SUCH TRIGGER, AND THAT IS WHY TWO EARLIER HUNTS FOUND NOTHING. This component is rendered
+     conditionally -- `activeMainTab === "map" ? <HexGridRenderer .../> : ...` -- and #213 switches the tab on
+     every round transition, to the Stock Market for a Stock Round and back to the map for an Operating Round.
+     So the board is UNMOUNTED and REMOUNTED across SR -> OR, and a remount restores `useState`'s initial
+     value: `detailedView` back to `false`, which locks the camera to `fitView`. The zoom-out is not a call
+     anybody made; it is the default pose reasserting itself on a fresh mount.
+     SO THE POSE IS REMEMBERED OUTSIDE THE COMPONENT. Module scope rather than a prop, deliberately: lifting
+     `view` and `detailedView` into `App.tsx` would thread two more pieces of state through a 3,000-line
+     component for a fact no other surface reads, and every caller would then have to remember to pass them.
+     What is being modelled is "the camera the player last left", which belongs to the board and outlives one
+     mounting of it.
+     NOT PERSISTENCE. This is a module variable, so it dies with the tab -- a reload opens on the default pose,
+     which is correct: a new session has no camera to preserve. */
+  const [view, setView] = useState<ViewTransform>(
+    () =>
+      rememberedCamera.view ?? {
+        panX: width / 2,
+        panY: height / 2,
+        zoom: 1,
+      },
+  );
   const dragStateRef = useRef<{
     startX: number;
     startY: number;
@@ -678,7 +708,10 @@ export function HexGridRenderer({
 
   /** false locks the camera at fitView and ignores pan/zoom input; true unlocks both.
    *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #13 */
-  const [detailedView, setDetailedView] = useState(false);
+  /* Design note #927: restored with the pose it belongs to. Splitting them -- remembering the view and not
+     whether the camera was unlocked -- would restore a pan and then have the sync effect below overwrite it
+     with `fitView` on the very next commit, which is the bug wearing a hat. */
+  const [detailedView, setDetailedView] = useState(() => rememberedCamera.detailedView);
 
   /** City Nameplate Visibility toggle gates every NAME pass only -- station tokens, value badges and track splines are separate unconditional passes.
    *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #42 */
@@ -1989,6 +2022,13 @@ export function HexGridRenderer({
     if (detailedView) return;
     setView(fitView);
   }, [fitView, detailedView]);
+
+  /* Design note #927: written on every change, so whatever the player last looked at is what a remount
+     restores. A ref would not do: the point is to outlive the component instance entirely. */
+  useEffect(() => {
+    rememberedCamera.view = view;
+    rememberedCamera.detailedView = detailedView;
+  }, [view, detailedView]);
 
   /* Design note #866: the board answers the host's standing question about one hex's free-station slot.
      KEYED ON `view` AS WELL AS THE REQUEST, so a pan or a zoom re-reports and the confirmation ring follows

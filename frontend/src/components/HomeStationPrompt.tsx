@@ -192,6 +192,19 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#e2e6ee",
     boxShadow: "0 18px 48px rgba(0,0,0,0.5)",
     overflow: "hidden",
+    /* ==================================================================
+        DESIGN NOTE 926: THE CARD NEEDED A FLOOR
+       ==================================================================
+       REPORTED: "the Home Station modal for non-president players is missing bottom margin/padding. The edge
+       of the 'Home Hex: XXX' panel is touching the absolute bottom edge of the modal."
+       AND IT ONLY SHOWS FOR A WATCHER, which is why it survived: the card's children each carry their own
+       padding and the last of them was always the BUTTON row, whose padding was doing double duty as the
+       card's floor. #783 took the button away from watchers and #912 took the rules line, so the hex panel
+       became the last child and there was nothing underneath it.
+       ON THE CARD RATHER THAN ON THE HEX PANEL, because the next element to become last should not have to
+       rediscover this. `overflow: hidden` plus the livery header's own full-bleed padding means a top pad
+       here would double up, so only the bottom is set. */
+    paddingBottom: "16px",
   },
   livery: {
     display: "flex",

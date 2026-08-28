@@ -142,3 +142,46 @@ describe("the framing keeps the player's own zoom (design note #911)", () => {
   });
 });
 
+describe("the camera survives the round change (design note #927)", () => {
+  /* ==================================================================
+      REPORTED THREE TIMES, AND THE FIRST TWO HUNTS LOOKED FOR THE WRONG THING
+     ==================================================================
+     "The start of OR 3.1 triggered an extreme zoom-out ... find the unguarded `fitBounds` or zoom trigger in
+     the round transition logic and strip it."
+     THERE IS NO SUCH TRIGGER. `HexGridRenderer` is rendered conditionally on `activeMainTab === "map"`, and
+     #213 switches the tab on every round transition -- to the Stock Market for a Stock Round and back for an
+     Operating Round. So the board is UNMOUNTED and REMOUNTED across SR -> OR, and a remount restores
+     `useState`'s initial values: `detailedView` to `false`, which locks the camera to `fitView`. The zoom-out
+     is the default pose reasserting itself, not a call anybody made -- which is exactly why grepping for a
+     zoom call found nothing, twice.
+     SO THE ASSERTIONS ARE ABOUT THE SEEDS. A remembered pose that the initialisers do not read, or an
+     initialiser that reads a constant, is the bug returning. */
+  const RENDERER = stripComments(readSource("components/HexGridRenderer.tsx"));
+
+  it("keeps the pose somewhere that outlives one mounting", () => {
+    /* Module scope, not a ref: a ref dies with the component instance, which is the thing being unmounted. */
+    expect(RENDERER).toContain("const rememberedCamera");
+  });
+
+  it("seeds both the view and the lock from it", () => {
+    /* BOTH, or the restore is worse than useless: remembering the pan while `detailedView` resets to `false`
+       would restore a pan and then have the fit-sync effect overwrite it on the very next commit. */
+    expect(RENDERER).toContain("rememberedCamera.view ??");
+    expect(RENDERER).toContain("useState(() => rememberedCamera.detailedView)");
+  });
+
+  it("writes the pose back on every change", () => {
+    /* A store nothing writes to is a store that always reads its initial value -- which would leave this
+       whole mechanism looking present and doing nothing. */
+    expect(RENDERER).toContain("rememberedCamera.view = view;");
+    expect(RENDERER).toContain("rememberedCamera.detailedView = detailedView;");
+  });
+
+  it("still lets the locked camera follow the fit", () => {
+    /* THE CONTROL. A restore that also pinned `detailedView` true would strand a player who had never zoomed
+       at a stale pan; the sync effect must survive, so a locked camera still tracks `fitView` on a resize. */
+    expect(RENDERER).toContain("if (detailedView) return;");
+    expect(RENDERER).toContain("setView(fitView);");
+  });
+});
+

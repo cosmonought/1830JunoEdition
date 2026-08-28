@@ -511,19 +511,24 @@ describe("the disclosures default by obligation (design notes #918 / #919)", () 
      #917 both fell into. The default is a real rule and needs a real assertion. */
   const bar = stripComments(readSource("panels/ContextualActionBar.tsx"));
 
-  it("seeds the trains panel from the obligation, not from a constant", () => {
-    expect(bar).toContain("useState(mustBuyTrain)");
-    /* Scoped to the trains state rather than to the whole file: `mayPin` is an unrelated `useState(true)`,
-       and the first draft of this case failed on it -- an assertion about one declaration written as a
-       claim about the module. */
-    expect(bar).not.toContain("[trainPanelOpen, setTrainPanelOpen] = useState(true)");
+  it("seeds the trains panel on arriving at the step, not at the turn (design note #921)", () => {
+    /* ==================================================================
+        REPORTED: the panel started CLOSED with the obligation badge showing
+       ==================================================================
+       #918 re-seeded when the acting CORPORATION changed -- the top of the turn, at the Track step -- and
+       read `mustBuyTrain` there. A corporation is almost never trainless at the top of its turn; it becomes
+       trainless mid-turn when a phase change rusts its fleet. So the seed sampled the obligation before the
+       obligation could exist and always got `false`.
+       THE KEY CARRIES THE STEP, which is the fix in one assertion. */
+    expect(bar).toContain('orSubPhase === "Hardware" && mustBuyTrain');
+    expect(bar).toContain("`${activeCorporation?.companyId ?? \"none\"}:${inOperatingRound ? orSubPhase : \"none\"}`");
   });
 
-  it("re-seeds when the acting corporation changes, not when its fleet does", () => {
-    /* THE DISTINCTION THAT KEEPS IT FROM FIGHTING THE PLAYER. Watching the train COUNT would reopen the
-       panel under their hand the moment they bought the train and were done with it; watching WHOSE TURN it
-       is re-seeds only when nobody has expressed a preference yet. */
-    expect(bar).toContain("[activeCorporation?.companyId]");
+  it("re-seeds on the step and the corporation, never on the fleet", () => {
+    /* THE DISTINCTION THAT KEEPS IT FROM FIGHTING THE PLAYER. Watching the train COUNT would reopen the panel
+       under their hand the moment they bought the train and were done with it; watching where they ARE
+       re-seeds only when nobody has expressed a preference yet. */
+    expect(bar).toContain("[activeCorporation?.companyId, orSubPhase, roundType]");
     expect(bar).not.toContain("[mustBuyTrain]");
   });
 

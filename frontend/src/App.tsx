@@ -150,7 +150,7 @@ import ContextualSubPanel from "./components/ContextualSubPanel";
 import FinancialLedger from "./components/FinancialLedger";
 import RulesReference from "./components/RulesReference";
 // Design note #697: the receipt for an action you just took.
-import ActionToast from "./components/ActionToast";
+import ActionToast, { PRIVATE_REVENUE_TOAST_MS } from "./components/ActionToast";
 // Design note #718: which dispatches earn a toast -- a named few, not everything that passes through.
 import { deservesActionReceipt } from "./utils/actionReceipt";
 // Design note #677: the Tiles tab.
@@ -369,6 +369,7 @@ import {
   pendingHomeTokens,
   placeHomeStationToken,
   describePrivatePayout,
+  summarisePrivateRevenueForPlayer,
   describeFleetLoss,
   describeFleetLosses,
   describePrivateClosures,
@@ -1043,6 +1044,22 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         : null,
       // Design note #441: the identity, for the corporate-power gate.
       presidentAddress: company.president ?? null,
+      /* ==================================================================
+          DESIGN NOTE 974: THE PRESIDENT'S OWN COLOUR, RESOLVED WHERE THE ROSTER IS
+         ==================================================================
+         REPORTED: "When buying private companies or trains from other corporations, it is hard to tell at a
+         glance who owns the active corporation."
+         RESOLVED HERE FOR #779's REASON, verbatim the rule three other panels already follow: `seatColor`
+         wants the roster INDEX and the bar has a name, so the lookup happens where both exist. `null` for an
+         address off the roster rather than a fallback tint -- "on a table where colour identifies a person,
+         a wrong colour is worse than none."
+         A COLOUR AND NOT A SEAT INDEX, because the bar has no other use for the index and handing it one
+         would make a second surface responsible for knowing how seats map to hues. */
+      presidentColor: (() => {
+        if (!company.president || !gameState) return null;
+        const seat = gameState.player_addresses.indexOf(company.president);
+        return seat === -1 ? null : seatColor(company.president, seat);
+      })(),
       /* Design note #806: `presidentCash` is GONE from this object, with the bar tooltip that was its only
          reader. #326 resolved it here -- "the president's OWN wallet, not the treasury", null when the room
          does not report it -- and that resolution was correct while the bar was the only Operating Round
@@ -3216,6 +3233,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     detail?: string | null;
     /** Design note #929: the era transition, when this toast is announcing one. */
     eraTransition?: { from: string; to: string } | null;
+    /** Design note #966: a longer window for the one toast that is a LIST. Absent means the standard 3700ms. */
+    durationMs?: number;
   } | null>(null);
   const actionToastTokenRef = useRef(0);
   /* Design note #738: the same toast with a second line. Kept as a separate entry point rather than an extra
@@ -3223,11 +3242,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      receipt is for your own dispatch, this is a notification about somebody else's -- and one function
      answering to both invitations is how #718's scope crept in the first place. */
   const showDividendToast = useCallback(
-    (text: string, detail: string | null, eraTransition: { from: string; to: string } | null = null) => {
+    (
+      text: string,
+      detail: string | null,
+      eraTransition: { from: string; to: string } | null = null,
+      durationMs?: number,
+    ) => {
       // Design note #825: nothing has just happened during a rebuild -- see the flag's own note.
       if (replayingHistory) return;
       actionToastTokenRef.current += 1;
-      setActionToast({ text, detail, eraTransition, token: actionToastTokenRef.current });
+      setActionToast({ text, detail, eraTransition, durationMs, token: actionToastTokenRef.current });
     },
     [],
   );
@@ -3272,9 +3296,19 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     const previous = lastEraRef.current;
     lastEraRef.current = eraNow;
     if (previous === null || previous === eraNow) return;
+    /* ==================================================================
+        DESIGN NOTE 966: THE ERA TOAST SAYS ONE THING
+       ==================================================================
+       REPORTED: "The current era change toast has too much text. Change the copy to simply read:
+       'Corporations can now upgrade yellow tiles to green.'"
+       AND #868'S REASON FOR THE TOAST SURVIVES THE TRIM -- "the Era change expands their repertoires" -- it
+       is the second line that was doing nothing the first did not. The headline named the era and the detail
+       explained what an era is, to a table that has been laying tiles all game.
+       DERIVED FROM THE TRANSITION, not written per era, so the Brown and Grey crossings read the same way
+       without a table of four sentences. `previous` is non-null under the guard above (#929). */
     showDividendToast(
-      `${eraNow} Tiles are now available.`,
-      `Every corporation may now lay ${eraNow} tiles, and upgrade existing track to them.`,
+      `Corporations can now upgrade ${previous.toLowerCase()} tiles to ${eraNow.toLowerCase()}.`,
+      null,
       /* Design note #929: the two eras the graphic draws. `previous` is non-null here by the guard above, so
          the arrow always has both ends -- a transition with one hex would be a statement about nothing. */
       { from: previous, to: eraNow },
@@ -4926,8 +4960,22 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             const labelForCompany = (companyId: number) =>
               settled.public_companies.find((entry) => entry.company_id === companyId)?.ticker ??
               `company #${companyId}`;
-            for (const payout of applyPrivateRevenue(before)?.payouts ?? []) {
+            const openingPayouts = applyPrivateRevenue(before)?.payouts ?? [];
+            /* THE LOG KEEPS ITS LINE PER PRIVATE (#967): the feed is a record, and a record wants each
+               payment findable. The toast is the surface that consolidates. */
+            for (const payout of openingPayouts) {
               logInfo("Private Revenue", describePrivatePayout(payout, labelForAddress, labelForCompany));
+            }
+            /* Design note #967: one toast for the whole round's income, at 1.5x the standard window because
+               it is the only toast in the app that is a LIST -- "Increase the display duration of this
+               specific toast to 1.5x the standard duration so it is easily readable." */
+            /* Design note #967a: THROUGH THE REF, like every other viewer read inside this callback (#3542,
+               #4612). `runGameplayAction` is a long-lived `useCallback` and `viewerAddress` is not in its
+               deps -- a closure read would toast the wallet that was connected when the callback was built,
+               which after a reconnect is somebody else's income. */
+            const mine = summarisePrivateRevenueForPlayer(openingPayouts, viewerAddressRef.current);
+            if (mine) {
+              showDividendToast(mine.text, mine.detail, null, PRIVATE_REVENUE_TOAST_MS);
             }
           }
 
@@ -5011,9 +5059,23 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
               ? refusedActionLineWithReason(label, refusalReason)
               : label,
             status: refusalWasRefused ? "error" : "success",
+            /* ==================================================================
+                DESIGN NOTE 965: THE SANDBOX RECEIPT IS GONE FROM THE SUCCESS PATH
+               ==================================================================
+               REPORTED: "Remove the string 'Sandbox: applied to local mock state (nothing signed, no chain).'
+               from the sandbox Activity Log outputs. It is unnecessary debug spam for our playtesting."
+               AND IT SAYS THE SAME THING ON EVERY LINE, which is what makes it spam rather than information:
+               the whole feed is the sandbox, so a per-entry reminder carries no bit. It was written when the
+               sandbox and a live chain shared this feed and a reader needed to know which they were watching.
+               THE REFUSAL SENTENCE STAYS. That one is not boilerplate -- it fires only when the reducer
+               DECLINED a message, which is a fact about that entry and the only thing distinguishing it from
+               an action that worked.
+               EMPTY STRING, NOT `undefined`: `ActionLogEntry.detail` is a required `string`, and
+               `feedItemText` already renders the " — " separator only when the detail is truthy. Widening the
+               field to optional for one call site would touch every reader of the feed. */
             detail: refusalWasRefused
               ? "Sandbox: the reducer declined this message and the board is unchanged."
-              : "Sandbox: applied to local mock state (nothing signed, no chain).",
+              : "",
             timestamp,
             timestampMs,
             /* Stamp the entry with the round the action was taken IN (before), not the one it resolved to.
@@ -5271,6 +5333,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       PlaceStationToken: "the last station placement",
       PlaceHomeStation: "the last home station placement",
       RunManualRoute: "the last route",
+      // Design note #968: the whole turn's running is one action now, so the noun is plural.
+      RunMultipleRoutes: "the last set of routes",
       DeclareDividends: "the last dividend decision",
       BuyHardwareFromPool: "the last train purchase",
       BuyTrainFromCorporation: "the last train trade",
@@ -5902,30 +5966,49 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
        supposed to zero the running total, and the flag could never reach the reducer -- the log carries the
        message and nothing beside it, and every client applies by replaying. The turn change clears the
        figure now, which every client reaches from the log alone. */
-    for (const draft of runnable) {
-      /* Design note #808: the SAME marking the readout used. A route priced with the bow and dispatched
-         without it would be re-priced through the station by the reducer, and the panel and the log would
-         disagree about what just ran -- which is #775's failure in a different currency. */
-      const points = withForcedBypass(
-        routeDraftsRef.current[draft.trainIndex] ?? [],
-        mapGrid,
-        blocksThroughCityRef.current,
-      );
-      if (points.length < 2) continue;
-      // eslint-disable-next-line no-await-in-loop
-      await runGameplayAction(
-        "RunManualRoute",
-        {
-          RunManualRoute: {
-            game_id: gameId,
-            protocol_id: actingProtocolId,
-            path: routePointsToWaypoints(points),
-            // Withhold at Routes; the pay-or-withhold decision belongs to the very next step.
-            // See docs/ai_architecture/routing_pathfinding.md - App.tsx #373
-            payout_strategy: "Withhold",
-          },
+    /* ==================================================================
+        DESIGN NOTE 968: ONE MESSAGE FOR THE WHOLE TURN'S RUNNING
+       ==================================================================
+       REPORTED, from a live room: "B&O ran 3 trains. On a later turn, it ran 4 trains. In both cases, only 1
+       train's revenue actually paid out."
+       THIS LOOP WAS THE CAUSE, and it survived three batches of me looking at everything around it. Each
+       iteration appended its own action at `appliedIndexRef.current` -- and the snapshot handler REASSIGNS
+       that ref from the last action it can see, so a snapshot carrying only the first append rewinds the
+       cursor while the second and third are still in flight. They land on an index already taken, and
+       `effectiveActions` keys on `index`.
+       #916 GUARDED THIS AND COULD NOT CLOSE IT. That note advanced the cursor optimistically so a burst would
+       take successive slots, which is right until a snapshot lands mid-burst and moves it backwards. Every
+       fix at this layer is a race against a listener the client does not control.
+       SO THE BURST IS GONE RATHER THAN ORDERED. One action, one index, one document, one reducer transition:
+       there is nothing left to interleave. The routes are gathered here, priced by the reducer in a single
+       tick, and the die is rolled once on their sum -- which is what #941 already decided a turn's revenue
+       was.
+       THE POINTS ARE STILL MARKED PER ROUTE (#808), because that is a fact about each route's own path and
+       the reducer prices what it is given. Gathering the dispatch does not gather the pricing. */
+    const turnRoutes = runnable
+      .map((draft) =>
+        withForcedBypass(
+          routeDraftsRef.current[draft.trainIndex] ?? [],
+          mapGrid,
+          blocksThroughCityRef.current,
+        ),
+      )
+      /* The same guard the loop had, kept: a draft that passed `runnableDrafts` but resolves to fewer than
+         two points is not a route, and sending it would have the reducer price an empty path at zero. */
+      .filter((points) => points.length >= 2)
+      .map((points) => routePointsToWaypoints(points));
+
+    if (turnRoutes.length > 0) {
+      await runGameplayAction("RunMultipleRoutes", {
+        RunMultipleRoutes: {
+          game_id: gameId,
+          protocol_id: actingProtocolId,
+          routes: turnRoutes,
+          // Withhold at Routes; the pay-or-withhold decision belongs to the very next step.
+          // See docs/ai_architecture/routing_pathfinding.md - App.tsx #373
+          payout_strategy: "Withhold",
         },
-      );
+      });
     }
 
     /* ==================================================================
@@ -5996,24 +6079,66 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
        the two ever disagreed the log would be wrong and the treasury right, which is the correct way round
        for a narration bug to fail. */
     if (resolveVariants(gameState?.variants).unpredictableRevenue) {
-      const printedTurnTotal = runnable.reduce((sum, draft) => sum + (draft.value ?? 0), 0);
-      const roll = rollTurnRevenue(printedTurnTotal, {
+      /* ==================================================================
+          DESIGN NOTE 963: THE SENTENCE AND THE DIVIDEND READ ONE FIGURE
+         ==================================================================
+         REPORTED: "B&O ran multiple routes totaling a modified $170. However, the Dividends phase calculated
+         the payout at $6/share (using only the $60 from a single route)."
+         TWO NUMBERS ON SCREEN, FROM TWO SOURCES, AND I BUILT THE SECOND ONE. #941 computed this sentence from
+         `runnable` -- the shell's own sum of the drafts it was about to dispatch -- while the dividend reads
+         `last_route_revenue`, the reducer's banked total. When those disagree the player is shown a figure
+         nobody is going to pay them, which is exactly #775's fault in a new currency and exactly what I have
+         spent four batches removing from this feature.
+         SO THE REDUCER IS THE SOURCE FOR BOTH. This reads the same two fields the Dividends step reads, and
+         the sentence now states what a player will actually receive -- if the banked total is wrong, the log
+         says so too, and the two figures can no longer point at different bugs.
+         THE DRAFTS SUM SURVIVES AS A FALLBACK ONLY, for a state that does not report the fields at all
+         (#232). It cannot cap anything: this is a log line, not money, and the money is read at the moment it
+         is spent (#934). */
+      const banked = sandboxStateRef.current?.public_companies.find(
+        (entry) => entry.company_id === actingProtocolId,
+      );
+      const printedFromDrafts = runnable.reduce((sum, draft) => sum + (draft.value ?? 0), 0);
+      const printedTurnTotal = Number(banked?.printed_route_revenue ?? NaN);
+      const seed = {
         macroRound: gameState?.macro_round_number ?? 0,
         subRound: gameState?.sub_round_index ?? 0,
         companyId: actingProtocolId,
-      });
+      };
+      const roll = rollTurnRevenue(
+        Number.isFinite(printedTurnTotal) && printedTurnTotal > 0
+          ? printedTurnTotal
+          : printedFromDrafts,
+        seed,
+      );
+      /* ==================================================================
+          DESIGN NOTE 963: STAMPED WITH THE STEP IT DESCRIBES, NOT THE ONE THE CURSOR REACHED
+         ==================================================================
+         REPORTED: "the variant log line incorrectly logged under the `[Dividends]` subphase header before the
+         dividend decision was made, and included old formatting ('Run Routes —')."
+         AND THE CURSOR HAS ALREADY MOVED BY THE TIME THIS RUNS, which I confirmed by driving the reducer: the
+         FIRST `RunManualRoute` advances `operating_sub_phase` from Routes to Dividends, so all the later
+         routes and this line are dispatched against a state that already says Dividends. #958's stamp reads
+         that field, so it was telling the truth about the cursor and lying about the entry.
+         THE STEP IS STATED RATHER THAN READ, therefore. This line is about the Run Routes step by
+         construction -- it is raised by the run-trains handler, once, after running -- so it names that step
+         instead of asking a cursor that has moved on.
+         AND THE SENTENCE IS THE LABEL, not a detail. `feedItemText` renders `label — detail`, which is where
+         "Run Routes — " came from; with the step in the tag the prefix was saying it a third time. */
+      const runRoutesStamp = roundStampFor(
+        gameState ? ({ ...gameState, operating_sub_phase: "Routes" } as typeof gameState) : null,
+      );
       logInfo(
-        "Run Routes",
         turnRevenueSentence(
-          gameState?.public_companies.find((entry) => entry.company_id === actingProtocolId)
-            ?.ticker ?? `Corporation #${actingProtocolId}`,
+          banked?.ticker ??
+            gameState?.public_companies.find((entry) => entry.company_id === actingProtocolId)
+              ?.ticker ??
+            `Corporation #${actingProtocolId}`,
           roll,
-          {
-            macroRound: gameState?.macro_round_number ?? 0,
-            subRound: gameState?.sub_round_index ?? 0,
-            companyId: actingProtocolId,
-          },
+          seed,
         ),
+        "",
+        runRoutesStamp,
       );
       /* #938'S PREDICATE, not `percent !== 100`: a 90% roll on a $50 turn pays $45, which rounds back to $50,
          and flashing "-10%" over a turn that lost nothing is the confusion this overlay exists to prevent. */
@@ -6840,19 +6965,47 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   const dueFleetNotice = useMemo<FleetLossNotice | null>(() => {
     if ((gameState?.current_round_type ?? null) !== "OperatingRound") return null;
     if (spectator) return null;
+    /* ==================================================================
+        DESIGN NOTE 981: A BLOCKING MODAL FOR SOMEBODY ELSE'S CORPORATION
+       ==================================================================
+       REPORTED: "the Rust and Train Limit modals pop up for every player in the room ... Inactive players
+       should not receive blocking pop-ups for corporate events they do not control."
+       AND THE GATE THAT WAS HERE READS AS IF IT ALREADY DID THIS. `companyId === actingProtocolId` scopes the
+       notice to the corporation whose turn it is -- which is a fact about the GAME, not about the VIEWER, so
+       it is true on every client at once. Six players, six unskippable modals, five of them about a fleet the
+       reader cannot spend, buy for or run. The only viewer-scoped condition in the whole memo was
+       `spectator`, and a seated player who owns nothing is not a spectator.
+       THE PRESIDENT IS THE RIGHT AUDIENCE and not merely a narrower one: #896's case for interrupting at all
+       is that the loss "is about to change what you do next", and for anyone but the president it changes
+       nothing they can act on. They are not left uninformed -- `describeFleetLoss` puts every loss in the
+       Activity Log for the whole table, which is where a fact you cannot act on belongs.
+       `viewerAddress` NULL MEANS UNIDENTIFIED, NOT UNAUTHORISED. A client that has not resolved its own
+       address yet would otherwise be silently excluded from a notice it is owed, and #232's rule applies to
+       the viewer as much as to the chain: absence is not an answer. Showing it is the recoverable direction
+       -- a modal one dismiss away -- where hiding it loses the notice for that turn permanently. */
+    const presidentOf = (companyId: number) =>
+      gameState?.public_companies?.find((entry) => entry.company_id === companyId)?.president ?? null;
+    const mine = pendingFleetNotices.filter((notice) => {
+      if (notice.companyId !== actingProtocolId) return false;
+      const president = presidentOf(notice.companyId);
+      if (president === null || viewerAddress === null) return true;
+      return president === viewerAddress;
+    });
     return nextDueNotice(
-      pendingFleetNotices.filter((notice) => notice.companyId === actingProtocolId),
+      mine,
       turnIdentity,
       (notice) => isNoticeSilenced(sandboxRoomCode, notice.companyId, notice.cause),
       dismissedFleetNoticesRef.current,
     );
   }, [
     gameState?.current_round_type,
+    gameState?.public_companies,
     spectator,
     pendingFleetNotices,
     actingProtocolId,
     turnIdentity,
     sandboxRoomCode,
+    viewerAddress,
   ]);
 
   const acknowledgeFleetNotice = useCallback(() => {
@@ -9489,6 +9642,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         detail={actionToast?.detail ?? null}
         // Design note #929: the hex pair, on the one toast that is about a colour.
         eraTransition={actionToast?.eraTransition ?? null}
+        /* Design note #967: the toast that is a list gets a longer window; everything else takes the default. */
+        durationMs={actionToast?.durationMs}
         token={actionToast?.token ?? 0}
         onDismiss={() => setActionToast(null)}
       />

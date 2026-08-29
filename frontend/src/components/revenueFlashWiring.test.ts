@@ -45,38 +45,72 @@ describe("the overlay is floating text, not a window (design note #940)", () => 
 
   it("wears no box, pill, or plate", () => {
     /* ==================================================================
-        THE RULING, AS AN ABSENCE -- AND #960 HAD TO BE LET THROUGH DELIBERATELY
+        THE RULING, AS AN ABSENCE -- AND #973 CHANGED WHAT IT IS AN ABSENCE OVER
        ==================================================================
        Every property that would give this a window is named, because "floating text ONLY" is a constraint on
        what must NOT appear and a positive assertion cannot express it.
        `textShadow` WAS ALWAYS EXEMPT -- a halo is not a box, and it is the same trick #364 uses on the hex
        badge for the same reason: legibility over a board of four different colours.
-       #960'S GLOW IS THE SAME FAMILY AND WOULD HAVE PASSED THIS CASE UNTOUCHED, which is why it is called out
-       here instead. It sets `background` with a radial gradient, not `backgroundColor`, so every assertion
-       below would still have held while a coloured field appeared behind the figure. Slipping past an absence
-       test on a technicality makes the test worthless for everything it still guards.
-       THE LINE THAT ACTUALLY MATTERS IS THE EDGE. A box has a rim; this reaches full transparency inside its
-       own bounds, so no rectangle is visible at any opacity. The case below asserts that directly rather than
-       trusting the distinction to prose. */
+       #960's GLOW WAS CALLED OUT HERE because it would have passed untouched: a radial gradient sets
+       `background`, not `backgroundColor`, so a coloured field could appear behind the figure with every
+       assertion below still holding. That glow is GONE (#973) and the note that let it through with it.
+       WHAT REPLACED IT IS A REAL `box-shadow`, AND THAT NEEDS SAYING OUT LOUD rather than being routed around.
+       #973's screen-edge flash is an inset shadow -- exactly the property this case forbids -- and it lives
+       in `animations.ts`, so a whole-file scan of the COMPONENT would have kept passing while a shadow
+       appeared on screen. Letting an absence test go on passing because the forbidden thing moved file is
+       precisely the "technicality" failure #960 was called out for.
+       WHAT #940 FORBIDS IS A SURFACE THE NUMERAL SITS ON, and the viewport's rim is not that surface -- it
+       is nowhere near the figure. So the component's own absences stand unchanged (they still guard the
+       thing the rule is about), the rim's shadow is asserted POSITIVELY in the next case rather than being
+       quietly allowed to live one file over, and #960's radial field is asserted gone rather than assumed. */
     expect(FLASH).not.toContain("backgroundColor");
     expect(FLASH).not.toContain("borderRadius");
     expect(FLASH).not.toContain("boxShadow");
     expect(FLASH).not.toContain("border:");
     expect(FLASH).not.toContain("padding");
+    /* THE GLOW DID NOT SURVIVE AS A SECOND COPY. `background:` or a gradient anywhere in this component is
+       the coloured field coming back; the edge flash sets `color`, which is not a background. */
+    expect(FLASH).not.toContain("radial-gradient");
+    expect(FLASH).not.toContain("background:");
   });
 
-  it("keeps the glow edgeless (design note #960)", () => {
-    /* THE PROPERTY THAT SEPARATES A GLOW FROM A PLATE. `radial-gradient` with a fully transparent stop before
-       the boundary has no rim to read as a shape; a solid `background`, or a gradient whose last stop still
-       carries alpha, is a coloured rectangle with soft corners. */
+  it("flashes the screen's rim, not a plate behind the figure (design note #973)", () => {
+    /* RULED: "Remove the text glow and replace it with a brief screen-border glow/flash (green for bonus,
+       red for malus) that matches this 850ms duration."
+       ASSERTED IN BOTH FILES, because the two halves fail independently: the element can be rendered with no
+       rule to style it, and the rule can exist with nothing rendering it -- and either way nothing appears
+       and nothing else objects. This project's recurring fault, in a stylesheet. */
     const ANIM = readStripped("styles/animations.ts");
-    expect(FLASH).toContain("radial-gradient(closest-side");
-    expect(FLASH).toContain("rgba(0, 0, 0, 0) 70%");
-    /* AND IT SITS BEHIND THE GLYPHS. Without the negative stacking it would wash out the figure it exists to
-       lift off the board -- the exact opposite of the job. */
-    const glow = sliceBetween(ANIM, ".app-revenue-glow {", "}");
-    expect(glow).toContain("z-index: -1");
-    expect(glow).toContain("pointer-events: none");
+    expect(FLASH).toContain('className="app-revenue-edge"');
+    expect(FLASH).toContain("color: bonus ? BONUS_EDGE : MALUS_EDGE,");
+    const edge = sliceBetween(ANIM, ".app-revenue-edge {", "}");
+    /* INSET, or it draws a halo OUTSIDE a viewport-sized box, where nothing can see it. */
+    expect(edge).toContain("box-shadow: inset");
+    expect(edge).toContain("position: fixed");
+    expect(edge).toContain("pointer-events: none");
+    /* `currentColor` IS WHAT KEEPS THE HUE OUT OF THE STYLESHEET. A literal green here would be a second
+       place deciding what a bonus looks like, and the two would drift the first time either moved. */
+    expect(edge).toContain("currentColor");
+    expect(ANIM).not.toContain("app-revenue-glow");
+  });
+
+  it("names its duration once (design note #970)", () => {
+    /* RULED: "Hardcode the display duration to exactly 850ms so it is uniform in all contexts."
+       THE FAILURE THIS CATCHES IS THE ONE THAT MADE IT NON-UNIFORM: three literals -- the constant, the
+       arrows' `animation-duration` and the glow's shorthand -- that agreed by coincidence. The stylesheet
+       must name NO duration for these elements, so the constant is the only copy. */
+    const ANIM = readStripped("styles/animations.ts");
+    expect(FLASH).toContain("export const REVENUE_FLASH_MS = 850;");
+    expect(FLASH.match(/animationDuration: `\$\{REVENUE_FLASH_MS\}ms`/g)?.length ?? 0).toBe(2);
+    const arrow = sliceBetween(ANIM, ".app-revenue-arrow {", ".app-revenue-figure");
+    expect(arrow).not.toContain("animation-duration:");
+    const edge = sliceBetween(ANIM, ".app-revenue-edge {", "}");
+    expect(edge).not.toContain("animation-duration:");
+    /* AND THE THIRD COPY IS GONE WITH THE RULE THAT HID IT. It lived inside a SHORTHAND --
+       `animation: app-revenue-glow-in 700ms ease-out 1 forwards` -- where neither of the longhand scans
+       above would have seen it, which is why this asks for the block by name rather than for a property. */
+    expect(ANIM).not.toContain("app-revenue-glow-in");
+    expect(ANIM).not.toContain("REVENUE_FLASH_GLOW_CSS = ");
   });
 
   it("cannot swallow a click", () => {
@@ -134,10 +168,20 @@ describe("the shell raises it once per TURN (design notes #940 -> #941)", () => 
   });
 
   it("rolls once, on the aggregated printed total", () => {
-    /* THE RULING'S ARITHMETIC AT THE CALL SITE: the sum of the drafts it just dispatched, not a per-train
-       figure and not a state read (#934's race). */
-    expect(runBlock).toContain("rollTurnRevenue(printedTurnTotal");
-    expect(runBlock).toContain("runnable.reduce((sum, draft) => sum + (draft.value ?? 0), 0)");
+    /* ==================================================================
+        THE SOURCE OF THE TOTAL CHANGED; THE "ONCE" DID NOT
+       ==================================================================
+       THIS ASSERTED the sum came from `runnable` -- the drafts the shell was about to dispatch -- and #941's
+       reason was #934's race: reading state right after a dispatch loop can catch a room mid-snapshot.
+       REPORTED SINCE: "B&O ran multiple routes totaling a modified $170. However, the Dividends phase
+       calculated the payout at $6/share." Two figures on one screen, because the sentence summed the drafts
+       while the dividend read the reducer's field. #963 makes both read the reducer, so they can no longer
+       name different numbers -- and the drafts sum stays as the fallback for a state that reports nothing.
+       WHAT IS STILL ASSERTED IS THE RULING: one roll, on a turn total rather than a per-train figure. */
+    expect(runBlock).toContain("rollTurnRevenue(");
+    expect(runBlock).toContain("banked?.printed_route_revenue");
+    expect(runBlock).toContain("printedFromDrafts");
+    expect(runBlock.match(/rollTurnRevenue\(/g)?.length ?? 0).toBe(1);
   });
 
   it("seeds the roll on the turn, with no train ordinal", () => {

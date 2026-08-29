@@ -203,8 +203,11 @@ export const REVENUE_FLASH_ARROWS_CSS = `
   30%  { opacity: 0.85; }
   100% { opacity: 0; transform: translateY(46px); }
 }
-/* The figure's own entrance -- a small settle rather than a zoom. At 700ms a large scale change reads as a
-   lurch; this is enough to register as "something arrived" and finishes well inside the window. */
+/* The figure's own entrance -- a small settle rather than a zoom. In a window under a second a large scale
+   change reads as a lurch; this is enough to register as "something arrived" and finishes well inside the
+   window at any of the durations this has had. Its 260ms is deliberately NOT tied to \`REVENUE_FLASH_MS\`
+   (#970): an entrance is a fixed gesture, and stretching it to fill a longer window would make the numeral
+   swell slowly rather than arrive. */
 @keyframes app-revenue-figure-in {
   0%   { opacity: 0; transform: scale(0.82); }
   55%  { opacity: 1; transform: scale(1.04); }
@@ -220,7 +223,9 @@ export const REVENUE_FLASH_ARROWS_CSS = `
   line-height: 1;
   pointer-events: none;
   opacity: 0;
-  animation-duration: 700ms;
+  /* Design note #970: NO DURATION HERE. It is set inline from \`REVENUE_FLASH_MS\`, so the arrows, the edge
+     flash and the timer that hides all of them read one number. This class had its own \`700ms\` and the glow
+     had a third; three literals that agreed was a coincidence, not an invariant. */
   animation-timing-function: ease-out;
   animation-fill-mode: forwards;
   animation-iteration-count: 1;
@@ -232,39 +237,82 @@ export const REVENUE_FLASH_ARROWS_CSS = `
   /* THE ONE CASE WHERE MOTION IS THE WHOLE FEATURE AND STILL HAS TO YIELD. The figure and its colour carry
      the fact without any of this; what is removed is decoration, so removing it costs nothing a player
      needs. The arrows stay VISIBLE and stop MOVING, rather than vanishing -- an empty space beside the
-     number would be a different layout for these users, not a calmer one. */
-  .app-revenue-arrow { animation: none; opacity: 0.5; }
-  .app-revenue-figure { animation: none; }
+     number would be a different layout for these users, not a calmer one.
+
+     ==================================================================
+      DESIGN NOTE 970b: THIS RULE HAS NEVER ACTUALLY WORKED ON THE ARROWS
+     ==================================================================
+     FOUND WHILE MOVING THE DURATION INLINE, and it predates that move. The arrows set \`animationName\` and
+     \`animationDelay\` as INLINE styles, and an inline declaration beats a stylesheet rule at any
+     specificity unless the rule is \`!important\`. So \`animation: none\` reset the shorthand's other
+     longhands and was then overridden on the only one that matters: a player with reduced motion has been
+     watching six arrows fly since #953.
+     THE FILE ALREADY KNEW. \`.app-train-rust-critical\` five blocks up carries \`animation: none !important\`
+     for exactly this reason; these two were written without it and nothing compares them.
+     WHY IT SURVIVED A HARNESS THAT ASKS ABOUT REDUCED MOTION: \`polishWave6\` asserts the rule EXISTS in the
+     stylesheet, which it does. Whether a rule wins is a cascade question, and a source scan cannot ask it --
+     worth naming, because the case reads like coverage of the accommodation and only covers its presence. */
+  .app-revenue-arrow { animation: none !important; opacity: 0.5; }
+  .app-revenue-figure { animation: none !important; }
 }
 `;
 
-/* Design note #960: the glow behind the figure. Sized from the figure's own em so it scales with the type,
-   centred on it, and BEHIND both the numeral and the arrows -- `z-index: -1` inside the relative wrapper,
-   which is what keeps it from washing out the glyphs it exists to lift off the board.
-   IT FADES ON THE SAME CURVE AS THE FIGURE and finishes inside the display window; a glow outliving the text
-   would be a coloured smudge over the board with nothing in it. */
-export const REVENUE_FLASH_GLOW_CSS = `
-@keyframes app-revenue-glow-in {
-  0%   { opacity: 0; transform: translate(-50%, -50%) scale(0.6); }
-  40%  { opacity: 1; transform: translate(-50%, -50%) scale(1.05); }
-  100% { opacity: 0; transform: translate(-50%, -50%) scale(1.15); }
+/* ==================================================================
+ *  DESIGN NOTE 973: THE FLASH MOVED TO THE SCREEN'S RIM
+ * ==================================================================
+ *
+ * RULED: "Remove the text glow and replace it with a brief screen-border glow/flash (green for bonus, red
+ * for malus) that matches this 850ms duration."
+ *
+ * AN INSET \`box-shadow\` RATHER THAN A BORDER OR A GRADIENT. A border is a hard line and would read as a
+ * frame drawn around the game; a linear-gradient overlay would need four of them or one very careful
+ * multi-stop, and neither reaches full transparency at the middle the way a large blurred inset shadow does.
+ * The shadow's spread puts colour density AT the rim and none in the centre, which is the whole shape of
+ * "the edges of the screen lit up" in one declaration.
+ *
+ * \`currentColor\`, so this file states no hue. The outcome's two colours live beside the figure's two
+ * colours in \`RevenueModifierFlash\`, and the element passes one in as \`color\`. A green written here would
+ * be the third place this feature decides what green means.
+ *
+ * DURATION IS SET INLINE by the caller (#970), so a change to \`REVENUE_FLASH_MS\` moves the edge, the arrows
+ * and the timer together. This block owns the CURVE only -- up fast, hold, out slow, which is what makes it
+ * read as a flash rather than as a fade.
+ *
+ * \`position: fixed\` ON THE ELEMENT ITSELF, not inherited from the overlay: it is a sibling of the centred
+ * figure inside a flex container, and a static element there would be laid out as a flex item beside the
+ * numeral rather than covering the viewport. */
+export const REVENUE_FLASH_EDGE_CSS = `
+@keyframes app-revenue-edge-in {
+  0%   { opacity: 0; }
+  18%  { opacity: 1; }
+  62%  { opacity: 1; }
+  100% { opacity: 0; }
 }
-.app-revenue-glow {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 2.6em;
-  height: 2.6em;
-  transform: translate(-50%, -50%);
-  z-index: -1;
+.app-revenue-edge {
+  position: fixed;
+  inset: 0;
   pointer-events: none;
   opacity: 0;
-  animation: app-revenue-glow-in 700ms ease-out 1 forwards;
+  box-shadow: inset 0 0 90px 18px currentColor;
+  animation-name: app-revenue-edge-in;
+  animation-timing-function: ease-out;
+  animation-iteration-count: 1;
+  animation-fill-mode: forwards;
 }
 @media (prefers-reduced-motion: reduce) {
-  /* Held still rather than removed, for the reason the arrows are: the glow is doing legibility work over a
-     multi-coloured board, and deleting it would change what these users can READ rather than only what
-     moves. */
-  .app-revenue-glow { animation: none; opacity: 0.75; }
+  /* Held at a low steady tint rather than removed, for the reason the arrows are held: this carries the
+     bonus/malus DIRECTION as a colour, and deleting it would change what these users can read rather than
+     only what moves. \`!important\` for #970b's reason -- the caller sets \`animationDuration\` inline. */
+  .app-revenue-edge { animation: none !important; opacity: 0.55; }
 }
 `;
+
+/* Design note #973: `REVENUE_FLASH_GLOW_CSS` is GONE, with #960's radial glow behind the numeral.
+   WHAT IT WAS, for the record, because the reasoning is worth keeping findable: a `closest-side` radial
+   gradient at `z-index: -1` inside the figure's relative wrapper, sized in `em` so it scaled with the type,
+   reaching full transparency at 70% so it had no rim to read as a plate. It existed to lift a green "+20%"
+   off green track.
+   WHY IT IS NOT SIMPLY MOVED: the rim flash does that job from a place the board never occupies, so the two
+   are alternatives rather than a pair. Keeping both would put the outcome's hue directly behind the
+   numeral AND around it -- twice the colour for one fact, and the half sitting on the figure is the half
+   that competes with it. See `RevenueModifierFlash` #973. */

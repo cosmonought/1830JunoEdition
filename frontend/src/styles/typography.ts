@@ -68,6 +68,33 @@ export const LINE_HEIGHT = {
   normal: 1.55,
 } as const;
 
+/* ==================================================================
+ *  DESIGN NOTE 975: HOW TALL A LETTER ACTUALLY IS, IN ONE PLACE
+ * ==================================================================
+ *
+ * NEITHER OF THESE IS A CHOICE. They are approximations of a metric the font has and the platform mostly
+ * will not tell us: `cap-height` and `x-height` as fractions of the em, for a bold UI sans. They live beside
+ * `FONT_SIZE` because that is the number they are always multiplied by.
+ *
+ * THIS BATCH FOUND THREE COPIES OF THE FIRST ONE, in two files, all written as `0.72` with a comment saying
+ * roughly "cap height, near enough":
+ *   - `drawReservationBadgeAt`, as the fallback when `actualBoundingBoxAscent` is unavailable (#937);
+ *   - `tokenTextChordWidth`, sizing the chord a station token's letters have to fit inside (#564);
+ *   - and this batch was about to write a fourth on the action bar's power chip.
+ * Three literals agreeing is not an invariant, and a corrected figure would have to be found in three places
+ * by someone who did not know there were three.
+ *
+ * MEASURE WHEN YOU CAN. `drawReservationBadgeAt` calls `measureText` and only falls back to `CAP_HEIGHT_RATIO`
+ * when the engine does not report the metric -- #937's whole point, and naming the fallback does not weaken
+ * it. CSS gives JavaScript no x-height at all without rendering a glyph and measuring it, so
+ * `X_HEIGHT_RATIO` is used directly; that is a real limitation and not an oversight.
+ *
+ * WHY x-HEIGHT EXISTS HERE AT ALL: an icon set to a string's cap-height sits flush beside ALL-CAPS text and
+ * towers over mixed-case text, because most of a mixed-case word is x-height. Two ratios, so a caller can
+ * ask which kind of string it is standing next to. See `privatePowerStar` #975. */
+export const CAP_HEIGHT_RATIO = 0.72;
+export const X_HEIGHT_RATIO = 0.52;
+
 /** The app's one font stack. Was duplicated as a literal in five files. */
 export const FONT_FAMILY = "system-ui, -apple-system, Segoe UI, sans-serif";
 

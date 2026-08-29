@@ -14,7 +14,7 @@
 //
 // Design notes #10/#11/#170/#405/#449/#572/#645: see `docs/ai_architecture/ui_shell_layout.md`.
 
-import PresidentCrown from "./PresidentCrown";
+import PresidentCrown, { PRESIDENT_CROWN_GOLD } from "./PresidentCrown";
 import React from "react";
 
 import type {
@@ -337,7 +337,14 @@ function OperatingRoundCorporationPanel({
                           right beside it and the column header already says
                           President, so an accessible name would make a
                           screen reader announce the word twice per row. */}
-                      <PresidentCrown label={null} scale={1.05} style={{ color: "#c9a94c" }} />
+                      {/* Design note #974: the hex is `PRESIDENT_CROWN_GOLD` now, not a literal -- three
+                          panels were typing the same string and a near-miss in one of them would be
+                          invisible. */}
+                      <PresidentCrown
+                        label={null}
+                        scale={1.05}
+                        style={{ color: PRESIDENT_CROWN_GOLD }}
+                      />
                       <span>{playerLabel(company.president)}</span>
                     </span>
                   ) : (

@@ -106,7 +106,18 @@ describe("the power chips carry it (design notes #936 -> #943)", () => {
   const BAR = readStripped("panels/ContextualActionBar.tsx");
 
   it("marks the Use Power chips", () => {
-    expect(BAR).toContain("icon: <PrivatePowerStar height={11} />");
+    /* ==================================================================
+        SUPERSEDED BY #975: THE HEIGHT WAS A LITERAL AND IS NOW DERIVED
+       ==================================================================
+       THIS ASSERTED `icon: <PrivatePowerStar height={11} />`. REPORTED SINCE: "The star icon on the Action
+       Bar button is currently larger than the star on the board hexes."
+       AND THE OLD ASSERTION WAS PINNING THE DEFECT. 11 came from nowhere -- the hex derives its star from a
+       measured cap-height (#937) and this one was typed -- so the two were related by luck, and a test that
+       froze the lucky number would have kept them related by luck. What is asserted now is that the size is
+       COMPUTED from the chip's own type scale, which is the property that makes the two stars one mark. */
+    expect(BAR).toContain("icon: <PrivatePowerStar height={POWER_CHIP_STAR_PX} />");
+    expect(BAR).toContain("parseFloat(FONT_SIZE.strong) * X_HEIGHT_RATIO");
+    expect(BAR).not.toContain("height={11}");
   });
 
   it("has taken the star off the Buy toggle", () => {

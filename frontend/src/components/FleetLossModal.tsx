@@ -33,6 +33,7 @@ import { FONT_SIZE } from "../styles/typography";
 import {
   noticeBody,
   noticeConsequence,
+  noticeGentleRustLine,
   noticeHeadline,
   silenceLabel,
   type FleetLossNotice,
@@ -81,7 +82,18 @@ export function FleetLossModal({
         </div>
 
         <p style={styles.body}>{noticeBody(notice)}</p>
-        <p style={styles.consequence}>{noticeConsequence(notice)}</p>
+        {/* Design note #980: the gentle-rust line keeps the amber the consequence line used, which is what
+            "keep the colored text" asks for -- the ruling is about the TREATMENT, not about which function
+            produced the sentence. It renders in the consequence's slot because that is where a coloured
+            second line already sat, so the card's rhythm is unchanged. */}
+        {noticeGentleRustLine(notice) && (
+          <p style={styles.consequence}>{noticeGentleRustLine(notice)}</p>
+        )}
+        {/* `null` for a rust notice (#980), and rendered conditionally rather than as an empty paragraph: an
+            empty `<p>` still occupies its margins and reads as a sentence that failed to load. */}
+        {noticeConsequence(notice) && (
+          <p style={styles.consequence}>{noticeConsequence(notice)}</p>
+        )}
 
         <div style={styles.fleetRow}>
           <span style={styles.fleetLabel}>Taken</span>

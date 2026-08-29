@@ -20,7 +20,7 @@
 //
 // Source scans plus one pure-function call, so this file takes the node environment.
 
-import { readSource, stripComments } from "./sourceScan";
+import { readSource, sliceBetween, stripComments } from "./sourceScan";
 
 import { PRIVATE_COMPANY_CATALOG, abilitySummary } from "./privateCatalog";
 import { GAMEPLAY_MESSAGE_KEYS } from "./sessionKey";
@@ -189,43 +189,42 @@ describe("the chips have their own group and their own mark (design note #884)",
     expect((BAR.match(/\{powerChipNodes\}/g) ?? []).length).toBe(2);
   });
 
-  it("puts the mark inside the chip, leaving the border to say whether it is live", () => {
+  it("leaves the border free to say whether the chip is live", () => {
     /* ==================================================================
-        THE ANSWER TO "rainbow outline, or a PC chip, or something similar"
+        HALF OF THIS CASE IS GONE WITH THE MARK IT WAS ABOUT (#976)
        ==================================================================
-       #732's RULE IS WHAT DECIDES IT: the border on this bar is a STATE channel --
-       `actionBarButtonDisabled` overrides `borderColor`, `actionBarCancelErrand` paints it amber. A border
-       that is sometimes a rainbow puts identity and state on one channel. #840 makes it concrete: a
-       shorthand beside a sibling's longhand is how React comes to blank the colour.
-       SO THE ASSERTION IS THAT THE MARK IS A BACKGROUND ON A CHILD, and that neither chip style touches the
-       border at all -- the second half is the one that would rot, because "just tint the border" is the
-       obvious next edit. */
-    const chipAt = STYLES.indexOf("actionBarPowerChip: {");
-    const markAt = STYLES.indexOf("actionBarPowerChipMark: {");
-    expect(chipAt).toBeGreaterThan(-1);
-    expect(markAt).toBeGreaterThan(chipAt);
-    const chip = STYLES.slice(chipAt, markAt);
-    const mark = STYLES.slice(markAt, STYLES.indexOf("},", markAt));
+       IT USED TO ASSERT `actionBarPowerChipMark`'s `backgroundImage` -- the rainbow strip -- alongside the
+       border rule. RULED SINCE: "Remove the vertical rainbow gradient strip from the 'Use [Private Company]
+       Power' button", and #976 records why the strip deserved to go rather than merely being unwanted:
+       `PRIVATE_POWER_GLOW_STOPS` is ONE shared hue circle, so every chip drew the same strip and it
+       identified nothing. #884's note claiming it "says WHICH company" was simply wrong.
+       #732's RULE SURVIVES INTACT AND IS THE WHOLE OF THIS CASE NOW. The border on this bar is a STATE
+       channel -- `actionBarButtonDisabled` overrides `borderColor`, `actionBarCancelErrand` paints it amber
+       -- so a chip style that touched the border would put identity and state on one channel, and #840
+       makes the mechanism concrete: a shorthand beside a sibling's longhand is how React comes to blank the
+       colour. "Just tint the border" is still the obvious next edit, which is why this half is kept. */
+    const chip = sliceBetween(STYLES, "actionBarPowerChip: {", "},");
     expect(chip).not.toBe("");
-    expect(mark).not.toBe("");
     expect(chip).not.toContain("border");
-    expect(mark).toContain("backgroundImage:");
-    expect(mark).not.toContain("borderColor");
+    expect(STYLES).not.toContain("actionBarPowerChipMark");
   });
 
-  it("draws it from the one palette the board already uses", () => {
-    /* #727 is explicit that the MECHANISM cannot be shared between a canvas gradient and a CSS one, "so
-       what must be shared is the list. Two hard-coded palettes drifting apart is how the association
-       quietly stops being one." This is the third renderer of that list. */
-    expect(STYLES).toContain(
-      'import { PRIVATE_POWER_GLOW_STOPS } from "../utils/privatePowerGlow";',
-    );
-    expect(STYLES).toContain("PRIVATE_POWER_GLOW_STOPS.join(");
-    /* AND NOT A COPY OF THE STOPS. A literal hue anywhere in this file's chip styles is the drift #727
-       names; the first colour in the list is the cheapest fingerprint for it. */
-    const markAt = STYLES.indexOf("actionBarPowerChipMark: {");
-    const mark = STYLES.slice(markAt, STYLES.indexOf("},", markAt));
-    expect(mark).not.toContain("#ff4d4d");
+  it("has stopped being a renderer of the shared palette", () => {
+    /* #727: "what must be shared is the list. Two hard-coded palettes drifting apart is how the association
+       quietly stops being one." This sheet was the third renderer of that list and is no longer one at all,
+       so the IMPORT has to go with the style -- an unused import is the half of a deletion that gets left
+       behind, and it would keep this file looking like a consumer.
+       THE LIST AND ITS REAL RENDERERS ARE UNTOUCHED, asserted here rather than assumed: #727's association
+       is card -> hex -> chip and only the chip's copy was ruled off. Deleting the palette, or the hex halo
+       that draws it, would take the association with it and nothing asked for that. */
+    expect(STYLES).not.toContain("PRIVATE_POWER_GLOW_STOPS");
+    expect(STYLES).not.toContain("#ff4d4d");
+    const fs = require("fs") as typeof import("fs");
+    const path = require("path") as typeof import("path");
+    const read = (relative: string) =>
+      fs.readFileSync(path.join(__dirname, "..", relative), "utf8");
+    expect(read("utils/privatePowerGlow.ts")).toContain("#ff4d4d");
+    expect(read("components/HexGridRenderer.tsx")).toContain("PRIVATE_POWER_GLOW_STOPS");
   });
 });
 

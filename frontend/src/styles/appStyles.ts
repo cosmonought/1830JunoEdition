@@ -23,9 +23,10 @@ import {
   TURN_PULSE_INK_RGB,
 } from "./palette";
 import type { GamePhase } from "../utils/gamePhase";
-/* Design note #884: the private-power hue circle, imported rather than retyped. #727 is explicit that the
-   MECHANISM cannot be shared between a canvas gradient and a CSS one, "so what must be shared is the list". */
-import { PRIVATE_POWER_GLOW_STOPS } from "../utils/privatePowerGlow";
+/* Design note #884 imported `PRIVATE_POWER_GLOW_STOPS` here, for the chip's gradient strip.
+   Design note #976: the strip is gone and so is the import -- this sheet had exactly one consumer of the
+   list, and an unused import is the half of a deletion that gets left behind. The palette itself is
+   untouched and still drawn by `HexGridRenderer` and the auction dashboard. */
 
 export const NEUTRAL_PHASE_BADGE: React.CSSProperties = {
   borderColor: "#3a4055",
@@ -794,17 +795,19 @@ export const styles: Record<string, React.CSSProperties> = {
      `boxShadow` in the palette's own mid stop, which is the glow's effect expressed in the medium CSS has.
      Card -> hex -> chip now share a colour AND a glow rather than a colour alone, which is the association
      #884 was building and the subtlety the report is about. */
-  actionBarPowerChipMark: {
-    flexShrink: 0,
-    width: "7px",
-    alignSelf: "stretch",
-    minHeight: "16px",
-    borderRadius: "3px",
-    backgroundImage: `linear-gradient(180deg, ${PRIVATE_POWER_GLOW_STOPS.join(", ")})`,
-    /* The canvas halo, in the medium available here. `PRIVATE_POWER_GLOW_STOPS[4]` is the same stop
-       `HexGridRenderer` uses for its `shadowColor`, imported rather than retyped for #727's stated reason. */
-    boxShadow: `0 0 6px ${PRIVATE_POWER_GLOW_STOPS[4]}`,
-  },
+  /* ==================================================================
+      DESIGN NOTE 976: `actionBarPowerChipMark` IS GONE
+     ==================================================================
+     RULED: "Remove the vertical rainbow gradient strip from the 'Use [Private Company] Power' button."
+     THE NOTE ABOVE IS KEPT AS THE RECORD OF TWO REVISIONS, and it should be read knowing its premise did not
+     survive. #884 introduced this strip as the chip's identity mark and #931 widened it and gave it a halo
+     when it read as too subtle -- but `PRIVATE_POWER_GLOW_STOPS` is a single shared hue circle, so the strip
+     was the same on every chip and identified nothing. The acronym in the label identifies the company; the
+     star (#943) says it is a private power. The strip was a third, weaker copy of the second of those.
+     DELETED RATHER THAN LEFT UNREFERENCED, per the rule this sheet keeps for itself: an orphaned style for a
+     rendering we have been asked to stop doing is how the rendering comes back.
+     `PRIVATE_POWER_GLOW_STOPS` STILL HAS CONSUMERS -- `HexGridRenderer`'s hex halo and the auction palette --
+     so the association #727 built is intact; what left is this surface's copy of it. */
   /* Design note #426: nudged back up. #31 slimmed these on the reasoning that a chrome strip only has to be
      comfortably clickable, which took them below comfortable. These are the primary actions of a turn and
      several are destructive-ish, so they get one step of the type scale back. */
@@ -994,12 +997,35 @@ export const styles: Record<string, React.CSSProperties> = {
      It also carries its own layout now: it was spreading `orContextFact` for that and then overriding the
      6px gap back to 0, because `orContextFact`'s gap is the space between a CAPTION and its value and there
      is no caption here -- the crown brings its own 3px margin. Two declarations to reach one arrangement. */
+  /* ==================================================================
+      DESIGN NOTE 974: THE ONE PLACE ON THIS BAR THAT IS NOT ABOUT THE CORPORATION
+     ==================================================================
+     REPORTED: "it is hard to tell at a glance who owns the active corporation ... use a neutral background
+     badge, render the player's name in their specific player color."
+     A PLATE HERE AND NOWHERE ELSE ON THE CARD, which is worth defending because #236 painted this whole bar
+     one colour precisely so its contents would NOT need individual containers. Every other fact on it is
+     about the acting corporation and can take the livery's derived ink. This one is about a PERSON, and it
+     is the only fact on the bar whose colour has to come from a different vocabulary -- so it is the only
+     one that needs a ground of its own to be legible in.
+     `rgba(0, 0, 0, 0.5)` RATHER THAN A NAMED SURFACE. It has to darken eight liveries by the same amount and
+     stay the same badge on all of them; a solid hex would be right on the dark corporations and a grey patch
+     on the pale ones. A translucent black is one rule that works over every hue -- the same trick #631 uses
+     for the seat card's border, and #2165's desaturation argument one step down.
+     PADDING AND A RADIUS ARE WHAT MAKE IT A BADGE rather than a tint behind text, and they are small on
+     purpose: this sits in a two-row column under the treasury figure (#805), and a badge with real padding
+     would push the second row off the full name's line -- the alignment that note exists to hold.
+     TYPOGRAPHY UNCHANGED from #671/#805: still `FONT_SIZE.small`, still not tabular, because a name is not a
+     quantity and the reasons for that did not move with the plate. */
   orContextPresident: {
     display: "inline-flex",
     alignItems: "center",
     fontSize: FONT_SIZE.small,
     whiteSpace: "nowrap",
     minWidth: 0,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    borderRadius: "5px",
+    padding: "1px 6px 1px 4px",
+    fontWeight: 700,
   },
   /* Design note #805: the first fact is a two-row column -- treasury above, president below.
      `alignItems: flex-start` so the crown starts at the treasury caption's x rather than centring itself

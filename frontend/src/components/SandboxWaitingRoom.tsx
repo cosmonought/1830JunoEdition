@@ -295,7 +295,9 @@ export function SandboxWaitingRoom({
                 : /* Design note #924: SILENCE WOULD READ AS A LOADING STATE. With every toggle off the list
                      above renders nothing, and a heading with an empty body looks broken rather than
                      settled. This says the same thing the empty list means. */
-                  "No variants are switched on — this table is playing 1830 as printed."}
+                  /* Design note #977: "the standard game" rather than the number. Same rule, same batch's
+                     slip, same reason -- see `gameVariants` #977. */
+                  "No variants are switched on — this table is playing the standard game, as printed."}
             </span>
           )}
         </div>

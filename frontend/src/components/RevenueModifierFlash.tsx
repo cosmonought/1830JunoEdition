@@ -25,7 +25,7 @@
 
 import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { REVENUE_FLASH_ARROWS_CSS, REVENUE_FLASH_GLOW_CSS } from "../styles/animations";
+import { REVENUE_FLASH_ARROWS_CSS, REVENUE_FLASH_EDGE_CSS } from "../styles/animations";
 
 /** Exactly two seconds, as ruled. Exported so the test asserts the number the component uses rather than a
  *  copy of it. */
@@ -39,8 +39,25 @@ import { REVENUE_FLASH_ARROWS_CSS, REVENUE_FLASH_GLOW_CSS } from "../styles/anim
    and legible time is the window minus the fade, not the window. 700ms with a 200ms fade leaves ~500ms at
    full opacity, which clears the rule with a little room; 500ms with the old 400ms fade would have left
    100ms, which is why the fade had to shrink with it rather than being left alone.
-   ONE CONSTANT, so trying 500 or 800 is a one-line change and the test reads it rather than a copy. */
-export const REVENUE_FLASH_MS = 700;
+   ONE CONSTANT, so trying 500 or 800 is a one-line change and the test reads it rather than a copy.
+
+   ==================================================================
+    DESIGN NOTE 970: 850, AND NOW IT IS THE ONLY COPY OF THE NUMBER
+   ==================================================================
+   RULED: "The animation speed feels inconsistent when re-running a route via Undo. Hardcode the display
+   duration to exactly 850ms so it is uniform in all contexts."
+   THE INCONSISTENCY WAS REAL AND THIS CONSTANT WAS NEVER THE CAUSE. There were THREE durations, not one:
+   this 700, `.app-revenue-arrow`'s own `animation-duration: 700ms` in the stylesheet, and
+   `.app-revenue-glow`'s `700ms` inside a shorthand. Three literals that happened to agree, which is a
+   coincidence rather than an invariant -- and the moment one moved, the text and its motion would run for
+   different lengths and the overlay would read as a different speed depending on which one you noticed.
+   SO THE STYLESHEET NO LONGER NAMES A DURATION AT ALL. The arrows and the edge flash take
+   `animationDuration` inline from this constant, and the CSS owns the CURVE. One number, three surfaces,
+   and "uniform in all contexts" becomes structural instead of a thing to keep checking.
+   WHAT THIS DOES NOT EXPLAIN, said plainly: nothing here was ever per-CALLER, so an Undo re-run has always
+   been handed the same figures as a first run. #971 is the change that actually accounts for a re-run
+   looking different -- the second flash was playing no motion at all. */
+export const REVENUE_FLASH_MS = 850;
 
 /** How long the fade at the end takes, inside the two seconds rather than after them: "display for exactly 2
  *  seconds, then fade or disappear" -- so the text is legible for most of the window and gone at the end of
@@ -69,7 +86,36 @@ export const REVENUE_FLASH_FADE_MS = 200;
  * the symptom impossible, and it does not tell either of us which element was causing it.
  *
  * THE CEILING IS DELIBERATE. The highest `zIndex` in `appStyles.ts` is 3000; this sits well above it and is
- * named rather than inline so the two can be compared without reading two files. */
+ * named rather than inline so the two can be compared without reading two files.
+ *
+ * ==================================================================
+ *  DESIGN NOTE 970a: REPORTED AGAIN, AND THE FIX ASKED FOR WAS ALREADY IN
+ * ==================================================================
+ *
+ * REPORTED: "The notification is being hidden/overlapped by the sticky Action Bar. Break the overlay out
+ * using an absolute top-level `z-index` (or a React portal)."
+ *
+ * BOTH OF THOSE ARE WHAT THIS FILE ALREADY DOES, and I went looking for a mechanism a third time rather than
+ * writing the same fix twice. What I checked, so the next person does not repeat it:
+ *   - EVERY `zIndex` IN THE APP. The highest anywhere in `src` is 4000; nothing beats 9000, and nothing sets
+ *     one from a variable except this file.
+ *   - THE PORTAL'S ANCESTORS. `createPortal` targets `document.body`, whose only styling is the three lines
+ *     in `public/index.html` -- `margin`, `font-size`, `line-height`. No `transform`, `filter`, `contain` or
+ *     `will-change` on `html` or `body`, and nothing anywhere writes `document.body.style`. That matters
+ *     specifically: a containing block on BODY would make `position: fixed` resolve against the whole
+ *     scrollable document instead of the viewport, which is the one arrangement that would centre this
+ *     overlay somewhere other than the middle of the screen. It is not present.
+ *   - THE APPEND ORDER. A body portal mounts last, so it is after `#root` in paint order as well as above it.
+ *
+ * SO I CANNOT REPRODUCE THE OCCLUSION FROM THE SOURCE, and the honest reading is that what was seen was
+ * #971: from the second flash of a session onward the arrows and the glow did not play, so the overlay
+ * arrived as a bare numeral with no motion and nothing around it. That is a very reasonable thing to
+ * describe as being hidden. #971 is the change; this note is here so the portal is not "fixed" a third time.
+ *
+ * WHAT DID CHANGE HERE is that the overlay no longer OUTLIVES its own window -- see the effect below. It
+ * used to stay mounted forever at `opacity: 0`, which left a full-viewport node at z-index 9000 over the
+ * whole app between runs. It could not swallow a click (`pointer-events: none`), so this is not the report's
+ * cause either -- but a permanent invisible sheet over everything is worth not having. */
 export const REVENUE_FLASH_Z_INDEX = 9000;
 
 export interface RevenueFlashSignal {
@@ -123,26 +169,63 @@ const ARROW_POSITIONS: readonly {
      "how much bigger is critical" is one number rather than twelve. */
   scale: number;
 }[] = [
-  { left: "-14%", top: "10%", delay: 0, scale: 1.25 },
-  { left: "6%", top: "-18%", delay: 90, scale: 0.7 },
-  { left: "34%", top: "24%", delay: 40, scale: 1 },
-  { left: "62%", top: "-14%", delay: 150, scale: 0.8 },
-  { left: "88%", top: "16%", delay: 70, scale: 1.4 },
-  { left: "108%", top: "-6%", delay: 120, scale: 0.85 },
+  /* ==================================================================
+      DESIGN NOTE 972: PUSHED OUT, BECAUSE THEY GOT BIGGER
+     ==================================================================
+     THESE OFFSETS ARE PERCENTAGES OF THE FIGURE'S OWN BOX, so they are a position and not a distance -- and
+     enlarging the glyphs by two thirds without moving them would have walked the two inner arrows straight
+     over the numeral. The spread widens by roughly the same factor the type does; the ASYMMETRY and the
+     staggered delays are #953's and are deliberately preserved, since an even ring on a regular beat is the
+     loading-spinner reading that note exists to avoid. */
+  { left: "-32%", top: "6%", delay: 0, scale: 1.25 },
+  { left: "-6%", top: "-46%", delay: 90, scale: 0.7 },
+  { left: "34%", top: "58%", delay: 40, scale: 1 },
+  { left: "70%", top: "-42%", delay: 150, scale: 0.8 },
+  { left: "104%", top: "10%", delay: 70, scale: 1.4 },
+  { left: "124%", top: "-26%", delay: 120, scale: 0.85 },
 ];
 
 /** The em the multipliers above are applied to. Critical swings skew larger, minor smaller -- #957's rule,
- *  now expressed as the centre of a spread rather than as the whole of it. */
-const ARROW_BASE_EM = { critical: 0.34, minor: 0.2 } as const;
+ *  now expressed as the centre of a spread rather than as the whole of it.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 972: "WAY TOO SMALL RELATIVE TO THE TEXT"
+ *  ==================================================================
+ *  RULED: "The directional arrows are way too small relative to the text ... Scale them up significantly."
+ *  AND THE COMPARISON IN THAT SENTENCE IS THE RIGHT ONE, which is why both numbers move rather than the
+ *  arrows being given a px size. #957 chose 0.34/0.2 against a 132px ceiling; #954 then cut the ceiling to
+ *  104px for a shorter window and did not revisit these, so the arrows shrank with the numeral while the
+ *  reason for their size did not change. That is the drift being corrected, not a new preference.
+ *  UP BY ABOUT TWO THIRDS, AND THE SKEW IS UNTOUCHED: the critical base stays roughly 1.5x the minor one, so
+ *  #957's third channel -- size read before the numeral is -- survives the rescaling intact. */
+const ARROW_BASE_EM = { critical: 0.55, minor: 0.36 } as const;
 
 const BONUS_COLOR = "#4ade80";
 const MALUS_COLOR = "#f87171";
 
-/** The glow's core colour -- the outcome's own hue at low alpha. Derived by eye rather than by `mixHex`,
- *  because this one is not a blend between two known inks: it is a light source, and the alpha is doing the
- *  work that a blend ratio would do for a solid. */
-const BONUS_GLOW = "rgba(74, 222, 128, 0.28)";
-const MALUS_GLOW = "rgba(248, 113, 113, 0.28)";
+/* ==================================================================
+    DESIGN NOTE 973: THE GLOW LEFT THE TEXT AND WENT TO THE EDGE
+   ==================================================================
+   RULED: "Remove the text glow and replace it with a brief screen-border glow/flash (green for bonus, red
+   for malus) that matches this 850ms duration."
+   AND IT SETTLES SOMETHING #960 LEFT UNCOMFORTABLE. That note spent a paragraph arguing that a radial
+   gradient behind the numeral was "not a box" on the grounds that it has no edge -- true, and it was
+   arguing the point at all because the thing was sitting exactly where #940 ruled nothing may sit. A flash
+   at the VIEWPORT's rim is not in that argument's territory at all: it is nowhere near the figure, so
+   "floating text ONLY" is satisfied by construction rather than by a distinction about rims.
+   IT ALSO DOES THE JOB BETTER THAN THE THING IT REPLACES. #960's glow existed to lift a green "+20%" off
+   green track -- it was a legibility patch on a contrast problem, and it worked by putting more of the
+   figure's own hue directly behind the figure, which is the least effective place to put it. The board is
+   never the screen's edge, so the same hue at the rim carries the direction cue without competing with the
+   numeral for the same pixels.
+   THE BLACK HALO ON THE TEXT STAYS. That is `textShadow`, it is what #364 uses on the hex badge, and it is
+   doing the legibility work over a four-coloured board -- "the text glow" being removed here is #960's
+   coloured field, not the shadow that makes the numeral readable at all.
+   ALPHA 0.45 RATHER THAN #960's 0.28. A vignette is spread over the whole rim at low blur density, where
+   the radial sat concentrated behind two glyphs; the same alpha would read as a smudge rather than a
+   flash. */
+const BONUS_EDGE = "rgba(74, 222, 128, 0.45)";
+const MALUS_EDGE = "rgba(248, 113, 113, 0.45)";
 
 export function RevenueModifierFlash({ signal }: RevenueModifierFlashProps): JSX.Element | null {
   const [visible, setVisible] = useState(false);
@@ -155,7 +238,26 @@ export function RevenueModifierFlash({ signal }: RevenueModifierFlashProps): JSX
     setShown(signal);
     setVisible(true);
     const timer = window.setTimeout(() => setVisible(false), REVENUE_FLASH_MS);
-    return () => window.clearTimeout(timer);
+    /* ==================================================================
+        DESIGN NOTE 971: AND THEN IT LEAVES, WHICH IS HALF THE BUG
+       ==================================================================
+       THE OVERLAY USED TO STAY MOUNTED FOR THE REST OF THE SESSION at `opacity: 0`. That is what made the
+       reported fault possible: `.app-revenue-arrow` and the old glow both carry `animation-fill-mode:
+       forwards` with `iteration-count: 1`, so on the second flash the SAME DOM nodes were still sitting on
+       their final keyframe -- opacity 0, translated 46px away -- and a CSS animation does not replay because
+       a parent re-rendered. The numeral kept appearing because its own keyframe ends at `opacity: 1`; the
+       arrows ended at 0. Exactly the report: "they fail to appear at all after the first time."
+       CLEARED AFTER THE FADE, NOT AT THE WINDOW. `setVisible(false)` starts a `REVENUE_FLASH_FADE_MS`
+       opacity transition, and unmounting at `REVENUE_FLASH_MS` would cut it off -- the overlay would blink
+       out rather than fade, which is the one visible way this fix could go wrong. */
+    const clear = window.setTimeout(
+      () => setShown(null),
+      REVENUE_FLASH_MS + REVENUE_FLASH_FADE_MS,
+    );
+    return () => {
+      window.clearTimeout(timer);
+      window.clearTimeout(clear);
+    };
     // Design note #940: the TOKEN is the dependency, not the delta -- see `RevenueFlashSignal`.
   }, [signal?.token, signal]);
 
@@ -177,6 +279,24 @@ export function RevenueModifierFlash({ signal }: RevenueModifierFlashProps): JSX
   const critical = Math.abs(shown.delta) >= CRITICAL_SWING_PERCENT;
   const overlay = (
     <div
+      /* ==================================================================
+          DESIGN NOTE 971: A KEY ON THE TRIGGER, SO EVERY ANIMATION STARTS OVER
+         ==================================================================
+         RULED: "Ensure the animation state/keyframe fully resets (e.g., via a React `key` tied to the
+         trigger token) so the arrows reliably appear on every single trigger."
+         THIS IS THE MECHANISM ASKED FOR AND IT IS THE RIGHT ONE. A changed key makes React destroy the
+         subtree and build a new one, and a freshly-inserted element runs its animations from 0% -- which is
+         the only way to replay a CSS animation without a class toggle, a forced reflow read and a cleanup.
+         #597 settled the identical question the identical way for the turn-handoff band: "Replayed by
+         REMOUNTING -- the band carries `key={acting seat}`."
+         BELT AND BRACES WITH THE UNMOUNT ABOVE, deliberately. The unmount handles the ordinary case; this
+         handles the one it cannot -- a second turn's flash arriving DURING the previous one's fade, when the
+         node is still mounted and mid-animation. Two trains rolling in quick succession is exactly the case
+         #940's token was invented for, so it would be odd to fix the common path and leave that one.
+         ON THE WHOLE OVERLAY RATHER THAN ON THE ARROWS. The figure's entrance, the edge flash and the six
+         arrows are three animations that must start together; keying only the list would replay one of the
+         three and leave the reported symptom half-fixed. */
+      key={shown.token}
       aria-live="polite"
       style={{
         position: "fixed",
@@ -193,7 +313,20 @@ export function RevenueModifierFlash({ signal }: RevenueModifierFlashProps): JSX
       }}
     >
       <style>{REVENUE_FLASH_ARROWS_CSS}</style>
-      <style>{REVENUE_FLASH_GLOW_CSS}</style>
+      <style>{REVENUE_FLASH_EDGE_CSS}</style>
+      {/* Design note #973: THE SCREEN'S RIM, tinted to the outcome. `currentColor` is what keeps the
+          `box-shadow` geometry in the stylesheet and the COLOUR here beside `BONUS_COLOR`/`MALUS_COLOR` --
+          one decision about which hue means what, in one file, rather than a second green written into CSS.
+          `animationDuration` INLINE, from #970's constant: the stylesheet names no duration at all now, so
+          the edge, the arrows and the timer cannot come to disagree about how long this lasts. */}
+      <span
+        aria-hidden="true"
+        className="app-revenue-edge"
+        style={{
+          color: bonus ? BONUS_EDGE : MALUS_EDGE,
+          animationDuration: `${REVENUE_FLASH_MS}ms`,
+        }}
+      />
       {/* ==================================================================
            DESIGN NOTE 953: SIX ARROWS, AROUND THE FIGURE RATHER THAN ON IT
           ==================================================================
@@ -205,35 +338,11 @@ export function RevenueModifierFlash({ signal }: RevenueModifierFlashProps): JSX
           SIX, AT ASYMMETRIC OFFSETS AND STAGGERED DELAYS. An even spread on a regular beat reads as a loading
           spinner; the irregularity is what makes it read as drift. */}
       <span style={{ position: "relative", display: "inline-block" }}>
-        {/* ==================================================================
-             DESIGN NOTE 960: A GLOW IS NOT A BOX, AND THE DIFFERENCE IS THE EDGE
-            ==================================================================
-            ASKED: "It might help if the number and arrows had a brief background glow behind them as well?"
-            IT DOES, AND IT HAS TO BE RECONCILED WITH #940 RATHER THAN SLIPPED PAST IT. That note ruled: "Do
-            not put this in a box, pill, or standard toast notification window", and its test asserts the
-            absence of `backgroundColor`, `borderRadius`, `boxShadow`, `border` and `padding`. A radial
-            gradient would have sailed through every one of those on a technicality -- it sets `background`,
-            not `backgroundColor` -- and doing it quietly is exactly the kind of thing that makes an absence
-            test worthless.
-            SO THE DISTINCTION IS STATED. What #940 forbids is a SURFACE: something with an edge, that the
-            figure sits ON, that reads as a window laid over the board. This has no edge at any point -- the
-            gradient reaches full transparency well inside its own box -- so there is nothing to read as a
-            rim, and no rectangle appears at any opacity. It is the same family as the `textShadow` halo
-            #940 explicitly kept, one step larger.
-            AND IT EARNS ITS PLACE at 700ms: the overlay sits over a board that is yellow, green, grey and red
-            by turns, and a green "+20%" over green track is the one case the halo alone struggles with. The
-            glow is tinted to the OUTCOME, so it deepens the colour contrast rather than merely darkening.
-            `closest-side` KEEPS IT CIRCULAR regardless of the figure's aspect -- a percentage would ellipse
-            it into something that reads as a shape. */}
-        <span
-          aria-hidden="true"
-          className="app-revenue-glow"
-          style={{
-            background: `radial-gradient(closest-side, ${
-              bonus ? BONUS_GLOW : MALUS_GLOW
-            }, rgba(0, 0, 0, 0) 70%)`,
-          }}
-        />
+        {/* Design note #973: #960's RADIAL GLOW WAS HERE, behind the numeral, and it is gone -- see the
+            constants above for why the rim is the better home for the same idea. Recorded rather than
+            silently deleted because #960's argument (a gradient that reaches full transparency inside its
+            own box has no rim to read as a plate) was sound, and a later reader wanting a glow behind the
+            figure should find the reason it moved rather than rediscover the reason it was allowed. */}
         {ARROW_POSITIONS.map((offset, index) => (
           <span
             key={index}
@@ -245,6 +354,9 @@ export function RevenueModifierFlash({ signal }: RevenueModifierFlashProps): JSX
               color: bonus ? BONUS_COLOR : MALUS_COLOR,
               animationName: bonus ? "app-revenue-arrow-up" : "app-revenue-arrow-down",
               animationDelay: `${offset.delay}ms`,
+              /* Design note #970: the duration comes from the constant, not from a second copy in the
+                 stylesheet. `.app-revenue-arrow` used to carry its own `animation-duration: 700ms`. */
+              animationDuration: `${REVENUE_FLASH_MS}ms`,
               /* Design note #957: sized from the FIGURE's em, so the ratio holds at every viewport -- a fixed
                  px size would make the two tiers indistinguishable on a small screen and absurd on a large
                  one, which is the failure the `clamp` on the numeral already exists to avoid.

@@ -89,10 +89,27 @@ describe("the badge is drawn as a star", () => {
   });
 
   it("draws the ten alternating vertices of a five-pointed star", () => {
-    // The standard construction -- outer and inner radius alternating -- rather than a glyph the platform
-    // might substitute. Same argument #617 makes for the locomotive and #552 for the crown.
-    expect(CODE).toContain("point < 10");
-    expect(CODE).toMatch(/outer|inner/);
+    /* ==================================================================
+        RED SINCE #936, AND NOTHING SAID SO
+       ==================================================================
+       THIS ASSERTED `point < 10` IN `hexCanvasPrimitives.ts`. That loop left this file in #936, which pulled
+       the construction into `privatePowerStar` so the canvas and the action bar's SVG could not draw two
+       different stars -- and `privatePowerStarWiring` asserts the move from the other side, including an
+       explicit absence of the old angle expression here. So the two suites have been contradicting each
+       other since, one of them failing, and the failure was in a file nobody had reason to open.
+       FOUND BY A BLAST-RADIUS SWEEP rather than by a run: this batch touched `privatePowerStar`, so every
+       suite naming it was run, and this one was already red before a line of the batch was written. Worth
+       recording plainly -- "the suite is green" has been true of the suites I ran and not of this one.
+       RE-ANCHORED ON THE CONSTRUCTION WHEREVER IT LIVES. The claim was never "this file has a loop", it was
+       "the badge is a plotted star and not a glyph the platform might substitute" -- the argument #617 makes
+       for the locomotive and #552 for the crown. That claim is now answered by two files, so both are read. */
+    const SHARED = fs.readFileSync(path.join(__dirname, "privatePowerStar.tsx"), "utf8");
+    expect(SHARED).toContain("point < 10");
+    expect(SHARED).toMatch(/outerRadius|innerRatio/);
+    /* AND THE CANVAS STILL WALKS IT, or the badge would be a correct shape that nothing draws -- the
+       integration gap this project keeps finding, one step from where it was found last time. */
+    expect(CODE).toContain("starVertices(");
+    expect(CODE).not.toMatch(/[\u{1F31F}★☆]/u);
   });
 
   it("keeps the padlock in the design note, where it is history", () => {

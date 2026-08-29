@@ -24,6 +24,7 @@ import {
   nextDueNotice,
   noticeBody,
   noticeConsequence,
+  noticeGentleRustLine,
   noticeDismissKey,
   noticeHeadline,
   resetNoticeSilenceCache,
@@ -91,9 +92,27 @@ describe("the copy tells a president what happened and what it costs", () => {
     expect(noticeHeadline(limit)).toContain("1 train");
   });
 
-  it("names the trigger and the rule in the rust body", () => {
-    expect(noticeBody(rust)).toContain("first 4-train");
-    expect(noticeBody(rust)).toContain("2-train and 2-train");
+  it("says what rusted and how many, and nothing else", () => {
+    /* ==================================================================
+        SUPERSEDED BY #980: THE BODY WAS A PARAGRAPH AND IS NOW A SENTENCE
+       ==================================================================
+       THIS ASSERTED `"first 4-train"` and `"2-train and 2-train"` -- the trigger clause and the spelled-out
+       fleet. RULED SINCE: "The current Rust modal contains a wall of text. Simplify it drastically", with the
+       replacement given verbatim.
+       THE TRIGGER IS NOT LOST, WHICH IS WHY IT COULD GO: the purchase that caused this is the Activity Log
+       line immediately above, stamped with its round and step. A blocking modal is the worst surface in the
+       app for a fact the player did not ask for.
+       ASSERTED AS A CEILING TOO. "Drastically" is the instruction, and a case that only checks the new
+       sentence is present would pass against a build that appended the old paragraph after it. */
+    expect(noticeBody(rust)).toBe("2 of your 2-trains have rusted.");
+    expect(noticeBody(rust).length).toBeLessThan(70);
+  });
+
+  it("agrees in number when only one train went", () => {
+    /* THE ONE DEVIATION FROM THE RULED STRING, and it is grammar rather than judgement: the template was
+       written for the plural and "1 ... have rusted" is simply wrong. */
+    const [one] = fleetLossNotices(loss({ rusted: ["4"], discarded: [] }), "6", 2);
+    expect(noticeBody(one)).toBe("1 of your 4-trains has rusted.");
   });
 
   it("names the limit AND the cheapest-first rule in the limit body", () => {
@@ -104,11 +123,43 @@ describe("the copy tells a president what happened and what it costs", () => {
     expect(noticeBody(limit)).toContain("cheapest");
   });
 
-  it("says it could not have been prevented, in both causes", () => {
-    /* WHAT MAKES A BLOCKING MODAL FAIR. Being stopped is tolerable when the thing you are told could not have
-       been avoided; it is an insult when it is news you could have read. */
-    expect(noticeConsequence(rust)).toContain("could not be refused");
+  it("says it could not have been prevented, where that is still worth a line", () => {
+    /* ==================================================================
+        NARROWED BY #980: THE RUST NOTICE GIVES THIS SENTENCE UP
+       ==================================================================
+       IT WAS ASSERTED FOR BOTH CAUSES, on #896's argument that "being stopped is tolerable when the thing you
+       are told could not have been avoided; it is an insult when it is news you could have read."
+       THAT ARGUMENT IS ABOUT THE MODAL, NOT ABOUT THIS SENTENCE. After #980 the rust modal is two short lines
+       and defends its own interruption; a paragraph explaining that the interruption was fair IS the wall of
+       text the ruling is about.
+       THE LIMIT NOTICE KEEPS IT, and the difference is decidable rather than stylistic: "the train is already
+       back in the depot and may be bought again by anyone" is a fact with a rival's decision attached, and it
+       is on no other surface. That is the case #896 was actually defending.
+       `null` RATHER THAN "" so the modal renders no paragraph at all -- an empty one still occupies its
+       margins and reads as a sentence that failed to load. */
+    expect(noticeConsequence(rust)).toBeNull();
     expect(noticeConsequence(limit)).toContain("could not be refused");
+  });
+
+  it("adds the gentle-rust line only under the variant, and only to rust", () => {
+    /* RULED VERBATIM, so asserted verbatim: a paraphrase here would be this file agreeing with itself.
+       ITS OWN FUNCTION rather than a clause inside the body, because the ruling asks for it to be COLOURED --
+       "keep the colored text" -- and a modal cannot tint half a string it was handed whole.
+       AND IT IS SCOPED TWICE. A limit notice under a gentle-rust table is still a limit notice: nothing about
+       a train the depot has taken back gets one more run, and offering that line there would promise a grace
+       period the rules do not give. */
+    const [gentle] = fleetLossNotices(loss({ rusted: ["2"], discarded: [] }), "4", 3, true);
+    expect(noticeGentleRustLine(gentle)).toBe(
+      "Gentle rust: You can run these trains one more time before they retire.",
+    );
+    expect(noticeGentleRustLine(rust)).toBeNull();
+    const [, gentleLimit] = fleetLossNotices(
+      loss({ rusted: ["2"], discarded: ["3"] }),
+      "4",
+      3,
+      true,
+    );
+    expect(noticeGentleRustLine(gentleLimit)).toBeNull();
   });
 
   it("labels the toggle for the cause AND the corporation, never for both causes at once", () => {

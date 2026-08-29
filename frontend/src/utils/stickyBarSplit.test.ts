@@ -283,8 +283,19 @@ describe("the two progress tracks share a row (design note #920)", () => {
     expect(bar).toContain("orProgressRow");
     /* #490a: the copy being sliced has had its COMMENTS STRIPPED, so a comment cannot be an anchor -- the
        first draft of this case anchored on "Design note #630" and sliced an empty string, which then
-       "contained" nothing and failed for the wrong reason. Anchored on code either side instead. */
-    const row = sliceBetween(bar, "styles.orProgressRow", "seatOrderTrail");
+       "contained" nothing and failed for the wrong reason. Anchored on code either side instead.
+       ==================================================================
+        AND THE END ANCHOR ROTTED ANYWAY, WHICH IS THE SAME MISTAKE ONE STEP OVER
+       ==================================================================
+       IT WAS `seatOrderTrail`, chosen because that trail rendered AFTER this row. It has since moved INSIDE
+       the row -- `{roundType !== "OperatingRound" && seatOrderTrail}` now sits between the round label and
+       the sub-phase trail -- so the slice stopped a few lines in and no longer reached the two things this
+       case is about. The claim never stopped being true; the window shrank until it could not see it.
+       FOUND BY A BLAST-RADIUS SWEEP, not by a run of its own, and it was already red before this batch.
+       RE-ANCHORED ON THE NEXT SIBLING BLOCK. `orContextCard` is the corporation card that follows the
+       progress row, so the window is the row and nothing but the row -- and it is a LAYOUT landmark rather
+       than a piece of conditional content, which is what the old anchor turned out to be. */
+    const row = sliceBetween(bar, "styles.orProgressRow", "styles.orContextCard");
     expect(row).toContain("styles.orTurnOrder");
     expect(row).toContain("styles.subPhaseTrail");
   });

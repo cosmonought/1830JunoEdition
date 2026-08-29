@@ -49,6 +49,13 @@ import React, { useEffect } from "react";
 
 import { FONT_SIZE } from "../styles/typography";
 
+/** Design note #928's window, named so #967's longer one can be expressed as a multiple of it rather than as
+ *  a second magic number that has to be kept in step by hand. */
+export const STANDARD_TOAST_MS = 3700;
+
+/** Design note #967: 1.5x, for the one toast that is a list of figures rather than a sentence. */
+export const PRIVATE_REVENUE_TOAST_MS = Math.round(STANDARD_TOAST_MS * 1.5);
+
 export interface ActionToastProps {
   /** The sentence, or `null` for nothing pending. */
   message: string | null;
@@ -114,7 +121,7 @@ export function ActionToast({
   detail = null,
   token,
   onDismiss,
-  durationMs = 3700,
+  durationMs = STANDARD_TOAST_MS,
   eraTransition = null,
 }: ActionToastProps) {
   useEffect(() => {

@@ -160,10 +160,17 @@ describe("nothing about the fact itself was lost in the move", () => {
     /* #671: the crown IS the caption -- the mark every other surface uses for this fact (`PlayerCards` #567
        settled it the same way) -- and "PRESIDENT [crown] Ada" says it twice. It now sits under the word
        "Treasury", which is a caption, so the absence of a second one is what keeps the column from reading
-       as a label above its value. */
-    expect(CODE).toContain("<PresidentCrown scale={0.95}");
+       as a label above its value.
+       #974 SPLIT THE ELEMENT OVER THREE LINES to set the crown's fill, so the anchor is the prop rather than
+       the opening tag and its first attribute. */
+    expect(CODE).toContain("<PresidentCrown");
+    expect(CODE).toContain("scale={0.95}");
     const stack = CODE.slice(at("styles.orContextTreasuryStack"), at("<StationTokenRow"));
-    expect(stack).not.toContain("PRESIDENT");
+    /* THE IDENTIFIER IS NOT THE CAPTION. #974 sets the crown's fill from `PRESIDENT_CROWN_GOLD`, whose NAME
+       contains the word this case is about -- so the bare search started matching a constant reference
+       rather than rendered text. Neutralised by name rather than by weakening the assertion, because what is
+       being forbidden is still exactly "the word PRESIDENT reaching the screen beside the crown". */
+    expect(stack.replace(/PRESIDENT_CROWN_GOLD/g, "")).not.toContain("PRESIDENT");
     expect(stack).not.toContain("orContextFactLabel, color: corporationBarInk.inkMuted }}>\n                      President");
   });
 
@@ -192,10 +199,24 @@ describe("nothing about the fact itself was lost in the move", () => {
     expect(strip(read("panels/ContextualActionBar.tsx"))).not.toContain("presidentCash");
   });
 
-  it("keeps the muted ink it is legible in", () => {
-    // The bar is painted in the acting corporation's livery, so the ink is derived rather than fixed (#236).
+  it("keeps the muted ink it is legible in, as the fallback", () => {
+    /* ==================================================================
+        NARROWED BY #974: THE MUTED INK IS NOW THE SECOND ANSWER, NOT THE ONLY ONE
+       ==================================================================
+       THIS ASSERTED `color: corporationBarInk.inkMuted,` on the president outright, because #236 paints the
+       bar in the acting corporation's livery and every figure on it takes a derived ink.
+       REPORTED SINCE: "it is hard to tell at a glance who owns the active corporation ... render the
+       player's name in their specific player color."
+       SO THE DERIVATION SURVIVES AS THE FALLBACK, which is the half worth keeping: #779's rule is that an
+       address the roster does not know gets NO colour ("a wrong colour is worse than none"), and what it
+       falls back to has to be an ink that is legible on this bar -- which is exactly what the old assertion
+       was protecting. Asserted as the `??` so a build that dropped the fallback and left an undefined colour
+       fails here rather than rendering a name in the browser's default ink over a saturated livery. */
     const stack = CODE.slice(at("styles.orContextTreasuryStack"), at("<StationTokenRow"));
-    expect(stack).toContain("color: corporationBarInk.inkMuted,");
+    expect(stack).toContain("activeCorporation.presidentColor ?? corporationBarInk.inkMuted,");
+    /* AND THE TREASURY ROW ABOVE IT IS UNTOUCHED -- the livery derivation is still how this column's
+       CORPORATION facts are inked, and only the person's line changed. */
+    expect(stack).toContain("color: pendingTreasury ? corporationBarInk.inkMuted");
   });
 
   it("kept the notes for the two placements this replaces", () => {

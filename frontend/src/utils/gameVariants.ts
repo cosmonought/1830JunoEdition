@@ -46,7 +46,12 @@ export const BANK_SIZE_BY_LENGTH: Readonly<Record<GameLength, number>> = {
 export const GAME_LENGTH_BLURB: Readonly<Record<GameLength, string>> = {
   short:
     "$4,500 bank. The bank breaks early, often before the 5-trains arrive — a sharp game about the opening.",
-  standard: "$12,000 bank. 1830 as printed.",
+  /* Design note #977: "as printed" WITHOUT the number. `appNaming` #706's rule is that no player-facing
+     string names 1830 -- this app is Project 18XX -- and the lobby copy batch put it back in two places
+     while the case that forbids it was already red for an unrelated reason and so said nothing. The phrase
+     still points at the same thing: "as printed" is what a player choosing a bank size needs, and the
+     rulebook it refers to is named in the Rules Reference where the citation belongs. */
+  standard: "$12,000 bank. The standard game, as printed.",
   long:
     "$20,000 bank. Runs well past the Diesels, with time for late corporations to matter.",
 };
@@ -557,13 +562,32 @@ export function flavorBucketFor(roll: RevenueRoll): FlavorBucket {
 
 /** The line itself, drawn from the bucket by the turn's own seed.
  *
- *  `seed % length` EXACTLY AS SPECIFIED -- `% 20` for `unchanged` and `% 25` for the other four -- taken from
- *  the array's own length rather than from a literal, so the modulus cannot come apart from the payload the
- *  way a hard-coded 25 would the first time a line is added or removed. */
+ *  ==================================================================
+ *   DESIGN NOTE 969: THE HASH IS DIVIDED BY SIX BEFORE IT PICKS A LINE
+ *  ==================================================================
+ *
+ *  #944 SPECIFIED `seed % length` AND FLAGGED THE HAZARD IN THE SAME BREATH: the face is `hash % 6` and the
+ *  index came off the same number, so the two are not independent. That note's reachability case measured it
+ *  rather than assuming, found all 120 lines reachable, and left the rule as written.
+ *  AT 245 LINES IT BITES. `gcd(6, 50) = 2`, so a fixed die face pins `hash % 50` to a single parity class and
+ *  exactly HALF of each 50-line bucket becomes unreachable -- measured at 25 of 50 on every modifier bucket
+ *  and 30 of 45 on `unchanged`. At 25 it happened not to bite, because `gcd(6, 25) = 1`. The rule was correct
+ *  for one payload size and silently wrong for the next.
+ *
+ *  DIVIDING BY SIX FIRST IS #907'S OWN FIX, restored. Its words: "integer-dividing by 6 first discards those
+ *  low bits so the line is not correlated with the face it is explaining." #944 dropped it in favour of the
+ *  specified `% 25`, which was right about the modulus and wrong about which number to take it of. Measured
+ *  at 50/50, 50/50, 45/45, 50/50, 50/50.
+ *
+ *  THE MODULUS IS STILL THE ARRAY'S OWN LENGTH, which is the half of #944 that held up: adding these 125
+ *  lines needed no arithmetic change, only this decorrelation.
+ *
+ *  A GIVEN TURN NOW DRAWS A DIFFERENT LINE than it did before this change -- cosmetic only, and it does not
+ *  touch a figure. Replay stability within a build is what #903 requires, and that is unaffected. */
 export function revenueFlavourClause(roll: RevenueRoll, parts: RevenueSeedParts): string {
   const bucket = flavorBucketFor(roll);
   const lines = UNPREDICTABLE_REVENUE_FLAVOR[bucket];
-  return lines[revenueSeedHash(parts) % lines.length];
+  return lines[Math.floor(revenueSeedHash(parts) / 6) % lines.length];
 }
 
 /* ==================================================================

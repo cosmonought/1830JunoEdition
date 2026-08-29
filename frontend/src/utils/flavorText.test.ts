@@ -40,12 +40,24 @@ describe("the payload's shape (design note #944)", () => {
       UNPREDICTABLE_REVENUE_FLAVOR.unchanged.length,
       UNPREDICTABLE_REVENUE_FLAVOR.minorBonus.length,
       UNPREDICTABLE_REVENUE_FLAVOR.criticalBonus.length,
-    ]).toEqual([25, 25, 20, 25, 25]);
+    ]).toEqual([50, 50, 45, 50, 50]);
   });
 
-  it("holds 120 lines in total", () => {
+  it("holds 245 lines in total", () => {
+    /* ==================================================================
+        THE COUNTS MOVED, AND THE MODULO DID NOT HAVE TO
+       ==================================================================
+       125 lines were added -- 25 to each bucket -- taking `unchanged` from 20 to 45 and the other four from
+       25 to 50. ASKED: "You will need to adjust your modulo arithmetic since this expand the number of
+       possible variants."
+       NO ARITHMETIC CHANGED, and that is #944's doing rather than luck: `revenueFlavourClause` indexes with
+       `revenueSeedHash(parts) % lines.length`, taken from the array itself. That note recorded the reason at
+       the time -- "so the modulus cannot come apart from the payload the way a hard-coded 25 would the first
+       time a line is added or removed" -- and this is the first time it was tested.
+       THESE COUNT CASES ARE THE PART THAT HAD TO MOVE, which is the right split: the payload's shape is a
+       fact worth pinning, and the code reads that shape rather than repeating it. */
     const all = Object.values(UNPREDICTABLE_REVENUE_FLAVOR).flat();
-    expect(all).toHaveLength(120);
+    expect(all).toHaveLength(245);
   });
 
   it("repeats no line, within a bucket or across them", () => {
@@ -189,7 +201,7 @@ describe("the line is drawn by the turn's own seed (design note #944)", () => {
       const bucket = flavorBucketFor(roll);
       const lines = UNPREDICTABLE_REVENUE_FLAVOR[bucket];
       expect(revenueFlavourClause(roll, parts)).toBe(
-        lines[revenueSeedHash(parts) % lines.length],
+        lines[Math.floor(revenueSeedHash(parts) / 6) % lines.length],
       );
     }
   });
@@ -230,21 +242,29 @@ describe("every line is reachable (design note #944)", () => {
      SWEPT OVER REAL TURNS rather than over raw hashes, because that is the population that matters: what a
      table would see across a long game is the set of (round, sub-round, corporation) triples the game
      actually visits. */
-  const seen: Record<string, Set<number>> = {
+  /* ==================================================================
+      MEASURED THROUGH THE FUNCTION, BECAUSE THE FIRST VERSION MEASURED ITSELF
+     ==================================================================
+     THIS USED TO RECOMPUTE THE INDEX -- `seen[bucket].add(revenueSeedHash(parts) % lines.length)` -- which is
+     the implementation's formula copied into the test. A control that removed #969's decorrelation from the
+     REAL function did not fail here, because this block was still dividing (or not dividing) by six on its
+     own account. It was describing its own arithmetic and calling it coverage.
+     SO IT COLLECTS THE RETURNED LINES. `revenueFlavourClause` is called with the same roll the reducer would
+     produce, and the distinct STRINGS are counted -- which cannot be satisfied by a formula the test happens
+     to agree with, and is the thing the case was always meant to be about. */
+  const seen: Record<string, Set<string>> = {
     criticalMalus: new Set(),
     minorMalus: new Set(),
     unchanged: new Set(),
     minorBonus: new Set(),
     criticalBonus: new Set(),
   };
-  for (let macroRound = 1; macroRound <= 60; macroRound += 1) {
+  for (let macroRound = 1; macroRound <= 200; macroRound += 1) {
     for (let subRound = 1; subRound <= 3; subRound += 1) {
       for (let companyId = 1; companyId <= 8; companyId += 1) {
         const parts = { macroRound, subRound, companyId };
         const roll = rollTurnRevenue(170, parts);
-        const bucket = flavorBucketFor(roll);
-        const lines = UNPREDICTABLE_REVENUE_FLAVOR[bucket];
-        seen[bucket].add(revenueSeedHash(parts) % lines.length);
+        seen[flavorBucketFor(roll)].add(revenueFlavourClause(roll, parts));
       }
     }
   }
@@ -258,7 +278,7 @@ describe("every line is reachable (design note #944)", () => {
       seen.unchanged.size,
       seen.minorBonus.size,
       seen.criticalBonus.size,
-    ]).toEqual([25, 25, 20, 25, 25]);
+    ]).toEqual([50, 50, 45, 50, 50]);
   });
 });
 

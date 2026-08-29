@@ -46,13 +46,30 @@ describe("the shell announces it once, when it lands", () => {
   const CODE = APP.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 
   it("says what became possible, in the present tense", () => {
-    /* THE SENTENCE THE REPORT ASKED FOR, near enough to quote: "Green Tiles are now available, Brown Tiles
-       are now available". Present tense because the toast fires at the moment it is true -- which is the
-       difference between this and the badge it replaced. */
+    /* ==================================================================
+        SUPERSEDED BY #966, AND THIS CASE HAD BEEN RED EVER SINCE
+       ==================================================================
+       IT ASSERTED "`${eraNow} Tiles are now available.`" -- #868's sentence, near enough to quote the
+       original report. RULED SINCE: "The current era change toast has too much text. Change the copy to
+       simply read: 'Corporations can now upgrade yellow tiles to green.'"
+       THE COPY CHANGED AND THIS DID NOT, so a suite has been failing on the old wording in a file the copy
+       batch had no reason to open. A test enforcing the sentence a ruling replaced is the same shape as a
+       test enforcing a bug, and it is worth naming as such rather than quietly editing the string.
+       WHAT SURVIVES IS THE PROPERTY, not the words: the toast is in the PRESENT TENSE, because it fires at
+       the moment the thing becomes true -- which is the difference between this and the badge it replaced --
+       and it is DERIVED FROM THE TRANSITION rather than written per era, so the Brown and Grey crossings
+       read the same way without a table of four sentences. Both halves are asserted. */
     const dollar = String.fromCharCode(36);
     expect(CODE).toContain(
-      "`" + dollar + "{eraNow} Tiles are now available.`",
+      "`Corporations can now upgrade " +
+        dollar +
+        "{previous.toLowerCase()} tiles to " +
+        dollar +
+        "{eraNow.toLowerCase()}.`",
     );
+    /* THE SENTENCE IT REPLACED, as an absence: leaving both would toast twice on one crossing, which is the
+       plausible half-done state for a copy change made at one of two call sites. */
+    expect(CODE).not.toContain("Tiles are now available");
   });
 
   it("fires on a CHANGE, never on the first thing it sees", () => {

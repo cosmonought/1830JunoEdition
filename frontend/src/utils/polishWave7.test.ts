@@ -202,7 +202,9 @@ describe("the overlay renders outside the app subtree (design note #956)", () =>
     /* RULED: "ensure the animation and timer remain intact." A portal changes where a component renders, not
        what it does -- but the effect and the render moved in the same edit, which is where a timer gets lost. */
     expect(FLASH).toContain("setTimeout(() => setVisible(false), REVENUE_FLASH_MS)");
-    expect(FLASH).toContain("export const REVENUE_FLASH_MS = 700;");
+    /* #970: 850 now, on instruction. The number is `polishWave6`'s to justify; what this case is about is
+       that the portal did not eat the timer. */
+    expect(FLASH).toContain("export const REVENUE_FLASH_MS = 850;");
   });
 });
 

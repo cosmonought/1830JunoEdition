@@ -43,6 +43,32 @@ const COVERED = ["StockRoundPanel.tsx"] as const;
  *  deliberately loose: what matters is that a look was CHOSEN, not which. */
 const DISABLED_LOOK = /(Disabled|Empty|soldOut|Inert)/;
 
+/* ==================================================================
+ *  DESIGN NOTE 978: ONE CONTROL WHOSE DISABLED LOOK IS ITS PARENT'S
+ * ==================================================================
+ *
+ * RULED: "because the entire parent card is already desaturated via `filter: grayscale(1)`, the disabled
+ * visual state is already fully communicated to the player. Grant the button an exemption in the test. We do
+ * not need a redundant disabled style on the button itself."
+ *
+ * AND THE INVARIANT IS ABOUT THE PLAYER, NOT ABOUT THE ELEMENT. #681's rule exists because "a control that
+ * refuses clicks at full contrast reads as broken rather than as barred". This button is the CARD'S WHOLE
+ * FACE (#16/#26), and #948 drains the card: `filter: grayscale(1)`, `opacity: 0.55`, `pointerEvents: none`,
+ * plus a standing footnote saying why. Nothing about it is at full contrast. A second greyed style on the
+ * button would be applied to a surface already greyed by an ancestor -- greying the grey.
+ *
+ * WHY THIS IS NOT A HOLE IN THE SWEEP. A source scan cannot see an ancestor's `filter`, so the exemption has
+ * to be declared rather than derived -- and the risk with a declared exemption is that it outlives its
+ * reason, which is exactly how `appNaming`'s storage-key allowlist rotted. So it is guarded three ways: it
+ * names ONE style key rather than a file, the case below fails if the exempt control disappears (an
+ * exemption covering nothing is a hole waiting for the next control to fall into it), and a separate case
+ * asserts the parent treatment it is standing in for still exists. Delete `rosterCardLocked`'s grayscale and
+ * this exemption stops being granted.
+ *
+ * THE `title` HALF IS NOT EXEMPT. "A disabled control can say why" is answered here by `aria-label`, and the
+ * sweep's `missingReason` accepts neither -- so that case still has to hold on its own terms. */
+const LOOK_EXEMPT_BY_ANCESTOR = ["styles.rosterCardToggle"] as const;
+
 /** One JSX opening tag's attribute text, brace-aware.
  *
  *  Walks from `<button` counting `{}` depth and stops at the first `>` seen at
@@ -85,7 +111,10 @@ function controlsIn(file: string): string[] {
  *  this one would pass just as happily against a file with no controls in it,
  *  which is the failure mode the "finds the controls" test above exists for. */
 const missingLook = (tags: readonly string[]) =>
-  tags.filter((tag) => /\bdisabled=/.test(tag)).filter((tag) => !DISABLED_LOOK.test(tag));
+  tags
+    .filter((tag) => /\bdisabled=/.test(tag))
+    .filter((tag) => !LOOK_EXEMPT_BY_ANCESTOR.some((key) => tag.includes(key)))
+    .filter((tag) => !DISABLED_LOOK.test(tag));
 const missingReason = (tags: readonly string[]) =>
   tags.filter((tag) => /\bdisabled=/.test(tag)).filter((tag) => !/\btitle=/.test(tag));
 
@@ -133,6 +162,46 @@ describe("the scanner", () => {
       const withDisabled = controlsIn(file).filter((tag) => /\bdisabled=/.test(tag));
       expect(withDisabled.length).toBeGreaterThanOrEqual(5);
     }
+  });
+
+  it("still catches a control that only LOOKS exempt", () => {
+    /* #978'S EXEMPTION, POINTED AT SYNTHETIC INPUT, because an exemption that is wider than it reads is the
+       way this sweep goes quiet. It matches the style key, not the file and not the tag name -- so a second
+       button in the same component, or a `rosterCardToggleFooter` that merely starts the same way, is still
+       swept. Asserted here rather than trusted to the list's length. */
+    const exempt = `<button style={styles.rosterCardToggle} disabled={x} title="locked">`;
+    const neighbour = `<button style={styles.rosterCardHeader} disabled={x} title="locked">`;
+    expect(missingLook([exempt])).toEqual([]);
+    expect(missingLook([neighbour])).toEqual([neighbour]);
+  });
+});
+
+describe("the exemption is still standing for something (design note #978)", () => {
+  /* AN EXEMPTION THAT OUTLIVES ITS REASON IS A HOLE. `appNaming`'s storage-key allowlist rotted exactly this
+     way -- three enumerated keys, a fourth added later, a suite red for a year of batches. These two cases
+     are what stop the same thing happening here: the exempt control has to exist, and the ancestor
+     treatment it is standing in for has to still be doing the work. */
+  const panel = fs.readFileSync(path.join(__dirname, "StockRoundPanel.tsx"), "utf8");
+
+  it("covers a control that is actually there and actually disabled", () => {
+    /* An exemption matching nothing is not harmless: it reads as a considered decision about a control that
+       has since moved or been renamed, and it will be honoured the moment something takes the old name. */
+    const exempted = controlsIn("StockRoundPanel.tsx").filter((tag) =>
+      LOOK_EXEMPT_BY_ANCESTOR.some((key) => tag.includes(key)),
+    );
+    expect(exempted).toHaveLength(1);
+    expect(exempted[0]).toMatch(/\bdisabled=/);
+  });
+
+  it("still has the parent treatment that makes it legible", () => {
+    /* THE WHOLE REASON THE BUTTON NEEDS NO STYLE OF ITS OWN. #948 drains the card the button IS the face of.
+       Take the grayscale away and the exemption becomes a control refusing clicks at full contrast, which is
+       the exact fault #681 exists to prevent -- so the grant is asserted against the thing granting it. */
+    const locked = panel.slice(panel.indexOf("rosterCardLocked: {"));
+    expect(locked).toContain('filter: "grayscale(1)"');
+    expect(locked).toContain('pointerEvents: "none"');
+    /* AND IT IS APPLIED, not merely declared -- the integration gap this project keeps finding. */
+    expect(panel).toContain("styles.rosterCardLocked");
   });
 });
 

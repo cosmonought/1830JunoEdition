@@ -147,6 +147,46 @@ export function describeGameplayAction(
     );
   }
 
+  /* ==================================================================
+      DESIGN NOTE 968: THE TURN'S ROUTES, IN ONE SENTENCE
+     ==================================================================
+     The dispatch is one message now, so the log gets one line for it. It names each route's track the way
+     the per-route line did -- that is still the thing only this entry can say -- and totals the printed
+     value, which is what the turn actually ran before the die.
+     THE DIE IS NOT MENTIONED HERE, for #941's reason: the modifier is a fact about the TURN and is stated
+     once, by `turnRevenueSentence`, from the shell. This line is the record of which track was run. */
+  if ("RunMultipleRoutes" in msg) {
+    const { protocol_id, routes } = msg.RunMultipleRoutes;
+    const company = gameState?.public_companies.find(
+      (entry) => entry.company_id === protocol_id,
+    );
+    const train = (company?.owned_trains ?? []).slice().sort().pop();
+    const total = routes.reduce(
+      (sum, path) => sum + sandboxRouteBreakdown(mapGrid, path, era).revenue,
+      0,
+    );
+    const legs = routes.map((path) => {
+      const stops = path
+        .map((stop) => stop.hex)
+        .filter((hex, index, all) => all.indexOf(hex) === index);
+      return stops.join(" -> ");
+    });
+    /* ONE ROUTE READS AS ONE ROUTE. A corporation with a single train is the common case for most of a game,
+       and "ran 1 route" would be a worse sentence than the one this replaces. */
+    if (routes.length === 1) {
+      return (
+        `${corp(gameState, protocol_id)} ran a $${total} route` +
+        (train ? ` with a ${train}-train` : "") +
+        ` through ${legs[0]}.`
+      );
+    }
+    return (
+      `${corp(gameState, protocol_id)} ran ${routes.length} routes for $${total}` +
+      (train ? ` with trains up to a ${train}` : "") +
+      `: ${legs.join("; ")}.`
+    );
+  }
+
   if ("RunManualRoute" in msg) {
     const { protocol_id, path } = msg.RunManualRoute;
     const breakdown = sandboxRouteBreakdown(mapGrid, path, era);

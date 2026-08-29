@@ -134,8 +134,12 @@ describe("the waiting room offers every variant the schema defines (design note 
   });
 
   it("says so when a guest's filtered list would be empty", () => {
-    /* A heading with nothing under it reads as a loading state rather than as a settled table. */
-    expect(source).toContain("playing 1830 as printed");
+    /* A heading with nothing under it reads as a loading state rather than as a settled table.
+       #977 RE-WORDED THE SENTENCE, not the rule: `appNaming` #706 forbids a player-facing string naming
+       1830 -- this app is Project 18XX -- and the lobby copy batch had put the number back here. The anchor
+       follows the copy, and the claim this case makes is unchanged. */
+    expect(source).toContain("playing the standard game, as printed");
+    expect(source).not.toContain("1830");
   });
 
   it("gives the rules text a legible treatment (design note #924)", () => {
@@ -245,12 +249,25 @@ describe("the dividend pays what was banked (design notes #917 -> #934)", () => 
     expect(runBlock).not.toContain("applyRevenuePercent");
   });
 
-  it("still dispatches one route per runnable draft", () => {
-    /* THE LOOP ITSELF, pinned because #934 deleted the lines directly beneath it and an edit that took the
-       loop with them would produce a turn that pays correctly and runs nothing. */
+  it("still dispatches every runnable draft", () => {
+    /* ==================================================================
+        THIS CASE WAS PROTECTING THE BUG
+       ==================================================================
+       IT ASSERTED THE LOOP: `expect(runBlock).toContain("for (const draft of runnable)")`. Its reason was
+       sound at the time -- #934 had just deleted the lines directly beneath it, and "an edit that took the
+       loop with them would produce a turn that pays correctly and runs nothing."
+       AND THE LOOP TURNED OUT TO BE THE FAULT. Reported from a live room: three trains run, one paid; four
+       trains run, one paid. Each iteration appended its own action at `appliedIndexRef.current`, and the
+       snapshot handler reassigns that ref from the last action it can see -- so a snapshot landing mid-burst
+       rewound the cursor and later appends took an index already used. #968 sends one message instead.
+       WHICH IS WHY A TEST PINNING A MECHANISM IS DIFFERENT FROM ONE PINNING A RULE. The rule this was written
+       to protect -- every runnable draft must reach the reducer -- is unchanged and is what is asserted now.
+       The `for` loop was one way to satisfy it, and the case had quietly made that way mandatory. */
     const runBlock = sliceBetween(APP, "const runnable = runnableDrafts(", "setLiveOrSubPhase(");
-    expect(runBlock).toContain("for (const draft of runnable)");
-    expect(runBlock).toContain("RunManualRoute");
+    expect(runBlock).toContain("runnable\n      .map((draft)");
+    expect(runBlock).toContain("routes: turnRoutes,");
+    /* AND IN ONE ACTION, which is the half the old case could not have expressed. */
+    expect(runBlock.match(/await runGameplayAction\(/g)?.length ?? 0).toBe(1);
   });
 });
 
@@ -298,7 +315,12 @@ describe("the polish wave's smaller fixes (design notes #928 / #929 / #931 / #93
   it("gives the toast time to be read", () => {
     /* The receipts grew into this complaint: #923's headline carries three figures and #738's detail line a
        treasury transition, against a duration set for a one-clause receipt. */
-    expect(toast).toContain("durationMs = 3700");
+    /* Design note #967: the figure is a NAMED CONSTANT now, because a second toast needed to express itself
+       as a multiple of it -- "1.5x the standard duration". Two hand-kept numbers is how the standard and its
+       multiple come apart, and this case asserting the literal would have blocked the constant. The rule is
+       unchanged: the default window is the one #928 widened to. */
+    expect(toast).toContain("export const STANDARD_TOAST_MS = 3700;");
+    expect(toast).toContain("durationMs = STANDARD_TOAST_MS");
   });
 
   it("draws the era change rather than only stating it", () => {
@@ -324,15 +346,25 @@ describe("the polish wave's smaller fixes (design notes #928 / #929 / #931 / #93
     expect(prompt).toContain("recipientCash !== null");
   });
 
-  it("strengthens the private mark without turning it into a border", () => {
-    /* #884 refused a gradient border on two grounds that both still hold -- the border is a STATE channel,
-       and a gradient needs `borderImage`, which cannot participate in a `borderColor` longhand. The mark gets
-       louder instead, and picks up the canvas halo. Asserted as an absence too, since "make it a border" is
-       the request this note is declining. */
-    const mark = sliceBetween(sheet, "actionBarPowerChipMark: {", "},");
-    expect(mark).toContain("boxShadow");
-    expect(mark).toContain("PRIVATE_POWER_GLOW_STOPS");
-    expect(mark).not.toContain("borderImage");
+  it("still refuses to make the private mark a border", () => {
+    /* ==================================================================
+        #931's MARK IS GONE (#976); #884's REFUSAL IS NOT
+       ==================================================================
+       THIS ASSERTED the strip's `boxShadow` halo and its use of `PRIVATE_POWER_GLOW_STOPS` -- #931's answer
+       to "the thin rainbow gradient bar is too subtle ... expand the gradient to be a border around the
+       button". RULED SINCE: "Remove the vertical rainbow gradient strip."
+       AND #931's OWN REPORT READS DIFFERENTLY IN HINDSIGHT. It said the strip was too subtle to link the
+       chip to the map; #931 made it louder. What #976 establishes is that it could never have made that
+       link, because the stops are one shared hue circle drawn identically on every chip -- so "too subtle"
+       was the symptom of a mark that had nothing to say, and widening it was treating the volume.
+       THE HALF THAT SURVIVES IS THE REFUSAL, and it survives on both of its original grounds: the border is
+       a STATE channel here, and a gradient border needs `borderImage`, which cannot participate in a
+       `borderColor` longhand at all. "Make it a border" is still the obvious next request, and this is
+       still the answer -- so the absence is kept and the positive half retired with the element. */
+    const chip = sliceBetween(sheet, "actionBarPowerChip: {", "},");
+    expect(chip).not.toContain("borderImage");
+    expect(chip).not.toContain("border");
+    expect(sheet).not.toContain("actionBarPowerChipMark");
   });
 });
 

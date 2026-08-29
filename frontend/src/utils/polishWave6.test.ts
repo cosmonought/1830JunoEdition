@@ -180,11 +180,14 @@ describe("the overlay is shorter, smaller and moves (design notes #953/#954)", (
   const FLASH = readStripped("components/RevenueModifierFlash.tsx");
   const ANIM = readStripped("styles/animations.ts");
 
-  it("shows for 700ms", () => {
-    /* RULED, after a revision: "reduce the display duration from 2000ms to 500ms", then "If you want to make
-       it 700 or 800ms we can try that as well. I just think the rule of thumb is that a juice notification
-       should be readable ~1.5x before it goes away." 700 with a 200ms fade leaves ~500ms fully legible. */
-    expect(FLASH).toContain("export const REVENUE_FLASH_MS = 700;");
+  it("shows for 850ms", () => {
+    /* RULED, after two revisions: "reduce the display duration from 2000ms to 500ms", then "If you want to
+       make it 700 or 800ms we can try that as well. I just think the rule of thumb is that a juice
+       notification should be readable ~1.5x before it goes away", and finally "Hardcode the display duration
+       to exactly 850ms so it is uniform in all contexts."
+       THE FIGURE IS THE RULING'S and needs no derivation; what the next case protects is the RELATIONSHIP
+       between it and the fade, which is the half that was nearly missed at 700 and would be missed again. */
+    expect(FLASH).toContain("export const REVENUE_FLASH_MS = 850;");
   });
 
   it("shrinks the fade with the window", () => {

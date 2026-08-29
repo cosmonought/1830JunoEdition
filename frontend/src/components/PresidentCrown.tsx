@@ -14,6 +14,26 @@
 
 import React from "react";
 
+/** The crown's gold, for the surfaces that set it rather than inheriting it.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 974: TWO PANELS HAD ALREADY TYPED THIS HEX
+ *  ==================================================================
+ *
+ *  THE DEFAULT IS STILL `currentColor` and that is still right -- on a table row or a right-aligned numeric
+ *  column the crown should take the row's ink, which is the entire argument #552 makes for shipping a drawing
+ *  instead of an emoji.
+ *
+ *  BUT THREE SURFACES OVERRIDE IT, and until now each did so with its own literal: `ContextualSubPanel`'s
+ *  president column, `PlayerCards`' holding crown, and now the Operating Round bar. Three copies of one hex
+ *  is the shape this project keeps finding -- `PRIVATE_POWER_STAR_FILL` exists for exactly this reason, one
+ *  component over, and its note says why: "Exported so the button cannot drift to a near-miss."
+ *
+ *  NOT IMPORTED FROM `palette.ts`, although `CARD_BORDER_ACTIVE` happens to be the same string. That token
+ *  means "this card is the active one" and this one means "president"; they agree today by coincidence, and
+ *  a change to the active-card border should not silently repaint every crown in the app. */
+export const PRESIDENT_CROWN_GOLD = "#c9a94c";
+
 export interface PresidentCrownProps {
   /** Multiplier on the surrounding font size. */
   scale?: number;

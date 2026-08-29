@@ -19,7 +19,7 @@
 import React, { useState } from "react";
 
 import { FONT_SIZE } from "../styles/typography";
-import { PresidentCrown } from "./PresidentCrown";
+import { PresidentCrown, PRESIDENT_CROWN_GOLD } from "./PresidentCrown";
 import { bestContrastTextColor } from "../styles/corporationLivery";
 // Design note #670: the same badge the Operating Round's cash strip uses. The
 // cards are where cash lives in a Stock Round, so this is where the confirmation
@@ -538,7 +538,8 @@ export const styles: Record<string, React.CSSProperties> = {
     overflow: "hidden",
     textOverflow: "ellipsis",
   },
-  holdingCrown: { color: "#c9a94c", marginLeft: "4px" },
+  // Design note #974: the shared gold, not a third copy of the hex.
+  holdingCrown: { color: PRESIDENT_CROWN_GOLD, marginLeft: "4px" },
   holdingNum: {
     ...TABLE_ROW_CELL,
     padding: "1px 0 1px 10px",

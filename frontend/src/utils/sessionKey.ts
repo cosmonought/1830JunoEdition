@@ -90,6 +90,22 @@ export const GAMEPLAY_MESSAGE_KEYS = [
   // it moves no real JUNO -- so it belongs on the session key like every
   // other entry here.
   "RunManualRoute",
+  /* ==================================================================
+      DESIGN NOTE 968: A TURN'S ROUTES ARE ONE MESSAGE
+     ==================================================================
+     REPORTED, from a live room: "B&O ran 3 trains. On a later turn, it ran 4 trains. In both cases, only 1
+     train's revenue actually paid out."
+     AND THE DISPATCH WAS N MESSAGES FOR ONE DECISION, which is what made the whole class possible. Each
+     `RunManualRoute` is appended at `appliedIndexRef.current`, and the snapshot handler REASSIGNS that ref
+     from the last action it can see -- so a snapshot carrying only the first append rewinds the cursor while
+     the second and third are still in flight, and they land on an index already taken. `effectiveActions`
+     keys on `index`, so entries that collide there stop being distinguishable.
+     ONE MESSAGE MAKES THAT UNREACHABLE rather than better-guarded. There is one append, one index, one
+     document and one reducer transition; no ordering, no cursor and no snapshot timing can drop a route,
+     because there is nothing left to interleave.
+     AND IT IS ALSO THE HONEST SHAPE. #941 already made the die ONE roll per turn on the aggregated revenue --
+     the dispatch was the last surface still pretending a turn was several independent events. */
+  "RunMultipleRoutes",
   "BuyHardwareFromPool",
   "EmergencyBuyHardware",
   "PassTurn",
@@ -289,6 +305,19 @@ export type GameplayExecuteMsg =
         game_id: number;
         protocol_id: number;
         path: RouteWaypointDto[];
+        payout_strategy: PayoutStrategyDto;
+      };
+    }
+  /* Design note #968: the whole turn's running, atomically. `routes` is an array of the same waypoint lists
+   *  `RunManualRoute` carries one of -- deliberately the same shape, so the reducer's pricing is one function
+   *  applied N times rather than a second implementation for the bulk case.
+   *  `RunManualRoute` SURVIVES and is not deprecated away: every game already logged contains them, and #902's
+   *  rule is that an old log replays to the game it was played as. The reducer keeps both arms. */
+  | {
+      RunMultipleRoutes: {
+        game_id: number;
+        protocol_id: number;
+        routes: RouteWaypointDto[][];
         payout_strategy: PayoutStrategyDto;
       };
     }

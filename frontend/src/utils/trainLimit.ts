@@ -122,6 +122,106 @@ export function isTrainLocked(owned: number, currentLimit: number | null): boole
  *  @param currentLimit the phase's train limit, or `null` where the chain did not say
  *  @param buyable      `buyableNow` for this corporation -- the floor under the fallback
  */
+/* ==================================================================
+ *  DESIGN NOTE 979: A REPRIEVED TRAIN IS STILL A TRAIN
+ * ==================================================================
+ *
+ * REPORTED: "The engine currently assumes 'gently rusted' trains do not count toward a corporation's train
+ * limit. This is incorrect. Gently rusted trains do count toward the limit until they are permanently retired
+ * at the end of their grace run."
+ *
+ * #906 RULED THE OPPOSITE AND IMPLEMENTED IT BY SLEIGHT OF HAND. It moved a doomed train OUT of `owned_trains`
+ * into `pending_rust_trains`, and its harness states the trick in as many words: "Every surface that counts
+ * trains counts that array, so this is what implements 'a pending-rust train occupies no train-limit slot'
+ * without any of them being told."
+ *
+ * AND THAT IS EXACTLY WHY THE RULE COULD BE WRONG WITHOUT ANYTHING NOTICING. A rule enforced by hiding a value
+ * from every reader is not enforced anywhere in particular, so there was no line to review, no assertion to
+ * disagree with, and nothing that had to be updated when the ruling changed. It also took the train off every
+ * OTHER surface that reads `owned_trains` -- including the route planner, which is where "one final run" was
+ * supposed to happen. See `sandboxSession` #979 for that half.
+ *
+ * SO THE MECHANISM INVERTS: the train stays in `owned_trains` and `pending_rust_trains` becomes a MARKER over
+ * it. Counting it against the limit then needs no rule at all, for the same reason not counting it needed
+ * none -- which is the honest version of #906's argument, pointing the other way.
+ *
+ * WHAT NEEDS A RULE IS WHICH TRAIN GOES when the limit bites, and that is this function. */
+export interface TrimInput {
+  /** Every train the corporation holds, reprieved ones included. */
+  owned: readonly string[];
+  /** The subset under a gentle-rust reprieve, as models. A multiset, not a set: two 2-trains are two. */
+  reprieved: readonly string[];
+  /** The limit now in force. `Infinity` or a non-finite value means no trim. */
+  limit: number;
+  /** What a model is worth, for #284's cheapest-first ordering. */
+  cost: (model: string) => number;
+}
+
+export interface TrimResult {
+  owned: readonly string[];
+  reprieved: readonly string[];
+  /** What the trim took, in the order it took it -- the shell narrates from this (#704). */
+  discarded: readonly string[];
+}
+
+/** Discard down to the limit: reprieved trains first, then cheapest first.
+ *
+ *  REPRIEVED FIRST IS THE RULING'S OWN EXPECTATION -- "which will typically be the gently rusted train" -- and
+ *  it is also the only ordering that is right on the merits. A reprieved train is worth exactly one more run;
+ *  a live train is worth every run for the rest of the game. Cheapest-first alone would hand a corporation the
+ *  reprieved 4-train and take its live 2, which is a worse fleet on every subsequent turn.
+ *
+ *  CHEAPEST-FIRST WITHIN EACH GROUP, so #284's rule survives where it still applies and the corporation is
+ *  left with the most valuable fleet the limit allows.
+ *
+ *  A MULTISET WALK RATHER THAN A `Set`, for the reason `describeFleetLosses` gives: two 3-trains are two
+ *  trains, and a corporation with one reprieved 3 and one live 3 must not have both treated as reprieved.
+ *  Slots carry their index so the surviving fleet keeps its original order -- a fleet that re-sorted itself
+ *  every phase change would move the chips under the player for no reason. */
+export function trimToTrainLimit(input: TrimInput): TrimResult {
+  const { owned, reprieved, limit, cost } = input;
+  if (!Number.isFinite(limit) || owned.length <= limit) {
+    return { owned, reprieved, discarded: [] };
+  }
+
+  const stillReprieved = new Map<string, number>();
+  for (const model of reprieved) stillReprieved.set(model, (stillReprieved.get(model) ?? 0) + 1);
+  const slots = owned.map((model, index) => {
+    const left = stillReprieved.get(model) ?? 0;
+    if (left > 0) stillReprieved.set(model, left - 1);
+    return { model, index, isReprieved: left > 0 };
+  });
+
+  const order = [...slots].sort((a, b) => {
+    if (a.isReprieved !== b.isReprieved) return a.isReprieved ? -1 : 1;
+    return cost(a.model) - cost(b.model);
+  });
+  const doomed = new Set(order.slice(0, owned.length - limit).map((slot) => slot.index));
+
+  const keptOwned: string[] = [];
+  const discarded: string[] = [];
+  const droppedReprieved: string[] = [];
+  for (const slot of slots) {
+    if (!doomed.has(slot.index)) {
+      keptOwned.push(slot.model);
+      continue;
+    }
+    discarded.push(slot.model);
+    if (slot.isReprieved) droppedReprieved.push(slot.model);
+  }
+
+  /* THE MARK LEAVES WITH THE TRAIN. A model left in `reprieved` after its train has gone would expire against
+     a fleet that no longer holds it -- and because the expiry is a multiset removal too, it would take a
+     DIFFERENT train of the same tier with it at the end of the turn. */
+  const keptReprieved = [...reprieved];
+  for (const model of droppedReprieved) {
+    const at = keptReprieved.indexOf(model);
+    if (at >= 0) keptReprieved.splice(at, 1);
+  }
+
+  return { owned: keptOwned, reprieved: keptReprieved, discarded };
+}
+
 export function quantityOptionCount(currentLimit: number | null, buyable: number): number {
   const floor = Math.max(1, buyable);
   if (currentLimit === null || !Number.isFinite(currentLimit)) return floor;

@@ -24,6 +24,10 @@
 // circumradius -- the two lower points stop well short of the bottom. Every caller that tried to reason about
 // that itself would get it slightly wrong in a different direction, so the conversion lives here, once.
 
+// Design note #975: the type metrics both renderers size a star against. Declared in `typography.ts`
+// because they are facts about letters rather than about this shape -- see the re-export below.
+import { CAP_HEIGHT_RATIO, X_HEIGHT_RATIO } from "../styles/typography";
+
 /** The five-pointed star's height as a multiple of its circumradius.
  *
  *  ==================================================================
@@ -116,6 +120,42 @@ function round(value: number): number {
 
 /** The same gold the hex badge fills with. Exported so the button cannot drift to a near-miss. */
 export const PRIVATE_POWER_STAR_FILL = "#f0d074";
+
+/* ==================================================================
+ *  DESIGN NOTE 975: HOW TALL, AS A RULE RATHER THAN AS TWO NUMBERS
+ * ==================================================================
+ *
+ * REPORTED: "The star icon on the Action Bar button is currently larger than the star on the board hexes.
+ * Scale down the Action Bar button's star so it matches the size of the board hex star perfectly."
+ *
+ * IT IS LARGER, AND ABSOLUTE PARITY IS THE WRONG TARGET -- which is the one part of this I want to argue
+ * with rather than implement. The hex's star is the cap-height of an 8px bold acronym: about 5.8 pixels, and
+ * only at full zoom, because `drawReservationBadgeAt` scales its type with the hex and bottoms out around
+ * 4.3px zoomed out. Pinning the chip to 5.8px would put a speck beside 15px text, and it would still be
+ * "wrong" at every zoom but one. There is no number that matches a thing whose size is a function of the map.
+ *
+ * WHAT DOES TRANSFER IS #937's RULE: the star is as tall as the text beside it. That is what makes the two
+ * marks read as one mark, and it holds at every zoom and every type scale rather than at one pairing.
+ *
+ * AND APPLYING IT PROPERLY IS WHAT ACTUALLY SHRINKS THE CHIP'S STAR, because the two strings are different
+ * KINDS of string. The hex says `DH` -- all capitals, so cap-height IS the word's full visual mass and a
+ * cap-height star sits flush with it. The chip says `Use DH Power`, which is mostly lowercase, so a
+ * cap-height star towers over the x-height that makes up most of the word. Same rule, same ratio, and it
+ * reads as oversized in one place and correct in the other. That is the report, and it is a real defect
+ * rather than a preference.
+ *
+ * SO THE CHIP TAKES THE X-HEIGHT and the hex keeps the cap-height. Both are "as tall as the text beside it";
+ * they differ because the text differs.
+ *
+ * THE HEX MEASURES ITS CAP-HEIGHT FOR REAL (`actualBoundingBoxAscent`) and falls back to a ratio. The chip
+ * cannot -- CSS gives no x-height metric to JavaScript without rendering a glyph and measuring it -- so it
+ * uses the ratio directly.
+ *
+ * BOTH RATIOS LIVE IN `typography.ts`, NOT HERE. They are facts about type rather than about this star, and
+ * the cap-height one already had three copies across two files when this batch went looking. Re-exported so
+ * a reader who arrives at the star's geometry finds them, and so the two consumers that reason about a star
+ * do not have to know they came from the type scale. */
+export { CAP_HEIGHT_RATIO as STAR_CAP_HEIGHT_RATIO, X_HEIGHT_RATIO as STAR_X_HEIGHT_RATIO };
 
 export interface PrivatePowerStarProps {
   /** Drawn height in pixels -- the dimension #937 matches to a cap-height. */

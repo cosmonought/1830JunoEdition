@@ -33,11 +33,17 @@ import { APP_NAME } from "../config";
 const SRC = path.join(__dirname, "..");
 
 /** Keys, not labels. Renaming these would reset saved preferences for anyone who has already played. */
-const STORAGE_KEY_EXCEPTIONS = [
-  '"1830juno.tutorials_off.v1"',
-  '"1830juno.tutorial_seen.v1."',
-  '"1830juno.tutorial_mode.v1"',
-];
+/* ==================================================================
+    THE EXCEPTION IS A NAMESPACE, NOT A LIST OF THREE KEYS
+   ==================================================================
+   IT WAS AN ENUMERATION of the three `TutorialModal` keys, and it rotted exactly the way an enumeration of
+   allowed strings does: `fleetLossNotice`'s `1830juno.fleet_loss_silence.v1.` was added later, is the same
+   KIND of thing for the same reason, and turned this case red without anybody having done anything wrong.
+   `1830juno.` IS THE PROPERTY THAT MATTERS. A `localStorage` key is a persisted identifier -- renaming one
+   silently discards every player's saved preference -- which is the whole reason these are exempt, and it is
+   true of the namespace rather than of three particular members of it. A new key in it is exempt by
+   construction; a "1830" anywhere else is still an offender. */
+const STORAGE_KEY_NAMESPACE = "1830juno.";
 
 function sourceFiles(dir: string): string[] {
   const out: string[] = [];
@@ -116,7 +122,7 @@ describe("no player reads the number 1830", () => {
       if (/\.test\.tsx?$/.test(file)) continue;
       withoutComments(file).forEach((text, index) => {
         if (!text.includes("1830")) return;
-        if (STORAGE_KEY_EXCEPTIONS.some((key) => text.includes(key.slice(1, -1)))) return;
+        if (text.includes(STORAGE_KEY_NAMESPACE)) return;
         offenders.push(`${path.relative(SRC, file)}:${index + 1}  ${text.trim().slice(0, 110)}`);
       });
     }

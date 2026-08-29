@@ -29,6 +29,8 @@ import {
 import { terrainFeeDue, withTerrainPaid } from "./terrainFee";
 // Design note #736: which arriving tier closes the private companies.
 import { closesPrivateCompanies } from "./depotSchedule";
+// Design note #979: which train the limit takes is a rule, and it lives with the other train-limit rules.
+import { trimToTrainLimit } from "./trainLimit";
 // actingSeatIndex lives in gameState.ts, not here: it asks about CONTRACT state and the
 // live dashboard needs it too. See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #0
 import type { GameplayExecuteMsg } from "./sessionKey";
@@ -781,32 +783,74 @@ export function applyPhaseChange(
 
     // 1. Rust.
     const rustedNow = doomed.size === 0 ? [] : owned.filter((model) => doomed.has(model));
-    let fleet = doomed.size === 0 ? [...owned] : owned.filter((model) => !doomed.has(model));
-    /* Design note #906: under Gentle Rust the doomed trains are MOVED rather than destroyed. Appended to any
-       existing marks rather than replacing them, because two phase changes can land between one
-       corporation's turns and the older reprieve is still owed its run. */
-    const reprieved = gentle && rustedNow.length > 0
+    /* ==================================================================
+        DESIGN NOTE 979: THE REPRIEVE IS A MARK ON THE TRAIN, NOT A PLACE IT GOES
+       ==================================================================
+       #906 MOVED THE DOOMED TRAIN OUT OF `owned_trains`, and its own harness explains why: "Every surface
+       that counts trains counts that array, so this is what implements 'a pending-rust train occupies no
+       train-limit slot' without any of them being told."
+       CORRECTED: "Gently rusted trains do count toward the limit until they are permanently retired at the
+       end of their grace run."
+       AND THE OLD MECHANISM WAS TAKING MORE THAN THE LIMIT SLOT WITH IT. Every surface reads `owned_trains`
+       -- including `ownedTrainRoster`, which is what the route planner draws its trains from. A train moved
+       out of that array has no roster entry, so it has no route draft, so it cannot be run. #906's headline
+       promise -- "exactly one final Operating Round run before obsolescence" -- has therefore never been
+       reachable: the train was simply deleted a turn later than it would have been, invisibly. Nothing in
+       the suite could see it, because `pending_rust_trains` was written by this function, cleared by
+       `settleOperatingCursor`, and READ BY NOTHING ELSE IN THE APP.
+       SO THE TRAIN STAYS PUT AND IS MARKED. Counting it against the limit then needs no rule, for the same
+       reason not counting it needed none -- and it appears in the roster, in the chips and in the route
+       planner, which is what "one more run" required all along. */
+    const fleetAfterRust = gentle
+      ? [...owned]
+      : doomed.size === 0
+        ? [...owned]
+        : owned.filter((model) => !doomed.has(model));
+    /* Appended to any existing marks rather than replacing them, because two phase changes can land between
+       one corporation's turns and the older reprieve is still owed its run. */
+    const reprievedAfterRust = gentle && rustedNow.length > 0
       ? [...(company.pending_rust_trains ?? []), ...rustedNow]
-      : company.pending_rust_trains;
+      : (company.pending_rust_trains ?? []);
 
-    // 2. Trim, cheapest first.
-    if (Number.isFinite(limit) && fleet.length > limit) {
-      const byValue = [...fleet].sort(
-        (a, b) => (TIER_COST[a] ?? 0) - (TIER_COST[b] ?? 0),
-      );
-      const discard = byValue.slice(0, fleet.length - limit);
-      for (const model of discard) {
-        const at = fleet.indexOf(model);
-        if (at >= 0) fleet.splice(at, 1);
-      }
-    }
+    // 2. Trim to the limit -- reprieved first, then cheapest first (#979).
+    const trimmed = trimToTrainLimit({
+      owned: fleetAfterRust,
+      reprieved: reprievedAfterRust,
+      limit,
+      cost: (model) => TIER_COST[model] ?? 0,
+    });
+    const fleet = trimmed.owned;
+    /* ==================================================================
+        #232: THE FIELD APPEARS WHEN THERE IS SOMETHING TO SAY, AND NOT BEFORE
+       ==================================================================
+       `reprievedAfterRust` normalises `undefined` to `[]` so the trim can walk it, and that normalisation
+       must not leak back into the state: writing `pending_rust_trains: []` onto every company on every phase
+       change would put an empty answer where the record had no answer -- #897's fault, one field over, and on
+       a state that may not be playing this variant at all.
+       BUT AN EMPTY LIST IS A REAL ANSWER ONCE MARKS HAVE EXISTED. A corporation whose reprieved trains were
+       all taken by the trim in this very call genuinely holds none, and this reducer is the only writer of
+       the field -- so `[]` there is a fact rather than an invention. The distinction is whether THIS call
+       created a mark, which is exactly `gentle && rustedNow.length > 0`. */
+    const markedThisPhase = gentle && rustedNow.length > 0;
+    const reprieved =
+      company.pending_rust_trains === undefined && !markedThisPhase
+        ? undefined
+        : trimmed.reprieved;
+    const sameReprieve =
+      reprieved === company.pending_rust_trains ||
+      (reprieved !== undefined &&
+        company.pending_rust_trains !== undefined &&
+        reprieved.length === company.pending_rust_trains.length &&
+        reprieved.every((model, at) => model === company.pending_rust_trains?.[at]));
+    const reprieveChanged = !sameReprieve;
 
-    if (fleet.length === owned.length && reprieved === company.pending_rust_trains) return company;
+    if (fleet.length === owned.length && !reprieveChanged) return company;
     changed = true;
     return {
       ...company,
-      owned_trains: fleet,
-      ...(reprieved === company.pending_rust_trains ? {} : { pending_rust_trains: reprieved }),
+      // `PublicCompanyState.owned_trains` is mutable; `trimToTrainLimit` returns a readonly view.
+      owned_trains: [...fleet],
+      ...(reprieveChanged ? { pending_rust_trains: reprieved } : {}),
     };
   });
 
@@ -937,13 +981,41 @@ export function describeFleetLosses(
       if (at >= 0) remaining.splice(at, 1);
       else lost.push(model);
     }
-    if (lost.length === 0) continue;
+    /* ==================================================================
+        DESIGN NOTE 979: UNDER GENTLE RUST, RUST TAKES NOTHING -- SO THE DIFF CANNOT SEE IT
+       ==================================================================
+       THIS FUNCTION READS BACK WHAT `applyPhaseChange` DID by diffing `owned_trains`, and #979 stops a
+       gently-rusted train from leaving that array. Left alone, the rust notice would simply stop appearing
+       for the one variant whose whole point is telling the player about it -- a narrator that went quiet
+       because the thing it narrates moved one field over.
+       SO THE REPRIEVE IS DIFFED TOO. Trains newly ADDED to `pending_rust_trains` are the rust event; trains
+       gone from `owned_trains` are what the limit took.
+       AND UNDER THIS VARIANT EVERY DEPARTURE IS THE LIMIT'S. Rust only marks, so a doomed train that left the
+       fleet in the same phase change left because the trim took it -- which is the more useful thing to tell
+       the player, since their question is why it did not get the grace run it was just promised. The
+       tier-based split below is the STANDARD rule and stays exactly as it was. */
+    const gentle = resolveVariants(after.variants).gentleRust;
+    const newlyReprieved: string[] = [];
+    if (gentle) {
+      const already = [...(was?.pending_rust_trains ?? [])];
+      for (const model of company.pending_rust_trains ?? []) {
+        const at = already.indexOf(model);
+        if (at >= 0) already.splice(at, 1);
+        else newlyReprieved.push(model);
+      }
+    }
+    if (lost.length === 0 && newlyReprieved.length === 0) continue;
 
     const rusted: string[] = [];
     const discarded: string[] = [];
-    for (const model of lost) {
-      if (arrivingTier !== null && RUSTS_ON[model] === arrivingTier) rusted.push(model);
-      else discarded.push(model);
+    if (gentle) {
+      rusted.push(...newlyReprieved);
+      discarded.push(...lost);
+    } else {
+      for (const model of lost) {
+        if (arrivingTier !== null && RUSTS_ON[model] === arrivingTier) rusted.push(model);
+        else discarded.push(model);
+      }
     }
     losses.push({ companyId: company.company_id, ticker: company.ticker, rusted, discarded });
   }
@@ -1696,9 +1768,32 @@ function settleOperatingCursor(
     if (!(state.public_companies ?? []).some(done)) return state;
     return {
       ...state,
-      public_companies: state.public_companies.map((company) =>
-        done(company) ? { ...company, pending_rust_trains: [] } : company,
-      ),
+      public_companies: state.public_companies.map((company) => {
+        if (!done(company)) return company;
+        /* ==================================================================
+            DESIGN NOTE 979: THE EXPIRY NOW HAS A TRAIN TO TAKE
+           ==================================================================
+           UNDER #906 THIS CLEARED A LIST AND NOTHING ELSE, because the trains had already left `owned_trains`
+           at the phase change -- so "scrapped the moment that turn ends" was, mechanically, "scrapped a
+           turn earlier and forgotten about now". #979 leaves them in the fleet, which is what lets them run,
+           and makes this the line that actually retires them.
+           A MULTISET REMOVAL, not a filter on the model: a corporation holding a reprieved 3 and a live 3
+           must lose exactly one of them. `filter(m => !reprieved.includes(m))` would take both, which is the
+           bug this shape exists to avoid and the same one `describeFleetLosses` records.
+           `pending_rust_trains: []` RATHER THAN THE FIELD REMOVED: by the time this runs the state has
+           certainly reported a reprieve -- `done` requires a non-empty one -- so an empty list here is a
+           fact rather than an invention. */
+        const survivors = [...(company.owned_trains ?? [])];
+        for (const model of company.pending_rust_trains ?? []) {
+          const at = survivors.indexOf(model);
+          if (at >= 0) survivors.splice(at, 1);
+        }
+        return {
+          ...company,
+          ...(company.owned_trains == null ? {} : { owned_trains: survivors }),
+          pending_rust_trains: [],
+        };
+      }),
     };
   };
 
@@ -1814,7 +1909,13 @@ function stepAfterMessage(
   if ("PlaceStationToken" in msg) return settleSubPhase(state, "Routes");
   /* Running the routes COMPUTES the revenue; declaring dividends chooses
      what to do with it (design note #142). Two steps, so two messages. */
-  if ("RunManualRoute" in msg) return settleSubPhase(state, "Dividends");
+  /* Design note #968: BOTH RUN MESSAGES END THE STEP. `RunMultipleRoutes` is the whole turn's running in one
+     action and `RunManualRoute` is one route of it -- either way the revenue has been computed and the choice
+     of what to do with it is the next step. Omitting the new arm would leave the cursor on Routes after a
+     turn that had run, which is the one state the Dividends controls do not render in. */
+  if ("RunManualRoute" in msg || "RunMultipleRoutes" in msg) {
+    return settleSubPhase(state, "Dividends");
+  }
   if ("DeclareDividends" in msg) return settleSubPhase(state, "Hardware");
   /* The Skip button and the auto-skip (design note #439) both arrive as
      this, and both mean the same thing to the cursor. */
@@ -2565,6 +2666,56 @@ function applyOneAction(
     };
   }
 
+  /* ==================================================================
+      DESIGN NOTE 968: THE WHOLE TURN'S RUNNING, IN ONE TRANSITION
+     ==================================================================
+     REPORTED, from a live room: three trains run, one paid. The dispatch was one message per train, and the
+     room's index cursor cannot survive three appends in flight -- see `sessionKey`'s note for the mechanism.
+     THIS ARM IS THE SAME ARITHMETIC AS `RunManualRoute`, GATHERED. It prices every route with the same
+     `sandboxRouteRevenue`, sums the printed values, and applies the turn's one die to that sum -- which is
+     what the per-route arm was already converging on, since #941 made it recompute the aggregate on every
+     dispatch. What changes is that the aggregate is now assembled from routes that cannot be separated by a
+     network, rather than from a field carried between transitions.
+     IT STILL ADDS TO WHAT IS THERE. A corporation could in principle run, then run again in one turn -- the
+     UI does not offer it, but the reducer must not silently discard a prior total if it ever does, and #777's
+     turn-change clear is what bounds this rather than an assumption about the caller.
+     `routes_run_this_turn` COUNTS THE ROUTES, not the messages. It exists for the log and for #777's clear,
+     and a four-train turn that arrived as one message still ran four trains. */
+  if ("RunMultipleRoutes" in msg) {
+    const { protocol_id, routes } = msg.RunMultipleRoutes;
+    const variants = resolveVariants(state.variants);
+    const priced = routes.map((path) =>
+      ctx?.mapGrid
+        ? sandboxRouteRevenue(ctx.mapGrid, path, ctx.era ?? "Yellow")
+        : SANDBOX_NOMINAL_ROUTE_REVENUE,
+    );
+    const printedThisMessage = priced.reduce((sum, value) => sum + value, 0);
+    const company = state.public_companies.find((entry) => entry.company_id === protocol_id);
+    const previousPrinted = Math.max(0, Number(company?.printed_route_revenue ?? 0) || 0);
+    const printedTotal = previousPrinted + printedThisMessage;
+    const roll = variants.unpredictableRevenue
+      ? rollTurnRevenue(printedTotal, {
+          macroRound: state.macro_round_number ?? 0,
+          subRound: state.sub_round_index ?? 0,
+          companyId: protocol_id,
+        })
+      : null;
+    const running = roll ? roll.adjusted : printedTotal;
+    return {
+      ...state,
+      public_companies: state.public_companies.map((entry) =>
+        entry.company_id === protocol_id
+          ? {
+              ...entry,
+              last_route_revenue: String(running),
+              printed_route_revenue: String(printedTotal),
+              routes_run_this_turn: (entry.routes_run_this_turn ?? 0) + routes.length,
+            }
+          : entry,
+      ),
+    };
+  }
+
   if ("DeclareDividends" in msg) {
     /* The dividend buttons were a no-op. Withhold credits the corporation; Pay splits ten ways. The price
        ladder stays market.rs's.
@@ -3025,6 +3176,57 @@ export function describePrivatePayout(
     ? labelForAddress(payout.toPlayer)
     : labelForCompany(payout.toCompanyId as number);
   return `${payout.privateName} pays $${payout.amount} to ${recipient}.`;
+}
+
+/** One toast for a whole round of private income, from the viewer's side of it.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 967: ONE TOAST, BECAUSE IT IS ONE EVENT
+ *  ==================================================================
+ *
+ *  REQUESTED: "Create a single, consolidated toast notification that fires at the start of the OR summarizing
+ *  all PC revenues paid to the player."
+ *
+ *  THE LOG ALREADY WRITES ONE LINE PER PRIVATE and should keep doing so -- the feed is a record, and a record
+ *  wants each payment findable. A toast is the opposite kind of surface: it is glanced at once, and four of
+ *  them in a row is four things to dismiss to learn one number.
+ *
+ *  THE VIEWER'S OWN PRIVATES ONLY. `applyPrivateRevenue` pays every player and some corporations; a toast
+ *  saying "$95 was paid out" to somebody who received $5 of it is worse than silence. Corporate payouts are
+ *  excluded for the same reason -- a corporation's treasury is not the player's money (#743), and folding the
+ *  two into one figure is precisely the confusion that note exists to prevent.
+ *
+ *  `null` WHEN THE VIEWER RECEIVED NOTHING, so the caller raises no toast rather than an empty one. A player
+ *  holding no privates is the common case for most of a game.
+ *
+ *  THE DETAIL LISTS THE SOURCES because "you were paid $45" invites the question the list answers, and the
+ *  list is short by construction: 1830 has six privates and one player rarely holds more than three. */
+export interface PrivateRevenueSummary {
+  total: number;
+  /** How many of the viewer's privates paid -- the caller uses it for nothing, and a reader checking the
+   *  arithmetic against the detail line needs it. */
+  count: number;
+  text: string;
+  detail: string;
+}
+
+export function summarisePrivateRevenueForPlayer(
+  payouts: readonly PrivatePayout[],
+  viewerAddress: string | null,
+): PrivateRevenueSummary | null {
+  if (!viewerAddress) return null;
+  const mine = payouts.filter((payout) => payout.toPlayer === viewerAddress);
+  if (mine.length === 0) return null;
+  const total = mine.reduce((sum, payout) => sum + payout.amount, 0);
+  /* A private that pays $0 is not a payment, and a summary of nothing reads as a fault. Guarded on the TOTAL
+     rather than on the list, because several $0 privates are still $0. */
+  if (total <= 0) return null;
+  return {
+    total,
+    count: mine.length,
+    text: `Your private companies paid you $${total}.`,
+    detail: mine.map((payout) => `${payout.privateName} $${payout.amount}`).join(" \u00B7 "),
+  };
 }
 
 /* ------------------------------------------------------------------ */

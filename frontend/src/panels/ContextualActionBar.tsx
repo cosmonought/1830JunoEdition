@@ -72,7 +72,7 @@ import { TURN_HANDOFF_SWEEP_CSS } from "../styles/animations";
 // Design note #410: shared with the Stock Card stripe.
 import { CorporateLogo } from "../components/CorporateLogo";
 // Design note #552: the shipped crown, not a platform emoji.
-import { PresidentCrown } from "../components/PresidentCrown";
+import { PresidentCrown, PRESIDENT_CROWN_GOLD } from "../components/PresidentCrown";
 import { NO_TRAIN_ROUTE_REASON } from "../utils/gameConstants";
 import { passButtonLabel, passButtonTitle } from "../utils/turnAction";
 import {
@@ -89,6 +89,9 @@ import { dividendDeclaration, marketMoveDirection } from "../utils/dividendStep"
 // the lines on the map.
 import { routeTrainColor } from "../styles/routeLivery";
 import { styles, PHASE_TINT_STYLES } from "../styles/appStyles";
+// Design note #975: the chip's own type scale and the x-height ratio, so its star can be derived from the
+// text beside it rather than typed as a pixel count.
+import { FONT_SIZE, X_HEIGHT_RATIO } from "../styles/typography";
 // Design note #707: a corporation that can run must run.
 import { routeRunObligation } from "../utils/routeStep";
 // Design note #705: the row as one sentence, built from the fields the row renders.
@@ -130,6 +133,33 @@ interface ActionBarButton {
  *  and the sort of thing that survives about one refactor when it is written as `24` in two places.
  *  A number rather than a style key because `appStyles.ts` cannot see the `size` prop this is passed to. */
 const CORPORATION_HERALD_PX = 24;
+
+/** The power chip's star, sized from the chip's own type rather than typed as a pixel count.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 975: 11 WAS A NUMBER, NOT A RULE
+ *  ==================================================================
+ *
+ *  REPORTED: "The star icon on the Action Bar button is currently larger than the star on the board hexes.
+ *  Scale down the Action Bar button's star so it matches the size of the board hex star perfectly."
+ *
+ *  THE REAL DEFECT IS THAT THE TWO STARS WERE NOT RELATED BY ANYTHING. The hex derives its star from the
+ *  MEASURED cap-height of the acronym beside it (#937); #943 wrote `height={11}` here and derived it from
+ *  nothing at all. That the two were ever close was luck, and it would have come apart silently the next
+ *  time `FONT_SIZE.strong` moved.
+ *
+ *  X-HEIGHT, NOT CAP-HEIGHT, and `privatePowerStar` #975 carries the argument: the hex's neighbour is
+ *  `DH` -- all capitals -- while this chip's is `Use DH Power`, which is mostly lowercase. One ratio applied
+ *  to both makes the mark sit flush on the hex and tower over the chip, which is exactly what was reported.
+ *
+ *  IT DOES NOT MATCH THE HEX'S STAR IN PIXELS AND CANNOT. The board star is ~5.8px at full zoom and shrinks
+ *  with the map; this lands near 8px against 15px text. Said plainly rather than implied, because the
+ *  request asked for "perfectly" and this is deliberately not that -- see #975 for why no fixed number can
+ *  be.
+ *
+ *  PARSED FROM THE TYPE SCALE so there is one declaration of the chip's font size. `FONT_SIZE.strong` is the
+ *  string `actionBarButton` sets; reading it here is what keeps this derived rather than re-typed. */
+const POWER_CHIP_STAR_PX = Math.round(parseFloat(FONT_SIZE.strong) * X_HEIGHT_RATIO * 10) / 10;
 
 /* Design note #831's `EMPTY_JUMP_REF` is GONE, and #833 says why: the map now arrives as an ELEMENT rather
    than a ref, so "no map on screen" is spelled `null` and needs no stand-in object. See `useJumpTarget`. */
@@ -660,6 +690,9 @@ export default function ContextualActionBar({
      *  corporation's controls, and that is an identity comparison -- two
      *  seats can share a truncated label, so the label cannot answer it. */
     presidentAddress: string | null;
+    /** Design note #974: the president's seat colour, or `null` for an address the roster does not know.
+     *  The shell resolves it (`seatColor` indexes the roster); this panel only paints with it. */
+    presidentColor: string | null;
     /* Design note #806: `presidentCash` is GONE, and #326's figure with it -- see the render site for the
        argument. The prop had exactly one consumer, the tooltip, so leaving it declared would be a value the
        shell computes every render for nobody: #660a's dead `eligiblePrivatesForPurchase` in miniature, and
@@ -1725,7 +1758,7 @@ export default function ContextualActionBar({
              power" is the more useful thing for it to mean at the size it renders. Recorded because the
              narrower reading is the one #714's note supports, and a later reader deserves to know it was
              considered and overruled rather than missed. */
-          icon: <PrivatePowerStar height={11} />,
+          icon: <PrivatePowerStar height={POWER_CHIP_STAR_PX} />,
           onClick: () => onUsePowerOffer(offer.abilityKey),
           disabled: false,
           title: offer.chipTitle ?? "Opens the question — nothing is spent until you answer it.",
@@ -1756,12 +1789,27 @@ export default function ContextualActionBar({
       disabled={chip.disabled || !sessionReady}
       title={chip.title}
     >
-      {/* Design note #884: THE MARK IS INSIDE THE CHIP, NOT ITS BORDER. See `appStyles.ts` for why the
-          border cannot carry it. `aria-hidden` because the acronym in the label already says which company
-          this is -- the gradient is a second channel for sighted players, not a fact of its own. */}
-      <span style={styles.actionBarPowerChipMark} aria-hidden="true" />
-      {/* Design note #943: the star sits INSIDE the chip's own row, after the identity gradient and before
-          the words. The gradient says WHICH company; the star says what kind of thing this is. */}
+      {/* ==================================================================
+           DESIGN NOTE 976: THE GRADIENT STRIP IS GONE, AND #884 WAS WRONG ABOUT WHAT IT SAID
+          ==================================================================
+          RULED: "Remove the vertical rainbow gradient strip from the 'Use [Private Company] Power' button."
+          AGREED, AND FOR A STRONGER REASON THAN TIDINESS. #943's note beside this element claimed "The
+          gradient says WHICH company; the star says what kind of thing this is." That is false, and it is
+          checkable: `PRIVATE_POWER_GLOW_STOPS` is ONE array -- a fixed eight-stop hue circle, identical for
+          the DH, the C&A, the M&H and every future private. Every chip drew the same strip. It never said
+          which company anything was; the ACRONYM in the label does that, and always did.
+          SO WHAT WAS ACTUALLY ON THE CHIP was two marks meaning "this is a private power", one of them a
+          7px strip that #931 had already had to widen once because it was "too subtle to clearly link it to
+          the map elements". The answer to a mark that is too weak to carry its meaning, standing beside a
+          mark that carries the same meaning clearly, is not a third revision of the weak one.
+          WHAT IS LOST, stated rather than glossed: #727's rainbow is still the hex halo and still the
+          auction's palette, so the card -> hex association is intact everywhere it was. What goes is the
+          chip's copy of it -- and the star is a stronger link to the hex than the halo was, because the star
+          is drawn ON the hex (#714) while the halo is drawn AROUND it.
+          `actionBarPowerChipMark` IS DELETED FROM THE SHEET TOO. An orphaned style for a rendering somebody
+          has just asked us to stop using is how it comes back -- `palette.ts`'s rule for its deleted colour
+          token, and #682's for `cashAfter`. */}
+      {/* Design note #943: the star sits INSIDE the chip's own row, before the words. */}
       {chip.icon ? (
         <span style={styles.actionBarButtonWithIcon}>
           {chip.icon}
@@ -2005,7 +2053,22 @@ export default function ContextualActionBar({
               ? `Operating Round ${orSequence.cycle}.${orSequence.index}`
               : "Operating Round"
             : roundType === "StockRound"
-              ? "Stock Round"
+              ? /* ==================================================================
+                    DESIGN NOTE 964: THE STOCK ROUND HAS A NUMBER TOO
+                   ==================================================================
+                   REPORTED: "Ensure the Stock Round title includes its round number (e.g., 'Stock Round 1')."
+                   AND #517 ALREADY MADE THIS ARGUMENT for the Operating Round: "'Operating Round' alone named
+                   the KIND of round in a game that runs several back to back, so a player reading a log line
+                   about 'OR 3.2' had nothing to match it against." The Stock Round is the same shape and was
+                   simply left out -- and `roundLabelFor` has been stamping "SR2" on log entries the whole
+                   time, so the feed and the bar disagreed about whether this round had an identity.
+                   `orSequence.cycle` IS `macro_round_number`, which numbers BOTH kinds of round -- the prop is
+                   named for the caller that needed it first, not for the field. Using it here is reading the
+                   same number the log reads rather than adding a second source; the alternative was a new
+                   prop carrying a value this one already holds. */
+                orSequence
+                ? `Stock Round ${orSequence.cycle}`
+                : "Stock Round"
               : roundType === "WaterfallAuction"
                 ? "Auction Round"
                 : "No live round"}
@@ -2055,6 +2118,19 @@ export default function ContextualActionBar({
           FLUSH RIGHT VIA `marginLeft: auto` ON THE ORDER, not `justify-content: space-between` on the row --
           the trail must stay left-anchored when the order is absent (a Stock Round, or a round with no queue),
           and `space-between` would centre a lone trail. */}
+      {/* ==================================================================
+           DESIGN NOTE 964: THE SEAT TRAIL JOINS THE ROW THE LABEL IS IN
+          ==================================================================
+          REPORTED: "The player turn order in the Auction and Stock rounds has incorrectly dropped to a second
+          line. Restore them to the exact same horizontal row as the round title."
+          AND #946 IS WHY IT DROPPED. That note moved the round label INTO `orProgressRow` to put the Operating
+          Round's three facts on one line -- and left this sibling outside the div, where it had always been
+          harmless because the label was a sibling too. Moving one of a pair into a container puts the other
+          on its own line; the regression is the shape of the fix, not a separate fault.
+          THE SAME ROW SERVES BOTH ROUNDS, which is #630's own argument: the seat trail and the sub-phase
+          trail "answer 'where are we in the rotation'", and they are mutually exclusive by round type, so one
+          row holds whichever the round has. */}
+      {roundType !== "OperatingRound" && seatOrderTrail}
       {roundType === "OperatingRound" && orSubPhaseProgress && (
         <span
           style={styles.subPhaseTrail}
@@ -2158,7 +2234,6 @@ export default function ContextualActionBar({
          track this round has; the two are mutually exclusive by round type, so this costs no height.
          AND THE MONEY IS NO LONGER WHY IT IS THERE -- #631's seat card carries the acting player's figures
          beside the controls, which is the part of #342 that was about proximity to the buttons. */}
-      {roundType !== "OperatingRound" && seatOrderTrail}
       {/* Operating Round turn stepper, directly under the round label it elaborates: the label says WHICH step,
          the strip says where that step sits in the turn. Operating Round only -- a strip elsewhere would be
          inventing structure.
@@ -2361,16 +2436,48 @@ export default function ContextualActionBar({
                      wording from "President's Personal Treasury" and #743's harness has been asserting on
                      this exact sentence since. The vocabulary RULE it was protecting is a sweep over every
                      surface and is untouched; what changes is which surface the example points at. */}
+                  {/* ==================================================================
+                       DESIGN NOTE 974: A PLATE, SO THE SEAT COLOUR CAN BE ITSELF
+                      ==================================================================
+                     REPORTED: "When buying private companies or trains from other corporations, it is hard
+                     to tell at a glance who owns the active corporation. Update the president designation
+                     ... use a neutral background badge, render the player's name in their specific player
+                     color, and include the yellow crown icon."
+                     THE PLATE IS WHAT MAKES THE COLOUR POSSIBLE, and that is the whole of why this needs
+                     three changes rather than one. #236 paints this entire bar in the ACTING CORPORATION's
+                     livery, which is why every other figure on it takes a derived `corporationBarInk`
+                     rather than a fixed one. A seat colour laid straight onto that is eight hues over eight
+                     liveries -- sixty-four contrast pairs, several of them a seat colour on top of very
+                     nearly itself, and the failure is silent: the name does not vanish, it just stops being
+                     legible on the two boards where it matters.
+                     A NEUTRAL PLATE COLLAPSES THAT TO EIGHT. `rgba(0,0,0,0.5)` is one ground, so each seat
+                     colour has to be legible against exactly one thing, and it is the same ground whichever
+                     corporation is acting -- which is also what stops the badge itself flickering hue as the
+                     turn passes round the table.
+                     #779's RULE STILL DECIDES WHEN NOT TO. An address off the roster gets no colour, and
+                     then the badge falls back to the bar's own muted ink -- "a wrong colour is worse than
+                     none", so the fallback is the reading it had before this note rather than a guess.
+                     THE CROWN GOES GOLD, WHICH IS A CORRECTION AND NOT A DECORATION. It has been taking
+                     `currentColor` here, so it was rendering in the corporation's muted ink -- a different
+                     colour on this surface than on `ContextualSubPanel`'s table, where #552's crown is
+                     `#c9a94c`. One mark, two colours, decided by which panel you were looking at. Now the
+                     crown is the constant and the NAME is the variable, which is the arrangement that lets
+                     a player read "crown = president, colour = who" instead of decoding both together. */}
                   {activeCorporation.presidentLabel && (
                     <span
                       style={{
                         ...styles.orContextPresident,
-                        color: corporationBarInk.inkMuted,
+                        color: activeCorporation.presidentColor ?? corporationBarInk.inkMuted,
                       }}
                     >
                       {/* Design note #552: our own crown, not U+1F451 -- the same drawing every other surface
-                          uses. */}
-                      <PresidentCrown scale={0.95} style={{ marginRight: "3px" }} />
+                          uses. Design note #974: and in the badge gold every other surface gives it, set
+                          explicitly because the name beside it no longer supplies a `currentColor` the crown
+                          should follow. */}
+                      <PresidentCrown
+                        scale={0.95}
+                        style={{ marginRight: "3px", color: PRESIDENT_CROWN_GOLD }}
+                      />
                       {activeCorporation.presidentLabel}
                     </span>
                   )}

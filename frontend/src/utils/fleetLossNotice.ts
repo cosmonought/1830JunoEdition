@@ -108,29 +108,37 @@ export function noticeHeadline(notice: FleetLossNotice): string {
     : `${notice.ticker} gave up ${count} ${plural} to the train limit`;
 }
 
-/** What happened, in the order a president needs it: the event, then the consequence, then the remedy. */
+/** What happened, in the order a president needs it: the event, then the consequence, then the remedy.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 980: THE RUST MODAL WAS A WALL OF TEXT
+ *  ==================================================================
+ *
+ *  RULED: "The current Rust modal contains a wall of text. Simplify it drastically." With the replacement
+ *  given verbatim: `"[number] of your [train-type]-trains have rusted."`, and for the variant, `"Gentle rust:
+ *  You can run these trains one more time before they retire."`
+ *
+ *  AND THE OLD COPY HAD ACQUIRED A FALSEHOOD, which is the better reason to cut it. Its last sentence read
+ *  "It no longer counts against the train limit, so its replacement can be bought now" -- #906's rule, which
+ *  #979 has just corrected. A long paragraph is where a stale clause hides; a one-line sentence has nowhere
+ *  to put one.
+ *
+ *  WHAT THE TRIGGER SENTENCE WAS BUYING, and why losing it is affordable: it named which purchase caused this
+ *  ("The first 4-train was bought"). That fact is in the Activity Log, on the line immediately above, with a
+ *  timestamp and a round stamp -- and the modal is a blocking interruption, which is the worst surface in the
+ *  app for a fact the player did not ask for.
+ *
+ *  NUMBER AGREEMENT IS THE ONE DEVIATION from the ruled string: with a single train it reads "1 of your
+ *  2-trains has rusted." The template was written for the plural case and "have" is simply wrong for one.
+ *
+ *  THE LIMIT NOTICE IS UNTOUCHED. The ruling names the rust modal, and the limit copy is carrying a rule the
+ *  player genuinely cannot infer -- which train went, and that they had no say. Trimming it was not asked for
+ *  and it is not the same kind of text. */
 export function noticeBody(notice: FleetLossNotice): string {
   const trains = namedTrains(notice.trains);
   if (notice.cause === "rust") {
-    const trigger =
-      notice.arrivingTier === null
-        ? "A new train tier reached the board"
-        : `The first ${notice.arrivingTier}-train was bought`;
-    if (notice.gentleRust) {
-      /* Design note #906: THE GRACE PERIOD, STATED AS A DEADLINE. "One final run" is the good news and the
-         bad news at once, and a player who reads only the first half will plan a turn around a train that
-         will not be there. So the sentence ends on when it goes, not on what it is still worth. */
-      return (
-        `${trigger}, and every ${notice.trains[0]}-train in the game is now obsolete. This table plays ` +
-        `Gentle Rust, so ${notice.ticker}'s ${trains} ${count(notice)} NOT gone yet: it runs once more, on ` +
-        `this turn, and is scrapped the moment that turn ends. It no longer counts against the train limit, ` +
-        `so its replacement can be bought now.`
-      );
-    }
-    return (
-      `${trigger}, and every ${notice.trains[0]}-train in the game was destroyed with it. ` +
-      `${notice.ticker}'s ${trains} ${count(notice)} gone from its fleet.`
-    );
+    const verb = notice.trains.length === 1 ? "has" : "have";
+    return `${notice.trains.length} of your ${notice.trains[0]}-trains ${verb} rusted.`;
   }
   /* THE LIMIT IS NAMED AND SO IS THE RULE, for #704's reason: "discarded its 2-train" without them reads as a
      choice the president made. It is not a choice -- 1830 takes the train, and the only latitude is which one. */
@@ -153,13 +161,34 @@ const count = (notice: FleetLossNotice) => (notice.trains.length === 1 ? "is" : 
  *  A BLOCKING MODAL OWES THE PLAYER THIS. Being stopped is tolerable when the thing you are told could not have
  *  been avoided and is about to change what you do next; it is an insult when it is news you could have read.
  *  Both causes qualify -- neither is refusable and both happened while this corporation was not acting. */
-export function noticeConsequence(notice: FleetLossNotice): string {
-  if (notice.cause === "rust" && notice.gentleRust) {
-    return "This happened between your turns and could not be refused. Run it while you still have it — after this turn the fleet is one train smaller.";
-  }
-  return notice.cause === "rust"
-    ? "This happened between your turns and could not be refused. Check whether this corporation can still run a route before you spend its treasury."
-    : "This happened between your turns and could not be refused. The train is already back in the depot and may be bought again by anyone.";
+export function noticeConsequence(notice: FleetLossNotice): string | null {
+  /* ==================================================================
+      DESIGN NOTE 980: THE RUST NOTICE GIVES THIS UP, AND #896's ARGUMENT IS WHY IT CAN
+     ==================================================================
+     #896 ARGUED A BLOCKING MODAL OWES THE PLAYER A REASON IT WAS WORTH STOPPING THEM FOR -- "an insult when
+     it is news you could have read". That argument is about the modal as a whole, not about this particular
+     sentence, and after #980 the rust modal is two short lines that a player reads in about a second. The
+     interruption defends itself; a paragraph explaining that the interruption was fair is the wall of text.
+     `null` RATHER THAN AN EMPTY STRING, so the caller renders no paragraph at all. An empty `<p>` still
+     occupies its margins, which is a gap in the card that reads as a missing sentence.
+     THE LIMIT NOTICE KEEPS ITS LINE. "The train is already back in the depot and may be bought again by
+     anyone" is a fact with a decision attached -- a rival can take it this round -- and it is nowhere else on
+     screen. That is exactly the case #896 was defending. */
+  if (notice.cause === "rust") return null;
+  return "This happened between your turns and could not be refused. The train is already back in the depot and may be bought again by anyone.";
+}
+
+/** The gentle-rust line, or `null` when the table is not playing it.
+ *
+ *  Design note #980: RULED VERBATIM -- "Gentle rust: You can run these trains one more time before they
+ *  retire." -- and kept as its own string so the modal can colour it, which the ruling asked for explicitly.
+ *  IT IS TRUE FOR THE FIRST TIME. Under #906 the reprieved train left `owned_trains` and so never reached the
+ *  route planner; #979 leaves it in the fleet, which is what makes "you can run these" a promise the engine
+ *  keeps. Recorded here because this sentence has been on screen, unchanged in meaning, since #906 -- and it
+ *  was not true then. */
+export function noticeGentleRustLine(notice: FleetLossNotice): string | null {
+  if (notice.cause !== "rust" || !notice.gentleRust) return null;
+  return "Gentle rust: You can run these trains one more time before they retire.";
 }
 
 /** The toggle's own label, phrased as the request asked and scoped as narrowly as it actually behaves. */

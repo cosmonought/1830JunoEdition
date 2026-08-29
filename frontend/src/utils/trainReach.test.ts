@@ -83,8 +83,19 @@ describe("nobody keeps a private copy of the rule", () => {
 
   it("leaves no bare 999 in the callers", () => {
     /* THE MAGIC NUMBER IS THE BUG. Four literal comparisons is how one question got three answers, so the
-       absence is the assertion -- the sentinel lives in one module and is named. */
-    expect(APP).not.toContain("999");
+       absence is the assertion -- the sentinel lives in one module and is named.
+       ==================================================================
+        NARROWED: A BARE `999` ALSO MATCHED A PILL RADIUS
+       ==================================================================
+       IT ASSERTED `not.toContain("999")` on the whole of `App.tsx`, and `borderRadius: "999px"` -- the
+       standard "make this a pill" idiom, nothing to do with trains -- turned it red. The failure was a false
+       positive and the case has been failing on it rather than on anything about reach.
+       COMPARISONS, NOT DIGITS. What this rule forbids is a caller ASKING the question itself; `999` appearing
+       as a length, a radius or a duration is not that. The sibling assertion on `routeAutoTrace` was already
+       written in the narrow form, which is the shape both should have had. */
+    expect(APP).not.toContain("=== 999");
+    expect(APP).not.toContain("!== 999");
+    expect(APP).not.toContain(">= 999");
     expect(TRACE).not.toContain(">= 999");
   });
 

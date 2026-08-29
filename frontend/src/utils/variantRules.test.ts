@@ -34,7 +34,8 @@ import {
   projectDividendCellMove,
   projectDividendFrom,
 } from "../components/StockMarketRenderer";
-import { fleetLossNotices, noticeBody, noticeConsequence } from "./fleetLossNotice";
+import { fleetLossNotices, noticeBody, noticeGentleRustLine } from "./fleetLossNotice";
+import { isTrainLocked } from "./trainLimit";
 import type { GameStateResponse } from "./gameState";
 
 const DELAYED = { ...STANDARD_VARIANTS, delayedAuction: true };
@@ -348,25 +349,124 @@ describe("gentle rust reprieves a train for one turn (design note #906)", () => 
     expect(pr.pending_rust_trains ?? []).toEqual([]);
   });
 
-  it("moves them to a reprieve instead when the variant is on", () => {
+  it("marks them instead of taking them when the variant is on", () => {
+    /* ==================================================================
+        CORRECTED BY #979: THE OLD MECHANISM ENFORCED A RULE BY HIDING A VALUE
+       ==================================================================
+       THIS ASSERTED `expect(pr.owned_trains).not.toContain("2")`, and its note said why: "OUT of
+       `owned_trains` IS THE MECHANISM. Every surface that counts trains counts that array, so this is what
+       implements 'a pending-rust train occupies no train-limit slot' without any of them being told."
+       RULED SINCE: "Gently rusted trains do count toward the limit until they are permanently retired at the
+       end of their grace run."
+       AND THE OLD ASSERTION WAS PINNING TWO BUGS AT ONCE. Every surface reads `owned_trains` -- including
+       `ownedTrainRoster`, which is where the route planner gets its trains. A train removed from that array
+       has no roster entry, so no route draft, so it cannot be run: #906's headline promise of "one final
+       Operating Round run" was unreachable from the moment it was written, and nothing in the suite could
+       see it because `pending_rust_trains` was written here, cleared at the turn's end, and read by nothing
+       else in the app.
+       SO THE TRAIN STAYS AND THE LIST IS A MARK OVER IT. Both halves asserted, because either alone is a
+       state the fix can half-reach: the fleet unchanged with no mark is rust that did not happen, and a mark
+       with the train gone is #906 again wearing a new field. */
     const gentle = { ...STANDARD_VARIANTS, gentleRust: true };
     const after = applyPhaseChange(phaseFour(gentle), "4");
     const pr = after.public_companies[0];
-    /* OUT OF `owned_trains` IS THE MECHANISM. Every surface that counts trains counts that array, so this is
-       what implements "a pending-rust train occupies no train-limit slot" without any of them being told. */
-    expect(pr.owned_trains).not.toContain("2");
+    expect(pr.owned_trains).toEqual(["2", "2", "3"]);
     expect(pr.pending_rust_trains).toEqual(["2", "2"]);
   });
 
+  it("counts the reprieved trains against the train limit", () => {
+    /* THE RULING, AS ARITHMETIC. Phase 4's limit is 3 and this corporation holds three trains, two of them
+       reprieved -- so nothing is discarded, and the fleet that survives is the WHOLE fleet. Under #906 this
+       corporation counted as holding one train and had room to buy two more.
+       DRIVEN THROUGH THE SHARED RULE the buy gate asks, not through a second `>=` written here: if the two
+       ever disagree, the corporation is offered a purchase the reducer will take back. */
+    const gentle = { ...STANDARD_VARIANTS, gentleRust: true };
+    const after = applyPhaseChange(phaseFour(gentle), "4");
+    const pr = after.public_companies[0];
+    expect(pr.owned_trains).toHaveLength(3);
+    expect(isTrainLocked(pr.owned_trains?.length ?? 0, 3)).toBe(true);
+  });
+
+  it("forces a discard when the new limit is below the whole fleet", () => {
+    /* RULED: "If a phase change drops the corporate train limit lower than a corporation's current total
+       train count (including gently rusted trains), force the immediate discard of a train (which will
+       typically be the gently rusted train)."
+       PHASE 6 CUTS THE LIMIT TO 2 and this corporation holds four, so two must go. The first 6-train rusts
+       the 3s (`RUSTS_ON`), which under this variant marks them rather than taking them -- and the fleet is
+       then over by exactly the pair the trim should reach for first.
+       THE FIXTURE HAD TO ARRIVE AT 6, NOT 5. My first version bought a 5 and asserted a reprieve: nothing
+       rusts on 5 in 1830 (2s go on the first 4, 3s on the first 6, 4s on the first Diesel), so the case was
+       testing a plain cheapest-first trim and calling it a reprieve test. It passed on `owned_trains` and
+       only the `pending_rust_trains` assertion noticed.
+       ASSERTED ON WHICH TRAINS SURVIVE, not just on the count. A cheapest-first trim that ignored the marks
+       would leave the same NUMBER of trains and the wrong ones -- a corporation holding two reprieved trains
+       that die at the end of the turn, having just scrapped the two that would have run all game. */
+    const gentle = { ...STANDARD_VARIANTS, gentleRust: true };
+    const before = phaseFour(gentle);
+    const fleet = {
+      ...before,
+      public_companies: [
+        { company_id: 1, ticker: "PRR", owned_trains: ["3", "3", "5", "6"], is_floated: true },
+      ],
+    } as unknown as GameStateResponse;
+    const after = applyPhaseChange(fleet, "6");
+    const pr = after.public_companies[0];
+    expect(pr.owned_trains).toEqual(["5", "6"]);
+    expect(pr.pending_rust_trains).toEqual([]);
+  });
+
+  it("takes a live train too when the reprieved ones are not enough", () => {
+    /* THE OTHER SIDE OF "REPRIEVED FIRST": it is an ORDERING, not a rule that only reprieved trains may go.
+       One reprieved 3 and three live trains against a limit of 2 means two departures, and the second has to
+       come out of the live fleet cheapest-first -- #284's rule, still in force under the reprieved ones. */
+    const gentle = { ...STANDARD_VARIANTS, gentleRust: true };
+    const before = phaseFour(gentle);
+    const fleet = {
+      ...before,
+      public_companies: [
+        { company_id: 1, ticker: "PRR", owned_trains: ["3", "4", "5", "6"], is_floated: true },
+      ],
+    } as unknown as GameStateResponse;
+    const after = applyPhaseChange(fleet, "6");
+    const pr = after.public_companies[0];
+    /* The reprieved 3 goes first, then the cheapest live train -- the 4. */
+    expect(pr.owned_trains).toEqual(["5", "6"]);
+    expect(pr.pending_rust_trains).toEqual([]);
+  });
+
+  it("does not leave a mark behind on a train the limit took", () => {
+    /* THE SILENT FAILURE THIS PREVENTS, and it is worse than a stale field. The reprieve expires by MULTISET
+       REMOVAL from `owned_trains`, so a "3" left in `pending_rust_trains` after its own train was discarded
+       would, at the end of the turn, remove a DIFFERENT 3 -- a live train, scrapped for a mark belonging to
+       one that left two phases ago. Asserted through the trim rather than by inspecting the helper, because
+       the two lists are only wrong together. */
+    const gentle = { ...STANDARD_VARIANTS, gentleRust: true };
+    const before = phaseFour(gentle);
+    const fleet = {
+      ...before,
+      public_companies: [
+        { company_id: 1, ticker: "PRR", owned_trains: ["3", "3", "5"], is_floated: true },
+      ],
+    } as unknown as GameStateResponse;
+    const after = applyPhaseChange(fleet, "6");
+    const pr = after.public_companies[0];
+    expect(pr.owned_trains).toEqual(["3", "5"]);
+    expect(pr.pending_rust_trains).toEqual(["3"]);
+  });
+
   it("scraps them at the end of that corporation's turn", () => {
-    /* THE RULING, EXACTLY: "dies at the exact end of that specific corporation's next Operating Round turn". */
+    /* THE RULING, EXACTLY: "dies at the exact end of that specific corporation's next Operating Round turn".
+       #979: AND NOW THERE IS A TRAIN TO SCRAP. Under #906 this line cleared a list and nothing else, because
+       the trains had left `owned_trains` at the phase change -- so the expiry asserted here was a bookkeeping
+       tidy, not a retirement. The fleet is asserted alongside the mark now, which is the half that was
+       missing and the half a player can see. */
     const withReprieve = operating({
       variants: { ...STANDARD_VARIANTS, gentleRust: true },
       public_companies: [
         {
           company_id: 1,
           ticker: "PRR",
-          owned_trains: ["4"],
+          owned_trains: ["2", "4"],
           pending_rust_trains: ["2"],
           is_floated: true,
         },
@@ -374,6 +474,27 @@ describe("gentle rust reprieves a train for one turn (design note #906)", () => 
     });
     const after = endOfSet(withReprieve);
     expect(after.public_companies[0].pending_rust_trains).toEqual([]);
+    expect(after.public_companies[0].owned_trains).toEqual(["4"]);
+  });
+
+  it("scraps one train per mark, not every train of that model", () => {
+    /* THE MULTISET RULE, and the reason the expiry is a splice rather than a filter. A corporation holding a
+       reprieved 3 and a live 3 must lose exactly one; `filter(m => !reprieved.includes(m))` takes both, and
+       the player watches a train they still owned disappear with no event anywhere to explain it. */
+    const withReprieve = operating({
+      variants: { ...STANDARD_VARIANTS, gentleRust: true },
+      public_companies: [
+        {
+          company_id: 1,
+          ticker: "PRR",
+          owned_trains: ["3", "3", "5"],
+          pending_rust_trains: ["3"],
+          is_floated: true,
+        },
+      ] as never,
+    });
+    const after = endOfSet(withReprieve);
+    expect(after.public_companies[0].owned_trains).toEqual(["3", "5"]);
   });
 
   it("does not scrap another corporation's reprieve on the way past", () => {
@@ -395,18 +516,33 @@ describe("gentle rust reprieves a train for one turn (design note #906)", () => 
   });
 
   it("tells the player it is a deadline, not a gift", () => {
-    /* THE COPY IS PART OF THE RULE. "One final run" read alone is good news, and a player who stops there
-       plans a turn around a train that will not be here. */
+    /* ==================================================================
+        REWRITTEN BY #980, AND ONE OF THE OLD ASSERTIONS WAS PINNING A FALSEHOOD
+       ==================================================================
+       IT ASSERTED FOUR PHRASES from #906's paragraph, one of which was
+       `/no longer counts against the train limit/`. That clause is exactly the rule #979 has just corrected,
+       so this case had become a test enforcing the bug -- and it would have failed the fix rather than
+       catching anything.
+       THE COPY IS STILL PART OF THE RULE, which is why the case survives at all: "one more time" read alone
+       is good news, and the sentence has to land on the retirement. The ruled string does, in eleven words
+       where #906 took sixty.
+       AND THE VARIANT'S LINE IS NOT IN THE BODY ANY MORE. It is its own string so the modal can colour it,
+       which the ruling asked for -- so the body is asserted to be the STANDARD sentence even here, and the
+       variant's contribution asserted beside it. */
     const [rust] = fleetLossNotices(
       { companyId: 1, ticker: "PRR", rusted: ["2"], discarded: [] },
       "4",
       3,
       true,
     );
-    expect(noticeBody(rust)).toMatch(/NOT gone yet/);
-    expect(noticeBody(rust)).toMatch(/scrapped the moment that turn ends/);
-    expect(noticeBody(rust)).toMatch(/no longer counts against the train limit/);
-    expect(noticeConsequence(rust)).toMatch(/Run it while you still have it/);
+    expect(noticeBody(rust)).toBe("1 of your 2-trains has rusted.");
+    expect(noticeGentleRustLine(rust)).toBe(
+      "Gentle rust: You can run these trains one more time before they retire.",
+    );
+    expect(noticeGentleRustLine(rust)).toMatch(/before they retire/);
+    /* THE CLAUSE #979 KILLED, as an absence, in both strings. A build that restored the old paragraph would
+       be telling the player a train-limit rule the engine no longer follows. */
+    expect(`${noticeBody(rust)} ${noticeGentleRustLine(rust)}`).not.toMatch(/train limit/);
   });
 
   it("keeps the ordinary wording when the variant is off", () => {
@@ -416,8 +552,10 @@ describe("gentle rust reprieves a train for one turn (design note #906)", () => 
       3,
       false,
     );
-    expect(noticeBody(rust)).toMatch(/destroyed with it/);
-    expect(noticeBody(rust)).not.toMatch(/NOT gone yet/);
+    expect(noticeBody(rust)).toBe("1 of your 2-trains has rusted.");
+    /* THE ONLY DIFFERENCE BETWEEN THE TWO TABLES IS THE EXTRA LINE now, which is what "keep the colored text"
+       produces: one sentence everybody gets, one the variant adds. */
+    expect(noticeGentleRustLine(rust)).toBeNull();
   });
 });
 

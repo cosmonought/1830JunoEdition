@@ -94,6 +94,10 @@ import {
   starVertices,
   starWidthForHeight,
 } from "./privatePowerStar";
+/* Design note #975: this file had TWO copies of `0.72`, both commented "cap height, near enough" -- the
+   badge's fallback and `tokenTextChordWidth`'s chord offset. One declaration, in the module that owns the
+   type scale. */
+import { CAP_HEIGHT_RATIO } from "../styles/typography";
 
 /** One train's traced route, for the map overlay -- design note #137 (F-1). */
 export interface RouteOverlay {
@@ -1348,7 +1352,10 @@ export function drawReservationBadgeAt(
   const capHeight =
     typeof capMetrics.actualBoundingBoxAscent === "number" && capMetrics.actualBoundingBoxAscent > 0
       ? capMetrics.actualBoundingBoxAscent
-      : fontPx * 0.72;
+      /* Design note #975: the fallback ratio is shared with the action bar's chip now, rather than typed
+         here. Both surfaces size a star from a font size and had their own decimal; one place is one
+         decision, and the note there records why the chip takes the x-height and this takes the cap. */
+      : fontPx * CAP_HEIGHT_RATIO;
   const starH = capHeight;
   const markW = starWidthForHeight(starH);
   const gap = fontPx * 0.28;
@@ -2147,8 +2154,11 @@ export function tokenTextChordWidth(
   /* Cap height, near enough, for a bold sans at this size -- the letters are
      all capitals, so the ascender is the whole story and the descender never
      appears. Half of it is the offset from the centre line at which the
-     chord has to be measured. */
-  const halfTextHeight = fontPx * 0.72 * 0.5;
+     chord has to be measured.
+     Design note #975: the ratio is `CAP_HEIGHT_RATIO` now. It was `0.72` here
+     and `0.72` again in `drawReservationBadgeAt`, each with a comment saying
+     this, and the action bar was about to write a third. */
+  const halfTextHeight = fontPx * CAP_HEIGHT_RATIO * 0.5;
   // The ring is stroked ON the circle, so half of it is interior.
   const inner = radius - ringWidth / 2;
   if (inner <= halfTextHeight) return 0;

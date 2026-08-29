@@ -259,12 +259,23 @@ describe("the consolidated private revenue toast (design note #967)", () => {
     expect(opening).toContain("PRIVATE_REVENUE_TOAST_MS");
   });
 
-  it("runs at one and a half times the standard window", () => {
-    /* RULED: "Increase the display duration of this specific toast to 1.5x the standard duration." Derived
-       from the standard rather than typed, so the two cannot drift apart. */
+  it("runs on a window of its own", () => {
+    /* ==================================================================
+        SUPERSEDED BY #983, IN THE OPPOSITE DIRECTION
+       ==================================================================
+       THIS ASSERTED `Math.round(STANDARD_TOAST_MS * 1.5)`. #967's ruling was "Increase the display duration
+       of this specific toast to 1.5x the standard duration so it is easily readable", and deriving it from
+       the standard was right for that instruction: the two could not drift apart.
+       RULED SINCE: "The 'Your Private Companies' toast stays up far too long. Reduce its display duration to
+       strictly `400ms`." A fixed figure, not a multiple -- so the derivation is what has to go, and keeping
+       it would mean a change to the standard window silently dragging this back up.
+       WHAT THE CASE IS STILL FOR is the property that survived both rulings and is the reason #967 built a
+       constant at all: this toast has a window of its OWN, named once, and every other toast takes the
+       default. `polishWave9` owns the figure; this owns the separation. */
     const TOAST = readStripped("components/ActionToast.tsx");
     expect(TOAST).toContain("export const STANDARD_TOAST_MS = 3700;");
-    expect(TOAST).toContain("Math.round(STANDARD_TOAST_MS * 1.5)");
+    expect(TOAST).toContain("export const PRIVATE_REVENUE_TOAST_MS = 400;");
+    expect(TOAST).not.toContain("STANDARD_TOAST_MS * 1.5");
     expect(TOAST).toContain("durationMs = STANDARD_TOAST_MS");
   });
 });

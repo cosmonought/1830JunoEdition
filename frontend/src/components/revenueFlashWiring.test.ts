@@ -68,10 +68,31 @@ describe("the overlay is floating text, not a window (design note #940)", () => 
     expect(FLASH).not.toContain("boxShadow");
     expect(FLASH).not.toContain("border:");
     expect(FLASH).not.toContain("padding");
-    /* THE GLOW DID NOT SURVIVE AS A SECOND COPY. `background:` or a gradient anywhere in this component is
-       the coloured field coming back; the edge flash sets `color`, which is not a background. */
-    expect(FLASH).not.toContain("radial-gradient");
-    expect(FLASH).not.toContain("background:");
+  });
+
+  it("keeps the backdrop edgeless, which is what makes it not a plate (design note #986)", () => {
+    /* ==================================================================
+        I ASSERTED THIS GRADIENT WAS GONE ONE BATCH AGO, AND IT IS BACK ON INSTRUCTION
+       ==================================================================
+       #973 REMOVED #960's GLOW and I added `not.toContain("radial-gradient")` and `not.toContain("background:")`
+       here to hold it removed. RULED SINCE: "render a white/cream radial gradient glow strictly behind the
+       number and arrows ... 70% opacity at its center and fade out completely to 0% at its edges."
+       SO THOSE TWO ABSENCES ARE WITHDRAWN, and I would rather say that than quietly weaken them. What they
+       were guarding is real and #960's note states it exactly: "Slipping past an absence test on a
+       technicality makes the test worthless for everything it still guards." The technicality then was that
+       a radial gradient sets `background`, not `backgroundColor`, so #940's list could not see it.
+       WHAT #940 ACTUALLY FORBIDS IS AN EDGE. A box has a rim the figure sits inside; this reaches full
+       transparency at its own boundary, so no rectangle is visible at any opacity and there is nothing to
+       read as a window. That distinction is now asserted DIRECTLY -- the last stop's alpha -- rather than
+       being left to the property name, which is the form it should have had the first time.
+       THE FIGURE'S OWN STYLE IS STILL A BARE `background`-FREE BLOCK, and the case above still says so: the
+       backdrop is a separate element with its own class, not a fill on the numeral. */
+    expect(FLASH).toContain("radial-gradient(ellipse closest-side");
+    expect(FLASH).toContain('const BACKDROP_FADE = "rgba(255, 250, 240, 0)"');
+    expect(FLASH).toContain("${BACKDROP_FADE} 100%)");
+    /* AND IT IS THE ONLY GRADIENT IN THE COMPONENT. A second one would be #960's outcome-tinted field back
+       beside this one, which is the duplication #973 was right to object to. */
+    expect(FLASH.match(/radial-gradient/g)?.length ?? 0).toBe(1);
   });
 
   it("flashes the screen's rim, not a plate behind the figure (design note #973)", () => {

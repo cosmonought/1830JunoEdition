@@ -139,15 +139,69 @@ describe("the glow moved to the screen's rim (design note #973)", () => {
     expect(edge).toContain("currentColor");
   });
 
-  it("has retired the radial glow rather than keeping both", () => {
-    /* AS AN ABSENCE, IN BOTH FILES, on comment-stripped copies (#490a) so #973's own note explaining the
-       removal cannot satisfy the search. Keeping both would put the outcome's hue behind the numeral AND
-       around it -- twice the colour for one fact, and the half sitting on the figure is the half that
-       competes with it. */
+  it("keeps the rim flash and the backdrop as two different jobs (design note #986)", () => {
+    /* ==================================================================
+        HALF OF #973 IS REVERSED, AND THE HALF THAT SURVIVES IS THE ARGUMENT
+       ==================================================================
+       THIS ASSERTED `not.toContain("radial-gradient")` -- #973 had moved the glow to the screen's rim and
+       argued the rim was the better home "from a place the board never occupies".
+       REPORTED SINCE: "The number is getting lost against the map and the Action Bar ... render a
+       white/cream radial gradient glow strictly behind the number and arrows."
+       AND #973 WAS TREATING ONE ELEMENT AS DOING ONE JOB when it was doing two. #960's glow carried the
+       outcome's hue (a direction cue) AND sat behind the glyphs (legibility). Moving it to the rim kept the
+       first and silently dropped the second, which is the report.
+       SO BOTH EXIST NOW, and the COLOUR is what stops them being the duplication #973 objected to: the rim is
+       tinted green or red and says which way the money went; the backdrop is neutral cream and says nothing.
+       Two elements, two channels, no overlap -- asserted as the pair rather than as either alone, because
+       either one arriving without the other is a state this batch can half-reach. */
+    const ANIM = readStripped("styles/animations.ts");
+    expect(FLASH).toContain('className="app-revenue-edge"');
+    expect(FLASH).toContain('className="app-revenue-backdrop"');
+    expect(FLASH).toContain("radial-gradient(ellipse closest-side");
+    /* THE BACKDROP SAYS NOTHING ABOUT DIRECTION. A `bonus ?` ternary anywhere near its colour would put the
+       outcome's hue behind the figure again, which is exactly what #973 removed. */
+    const backdrop = sliceBetween(FLASH, 'className="app-revenue-backdrop"', "/>");
+    expect(backdrop).not.toContain("bonus ?");
     expect(ANIM).not.toContain("app-revenue-glow");
-    expect(ANIM).not.toContain("REVENUE_FLASH_GLOW_CSS");
-    expect(FLASH).not.toContain("radial-gradient");
-    expect(FLASH).not.toContain("REVENUE_FLASH_GLOW_CSS");
+  });
+
+  it("fades the backdrop to nothing at its edge, at the ruled opacity", () => {
+    /* RULED: "70% opacity at its center and fade out completely to 0% at its edges."
+       BOTH STOPS ASSERTED, and as the SAME ink at two alphas. Fading to the `transparent` keyword instead is
+       the classic gradient bug -- several engines interpolate it through transparent BLACK, which lays a grey
+       halo across the middle of a gradient whose whole job is to brighten. */
+    expect(FLASH).toContain('const BACKDROP_INK = "rgba(255, 250, 240, 0.7)"');
+    expect(FLASH).toContain('const BACKDROP_FADE = "rgba(255, 250, 240, 0)"');
+    expect(FLASH).not.toContain("transparent)");
+  });
+
+  it("puts the backdrop strictly behind the number and the arrows", () => {
+    /* "STRICTLY BEHIND" IS `z-index: -1` INSIDE THE FIGURE'S WRAPPER: the numeral and all six arrows are
+       siblings in that one stacking context, so a single negative index puts the backdrop under every one of
+       them. Without it the cream washes over the glyphs it exists to lift -- the exact opposite of the job,
+       and the failure #960 named for its own glow. */
+    const ANIM = readStripped("styles/animations.ts");
+    const backdrop = sliceBetween(ANIM, ".app-revenue-backdrop {", "}");
+    expect(backdrop).toContain("z-index: -1");
+    expect(backdrop).toContain("pointer-events: none");
+    expect(backdrop).toContain("position: absolute");
+  });
+
+  it("sizes the backdrop from the wrapper, so it covers the arrow spread", () => {
+    /* #960's GLOW WAS `2.6em` SQUARE -- a multiple of the FONT SIZE, which is right for a numeral alone and
+       far too small for a numeral ringed by six arrows reaching from -32% to 124%. Percentages resolve
+       against the same box those offsets are percentages of, so the backdrop grows with the spread instead
+       of needing a re-tune every time an offset moves.
+       CHECKED AGAINST THE ARROWS' OWN REACH rather than against a remembered number, so widening the spread
+       without widening the backdrop fails here. */
+    const ANIM = readStripped("styles/animations.ts");
+    const backdrop = sliceBetween(ANIM, ".app-revenue-backdrop {", "}");
+    const width = Number(backdrop.match(/width: (\d+)%/)?.[1]);
+    const lefts = (FLASH.match(/left: "(-?[\d.]+)%"/g) ?? []).map((entry) =>
+      Number(entry.replace(/[^-\d.]/g, "")),
+    );
+    expect(lefts.length).toBe(6);
+    expect(width).toBeGreaterThan(Math.max(...lefts) - Math.min(...lefts));
   });
 
   it("keeps the black halo on the text", () => {
@@ -160,29 +214,35 @@ describe("the glow moved to the screen's rim (design note #973)", () => {
 });
 
 describe("the arrows are legible against the numeral (design note #972)", () => {
-  it("sizes both tiers well above what they were", () => {
+  it("sizes both tiers to the ruled share of the number", () => {
     /* ==================================================================
-        A RATIO, NOT A LITERAL, BECAUSE THE LITERAL IS WHAT DRIFTED
+        #972 MEASURED THE WRONG THING, AND THAT IS WHY THEY STILL LOOKED SMALL
        ==================================================================
-       REPORTED: "The directional arrows are way too small relative to the text ... Scale them up
-       significantly."
-       AND THE COMPARISON IS THE MEASUREMENT. #957 chose 0.34/0.2 against a 132px type ceiling; #954 then cut
-       that ceiling to 104px and did not revisit them, so the arrows shrank with the numeral while the reason
-       for their size did not change. Asserted against the FIGURES THEY REPLACE so a future edit that quietly
-       walks them back fails here. */
-    const critical = Number(FLASH.match(/critical: ([\d.]+)/)?.[1]);
-    const minor = Number(FLASH.match(/minor: ([\d.]+)/)?.[1]);
-    expect(critical).toBeGreaterThan(0.34);
-    expect(minor).toBeGreaterThan(0.2);
+       IT ASSERTED THE TWO BASES HAD GROWN past #957's figures, which they had. REPORTED ANYWAY: "The
+       animation arrows are still drastically too small ... The large/critical arrows must be 60-80% of the
+       size of the number text, and the small/minor arrows must be 30-50%."
+       THE INSTRUCTION AND #972 ARE TALKING ABOUT DIFFERENT QUANTITIES. #972 set a FONT SIZE and compared it
+       to the numeral's font size; the ruling is about DRAWN heights. U+25B2 inks roughly seven tenths of its
+       em while the numeral is read by its cap height -- so a "0.55em" arrow drew at about 53% of the numeral,
+       and the smallest of the six landed near 37%. Every percentage in #972's note was about a box nobody can
+       see.
+       SO THE ASSERTION IS ON THE BAND, in the ruling's own units, and the conversion is asserted separately
+       in `polishWave7`. "At least 10x" is not implementable alongside these percentages -- ten times #972's
+       sizing puts one arrow at five and a half times the numeral's height -- and #985 records that the band
+       is the half that was followed. */
+    expect(FLASH).toContain("critical: { low: 0.6, high: 0.8 }");
+    expect(FLASH).toContain("minor: { low: 0.3, high: 0.5 }");
+    expect(FLASH).toContain("CAP_HEIGHT_RATIO");
+    expect(FLASH).toContain("ARROW_GLYPH_RATIO");
   });
 
   it("keeps #957's skew while doing it", () => {
     /* THE HALF THAT MUST SURVIVE A RESCALING. Size is the channel a familiar player reads before the numeral
-       resolves, and it only says anything if the two tiers stay apart. Scaling both to the same number would
-       satisfy "bigger" and delete the meaning. */
-    const critical = Number(FLASH.match(/critical: ([\d.]+)/)?.[1]);
-    const minor = Number(FLASH.match(/minor: ([\d.]+)/)?.[1]);
-    expect(critical).toBeGreaterThan(minor * 1.35);
+       resolves, and it only says anything if the two tiers stay apart -- so the bands must not overlap at
+       all, which is stronger than comparing their centres. */
+    const criticalLow = Number(FLASH.match(/critical: \{ low: ([\d.]+)/)?.[1]);
+    const minorHigh = Number(FLASH.match(/minor: \{ low: [\d.]+, high: ([\d.]+)/)?.[1]);
+    expect(criticalLow).toBeGreaterThan(minorHigh);
   });
 
   it("pushes the offsets out with them", () => {
@@ -269,9 +329,20 @@ describe("the president reads as a person (design note #974)", () => {
        TRANSLUCENT BLACK RATHER THAN A SOLID, because it has to darken eight liveries by the same amount and
        remain the same badge on all of them -- a fixed hex would be right on the dark corporations and a grey
        patch on the pale ones. */
+    /* ==================================================================
+        SUPERSEDED BY #989: THE TRANSLUCENT PLATE WAS THE THING THAT LOOKED MESSY
+       ==================================================================
+       THIS ASSERTED `rgba(0, 0, 0, ...)`, and #974's reason was that one translucent rule could darken eight
+       liveries by the same amount.
+       REPORTED SINCE: "a dark, semi-opaque background that looks messy against the app's blue theme."
+       AND THE REPORT IS RIGHT ABOUT THE MECHANISM. A translucent plate does not produce ONE ground, it
+       produces eight muddied ones -- each corporation's own hue seen through smoke -- so the badge changed
+       colour as the turn passed round the table, which is the opposite of what #974 claimed for it.
+       THE PROPERTY THE CASE IS FOR IS UNCHANGED: the badge has a ground of its own, so a seat colour is read
+       against one known surface rather than against a livery. Solid white is that, and better at it. */
     const style = sliceBetween(STYLES, "orContextPresident: {", "},");
-    expect(style).toContain("backgroundColor:");
-    expect(style).toContain("rgba(0, 0, 0,");
+    expect(style).toContain('backgroundColor: "#ffffff"');
+    expect(style).not.toContain("rgba(0, 0, 0,");
     expect(style).toContain("borderRadius:");
     expect(style).toContain("padding:");
   });

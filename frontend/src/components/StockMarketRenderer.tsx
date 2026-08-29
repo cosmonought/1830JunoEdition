@@ -22,7 +22,12 @@ import { FONT_SIZE } from "../styles/typography";
 import { corporationLabel } from "../utils/corporationNames";
 import { bestContrastTextColor, corporationLiveryColor } from "../styles/corporationLivery";
 import { CorporateLogo } from "./CorporateLogo";
-import { resolveVariants, type GameVariants } from "../utils/gameVariants";
+import {
+  PAY_DOUBLE_JUMP_MULTIPLE,
+  WITHHOLD_DOUBLE_DROP_MULTIPLE,
+  resolveVariants,
+  type GameVariants,
+} from "../utils/gameVariants";
 
 /* ------------------------------------------------------------------ */
 /* Contract data mirrors -- see design note #1                        */
@@ -720,7 +725,36 @@ export function compassArmsFor(
       glyph: "→",
       label: "Paid (varies)",
       rising: true,
-      rule: "Dynamic Stock Market: the corporation paid dividends. Under its own share price the token does not move; once the price, one column right; twice the price or more, two columns.",
+      /* Design note #988: THREE TIMES, from `DOUBLE_JUMP_MULTIPLE` rather than from the word "twice" typed
+         here. This legend and `dividendStepsFor` are the pair #746c is about -- "The caption was accurate
+         about the code as it then stood, which is precisely why a wrong rule reaches a player: the legend
+         agreed with the bug" -- and a rebalance that moved the threshold while leaving "twice" on screen is
+         that failure arriving on schedule. */
+      rule: `Dynamic Stock Market: the corporation paid dividends. Under its own share price the token does not move; once the price, one column right; ${PAY_DOUBLE_JUMP_MULTIPLE} times the price or more, two columns.`,
+    },
+    /* ==================================================================
+        DESIGN NOTE 994: THE WITHHOLD VARIES AFTER ALL, AND #988's ARM SAID THE OPPOSITE
+       ==================================================================
+       #988 GAVE THIS ARM A SENTENCE PRECISELY TO RULE THE VARIATION OUT -- "One column left, whatever the run
+       was worth — the variant scales the reward, never the penalty" -- because beside a right arm labelled
+       "Paid (varies)" an unqualified "Withheld" invited the wrong inference.
+       RULED ONE BATCH LATER: "If a corporation Withholds revenue that is >= 3x the current share price, the
+       stock must drop by 2 cells." So the inference #988 was at pains to prevent is now the rule, and the
+       sentence written to prevent it would be the legend agreeing with nothing at all -- #746c's failure with
+       the polarity reversed, and a good reminder that a legend written to deny a rule is as fragile as one
+       written to state it.
+       THE LABEL TAKES THE QUALIFIER TOO, matching the right arm. A tooltip nobody hovers is where #962 put the
+       detail; the label is what is read at a glance, and "Withheld" beside "Paid (varies)" would still say
+       the withhold is fixed.
+       AND THE FLOOR IS IN THE SENTENCE, because it is the half a player cannot infer from the pay arm: the
+       pay can move nothing at all, the withhold never can. */
+    left: {
+      ...COMPASS_ARMS.left,
+      label: "Withheld (varies)",
+      /* Design note #995: TWO TIMES HERE, THREE ON THE RIGHT ARM, and the rose is the one surface where a
+         player sees both at once -- which is exactly why each arm reads its OWN constant. A shared figure
+         would have made the asymmetry invisible on the legend that exists to show it. */
+      rule: `Dynamic Stock Market: the corporation withheld. Always at least one column left, and ${WITHHOLD_DOUBLE_DROP_MULTIPLE} times the share price or more drops it two columns.`,
     },
   };
 }

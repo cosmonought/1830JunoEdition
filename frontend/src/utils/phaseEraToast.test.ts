@@ -107,8 +107,20 @@ describe("the shell announces it once, when it lands", () => {
   it("keeps the replay guard #825 installed upstream", () => {
     /* Nothing has just happened during a rebuild. The guard lives inside `showDividendToast`, so this
        asserts the toast goes through that door rather than around it. */
+    /* ==================================================================
+        SLICED TO THE FUNCTION'S FIRST STATEMENT, NOT TO A BYTE COUNT
+       ==================================================================
+       IT WAS `CODE.slice(at, at + 300)`, and #984 broke it by adding one parameter -- `detailRows`, whose
+       type annotation is about seventy characters. The guard had not moved; the window had. A fixed-length
+       window is a hidden assumption about how long a signature is allowed to get, and it fails on a change
+       that has nothing to do with the property being asserted.
+       ANCHORED ON THE TOKEN BUMP, which is the first statement after the guard and the thing the guard must
+       come before. That is the relationship this case is actually about: the replay check happens BEFORE any
+       toast state is written, not merely somewhere in the vicinity. */
     const at = CODE.indexOf("const showDividendToast");
     expect(at).toBeGreaterThan(-1);
-    expect(CODE.slice(at, at + 300)).toContain("if (replayingHistory) return;");
+    const body = CODE.slice(at, CODE.indexOf("actionToastTokenRef.current += 1;", at));
+    expect(body.length).toBeGreaterThan(0);
+    expect(body).toContain("if (replayingHistory) return;");
   });
 });

@@ -40,10 +40,10 @@ describe("the payload's shape (design note #944)", () => {
       UNPREDICTABLE_REVENUE_FLAVOR.unchanged.length,
       UNPREDICTABLE_REVENUE_FLAVOR.minorBonus.length,
       UNPREDICTABLE_REVENUE_FLAVOR.criticalBonus.length,
-    ]).toEqual([50, 50, 45, 50, 50]);
+    ]).toEqual([105, 105, 120, 105, 110]);
   });
 
-  it("holds 245 lines in total", () => {
+  it("holds 545 lines in total", () => {
     /* ==================================================================
         THE COUNTS MOVED, AND THE MODULO DID NOT HAVE TO
        ==================================================================
@@ -57,7 +57,7 @@ describe("the payload's shape (design note #944)", () => {
        THESE COUNT CASES ARE THE PART THAT HAD TO MOVE, which is the right split: the payload's shape is a
        fact worth pinning, and the code reads that shape rather than repeating it. */
     const all = Object.values(UNPREDICTABLE_REVENUE_FLAVOR).flat();
-    expect(all).toHaveLength(245);
+    expect(all).toHaveLength(545);
   });
 
   it("repeats no line, within a bucket or across them", () => {
@@ -72,7 +72,18 @@ describe("the payload's shape (design note #944)", () => {
        the `unchanged` lines are appended whole. Either way the payload supplies the terminator, so a line
        missing one produces a log entry that runs into nothing. */
     for (const line of Object.values(UNPREDICTABLE_REVENUE_FLAVOR).flat()) {
-      expect([line.slice(-24), line.endsWith(".")]).toEqual([line.slice(-24), true]);
+      /* ==================================================================
+          A CLOSING QUOTE MAY FOLLOW THE STOP (design note #993)
+         ==================================================================
+         ONE SUPPLIED LINE ENDS `... sound management.”` -- the full stop inside the quotation marks, which is
+         the standard convention and is where the sentence genuinely ends. The old assertion read the LAST
+         CHARACTER, so it called that line unterminated.
+         WIDENED RATHER THAN THE LINE REWRITTEN, because the copy is supplied verbatim (#944: "this file is a
+         payload, not a derivation") and moving a full stop to satisfy a test is the test editing the game's
+         voice. What the rule is actually about is that the sentence TERMINATES -- so a trailing quote is
+         allowed and nothing else is. */
+      const terminal = line.replace(/[”"]$/, "");
+      expect([line.slice(-24), terminal.endsWith(".")]).toEqual([line.slice(-24), true]);
     }
   });
 
@@ -278,7 +289,7 @@ describe("every line is reachable (design note #944)", () => {
       seen.unchanged.size,
       seen.minorBonus.size,
       seen.criticalBonus.size,
-    ]).toEqual([50, 50, 45, 50, 50]);
+    ]).toEqual([105, 105, 120, 105, 110]);
   });
 });
 

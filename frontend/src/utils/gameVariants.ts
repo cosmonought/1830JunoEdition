@@ -78,6 +78,38 @@ export const GAME_LENGTH_BLURB: Readonly<Record<GameLength, string>> = {
  * it, it could be something more lighthearted." The Lobby is where a table decides what KIND of game to play,
  * which is a question about feel; the mechanism belongs in the Rules Reference, where a player goes having
  * already chosen. The two difficulty parentheticals do the work the old paragraphs were failing at. */
+/* ==================================================================
+ *  DESIGN NOTE 995: THE TWO THRESHOLDS ARE DELIBERATELY DIFFERENT
+ * ==================================================================
+ *
+ * RULED: "The current symmetric 3x threshold is too forgiving for withholding. Introduce a deliberate
+ * asymmetry strictly for the Dynamic Stock Market variant. Pay Out: keep 3x. Withhold: 2x."
+ *
+ * TWO CONSTANTS, TWO NAMES, AND THE RENAME IS THE POINT. There was one `DOUBLE_JUMP_MULTIPLE` serving both
+ * arms, which was honest while the numbers agreed and becomes a trap the moment they do not: a name that
+ * says "the threshold" invites the next reader to unify two figures that are different ON PURPOSE. Named for
+ * their arms, neither can be mistaken for the other, and a diff that changes one shows exactly which.
+ *
+ * WHY THE ASYMMETRY IS THE WHOLE VARIANT AND NOT A TUNING KNOB. Dynamic Stock Market rewards a big payout by
+ * moving the token further; #988 then found that withholding was free below the share price, and #994 gave
+ * the withhold a matching ceiling. A SYMMETRIC pair leaves the two decisions balanced against each other,
+ * which is what "too forgiving for withholding" names: a president banking a large run pays the same
+ * marginal price as one banking a small one until the run is enormous. Dropping the withhold's bar to 2x
+ * makes hoarding a large revenue bite sooner than paying it out rewards.
+ *
+ * NO THIRD RUNG. "There are no 3-cell drops; cap the maximum penalty at a 2-cell drop", ruled explicitly --
+ * so both arms top out at two and the ladder has three rungs at most on the pay side (0, 1, 2) and two on
+ * the withhold side (1, 2). */
+export const PAY_DOUBLE_JUMP_MULTIPLE = 3;
+export const WITHHOLD_DOUBLE_DROP_MULTIPLE = 2;
+
+/* Design note #996: DECLARED ABOVE `VARIANT_COPY`, WHICH IS NOT TIDINESS. That record interpolates both
+   figures into the Dynamic Stock Market blurb and is evaluated at module load -- so with these below it the
+   two constants are in their temporal dead zone and the import throws a `ReferenceError` before the app
+   renders anything at all. Caught by moving the copy, not by a test: every suite that imports this module
+   would have failed at once, which is the loud kind of failure, but the ordering is a real constraint and is
+   worth stating rather than leaving to look arbitrary. */
+
 export type VariantCopyKey =
   | "unpredictableRevenue"
   | "dynamicStockMarket"
@@ -125,10 +157,29 @@ export const VARIANT_COPY: Readonly<Record<VariantCopyKey, { label: string; blur
     blurb:
       "Running railways is risky. In this variant, runs can produce up to ±20% their standard revenue, rounded to the nearest $10.",
   },
+  /* ==================================================================
+      DESIGN NOTE 996: THE LOBBY BLURB HAD GONE STALE TWICE OVER
+     ==================================================================
+     SUPPLIED: "Markets are volatile. Paying out 3x the share price triggers a double jump increase, but
+     withholding 2x the share price will cause a double jump decrease."
+     THE SENTENCE IT REPLACES WAS WRONG IN THREE PLACES, all of them acquired rather than original. "Twice the
+     price moves it two cells" was true until #988 raised the pay's bar to three. It said nothing at all about
+     the withhold, which #994 gave a threshold and #995 gave a lower one. And "punishes token payouts" is the
+     old rule's flavour: under the current numbers a small payout does not move the token, which is not a
+     punishment so much as a non-event.
+     WHICH IS #982 HAPPENING AGAIN, IN THE SAME FILE, three batches later. That note is about the Gentle Rust
+     blurb going stale when #979 reversed the rule under it, and it added a guard -- no blurb may say
+     "train limit" -- narrow to that one rule because "a blurb describing a rule that lives in a reducer is
+     not checkable from the string". The same is true here, and the same guard is now extended: the numbers in
+     this sentence are checked against the two exported constants, which is the strongest join available
+     short of generating the copy.
+     THE SUPPLIED WORDING IS KEPT VERBATIM apart from the figures being interpolated. "Markets are volatile"
+     is the feel a table is choosing (#961's rule for these blurbs: this is not a specification), and the two
+     thresholds are the one mechanical fact a player cannot infer from the name. */
   dynamicStockMarket: {
     label: "Dynamic stock market",
     blurb:
-      "The share price moves by how much was paid, not just that it was. A dividend under the share price does not move the token at all; twice the price moves it two cells. Rewards running big and punishes token payouts.",
+      `Markets are volatile. Paying out ${PAY_DOUBLE_JUMP_MULTIPLE}x the share price triggers a double jump increase, but withholding ${WITHHOLD_DOUBLE_DROP_MULTIPLE}x the share price will cause a double jump decrease.`,
   },
   /* Design note #961a: the difficulty qualifiers moved to the LABELS above. A table choosing variants wants
      to know which way each one pushes as it reads the name, not three lines into the description. */
@@ -242,39 +293,103 @@ export interface GameVariants {
  * the right fallback for a question this rule cannot pose. */
 
 /** How many cells a payout moves the token under Dynamic Stock Market. `0`, `1` or `2`. */
+
+
+/** How many cells the token moves on a dividend decision.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 988: THE DECISION IS AN INPUT, AND LEAVING IT OUT WAS A REAL BUG
+ *  ==================================================================
+ *
+ *  RULED: "Withholding revenue must now actively penalize the stock price. It should move the share price one
+ *  space to the left (or down, if at a wall), perfectly mirroring the standard one-space right/up movement of
+ *  a Pay Out."
+ *
+ *  IT ALREADY MOVED LEFT. `dividendStepFrom` has walked left-then-down on a withhold since #891. What it did
+ *  not do was move ONE: this function had no idea which decision it was being asked about, and the shell
+ *  handed its answer to BOTH projections. So under Dynamic Stock Market a withhold moved by the multiple the
+ *  PAYOUT would have earned -- zero cells when the revenue was under the share price, and TWO when it was
+ *  double. A corporation could withhold a small run and be punished not at all, or withhold a large one and
+ *  be punished twice over.
+ *
+ *  AND THE TWO SURFACES ALREADY DISAGREED ABOUT IT, which is the part worth recording. `App.tsx`'s readout
+ *  computed the withhold projection with a hard-coded one cell and said so in a comment -- "A WITHHOLD IS
+ *  ALWAYS ONE CELL" -- while the reducer's `projectDividend` passed the pay-derived count to whichever choice
+ *  arrived. The bar promised a one-cell drop and the board moved zero or two. That is #891 exactly, the note
+ *  this function exists because of: "the bar promising a rise the board does not perform." A rule stated in a
+ *  comment at one call site is not a rule.
+ *
+ *  SO THE CHOICE IS A REQUIRED ARGUMENT rather than a defaulted one. A default would let a caller keep
+ *  forgetting to say which decision it means, which is the entire bug -- and there is no answer that is safe
+ *  to assume, since the two arms differ in exactly the case the variant is about. */
 export function dividendStepsFor(
   payout: number,
   sharePrice: number | null | undefined,
   variants: GameVariants,
+  choice: "pay" | "withhold",
 ): number {
-  // Standard rules: any payout moves exactly one cell, whatever it was worth.
+  // Standard rules: any dividend decision moves exactly one cell, whatever it was worth.
   if (!variants.dynamicStockMarket) return 1;
-  if (!Number.isFinite(payout) || payout <= 0) return 0;
-  if (sharePrice == null || !Number.isFinite(sharePrice) || sharePrice <= 0) return 1;
-  if (payout >= sharePrice * 2) return 2;
-  if (payout >= sharePrice) return 1;
+
+  /* Read once, so the two arms cannot come to disagree about what an unreadable price or a zero payout is.
+     `null` is "the chain did not say", which #232 keeps distinct from zero -- and a price of zero is treated
+     as unreadable rather than as a divisor, because every payout is infinitely many times nothing. */
+  const price =
+    sharePrice == null || !Number.isFinite(sharePrice) || sharePrice <= 0 ? null : sharePrice;
+  const earned = Number.isFinite(payout) && payout > 0 ? payout : 0;
+
+  /* ==================================================================
+      DESIGN NOTE 994: THE WITHHOLD SCALES TOO, AND ITS FLOOR IS WHAT KEEPS IT A PENALTY
+     ==================================================================
+     RULED: "Implement a dynamic Withholding penalty that mirrors the new Pay Out double-jump. If a
+     corporation Withholds revenue that is >= 3x the current share price, the stock must drop by 2 cells."
+     THIS IS NOT #988's BUG COMING BACK, and the difference is the FLOOR rather than the ceiling. Before #988
+     a withhold took the pay's whole ladder, including its bottom rung -- so a run under the share price moved
+     the token NOTHING and withholding a small revenue was free. The rule now has two rungs and no zero: one
+     cell always, two when the run is large. A corporation can never withhold without paying for it.
+     AND THE ASYMMETRY WITH THE PAY ARM IS THE POINT OF THE VARIANT. A pay can move zero cells (the run did
+     not cover the price); a withhold cannot. Written as two arms rather than one shared ladder with a
+     `Math.max(1, ...)`, because the arms differ in their floor AND in what a missing price means, and one
+     expression covering both is how #988's bug was possible in the first place.
+     AN UNREADABLE PRICE FALLS TO ONE, not two: the same direction the pay arm falls, and the conservative
+     answer when the board cannot say what a multiple would even be. */
+  if (choice === "withhold") {
+    /* Design note #995: TWO TIMES, not three. The withhold's bar is deliberately lower than the pay's -- see
+       the constants for why the asymmetry is the variant rather than a tuning choice -- and it is capped
+       here at two cells because the ruling says so in as many words: "There are no 3-cell drops." */
+    if (price !== null && earned >= price * WITHHOLD_DOUBLE_DROP_MULTIPLE) return 2;
+    return 1;
+  }
+
+  if (earned <= 0) return 0;
+  if (price === null) return 1;
+  if (earned >= price * PAY_DOUBLE_JUMP_MULTIPLE) return 2;
+  if (earned >= price) return 1;
   return 0;
 }
 
-/** The sentence for the action bar, so a player can see WHY the token is about to move two cells -- or none. */
-export function dividendStepsExplanation(
-  payout: number,
-  sharePrice: number | null | undefined,
-  variants: GameVariants,
-): string | null {
-  if (!variants.dynamicStockMarket) return null;
-  const steps = dividendStepsFor(payout, sharePrice, variants);
-  const price = sharePrice == null || !Number.isFinite(sharePrice) ? null : sharePrice;
-  if (steps === 0) {
-    return price === null
-      ? "Dynamic Stock Market: this payout is too small to move the token."
-      : `Dynamic Stock Market: $${payout} is less than the $${price} share price, so the token does not move.`;
-  }
-  if (steps >= 2) {
-    return `Dynamic Stock Market: $${payout} is at least twice the $${price} share price, so the token moves two cells.`;
-  }
-  return `Dynamic Stock Market: $${payout} covers the $${price} share price once, so the token moves one cell.`;
-}
+/* ==================================================================
+ *  DESIGN NOTE 998: `dividendStepsExplanation` IS DELETED
+ * ==================================================================
+ *
+ * #908 BUILT IT AS "the sentence for the action bar, so a player can see WHY the token is about to move two
+ * cells -- or none", and no caller was ever written. #997 finally wired it, on instruction, into a footer
+ * beneath the two dividend columns. ASKED IMMEDIATELY AFTER: "can we actually just indicate this on the
+ * Market Move line? ... Maybe we replace both with (double move)?"
+ *
+ * SO IT LASTED ONE BATCH AS RENDERED CODE, and the marker is better for the reason #509a already gives about
+ * this panel: "SHOW THE MONEY MOVING, DO NOT DESCRIBE IT." The figures on the Market Move line state the
+ * outcome; a paragraph underneath explaining the arithmetic behind them is one layer of prose too many, and
+ * the one fact it carried that the figures do not -- "this move is twice the usual" -- is two words.
+ *
+ * DELETED RATHER THAN LEFT EXPORTED AND UNCALLED, which is the state it spent its whole life in and the
+ * reason nobody noticed: it had a passing suite, so it read as a working feature with a caller somewhere.
+ * That is #990's rule for `noticeConsequence`, applied to the function I had just finished defending -- and
+ * it would be inconsistent to knowingly recreate the exact fault I flagged two batches ago.
+ *
+ * WHAT IT WOULD BE GOOD FOR, if it is ever wanted back: the Rules Reference, where a player goes to read a
+ * rule rather than to make a decision. `git` has the sentences. */
+
 
 /** 1830 as printed. The shape a game with no config recorded reads as. */
 export const STANDARD_VARIANTS: GameVariants = {

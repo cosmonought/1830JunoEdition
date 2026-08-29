@@ -23,8 +23,9 @@ import { dividendSplit } from "./dividendSplit";
 import { readStripped } from "./sourceScan";
 import {
   boIsLocked,
-  dividendStepsExplanation,
   dividendStepsFor,
+  PAY_DOUBLE_JUMP_MULTIPLE,
+  WITHHOLD_DOUBLE_DROP_MULTIPLE,
   turnRevenueSentence,
   rollTurnRevenue,
   STANDARD_VARIANTS,
@@ -566,41 +567,95 @@ describe("the market rewards the size of the dividend (design note #908)", () =>
     /* THE CONTROL, and the one that protects every existing game: with the variant off the step count is 1
        whatever the figures say, which is 1830. A `dividendStepsFor` that reasoned about multiples before
        checking the flag would silently change the base game. */
-    expect(dividendStepsFor(10, 100, STANDARD_VARIANTS)).toBe(1);
-    expect(dividendStepsFor(1000, 100, STANDARD_VARIANTS)).toBe(1);
-    expect(dividendStepsFor(0, 100, STANDARD_VARIANTS)).toBe(1);
+    expect(dividendStepsFor(10, 100, STANDARD_VARIANTS, "pay")).toBe(1);
+    expect(dividendStepsFor(1000, 100, STANDARD_VARIANTS, "pay")).toBe(1);
+    expect(dividendStepsFor(0, 100, STANDARD_VARIANTS, "pay")).toBe(1);
   });
 
   it("does not move at all below the share price", () => {
-    expect(dividendStepsFor(99, 100, DYNAMIC)).toBe(0);
-    expect(dividendStepsFor(1, 100, DYNAMIC)).toBe(0);
+    expect(dividendStepsFor(99, 100, DYNAMIC, "pay")).toBe(0);
+    expect(dividendStepsFor(1, 100, DYNAMIC, "pay")).toBe(0);
   });
 
-  it("moves one cell from 1x, and two from 2x", () => {
+  it("moves one cell from 1x, and two from 3x", () => {
     /* THE BOUNDARIES ARE INCLUSIVE UPWARD, which is the one phrase in the rule that could be read either way:
        a payout EQUAL to the share price is not "less than" it. Pinned at both edges because a table arguing
-       about a $100 payout on a $100 share is a bad afternoon. */
-    expect(dividendStepsFor(100, 100, DYNAMIC)).toBe(1);
-    expect(dividendStepsFor(199, 100, DYNAMIC)).toBe(1);
-    expect(dividendStepsFor(200, 100, DYNAMIC)).toBe(2);
+       about a $100 payout on a $100 share is a bad afternoon.
+       ==================================================================
+        THE DOUBLE JUMP MOVED FROM 2x TO 3x (design note #988)
+       ==================================================================
+       RULED: "Shift the requirement for a 2-cell positive movement (double jump) from 2x the share price to
+       3x the share price", because Unpredictable Revenue and this variant compound in one direction -- a
+       +20% roll can carry a run over a step function and buy a 100% swing in how far the token travels.
+       THE OLD BOUNDARY IS ASSERTED AS THE MIDDLE BAND NOW, not deleted: $200 on a $100 share was two cells
+       and is one, and that is the whole of the rebalance. A case that only moved the 3x edge upward would
+       pass against an implementation that kept 2x as a third band. */
+    expect(dividendStepsFor(100, 100, DYNAMIC, "pay")).toBe(1);
+    expect(dividendStepsFor(199, 100, DYNAMIC, "pay")).toBe(1);
+    expect(dividendStepsFor(200, 100, DYNAMIC, "pay")).toBe(1);
+    expect(dividendStepsFor(299, 100, DYNAMIC, "pay")).toBe(1);
+    expect(dividendStepsFor(300, 100, DYNAMIC, "pay")).toBe(2);
+  });
+
+  it("takes the threshold from the shared constant, not from a literal", () => {
+    /* THE SENTENCE AND THE ARITHMETIC ARE THE PAIR #891 EXISTS FOR, and a rebalance is exactly when they come
+       apart: the number moves in one place and a legend somewhere else keeps saying "twice". Driven off the
+       exported constant so this case follows a future change rather than pinning today's figure. */
+    const price = 100;
+    expect(dividendStepsFor(price * PAY_DOUBLE_JUMP_MULTIPLE, price, DYNAMIC, "pay")).toBe(2);
+    expect(dividendStepsFor(price * PAY_DOUBLE_JUMP_MULTIPLE - 1, price, DYNAMIC, "pay")).toBe(1);
+  });
+
+  it("moves a withhold one cell below the threshold and two at it", () => {
+    /* ==================================================================
+        THE REPORTED IMBALANCE, THEN THE REBALANCE ON TOP OF IT (#988 -> #994)
+       ==================================================================
+       #988 FIXED A REAL BUG: this function had no idea which decision it was being asked about, so the shell
+       handed its answer to BOTH projections and a withhold under Dynamic Stock Market moved by the multiple a
+       PAYOUT would have earned -- zero cells for a small run, two for a large one.
+       #994 THEN ADDED THE CEILING BACK, deliberately and only at the top: "If a corporation Withholds revenue
+       that is >= 3x the current share price, the stock must drop by 2 cells."
+       THE DIFFERENCE FROM THE BUG IS THE FLOOR. A withhold can never move nothing now, whatever the run was
+       worth, so withholding a small revenue is never free -- which was the actual economic hole. Asserted as
+       the pair, because the floor and the ceiling fail independently. */
+    for (const payout of [0, 50, 100, 150, 199]) {
+      expect([payout, dividendStepsFor(payout, 100, DYNAMIC, "withhold")]).toEqual([payout, 1]);
+    }
+    /* Design note #995: TWICE, not three times -- the withhold's bar is deliberately lower than the pay's.
+       `batch26` owns the asymmetry; what this file keeps is the floor and the fact that a ceiling exists. */
+    expect(dividendStepsFor(200, 100, DYNAMIC, "withhold")).toBe(2);
+    expect(dividendStepsFor(5000, 100, DYNAMIC, "withhold")).toBe(2);
+  });
+
+  it("leaves the base game's withhold at one cell forever (design note #994a)", () => {
+    /* THE SCOPE LIMIT, RULED EXPLICITLY: "Do not alter the base game's withholding rules. Base game
+       withholding must always remain exactly a 1-cell drop, regardless of the revenue withheld."
+       THE GUARD ON THE VARIANT FLAG SITS AHEAD OF EVERY ARM, so this is true by construction -- and it gets
+       its own case anyway, because "true by construction" is what #988's withhold was until it was not. */
+    for (const payout of [0, 100, 299, 300, 5000]) {
+      expect([payout, dividendStepsFor(payout, 100, STANDARD_VARIANTS, "withhold")]).toEqual([
+        payout,
+        1,
+      ]);
+    }
   });
 
   it("caps at two however large the payout", () => {
-    // "2x to 3x (or higher)" is two cells; there is no third step to earn.
-    expect(dividendStepsFor(300, 100, DYNAMIC)).toBe(2);
-    expect(dividendStepsFor(5000, 100, DYNAMIC)).toBe(2);
+    // Two cells is the ceiling; there is no third step to earn however far past the threshold a run lands.
+    expect(dividendStepsFor(300, 100, DYNAMIC, "pay")).toBe(2);
+    expect(dividendStepsFor(5000, 100, DYNAMIC, "pay")).toBe(2);
   });
 
   it("falls back to one cell rather than two on a priceless company", () => {
     /* Every payout is infinitely many times nothing, so a naive multiple would hand the variant's biggest
        reward to the company with the weakest claim on it. And no division anywhere, so a zero price is a
        fallback rather than an exception. */
-    expect(dividendStepsFor(500, 0, DYNAMIC)).toBe(1);
-    expect(dividendStepsFor(500, null, DYNAMIC)).toBe(1);
+    expect(dividendStepsFor(500, 0, DYNAMIC, "pay")).toBe(1);
+    expect(dividendStepsFor(500, null, DYNAMIC, "pay")).toBe(1);
   });
 
   it("pays nothing for a payout of nothing", () => {
-    expect(dividendStepsFor(0, 100, DYNAMIC)).toBe(0);
+    expect(dividendStepsFor(0, 100, DYNAMIC, "pay")).toBe(0);
   });
 
   it("actually moves the token that many cells on the real chart", () => {
@@ -639,10 +694,23 @@ describe("the market rewards the size of the dividend (design note #908)", () =>
     expect(projected.price).toBe(start.price);
   });
 
-  it("explains itself only when the variant is on", () => {
-    expect(dividendStepsExplanation(50, 100, STANDARD_VARIANTS)).toBeNull();
-    expect(dividendStepsExplanation(50, 100, DYNAMIC)).toMatch(/does not move/i);
-    expect(dividendStepsExplanation(250, 100, DYNAMIC)).toMatch(/two cells/i);
+  it("no longer ships a sentence nobody renders (design note #998)", () => {
+    /* ==================================================================
+        `dividendStepsExplanation` IS DELETED, AND THIS BLOCK WITH IT
+       ==================================================================
+       IT ASSERTED THE THREE BANDS' SENTENCES -- "does not move", "one cell", "two cells" -- for a function
+       #908 built as "the sentence for the action bar" and never wired. It had a passing suite its entire
+       life, which is exactly why nobody noticed: a green test reads as a working feature with a caller
+       somewhere.
+       #997 WIRED IT, ON INSTRUCTION, and lasted one batch. ASKED IMMEDIATELY AFTER: "can we actually just
+       indicate this on the Market Move line? ... Maybe we replace both with (double move)?" -- and the
+       marker is better for #509a's reason about this very panel: "SHOW THE MONEY MOVING, DO NOT DESCRIBE
+       IT."
+       SO THE ABSENCE IS THE ASSERTION, because the failure this guards is the function coming back exported
+       and uncalled -- which is the state it was in for eight batches. */
+    const source = readStripped("utils/gameVariants.ts");
+    expect(source).not.toContain("export function dividendStepsExplanation");
+    expect(source).not.toContain("Dynamic Stock Market: $");
   });
 });
 

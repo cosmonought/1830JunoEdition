@@ -15,70 +15,22 @@
 //   background fill, an animation delay that outlives the window it plays in -- all readable in the source
 //   and none observable in a node environment.
 
-import { chooseFrameKeys } from "./frameHexes";
 import { readStripped, sliceBetween } from "./sourceScan";
 
-describe("the Lay Track jump goes home (design note #955)", () => {
-  const NETWORK = new Set(["10,10", "11,11"]);
-  const BUILDABLE = new Set(["5,5", "6,6"]);
-
-  it("frames the home station when there is one", () => {
-    /* REPORTED: "target the specific DOM node (or grid coordinate) of that corporation's Home Station hex,
-       centering that hex in the viewport." Supplied ALONGSIDE the other two candidates, because the ruling is
-       about which WINS -- a test passing only `home` would pass against an implementation that ignored the
-       ordering entirely. */
-    expect(
-      chooseFrameKeys({
-        home: "3,4",
-        buildable: BUILDABLE,
-        network: NETWORK,
-        stations: ["9,9"],
-      }),
-    ).toEqual(["3,4"]);
-  });
-
-  it("frames exactly one hex, not a bounding box", () => {
-    /* "CENTERING THAT HEX" IS A SINGLE POINT. Returning home plus the network would centre their midpoint,
-       which is not the home station and would drift as track is laid. */
-    expect(chooseFrameKeys({ home: "3,4", network: NETWORK })).toHaveLength(1);
-  });
-
-  it("falls back to #888's ordering when there is no home", () => {
-    /* THE HALF OF #888 THAT SURVIVES. Its argument -- the buildable set is the decision the player is
-       standing in front of -- is still the right answer when the board cannot say where home is. */
-    expect(chooseFrameKeys({ home: null, buildable: BUILDABLE, network: NETWORK })).toEqual([
-      "5,5",
-      "6,6",
-    ]);
-    expect(chooseFrameKeys({ buildable: BUILDABLE, network: NETWORK })).toEqual(["5,5", "6,6"]);
-  });
-
-  it("keeps the rest of the ladder intact", () => {
-    /* THE TWO LOWER RUNGS, unchanged: network when nothing is buildable, stations as the last resort -- the
-       one that is non-empty from the moment a corporation floats. */
-    expect(chooseFrameKeys({ network: NETWORK, stations: ["9,9"] })).toEqual(["10,10", "11,11"]);
-    expect(chooseFrameKeys({ stations: ["9,9"] })).toEqual(["9,9"]);
-    expect(chooseFrameKeys({})).toEqual([]);
-  });
-
-  it("treats an empty home string as absent", () => {
-    /* `home_hex_label` is optional on the chain (#232), and `""` is what a partially-populated record looks
-       like. An empty key would frame a hex that does not exist -- silently, since `frameHexes` would take the
-       one-point path and centre on nothing. */
-    expect(chooseFrameKeys({ home: "", buildable: BUILDABLE })).toEqual(["5,5", "6,6"]);
-  });
-
-  it("resolves the home label through the board's own table", () => {
-    /* THE WIRING, because the function above cannot see whether the shell gives it a real key. A second
-       label-to-coordinate map would be the fault this codebase keeps finding; `STATIC_BOARD_HEXES` is what
-       every other lookup in that file uses. */
-    const APP = readStripped("App.tsx");
-    const block = sliceBetween(APP, "const homeKey = (() => {", "return chooseFrameKeys({");
-    expect(block).toContain("corporation?.home_hex_label");
-    expect(block).toContain("STATIC_BOARD_HEXES.find");
-    expect(APP).toContain("home: homeKey,");
-  });
-});
+/* ==================================================================
+    DESIGN NOTE 987: #955's WHOLE BLOCK IS GONE, WITH THE FUNCTION IT DROVE
+   ==================================================================
+   IT TESTED `chooseFrameKeys` -- which hex the Lay Track button put the camera on, and the ordering behind
+   that choice: home station, then buildable, then network, then station tokens.
+   RULED: "the map is auto-zooming and panning into empty space ... Strip out the map auto-zoom functionality
+   completely."
+   SO THE MODULE IS DELETED AND SO ARE ITS CASES. Keeping a green suite over a deleted feature's arithmetic
+   is how the feature comes back: a passing test reads as a commitment.
+   WHAT THE BLOCK WAS RIGHT ABOUT, worth carrying forward if a camera move is ever wanted again: it asserted
+   the ORDERING by supplying every candidate at once, because "a test passing only `home` would pass against
+   an implementation that ignored the ordering entirely". That is the shape any future version needs.
+   THE SIBLING BLOCKS BELOW ARE UNTOUCHED -- #951's price row, #952's passed badge, #953/#954's overlay. Only
+   the framing left. */
 
 describe("the sale's two consequences share one table (design note #951)", () => {
   const PANEL = readStripped("components/StockRoundPanel.tsx");

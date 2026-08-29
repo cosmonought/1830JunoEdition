@@ -30,9 +30,10 @@
 import React from "react";
 
 import { FONT_SIZE } from "../styles/typography";
+// Design note #991: the same herald the board and the corporation card draw, not a second rendering of it.
+import { CorporateLogo } from "./CorporateLogo";
 import {
   noticeBody,
-  noticeConsequence,
   noticeGentleRustLine,
   noticeHeadline,
   silenceLabel,
@@ -78,6 +79,28 @@ export function FleetLossModal({
           <span style={notice.cause === "rust" ? styles.chipRust : styles.chipLimit}>
             {notice.cause === "rust" ? "RUST" : "TRAIN LIMIT"}
           </span>
+          {/* ==================================================================
+               DESIGN NOTE 991: THE HERALD, BESIDE THE NAME IT BELONGS TO
+              ==================================================================
+              RULED: "On both the Rust and Train Limit warning modals, inject the corporate herald (logo) into
+              the title alongside the corporation acronym to make the UI feel integrated with the active
+              company."
+              AND IT ANSWERS A REAL QUESTION THIS MODAL ASKS OF THE PLAYER. It interrupts a turn to say a
+              corporation lost trains, and the first thing a president running three of them needs is WHICH --
+              which is why #896 put the ticker in the headline at all ("a headline that says 'your trains
+              rusted' names none"). The herald is that same fact in the channel a player reads before they
+              read words.
+              THE ACRONYM STAYS. `CorporateLogo` falls back to the ticker when a file is missing, so the logo
+              alone would be an identity that silently becomes a second copy of the word -- and the headline
+              is a sentence, not a label: "lost 2 trains to rust" needs a subject in it.
+              SIZED TO THE HEADING rather than to a fixed box, so the pair reads as one title at any type
+              scale. */}
+          <CorporateLogo
+            ticker={notice.ticker}
+            size={20}
+            title={`${notice.ticker} herald`}
+            fallbackStyle={styles.heraldFallback}
+          />
           <span style={styles.heading}>{noticeHeadline(notice)}</span>
         </div>
 
@@ -88,11 +111,6 @@ export function FleetLossModal({
             second line already sat, so the card's rhythm is unchanged. */}
         {noticeGentleRustLine(notice) && (
           <p style={styles.consequence}>{noticeGentleRustLine(notice)}</p>
-        )}
-        {/* `null` for a rust notice (#980), and rendered conditionally rather than as an empty paragraph: an
-            empty `<p>` still occupies its margins and reads as a sentence that failed to load. */}
-        {noticeConsequence(notice) && (
-          <p style={styles.consequence}>{noticeConsequence(notice)}</p>
         )}
 
         <div style={styles.fleetRow}>
@@ -119,9 +137,20 @@ export function FleetLossModal({
           />
           <span style={styles.rowText}>
             <span style={styles.rowLabel}>{silenceLabel(notice)}</span>
+            {/* ==================================================================
+                 DESIGN NOTE 992: THE CAPTION SAID "MODAL" TO A PLAYER
+                ==================================================================
+                RULED: "Normal people don't use the word 'modals.'" With the replacement given verbatim.
+                AND THE OLD SENTENCE WAS WRITTEN FROM THE INSIDE in more than that one word -- "this kind of
+                event" is the code's vocabulary for `FleetLossCause`, and "for the rest of this session" is a
+                fact about `sessionStorage`. Every clause described the implementation to somebody who wanted
+                to know what the tick box does.
+                THE HALF WORTH KEEPING SURVIVES INTACT and is the reason the toggle is safe to offer at all:
+                nothing is hidden, the Activity Log still has it. That is the sentence's second half, in the
+                ruling's own words. */}
             <span style={styles.rowCaption}>
-              Stops this modal for this corporation and this kind of event, for the rest of this session. The
-              Activity Log still records every loss, so nothing is hidden — you just find out there instead.
+              This disables Rust/Train Limit notifications for this company. They will still print in the
+              Activity Log.
             </span>
           </span>
         </label>
@@ -191,6 +220,10 @@ const styles: Record<string, React.CSSProperties> = {
     letterSpacing: "0.06em",
   },
   body: { fontSize: FONT_SIZE.small, color: "#d8dce6", lineHeight: 1.45, margin: 0 },
+  /* Design note #991: what the herald falls back to when a corporation has no logo file. The acronym in the
+     heading is already beside it, so this is deliberately quiet -- a second bold ticker would read as a
+     stutter rather than as a missing image. */
+  heraldFallback: { fontSize: FONT_SIZE.micro, fontWeight: 700, color: "#8a90a0" },
   /* Amber: this is the "what it means for you" line, not an error. */
   consequence: { fontSize: FONT_SIZE.small, color: "#e0b062", lineHeight: 1.45, margin: 0 },
   fleetRow: { display: "flex", alignItems: "center", gap: "10px", marginTop: "2px" },

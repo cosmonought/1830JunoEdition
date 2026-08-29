@@ -161,22 +161,29 @@ const count = (notice: FleetLossNotice) => (notice.trains.length === 1 ? "is" : 
  *  A BLOCKING MODAL OWES THE PLAYER THIS. Being stopped is tolerable when the thing you are told could not have
  *  been avoided and is about to change what you do next; it is an insult when it is news you could have read.
  *  Both causes qualify -- neither is refusable and both happened while this corporation was not acting. */
-export function noticeConsequence(notice: FleetLossNotice): string | null {
-  /* ==================================================================
-      DESIGN NOTE 980: THE RUST NOTICE GIVES THIS UP, AND #896's ARGUMENT IS WHY IT CAN
-     ==================================================================
-     #896 ARGUED A BLOCKING MODAL OWES THE PLAYER A REASON IT WAS WORTH STOPPING THEM FOR -- "an insult when
-     it is news you could have read". That argument is about the modal as a whole, not about this particular
-     sentence, and after #980 the rust modal is two short lines that a player reads in about a second. The
-     interruption defends itself; a paragraph explaining that the interruption was fair is the wall of text.
-     `null` RATHER THAN AN EMPTY STRING, so the caller renders no paragraph at all. An empty `<p>` still
-     occupies its margins, which is a gap in the card that reads as a missing sentence.
-     THE LIMIT NOTICE KEEPS ITS LINE. "The train is already back in the depot and may be bought again by
-     anyone" is a fact with a decision attached -- a rival can take it this round -- and it is nowhere else on
-     screen. That is exactly the case #896 was defending. */
-  if (notice.cause === "rust") return null;
-  return "This happened between your turns and could not be refused. The train is already back in the depot and may be bought again by anyone.";
-}
+/* ==================================================================
+ *  DESIGN NOTE 990: `noticeConsequence` IS GONE, AND ITS LAST SENTENCE WAS WRONG ABOUT THE RULES
+ * ==================================================================
+ *
+ * RULED: "The modal incorrectly states the discarded train returns to the depot. Discarded trains are
+ * permanently removed from the game. Remove the sentence: 'The train is already back in the depot and may be
+ * bought again by anyone.'"
+ *
+ * AND THAT IS A LORE ERROR I INTRODUCED AND THEN DEFENDED. #980 cut this line from the rust notice and kept
+ * it for the limit one, on the argument that it was "a fact with a rival's decision attached -- a rival can
+ * take it this round -- and it is nowhere else on screen". The decision it described does not exist: 1830
+ * removes an over-limit discard from the game. So the sentence was not merely surplus, it was telling a
+ * president to expect a train back that nobody will ever see again -- and my reason for keeping it was
+ * entirely built on the thing that was false.
+ *
+ * THE FUNCTION GOES WITH IT rather than being left returning `null` for both causes. A predicate with one
+ * reachable answer is #788's unreachable arm wearing a return type, and the next reader would take it for a
+ * slot waiting to be filled.
+ *
+ * #896's ARGUMENT SURVIVES ITS LAST SENTENCE. "A blocking modal owes the player a reason it was worth
+ * stopping them for" is about the modal, and after #980 the modal is a headline, a line of fact and the
+ * trains it took. The interruption defends itself. */
+
 
 /** The gentle-rust line, or `null` when the table is not playing it.
  *

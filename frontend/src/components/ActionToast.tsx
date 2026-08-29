@@ -53,8 +53,31 @@ import { FONT_SIZE } from "../styles/typography";
  *  a second magic number that has to be kept in step by hand. */
 export const STANDARD_TOAST_MS = 3700;
 
-/** Design note #967: 1.5x, for the one toast that is a list of figures rather than a sentence. */
-export const PRIVATE_REVENUE_TOAST_MS = Math.round(STANDARD_TOAST_MS * 1.5);
+/* ==================================================================
+ *  DESIGN NOTE 983: 400ms, ON INSTRUCTION, AND I THINK THE NUMBER IS WRONG
+ * ==================================================================
+ *
+ * RULED: "The 'Your Private Companies' toast stays up far too long. Reduce its display duration to strictly
+ * `400ms`."
+ *
+ * IT WAS 5,550 -- `STANDARD_TOAST_MS * 1.5` -- and #967 set the multiplier for a stated reason: this is the
+ * one toast in the app that is a LIST rather than a sentence, asked for as "increase the display duration of
+ * this specific toast to 1.5x the standard duration so it is easily readable".
+ *
+ * SO THIS BATCH RULES TWICE ON THE SAME TOAST IN OPPOSITE DIRECTIONS: make the payload a stacked table so the
+ * rows are "easily comparable", and show it for 400ms. Those two are in tension, and the project's own
+ * rule-of-thumb -- "a juice notification should be readable ~1.5x before it goes away" -- prices it: #970 gave
+ * a two-digit percentage 850ms on that basis, and a three-row table of names and figures is several times the
+ * read. 400ms is under half of what one two-digit number was given.
+ *
+ * IMPLEMENTED AS RULED ANYWAY, because it is one constant and trivially revertible, and because the report is
+ * about a felt problem I should not talk anybody out of: the old window really was long enough to sit in the
+ * player's way. What I would not want is for the number to have been chosen believing the table would still
+ * be readable at it. The arithmetic is here so the next figure can be picked rather than guessed.
+ *
+ * IT IS STILL EXPRESSED AS ITS OWN CONSTANT and not inlined at the call site, which is the half of #967 worth
+ * keeping: one place to change, and a test that reads the constant rather than a copy of it. */
+export const PRIVATE_REVENUE_TOAST_MS = 400;
 
 export interface ActionToastProps {
   /** The sentence, or `null` for nothing pending. */
@@ -63,6 +86,31 @@ export interface ActionToastProps {
    *  Optional because the ordinary receipt (#697) has one thing to say and should not grow a slot it leaves
    *  empty. */
   detail?: string | null;
+  /* ==================================================================
+   *  DESIGN NOTE 984: A LIST IS NOT A SENTENCE, AND `detail` COULD ONLY BE A SENTENCE
+   * ==================================================================
+   *
+   * REPORTED: "Cramming all the companies onto one line is unreadable. Reformat the toast payload into a
+   * multi-line flex-column or table layout so the company titles and their respective revenues are
+   * vertically stacked and easily comparable."
+   *
+   * THE ONE-LINE FORM WAS NOT A STYLING CHOICE, it was the only shape `detail` can hold. It is a `string`,
+   * joined with a middle dot at the source, so by the time it reached this component the rows had already
+   * stopped being rows -- and no amount of CSS recovers a column from a sentence.
+   *
+   * A SECOND CHANNEL RATHER THAN A PARSED `detail`. Splitting the string back on its separator here would
+   * make the separator load-bearing punctuation, and a private company whose name contained one would
+   * silently produce a wrong table. The caller has the structure; it should hand it over rather than encode
+   * and re-decode it.
+   *
+   * OPTIONAL, AND `detail` STAYS. Every other toast in the app has one thing to say (#697) and #738's
+   * dividend receipt has a transition line, not a table; giving them a grid slot they leave empty is the
+   * shape #697 argues against. Exactly one caller passes rows.
+   *
+   * ALIGNMENT IS THE WHOLE POINT of the request -- "easily comparable" -- so this is a two-column grid with
+   * the figures right-aligned in tabular figures, not a flex column of pre-joined strings. Comparing $25 with
+   * $5 by eye needs the digits in one column, which is the thing a `\n`-joined string cannot do either. */
+  detailRows?: readonly { label: string; value: string }[] | null;
   /** Changes on every dispatch, including two identical ones in a row --
    *  which is why it exists rather than keying the timer on `message`. Buying
    *  a second 2-train produces the same string, and a toast that did not
@@ -119,6 +167,7 @@ function EraHex({ tone }: { tone: string }) {
 export function ActionToast({
   message,
   detail = null,
+  detailRows = null,
   token,
   onDismiss,
   durationMs = STANDARD_TOAST_MS,
@@ -188,6 +237,22 @@ export function ActionToast({
               facts -- what arrived and where it left you -- and #670 settled that they read as a before and an
               after rather than as one run-on line. */}
           {detail && <span style={styles.detail}>{detail}</span>}
+          {/* Design note #984: the rows, when the caller has rows. Rendered INSTEAD of nothing rather than
+              instead of `detail` -- the two are independent slots, and the private-revenue toast is simply
+              the only caller that fills this one. */}
+          {detailRows && detailRows.length > 0 && (
+            <span style={styles.detailTable}>
+              {detailRows.map((row) => (
+                /* The label is the key: a player cannot hold the same private twice, so it is unique by the
+                   rules rather than by construction -- and an index key here would re-associate rows if the
+                   list were ever re-ordered under a running animation. */
+                <React.Fragment key={row.label}>
+                  <span style={styles.detailRowLabel}>{row.label}</span>
+                  <span style={styles.detailRowValue}>{row.value}</span>
+                </React.Fragment>
+              ))}
+            </span>
+          )}
         </span>
       </div>
     </>
@@ -233,6 +298,25 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#9fb8a4",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
   },
+  /* Design note #984: two columns -- names flush left, figures flush right in tabular figures, so the digits
+     line up whatever the names are. `auto auto` rather than `1fr auto`: the table is as wide as its content
+     and the toast stays the width of its sentence, where a fractional first column would stretch a
+     three-row list across the whole card.
+     `columnGap` DOES THE SEPARATING, not a dot or a dash. The middle dot this replaces was punctuation
+     standing in for a column, which is exactly what stopped the figures being comparable. */
+  detailTable: {
+    display: "grid",
+    gridTemplateColumns: "auto auto",
+    columnGap: "14px",
+    rowGap: "2px",
+    marginTop: "6px",
+    fontSize: FONT_SIZE.micro,
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+  },
+  detailRowLabel: { color: "#9fb8a4", textAlign: "left" },
+  /* Brighter than the label: on a row of two facts the figure is the one being compared, and #670's rule for
+     the dividend block applies here too -- the number carries the decision, the name only says whose it is. */
+  detailRowValue: { color: "#d8e6da", textAlign: "right", fontVariantNumeric: "tabular-nums" },
   /* Design note #697: BOTTOM CENTRE, above the status dock. Not top -- the action bar is sticky there and a
      toast over it would cover the controls the player is mid-sequence with, which is the one place it must
      not be. Not a corner either: a receipt for a deliberate action should be on the axis the reader is

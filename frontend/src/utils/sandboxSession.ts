@@ -3208,6 +3208,17 @@ export interface PrivateRevenueSummary {
   count: number;
   text: string;
   detail: string;
+  /* ==================================================================
+      DESIGN NOTE 984: THE ROWS, AS ROWS
+     ==================================================================
+     REPORTED: "Cramming all the companies onto one line is unreadable ... so the company titles and their
+     respective revenues are vertically stacked and easily comparable."
+     `detail` IS KEPT AND IS NOW THE FALLBACK. It is the Activity Log's shape and the shape every other
+     consumer of a summary expects, and deleting it would make this function's output toast-specific.
+     THE STRUCTURE TRAVELS INSTEAD OF BEING RE-DERIVED. The alternative is for the toast to split `detail` on
+     its separator, which makes a middle dot into load-bearing punctuation -- one private company with a dot
+     in its name and the table is silently wrong. */
+  rows: readonly { label: string; value: string }[];
 }
 
 export function summarisePrivateRevenueForPlayer(
@@ -3226,6 +3237,13 @@ export function summarisePrivateRevenueForPlayer(
     count: mine.length,
     text: `Your private companies paid you $${total}.`,
     detail: mine.map((payout) => `${payout.privateName} $${payout.amount}`).join(" \u00B7 "),
+    /* Design note #984: the same figures, unjoined. The `$` lives with the VALUE rather than being a column
+       of its own -- a currency mark is part of the number a player compares, and splitting it would put two
+       right-aligned columns where the request asks for one. */
+    rows: mine.map((payout) => ({
+      label: payout.privateName,
+      value: `$${payout.amount}`,
+    })),
   };
 }
 

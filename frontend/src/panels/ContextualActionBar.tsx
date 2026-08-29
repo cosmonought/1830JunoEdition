@@ -176,11 +176,24 @@ function MarketMoveLine({
   currentPrice,
   projection,
   direction,
+  steps = 1,
 }: {
   currentPrice: number | null;
   projection: MarketProjection | null;
   /** Which way the token travels: paying out steps right, withholding left. */
   direction: "pay" | "withhold";
+  /* ==================================================================
+   *  DESIGN NOTE 998: HOW FAR, SO THE LINE CAN SAY WHEN IT IS TWO
+   * ==================================================================
+   * ASKED: "can we actually just indicate this on the Market Move line? e.g., 'Market Move: $current >
+   * $new (double jump)' ... Maybe we replace both with (double move)?"
+   * AND THE LINE IS THE RIGHT SURFACE, which #997's footer was not. That footer explained a rule beneath a
+   * pair of figures that already state the outcome -- "$76 ➜ $65" IS the projection, and a sentence under
+   * it describing why is #509a's own complaint one panel over: "SHOW THE MONEY MOVING, DO NOT DESCRIBE IT."
+   * A two-word marker on the line itself is the same fact where the player is already looking.
+   * DEFAULTED TO ONE so the two call sites that do not care read as before -- there is only one variant
+   * that can produce a two, and every other caller is describing a single step by definition. */
+  steps?: number;
 }) {
   /* Design note #214: THE ARROW CARRIES THE MEANING (glyph superseded by #489; the colour argument
      stands). Grey arrows made the two columns look identical at a glance, so green for the rise and red
@@ -239,6 +252,24 @@ function MarketMoveLine({
           LEDGE, where a payout moves the token up a row, so `moves` is true there now and this note is not
           reached. What remains is the genuine edge of the CHART -- the top-right corner on a payout, the
           bottom-left on a withhold -- where there is no cell in either direction. */}
+      {/* ==================================================================
+           DESIGN NOTE 998: "(double move)", NOT "(double jump)" OR "(double drop)"
+          ==================================================================
+          RULED, with the reasoning supplied: "The only issue with 'drop' is that it sounds like a vertical
+          movement. Maybe we replace both with (double move)?"
+          AND IT IS THE ONLY DIRECTION-NEUTRAL OPTION THAT IS ACTUALLY TRUE HERE, which is a stronger reason
+          than symmetry. On this chart a step is horizontal UNTIL it reaches a ledge and then it is vertical
+          -- `dividendStepFrom` moves right, or up from the end of a row; left, or down from the start of one.
+          So "jump" and "drop" are both wrong about the geometry roughly whenever a token is near an edge, and
+          #891's note records the last time this panel described the chart's shape incorrectly in print.
+          ONE WORD FOR BOTH COLUMNS, so the marker means "twice as far" and never encodes a direction the
+          arrow beside it is already carrying (#489: the arrow says only "becomes").
+          SUPPRESSED AT THE CHART'S EDGE. A token with nowhere to go has not moved twice as far -- it has not
+          moved at all -- and the note below already says so. Two contradictory parentheticals on one line
+          would be worse than either alone. */}
+      {steps >= 2 && projection.moves && (
+        <span style={styles.dividendMoveNote}> (double move)</span>
+      )}
       {!projection.moves && (
         <span style={styles.dividendMoveNote}>
           {direction === "pay"
@@ -598,8 +629,6 @@ export default function ContextualActionBar({
   armedErrand = null,
   mapEl = null,
   onShowMap,
-  onFrameNetwork,
-  canFrameNetwork = false,
   powerOffers = [],
   onUsePowerOffer,
   privatePurchase,
@@ -622,6 +651,7 @@ export default function ContextualActionBar({
   dividendPrice,
   payProjection,
   withholdProjection,
+  dividendMoveSteps = null,
   selectedHardwareModel,
   onEndOperatingTurn,
   onUndoLastAction,
@@ -823,13 +853,10 @@ export default function ContextualActionBar({
      screen -- a fact about layout, not about whether the player can see where they may build. #833 picked
      that subject when the map genuinely needed FINDING. It does not need finding any more; it needs READING,
      and the predicate never moved with the question. A proxy that stopped standing for its subject.
-     SO THE DESTINATION CHANGES AND THE GATE GOES WITH IT. The press now frames the board on the hexes a tile
-     actually fits (#716's glow set), which is the question the step asks -- and a control that always has
-     somewhere to go needs no "you are already there" arm at all. */
-  onFrameNetwork?: () => void;
-  /** Whether there is anything to frame. `false` disables the jump, per #797: a control pointing at nothing
-   *  is worse than no control. */
-  canFrameNetwork?: boolean;
+     SO THE DESTINATION CHANGED AND THE GATE WENT WITH IT -- and #987 has now removed the destination too.
+     `onFrameNetwork` and `canFrameNetwork` are GONE: the press frames nothing, because framing is the
+     auto-camera that was ruled off. What is left of this button is a tab switch, and a tab switch always has
+     somewhere to go. */
   /** ==================================================================
    *   DESIGN NOTE 846: THE POWER, WHERE A PLAYER IS ALREADY LOOKING
    *  ==================================================================
@@ -911,6 +938,19 @@ export default function ContextualActionBar({
    *  current price is not on the chart. */
   payProjection: MarketProjection | null;
   withholdProjection: MarketProjection | null;
+  /* ==================================================================
+   *  DESIGN NOTE 998: HOW MANY CELLS EACH DECISION MOVES
+   * ==================================================================
+   * #997 PASSED TWO SENTENCES HERE and this passes two numbers instead -- see `MarketMoveLine` for why the
+   * marker beat the footer.
+   * THE COUNTS RATHER THAN A BOOLEAN, so this panel is told the same thing the board is told rather than a
+   * predicate derived from it. `steps >= 2` is a rendering decision and belongs at the render site; "how far
+   * does this decision move the token" is the rule, and it has exactly one author (`dividendStepsFor`).
+   * DERIVED IN THE SHELL, from the same revenue and price the projections use. This panel holds a revenue and
+   * a price of its own and could compute it -- which is precisely the split #891 exists because of: the bar
+   * once promised a move the board did not perform.
+   */
+  dividendMoveSteps?: { pay: number; withhold: number } | null;
   selectedHardwareModel: string;
   onEndOperatingTurn: () => void;
   onUndoLastAction: () => void;
@@ -1151,42 +1191,38 @@ export default function ContextualActionBar({
      `boardPane` IS THE THING MEANT, and the shell already held it in state for the radial selector -- so it
      arrives as an element and the observer follows it across a tab change. */
   /* ==================================================================
-      DESIGN NOTE 888: THE OBSERVER'S `inView` HALF HAS NO READER LEFT
+      DESIGN NOTE 987: THE MAP'S JUMP TARGET IS GONE, HOOK AND PENDING FLAG BOTH
      ==================================================================
-     `mapInView` existed to grey the Lay Track button, and greying it was the reported bug -- the predicate
-     answered "is a quarter of the pane on screen" while the question had become "can you see where you may
-     build". With the gate replaced by `canFrameNetwork`, nothing reads it.
-     THE HOOK STAYS AND THE BINDING GOES, which is the honest shape rather than a courtesy: `useJumpTarget`
-     returns a pair and `stepPanelInView` still uses both halves, so the hook is not the thing that became
-     redundant. A destructuring hole says "this is deliberately unread" where a named binding would read as
-     something a future pass should wire back up.
-     THE SCROLL IS NOW UNCONDITIONAL, and that is fine rather than merely tolerable: `scrollIntoView` on an
-     element already at the top of the viewport moves nothing, so the "you are already there" check was
-     buying a skipped no-op at the price of a wrong disabled state. */
-  const [, scrollToMap] = useJumpTarget(mapEl ?? null, barClearance);
+     WHAT WAS HERE: a second `useJumpTarget` bound to the board pane, and a pending flag that waited for the
+     pane to mount after a tab change so the scroll could fire on the commit after it.
+     #888 ALREADY RECORDED WHY THE `inView` HALF HAD NO READER, and left the scroll half running
+     unconditionally on the reasoning that "`scrollIntoView` on an element already at the top of the viewport
+     moves nothing". That is true and it is also the bug: when the pane IS at the top of the document,
+     scrolling it to `block: "start"` moves the PAGE to the top, which is what was reported.
+     THE STEP PANEL'S OWN JUMP IS UNTOUCHED. `stepPanelInView`/`scrollToStepPanel` still serve Buy Trains and
+     Buy Private, which scroll to a panel genuinely below the fold -- a different destination with a real
+     journey, and not the map. Only the map's binding goes. */
 
-  /* THE MAP TAB IS PART OF "NOT ALREADY ON IT". Asked for as "scrolled players to the rail map if they
-     weren't already on it", and a player reading the Stock Market tab is not already on it. Without this the
-     button would be live (no element, so nothing intersects) and pressing it would do nothing -- the one
-     outcome #797's greying rule exists to prevent.
-     A PENDING FLAG RATHER THAN A FRAME CALLBACK: the pane mounts on the next commit, and the effect that
-     scrolls runs after the hook's own effect has written `scroll-margin-top` on it. Guessing at a delay
-     would be a third guess where a measurement is available (#813). */
-  const [mapJumpPending, setMapJumpPending] = React.useState(false);
-  React.useEffect(() => {
-    if (!mapJumpPending || !mapEl) return;
-    setMapJumpPending(false);
-    scrollToMap();
-  }, [mapJumpPending, mapEl, scrollToMap]);
-
+  /* ==================================================================
+      DESIGN NOTE 987: THE TAB SWITCH SURVIVES; THE SCROLL DOES NOT
+     ==================================================================
+     REPORTED: "The 'Lay 1 Track' button's attempt to center on the home station is broken (it scrolls to the
+     top of the page). Remove the scroll action entirely OR FIGURE OUT HOW TO DO IT CORRECTLY."
+     THE SCROLL'S FAILURE IS ITS OWN MECHANISM. `scrollIntoView({ block: "start" })` puts the target's top
+     edge at the viewport's top -- so on a layout where the board pane IS near the top of the document, doing
+     it correctly and scrolling to the top of the page are the same outcome. There was nothing to fix; #810's
+     `scroll-margin-top` was already compensating for the sticky bar, and the destination was still the top.
+     AND ON A DESKTOP-FIRST BOARD THERE IS NOTHING TO TRAVEL TO. The map is the main pane and is on screen;
+     what a player on the Stock Market tab needs is the TAB, not a scroll position. That half is kept, and it
+     is the half that was always doing real work -- #833 records that it was written for exactly the case
+     where the pane does not exist yet.
+     SO THE BUTTON IS A NO-OP WHILE THE MAP IS ALREADY SHOWING, deliberately and visibly rather than by
+     accident. It is not greyed for it: #888 already fought that battle and lost it for a good reason -- a
+     greyed "Lay 1 Track" reads as "you may not lay track", which is a legality answer on a navigation
+     control (#732's one-channel rule), and the refusal to lay lives on the hex (#716). */
   const goToMap = React.useCallback(() => {
-    if (!mapEl) {
-      onShowMap?.();
-      setMapJumpPending(true);
-      return;
-    }
-    scrollToMap();
-  }, [mapEl, onShowMap, scrollToMap]);
+    if (!mapEl) onShowMap?.();
+  }, [mapEl, onShowMap]);
 
   /* Design note #481: the strip, as three facts instead of six chips.
      `null` when the cursor sits on a step this era does not show -- the
@@ -1416,33 +1452,17 @@ export default function ContextualActionBar({
           {
             key: "go-to-map",
             label: "Lay 1 Track",
-            /* Design note #888: BOTH, in this order. `goToMap` still switches to the map tab and scrolls the
-               page when the pane is elsewhere -- a framed camera behind a Stock Market tab helps nobody --
-               and the framing then puts the buildable hexes under the player's eye. The scroll is the
-               journey; the frame is the arrival. */
-            onClick: () => {
-              goToMap();
-              onFrameNetwork?.();
-            },
-            /* Design note #888: `mapInView` NO LONGER GATES THIS. It answered "is a quarter of the pane on
-               screen", which is true at the top of the page and says nothing about whether the player can
-               see their own track. What can genuinely make this press pointless is having nowhere to frame,
-               and that is what the shell reports. */
-            disabled: !canFrameNetwork,
-            /* ==================================================================
-                DESIGN NOTE 888: THE GREYED SENTENCE SAYS "NOWHERE TO GO", NOT "YOU MAY NOT BUILD"
-               ==================================================================
-               THE FIRST DRAFT READ "No hex is open to this corporation right now." -- caught by
-               `stepJumpButton.test.ts`, whose note states the rule this button has always been held to:
-               greyed here means "pressing this would not move you" and never "you may not lay track", because
-               "that refusal lives on the hex (#716)". A sentence about which hexes are OPEN puts a legality
-               answer on a navigation control, which is #732's one-channel rule and the doubt #279 raised.
-               AND THE HONEST READING IS THE NAVIGATIONAL ONE ANYWAY. `chooseFrameKeys` falls back to the
-               corporation's station tokens, and a floated corporation always has its home token -- so the
-               empty case is not "boxed in", it is "no corporation is operating yet". */
-            title: canFrameNetwork
-              ? "Zooms the Rail Map to the hexes you may build on this turn. Fit to Screen returns to the whole board."
-              : "Nothing to show on the map yet.",
+            /* Design note #987: ONE THING NOW. #888 had this do two -- travel, then frame -- and described
+               them as "the journey" and "the arrival". The arrival is what was moving the camera into empty
+               space and it is gone; the journey is a tab switch. */
+            onClick: goToMap,
+            /* Design note #987: NEVER DISABLED. #888 gated this on having somewhere to frame; with the
+               framing gone the only pointless press is one made while the Rail Map is already showing, and
+               greying it for that is the mistake #888's own note argues against at length -- a greyed
+               "Lay 1 Track" reads as "you may not lay track", which is a legality answer on a navigation
+               control (#732), and that refusal lives on the hex (#716). */
+            disabled: false,
+            title: "Switches to the Rail Map tab. Click a hex there to lay track.",
           },
         ];
         break;
@@ -3240,6 +3260,7 @@ export default function ContextualActionBar({
                   currentPrice={dividendPrice}
                   projection={payProjection}
                   direction="pay"
+                  steps={dividendMoveSteps?.pay ?? 1}
                 />
               </div>
 
@@ -3275,8 +3296,15 @@ export default function ContextualActionBar({
                   currentPrice={dividendPrice}
                   projection={withholdProjection}
                   direction="withhold"
+                  steps={dividendMoveSteps?.withhold ?? 1}
                 />
               </div>
+              {/* Design note #998: #997's EXPLANATION FOOTER WAS HERE and is gone. It rendered the two
+                  sentences from `dividendStepsExplanation` beneath both columns -- correct, and one layer of
+                  prose too many: the figures directly above it already state the outcome, and #509a settled
+                  this exact question one panel over ("SHOW THE MONEY MOVING, DO NOT DESCRIBE IT"). The fact
+                  the sentences carried that the figures did not is "this move is twice the usual", and that
+                  is now two words on the line itself. */}
             </div>
           )}
 

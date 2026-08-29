@@ -214,39 +214,75 @@ describe("arrow size follows the swing (design note #957)", () => {
 
   it("sizes critical swings larger than minor ones", () => {
     /* ==================================================================
-        #957 SET ONE SIZE PER TIER; #959 MADE EACH TIER A SPREAD
+        #957 SET ONE SIZE PER TIER; #959 MADE IT A SPREAD; #985 MADE IT A BAND
        ==================================================================
-       THIS USED TO READ THE TWO ARMS OF A TERNARY -- `fontSize: critical ? "0.42em" : "0.24em"` -- and compare
-       them. RULED SINCE: "the animation arrows should be a mix of sizes, but skew larger on the critical and
-       smaller on the malus. They shouldn't all be one size."
-       SO THE COMPARISON MOVED TO THE BASE. The tier scalar is what carries the magnitude cue now; the
-       per-arrow multipliers are what stop six glyphs reading as a widget. Both figures are read out and
-       compared, so a swap still fails here. */
-    expect(Number(FLASH.match(/critical: ([\d.]+)/)?.[1])).toBeGreaterThan(
-      Number(FLASH.match(/minor: ([\d.]+)/)?.[1]),
-    );
+       THIS READ THE TWO ARMS OF A TERNARY, then the two bases of a spread. RULED SINCE: "The large/critical
+       arrows must be 60-80% of the size of the number text, and the small/minor arrows must be 30-50%."
+       SO THE TIERS ARE RANGES NOW and the comparison is between them rather than between two scalars. The
+       property #957 was protecting is unchanged and is what is asserted: a critical arrow is bigger than a
+       minor one, at every point of both spreads -- which is stronger than comparing their centres, and is
+       the thing that makes size readable before the numeral is. */
+    const band = (tier: string) => {
+      const block = sliceBetween(FLASH, `${tier}: { low:`, "}");
+      return {
+        low: Number(block.match(/low: ([\d.]+)/)?.[1]),
+        high: Number(block.match(/high: ([\d.]+)/)?.[1]),
+      };
+    };
+    const critical = band("critical");
+    const minor = band("minor");
+    expect(critical.low).toBeGreaterThan(minor.high);
+    expect(critical.high).toBeGreaterThan(critical.low);
+    expect(minor.high).toBeGreaterThan(minor.low);
+  });
+
+  it("keeps both bands inside the ruled percentages", () => {
+    /* THE RULING ITSELF, as numbers. Asserted against the FIGURES IN THE INSTRUCTION rather than against
+       whatever the constants happen to say, so a later widening has to disagree with the ruling on purpose
+       instead of drifting past it. */
+    expect(FLASH).toContain("critical: { low: 0.6, high: 0.8 }");
+    expect(FLASH).toContain("minor: { low: 0.3, high: 0.5 }");
   });
 
   it("gives the six arrows a genuine spread, not one size", () => {
-    /* THE RULING'S OTHER HALF, and the one a tier comparison cannot see. Six equal multipliers would satisfy
-       every other case here and put the uniform set straight back. */
+    /* THE RULING'S OTHER HALF, and the one a tier comparison cannot see. Six equal positions would satisfy
+       every other case here and put the uniform set straight back.
+       THE RATIO ASSERTION MOVED FROM 1.5x TO THE SPREAD OF THE POSITIONS, and #985 records why: a band of
+       60-80% has extremes only 1.33x apart, so the old assertion is arithmetically unsatisfiable inside the
+       ruled range. The positions are 0..1 across the band, so what is checkable is that they genuinely use
+       it -- ends included -- rather than clustering in the middle. */
     const scales = (FLASH.match(/scale: [\d.]+/g) ?? []).map((entry) =>
       Number(entry.replace(/[^\d.]/g, "")),
     );
     expect(scales.length).toBe(6);
-    expect(new Set(scales).size).toBeGreaterThan(3);
-    expect(Math.max(...scales)).toBeGreaterThan(Math.min(...scales) * 1.5);
+    expect(new Set(scales).size).toBe(6);
+    expect(Math.max(...scales)).toBeGreaterThanOrEqual(0.85);
+    expect(Math.min(...scales)).toBeLessThanOrEqual(0.2);
   });
 
   it("keeps every arrow visible at both tiers", () => {
-    /* THE FAILURE A SPREAD INTRODUCES: a small multiplier on the minor base is the smallest glyph in the
-       system, and below roughly a tenth of the figure's em an arrow at 40px type is a speck. Checked as the
-       PRODUCT, because neither factor is wrong on its own. */
-    const scales = (FLASH.match(/scale: [\d.]+/g) ?? []).map((entry) =>
-      Number(entry.replace(/[^\d.]/g, "")),
-    );
-    const minor = Number(FLASH.match(/minor: ([\d.]+)/)?.[1]);
-    for (const scale of scales) expect(minor * scale).toBeGreaterThan(0.1);
+    /* THE FAILURE A SPREAD INTRODUCES: the smallest position on the minor band is the smallest glyph in the
+       system. It is now floored by the band itself -- nothing can draw below `minor.low` -- so what this
+       case checks is that the floor the ruling set is high enough to see, which is the same question one
+       level up from where #959 asked it. */
+    const minorLow = Number(FLASH.match(/minor: \{ low: ([\d.]+)/)?.[1]);
+    expect(minorLow).toBeGreaterThan(0.25);
+  });
+
+  it("converts a drawn share into a font size rather than using it raw", () => {
+    /* ==================================================================
+        THE BUG #985 FOUND IN #972's OWN ARITHMETIC
+       ==================================================================
+       The ruling talks about the arrow's size RELATIVE TO THE NUMBER -- both drawn heights. #972 set a font
+       SIZE and compared it to the numeral's font size, which are two different quantities: U+25B2 inks about
+       seven tenths of its em, while the numeral is read by its cap height, `CAP_HEIGHT_RATIO` of its own.
+       So every percentage in that note was about boxes nobody can see, and the arrows drew roughly a third
+       smaller than the figures claimed -- which is what "still drastically too small" was measuring.
+       BOTH CONVERSIONS ASSERTED, because either one alone still leaves the number wrong and neither is
+       visible in the rendered output as anything but "a bit off". */
+    expect(FLASH).toContain("CAP_HEIGHT_RATIO");
+    expect(FLASH).toContain("ARROW_GLYPH_RATIO");
+    expect(FLASH).toContain("const ARROW_GLYPH_RATIO = 0.7;");
   });
 
   it("keys on the magnitude rather than the bucket name", () => {
@@ -259,9 +295,10 @@ describe("arrow size follows the swing (design note #957)", () => {
 
   it("scales from the figure's em, not from pixels", () => {
     /* A FIXED PX SIZE would make the tiers indistinguishable on a small screen and absurd on a large one --
-       the failure the numeral's own `clamp` already exists to avoid. Design note #959: the em is now
-       composed from a base and a multiplier, so the assertion is on the unit rather than on a literal. */
-    expect(FLASH).toContain("* offset.scale");
+       the failure the numeral's own `clamp` already exists to avoid. Design note #985: the em is now composed
+       from a band and a position across it, so the anchor is the position and the unit rather than a
+       multiplication. */
+    expect(FLASH).toContain("offset.scale");
     expect(FLASH).toContain("}em`");
   });
 

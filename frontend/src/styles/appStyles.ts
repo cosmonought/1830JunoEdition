@@ -1022,7 +1022,23 @@ export const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.small,
     whiteSpace: "nowrap",
     minWidth: 0,
-    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    /* ==================================================================
+        DESIGN NOTE 989: SOLID WHITE, NOT A TRANSLUCENT DARKENING
+       ==================================================================
+       REPORTED: "The OR Action Bar's corporation card president badge has a dark, semi-opaque background
+       that looks messy against the app's blue theme. Change the badge's background to a solid `white` so it
+       looks intentional and clean."
+       AND "MESSY" NAMES THE ACTUAL DEFECT. #974 chose `rgba(0, 0, 0, 0.5)` so one rule could darken eight
+       liveries by the same amount -- but a translucent plate does not produce one ground, it produces eight
+       muddied ones, each the corporation's own hue seen through smoke. The badge changed colour as the turn
+       passed round the table, which is the opposite of the "same badge on every livery" the note claimed.
+       SOLID WHITE IS THE ONE GROUND. Every seat colour in `SEAT_COLORS` is a mid-to-dark ink (`#3f6fa8`,
+       `#a8593f`, `#4f8a5c`, `#7a5aa8`, `#a88a3f`, `#3f8a94`), so all six read on white -- which is what
+       #974's contrast argument was actually asking for and did not get.
+       THE CROWN'S GOLD IS THE ONE THING THIS COSTS. `PRESIDENT_CROWN_GOLD` was chosen against dark chrome and
+       is lower contrast on white; it stays a legible SHAPE and the name beside it carries the identity, so
+       this is a small loss rather than a lost fact -- but it is a real one and worth having written down. */
+    backgroundColor: "#ffffff",
     borderRadius: "5px",
     padding: "1px 6px 1px 4px",
     fontWeight: 700,
@@ -1452,6 +1468,9 @@ export const styles: Record<string, React.CSSProperties> = {
     borderTop: "1px solid #2b3242",
   },
   dividendColumn: { display: "flex", flexDirection: "column", gap: "4px" },
+  /* Design note #998: `dividendRuleFooter`/`dividendRuleLine` are GONE with #997's explanation block. An
+     orphaned style for a rendering we have just been asked to stop doing is how the rendering comes back --
+     the rule this sheet keeps for itself, and the one #976 applied to the power chip's gradient. */
   dividendHeading: { fontSize: FONT_SIZE.strong, fontWeight: 800, color: "#e2e6ee" },
   dividendRow: {
     display: "flex",

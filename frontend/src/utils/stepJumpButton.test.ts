@@ -139,22 +139,24 @@ describe("a jump is not an action", () => {
        which is what "a jump is not an action" means, and it stayed true when one of them became a toggle. */
     expect(CODE).not.toContain("onClick: onBuyFromBank");
     expect(CODE).not.toContain("onClick: onProposeTrade");
-    /* Design note #888: was `expect(CODE).toContain("onClick: goToMap,");`. The press now does two things --
-       travel, then frame -- so the assertion moved to `layTrackJump.test.ts`, which pins BOTH and their
-       order. What this file still guards is the property in its own name: the click is navigation and
-       framing, and nothing on this bar dispatches (#263). */
-    expect(CODE).toContain("goToMap();");
-    expect(CODE).toContain("onFrameNetwork?.();");
+    /* Design note #888 split this into `goToMap(); onFrameNetwork?.();` -- travel, then frame -- and moved
+       the ordering assertion to `layTrackJump.test.ts`.
+       Design note #987: THE FRAMING IS GONE and the assertion comes home. The press is a bare navigation
+       callback again, which is the shape #263's rule was written about in the first place: one control, one
+       outcome, and that outcome is not a dispatch. */
+    expect(CODE).toContain("onClick: goToMap,");
+    expect(CODE).not.toContain("onFrameNetwork");
   });
 
   it("gives the Lay Track step the jump it lacked", () => {
     /* REPORTED: "it's the one panel that doesn't have a clear action button when it's one of the more
        consequential actions of the whole game." The map IS that step's panel; it was simply owned elsewhere. */
     expect(CODE).toContain('key: "go-to-map"');
-    /* Design note #888: was `disabled: mapInView,`. The button still exists and still belongs to this step;
-       what it points AT changed, and the greying rule it obeys is asserted in "keeps the greying on one
-       channel" below rather than twice here. */
-    expect(CODE).toContain("disabled: !canFrameNetwork,");
+    /* Design note #888: was `disabled: mapInView,`, then `disabled: !canFrameNetwork,`.
+       Design note #987: NEITHER. With the framing gone there is no "nowhere to frame" state left to grey
+       for, and the one remaining pointless press -- made while the Rail Map is already showing -- is exactly
+       what the block below refuses to grey. The button still exists and still belongs to this step. */
+    expect(CODE).toContain("disabled: false,");
   });
 
   it("says Lay 1 Track and could never say two (design note #834)", () => {
@@ -187,22 +189,37 @@ describe("a jump is not an action", () => {
        with "No hex is open to this corporation right now", which is a LEGALITY sentence on a navigation
        control -- the exact second meaning this block exists to keep off the channel. It failed here and the
        copy was corrected. */
+    /* ==================================================================
+        DESIGN NOTE 987: THE CHANNEL IS EMPTY NOW, WHICH IS THE STRONGEST FORM OF ONE MEANING
+       ==================================================================
+       `disabled` HAS BEEN `mapInView`, THEN `!canFrameNetwork`, AND IS NOW `false`. Each step narrowed what
+       could grey this control; the framing's removal takes the last reason away entirely.
+       AND THE RULE THIS BLOCK PROTECTS IS UNCHANGED AND EASIER TO KEEP: a greyed "Lay 1 Track" would read as
+       "you may not lay track", which is a legality answer on a navigation control (#732), and that refusal
+       lives on the hex (#716). A button that is never greyed cannot make that mistake.
+       STILL ASSERTED AS A COUNT, because the failure to catch is a SECOND `disabled` arm appearing on this
+       case -- a condition added later would put the channel back into use without anyone re-reading this. */
     const mapCase = CODE.slice(CODE.indexOf('key: "go-to-map"'), CODE.indexOf('case "BuyPrivate":'));
     expect(mapCase.length).toBeGreaterThan(0);
-    expect(mapCase).toContain("disabled: !canFrameNetwork,");
+    expect(mapCase).toContain("disabled: false,");
     expect(mapCase.match(/disabled:/g)?.length).toBe(1);
-    /* THE SENTENCE IS ABOUT MOVEMENT, NOT ABOUT LEGALITY. A greyed jump may say "there is nowhere to go";
-       it may never say "you may not build here", which is the hex's answer to give. */
-    expect(mapCase).toContain("Nothing to show on the map yet.");
+    /* THE SENTENCE IS ABOUT MOVEMENT, NOT ABOUT LEGALITY -- and with nothing greyed it is a plain
+       description of where the button goes. It may never say "you may not build here", which is the hex's
+       answer to give. */
+    expect(mapCase).toContain("Switches to the Rail Map tab.");
     expect(mapCase).not.toContain("No hex is open");
+    expect(mapCase).not.toContain("Zooms the Rail Map");
   });
 
   it("takes a player on another tab to the map rather than nowhere (design note #833)", () => {
-    /* THE HOLE #833 CLOSED, and the reason the button is not simply greyed when the map is absent: with no
-       element there is nothing to intersect, so `mapInView` is false and the control looks live. A live
-       control that does nothing is the exact outcome #797's greying rule exists to prevent. */
+    /* THE HOLE #833 CLOSED, and the half of this button that was always doing real work: a player reading
+       the Stock Market tab has no map pane at all, and the tab switch is the only thing that can help them.
+       Design note #987: THE PENDING FLAG IS GONE WITH THE SCROLL IT EXISTED TO SEQUENCE. It waited for the
+       pane to mount so a `scrollIntoView` could fire on the next commit; with no scroll to fire there is
+       nothing to wait for, and the switch is the whole action. */
     expect(CODE).toContain("onShowMap?.()");
-    expect(CODE).toContain("setMapJumpPending(true)");
+    expect(CODE).not.toContain("setMapJumpPending");
+    expect(CODE).not.toContain("scrollToMap");
   });
 
   it("moves the rotation rule off the bar (design note #835)", () => {

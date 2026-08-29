@@ -35,7 +35,6 @@ import HexGridRenderer, {
 import { assignRouteSet } from "./utils/routeAutoTrace";
 import { layableHexes, reachableNetwork, stationTokensOf, type StationToken } from "./utils/trackReach";
 // Design note #888: which hexes the Lay Track jump frames, and the camera pose that frames them.
-import { chooseFrameKeys } from "./utils/frameHexes";
 import { dividendDeclaration } from "./utils/dividendStep";
 // Design note #591f: `actingActor` went with the snapshot stack it stamped.
 import { countPhrase, describeGameplayAction } from "./utils/actionLog";
@@ -2143,56 +2142,22 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   ]);
 
   /* ==================================================================
-      DESIGN NOTE 888: WHERE THE LAY TRACK JUMP SHOULD POINT
+      DESIGN NOTE 987: THE FRAME CHOOSER AND ITS REQUEST ARE GONE
      ==================================================================
-     REPORTED: "Would it make more sense for this button to auto-scroll them to their network on the map?
-     Other than CPR (and maybe B&M) this is unlikely to be at the very top of the screen at the start of the
-     game when players will be getting acclimated with the game flow."
-     THE INSTINCT IS RIGHT AND THE MECHANISM IS A ZOOM. `HexGridRenderer` locks its camera at `fitView` until
-     the player presses a zoom control, so at the start of a game the network is already on screen -- small,
-     in the corner of a whole fitted board. Scrolling cannot help; framing can.
-     `chooseFrameKeys` DECIDES WHAT TO SHOW, in `frameHexes.ts`, and its note argues why the buildable set
-     beats "the network" as the answer: a network mid-game is a sprawl, and its bounding box can centre the
-     camera on a fully-built stretch with nothing to do in it. The station tokens are the last resort and are
-     non-empty from the moment a corporation floats. */
-  const layTrackFrameKeys = useMemo(() => {
-    const corporation = gameState?.public_companies.find(
-      (entry) => entry.company_id === actingProtocolId,
-    );
-    /* Design note #955: the home station, from the label the chain reports. Converted to the `"q,r"` key the
-       frame set speaks in via the board's own table -- the same `STATIC_BOARD_HEXES` every other label lookup
-       in this file uses, rather than a second map. An unknown or absent label falls through to #888's
-       ordering below, which is the honest answer when the board cannot say where home is. */
-    const homeKey = (() => {
-      const label = corporation?.home_hex_label;
-      if (!label) return null;
-      const hex = STATIC_BOARD_HEXES.find((entry) => entry.label === label);
-      return hex ? `${hex.q},${hex.r}` : null;
-    })();
-    return chooseFrameKeys({
-      home: homeKey,
-      buildable: layTrackFocus?.highlighted,
-      network: layTrackFocus?.network,
-      /* THE SAME `stationTokensOf` THE GLOW USES (#686: the recorded city slot travels with the token), so
-         the fallback frames the hexes the board actually drew a token on rather than a second reading. */
-      stations: (corporation ? stationTokensOf(corporation) : []).map(
-        ([q, r]) => `${q},${r}`,
-      ),
-    });
-  }, [layTrackFocus, gameState, actingProtocolId]);
+     RULED: "the map is auto-zooming and panning into empty space ... Strip out the map auto-zoom
+     functionality completely", and of the button that raised it: "its attempt to center on the home station
+     is broken (it scrolls to the top of the page)."
+     WHAT WAS HERE: `layTrackFrameKeys`, which asked `chooseFrameKeys` for the hexes to put on screen --
+     #955's home station first, then #888's buildable set, then the network, then the station tokens -- and
+     `handleFrameNetwork`, which raised them to the board as a one-shot token.
+     THE WHOLE LADDER GOES, not just the top rung. #955's home-station rule is the version that was reported,
+     but the layers under it are the same move with a different target: every one of them takes the camera
+     somewhere the player did not ask to be. A desktop-first game shows the whole board at the default pose --
+     which is exactly what #888's own note describes -- and the player has three visible controls for
+     changing it.
+     `frameHexes.ts` IS DELETED, both functions, because this was its only caller. An unused pure module with
+     a passing suite is how a feature that was ruled off comes back: it looks available. */
 
-  /* A TOKEN, NOT A STANDING REQUEST -- #873's shape. Re-answering a frame every render would fight the
-     player's own pan the moment they touched the board after pressing it. */
-  const [frameHexRequest, setFrameHexRequest] = useState<{
-    keys: readonly string[];
-    token: number;
-  } | null>(null);
-  const frameTokenRef = useRef(0);
-  const handleFrameNetwork = useCallback(() => {
-    if (layTrackFrameKeys.length === 0) return;
-    frameTokenRef.current += 1;
-    setFrameHexRequest({ keys: layTrackFrameKeys, token: frameTokenRef.current });
-  }, [layTrackFrameKeys]);
 
 
   /* Layer 3: close the ring when the sub-phase advances, since that can happen without a board click.
@@ -3233,8 +3198,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     detail?: string | null;
     /** Design note #929: the era transition, when this toast is announcing one. */
     eraTransition?: { from: string; to: string } | null;
-    /** Design note #966: a longer window for the one toast that is a LIST. Absent means the standard 3700ms. */
+    /** Design note #966: a longer window for the one toast that is a LIST. Absent means the standard 3700ms.
+     *  Design note #983: that window is 400ms now, on instruction -- shorter than the standard rather than
+     *  longer. The field is unchanged; only the value one caller passes is. */
     durationMs?: number;
+    /** Design note #984: the private-revenue table's rows, kept as rows so the toast can align them. */
+    detailRows?: readonly { label: string; value: string }[] | null;
   } | null>(null);
   const actionToastTokenRef = useRef(0);
   /* Design note #738: the same toast with a second line. Kept as a separate entry point rather than an extra
@@ -3247,11 +3216,23 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       detail: string | null,
       eraTransition: { from: string; to: string } | null = null,
       durationMs?: number,
+      /* Design note #984: LAST AND OPTIONAL, so the four existing call sites are untouched. One caller has a
+         table; every other toast in this app has one thing to say (#697) and should not have to say `null`
+         to a slot it does not use. */
+      detailRows: readonly { label: string; value: string }[] | null = null,
     ) => {
       // Design note #825: nothing has just happened during a rebuild -- see the flag's own note.
       if (replayingHistory) return;
       actionToastTokenRef.current += 1;
-      setActionToast({ text, detail, eraTransition, durationMs, token: actionToastTokenRef.current });
+      setActionToast({
+        text,
+        detail,
+        // Design note #984: the structured rows, for the one toast that is a table rather than a sentence.
+        detailRows,
+        eraTransition,
+        durationMs,
+        token: actionToastTokenRef.current,
+      });
     },
     [],
   );
@@ -4610,10 +4591,20 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                   )
                 : undefined;
             const payout = Number(declaring?.last_route_revenue ?? 0) || 0;
+            /* ==================================================================
+                DESIGN NOTE 988: THE CHOICE GOES IN, AND IT USED NOT TO
+               ==================================================================
+               THIS PASSED THE PAY-DERIVED COUNT TO WHICHEVER CHOICE ARRIVED, so a withhold under Dynamic
+               Stock Market moved by the multiple the PAYOUT would have earned -- none for a small run, two
+               for a large one. The readout twenty screens down already hard-coded one cell for a withhold
+               and said so in a comment, which is #891's exact failure: the bar promising a move the board
+               does not perform.
+               ONE ARGUMENT FIXES BOTH SIDES because `dividendStepsFor` is now the only place that knows. */
             const steps = dividendStepsFor(
               payout,
               marketPriceForCompany(declaring?.company_id ?? -1),
               resolveVariants(before?.variants),
+              choice,
             );
             return projectDividendCellMove(from, choice, steps);
           },
@@ -4975,7 +4966,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                which after a reconnect is somebody else's income. */
             const mine = summarisePrivateRevenueForPlayer(openingPayouts, viewerAddressRef.current);
             if (mine) {
-              showDividendToast(mine.text, mine.detail, null, PRIVATE_REVENUE_TOAST_MS);
+              showDividendToast(mine.text, mine.detail, null, PRIVATE_REVENUE_TOAST_MS, mine.rows);
             }
           }
 
@@ -8309,28 +8300,70 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      not computed independently here -- "the readout came to promise a rise the board did not make" -- so the
      payout and the price go through `dividendStepsFor` on both sides and the only difference between them is
      which function they hand the answer to. */
+  /* Design note #994: THE REVENUE THE DECISION IS ABOUT, read once and handed to both arms. It was inlined
+     inside the pay memo while the withhold memo passed a hard-coded `0` -- which was correct only while a
+     withhold could not scale, and became a wrong readout the moment #994 gave it a threshold. */
+  const dividendRevenueForSteps = useMemo(
+    () =>
+      Number(
+        gameState?.public_companies.find((entry) => entry.company_id === actingProtocolId)
+          ?.last_route_revenue ?? 0,
+      ) || 0,
+    [gameState, actingProtocolId],
+  );
   const dividendSteps = useMemo(
     () =>
       dividendStepsFor(
-        Number(
-          gameState?.public_companies.find((entry) => entry.company_id === actingProtocolId)
-            ?.last_route_revenue ?? 0,
-        ) || 0,
+        dividendRevenueForSteps,
         dividendPrice,
         resolveVariants(gameState?.variants),
+        // Design note #988: this count feeds the PAY projection only; the withhold asks for its own below.
+        "pay",
       ),
-    [gameState, actingProtocolId, dividendPrice],
+    [dividendRevenueForSteps, gameState, dividendPrice],
   );
   const payProjection = useMemo(
     () => projectDividendFrom(dividendCell, "pay", dividendSteps),
     [dividendCell, dividendSteps],
   );
+  /* ==================================================================
+      DESIGN NOTE 994: THE WITHHOLD READOUT NEEDED THE FIGURE IT HAD BEEN DENIED
+     ==================================================================
+     #988 ROUTED THIS THROUGH `dividendStepsFor` and passed `0` as the payout, on the reasoning that a
+     withhold pays nothing out so the amount could not matter. That was true of #988's rule and is false of
+     #994's: the drop now scales with the revenue WITHHELD, so a zero here reports one cell for every turn
+     including the ones the board moves two.
+     THE FAILURE WOULD HAVE BEEN #891 AGAIN, from the opposite side -- the readout under-promising a fall the
+     board then performs. Recorded because #988's own note is three lines up congratulating itself for
+     closing exactly this gap: a placeholder argument is a rule waiting to change under it. */
+  const withholdSteps = useMemo(
+    () =>
+      dividendStepsFor(
+        dividendRevenueForSteps,
+        dividendPrice,
+        resolveVariants(gameState?.variants),
+        "withhold",
+      ),
+    [dividendRevenueForSteps, gameState, dividendPrice],
+  );
   const withholdProjection = useMemo(
-    /* A WITHHOLD IS ALWAYS ONE CELL. The variant is about how much was PAID OUT, and a corporation that
-       withholds paid nothing -- scaling the drop by a dividend that did not happen would be a rule nobody
-       asked for. */
-    () => projectDividendFrom(dividendCell, "withhold"),
-    [dividendCell],
+    () => projectDividendFrom(dividendCell, "withhold", withholdSteps),
+    [dividendCell, withholdSteps],
+  );
+
+  /* ==================================================================
+      DESIGN NOTE 998: THE TWO COUNTS, NOT TWO SENTENCES
+     ==================================================================
+     #997 COMPUTED `dividendStepsExplanation` FOR BOTH DECISIONS and rendered them under the columns. ASKED
+     SINCE: "can we actually just indicate this on the Market Move line? ... Maybe we replace both with
+     (double move)?" -- so what the bar needs is how far each decision moves the token, which it already has
+     an authority for.
+     ASSEMBLED FROM THE TWO COUNTS ALREADY COMPUTED ABOVE rather than calling `dividendStepsFor` twice more.
+     They are the same numbers the two projections take, so the marker on the line cannot disagree with the
+     prices beside it -- which is #891's rule and the reason this is not derived in the panel. */
+  const dividendMoveSteps = useMemo(
+    () => ({ pay: dividendSteps, withhold: withholdSteps }),
+    [dividendSteps, withholdSteps],
   );
 
 
@@ -8947,10 +8980,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                      `onShowMap` exists to resolve. */
                   mapEl={activeMainTab === "map" ? boardEl : null}
                   onShowMap={handleShowMap}
-                  /* Design note #888: the jump frames the buildable hexes rather than finding a pane the
-                     player can already see. `canFrameNetwork` is what replaces `mapInView` as the gate. */
-                  onFrameNetwork={handleFrameNetwork}
-                  canFrameNetwork={layTrackFrameKeys.length > 0}
+                  /* Design note #987: `onFrameNetwork`/`canFrameNetwork` are GONE. The Lay Track button now
+                     switches to the Rail Map tab and does nothing else -- no camera move, no page scroll. */
                   /* Design note #846: the same offers the board rings, so the chip and the hue ring cannot
                      disagree about whether a power is available. Empty outside Lay Track by construction --
                      `dhPower`/`cslPower` report the lay unavailable once it is spent or forfeited. */
@@ -9057,6 +9088,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                   dividendPrice={dividendPrice}
                   payProjection={payProjection}
                   withholdProjection={withholdProjection}
+                  dividendMoveSteps={dividendMoveSteps}
                   selectedHardwareModel={selectedHardwareModel}
                   onEndOperatingTurn={handleEndOperatingTurn}
                   onUndoLastAction={handleUndoLastAction}
@@ -9390,7 +9422,6 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                       /* Design note #873: the one-shot that opens the picker where the errand points. */
                       autoSelectHex={autoSelectHex}
                       /* Design note #888: the Lay Track jump's destination, as a one-shot token. */
-                      frameHexRequest={frameHexRequest}
                       previewTile={previewTile}
                       currentEra={gameState?.current_global_era ?? "Yellow"}
                       // PublicCompanyState[] is structurally assignable to StationTokenCompany[]; omitted entirely until gameState resolves.
@@ -9640,6 +9671,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         message={actionToast?.text ?? null}
         // Design note #738: the treasury transition, when there is one.
         detail={actionToast?.detail ?? null}
+        // Design note #984: the private-revenue table, stacked and aligned rather than joined onto one line.
+        detailRows={actionToast?.detailRows ?? null}
         // Design note #929: the hex pair, on the one toast that is about a colour.
         eraTransition={actionToast?.eraTransition ?? null}
         /* Design note #967: the toast that is a list gets a longer window; everything else takes the default. */

@@ -25,7 +25,13 @@
 
 import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { REVENUE_FLASH_ARROWS_CSS, REVENUE_FLASH_EDGE_CSS } from "../styles/animations";
+import {
+  REVENUE_FLASH_ARROWS_CSS,
+  REVENUE_FLASH_BACKDROP_CSS,
+  REVENUE_FLASH_EDGE_CSS,
+} from "../styles/animations";
+// Design note #985: how much of its em a capital actually inks -- the conversion #972 was missing.
+import { CAP_HEIGHT_RATIO } from "../styles/typography";
 
 /** Exactly two seconds, as ruled. Exported so the test asserts the number the component uses rather than a
  *  copy of it. */
@@ -177,28 +183,53 @@ const ARROW_POSITIONS: readonly {
      over the numeral. The spread widens by roughly the same factor the type does; the ASYMMETRY and the
      staggered delays are #953's and are deliberately preserved, since an even ring on a regular beat is the
      loading-spinner reading that note exists to avoid. */
-  { left: "-32%", top: "6%", delay: 0, scale: 1.25 },
-  { left: "-6%", top: "-46%", delay: 90, scale: 0.7 },
-  { left: "34%", top: "58%", delay: 40, scale: 1 },
-  { left: "70%", top: "-42%", delay: 150, scale: 0.8 },
-  { left: "104%", top: "10%", delay: 70, scale: 1.4 },
-  { left: "124%", top: "-26%", delay: 120, scale: 0.85 },
+  { left: "-32%", top: "6%", delay: 0, scale: 0.85 },
+  { left: "-6%", top: "-46%", delay: 90, scale: 0.15 },
+  { left: "34%", top: "58%", delay: 40, scale: 0.55 },
+  { left: "70%", top: "-42%", delay: 150, scale: 0.3 },
+  { left: "104%", top: "10%", delay: 70, scale: 1 },
+  { left: "124%", top: "-26%", delay: 120, scale: 0.45 },
 ];
 
-/** The em the multipliers above are applied to. Critical swings skew larger, minor smaller -- #957's rule,
- *  now expressed as the centre of a spread rather than as the whole of it.
+/* ==================================================================
+ *  DESIGN NOTE 985: THE SIZE IS A BAND NOW, AND THE `scale` IS A POSITION INSIDE IT
+ * ==================================================================
  *
- *  ==================================================================
- *   DESIGN NOTE 972: "WAY TOO SMALL RELATIVE TO THE TEXT"
- *  ==================================================================
- *  RULED: "The directional arrows are way too small relative to the text ... Scale them up significantly."
- *  AND THE COMPARISON IN THAT SENTENCE IS THE RIGHT ONE, which is why both numbers move rather than the
- *  arrows being given a px size. #957 chose 0.34/0.2 against a 132px ceiling; #954 then cut the ceiling to
- *  104px for a shorter window and did not revisit these, so the arrows shrank with the numeral while the
- *  reason for their size did not change. That is the drift being corrected, not a new preference.
- *  UP BY ABOUT TWO THIRDS, AND THE SKEW IS UNTOUCHED: the critical base stays roughly 1.5x the minor one, so
- *  #957's third channel -- size read before the numeral is -- survives the rescaling intact. */
-const ARROW_BASE_EM = { critical: 0.55, minor: 0.36 } as const;
+ * RULED: "Increase their size by at least 10x. The large/critical arrows must be 60-80% of the size of the
+ * number text, and the small/minor arrows must be 30-50%."
+ *
+ * THE TWO HALVES OF THAT DISAGREE, AND THE BAND IS THE HALF I FOLLOWED. Ten times #972's sizing would put a
+ * single arrow at five and a half times the height of the numeral it decorates; the percentages are the
+ * checkable instruction and they are what the code now expresses. Said plainly rather than quietly split,
+ * because "10x" is a real perception and the band is where I think it came from -- see below.
+ *
+ * WHY THEY LOOKED SO MUCH SMALLER THAN THEIR NUMBERS SAID. #972 set a FONT SIZE, and a font size is not a
+ * drawn height: U+25B2 fills roughly seven tenths of its em box, while the numeral beside it is measured by
+ * its cap height, about `CAP_HEIGHT_RATIO` of ITS em. So an arrow at `0.55em` drew at about 0.385em against a
+ * numeral drawing at 0.72em -- 53% where the note claimed 55%, and the smallest of the six landed near 37%.
+ * Every figure in that note was about a box nobody can see. This one converts, once, in a named constant.
+ *
+ * THE BAND COSTS THE SPREAD SOME OF ITS RANGE, and that is worth naming as a trade rather than discovering
+ * later. #959 ruled the six arrows "a mix of sizes ... They shouldn't all be one size", and its harness
+ * asserted the largest was at least 1.5x the smallest. A band of 60-80% cannot hold a 1.5x ratio -- its own
+ * extremes are 1.33x apart. So the mix is narrower than it was, by arithmetic rather than by choice, and the
+ * harness's ratio assertion moves with it.
+ *
+ * `scale` IS A POSITION FROM 0 TO 1 ACROSS THE BAND, not a multiplier on a base. Written that way, "every
+ * arrow is inside the ruled range" is true by construction rather than by six separate checks -- and a future
+ * edit that widens the mix cannot silently walk an arrow out of the band. */
+const ARROW_BAND = {
+  critical: { low: 0.6, high: 0.8 },
+  minor: { low: 0.3, high: 0.5 },
+} as const;
+
+/** How much of its own em U+25B2 actually inks, near enough for sizing.
+ *
+ *  A MEASURED PROPERTY OF THE GLYPH, not a taste. It sits beside `CAP_HEIGHT_RATIO` in spirit -- both are
+ *  "how tall is the thing you can see, given a font size" -- and it is here rather than in `typography.ts`
+ *  because it is a fact about ONE character rather than about the type scale. If a second surface ever draws
+ *  this triangle, that is the moment to move it. */
+const ARROW_GLYPH_RATIO = 0.7;
 
 const BONUS_COLOR = "#4ade80";
 const MALUS_COLOR = "#f87171";
@@ -226,6 +257,18 @@ const MALUS_COLOR = "#f87171";
    flash. */
 const BONUS_EDGE = "rgba(74, 222, 128, 0.45)";
 const MALUS_EDGE = "rgba(248, 113, 113, 0.45)";
+
+/** The backdrop's two stops, ruled: "70% opacity at its center and fade out completely to 0% at its edges".
+ *
+ *  Design note #986: CREAM RATHER THAN WHITE, and the difference is small and deliberate. Pure white behind a
+ *  green "+20%" reads as a lit panel; `#fffaf0` is the warm near-white this app's cards are already made of
+ *  (`palette.ts`'s `CARD_SURFACE`), so the backdrop reads as paper the figure is printed on rather than as a
+ *  second light source competing with the rim flash.
+ *  BOTH STOPS ARE THE SAME INK AT DIFFERENT ALPHAS. Fading to `transparent` rather than to `rgba(...,0)` is
+ *  the classic gradient bug -- several engines interpolate the keyword through transparent BLACK, which puts
+ *  a grey halo between the two stops on exactly the surface this is meant to brighten. */
+const BACKDROP_INK = "rgba(255, 250, 240, 0.7)";
+const BACKDROP_FADE = "rgba(255, 250, 240, 0)";
 
 export function RevenueModifierFlash({ signal }: RevenueModifierFlashProps): JSX.Element | null {
   const [visible, setVisible] = useState(false);
@@ -314,6 +357,7 @@ export function RevenueModifierFlash({ signal }: RevenueModifierFlashProps): JSX
     >
       <style>{REVENUE_FLASH_ARROWS_CSS}</style>
       <style>{REVENUE_FLASH_EDGE_CSS}</style>
+      <style>{REVENUE_FLASH_BACKDROP_CSS}</style>
       {/* Design note #973: THE SCREEN'S RIM, tinted to the outcome. `currentColor` is what keeps the
           `box-shadow` geometry in the stylesheet and the COLOUR here beside `BONUS_COLOR`/`MALUS_COLOR` --
           one decision about which hue means what, in one file, rather than a second green written into CSS.
@@ -338,11 +382,36 @@ export function RevenueModifierFlash({ signal }: RevenueModifierFlashProps): JSX
           SIX, AT ASYMMETRIC OFFSETS AND STAGGERED DELAYS. An even spread on a regular beat reads as a loading
           spinner; the irregularity is what makes it read as drift. */}
       <span style={{ position: "relative", display: "inline-block" }}>
-        {/* Design note #973: #960's RADIAL GLOW WAS HERE, behind the numeral, and it is gone -- see the
-            constants above for why the rim is the better home for the same idea. Recorded rather than
-            silently deleted because #960's argument (a gradient that reaches full transparency inside its
-            own box has no rim to read as a plate) was sound, and a later reader wanting a glow behind the
-            figure should find the reason it moved rather than rediscover the reason it was allowed. */}
+        {/* ==================================================================
+             DESIGN NOTE 986: A GLOW BEHIND THE FIGURE, BACK, AND IN A DIFFERENT COLOUR
+            ==================================================================
+            RULED: "The number is getting lost against the map and the Action Bar ... render a white/cream
+            radial gradient glow strictly behind the number and arrows. This radial glow should be 70%
+            opacity at its center and fade out completely to 0% at its edges."
+            THIS REVERSES HALF OF #973 AND I WANT THAT ON THE RECORD rather than quietly re-landed. #960 put
+            a glow here, #973 took it to the screen's rim and argued the rim was the better home "from a
+            place the board never occupies". That argument was about the DIRECTION cue and it still holds --
+            the rim flash stays, green or red, and is untouched. What it got wrong is that it treated one
+            element as doing two jobs. #960's glow was ALSO doing legibility work directly behind the
+            glyphs, and moving it to the rim left the numeral with nothing behind it but a black text-shadow
+            over a board of four colours and a sticky bar. That is the report.
+            AND THE COLOUR IS WHY THE TWO CAN COEXIST NOW. #960's glow was tinted to the OUTCOME, so keeping
+            it alongside a tinted rim would have been the same hue twice for one fact -- #973's actual
+            objection. A neutral cream says nothing about direction; it only lifts. Two elements, two jobs,
+            no overlap.
+            `ellipse` RATHER THAN #960's CIRCLE. The thing being backed is wider than it is tall -- a
+            percentage plus six arrows spread from -32% to 124% -- and `closest-side` on a circle would size
+            to the SHORT axis and leave the outer arrows outside the glow entirely.
+            `z-index: -1` INSIDE THIS WRAPPER is what "strictly behind" means mechanically: the numeral and
+            every arrow are siblings in the same stacking context, so one negative index puts the backdrop
+            under all of them without needing an index of its own on each. */}
+        <span
+          aria-hidden="true"
+          className="app-revenue-backdrop"
+          style={{
+            background: `radial-gradient(ellipse closest-side, ${BACKDROP_INK} 0%, ${BACKDROP_FADE} 100%)`,
+          }}
+        />
         {ARROW_POSITIONS.map((offset, index) => (
           <span
             key={index}
@@ -360,9 +429,19 @@ export function RevenueModifierFlash({ signal }: RevenueModifierFlashProps): JSX
               /* Design note #957: sized from the FIGURE's em, so the ratio holds at every viewport -- a fixed
                  px size would make the two tiers indistinguishable on a small screen and absurd on a large
                  one, which is the failure the `clamp` on the numeral already exists to avoid.
-                 Design note #959: and multiplied per arrow, so the six are a spread rather than a set. */
+                 Design note #959: and varied per arrow, so the six are a spread rather than a set.
+                 Design note #985: the arithmetic, in the order it reads. `share` is the fraction of the
+                 NUMERAL'S DRAWN HEIGHT this arrow should draw at -- the thing the ruling specifies. Multiply
+                 by `CAP_HEIGHT_RATIO` to turn that into a fraction of the numeral's em, then divide by the
+                 glyph's own fill to get the font size that draws it. Two conversions, both named, because
+                 #972 skipped them and its every stated percentage was about an invisible box. */
               fontSize: `${
-                (critical ? ARROW_BASE_EM.critical : ARROW_BASE_EM.minor) * offset.scale
+                (((critical ? ARROW_BAND.critical : ARROW_BAND.minor).low +
+                  ((critical ? ARROW_BAND.critical : ARROW_BAND.minor).high -
+                    (critical ? ARROW_BAND.critical : ARROW_BAND.minor).low) *
+                    offset.scale) *
+                  CAP_HEIGHT_RATIO) /
+                ARROW_GLYPH_RATIO
               }em`,
             }}
           >

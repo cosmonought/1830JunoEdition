@@ -23,7 +23,6 @@ import {
   isNoticeSilenced,
   nextDueNotice,
   noticeBody,
-  noticeConsequence,
   noticeGentleRustLine,
   noticeDismissKey,
   noticeHeadline,
@@ -123,22 +122,27 @@ describe("the copy tells a president what happened and what it costs", () => {
     expect(noticeBody(limit)).toContain("cheapest");
   });
 
-  it("says it could not have been prevented, where that is still worth a line", () => {
+  it("has stopped promising the discarded train comes back (design note #990)", () => {
     /* ==================================================================
-        NARROWED BY #980: THE RUST NOTICE GIVES THIS SENTENCE UP
+        SUPERSEDED TWICE, AND THE SECOND TIME IT WAS A LORE ERROR
        ==================================================================
-       IT WAS ASSERTED FOR BOTH CAUSES, on #896's argument that "being stopped is tolerable when the thing you
-       are told could not have been avoided; it is an insult when it is news you could have read."
-       THAT ARGUMENT IS ABOUT THE MODAL, NOT ABOUT THIS SENTENCE. After #980 the rust modal is two short lines
-       and defends its own interruption; a paragraph explaining that the interruption was fair IS the wall of
-       text the ruling is about.
-       THE LIMIT NOTICE KEEPS IT, and the difference is decidable rather than stylistic: "the train is already
-       back in the depot and may be bought again by anyone" is a fact with a rival's decision attached, and it
-       is on no other surface. That is the case #896 was actually defending.
-       `null` RATHER THAN "" so the modal renders no paragraph at all -- an empty one still occupies its
-       margins and reads as a sentence that failed to load. */
-    expect(noticeConsequence(rust)).toBeNull();
-    expect(noticeConsequence(limit)).toContain("could not be refused");
+       #896 ASSERTED "could not be refused" ON BOTH CAUSES, on the argument that a blocking modal owes the
+       player a reason it was worth stopping them for. #980 narrowed it to the limit notice and kept that one
+       because its sentence was "a fact with a rival's decision attached -- a rival can take it this round".
+       THAT DECISION DOES NOT EXIST. RULED: "The modal incorrectly states the discarded train returns to the
+       depot. Discarded trains are permanently removed from the game."
+       SO THE SENTENCE WAS NOT SURPLUS, IT WAS WRONG -- and my reason for keeping it was built entirely on the
+       thing that was false. Worth recording as such: the case did its job for #896's version and then held a
+       falsehood in place for one batch because nobody re-checked the rule the copy was asserting.
+       THE FUNCTION IS GONE, not left returning `null`. A predicate with one reachable answer is #788's
+       unreachable arm wearing a return type. Asserted as an absence over the module and the modal both,
+       because an orphaned export is how the sentence comes back. */
+    const NOTICE = readStripped("utils/fleetLossNotice.ts");
+    const MODAL = readStripped("components/FleetLossModal.tsx");
+    expect(NOTICE).not.toContain("back in the depot");
+    expect(NOTICE).not.toContain("could not be refused");
+    expect(NOTICE).not.toContain("export function noticeConsequence");
+    expect(MODAL).not.toContain("noticeConsequence");
   });
 
   it("adds the gentle-rust line only under the variant, and only to rust", () => {

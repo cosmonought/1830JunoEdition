@@ -307,6 +307,43 @@ export const REVENUE_FLASH_EDGE_CSS = `
 }
 `;
 
+/* ==================================================================
+ *  DESIGN NOTE 986: THE BACKDROP THE NUMERAL SITS ON
+ * ==================================================================
+ *
+ * RULED: "render a white/cream radial gradient glow strictly behind the number and arrows ... 70% opacity at
+ * its center and fade out completely to 0% at its edges, acting as a soft backdrop to make the text pop."
+ *
+ * SIZED IN PERCENTAGES OF THE FIGURE'S OWN BOX, not in `em`. #960's glow was `2.6em` square, which is a
+ * multiple of the FONT SIZE and therefore right for a numeral and far too small for a numeral surrounded by
+ * six arrows spread from -32% to 124%. Percentages resolve against the wrapper -- the same box those offsets
+ * are percentages of -- so the backdrop grows with the arrow spread by construction rather than by being
+ * re-tuned every time an offset moves.
+ *
+ * TALLER THAN IT IS WIDE, PROPORTIONALLY: the arrows reach further above and below the figure than the figure
+ * is tall, so the vertical multiplier is the larger one. `ellipse closest-side` then reaches full
+ * transparency at the nearer edge, which is what "fade out completely to 0% at its edges" asks for.
+ *
+ * `z-index: -1` AND `pointer-events: none`, both for #960's reasons and unchanged: behind the glyphs it
+ * exists to lift, and incapable of eating a click on a board it covers.
+ *
+ * NO ANIMATION OF ITS OWN. It appears and disappears with the overlay's opacity transition (#970), because a
+ * backdrop that faded on a different curve from the thing it backs would leave a cream smudge over the board
+ * with nothing in it -- the failure #960 named for its own glow and then avoided with a matching keyframe. A
+ * static child of an animated parent gets it for free and cannot come out of step. */
+export const REVENUE_FLASH_BACKDROP_CSS = `
+.app-revenue-backdrop {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 260%;
+  height: 420%;
+  transform: translate(-50%, -50%);
+  z-index: -1;
+  pointer-events: none;
+}
+`;
+
 /* Design note #973: `REVENUE_FLASH_GLOW_CSS` is GONE, with #960's radial glow behind the numeral.
    WHAT IT WAS, for the record, because the reasoning is worth keeping findable: a `closest-side` radial
    gradient at `z-index: -1` inside the figure's relative wrapper, sized in `em` so it scaled with the type,

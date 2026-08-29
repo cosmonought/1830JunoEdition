@@ -236,12 +236,21 @@ describe("the rust modal is two lines (design note #980)", () => {
   const NOTICE = readStripped("utils/fleetLossNotice.ts");
   const MODAL = readStripped("components/FleetLossModal.tsx");
 
-  it("renders the gentle line and skips an absent consequence", () => {
-    /* BOTH CONDITIONALS MATTER AND THEY FAIL DIFFERENTLY. Without the first, the coloured line is computed
-       and never shown -- the integration gap this project keeps finding. Without the second, a rust notice
-       renders an empty `<p>`, which still occupies its margins and reads as a sentence that failed to load. */
+  it("renders the gentle line", () => {
+    /* THE INTEGRATION GAP THIS PROJECT KEEPS FINDING: without the guard the coloured line is computed and
+       never shown, and nothing else here would notice.
+       ==================================================================
+        THE SECOND HALF WENT WITH THE SENTENCE IT GUARDED (design note #990)
+       ==================================================================
+       IT ALSO ASSERTED `noticeConsequence(notice) && (`, which kept a rust notice from rendering an empty
+       `<p>`. That function is gone: its last surviving sentence told the player a discarded train "is already
+       back in the depot and may be bought again by anyone", and 1830 removes an over-limit discard from the
+       game. The line was not surplus, it was false -- and #980 kept it on the strength of exactly the
+       decision that does not exist.
+       ASSERTED AS AN ABSENCE NOW, in the place the conditional used to be, so the paragraph cannot return
+       without failing here. */
     expect(MODAL).toContain("noticeGentleRustLine(notice) && (");
-    expect(MODAL).toContain("noticeConsequence(notice) && (");
+    expect(MODAL).not.toContain("noticeConsequence");
   });
 
   it("colours the gentle line rather than the body", () => {

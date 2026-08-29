@@ -207,12 +207,16 @@ describe("the compass rose follows the variant (design note #962)", () => {
        checkable is that the three outcomes the function can return are the three the sentence names -- so a
        fourth band added to the rules would fail here rather than only on screen. */
     const price = 100;
-    const bands = [50, 100, 250].map((payout) => dividendStepsFor(payout, price, DYNAMIC));
+    const bands = [50, 100, 300].map((payout) => dividendStepsFor(payout, price, DYNAMIC, "pay"));
     expect(bands).toEqual([0, 1, 2]);
     const rule = compassArmsFor(DYNAMIC).right.rule;
     expect(rule).toContain("Under its own share price");
     expect(rule).toContain("once the price, one column right");
-    expect(rule).toContain("twice the price or more, two columns");
+    /* Design note #988: "3 times", from the constant. The legend saying "twice" while the reducer wants
+       three is #746c's fault exactly -- "the legend agreed with the bug" -- so the sentence is checked
+       against the same number the arithmetic uses rather than against a word. */
+    expect(rule).toContain("3 times the price or more, two columns");
+    expect(rule).not.toContain("twice the price");
   });
 
   it("qualifies the label as well as the tooltip", () => {
@@ -222,13 +226,40 @@ describe("the compass rose follows the variant (design note #962)", () => {
     expect(compassArmsFor(DYNAMIC).right.label).toContain("varies");
   });
 
-  it("leaves the three arms #908 does not touch alone", () => {
-    /* SHARED, NOT DUPLICATED. Sold out, withheld and each-10%-sold are unchanged by the variant, and a second
-       copy of "one row down per 10% share sold" would be a second thing to keep in step for no gain. */
+  it("leaves the two arms the variant does not touch alone", () => {
+    /* SHARED, NOT DUPLICATED. Sold out and each-10%-sold are unchanged by the variant, and a second copy of
+       "one row down per 10% share sold" would be a second thing to keep in step for no gain. */
     const arms = compassArmsFor(DYNAMIC);
     expect(arms.up).toBe(COMPASS_ARMS.up);
-    expect(arms.left).toBe(COMPASS_ARMS.left);
     expect(arms.down).toBe(COMPASS_ARMS.down);
+  });
+
+  it("says out loud that the withhold DOES vary (design notes #988 -> #994)", () => {
+    /* ==================================================================
+        THE ARM THAT LEFT THE SHARED SET, AND WHY IT HAD TO
+       ==================================================================
+       THE LEFT ARM USED TO BE `COMPASS_ARMS.left` UNCHANGED, on the reasoning above -- the variant does not
+       touch the withhold, so it needs no copy. That was true of the RULE and false of the READING. Beside a
+       right arm relabelled "Paid (varies)", an unqualified "Withheld" invites exactly the inference that the
+       withhold varies too -- which is what the rules actually did until #988, so the rose was accidentally
+       describing the bug.
+       AND THEN THE DENIAL BECAME FALSE. #994 gave the withhold its own double jump at three times the share
+       price, so the sentence #988 wrote specifically to rule the variation OUT is now the opposite of the
+       rule. A legend written to DENY a behaviour is exactly as fragile as one written to state it -- #746c
+       from the other side, and worth recording as the reason this arm is now checked against the shared
+       constant rather than against any wording.
+       THE LABEL CARRIES THE QUALIFIER TOO. "Withheld" beside "Paid (varies)" still reads as fixed, and the
+       label is the half read without hovering; only the glyph stays shared. */
+    const arms = compassArmsFor(DYNAMIC);
+    expect(arms.left.glyph).toBe(COMPASS_ARMS.left.glyph);
+    expect(arms.left.label).toBe("Withheld (varies)");
+    expect(arms.left.rule).toContain("at least one column left");
+    expect(arms.left.rule).toContain("drops it two columns");
+    expect(arms.left.rule).not.toContain("whatever the run was worth");
+    /* AND THE STANDARD ROSE IS UNTOUCHED, or every table would read a variant sentence -- which is #994a's
+       scope limit expressed on the surface a base-game player actually looks at. */
+    expect(compassArmsFor(STANDARD_VARIANTS).left).toBe(COMPASS_ARMS.left);
+    expect(compassArmsFor(STANDARD_VARIANTS).left.label).toBe("Withheld");
   });
 
   it("is actually fed the game's variants", () => {

@@ -74,7 +74,6 @@ import {
 import { logoSrcFor } from "./CorporateLogo";
 import { reservationsByHex } from "../utils/privateReservations";
 // Design note #888: the camera pose that puts a set of hexes on screen, as a function that can be called.
-import { frameHexes } from "../utils/frameHexes";
 import { canvasTouchAction, isTapGesture } from "../utils/mapGesture";
 // Design note #723: the one place that decides whether ground is still unpaid.
 import { terrainFeeDue } from "../utils/terrainFee";
@@ -319,20 +318,11 @@ export interface HexGridRendererProps {
      clears it once the board has acted on it. */
   /** A one-shot request: resolve this hex as though it had been clicked. Changing the token re-fires. */
   autoSelectHex?: { q: number; r: number; token: number } | null;
-  /* ==================================================================
-      DESIGN NOTE 888: FRAME THESE HEXES, BECAUSE THE MAP IS FITTED NOT SCROLLED
-     ==================================================================
-     REPORTED, of the Lay Track button: "Would it make more sense for this button to auto-scroll them to
-     their network on the map?"
-     AND THERE IS NOTHING TO SCROLL. This component opens with `detailedView = false`, which locks the camera
-     at `fitView` -- the whole board fitted to the pane and centred on its own bounds -- so a player at the
-     default pose already has their network on screen. It is not off screen; it is SMALL. The move that
-     answers the report is a ZOOM.
-     A TOKEN, THE SAME SHAPE AS `autoSelectHex` ABOVE and for the same reason: this is a one-shot request,
-     not a standing question. Re-answering it every frame would fight the player's own pan the moment they
-     touched the board, which is #866's collision in a different costume. */
-  /** A one-shot request to frame these `"q,r"` hexes. Changing the token re-fires. */
-  frameHexRequest?: { keys: readonly string[]; token: number } | null;
+  /* Design note #987: `frameHexRequest` IS GONE, with #888's framing effect -- see the note at that effect's
+     old site for what it did and why. #888's observation survives it and is worth keeping: this component
+     locks its camera at `fitView` while `detailedView` is false, so a player at the default pose already has
+     the whole board on screen. The move #888 built was a zoom onto a subset of it; there is no automatic
+     camera move at all now. */
   /** The resolved anchor. `cityIndex` is `null` where the hex has more than one city -- the caller must then
    *  fall back to asking, because auto-staging a choice would be #858's bug with no click to blame. */
   onAutoStageStation?: (info: {
@@ -562,7 +552,6 @@ export function HexGridRenderer({
   autoStageStation = null,
   onAutoStageStation,
   autoSelectHex = null,
-  frameHexRequest = null,
   previewTile,
   currentEra = "Yellow",
   publicCompanies = EMPTY_PUBLIC_COMPANIES,
@@ -2654,60 +2643,20 @@ export function HexGridRenderer({
   }, [fitView, scheduleDraw]);
 
   /* ==================================================================
-      DESIGN NOTE 888: THE FRAMING REQUEST, ANSWERED ONCE PER TOKEN
+      DESIGN NOTE 987: THE FRAMING EFFECT IS GONE, AND WITH IT THE ONLY AUTOMATIC CAMERA MOVE
      ==================================================================
-     THE ARITHMETIC IS NOT HERE. `frameHexes` is a pure module (#887's argument, applied on purpose this
-     time): a camera pose is a calculation with an answer, and every way it can be wrong is a NUMBER -- an
-     axis fitted on the wrong side, a clamp applied before the centring, a zoom that inverts on a set of one.
-     Inside this component none of that could be asserted except by scanning for the presence of arithmetic.
-     `handleFitToScreen` IS THE WAY BACK, unchanged and already on screen. That is what makes this an
-     acceptable thing to do to a player's camera on a button press: the pose is reversible by a control they
-     can see, which #818's rule about decisions-by-dismissal is the general case of.
-     CLAMPED THE SAME WAY A DRAG IS. `clampPanToBoard` is what stops a frame near the board's edge leaving
-     half the canvas empty; skipping it here would make the button the one camera move in this component that
-     can leave the board off-centre against its own bounds. */
-  const lastFrameTokenRef = useRef<number | null>(null);
-  useEffect(() => {
-    if (!frameHexRequest) {
-      lastFrameTokenRef.current = null;
-      return;
-    }
-    if (lastFrameTokenRef.current === frameHexRequest.token) return;
-    lastFrameTokenRef.current = frameHexRequest.token;
-    const points = frameHexRequest.keys
-      .map((key) => {
-        const [q, r] = key.split(",").map(Number);
-        return Number.isFinite(q) && Number.isFinite(r) ? axialToPixel(q, r, hexSize) : null;
-      })
-      .filter((point): point is { x: number; y: number } => point !== null);
-    /* Design note #888: a hex-radius and a half of slack, so the outermost hex of the set is not flush
-       against the canvas edge and its neighbours read as context rather than as a crop. */
-    /* Design note #911: THE PLAYER'S OWN ZOOM, PASSED IN. `view.zoom` is the effective magnification whether
-       the camera is locked or free -- the effect at #13 keeps `view` synced to `fitView` while locked -- so
-       this is the number on screen at the moment of the press, and the frame keeps it. */
-    const framed = frameHexes(points, { width, height }, {
-      padding: hexSize * 1.5,
-      minZoom,
-      maxZoom: minZoom * MAX_ZOOM_MULTIPLIER,
-      lockedZoom: view.zoom,
-    });
-    if (!framed) return;
-    /* STILL UNLOCKS THE CAMERA, and that is not a zoom change: `view` already holds `fitView`'s zoom while
-       locked, so flipping to the free view at the same magnification only makes the pan below stick. */
-    setDetailedView(true);
-    const clamped = clampPanToBoard(
-      framed.panX,
-      framed.panY,
-      framed.zoom,
-      boardContentBounds,
-      width,
-      height,
-    );
-    setView({ zoom: framed.zoom, panX: clamped.panX, panY: clamped.panY });
-    scheduleDraw();
-    /* `view.zoom` rather than `view`: this effect must not re-run when the player pans, or a frame would be
-       re-applied on top of their own drag. The token guard above already makes it once-per-press. */
-  }, [frameHexRequest, hexSize, width, height, minZoom, view.zoom, boardContentBounds, scheduleDraw]);
+     RULED: "the map is auto-zooming and panning into empty space. This is a desktop-first game. Strip out the
+     map auto-zoom functionality completely."
+     WHAT WAS HERE: #888's effect. It watched a `frameHexRequest` token from the shell, converted a set of
+     `"q,r"` keys to pixels, asked `frameHexes` for a camera pose, unlocked the camera (`setDetailedView(true)`)
+     and wrote the pose in. #955 then narrowed the set it was given to ONE hex -- the corporation's home
+     station -- which is what turned it from a fit-to-your-network move into a hard pan onto a single hex at
+     whatever zoom happened to be in force. That is the reported "empty space".
+     THE CAMERA IS NOW ONLY EVER MOVED BY THE PLAYER. What remains are the three controls they can see: the
+     zoom buttons, the drag, and Fit to Screen -- plus the lock at #13, which keeps `view` synced to `fitView`
+     while `detailedView` is false and is not a move so much as the absence of one.
+     `rememberedCamera` SURVIVES AND IS NOT THIS. It carries the player's OWN pose across a remount so a round
+     change does not throw away their zoom (#927); nothing about it initiates a move. */
 
   /* THE THIRD TOOLTIP -- the one armed but not yet fired. #269 handled "already showing" and "about to be set"; a click during #365's dwell fires the timer ON TOP of the open ring. It survived because both natural ways to test it pass.
      See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #505 */

@@ -300,7 +300,10 @@ import {
   visibleSubPhases,
   type OperatingSubPhase,
 } from "./components/OperatingSubPhaseStepper";
-import { useDocumentTitleFlash } from "./utils/turnAlert";
+// Design note #1008: the glow's condition travels beside `isMyTurn`, never folded into it.
+import { useDocumentTitleFlash, useTurnGlowActive } from "./utils/turnAlert";
+// Design note #1009: the whistle takes the same `isMyTurn` the other two turn alerts do.
+import { RADIO_STREAM_URL, useRadioStream, useTurnWhistle } from "./utils/audio";
 import {
   placeParMark,
   // Design note #688: the invariant that replaced the par-mark edge detector.
@@ -1546,6 +1549,42 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   }, [viewerAddress, gameState, waterfallState]);
 
   useDocumentTitleFlash(isMyTurn);
+
+  /* Design note #1008: THE GLOW'S CONDITION, computed once here and passed down, so the full-viewport overlay
+     and the action bar's lit border cannot disagree about whether the player has acknowledged their turn.
+     Two surfaces answering one question two ways is this codebase's most frequent bug (#891), and these two
+     are the same signal drawn in two places -- a player who dismissed one and kept the other would read it as
+     the animation failing to clear rather than as two features. */
+  const turnGlowActive = useTurnGlowActive(isMyTurn);
+
+  /* ==================================================================
+      DESIGN NOTE 1009: THE THIRD TURN ALERT, ON THE SAME SIGNAL AS THE OTHER TWO
+     ==================================================================
+     REQUESTED: "Wire the train whistle SFX to fire exactly once when the game state changes to 'Your Turn'
+     (the exact same state that triggers the visual tab alerts)."
+
+     "THE EXACT SAME STATE" IS THE INSTRUCTION AND IT IS ALSO THE ARCHITECTURE. `isMyTurn` is one value, and
+     the title flash (#1008), the screen glow and now the whistle all take it from here rather than each
+     working out whose turn it is. Three notifications that could disagree about that would be three bugs
+     waiting, and #891's shape is the one this codebase produces most.
+
+     THE MUTE IS SEPARATE FROM THE MUSIC, per the report: two toggles, two pieces of state, no shared
+     "audio on". SFX default ON because a whistle needs no network and no autoplay permission until the edge
+     fires -- and if the browser refuses it before the player's first click, `playQuietly` swallows it. Music
+     defaults OFF, which is the autoplay rule stated as an initial value rather than enforced by a try/catch. */
+  const [sfxEnabled, setSfxEnabled] = useState(true);
+  const radio = useRadioStream(RADIO_STREAM_URL);
+  useTurnWhistle(isMyTurn, sfxEnabled);
+
+  const audioControls = useMemo(
+    () => ({
+      musicPlaying: radio.playing,
+      onToggleMusic: radio.toggle,
+      sfxEnabled,
+      onToggleSfx: () => setSfxEnabled((on) => !on),
+    }),
+    [radio.playing, radio.toggle, sfxEnabled],
+  );
 
   /* Mirrored into a ref: a dependency would rebuild runGameplayAction and re-arm the two effects that dispatch (#439).
      See docs/ai_architecture/session_keys_wallet.md - App.tsx #536 */
@@ -8538,7 +8577,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
          `isMyTurn` -- no gating value. The document-title flash is the other half and has no DOM footprint. */}
       <style>{TURN_PULSE_KEYFRAMES_CSS}</style>
       <style>{PHASE_SHIFT_PULSE_CSS}</style>
-      {isMyTurn && <div style={styles.turnPulseOverlay} aria-hidden="true" />}
+      {/* Design note #1008: `turnGlowActive`, not `isMyTurn`. The overlay is `pointerEvents: "none"`, so the
+          click that dismisses it passes straight through to whatever the player was actually aiming at --
+          which is what makes "dismiss on any click" safe to bind globally rather than to a close control. */}
+      {turnGlowActive && <div style={styles.turnPulseOverlay} aria-hidden="true" />}
 
       {/* Hotseat dev toolbar -- rendered ONLY in the sandbox branch, so it is structurally impossible to reach
          in a live game. Sits above every other chrome element because it changes what the whole screen means. */}
@@ -8719,6 +8761,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
          is worse than chat saying it is broken. */}
       <TopBar
         onLeaveGame={onLeaveGame}
+        // Design note #1009: state from the shell, layout from the header.
+        audio={audioControls}
         roomContext={
           <>
         {/* ==================================================================
@@ -9196,6 +9240,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                   onClearRoute={handleClearRoute}
                   currentGlobalEra={gameState?.current_global_era ?? null}
                   isMyTurn={isMyTurn}
+                  // Design note #1008: the ATTENTION flag, separate from the rules flag beside it.
+                  turnGlowActive={turnGlowActive}
                 />
                 )}
 

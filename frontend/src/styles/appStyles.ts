@@ -230,6 +230,54 @@ export const styles: Record<string, React.CSSProperties> = {
     whiteSpace: "nowrap",
     flexShrink: 0,
   },
+  /* ==================================================================
+      DESIGN NOTE 1009: THE AUDIO TOGGLES ARE ICONS, AND ICONS NEED A SQUARE
+     ==================================================================
+     REQUESTED: "simple, elegant toggle icons ... to the app's global Header ... ensure the Header UI controls
+     are cleanly aligned."
+
+     `topBarButton` IS A PILL SIZED BY ITS TEXT, which is right for "Session Key" and "Disconnect" and wrong
+     for a single glyph: two one-character buttons under it come out at two different widths, because a
+     speaker and a musical note have different advances. A FIXED SQUARE is what makes a row of icons read as a
+     row -- so this sets `width` and `height` rather than horizontal padding, and centres the glyph in it.
+
+     THE PAIR SITS IN ITS OWN GROUP (`topBarAudioGroup`) so the gap between the two icons is tighter than the
+     bar's own gap. They are one control in two halves; spaced like everything else they read as two unrelated
+     buttons that happen to be adjacent.
+
+     ONE TREATMENT, TWO STATES, NO SECOND GLYPH. Muted is the same icon dimmed and unfilled -- a slash through
+     a speaker is a third thing to recognise, and at 13px it is a smudge. `aria-pressed` carries the state to
+     anybody not reading the colour, which is the half a purely visual toggle leaves out. */
+  topBarAudioGroup: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "4px",
+    flexShrink: 0,
+  },
+  topBarIconButton: {
+    width: "26px",
+    height: "26px",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontSize: FONT_SIZE.small,
+    lineHeight: 1,
+    padding: 0,
+    borderRadius: "999px",
+    border: "1px solid #3a3f4b",
+    backgroundColor: "#242833",
+    color: "#6f7480",
+    cursor: "pointer",
+    flexShrink: 0,
+  },
+  /** The lit half of the toggle -- design note #1009. Silver rather than a hue, for #35's reason: the bar
+   *  already spends its colour budget on the wallet and session status dots, and a third colour there would
+   *  read as a fourth status rather than as a control the player set. */
+  topBarIconButtonOn: {
+    color: "#e8ecf4",
+    borderColor: "rgba(232, 236, 244, 0.55)",
+    backgroundColor: "#2f3442",
+  },
   // The one call to action in the bar, so it is the one thing in it with a
   // filled treatment.
   topBarConnectButton: {

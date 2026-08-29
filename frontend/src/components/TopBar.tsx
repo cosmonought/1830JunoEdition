@@ -95,11 +95,32 @@ function statusDotColor(
 export default function TopBar({
   roomContext,
   onLeaveGame,
+  audio,
 }: {
   /** Room identity / sandbox controls, owned by `AppShell` -- see design
    *  note #34 for why this is a node rather than a pile of props. */
   roomContext?: React.ReactNode;
   onLeaveGame?: () => void;
+  /** ==================================================================
+   *   DESIGN NOTE 1009: STATE FROM THE SHELL, LAYOUT FROM THE HEADER
+   *  ==================================================================
+   *
+   *  FOUR VALUES RATHER THAN A `React.ReactNode` LIKE `roomContext`. That prop exists because room controls
+   *  are a pile of unrelated chrome whose shape the header has no opinion about; these two are a matched pair
+   *  the header has to align with its own buttons, and a node handed in from `App.tsx` would put the header's
+   *  layout in a file that cannot see the rest of the row.
+   *
+   *  AND NOT A CONTEXT. The shell owns both flags already -- it is where `isMyTurn` lives, so it is where the
+   *  whistle has to fire -- and a provider would exist to carry state downward one level to its only consumer.
+   *
+   *  OPTIONAL, so `TopBar` still renders in a shell with no audio wired: the group disappears rather than
+   *  drawing two dead buttons. */
+  audio?: {
+    musicPlaying: boolean;
+    onToggleMusic: () => void;
+    sfxEnabled: boolean;
+    onToggleSfx: () => void;
+  };
 }) {
   const wallet = useWallet();
   const session = useGameSession();
@@ -157,6 +178,57 @@ export default function TopBar({
 
       {/* Everything after this spacer is pinned right. */}
       <span style={styles.topBarSpacer} />
+
+      {/* ==================================================================
+           DESIGN NOTE 1009: THE AUDIO PAIR LEADS THE RIGHT-HAND GROUP
+          ==================================================================
+          PLACED FIRST AFTER THE SPACER, which puts it furthest from the wallet cluster at the far right. The
+          order in that group is roughly "least consequential first": these two change what the player hears
+          and nothing else, while everything to their right can cost money or end a session. #34's note that
+          this group is the one that wraps first applies -- and a pair of 26px squares is the cheapest thing
+          in the row to push onto a second line.
+
+          TITLES SAY WHAT THE CLICK WILL DO, not what the state is. "Music: on" leaves a player working out
+          whether pressing it turns it off; "Stop the radio stream" is the answer they were after. */}
+      {audio && (
+        <span style={styles.topBarAudioGroup}>
+          <button
+            type="button"
+            style={{
+              ...styles.topBarIconButton,
+              ...(audio.musicPlaying ? styles.topBarIconButtonOn : {}),
+            }}
+            onClick={audio.onToggleMusic}
+            aria-pressed={audio.musicPlaying}
+            aria-label={audio.musicPlaying ? "Stop the radio stream" : "Play the radio stream"}
+            title={
+              audio.musicPlaying
+                ? "Stop the radio stream"
+                : "Play the radio stream — background music from an external station"
+            }
+          >
+            {/* A note, not a speaker: this one is about MUSIC, and the speaker beside it is about the game. */}
+            &#9835;
+          </button>
+          <button
+            type="button"
+            style={{
+              ...styles.topBarIconButton,
+              ...(audio.sfxEnabled ? styles.topBarIconButtonOn : {}),
+            }}
+            onClick={audio.onToggleSfx}
+            aria-pressed={audio.sfxEnabled}
+            aria-label={audio.sfxEnabled ? "Mute sound effects" : "Unmute sound effects"}
+            title={
+              audio.sfxEnabled
+                ? "Mute sound effects — the whistle that sounds when your turn begins"
+                : "Unmute sound effects — a whistle sounds when your turn begins"
+            }
+          >
+            &#128266;
+          </button>
+        </span>
+      )}
 
       {configError && (
         <span style={styles.offlineBadge} title={configError}>

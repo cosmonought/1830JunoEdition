@@ -669,6 +669,7 @@ export default function ContextualActionBar({
   activeTab,
   onSelectTab,
   isMyTurn,
+  turnGlowActive,
   phase,
 }: {
   roundType: RoundType | null;
@@ -1003,6 +1004,16 @@ export default function ContextualActionBar({
    *  JSX call site for where that `<style>` tag is injected) to this bar's
    *  own outer wrapper. */
   isMyTurn: boolean;
+  /** Whether the bar should still be LIT -- design note #1008.
+   *
+   *  A SECOND FLAG, NOT A NARROWER `isMyTurn`. This bar reads `isMyTurn` for six things, and five of them are
+   *  rules: `mayActThisTurn`, the Undo gate (#3734), which train drafts are editable, the band's identity key
+   *  and the band's own class. Only the pulse is decoration. Reusing one boolean for both would mean a player
+   *  who clicked anywhere lost their Undo button.
+   *
+   *  OPTIONAL, defaulting to `isMyTurn` at the use site, so a caller that has no acknowledgement state to
+   *  offer gets exactly the pre-#1008 behaviour rather than a bar that never lights. */
+  turnGlowActive?: boolean;
   /* Design note #500: `latestFeedItem` and `onOpenActivityLog` are GONE. They fed a one-line echo of
      `TopTicker`'s newest entry inside this panel, and the ticker is on the same screen. Removed rather than
      left unread -- an unused prop is an invitation to render it again.
@@ -2033,7 +2044,11 @@ export default function ContextualActionBar({
         /* Design note #597: the CONTINUOUS pulse stays and is now the quieter of two cues -- it says "it is still
            your turn", a sustained state correctly rendered by a sustained animation. The band's sweep says "your
            turn just began", which a continuous animation can never carry. */
-        ...(isMyTurn ? styles.actionBarTurnPulse : {}),
+        /* Design note #1008: the pulse now ends on the player's first click. #597's argument is untouched --
+           a sustained state deserves a sustained animation -- but "it is still your turn" stops being news
+           the moment they have shown they know. `?? isMyTurn` keeps a caller that passes nothing exactly
+           where it was. */
+        ...((turnGlowActive ?? isMyTurn) ? styles.actionBarTurnPulse : {}),
         ...(condensed ? styles.actionBarCondensed : {}),
         /* Design note #720: THE BAR UNSTICKS WHEN IT OUTGROWS THE VIEWPORT. Reported of the embedded Buy
            Private step: "my scrolling is taking me down the page but not the subpanel". A sticky element stops

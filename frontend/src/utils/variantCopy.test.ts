@@ -120,6 +120,30 @@ describe("the difficulty qualifiers ride on the titles (design note #961a)", () 
     expect(VARIANT_COPY.delayedAuction.label).toBe("Delayed private auction (harder)");
   });
 
+  it("does not restate a rule the reducer owns (design note #982)", () => {
+    /* ==================================================================
+        THE GENTLE RUST BLURB WENT STALE AND NOTHING HERE COULD SEE IT
+       ==================================================================
+       It read "...and stops counting against the train limit the moment it is doomed — so its replacement
+       can be bought straight away". True under #906; reversed by #979, which made gently rusted trains count
+       against the limit. The MODAL's copy was corrected in that batch (#980) and this sentence was missed --
+       one authority updated, its sibling not asked, which is this project's signature fault.
+       NO ASSERTION IN THIS FILE COULD HAVE CAUGHT IT, and that is the useful part. Every case here is about
+       the copy's SHAPE -- one home, qualifiers on the labels, the rounding clause present -- because a blurb
+       describing a rule that lives in a reducer is not checkable from the string. #746c recorded the cost of
+       exactly this: "the legend agreed with the bug."
+       SO THIS IS THE NARROWEST GUARD THAT IS HONEST. It cannot verify the copy against the engine; it can
+       insist the lobby stops making train-limit promises at all, which is the property that keeps the blurb
+       from being able to go stale again. The rule belongs in the Rules Reference and in the modal that fires
+       at the moment it applies. */
+    expect(VARIANT_COPY.gentleRust.blurb).toBe(
+      "A rusting train gets one last Operating Round turn before it goes.",
+    );
+    for (const entry of Object.values(VARIANT_COPY)) {
+      expect(entry.blurb).not.toContain("train limit");
+    }
+  });
+
   it("leaves the qualifiers out of the descriptions", () => {
     /* THE OTHER HALF OF THE MOVE. Saying it in both places is the duplication this whole note is about, one
        scale down. */

@@ -132,10 +132,27 @@ export const VARIANT_COPY: Readonly<Record<VariantCopyKey, { label: string; blur
   },
   /* Design note #961a: the difficulty qualifiers moved to the LABELS above. A table choosing variants wants
      to know which way each one pushes as it reads the name, not three lines into the description. */
+  /* ==================================================================
+      DESIGN NOTE 982: THE LOBBY WAS STILL PROMISING #906's RULE
+     ==================================================================
+     RULED: "Just remove everything after 'before it goes.'"
+     AND THE CLAUSE THAT GOES IS THE ONE #979 REVERSED -- "stops counting against the train limit the moment
+     it is doomed, so its replacement can be bought straight away". That was true when this was written and
+     has not been true since the train-limit correction; the modal's copy was fixed in the same batch (#980)
+     and this sentence was missed, which is this project's signature fault in miniature: one authority
+     updated, its sibling not asked.
+     WORTH NAMING WHERE IT SURVIVED. `variantCopy.test.ts` asserts a great deal about these blurbs -- that
+     they have one home, that the qualifiers ride on the labels, that Unpredictable Revenue's percentage is
+     honest about its rounding -- and none of it could catch a sentence that describes a RULE, because the
+     rule lives in a reducer this file cannot see. #746c already recorded the cost of exactly that: "The
+     caption was accurate about the code as it then stood, which is precisely why a wrong rule reaches a
+     player: the legend agreed with the bug."
+     WHAT IS LEFT IS THE HALF THAT IS STILL TRUE, and it is also the half a table choosing variants needs:
+     the train gets one more turn. How it interacts with the limit is a rule for the Rules Reference, and the
+     modal says it at the moment it applies. */
   gentleRust: {
     label: "Gentle rust (easier)",
-    blurb:
-      "A rusting train gets one last Operating Round turn before it goes, and stops counting against the train limit the moment it is doomed — so its replacement can be bought straight away.",
+    blurb: "A rusting train gets one last Operating Round turn before it goes.",
   },
   delayedAuction: {
     label: "Delayed private auction (harder)",

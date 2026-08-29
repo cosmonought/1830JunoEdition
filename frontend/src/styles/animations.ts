@@ -69,8 +69,40 @@ export const PHASE_SHIFT_PULSE_CSS = `
 .app-train-rust-critical {
   animation: app-phase-shift-pulse 1.4s ease-in-out infinite;
 }
+/* ==================================================================
+   DESIGN NOTE 1004: THE FINAL-RUN PULSE IS A DEEPER FADE
+   ==================================================================
+   RULED: "Change the animation for gently rusting train chips. Keep the red warning color, but have the
+   entire chip fade its opacity from 100% down to 20% in a continuous pulse to indicate it is on its final
+   run. Make sure this animation is also applied to the 'Rust Imminent' warning badge so they match."
+   A SECOND KEYFRAME RATHER THAN A DEEPER app-phase-shift-pulse, because the two states are different
+   claims and #702's rule is that they must stay distinguishable. The shared pulse bottoms out at 0.55 and
+   means "one purchase from rusting"; this bottoms out at 0.2 and means "already rusted, running once more".
+   A player who has learnt the first would read a deeper version of it as the same warning, louder.
+   AND 0.55 EXISTS FOR A REASON THAT DOES NOT APPLY HERE. #702: "a warning that blinks fully out is
+   unreadable for half its cycle, and this one carries text." True of a countdown a player must act on; this
+   chip is a fact about a train whose fate is settled, and at 0.2 it is still legible at the bottom of the
+   cycle -- which is why the ruling says 20% rather than 0.
+   ONE CLASS ON TWO SURFACES, which the ruling asks for in as many words: the chip and the badge share the
+   keyframe so they breathe together rather than at two rates -- #755's argument for sharing the pulse in the
+   first place ("two hand-tuned pulses at 1.4s and 1.5s would read as a rendering fault").
+   NOTE FOR EDITORS: no backticks anywhere in this block -- it is inside a TEMPLATE LITERAL, and #755's own
+   note records terminating the string four lines early by quoting three identifiers. My first draft did it
+   again, twice, and tsc caught it -- which is the cheap way round but is the second time this exact trap has
+   been sprung in this file. */
+@keyframes app-final-run-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.2; }
+}
+.app-train-final-run {
+  animation: app-final-run-pulse 1.4s ease-in-out infinite;
+}
 @media (prefers-reduced-motion: reduce) {
   .app-train-rust-critical { animation: none !important; }
+  /* Held at a legible opacity rather than removed: the fade is carrying "this train is on its last run",
+     which is information rather than decoration -- the accommodation is about motion (#953's rule for the
+     revenue arrows), so the colour and the dimming stay and only the breathing stops. */
+  .app-train-final-run { animation: none !important; opacity: 0.65; }
 }
 `;
 

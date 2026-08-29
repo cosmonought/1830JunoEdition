@@ -76,8 +76,35 @@ export const STANDARD_TOAST_MS = 3700;
  * be readable at it. The arithmetic is here so the next figure can be picked rather than guessed.
  *
  * IT IS STILL EXPRESSED AS ITS OWN CONSTANT and not inlined at the call site, which is the half of #967 worth
- * keeping: one place to change, and a test that reads the constant rather than a copy of it. */
-export const PRIVATE_REVENUE_TOAST_MS = 400;
+ * keeping: one place to change, and a test that reads the constant rather than a copy of it.
+ *
+ * ==================================================================
+ *  DESIGN NOTE 1000: 400ms MEANT THE TOAST WAS NEVER SEEN
+ * ==================================================================
+ *
+ * REPORTED: "Players are not getting the toast notifications for private company payouts."
+ *
+ * THE WIRING IS INTACT AND THE WINDOW WAS THE BUG. `summarisePrivateRevenueForPlayer` runs, the rows are
+ * built, `showDividendToast` fires -- and then the toast has 400ms to exist, of which its own entrance
+ * animation takes 180 (`app-action-toast-in`, one slide-up, no pulse). That leaves roughly 220ms at rest: the
+ * thing arrives and is removed before it has finished arriving, which on screen is a flicker at the bottom
+ * of the viewport and is very reasonably described as not happening.
+ *
+ * I FLAGGED THIS WHEN I IMPLEMENTED IT and should have been louder: #983 records the arithmetic and then
+ * shipped the number anyway. The note said "what I would not want is for the number to have been chosen
+ * believing the table would still be readable at it", which is exactly the outcome, and a warning inside a
+ * design note is not a warning anybody reads at the moment it matters.
+ *
+ * THE FIGURE, BY THE PROJECT'S OWN RULE OF THUMB ("readable ~1.5x before it goes away"). This toast is a
+ * heading plus one to three rows of name-and-figure. One row is about a 600ms read, three about 1.4s; 1.5x of
+ * the middle is roughly 1.5s, plus the 180ms entrance. 2000ms is that, rounded, and it is still barely a
+ * third of #967's original 5,550 -- so the report that started this ("stays up far too long") is answered
+ * without answering it into invisibility.
+ *
+ * AND IT IS STILL THE ONE TOAST WITH ITS OWN WINDOW. Everything else takes `STANDARD_TOAST_MS`; this is a
+ * table rather than a sentence, which is the distinction #967 drew and the reason a separate constant exists
+ * at all -- only the direction it points has changed twice. */
+export const PRIVATE_REVENUE_TOAST_MS = 2000;
 
 export interface ActionToastProps {
   /** The sentence, or `null` for nothing pending. */

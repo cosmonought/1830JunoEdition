@@ -29,7 +29,8 @@ import { STICKY_OPTIONAL } from "../utils/stickyCollapse";
 import { TrainGlyph } from "./TrainGlyph";
 import type { DepotTier, PhaseTint } from "../utils/gamePhase";
 // Design note #632: one tier-to-era lookup, shared with the phase badge.
-import { tierTint } from "../utils/gamePhase";
+// Design note #1007: `trainTierNamePlural` names the tier the way a player says it -- "Diesels", not "D-Trains".
+import { tierTint, trainTierNamePlural } from "../utils/gamePhase";
 import { stationTickerColor } from "./hexContractTypes";
 
 /** The subset of a corporation both sections need. */
@@ -492,8 +493,30 @@ export function TrainPurchasePanel({
             two pockets in one row, arrived at from the other side.
             AND `treasury` IS STILL READ, four lines up, to decide whether the buy is affordable and to word
             the refusal. What is removed is the second DISPLAY of it, not the figure. */}
+        {/* ==================================================================
+             DESIGN NOTE 1007: THE HEADING NAMES WHAT IS ACTUALLY FOR SALE
+            ==================================================================
+            REPORTED: "Update this string to dynamically inject the name/type of the current cheapest
+            available train in the depot ... 'Buy 3-Trains from the Bank Depot' or 'Buy Diesels'."
+
+            THE DEPOT SELLS EXACTLY ONE TIER AT A TIME -- App.tsx #182's queue rule, which `nextTier` four
+            hundred lines up already applies -- so a heading saying "Trains" was naming a category the panel
+            does not offer. The tier was on the buy row and in the stock caption below; what it was missing is
+            the line a player's eye lands on first.
+
+            `nextTier` RATHER THAN A SECOND DERIVATION, for #182's own reason: `depotInventory` applies the
+            queue rule once and everything on this panel reads its answer. A heading that found the cheapest
+            tier its own way is how a title comes to name a train the button below will not sell.
+
+            THE EMPTY DEPOT KEEPS THE OLD WORDS. `nextTier` is `null` when nothing is left for sale, and
+            "Buy null-Trains" is worse than the static string it replaced -- so the fallback is exactly the
+            pre-#1007 heading. It is a real state: the body below already branches on `nextTier` and renders
+            the sold-out notice instead of the buy row, and a heading naming a tier that no longer exists
+            would contradict the sentence directly under it. */}
         <div style={styles.sectionHeading}>
-          <span style={styles.sectionTitle}>Buy Trains from the Bank Depot</span>
+          <span style={styles.sectionTitle}>
+            Buy {nextTier ? trainTierNamePlural(nextTier.tier) : "Trains"} from the Bank Depot
+          </span>
         </div>
 
         {/* Design note #827: THE BODY BELONGS TO THE HEADER THAT OPENS IT.

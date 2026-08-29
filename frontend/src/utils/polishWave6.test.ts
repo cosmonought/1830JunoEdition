@@ -132,24 +132,34 @@ describe("the overlay is shorter, smaller and moves (design notes #953/#954)", (
   const FLASH = readStripped("components/RevenueModifierFlash.tsx");
   const ANIM = readStripped("styles/animations.ts");
 
-  it("shows for 850ms", () => {
+  it("shows for 900ms", () => {
     /* RULED, after two revisions: "reduce the display duration from 2000ms to 500ms", then "If you want to
        make it 700 or 800ms we can try that as well. I just think the rule of thumb is that a juice
        notification should be readable ~1.5x before it goes away", and finally "Hardcode the display duration
-       to exactly 850ms so it is uniform in all contexts."
+       to exactly 850ms so it is uniform in all contexts", and then "let's move the juice to 900ms and the
+       fade in/out to 300ms each."
        THE FIGURE IS THE RULING'S and needs no derivation; what the next case protects is the RELATIONSHIP
-       between it and the fade, which is the half that was nearly missed at 700 and would be missed again. */
-    expect(FLASH).toContain("export const REVENUE_FLASH_MS = 850;");
+       between it and the fades, which is the half that was nearly missed at 700 and would be missed again.
+       AND 900 IS THE TIME BEFORE IT STARTS LEAVING, not the total. With a 300ms rise and a 300ms fall the
+       overlay is on screen for 1,200ms and at full opacity for 600 -- which is what the arithmetic below
+       checks, because "900ms" read as a total would leave 300ms legible and be a regression wearing a
+       polish request. */
+    expect(FLASH).toContain("export const REVENUE_FLASH_MS = 900;");
   });
 
   it("shrinks the fade with the window", () => {
     /* THE PART THAT WOULD HAVE BEEN MISSED. The fade was 400ms, set against a 2000ms window. Left alone at
        500ms it would have consumed four fifths of the display; even at 700 it would leave 300ms. Legible time
        is the window MINUS the fade, so the two constants have to move together. */
-    expect(FLASH).toContain("export const REVENUE_FLASH_FADE_MS = 200;");
+    expect(FLASH).toContain("export const REVENUE_FLASH_FADE_MS = 300;");
+    expect(FLASH).toContain("export const REVENUE_FLASH_RISE_MS = 300;");
+    /* Design note #999: THREE CONSTANTS NOW, and the legible time is the window minus BOTH ends -- the rise
+       eats into it exactly as the fall does, which is the half a two-constant check could not see. */
     const window = Number(FLASH.match(/REVENUE_FLASH_MS = (\d+)/)?.[1]);
     const fade = Number(FLASH.match(/REVENUE_FLASH_FADE_MS = (\d+)/)?.[1]);
-    expect(window - fade).toBeGreaterThanOrEqual(450);
+    const rise = Number(FLASH.match(/REVENUE_FLASH_RISE_MS = (\d+)/)?.[1]);
+    expect(window - rise).toBeGreaterThanOrEqual(450);
+    expect(fade).toBeGreaterThan(0);
   });
 
   it("reduces the type ceiling", () => {

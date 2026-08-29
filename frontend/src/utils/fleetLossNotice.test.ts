@@ -23,7 +23,6 @@ import {
   isNoticeSilenced,
   nextDueNotice,
   noticeBody,
-  noticeGentleRustLine,
   noticeDismissKey,
   noticeHeadline,
   resetNoticeSilenceCache,
@@ -145,25 +144,26 @@ describe("the copy tells a president what happened and what it costs", () => {
     expect(MODAL).not.toContain("noticeConsequence");
   });
 
-  it("adds the gentle-rust line only under the variant, and only to rust", () => {
-    /* RULED VERBATIM, so asserted verbatim: a paraphrase here would be this file agreeing with itself.
-       ITS OWN FUNCTION rather than a clause inside the body, because the ruling asks for it to be COLOURED --
-       "keep the colored text" -- and a modal cannot tint half a string it was handed whole.
-       AND IT IS SCOPED TWICE. A limit notice under a gentle-rust table is still a limit notice: nothing about
-       a train the depot has taken back gets one more run, and offering that line there would promise a grace
-       period the rules do not give. */
-    const [gentle] = fleetLossNotices(loss({ rusted: ["2"], discarded: [] }), "4", 3, true);
-    expect(noticeGentleRustLine(gentle)).toBe(
-      "Gentle rust: You can run these trains one more time before they retire.",
-    );
-    expect(noticeGentleRustLine(rust)).toBeNull();
-    const [, gentleLimit] = fleetLossNotices(
-      loss({ rusted: ["2"], discarded: ["3"] }),
-      "4",
-      3,
-      true,
-    );
-    expect(noticeGentleRustLine(gentleLimit)).toBeNull();
+  it("says the same thing on every table now (design note #1003)", () => {
+    /* ==================================================================
+        THE VARIANT'S EXTRA LINE IS GONE, WITH THE TIMING THAT NEEDED IT
+       ==================================================================
+       THIS ASSERTED `noticeGentleRustLine` -- "Gentle rust: You can run these trains one more time before
+       they retire." -- present under the variant and absent otherwise.
+       RULED SINCE: "Since the modal now fires upon actual destruction, remove the special 'Gentle rust...'
+       explanatory text. Use the standard rust notification copy."
+       AND THE SENTENCE WAS A PROMISE ABOUT THE FUTURE, true at the moment the trains were MARKED and false at
+       the moment they die. #1002 moves the modal to the second of those, so keeping the line would tell a
+       president they may run trains that left the fleet in the dispatch that raised the modal.
+       WHAT IS ASSERTED NOW IS THE COLLAPSE: one body, one cause, no variant branch anywhere in the copy. A
+       `gentleRust` field surviving on the notice would be the branch waiting to come back. */
+    const [gentle] = fleetLossNotices(loss({ rusted: ["2"], discarded: [] }), "4", 3);
+    expect(noticeBody(gentle)).toBe("1 of your 2-trains have rusted.".replace("have", "has"));
+    const NOTICE = readStripped("utils/fleetLossNotice.ts");
+    expect(NOTICE).not.toContain("noticeGentleRustLine");
+    expect(NOTICE).not.toContain("Gentle rust:");
+    expect(NOTICE).not.toContain("gentleRust");
+    expect(readStripped("components/FleetLossModal.tsx")).not.toContain("noticeGentleRustLine");
   });
 
   it("labels the toggle for the cause AND the corporation, never for both causes at once", () => {

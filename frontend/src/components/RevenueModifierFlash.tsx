@@ -63,12 +63,40 @@ import { CAP_HEIGHT_RATIO } from "../styles/typography";
    WHAT THIS DOES NOT EXPLAIN, said plainly: nothing here was ever per-CALLER, so an Undo re-run has always
    been handed the same figures as a first run. #971 is the change that actually accounts for a re-run
    looking different -- the second flash was playing no motion at all. */
-export const REVENUE_FLASH_MS = 850;
+export const REVENUE_FLASH_MS = 900;
 
 /** How long the fade at the end takes, inside the two seconds rather than after them: "display for exactly 2
  *  seconds, then fade or disappear" -- so the text is legible for most of the window and gone at the end of
  *  it, rather than lingering to 2s plus a fade. */
-export const REVENUE_FLASH_FADE_MS = 200;
+export const REVENUE_FLASH_FADE_MS = 300;
+
+/** How long the arrival takes.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 999: THERE WAS NO FADE-IN AT ALL, AND #971 IS WHY
+ *  ==================================================================
+ *
+ *  REPORTED: "The glow behind the juice notification ... seems to just appear on the screen instead of fading
+ *  in and out" and then, more precisely, "the fade in may be happening, but it is very abrupt."
+ *
+ *  IT WAS NOT HAPPENING. The overlay's opacity has always been a CSS `transition`, which needs a previous
+ *  value to move from -- and while the node stayed mounted between flashes it had one: `visible` went false,
+ *  then true, and the browser animated between them. #971 made the overlay UNMOUNT after its window and
+ *  remount on a changed key, and a freshly inserted element has no previous value. It commits at `opacity: 1`
+ *  and there is nothing to transition. The fade-OUT still worked, which is exactly why this reads as "abrupt
+ *  in, fine out" rather than as a missing feature.
+ *  SO #971 FIXED THE ARROWS AND BROKE THE ARRIVAL, in the same edit and for the same reason. Worth recording
+ *  plainly: remounting to replay an animation is the right tool, and it silently disables every transition on
+ *  the node it remounts.
+ *
+ *  THE FIX IS A FIRST FRAME AT ZERO. The overlay now mounts transparent and is flipped opaque on the next
+ *  animation frame, which gives the transition the previous value it needs. That is the standard enter
+ *  transition and it is written out rather than reached for a library.
+ *
+ *  RISE AND FALL ARE SEPARATE CONSTANTS even though both are 300ms today, because they answer different
+ *  questions -- how fast should this arrive, how slowly should it leave -- and juice conventionally moves
+ *  fast in and slow out. Naming them apart is what makes trying that a one-line change. */
+export const REVENUE_FLASH_RISE_MS = 300;
 
 /* ==================================================================
  *  DESIGN NOTE 956: ABOVE EVERYTHING, BY BEING OUTSIDE EVERYTHING
@@ -279,7 +307,12 @@ export function RevenueModifierFlash({ signal }: RevenueModifierFlashProps): JSX
     /* HELD IN LOCAL STATE so the text does not vanish the instant the caller clears its signal -- the
        component owns the two seconds, and a parent that cleared early would truncate them. */
     setShown(signal);
-    setVisible(true);
+    /* Design note #999: MOUNTED TRANSPARENT, THEN FLIPPED ON THE NEXT FRAME. Setting `visible` true here
+       would commit the new node already opaque and the transition would have nothing to move from -- which
+       is precisely the bug this fixes. The `false` is not redundant: a re-trigger during the previous
+       flash's fade arrives with `visible` already false, and the frame callback is what restarts the rise. */
+    setVisible(false);
+    const rise = window.requestAnimationFrame(() => setVisible(true));
     const timer = window.setTimeout(() => setVisible(false), REVENUE_FLASH_MS);
     /* ==================================================================
         DESIGN NOTE 971: AND THEN IT LEAVES, WHICH IS HALF THE BUG
@@ -298,6 +331,7 @@ export function RevenueModifierFlash({ signal }: RevenueModifierFlashProps): JSX
       REVENUE_FLASH_MS + REVENUE_FLASH_FADE_MS,
     );
     return () => {
+      window.cancelAnimationFrame(rise);
       window.clearTimeout(timer);
       window.clearTimeout(clear);
     };
@@ -352,7 +386,10 @@ export function RevenueModifierFlash({ signal }: RevenueModifierFlashProps): JSX
         pointerEvents: "none",
         zIndex: REVENUE_FLASH_Z_INDEX,
         opacity: visible ? 1 : 0,
-        transition: `opacity ${REVENUE_FLASH_FADE_MS}ms ease-out`,
+        /* Design note #999: the duration follows the DIRECTION. React writes the style for the state being
+           entered, so a rise reads `REVENUE_FLASH_RISE_MS` and a fall reads `REVENUE_FLASH_FADE_MS` -- which
+           is what lets the two be tuned apart without a second element or a keyframe. */
+        transition: `opacity ${visible ? REVENUE_FLASH_RISE_MS : REVENUE_FLASH_FADE_MS}ms ease-out`,
       }}
     >
       <style>{REVENUE_FLASH_ARROWS_CSS}</style>

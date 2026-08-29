@@ -76,8 +76,8 @@ describe("the flash replays on every trigger (design note #971)", () => {
 });
 
 describe("one duration, for every surface (design note #970)", () => {
-  it("is 850, as ruled", () => {
-    expect(FLASH).toContain("export const REVENUE_FLASH_MS = 850;");
+  it("is 900, as ruled", () => {
+    expect(FLASH).toContain("export const REVENUE_FLASH_MS = 900;");
   });
 
   it("leaves the arrows and the edge no duration of their own", () => {

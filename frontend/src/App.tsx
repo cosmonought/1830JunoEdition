@@ -50,6 +50,7 @@ import {
 import { corporationPrivateCompanies } from "./utils/gameState";
 import type { TrainRouteDraft } from "./components/RoutePlannerPanel";
 import {
+  citySlotCount,
   evaluateStationPlacement,
   nextStationTokenCost,
   placeableStationHexes,
@@ -244,7 +245,10 @@ import {
   publishPresence,
   subscribeSandboxPresence,
 } from "./utils/sandboxPresence";
-import { printedMarkersFor, tileCitySlotCounts } from "./components/TileGraphics";
+/* Design note #1006: `printedMarkersFor` and `tileCitySlotCounts` are no longer imported here. Their one
+   caller was `citySlotsAt`, whose body moved to `utils/stationTokens.ts` so the placement gate could reach it.
+   Dropped rather than left imported, for #686's reason about `liveEdgesForHex`: an unused import of the tile
+   catalog is an invitation for the next resolver to be written here instead of beside the rule again. */
 import { tokenCityIndex, type StationTokenCompany } from "./components/hexContractTypes";
 import {
   CSL_HEX_LABEL,
@@ -371,6 +375,7 @@ import {
   summarisePrivateRevenueForPlayer,
   describeFleetLoss,
   describeFleetLosses,
+  describeReprieveExpiries,
   describePrivateClosures,
   applySandboxLayTile,
   describeFloat,
@@ -1070,6 +1075,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       // remaining-count. `stationTokenSlots` owns 1830's schedule.
       stationSlots: stationTokenSlots(company),
       trains: company.owned_trains ?? [],
+      /* Design note #1004: the models under a Gentle Rust reprieve, straight off the corporation. The bar
+         cannot derive this -- the depot outlook has already moved past the tier that doomed them -- so it is
+         the one fact about the fleet that has to travel rather than be recomputed. */
+      reprievedTrains: company.pending_rust_trains ?? [],
     };
   }, [gameState, actingProtocolId]);
 
@@ -2029,15 +2038,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
    * PREPRINTED CITIES COUNT TOO -- New York, Baltimore and Boston hold tokens before anybody lays anything, so
    * a resolver that only read `tiles` would report zero slots on exactly the three hexes most worth blocking,
    * and #729's rule 3 would then read them as "not a city". */
+  /* Design note #1006: the BODY moved to `utils/stationTokens.ts` and this is now a binding, not a resolver.
+     The placement gate has to ask the same question -- that is the whole of this batch's bug -- and a second
+     copy of the count living here is how the wall the board draws and the wall the gate enforces come to
+     disagree about a preprinted city. Kept as a callback because `blocksThroughCity` below and the tile-lay
+     glow both consume it in that shape. */
   const citySlotsAt = useCallback(
-    (q: number, r: number, cityIndex: number): number => {
-      const laid = mapGrid.tiles.find((tile) => tile.q === q && tile.r === r);
-      if (laid) return tileCitySlotCounts(laid.tile_id)[cityIndex] ?? 0;
-      const hex = STATIC_BOARD_HEXES.find((entry) => entry.q === q && entry.r === r);
-      if (!hex) return 0;
-      const cities = printedMarkersFor(hex.label).filter((marker) => marker.kind === "city");
-      return cities[cityIndex]?.slots ?? (cities.length > cityIndex ? 1 : 0);
-    },
+    (q: number, r: number, cityIndex: number): number => citySlotCount(mapGrid, q, r, cityIndex),
     [mapGrid],
   );
 
@@ -4889,19 +4896,27 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                line above is written whatever the player's toggles say -- silencing a notice changes WHEN they
                find out, never whether the game told them. */
             const arrivingTier = derivePhase(after)?.tier ?? null;
+            const gentleRustOn = resolveVariants(after.variants).gentleRust;
             const queuedNotices = [...pendingFleetNoticesRef.current];
             for (const loss of describeFleetLosses(before, after)) {
               const sentence = describeFleetLoss(loss, limitNow);
               if (sentence) logInfo("Phase Change", sentence);
 
-              for (const notice of fleetLossNotices(
-                loss,
-                arrivingTier,
-                limitNow,
-                /* Design note #906: the same variants the reducer just applied, so the modal's tense and the
-                   reducer's behaviour cannot disagree about whether the train is actually gone. */
-                resolveVariants(after.variants).gentleRust,
-              )) {
+              for (const notice of fleetLossNotices(loss, arrivingTier, limitNow)) {
+                /* ==================================================================
+                    DESIGN NOTE 1002: UNDER GENTLE RUST THE RUST MODAL WAITS
+                   ==================================================================
+                   RULED: "the Rust modal must no longer trigger globally upon the purchase of the
+                   phase-change train. Instead, scope it to trigger at the moment the gently rusted trains are
+                   permanently destroyed."
+                   AND ONLY THE RUST HALF WAITS. A train the LIMIT took is gone right now -- the trim is not
+                   postponed by this variant -- so its notice is still due immediately, and suppressing both
+                   would lose that one entirely. #896's split by cause is what makes the distinction
+                   expressible at all.
+                   THE ACTIVITY LOG IS UNTOUCHED: `describeFleetLoss` above still writes the line at the phase
+                   change for every corporation, which is #896's standing rule -- silencing or deferring a
+                   modal changes WHEN a player finds out, never whether the game told them. */
+                if (gentleRustOn && notice.cause === "rust") continue;
                 /* IDEMPOTENT, for #706's reason one function over: the Undo path replays the whole log, so
                    this block runs again for a phase change the player already saw. Keyed by CONTENT rather
                    than by position -- two different phase changes carry different arriving tiers and both
@@ -4917,6 +4932,45 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             if (queuedNotices.length !== pendingFleetNoticesRef.current.length) {
               pendingFleetNoticesRef.current = queuedNotices;
               setPendingFleetNotices(queuedNotices);
+            }
+
+            /* ==================================================================
+                DESIGN NOTE 1002: AND THE MODAL FOR A TRAIN THAT HAS JUST DIED
+               ==================================================================
+               THE OTHER END OF THE DEFERRAL ABOVE. `describeReprieveExpiries` reports the corporations whose
+               marks emptied in THIS dispatch -- which after #1001 is the moment the cursor enters Buy Trains,
+               with the trains actually gone from the fleet.
+               ONE CORPORATION AT A TIME, BY CONSTRUCTION, which is the whole point: the expiry is the acting
+               corporation's own, so the president who is about to buy a replacement is the one stopped, at
+               the moment the slot they need has just opened.
+               `arrivingTier` IS THE PHASE NOW IN FORCE, not the one that did the marking. The tier that
+               killed these trains may be two phases back by the time the reprieve runs out, and the notice's
+               body does not name it after #980 -- what it feeds is the tier field, which is honest as "the
+               phase this happened in" and would be a guess as anything else. */
+            const expiries = describeReprieveExpiries(before, after);
+            if (expiries.length > 0) {
+              const expiryQueue = [...pendingFleetNoticesRef.current];
+              const expiryTier = derivePhase(after)?.tier ?? null;
+              const expiryLimit =
+                depotInventory(after).find((row) => row.isCurrent)?.trainLimit ?? null;
+              for (const loss of expiries) {
+                for (const notice of fleetLossNotices(loss, expiryTier, expiryLimit)) {
+                  /* IDEMPOTENT ON A REPLAY, by content, exactly as the phase-change queue above is: Undo
+                     rebuilds by replaying the log, so this block runs again for an expiry the player has
+                     already acknowledged. */
+                  const key = `${notice.companyId}:${notice.cause}:${notice.arrivingTier}:${notice.trains.join(",")}`;
+                  const already = expiryQueue.some(
+                    (entry) =>
+                      `${entry.companyId}:${entry.cause}:${entry.arrivingTier}:${entry.trains.join(",")}` ===
+                      key,
+                  );
+                  if (!already) expiryQueue.push(notice);
+                }
+              }
+              if (expiryQueue.length !== pendingFleetNoticesRef.current.length) {
+                pendingFleetNoticesRef.current = expiryQueue;
+                setPendingFleetNotices(expiryQueue);
+              }
             }
 
             /* Design note #736: AND THE PRIVATES THE PHASE CLOSED. Same division as the fleet losses beside

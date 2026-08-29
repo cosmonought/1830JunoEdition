@@ -33,11 +33,14 @@ import type { MapGridResponse } from "../components/hexContractTypes";
 import {
   NEW_YORK_PRINTED_ARTWORK,
   printedArtwork,
+  printedMarkersFor,
   tileCitySlotCounts,
   tileCitySlotPoints,
 } from "../components/TileGraphics";
 import { LANDMARK_HEXES, STATIC_BOARD_HEXES, YELLOW_OO_HEXES } from "../components/hexBoardData";
 import { hexKey, reachableCities, reachableNetwork, stationTokensOf } from "./trackReach";
+// Design note #1006: the wall the placement gate never asked about.
+import { cityBlockerFor } from "./cityBlocking";
 
 /** The home token, granted at float rather than bought. */
 export const STATION_TOKEN_HOME_COST = 0;
@@ -123,6 +126,40 @@ export function stationSlotCount(mapGrid: MapGridResponse, q: number, r: number)
   if (archetype === "SingleCity") return 1;
   if (archetype === "DoubleCity") return 2;
   return 0;
+}
+
+/** How many token circles ONE city on this hex has -- `stationSlotCount` split by circle.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 1006: THE PER-CITY COUNT MOVES HERE, WHERE THE GATE CAN REACH IT
+ *  ==================================================================
+ *
+ *  This is `App.tsx`'s `citySlotsAt` (#729), lifted verbatim. It lived in the shell because #729's blocker was
+ *  ASSEMBLED there -- and being assembled at a call site is precisely what let this batch's bug in, so the
+ *  count has to be somewhere a `utils/` module can ask for it.
+ *
+ *  WHY THIS FILE MAY HOLD IT AND `cityBlocking.ts` MAY NOT. That module's note says the slot counts "live in
+ *  the tile catalog under `components/`, which `utils/` may not import for its tables". True of that module,
+ *  which imports nothing. This one already imports `tileCitySlotCounts`, `archetypeForHex`, `STATIC_BOARD_HEXES`
+ *  and `tokenCityIndex` -- the constraint was never about this file, and `stationSlotCount` directly above has
+ *  been reading the catalog since #2.
+ *
+ *  PREPRINTED CITIES COUNT, which is #729's own warning and the reason the reported hex is Baltimore: New York,
+ *  Baltimore and Boston hold tokens before anybody lays anything, so a resolver reading only `tiles` reports
+ *  zero slots on exactly the three hexes most worth blocking -- and #729's rule 3 then reads zero as "not a
+ *  city" and opens the wall. */
+export function citySlotCount(
+  mapGrid: MapGridResponse,
+  q: number,
+  r: number,
+  cityIndex: number,
+): number {
+  const laid = mapGrid.tiles.find((tile) => tile.q === q && tile.r === r);
+  if (laid) return tileCitySlotCounts(laid.tile_id)[cityIndex] ?? 0;
+  const hex = STATIC_BOARD_HEXES.find((entry) => entry.q === q && entry.r === r);
+  if (!hex) return 0;
+  const cities = printedMarkersFor(hex.label).filter((marker) => marker.kind === "city");
+  return cities[cityIndex]?.slots ?? (cities.length > cityIndex ? 1 : 0);
 }
 
 export interface StationPlacementCompany {
@@ -258,12 +295,53 @@ export function evaluateStationPlacement(
        that does not say which circle it means still gets the hex-level answer. The caller that DOES know is
        the click, and #893 in `App.tsx` is where it started saying so.
        SINGLE-CITY HEXES ARE UNAFFECTED either way: their one circle and their hex are the same question. */
+    /* ==================================================================
+       DESIGN NOTE 1006: THE GATE WAS THE FOURTH CALLER, AND #729 NEVER REACHED IT
+       ==================================================================
+       REPORTED: "C&O was able to place a station marker on hexes J14 and K15 by tracing a route through the
+       Baltimore hex. However, Baltimore was completely tokened out by B&O."
+
+       #729 TAUGHT THE WALK ABOUT TOKENS AND THE WALK WAS NEVER THE PROBLEM. `reachableTrack` has taken a
+       `blocksThrough` predicate since that note, drops a blocked city's exits, and `cityBlocking.ts` states the
+       three rules correctly. What #729 could not do is make anybody PASS it: the predicate is an optional
+       third argument whose omitted case is "no blocking", and these two lines omitted it. So the tile-lay veil
+       walked a walled board, the token veil's network tier walked a walled board, the route tracer walked a
+       walled board (#730), and the one function that decides whether a placement is LEGAL walked an open one.
+
+       AN OPTIONAL ARGUMENT IS AN OPT-IN RULE, which is the real lesson and the reason the fix is shaped this
+       way. #729 threaded the blocker through three call sites in `App.tsx` and this fourth caller simply never
+       came up -- not overruled, not exempted, never asked. The predicate is now BUILT HERE, from `company`,
+       `allCompanies` and `mapGrid`, all three of which this function already has in hand. There is no call
+       site left to forget it at, and `placeableStationHexes` and `stationPlacementBlockReason` inherit the
+       rule by construction rather than by a second edit that could be missed the same way.
+
+       #891's SHAPE, ONE MORE TIME: two surfaces answering one question two ways. The veil BEHIND the token
+       highlight already dimmed the far side of Baltimore -- `App.tsx` passes `blocksThroughCity` to
+       `reachableNetwork` for exactly that tier -- while the highlight ON TOP of it lit J14. The board was
+       drawing the wall and the gate was letting the player walk through it, in the same frame.
+
+       THE DESTINATION CITY IS NOT AFFECTED, deliberately. #729's "REACHED, BUT NOT PASSED" keeps a blocked
+       city in `hexes` and in `cities`, because a train may END in a city it cannot cross -- so this does not
+       start refusing placements in Baltimore itself. Those are already refused, several checks above, by the
+       slot-occupancy arm that counts every corporation's tokens. Two rules, two refusals, two sentences.
+
+       AND NEVER AGAINST ITS OWN TOKENS: `cityBlockerFor` is bound to `company.company_id`, so rule 2 exempts
+       the corporation from its own walls -- and from any city it shares. A blocker bound to the wrong
+       corporation would wall a company out of its own network, which is the failure mode that argues for
+       building it here from `company` rather than accepting one from a caller who may mean somebody else. */
+    const blocksThrough = cityBlockerFor({
+      actingCompanyId: company.company_id,
+      companies: allCompanies,
+      slotsAt: (bq, br, bCity) => citySlotCount(mapGrid, bq, br, bCity),
+      cityOf: (holder, hq, hr) =>
+        tokenCityIndex(holder as unknown as StationTokenCompany, hq, hr),
+    });
     const tokens = stationTokensOf(company);
     if (cityIndex === null || cityIndex === undefined) {
-      const network = reachableNetwork(mapGrid, tokens);
+      const network = reachableNetwork(mapGrid, tokens, blocksThrough);
       if (!network.has(hexKey(q, r))) return NOT_REACHED;
     } else {
-      const cities = reachableCities(mapGrid, tokens);
+      const cities = reachableCities(mapGrid, tokens, blocksThrough);
       if (!cities.has(`${hexKey(q, r)}:${cityIndex}`)) return NOT_REACHED;
     }
   }

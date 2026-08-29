@@ -274,7 +274,7 @@ describe("the consolidated private revenue toast (design note #967)", () => {
        default. `polishWave9` owns the figure; this owns the separation. */
     const TOAST = readStripped("components/ActionToast.tsx");
     expect(TOAST).toContain("export const STANDARD_TOAST_MS = 3700;");
-    expect(TOAST).toContain("export const PRIVATE_REVENUE_TOAST_MS = 400;");
+    expect(TOAST).toContain("export const PRIVATE_REVENUE_TOAST_MS = 2000;");
     expect(TOAST).not.toContain("STANDARD_TOAST_MS * 1.5");
     expect(TOAST).toContain("durationMs = STANDARD_TOAST_MS");
   });

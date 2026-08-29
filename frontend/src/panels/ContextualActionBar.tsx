@@ -733,6 +733,8 @@ export default function ContextualActionBar({
      *  pair, which could only express a fraction. */
     stationSlots: readonly StationTokenSlot[];
     trains: readonly string[];
+    /** Design note #1004: the models on their final run under Gentle Rust. Empty in every standard game. */
+    reprievedTrains: readonly string[];
   } | null;
   /** Design note #673: the tile lay currently being previewed, or `null` when
    *  none is or when it is free.
@@ -1854,6 +1856,31 @@ export default function ContextualActionBar({
   /* Design note #691: `mayActThisTurn` folded in here rather than repeated at three call sites -- this one flag
      gates the Auto Route button and the Run Routes button, which after #802 are the whole of the
      Run Routes step's interface. Three separate conditions is three chances to miss one. */
+  /* ==================================================================
+      DESIGN NOTE 1004: "Rust Imminent: [type]-train", FROM THE MARKS THEMSELVES
+     ==================================================================
+     RULED verbatim, including the label. Built here rather than in `purchaseWarnings` because that module
+     answers "how close is the next rust" from the DEPOT, and the whole reported fault is that the depot has
+     already moved past the tier these trains belong to. The marks are the only surviving record.
+     ONE BADGE PER TIER, NOT PER TRAIN. A corporation with two reprieved 3-trains has one fact to state, and
+     the ruled label is singular in its type ("[type]-train") rather than a count -- two identical badges
+     would read as two separate warnings.
+     SORTED, so two tiers under reprieve appear in a stable order rather than in whatever order the reducer
+     happened to append them; an order that changed between renders would read as the badges rearranging
+     themselves. */
+  const reprieveWarning = React.useMemo(() => {
+    const marks = activeCorporation?.reprievedTrains ?? [];
+    if (marks.length === 0) return null;
+    const tiers = Array.from(new Set(marks)).sort();
+    return {
+      label: `Rust Imminent: ${tiers.map((tier) => `${tier}-train`).join(", ")}`,
+      detail:
+        tiers.length === 1
+          ? `This corporation's ${tiers[0]}-train has already rusted. Gentle Rust lets it run once more; it is destroyed at the end of this turn's Run Routes step.`
+          : `These trains have already rusted. Gentle Rust lets them run once more; they are destroyed at the end of this turn's Run Routes step.`,
+    };
+  }, [activeCorporation]);
+
   const showRouteToggle =
     roundType === "OperatingRound" && orSubPhase === "Routes" && mayActThisTurn;
 
@@ -2545,6 +2572,7 @@ export default function ContextualActionBar({
                   ) : (
                     <TrainChips
                       trains={activeCorporation.trains}
+                      reprieved={activeCorporation.reprievedTrains}
                       phase={phase ?? null}
                       surface="dark"
                       // Design note #259: the rust countdown, matching the Round Detail table below the board. Without
@@ -2717,19 +2745,56 @@ export default function ContextualActionBar({
               {/* Design note #839: the two facts the phase badge used to whisper. Same row, same shape and the
                   same escalation -- a warning drawn differently from the warning beside it reads as a different KIND
                   of thing, which is the distinction #732 keeps on one channel. */}
-              {buyWarnings.map((warning) => (
-                <span
-                  key={warning.key}
-                  className={warning.imminent ? "app-phase-shift-critical" : undefined}
-                  style={{
-                    ...styles.phaseShiftBadge,
-                    ...(warning.imminent ? styles.phaseShiftBadgeCritical : styles.phaseShiftBadgeWarn),
-                  }}
-                  aria-label={warning.detail}
-                >
-                  &#9888; {warning.label}
-                </span>
-              ))}
+              {/* ==================================================================
+                   DESIGN NOTE 1005: THE BADGES KEEP TO ONE LINE
+                  ==================================================================
+                  REPORTED: "The Warning badges on certain Action Bar subphases are spilling into a second
+                  row."
+                  AND THE BADGES WERE NEVER THE THING WRAPPING. `phaseShiftBadge` already carries
+                  `whiteSpace: nowrap` and `flexShrink: 0`, so no badge has ever broken internally -- what
+                  wraps is `orPanelRailLeft`, which is `flexWrap: wrap` and has been since it was written.
+                  A GROUP RATHER THAN `nowrap` ON THE RAIL, which is the narrow fix. The rail wraps on purpose:
+                  #482 records that it holds a phase badge, a round label and a variable number of warnings in
+                  a column that must yield rather than drag the centre rail sideways. Forbidding it to wrap at
+                  all would trade a second row of badges for a rail that overflows its own track. Grouping the
+                  badges means they wrap TOGETHER, as one unit, and never against each other. */}
+              <span style={styles.orWarningGroup}>
+                {reprieveWarning && (
+                  /* ==================================================================
+                      DESIGN NOTE 1004: THE WARNING SURVIVES THE PHASE CHANGE
+                     ==================================================================
+                     REPORTED: "the red/amber warning badges and flashing train chips immediately disappear
+                     for the reprieved trains", with the fix ruled: "retain a persistent warning badge reading
+                     'Rust Imminent: [type]-train' for any corporation holding gently rusted trains until they
+                     are destroyed."
+                     IT IS NOT A COUNTDOWN AND SO IT IS NOT A `buyWarning`. Those are derived from the depot --
+                     "N purchases away" -- and the whole problem is that the depot has moved on. This badge is
+                     derived from the corporation's own marks, which is the only place the fact still lives,
+                     and it is true until the reducer clears them (#1001).
+                     THE SAME PULSE AS THE CHIPS IT DESCRIBES, ruled explicitly, so a player's eye ties the
+                     badge to the trains rather than reading two unrelated warnings. */
+                  <span
+                    className="app-train-final-run"
+                    style={{ ...styles.phaseShiftBadge, ...styles.phaseShiftBadgeCritical }}
+                    aria-label={reprieveWarning.detail}
+                  >
+                    &#9888; {reprieveWarning.label}
+                  </span>
+                )}
+                {buyWarnings.map((warning) => (
+                  <span
+                    key={warning.key}
+                    className={warning.imminent ? "app-phase-shift-critical" : undefined}
+                    style={{
+                      ...styles.phaseShiftBadge,
+                      ...(warning.imminent ? styles.phaseShiftBadgeCritical : styles.phaseShiftBadgeWarn),
+                    }}
+                    aria-label={warning.detail}
+                  >
+                    &#9888; {warning.label}
+                  </span>
+                ))}
+              </span>
             </div>
 
             {/* CENTRE -- only what this sub-phase can actually do. */}

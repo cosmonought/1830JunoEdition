@@ -34,7 +34,6 @@ import { FONT_SIZE } from "../styles/typography";
 import { CorporateLogo } from "./CorporateLogo";
 import {
   noticeBody,
-  noticeGentleRustLine,
   noticeHeadline,
   silenceLabel,
   type FleetLossNotice,
@@ -105,13 +104,10 @@ export function FleetLossModal({
         </div>
 
         <p style={styles.body}>{noticeBody(notice)}</p>
-        {/* Design note #980: the gentle-rust line keeps the amber the consequence line used, which is what
-            "keep the colored text" asks for -- the ruling is about the TREATMENT, not about which function
-            produced the sentence. It renders in the consequence's slot because that is where a coloured
-            second line already sat, so the card's rhythm is unchanged. */}
-        {noticeGentleRustLine(notice) && (
-          <p style={styles.consequence}>{noticeGentleRustLine(notice)}</p>
-        )}
+        {/* Design note #1003: THE GENTLE-RUST LINE WAS HERE and is gone with the timing that needed it.
+            The modal now fires when the trains are destroyed (#1002), so "you can run these one more time"
+            would be a promise about trains that left the fleet in the dispatch that raised this. The variant
+            still gives the extra run; this is simply no longer where a player hears about it. */}
 
         <div style={styles.fleetRow}>
           <span style={styles.fleetLabel}>Taken</span>

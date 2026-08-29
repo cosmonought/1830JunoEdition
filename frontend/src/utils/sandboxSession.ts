@@ -931,6 +931,83 @@ export interface FleetLoss {
   discarded: readonly string[];
 }
 
+/** The gently-rusted trains this dispatch finally destroyed.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 1002: THE MODAL MOVES TO THE MOMENT THE TRAIN ACTUALLY DIES
+ *  ==================================================================
+ *
+ *  RULED: "For the Gentle Rust variant, the Rust modal must no longer trigger globally upon the purchase of
+ *  the phase-change train. Instead, scope it to trigger at the moment the gently rusted trains are
+ *  permanently destroyed."
+ *
+ *  AND THE OLD TIMING WAS TELLING EIGHT PRESIDENTS ABOUT A LOSS SEVEN OF THEM HAD NOT HAD YET. A phase change
+ *  marks every corporation's doomed trains at once, so one purchase queued eight modals -- and under this
+ *  variant the trains were not gone, they were owed a run each, at eight different future moments. The notice
+ *  was true of the marking and premature about the loss.
+ *
+ *  THE SAME SHAPE AS `describeFleetLosses`, deliberately: a DIFF rather than a signal. #704's division is
+ *  that the reducer settles and the shell narrates, and a reprieve expiry is settled inside
+ *  `settleOperatingCursor` (#1001) where no caller can see it happen. What is observable afterwards is that a
+ *  corporation's `pending_rust_trains` emptied and its `owned_trains` lost exactly those models -- which is
+ *  this function.
+ *
+ *  BOTH SIDES ARE REQUIRED, and that is what stops it firing on a phase change. When the trains are MARKED,
+ *  `pending_rust_trains` grows and `owned_trains` is untouched (#979); when they are DESTROYED, the marks
+ *  clear and the fleet shrinks. Only the second produces entries here.
+ *
+ *  `rusted`, NOT `discarded`, because that is what happened: the arriving tier killed these trains and the
+ *  reprieve only postponed it. The train-limit trim is a different cause with a different remedy and is
+ *  narrated where it happens (#896's split). */
+export function describeReprieveExpiries(
+  before: GameStateResponse,
+  after: GameStateResponse,
+): FleetLoss[] {
+  const losses: FleetLoss[] = [];
+  for (const company of after.public_companies ?? []) {
+    const was = (before.public_companies ?? []).find(
+      (entry) => entry.company_id === company.company_id,
+    );
+    const marked = was?.pending_rust_trains;
+    // #232: absent is "the chain did not say", and a build that never reports the field expires nothing.
+    if (marked == null || marked.length === 0) continue;
+    if ((company.pending_rust_trains?.length ?? 0) !== 0) continue;
+    const had = was?.owned_trains;
+    const has = company.owned_trains;
+    if (had == null || has == null) continue;
+
+    /* Multiset difference, for `describeFleetLosses`' own reason: two 3-trains are two trains, and a
+       corporation that loses one still holds the other. */
+    const remaining = [...has];
+    const gone: string[] = [];
+    for (const model of had) {
+      const at = remaining.indexOf(model);
+      if (at >= 0) remaining.splice(at, 1);
+      else gone.push(model);
+    }
+    /* ONLY THE MARKED MODELS. A dispatch that expired a reprieve AND lost a train to something else would
+       otherwise report the second as rust; intersecting with the marks keeps this function about the one
+       event it names. */
+    const marks = [...marked];
+    const destroyed: string[] = [];
+    for (const model of gone) {
+      const at = marks.indexOf(model);
+      if (at >= 0) {
+        marks.splice(at, 1);
+        destroyed.push(model);
+      }
+    }
+    if (destroyed.length === 0) continue;
+    losses.push({
+      companyId: company.company_id,
+      ticker: company.ticker,
+      rusted: destroyed,
+      discarded: [],
+    });
+  }
+  return losses;
+}
+
 /** Reads back what `applyPhaseChange` took, by comparing the fleets it rewrote.
  *
  *  Design note #704: THE REDUCER SETTLES, THE SHELL NARRATES -- #400's division, and the same one #685 used
@@ -1760,10 +1837,13 @@ function settleOperatingCursor(
     before.current_round_type === "OperatingRound"
       ? (before.active_operating_order ?? [])[before.active_corporation_index] ?? null
       : null;
-  const expireReprieve = (state: GameStateResponse): GameStateResponse => {
-    if (outgoingCorporation === null) return state;
+  const expireReprieveFor = (
+    state: GameStateResponse,
+    corporation: number | null,
+  ): GameStateResponse => {
+    if (corporation === null) return state;
     const done = (company: (typeof state.public_companies)[number]) =>
-      company.company_id === outgoingCorporation &&
+      company.company_id === corporation &&
       (company.pending_rust_trains?.length ?? 0) > 0;
     if (!(state.public_companies ?? []).some(done)) return state;
     return {
@@ -1800,7 +1880,7 @@ function settleOperatingCursor(
   /* Outside an OR the cursor is CLEARED, not frozen -- a stale Hardware would be handed to the next round's first corporation.
      See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #656 */
   if (after.current_round_type !== "OperatingRound") {
-    const expired = expireReprieve(after);
+    const expired = expireReprieveFor(after, outgoingCorporation);
     if (expired.operating_sub_phase === undefined) return expired;
     return { ...expired, operating_sub_phase: undefined };
   }
@@ -1853,7 +1933,7 @@ function settleOperatingCursor(
        outgoing corporation is `before`'s cursor -- the one that was acting when this transition began. */
     /* Design note #906a: the reprieve expires through the SAME helper the non-Operating path uses, so a
        corporation whose turn ends mid-set and one whose turn ends the set are answered identically. */
-    const withReprieveExpired = expireReprieve(after);
+    const withReprieveExpired = expireReprieveFor(after, outgoingCorporation);
     /* Design note #941: AND THE PRINTED SUM GOES WITH THEM. It is the third turn-scoped figure on a
        corporation, and the one whose survival would be least visible: a stale `printed_route_revenue` does
        not show anywhere on screen, it simply makes the NEXT turn's single roll apply to last turn's routes as
@@ -1885,8 +1965,46 @@ function settleOperatingCursor(
 
   const current = after.operating_sub_phase;
   const next = stepAfterMessage(after, current, msg);
-  if (next === current) return after;
-  return { ...after, operating_sub_phase: next };
+  /* ==================================================================
+   *  DESIGN NOTE 1001: THE REPRIEVE ENDS AT BUY TRAINS, NOT AT THE TURN'S END
+   * ==================================================================
+   *
+   * REPORTED: "Because they still occupy a slot during the 'Buy Trains' phase, the engine incorrectly
+   * auto-skips the Buy Trains phase for corporations at the train limit, preventing them from replacing the
+   * trains that just rusted."
+   *
+   * AND THIS IS #979's CORRECTION COLLIDING WITH #906a's TIMING. #979 made a reprieved train count against
+   * the limit -- correctly, and that is what lets it run. #906a had already put its death at the end of the
+   * corporation's turn, which was the right reading of "dies immediately after it generates its final
+   * revenue" while the train occupied no slot. Put together, the two produce a corporation that is at its
+   * limit for the whole of Buy Trains and then loses a train once buying is over: it is charged for the slot
+   * at exactly the moment the slot matters and refunded it when it does not.
+   *
+   * SO THE DEATH MOVES ONE STEP EARLIER, to the boundary the ruling names. The train has generated its final
+   * revenue by the time the cursor leaves Dividends -- Routes computed it and Dividends spent it -- so
+   * "immediately after" is satisfied by the step change rather than by the turn change, and the corporation
+   * reaches Buy Trains with the slot already free.
+   *
+   * KEYED ON THE ARRIVAL AT `Hardware`, not on the message. `DeclareDividends` is one way in and
+   * `AdvanceOperatingSubPhase` is the other (the Skip button and #439's auto-skip both arrive as that), and a
+   * rule written per message would have to name both and would miss the third. What matters is that the
+   * cursor is entering Buy Trains, which is one comparison.
+   *
+   * THE ACTING CORPORATION, NOT THE OUTGOING ONE. This fires mid-turn, so `before`'s cursor is the
+   * corporation still acting -- the opposite of the turn-change path below it, where the outgoing one is the
+   * only right answer. Two callers, two subjects, one helper.
+   *
+   * AND THE TURN-CHANGE EXPIRY STAYS AS A BACKSTOP. A turn can end without reaching Buy Trains -- an Operating
+   * Round set ending, or any path that skips the step entirely -- and a reprieve that survived that would
+   * hand the train a second run, which is #906a's own bug in reverse. Two triggers for one event is normally
+   * the fault this codebase keeps finding; here they are the same expression called on the same helper, and
+   * the second is idempotent because the first leaves nothing to expire. */
+  const enteringHardware = next === "Hardware" && current !== "Hardware";
+  const actingCorporation =
+    (after.active_operating_order ?? [])[after.active_corporation_index] ?? null;
+  const settled = enteringHardware ? expireReprieveFor(after, actingCorporation) : after;
+  if (next === current) return settled;
+  return { ...settled, operating_sub_phase: next };
 }
 
 /** The four explicit arms mirror the CONTRACT's own cursor (hexmap::execute_lay_tile advances off Track on success), not an invented sandbox sequence.

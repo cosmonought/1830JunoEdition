@@ -53,10 +53,11 @@ export interface FleetLossNotice {
   companyId: number;
   ticker: string;
   cause: FleetLossCause;
-  /** Design note #906: this table plays Gentle Rust, so the trains named here are not gone -- they have one
-   *  more Operating Round turn in them. The COPY changes and nothing else does: the same notice, the same
-   *  toggle, a different tense. */
-  gentleRust?: boolean;
+  /* Design note #1003: `gentleRust` IS GONE FROM THIS RECORD. #906 put it here so the copy could change
+     tense -- "not gone yet, it runs once more" -- and that tense was only ever needed because the notice
+     fired at the MARKING. #1002 moves it to the destruction, where the trains really are gone, so the
+     standard sentence is the true one and there is nothing left for the flag to select. A field that can
+     only ever be `false` is #788's unreachable arm wearing a boolean. */
   /** The models this cause took, in the order the reducer took them. */
   trains: readonly string[];
   /** The tier whose arrival did it -- "4" for the first 4-train. `null` when the chain did not say. */
@@ -86,10 +87,9 @@ export function fleetLossNotices(
   loss: FleetLoss,
   arrivingTier: string | null,
   trainLimit: number | null,
-  gentleRust = false,
 ): FleetLossNotice[] {
   const notices: FleetLossNotice[] = [];
-  const base = { companyId: loss.companyId, ticker: loss.ticker, arrivingTier, trainLimit, gentleRust };
+  const base = { companyId: loss.companyId, ticker: loss.ticker, arrivingTier, trainLimit };
   if (loss.rusted.length > 0) {
     notices.push({ ...base, cause: "rust", trains: [...loss.rusted] });
   }
@@ -185,18 +185,26 @@ const count = (notice: FleetLossNotice) => (notice.trains.length === 1 ? "is" : 
  * trains it took. The interruption defends itself. */
 
 
-/** The gentle-rust line, or `null` when the table is not playing it.
+/* ==================================================================
+ *  DESIGN NOTE 1003: `noticeGentleRustLine` IS DELETED
+ * ==================================================================
  *
- *  Design note #980: RULED VERBATIM -- "Gentle rust: You can run these trains one more time before they
- *  retire." -- and kept as its own string so the modal can colour it, which the ruling asked for explicitly.
- *  IT IS TRUE FOR THE FIRST TIME. Under #906 the reprieved train left `owned_trains` and so never reached the
- *  route planner; #979 leaves it in the fleet, which is what makes "you can run these" a promise the engine
- *  keeps. Recorded here because this sentence has been on screen, unchanged in meaning, since #906 -- and it
- *  was not true then. */
-export function noticeGentleRustLine(notice: FleetLossNotice): string | null {
-  if (notice.cause !== "rust" || !notice.gentleRust) return null;
-  return "Gentle rust: You can run these trains one more time before they retire.";
-}
+ * RULED: "Since the modal now fires upon actual destruction, remove the special 'Gentle rust: You can run
+ * these...' explanatory text. Use the standard rust notification copy."
+ *
+ * AND THE SENTENCE WAS ONLY EVER TRUE OF THE OLD TIMING. It said "you can run these trains one more time
+ * before they retire" -- a promise about the future, correct at the moment the trains were MARKED and false
+ * at the moment they die. #1002 moves the modal to the second of those, so the line would now be telling a
+ * president they may run trains that left the fleet in the dispatch that raised the modal.
+ * #980 RECORDED THAT THIS SENTENCE BECAME TRUE FOR THE FIRST TIME under #979, because until then the
+ * reprieved train could not reach the route planner at all. It is worth noting that it has been true for
+ * exactly two batches and is now unnecessary rather than wrong -- the variant still gives the extra run; the
+ * modal simply is no longer the place that announces it.
+ *
+ * DELETED RATHER THAN LEFT RETURNING `null`, which is #990's rule for `noticeConsequence` and #998's for
+ * `dividendStepsExplanation`. Three functions in this feature have now outlived their callers; leaving a
+ * fourth as an always-null predicate is how the next reader concludes there is a slot to fill. */
+
 
 /** The toggle's own label, phrased as the request asked and scoped as narrowly as it actually behaves. */
 export function silenceLabel(notice: FleetLossNotice): string {

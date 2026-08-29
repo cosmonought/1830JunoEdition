@@ -35,7 +35,7 @@ import {
   projectDividendCellMove,
   projectDividendFrom,
 } from "../components/StockMarketRenderer";
-import { fleetLossNotices, noticeBody, noticeGentleRustLine } from "./fleetLossNotice";
+import { fleetLossNotices, noticeBody } from "./fleetLossNotice";
 import { isTrainLocked } from "./trainLimit";
 import type { GameStateResponse } from "./gameState";
 
@@ -516,47 +516,23 @@ describe("gentle rust reprieves a train for one turn (design note #906)", () => 
     expect(after.public_companies[1].pending_rust_trains).toEqual(["2"]);
   });
 
-  it("tells the player it is a deadline, not a gift", () => {
+  it("uses the standard rust copy on every table (design note #1003)", () => {
     /* ==================================================================
-        REWRITTEN BY #980, AND ONE OF THE OLD ASSERTIONS WAS PINNING A FALSEHOOD
+        THE DEADLINE SENTENCE IS GONE, AND SO IS THE REASON IT EXISTED
        ==================================================================
-       IT ASSERTED FOUR PHRASES from #906's paragraph, one of which was
-       `/no longer counts against the train limit/`. That clause is exactly the rule #979 has just corrected,
-       so this case had become a test enforcing the bug -- and it would have failed the fix rather than
-       catching anything.
-       THE COPY IS STILL PART OF THE RULE, which is why the case survives at all: "one more time" read alone
-       is good news, and the sentence has to land on the retirement. The ruled string does, in eleven words
-       where #906 took sixty.
-       AND THE VARIANT'S LINE IS NOT IN THE BODY ANY MORE. It is its own string so the modal can colour it,
-       which the ruling asked for -- so the body is asserted to be the STANDARD sentence even here, and the
-       variant's contribution asserted beside it. */
-    const [rust] = fleetLossNotices(
-      { companyId: 1, ticker: "PRR", rusted: ["2"], discarded: [] },
-      "4",
-      3,
-      true,
-    );
+       #906 GAVE THE VARIANT ITS OWN LINE because the modal fired at the MARKING, when the trains were not yet
+       gone: "one more time" was the true tense then, and #980 pared it to eleven words.
+       RULED SINCE: "the Rust modal must no longer trigger globally upon the purchase of the phase-change
+       train. Instead, scope it to trigger at the moment the gently rusted trains are permanently destroyed"
+       -- and, following from that, "remove the special 'Gentle rust...' explanatory text."
+       SO THE TENSE PROBLEM SOLVES ITSELF. At the moment of destruction the standard sentence is the accurate
+       one, and there is nothing left for a variant branch to select. What this case asserts is that the copy
+       is now IDENTICAL on both tables, which is the property the deletion produced. */
+    const [rust] = fleetLossNotices({ companyId: 1, ticker: "PRR", rusted: ["2"], discarded: [] }, "4", 3);
     expect(noticeBody(rust)).toBe("1 of your 2-trains has rusted.");
-    expect(noticeGentleRustLine(rust)).toBe(
-      "Gentle rust: You can run these trains one more time before they retire.",
-    );
-    expect(noticeGentleRustLine(rust)).toMatch(/before they retire/);
-    /* THE CLAUSE #979 KILLED, as an absence, in both strings. A build that restored the old paragraph would
-       be telling the player a train-limit rule the engine no longer follows. */
-    expect(`${noticeBody(rust)} ${noticeGentleRustLine(rust)}`).not.toMatch(/train limit/);
-  });
-
-  it("keeps the ordinary wording when the variant is off", () => {
-    const [rust] = fleetLossNotices(
-      { companyId: 1, ticker: "PRR", rusted: ["2"], discarded: [] },
-      "4",
-      3,
-      false,
-    );
-    expect(noticeBody(rust)).toBe("1 of your 2-trains has rusted.");
-    /* THE ONLY DIFFERENCE BETWEEN THE TWO TABLES IS THE EXTRA LINE now, which is what "keep the colored text"
-       produces: one sentence everybody gets, one the variant adds. */
-    expect(noticeGentleRustLine(rust)).toBeNull();
+    const NOTICE = readStripped("utils/fleetLossNotice.ts");
+    expect(NOTICE).not.toContain("before they retire");
+    expect(NOTICE).not.toContain("gentleRust");
   });
 });
 

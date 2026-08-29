@@ -1280,6 +1280,17 @@ export const styles: Record<string, React.CSSProperties> = {
      consumer. #406's 8em name ceiling is worth carrying forward -- `SeatOrderTrail` does not clamp its names,
      so a table of long sandbox nicknames widens the trail rather than truncating. If that ever overflows,
      a max-width on the seat name is the fix and this is the note that predicted it. */
+  /* Design note #1005: the warning badges, as one unit. `nowrap` here rather than on the rail -- see the
+     render site for why the rail must stay free to wrap. `flexShrink: 0` matches the badges' own, so the
+     group behaves like the widest badge it holds rather than compressing them against each other. */
+  orWarningGroup: {
+    display: "inline-flex",
+    flexDirection: "row",
+    flexWrap: "nowrap",
+    alignItems: "center",
+    gap: "8px",
+    flexShrink: 0,
+  },
   orPanelRailLeft: {
     display: "flex",
     flexDirection: "row",

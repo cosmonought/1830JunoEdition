@@ -82,7 +82,20 @@ describe("the pulse is the critical step alone", () => {
        does not. That preserves #702's rule that the two countdown steps "differ in COLOUR and not merely in
        whether they pulse", and adds an axis on top of it -- two away is amber and still, one away is red and
        moving. If every at-risk chip pulsed there would be nothing left to escalate to. */
-    expect(CODE).toContain('inDangerWindow === "doomed" ? "app-train-rust-critical" : undefined');
+    /* ==================================================================
+        #1004 SPLIT THE DOOMED STATE IN TWO, AND THIS ANCHOR FOLLOWED IT
+       ==================================================================
+       THIS ASSERTED the whole ternary verbatim. The class it names is unchanged and so is the rule it
+       protects -- one purchase away pulses, two away does not -- but there is a THIRD state now: a train
+       already rusted and running once more under Gentle Rust, which takes a deeper fade of its own.
+       ANCHORED ON THE ARM RATHER THAN ON THE EXPRESSION, so the countdown's class stays pinned to the
+       countdown's condition and a future fourth state does not have to rewrite this case again. */
+    expect(CODE).toContain('inDangerWindow === "doomed"');
+    expect(CODE).toContain('"app-train-rust-critical"');
+    /* AND THE FINAL-RUN STATE TAKES A DIFFERENT CLASS, which is what keeps the two distinguishable -- see
+       `animations.ts` #1004 for why a deeper version of one keyframe would have read as the same warning
+       turned up rather than as a different one. */
+    expect(CODE).toContain('"app-train-final-run"');
   });
 
   it("borrows the badge's keyframe rather than defining a lookalike", () => {
@@ -114,6 +127,10 @@ describe("the severity still comes from the shared countdown", () => {
 
   it("only tints the tier actually next in line to rust", () => {
     // A 4-train is not at risk because 3-trains are about to go; the countdown is per tier.
-    expect(CODE).toContain("doomed !== null && tier === doomed && severity !== null ? severity : null");
+    /* Design note #1004: the depot-driven arm is unchanged and is now the FALLBACK -- a reprieved train is
+       doomed whatever the outlook says, because the tier that killed it has already arrived and the outlook
+       has moved on to the next one. Asserted as the surviving expression rather than as the whole ternary. */
+    expect(CODE).toContain("doomed !== null && tier === doomed && severity !== null");
+    expect(CODE).toContain("const isFinalRun = reprievedAt >= 0;");
   });
 });

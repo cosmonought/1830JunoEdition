@@ -27,6 +27,39 @@ export type TrainTier = "2" | "3" | "4" | "5" | "6" | "D";
  *  the same ordering everything else uses, rather than restating it. */
 export const TIER_ORDER: readonly TrainTier[] = ["2", "3", "4", "5", "6", "D"];
 
+/** What a player calls a train of this tier -- `"3-Train"`, or `"Diesel"`.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 1007: "D-TRAIN" IS NOT A THING ANYBODY SAYS
+ *  ==================================================================
+ *
+ *  The five numbered tiers are named by their number and the sixth is not: 1830's last train is a Diesel, and
+ *  `${tier}-train` renders it "D-train" -- which is not wrong so much as not English.
+ *
+ *  ONE SITE IN THE APP ALREADY KNEW THIS. `TrainBadges.tsx` has carried `trigger === "D" ? "Diesel" :
+ *  \`${trigger}-Train\`` inline since the rust tooltips were written, and roughly twenty other places build
+ *  the phrase with a bare template literal. That is the shape this codebase keeps producing -- a rule stated
+ *  in one place and never asked in its siblings -- so the rule moves here, beside the type it is about, and
+ *  the sites are converted as they are touched rather than in one sweep.
+ *
+ *  HERE, BESIDE `TrainTier`, RATHER THAN IN A MODULE OF ITS OWN. Naming a tier is a property of the tier, and
+ *  this file is already the authority on what tiers exist and how they order. A `trainNaming.ts` holding two
+ *  functions would be a module whose only content is the thing this one is for. */
+export function trainTierName(tier: string): string {
+  return tier === "D" ? "Diesel" : `${tier}-Train`;
+}
+
+/** The same name in the plural -- `"3-Trains"`, `"Diesels"`.
+ *
+ *  Design note #1007: A SEPARATE FUNCTION RATHER THAN A COUNT ARGUMENT. Every caller so far knows at the call
+ *  site which it wants: a heading naming a category is always plural, and a button naming one purchase is
+ *  singular. A `count` parameter would make both of them pass a number they do not have in order to select a
+ *  suffix they already know. `countPhrase` in `App.tsx` remains the tool for "n of these", and it composes
+ *  with the singular form. */
+export function trainTierNamePlural(tier: string): string {
+  return `${trainTierName(tier)}s`;
+}
+
 /** How many of each train the Bank Depot starts with -- the printed 1830
  *  roster, mirroring `RulesReference.tsx`'s `TRAIN_ROSTER`. `D` is
  *  effectively unlimited, represented as `null` rather than a large number

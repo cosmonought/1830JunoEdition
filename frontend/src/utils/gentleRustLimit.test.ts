@@ -236,28 +236,23 @@ describe("the rust modal is two lines (design note #980)", () => {
   const NOTICE = readStripped("utils/fleetLossNotice.ts");
   const MODAL = readStripped("components/FleetLossModal.tsx");
 
-  it("renders the gentle line", () => {
-    /* THE INTEGRATION GAP THIS PROJECT KEEPS FINDING: without the guard the coloured line is computed and
-       never shown, and nothing else here would notice.
+  it("has no variant-only line left in the modal (design note #1003)", () => {
+    /* ==================================================================
+        THE GENTLE LINE IS GONE, AND SO IS THE CONSEQUENCE SLOT BESIDE IT
        ==================================================================
-        THE SECOND HALF WENT WITH THE SENTENCE IT GUARDED (design note #990)
-       ==================================================================
-       IT ALSO ASSERTED `noticeConsequence(notice) && (`, which kept a rust notice from rendering an empty
-       `<p>`. That function is gone: its last surviving sentence told the player a discarded train "is already
-       back in the depot and may be bought again by anyone", and 1830 removes an over-limit discard from the
-       game. The line was not surplus, it was false -- and #980 kept it on the strength of exactly the
-       decision that does not exist.
-       ASSERTED AS AN ABSENCE NOW, in the place the conditional used to be, so the paragraph cannot return
-       without failing here. */
-    expect(MODAL).toContain("noticeGentleRustLine(notice) && (");
+       #980 PUT A COLOURED SECOND LINE HERE -- "Gentle rust: You can run these trains one more time before
+       they retire." -- and these two cases asserted it, its guard and its colour.
+       RULED SINCE: the modal fires at DESTRUCTION now (#1002), so a sentence promising a future run would be
+       about trains that left the fleet in the dispatch that raised it. The variant still gives the extra run;
+       the modal is simply no longer where a player hears about it.
+       THREE FUNCTIONS IN THIS FEATURE HAVE NOW OUTLIVED THEIR CALLERS -- `noticeConsequence` (#990),
+       `dividendStepsExplanation` (#998) and this one -- and all three were deleted rather than left returning
+       null. Asserted as an absence over the modal, because a re-added slot is how the copy comes back.
+       THE BODY IS STILL THE BODY, which is the half that must survive a deletion: the modal has one sentence
+       and it is the standard one. */
+    expect(MODAL).not.toContain("noticeGentleRustLine");
     expect(MODAL).not.toContain("noticeConsequence");
-  });
-
-  it("colours the gentle line rather than the body", () => {
-    /* RULED: "keep the colored text". The body is the neutral sentence everyone gets; the variant's line is
-       the one that was amber before and stays amber. */
-    const block = sliceBetween(MODAL, "noticeGentleRustLine(notice) && (", ")}");
-    expect(block).toContain("styles.consequence");
+    expect(MODAL).not.toContain("Gentle rust:");
     expect(MODAL).toContain("<p style={styles.body}>{noticeBody(notice)}</p>");
   });
 

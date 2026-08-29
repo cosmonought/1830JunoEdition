@@ -152,7 +152,13 @@ describe("the bank no longer stands aside, because it no longer folds (#812 -> #
        the second DISPLAY of it. Asserted as the absence, because a heading is exactly where it would come
        back. */
     expect(DEPOT).not.toContain("treasury " + String.fromCharCode(36) + "{treasury}");
-    expect(DEPOT).toContain("Buy Trains from the Bank Depot");
+    /* Design note #1007: this pinned the heading VERBATIM, which is one word more than #889's argument needs.
+       The claim being made here is that the treasury is not restated on the bank's heading -- the heading's
+       own wording is a different subject, and it now names the tier for sale ("Buy 3-Trains from the Bank
+       Depot"). Narrowed to the half that belongs to this file; `depotTierHeading.test.ts` owns the rest.
+       A TEST THAT PINS MORE THAN ITS SUBJECT is a test that fails for somebody else's reasons, which is how a
+       harness starts enforcing the code instead of the rule. */
+    expect(DEPOT).toContain("from the Bank Depot");
   });
 
   it("has no fold left to trigger", () => {

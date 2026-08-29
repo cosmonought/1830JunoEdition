@@ -28,22 +28,40 @@ const BAR = readStripped("panels/ContextualActionBar.tsx");
 const BOARD = readStripped("components/HexGridRenderer.tsx");
 
 describe("the private-revenue toast is short and stacked (design notes #983/#984)", () => {
-  it("shows for exactly 400ms", () => {
+  it("shows for long enough to be seen at all", () => {
     /* RULED: "Reduce its display duration to strictly `400ms`."
        ASSERTED AS THE VALUE AND AS A RELATIONSHIP. #967 built this constant as `STANDARD_TOAST_MS * 1.5`,
        so a reader who only saw the multiplier would expect it to track the standard window; it does not any
-       more, and a future change to the standard must not drag this back up with it. */
-    expect(PRIVATE_REVENUE_TOAST_MS).toBe(400);
+       more, and a future change to the standard must not drag this back up with it.
+       ==================================================================
+        400 MEANT THE TOAST WAS NEVER SEEN (design note #1000)
+       ==================================================================
+       THIS ASSERTED 400, ON INSTRUCTION. REPORTED SINCE: "Players are not getting the toast notifications for
+       private company payouts."
+       THE WIRING WAS INTACT AND THE WINDOW WAS THE BUG. The toast's own entrance takes 180ms
+       (`app-action-toast-in`), so 400 left roughly 220ms at rest -- it was removed before it had finished
+       arriving. #983 records the arithmetic that predicted this and shipped the number anyway, which is worth
+       naming: a warning inside a design note is not a warning anybody reads at the moment it matters.
+       WHAT SURVIVES IS THE RELATIONSHIP, not the figure: this is still the one toast with a window of its own
+       (#967's distinction, a table rather than a sentence), and it is still far shorter than the 5,550 that
+       started the complaint. The number is checked against the entrance it has to outlast rather than
+       asserted bare. */
+    expect(PRIVATE_REVENUE_TOAST_MS).toBe(2000);
     expect(PRIVATE_REVENUE_TOAST_MS).toBeLessThan(STANDARD_TOAST_MS);
-    expect(TOAST).toContain("export const PRIVATE_REVENUE_TOAST_MS = 400;");
+    expect(TOAST).toContain("export const PRIVATE_REVENUE_TOAST_MS = 2000;");
     expect(TOAST).not.toContain("STANDARD_TOAST_MS * 1.5");
+    /* THE ENTRANCE IS THE FLOOR. A window shorter than the slide-up plus a beat is a toast nobody sees, which
+       is the whole of this report -- so the constant is compared with the animation it must outlast. */
+    const entrance = Number(TOAST.match(/app-action-toast-in (\d+)ms/)?.[1]);
+    expect(entrance).toBeGreaterThan(0);
+    expect(PRIVATE_REVENUE_TOAST_MS).toBeGreaterThan(entrance * 5);
   });
 
   it("still names the window once, rather than inlining it at the call site", () => {
     /* THE HALF OF #967 WORTH KEEPING. One place to change and a test that reads the constant instead of a
        copy of it -- which is the only reason the case above can assert a number at all. */
     expect(APP).toContain("PRIVATE_REVENUE_TOAST_MS, mine.rows)");
-    expect(APP).not.toContain("400);");
+    expect(APP).not.toContain("2000);");
   });
 
   it("hands the toast rows rather than a joined sentence", () => {
@@ -324,5 +342,86 @@ describe("the figure sits on a neutral backdrop (design note #986)", () => {
        static child of the animated overlay gets it for free and cannot come out of step. */
     const backdrop = sliceBetween(ANIM, ".app-revenue-backdrop {", "}");
     expect(backdrop).not.toContain("animation");
+  });
+});
+
+describe("the overlay fades in as well as out (design note #999)", () => {
+  it("mounts transparent and rises on the next frame", () => {
+    /* ==================================================================
+        THERE WAS NO FADE-IN, AND #971's REMOUNT IS WHY
+       ==================================================================
+       REPORTED: the glow "seems to just appear on the screen instead of fading in and out", refined to "the
+       fade in may be happening, but it is very abrupt."
+       IT WAS NOT HAPPENING AT ALL. Opacity here is a CSS `transition`, which needs a previous value to move
+       from. While the overlay stayed mounted between flashes it had one -- `visible` went false, then true.
+       #971 made it UNMOUNT after its window and remount on a changed key, and a freshly inserted element
+       commits at `opacity: 1` with nothing to transition from. The fade-OUT still worked, which is exactly
+       why the report describes an abrupt arrival rather than a missing feature.
+       SO #971 FIXED THE ARROWS AND BROKE THE ARRIVAL IN ONE EDIT. Remounting to replay an animation is the
+       right tool and it silently disables every transition on the node it remounts -- worth a case of its
+       own, because the two are the same mechanism pointing opposite ways.
+       ASSERTED AS THE PAIR: the explicit `false` and the frame callback that follows it. Either alone is a
+       state a half-done fix reaches, and the `false` looks redundant to a reader who does not know that a
+       re-trigger mid-fade arrives with `visible` already false. */
+    /* #490a: ANCHORED ON CODE, NOT ON A COMMENT. My first version ended the slice at
+       "// Design note #940: the TOKEN" -- which `readStripped` removes, so `sliceBetween` threw rather than
+       passing vacuously. The same mistake #955's harness records, caught by the thrower this time. */
+    const effect = sliceBetween(FLASH, "if (!signal) return undefined;", "}, [signal?.token, signal]);");
+    expect(effect).toContain("setVisible(false);");
+    expect(effect).toContain("window.requestAnimationFrame(() => setVisible(true))");
+    expect(effect).not.toContain("setVisible(true);\n    const timer");
+  });
+
+  it("cancels the frame it queued", () => {
+    /* A PENDING FRAME AFTER AN UNMOUNT sets state on a component that is gone -- and worse, a re-trigger
+       inside one frame would leave two callbacks racing to raise the same overlay. The cleanup already
+       cleared both timers; the frame is the third thing this effect starts. */
+    const cleanup = sliceBetween(FLASH, "return () => {", "};");
+    expect(cleanup).toContain("window.cancelAnimationFrame(rise);");
+  });
+
+  it("times the rise and the fall separately", () => {
+    /* RULED: "let's move the juice to 900ms and the fade in/out to 300ms each."
+       TWO CONSTANTS EVEN THOUGH BOTH ARE 300 TODAY, because they answer different questions -- how fast
+       should this arrive, how slowly should it leave -- and juice conventionally moves fast in and slow out.
+       Naming them apart is what makes trying that a one-line change rather than a refactor.
+       THE TRANSITION READS THE DIRECTION, which is the mechanism: React writes the style for the state being
+       entered, so the rise and the fall can differ without a second element or a keyframe. */
+    expect(FLASH).toContain("export const REVENUE_FLASH_RISE_MS = 300;");
+    expect(FLASH).toContain("export const REVENUE_FLASH_FADE_MS = 300;");
+    /* `no-template-curly-in-string` RIGHTLY OBJECTS to `${...}` inside a plain string, so the interpolation
+       is assembled rather than typed -- the same dodge `#779`'s harness uses for its dollar sign. What is
+       being asserted is the source text of a template literal, which is a string to this file. */
+    const DOLLAR = String.fromCharCode(36);
+    expect(FLASH).toContain(
+      "transition: `opacity " +
+        DOLLAR +
+        "{visible ? REVENUE_FLASH_RISE_MS : REVENUE_FLASH_FADE_MS}ms ease-out`",
+    );
+  });
+
+  it("keeps the backdrop on the overlay's own curve", () => {
+    /* #986 GAVE THE BACKDROP NO ANIMATION ON PURPOSE -- "a backdrop that faded on a different curve from the
+       thing it backs would leave a cream smudge over the board with nothing in it". That decision is what
+       makes this fix reach the glow the report was actually about: it inherits the overlay's opacity, so
+       fixing the overlay's rise fixes the glow's without a second timeline to keep in step. */
+    const backdrop = sliceBetween(ANIM, ".app-revenue-backdrop {", "}");
+    expect(backdrop).not.toContain("animation");
+    expect(backdrop).not.toContain("transition");
+  });
+
+  it("leaves enough time at full opacity to read the figure", () => {
+    /* ==================================================================
+        "900ms" IS TIME BEFORE IT LEAVES, NOT TIME ON SCREEN
+       ==================================================================
+       READ AS A TOTAL, 900 with a 300ms rise and a 300ms fall would leave 300ms at full opacity -- less than
+       half what the overlay had before this batch, which would be a legibility regression arriving as a
+       polish request. Read as the window before the fade STARTS, the overlay is on screen for 1,200ms and
+       fully opaque for 600.
+       CHECKED AS THE ARITHMETIC rather than as three literals, so the next change to any of the three has to
+       keep the property rather than merely keep the numbers. */
+    const window = Number(FLASH.match(/REVENUE_FLASH_MS = (\d+)/)?.[1]);
+    const rise = Number(FLASH.match(/REVENUE_FLASH_RISE_MS = (\d+)/)?.[1]);
+    expect(window - rise).toBeGreaterThanOrEqual(500);
   });
 });

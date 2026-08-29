@@ -67,6 +67,12 @@ export interface TrainChipsProps extends TrainBadgeCommonProps {
    *  will destroy it, just without the "(N purchases away)" figure -- a
    *  number we cannot stand behind is worse than no number. */
   outlook?: Readonly<Record<TrainTier, TierRustOutlook>> | null;
+  /** Design note #1004: the models under a Gentle Rust reprieve -- `pending_rust_trains`, verbatim. A chip
+   *  matching one is on its final run whatever the depot outlook says, because the tier that doomed it has
+   *  already arrived and the outlook has moved on to the next one. Optional: three of this component's four
+   *  call sites have no reprieve to report, and absent means "none marked" rather than "unknown", which is
+   *  the safe direction -- a missing mark under-warns, an invented one pulses a train that is fine. */
+  reprieved?: readonly string[] | null;
   /* Design note #375: the index is the position in `trains`, the same key the
      Route Planner rows and map overlays use -- two 3-trains are two different
      trains, get two rows and highlight independently (`RoutePlannerPanel #5`).
@@ -147,6 +153,7 @@ export function TrainChips({
   surface,
   compact,
   outlook,
+  reprieved = null,
   highlightedTrainIndex = null,
   onHighlightTrain,
   selectedTrainIndex = null,
@@ -199,6 +206,25 @@ export function TrainChips({
   const alert = phaseAlertLevel(phase);
   const severity = alert === "critical" ? "doomed" : alert === "warn" ? "atRisk" : null;
 
+  /* ==================================================================
+      DESIGN NOTE 1004: A REPRIEVED TRAIN KEEPS ITS WARNING
+     ==================================================================
+     REPORTED: "When a phase-change train is bought, the red/amber warning badges and flashing train chips
+     immediately disappear for the reprieved trains."
+     AND THE CAUSE IS THAT THE DEPOT MOVED ON. `inDangerWindow` is computed from `doomed` -- the tier NEXT in
+     line to rust, read off the depot outlook -- so the instant the phase turns, the tier that just rusted
+     stops being the one at risk and every chip of it goes quiet. Correct for the standard game, where those
+     trains no longer exist; wrong under Gentle Rust, where they are still in the fleet and still about to
+     die.
+     SO THE MARK IS AN INPUT NOW, not only a derivation. `reprieved` is the corporation's own
+     `pending_rust_trains`, and a chip matching one is doomed whatever the depot says -- which is the same
+     shape #979 used for the limit: the reprieve is a fact about THIS fleet, and a rule derived from the
+     depot cannot see it.
+     A MULTISET, CONSUMED AS IT MATCHES. A corporation holding one reprieved 3 and one live 3 must show one
+     pulsing chip and one still one; a `.includes` would pulse both, which is the same off-by-one
+     `trimToTrainLimit` records for the trim. */
+  const reprievedPool = [...(reprieved ?? [])];
+
   return (
     <span style={styles.chipRow}>
       {trains.map((model, index) => {
@@ -206,8 +232,14 @@ export function TrainChips({
         // Design note #4: the TINT is still depot-driven and still only
         // applies to the tier actually next in line to rust. Preserved
         // exactly -- the tooltip work below does not touch it.
-        const inDangerWindow =
-          doomed !== null && tier === doomed && severity !== null ? severity : null;
+        const reprievedAt = reprievedPool.indexOf(model);
+        const isFinalRun = reprievedAt >= 0;
+        if (isFinalRun) reprievedPool.splice(reprievedAt, 1);
+        const inDangerWindow = isFinalRun
+          ? "doomed"
+          : doomed !== null && tier === doomed && severity !== null
+            ? severity
+            : null;
         const warning = rustTooltip(tier, phase, outlook, inDangerWindow);
         /* Design note #375: highlighted, faded, or neither. The muted state
            matters as much as the primary one -- with three chips in a row,
@@ -223,7 +255,17 @@ export function TrainChips({
                rule that "the two countdown steps differ in COLOUR and not merely in whether they pulse", and
                adds a second axis on top of it: two away is amber and still, one away is red and moving. A
                board where every at-risk chip pulsed would have nothing left to escalate TO. */
-            className={inDangerWindow === "doomed" ? "app-train-rust-critical" : undefined}
+            /* Design note #1004: the deeper fade for a train already rusted and running once more; the
+               shared countdown pulse for one that is merely close. Two states, two classes -- see
+               `animations.ts` for why a deeper version of the same keyframe would have read as the same
+               warning turned up. */
+            className={
+              isFinalRun
+                ? "app-train-final-run"
+                : inDangerWindow === "doomed"
+                  ? "app-train-rust-critical"
+                  : undefined
+            }
             style={{
               ...styles.chip,
               ...ink.chip,

@@ -121,7 +121,7 @@ describe("the overlay is floating text, not a window (design note #940)", () => 
        arrows' `animation-duration` and the glow's shorthand -- that agreed by coincidence. The stylesheet
        must name NO duration for these elements, so the constant is the only copy. */
     const ANIM = readStripped("styles/animations.ts");
-    expect(FLASH).toContain("export const REVENUE_FLASH_MS = 850;");
+    expect(FLASH).toContain("export const REVENUE_FLASH_MS = 900;");
     expect(FLASH.match(/animationDuration: `\$\{REVENUE_FLASH_MS\}ms`/g)?.length ?? 0).toBe(2);
     const arrow = sliceBetween(ANIM, ".app-revenue-arrow {", ".app-revenue-figure");
     expect(arrow).not.toContain("animation-duration:");

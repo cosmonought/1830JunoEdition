@@ -224,6 +224,28 @@ export function routeBlockedCityReason(
    *  like `blocksThrough` and `labelFor` above, and omitted by every caller that has no board to consult --
    *  which reproduces the pre-#808 behaviour exactly. */
   offersBypass?: (q: number, r: number) => boolean,
+  /** ==================================================================
+   *   DESIGN NOTE 1022: WHICH CITY THIS ROUTE ACTUALLY ENTERS
+   *  ==================================================================
+   *
+   * REPORTED: a D-train routed through the empty city of a Brown OO hex (E11) was refused on submit because
+   * the OTHER city on that hex holds a rival station.
+   *
+   * THE LOOP BELOW USED TO ASK ABOUT BOTH CITIES and refuse if either was shut. On a single-city hex that is
+   * the right question asked clumsily; on an OO hex it is a different question, and a stricter one than the
+   * auto-router asks -- so the router offered routes this rejected, which is the error loop in the report.
+   *
+   * INJECTED, like `blocksThrough` and `offersBypass` above and for the same reason: this file's header
+   * promises to validate route points "without importing anything from that component", and naming a city
+   * needs the tile artwork. `trackReach.cityEnteredFrom` is the binding every caller should pass, because it
+   * is the same `cityForArrival` the network walk and the route tracer already use.
+   *
+   * OMITTED KEEPS THE OLD BEHAVIOUR EXACTLY, which is what makes this additive: a caller with no board to
+   * consult still gets the conservative both-cities test rather than a silently permissive one. */
+  cityEnteredFrom?: (
+    hex: { q: number; r: number },
+    from: { q: number; r: number },
+  ) => number | null,
 ): string | null {
   if (!blocksThrough || points.length < 3) return null;
   for (let at = 1; at < points.length - 1; at += 1) {
@@ -233,14 +255,25 @@ export function routeBlockedCityReason(
        impassable for the seven corporations that are not the PRR, whose home token fills its only slot.
        Checked before the cities rather than inside the loop: the bow clears the hex, not one of its cities. */
     if (offersBypass?.(point.q, point.r)) continue;
-    for (let city = 0; city < 2; city += 1) {
-      if (!blocksThrough(point.q, point.r, city)) continue;
-      const where = labelFor?.(point.q, point.r) ?? `${point.q},${point.r}`;
-      return (
-        `${where} is tokened out by other corporations, so a train may end its run there but not pass ` +
-        `through. Redraw the route to stop at ${where} or go around it.`
-      );
-    }
+
+    /* Design note #1022: the city this route enters, from the point it came from. `null` means the resolver
+       could not say -- no board injected, a non-adjacent draft, or plain track with no city at all -- and the
+       fallback below is the pre-#1022 test rather than a guess. */
+    const entered = cityEnteredFrom?.(point, points[at - 1]) ?? null;
+    const shut =
+      entered !== null
+        ? blocksThrough(point.q, point.r, entered)
+        : /* BOTH CITIES, AND ONLY WHEN WE CANNOT NAME ONE. Kept as the unknown case for the reason
+             `cityBlocking` gives about erring visibly: a wrongly refused route is a sentence the player can
+             read and route around, while a wrongly permitted one is a run the rules do not allow. */
+          blocksThrough(point.q, point.r, 0) || blocksThrough(point.q, point.r, 1);
+
+    if (!shut) continue;
+    const where = labelFor?.(point.q, point.r) ?? `${point.q},${point.r}`;
+    return (
+      `${where} is tokened out by other corporations, so a train may end its run there but not pass ` +
+      `through. Redraw the route to stop at ${where} or go around it.`
+    );
   }
   return null;
 }

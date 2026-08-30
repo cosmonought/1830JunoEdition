@@ -211,6 +211,47 @@ export function cityForArrival(
   return all.includes(edge) ? 0 : null;
 }
 
+/** Which city on `hex` a route entering from the ADJACENT hex `from` passes through, or `null` for plain
+ *  track and for a `from` that is not adjacent.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 1022: THE ENTRY EDGE WAS AVAILABLE ALL ALONG
+ *  ==================================================================
+ *
+ * REPORTED: "The auto-router correctly routes a D-train through an empty city in a Brown OO hex (E11).
+ * However, because the other city in that same hex has a rival station, clicking 'Run Routes' throws an error
+ * claiming the hex is tokened out, blocking the legal run."
+ *
+ * TWO WALKS, ONE RULE, AND ONLY ONE OF THEM KNEW WHICH CITY. `reachableTrack` and the route tracer both ask
+ * `cityForArrival` and then `blocksThrough` about THAT city -- the specific circle the rail enters.
+ * `routeBlockedCityReason`, the check on the submit path, looped `for (let city = 0; city < 2; city += 1)`
+ * and refused if EITHER was shut. On a hex with one city that is the same question; on an OO hex it is a
+ * different and stricter one, so the router offered a route the validator then rejected.
+ *
+ * `cityBypass.ts` WROTE THE REASON DOWN AND DID NOT NOTICE IT WAS SOLVABLE: "without an entry edge there is
+ * no way to say which one a crossing would enter. On a two-city hex this is the strict direction." True of
+ * `cityShutAt`, which is handed a bare hex. The submit-path validator walks an ORDERED LIST of points, so the
+ * previous point IS the entry edge -- the information was in the caller's hands and never converted.
+ *
+ * THIS IS THAT CONVERSION, and it lives beside `cityForArrival` so both walks reach the city index through
+ * one function. That is the whole of the report's second item: the router and the validator now share the
+ * resolver, rather than sharing a rule they apply to different granularities. */
+export function cityEnteredFrom(
+  mapGrid: MapGridResponse,
+  hex: { q: number; r: number },
+  from: { q: number; r: number },
+): number | null {
+  const arrivalEdge = HEX_NEIGHBOR_OFFSETS.findIndex(
+    (offset) => hex.q + offset[0] === from.q && hex.r + offset[1] === from.r,
+  );
+  /* NOT ADJACENT IS NOT AN EDGE. A drafted route can contain a jump -- the drawing surface does not enforce
+     adjacency -- and `-1` fed to `cityForArrival` would index nothing and read as "plain track", which is the
+     permissive answer to a question that was never asked. `null` says so instead, and the caller falls back
+     to the conservative both-cities test. */
+  if (arrivalEdge < 0) return null;
+  return cityForArrival(mapGrid, hex.q, hex.r, arrivalEdge);
+}
+
 export function reachableTrack(
   mapGrid: MapGridResponse,
   stationHexes: ReadonlyArray<StationToken>,

@@ -33,7 +33,13 @@ import HexGridRenderer, {
   type StationPreviewMarker,
 } from "./components/HexGridRenderer";
 import { assignRouteSet } from "./utils/routeAutoTrace";
-import { layableHexes, reachableNetwork, stationTokensOf, type StationToken } from "./utils/trackReach";
+import {
+  cityEnteredFrom,
+  layableHexes,
+  reachableNetwork,
+  stationTokensOf,
+  type StationToken,
+} from "./utils/trackReach";
 // Design note #888: which hexes the Lay Track jump frames, and the camera pose that frames them.
 import { dividendDeclaration } from "./utils/dividendStep";
 // Design note #591f: `actingActor` went with the snapshot stack it stamped.
@@ -2928,6 +2934,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                full city has nothing to say about it -- and refusing here is what produced the reported "it
                spit back the error that Altoona is tokened out" on a route the rules allow. */
             (q, r) => hexOffersBypass(mapGrid, q, r),
+            /* Design note #1022: THE SAME RESOLVER THE ROUTER USES. `cityEnteredFrom` wraps `cityForArrival`,
+               which is what `reachableTrack` and the route tracer ask -- so the validator now judges the city
+               the route actually passes through rather than refusing a hex because its OTHER city is shut. */
+            (hex, from) => cityEnteredFrom(mapGrid, hex, from),
           ),
       };
     });

@@ -36,6 +36,9 @@ const {
   escalationTier,
   resolveFlavourLine,
 } = require("./yellowSign") as typeof import("./yellowSign");
+/* Design note #1051: the pre-#1051 die. Every case here was written against the FNV hash, so the fixture
+   asks for it by name -- see `batch50.test.ts` for the claim about a real draw. */
+const { legacyTurnSeed } = require("./gameVariants") as typeof import("./gameVariants");
 const { countableTrainCount } = require("./trainLimit") as typeof import("./trainLimit");
 const { derivePhase } = require("./gamePhase") as typeof import("./gamePhase");
 const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
@@ -44,7 +47,12 @@ const APP = readStripped("App.tsx");
 const REDUCER = readStripped("utils/sandboxSession.ts");
 const PHASE = readStripped("utils/gamePhase.ts");
 
-const parts = (companyId: number) => ({ macroRound: 3, subRound: 1, companyId });
+const parts = (companyId: number) => ({
+  macroRound: 3,
+  subRound: 1,
+  companyId,
+  turnSeed: legacyTurnSeed(3, 1, companyId),
+});
 const resolve = (over: Partial<Parameters<typeof resolveFlavourLine>[0]>) =>
   resolveFlavourLine({
     naturalLine: YELLOW_SIGN_MALUS_LINE,

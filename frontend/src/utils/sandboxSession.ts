@@ -22,6 +22,10 @@ import type {
 import { bankIsBroken } from "./endgame";
 import {
   DELAYED_AUCTION_TRIGGER_TIER,
+  /* Design note #1051: the pre-#1051 die, for logs written before the roll was recorded. The reducer never
+     DRAWS -- it runs on every client for every replay, so a draw here would be four boards and a fifth on
+     reload -- it only reads what the log holds, or reconstructs what an older log implied. */
+  legacyTurnSeed,
   resolveVariants,
   rollTurnRevenue,
 } from "./gameVariants";
@@ -3019,11 +3023,26 @@ function applyOneAction(
     const company = state.public_companies.find((entry) => entry.company_id === protocol_id);
     const previousPrinted = Math.max(0, Number(company?.printed_route_revenue ?? 0) || 0);
     const printedTotal = previousPrinted + printed;
+    /* ==================================================================
+        DESIGN NOTE 1051: THE LEGACY ARM KEEPS THE LEGACY DIE
+       ==================================================================
+       NOTHING DISPATCHES `RunManualRoute` ANY MORE. #968 replaced the one-message-per-train shape with a
+       single `RunMultipleRoutes` for the whole turn, and this arm survives only to replay logs written before
+       that -- which is exactly the population that also predates #1051's recorded roll.
+       SO IT ASKS FOR THE OLD ANSWER EXPLICITLY. Those games were played against the hash; rebuilding them
+       against a fresh draw would give every client a different board for a history that is closed. Naming
+       `legacyTurnSeed` here rather than falling through to it is what makes that a decision a reader can see,
+       and it is the only caller of that function that is not a fallback. */
     const roll = variants.unpredictableRevenue
       ? rollTurnRevenue(printedTotal, {
           macroRound: state.macro_round_number ?? 0,
           subRound: state.sub_round_index ?? 0,
           companyId: protocol_id,
+          turnSeed: legacyTurnSeed(
+            state.macro_round_number ?? 0,
+            state.sub_round_index ?? 0,
+            protocol_id,
+          ),
         })
       : null;
     /* Design note #777's zeroing still lives on the turn change; what changed is that there are now TWO
@@ -3163,11 +3182,29 @@ function applyOneAction(
     const company = state.public_companies.find((entry) => entry.company_id === protocol_id);
     const previousPrinted = Math.max(0, Number(company?.printed_route_revenue ?? 0) || 0);
     const printedTotal = previousPrinted + printedThisMessage;
+    /* ==================================================================
+        DESIGN NOTE 1051: THE ROLL COMES OFF THE MESSAGE, NOT OUT OF A HASH
+       ==================================================================
+       THE REDUCER MUST NOT DRAW. It runs on every client, on every replay, for every entry in the log -- so a
+       `Math.random()` here would give four browsers four different boards and a reload a fifth. The draw
+       happens ONCE, in the shell, at dispatch; this reads what the log recorded.
+       THE FALLBACK IS FOR LOGS, NOT FOR MISTAKES. An entry with no `revenue_seed` predates this batch, and
+       replaying it through the hash rebuilds the board it was actually played on. It is deliberately NOT a
+       silent safety net for a dispatch that forgot to draw -- `batch50.test.ts` pins that the shell always
+       supplies one, because a live game quietly falling back to the hash would be the predictable die
+       returning with nothing on screen to say so. */
     const roll = variants.unpredictableRevenue
       ? rollTurnRevenue(printedTotal, {
           macroRound: state.macro_round_number ?? 0,
           subRound: state.sub_round_index ?? 0,
           companyId: protocol_id,
+          turnSeed:
+            msg.RunMultipleRoutes.revenue_seed ??
+            legacyTurnSeed(
+              state.macro_round_number ?? 0,
+              state.sub_round_index ?? 0,
+              protocol_id,
+            ),
         })
       : null;
     const running = roll ? roll.adjusted : printedTotal;
@@ -3718,6 +3755,75 @@ export function summarisePrivateRevenueForPlayer(
       value: `$${payout.amount}`,
     })),
   };
+}
+
+/* ==================================================================
+    DESIGN NOTE 1049: THE PAYOUT IS A PHASE, NOT A NOTIFICATION
+   ==================================================================
+
+   ASKED, immediately after #1047 built the toast that waits: "in the physical game, the PC payouts is a
+   separate phase prior to any corporation acting. All players receive their PC income at that time, and I
+   think the current version has minimized or obscured that process."
+
+   AND #1047 DECLINED A MODAL ON A PREMISE THAT WAS THEN CORRECTED. That note's case was that "modals kept
+   firing at the start of basically every operating round" -- to which the answer came back: "the reason the
+   modals happening every Operating Round was annoying is that the information they were displaying was
+   irrelevant/old." That is a complaint about #1032's stale notices, which #1032 fixed, and not about modals.
+   Once the premise went, the argument went with it, and the remaining objection -- two modals stacking on one
+   turn -- was priced and accepted rather than waved away: "there aren't any Rust/Train Limit events in the
+   first two phases ... two modals carrying meaningful information does not seem so overwhelming, and one is
+   for players, the other is for the corporation."
+
+   SO THIS FUNCTION GIVES THE PHASE ITS TABLE. `summarisePrivateRevenueForPlayer` above answers "what did I
+   get", which is the whole of what a toast should say and half of what a phase looks like: in the physical
+   game you watch everybody collect. The viewer's own privates stay itemised, because those are the figures
+   they check; every other player gets ONE LINE carrying a total.
+
+   NOT ITEMISED FOR EVERYONE, deliberately. Four players by up to six privates, every Operating Round, is a
+   table nobody reads twice -- and the half of #967's objection that was right survives here: "a toast saying
+   '$95 was paid out' to somebody who received $5 of it is worse than silence". A per-player total is not that
+   figure. It is several figures, each labelled with whose it is, which is the thing $95 was not.
+
+   SHOWING IT DISCLOSES NOTHING. Private ownership and revenue are public in 1830, and the Activity Log
+   already writes one line per payment (#967) -- so this only spares the reader assembling from a feed what
+   the table did in a single moment.
+
+   CORPORATE PAYOUTS ARE STILL EXCLUDED, on #743's rule that a treasury is not a player's money.
+   `applyPrivateRevenue` pays both; only `toPlayer` reaches this table. Folding a corporation's private income
+   into a row headed by a player's name would be precisely that confusion, with a face on it.
+
+   THE ROWS ARE IN PAYOUT ORDER, which is `state.private_companies` order, which every client replays
+   identically. Stated out loud because #1044 is this session's standing lesson: a list assembled through a
+   `Set` or sorted by a locale-dependent comparator would put two browsers' rows in two orders for the same
+   round, and that desync would present as a rendering quirk rather than as what it is. */
+export interface PrivateRevenueRound {
+  /** The viewer's own privates, itemised. `null` when they collected nothing this round. */
+  mine: PrivateRevenueSummary | null;
+  /** Every OTHER player who collected, in payout order, with their round total. Never itemised. */
+  others: readonly { address: string; total: number }[];
+}
+
+export function summarisePrivateRevenueRound(
+  payouts: readonly PrivatePayout[],
+  viewerAddress: string | null,
+): PrivateRevenueRound {
+  const mine = summarisePrivateRevenueForPlayer(payouts, viewerAddress);
+  /* AN ARRAY OF PAIRS RATHER THAN A `Map`, so first-payment order IS the order and there is no iteration
+     contract to reason about at all. 1830 has six privates, so the linear scan is not worth a second thought
+     and the guarantee is worth stating in code rather than in a comment about `Map` insertion semantics. */
+  const others: { address: string; total: number }[] = [];
+  for (const payout of payouts) {
+    if (!payout.toPlayer) continue;
+    if (payout.toPlayer === viewerAddress) continue;
+    /* GUARDED THE SAME WAY THE VIEWER'S SUMMARY IS. `applyPrivateRevenue` already skips a private paying
+       nothing, so this is belt-and-braces -- but a row reading "$0" beside a player's name asserts they were
+       paid, and #562's rule is that a zero and an absence are different facts. */
+    if (payout.amount <= 0) continue;
+    const seen = others.find((entry) => entry.address === payout.toPlayer);
+    if (seen) seen.total += payout.amount;
+    else others.push({ address: payout.toPlayer, total: payout.amount });
+  }
+  return { mine, others };
 }
 
 /* ------------------------------------------------------------------ */

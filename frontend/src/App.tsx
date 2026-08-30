@@ -156,7 +156,20 @@ import ContextualSubPanel from "./components/ContextualSubPanel";
 import FinancialLedger from "./components/FinancialLedger";
 import RulesReference from "./components/RulesReference";
 // Design note #697: the receipt for an action you just took.
-import ActionToast, { PRIVATE_REVENUE_TOAST_MS, type ToastAnchor } from "./components/ActionToast";
+import ActionToast, { type ToastAnchor } from "./components/ActionToast";
+/* ==================================================================
+    DESIGN NOTE 1049: THE PRIVATE PAYOUT LEFT THE TOAST LAYER ENTIRELY
+   ==================================================================
+   `PRIVATE_REVENUE_TOAST_MS` AND `CARD_ACCENT` ARE NO LONGER IMPORTED HERE, because this file no longer raises
+   that toast -- the payout is a phase with a modal of its own now (see `PrivateRevenueModal.tsx` #1049 for why
+   #1047's argument against one was withdrawn). Both constants survive where they are declared: the duration is
+   the record of three attempts at a number that does not exist for content of variable length, and the accent
+   is still the auction private cards' own.
+   #1048's OTHER HALF IS UNTOUCHED. "All other player-focused toasts in the player-color" was asked for and
+   delivered on the dividend receipt, which still passes the viewer's seat colour through `showDividendToast`. */
+import PrivateRevenueModal, {
+  type PrivateRevenueOther,
+} from "./components/PrivateRevenueModal";
 // Design note #718: which dispatches earn a toast -- a named few, not everything that passes through.
 import { deservesActionReceipt } from "./utils/actionReceipt";
 // Design note #677: the Tiles tab.
@@ -353,6 +366,12 @@ import type { GameVariants } from "./utils/gameVariants";
 import {
   boIsLocked,
   dividendStepsFor,
+  /* Design note #1051: the pre-#1051 die, for a log entry written before the roll was recorded. Only the
+     replay of an old game reaches it; a live turn always carries its own draw. */
+  legacyTurnSeed,
+  /* Design note #1051: the draw itself. This file is the ONLY one that calls it -- the reducer replays on
+     every client and must never invent a number, so the die is thrown once here and travels in the log. */
+  randomTurnSeed,
   resolveVariants,
   revenueDeltaPercent,
   revenueOutcome,
@@ -361,6 +380,9 @@ import {
   revenueFlavourClause,
   turnRevenueSentence,
 } from "./utils/gameVariants";
+/* Design note #1051: finding the roll a turn already made, in the RAW log -- including the entries an undo
+   struck out, which is what makes an undo unable to re-roll the die. */
+import { seedAlreadyRolled, turnSeedKey } from "./utils/turnSeed";
 import {
   AUTO_CLOSE_MS,
   formatCountdown,
@@ -400,7 +422,10 @@ import {
   pendingHomeTokens,
   placeHomeStationToken,
   describePrivatePayout,
-  summarisePrivateRevenueForPlayer,
+  /* Design note #1049: the ROUND, not just the viewer's slice of it. `summarisePrivateRevenueForPlayer` is
+     still the thing that itemises the viewer's own privates -- this wraps it and adds the other seats' totals,
+     so the shell asks one question and the two halves cannot come from two different reads of the payouts. */
+  summarisePrivateRevenueRound,
   describeFleetLoss,
   describeFleetLosses,
   describeReprieveExpiries,
@@ -3496,7 +3521,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     detailRows?: readonly { label: string; value: string }[] | null;
     /** Design note #1016: where it sits. Optional, so only the ambient toast names it. */
     anchor?: ToastAnchor;
-  } | null>(null);
+      /* Design note #1047: carried on the toast rather than inferred from `detailRows` or the anchor -- the
+       fifth recurring bug shape in this codebase is a proxy that stands for its subject until a second caller
+       has rows, or wants the corner, and does not want to wait. */
+    persistent?: boolean;
+    /** Design note #1048: the left-edge identity colour, or `null` for a toast about the table. */
+    accentColor?: string | null;
+} | null>(null);
   const actionToastTokenRef = useRef(0);
   /* Design note #738: the same toast with a second line. Kept as a separate entry point rather than an extra
      argument on `showActionToast`, because the two have different RULES about when they fire -- #718's
@@ -3515,6 +3546,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       /* Design note #1016: LAST AND OPTIONAL for #984's reason -- four callers want the centred position and
          should not have to name it. */
       anchor: ToastAnchor = "center",
+      /* Design note #1047: LAST AND OPTIONAL, for #984's and #1016's reason -- exactly one caller waits to be
+         dismissed and the other four should not have to say `false`. */
+      persistent = false,
+      /* Design note #1048: whose toast this is. `null` for the era announcement, which is about the table. */
+      accentColor: string | null = null,
     ) => {
       // Design note #825: nothing has just happened during a rebuild -- see the flag's own note.
       if (replayingHistory) return;
@@ -3524,6 +3560,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         detail,
         // Design note #984: the structured rows, for the one toast that is a table rather than a sentence.
         detailRows,
+        // Design note #1047: whether it waits for the player rather than for a clock.
+        persistent,
+        // Design note #1048: the identity edge -- the private cards' accent, or the viewer's seat colour.
+        accentColor,
         // Design note #1016: where it sits, carried with it rather than inferred downstream from `detailRows`.
         anchor,
         eraTransition,
@@ -3541,6 +3581,32 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     actionToastTokenRef.current += 1;
     setActionToast({ text, token: actionToastTokenRef.current });
   }, []);
+
+  /* ==================================================================
+      DESIGN NOTE 1049: THE PAYOUT PHASE, AS A PIECE OF SHELL STATE
+     ==================================================================
+     RAISED THROUGH A GUARDED SETTER RATHER THAN SET DIRECTLY, and the guard is the whole reason this is a
+     function at all when it has exactly one caller. `showDividendToast` and `showActionToast` above both open
+     with the same line, for #825's reason: a client rebuilding the board by replaying the log is not watching
+     anything happen. Without it, joining a game in progress would open, and demand a click on, one payout
+     modal for every Operating Round the table has already played.
+     STATE, NOT A REF, because the modal's visibility is rendered from it. And a plain object rather than a
+     queue: at most one Operating Round opens per dispatch, so there is never a second one waiting. */
+  const [privatePayoutPhase, setPrivatePayoutPhase] = useState<{
+    viewerName: string;
+    viewerSeatColor: string | null;
+    lines: readonly { label: string; value: string }[];
+    total: number;
+    others: readonly PrivateRevenueOther[];
+    roundLabel: string | null;
+  } | null>(null);
+  const showPrivatePayoutPhase = useCallback(
+    (phase: NonNullable<typeof privatePayoutPhase>) => {
+      if (replayingHistory) return;
+      setPrivatePayoutPhase(phase);
+    },
+    [],
+  );
 
   /* ==================================================================
       DESIGN NOTE 868: THE ERA IS GOOD NEWS, SO IT IS ANNOUNCED, NOT COUNTED DOWN TO
@@ -5115,10 +5181,38 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                  had it; a replaying client has no render state that matches the action it is replaying, and a
                  seed taken from the wrong turn produces a different face and a different sentence on every
                  browser -- which is worse than the missing line this note is fixing. */
+              /* ==================================================================
+                  DESIGN NOTE 1051: THE NARRATION READS THE ROLL, IT DOES NOT REPEAT IT
+                 ==================================================================
+                 THIS SENTENCE IS WRITTEN ON `DeclareDividends`, and the die was thrown back on
+                 `RunMultipleRoutes` -- so `msg` here is the wrong message to ask. Before this batch that did
+                 not matter, because the face was a pure function of the turn and any caller could re-derive
+                 it. It matters now: a real draw exists in exactly one place, the log.
+                 SO IT LOOKS THE RUN UP, with the same helper and the same key the dispatch used. The reducer
+                 priced the turn against `revenue_seed` and this sentence describes what the reducer did; two
+                 reads of one recorded number cannot disagree, where a second draw here would put a different
+                 percentage in the Activity Log than the one the board actually paid.
+                 THE FALLBACK IS THE OLD DIE, for a pre-#1051 log whose run carried no seed -- the same answer
+                 the reducer reaches for the same entry, which is what keeps the replay and its narration
+                 telling one story. */
               const seed = {
                 macroRound: before.macro_round_number ?? 0,
                 subRound: before.sub_round_index ?? 0,
                 companyId,
+                turnSeed:
+                  seedAlreadyRolled(
+                    sandboxLogRef.current,
+                    turnSeedKey(
+                      before.macro_round_number ?? 0,
+                      before.sub_round_index ?? 0,
+                      companyId,
+                    ),
+                  ) ??
+                  legacyTurnSeed(
+                    before.macro_round_number ?? 0,
+                    before.sub_round_index ?? 0,
+                    companyId,
+                  ),
               };
               const roll = rollTurnRevenue(printedTurnTotal, seed);
               /* Design note #963: stamped with the step it DESCRIBES. The cursor is on Dividends by now --
@@ -5317,11 +5411,21 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                  which only ever projected it. Where the two disagree the board is right. */
               const settled = cashOf(after);
               const beforeCash = cashOf(before);
+              /* Design note #1048: THE ONE OTHER PLAYER-FOCUSED TOAST. Asked for "all other player-focused
+                 toasts in the player-color", and today that set has exactly one member -- this receipt, which
+                 is about the viewer's own cash. The era toast is a fact about the table and stays unmarked. */
+              const seatAt = gameState?.player_addresses.indexOf(viewerAddressRef.current ?? "") ?? -1;
               showDividendToast(
                 receipt.headline,
                 beforeCash !== null && settled !== null
                   ? `$${beforeCash} → $${settled}`
                   : receipt.transition,
+                null,
+                undefined,
+                null,
+                "center",
+                false,
+                seatAt >= 0 ? seatColor(viewerAddressRef.current ?? "", seatAt) : null,
               );
             }
           }
@@ -5497,24 +5601,58 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             for (const payout of openingPayouts) {
               logInfo("Private Revenue", describePrivatePayout(payout, labelForAddress, labelForCompany));
             }
-            /* Design note #967: one toast for the whole round's income, at 1.5x the standard window because
-               it is the only toast in the app that is a LIST -- "Increase the display duration of this
-               specific toast to 1.5x the standard duration so it is easily readable." */
-            /* Design note #967a: THROUGH THE REF, like every other viewer read inside this callback (#3542,
-               #4612). `runGameplayAction` is a long-lived `useCallback` and `viewerAddress` is not in its
-               deps -- a closure read would toast the wallet that was connected when the callback was built,
-               which after a reconnect is somebody else's income. */
-            const mine = summarisePrivateRevenueForPlayer(openingPayouts, viewerAddressRef.current);
-            if (mine) {
-              showDividendToast(
-                mine.text,
-                mine.detail,
-                null,
-                PRIVATE_REVENUE_TOAST_MS,
-                mine.rows,
-                // Design note #1016: ambient, unbidden, and the longest-lived toast in the app.
-                "bottom-right",
-              );
+            /* ==================================================================
+                DESIGN NOTE 1049: THE TOAST BECOMES THE PHASE'S MODAL
+               ==================================================================
+               THREE SURFACES HAVE NOW STOOD HERE -- #967's consolidated toast, #1016's corner anchor, #1047's
+               toast that waits for a click -- and each was a better answer to "how long should this be up"
+               than the last. The question turned out to be the wrong one: "in the physical game, the PC
+               payouts is a separate phase prior to any corporation acting ... I think the current version has
+               minimized or obscured that process." A duration cannot fix a register.
+               EVERY EARLIER DECISION SURVIVES INSIDE THE NEW SURFACE. One panel rather than one per private
+               (#967), a table rather than a joined sentence (#984), a total at the foot of the column
+               (#1047), the private cards' own paper (#1048). What changed is that it interrupts.
+               Design note #967a still governs the read: THROUGH THE REF, like every other viewer read inside
+               this callback. `runGameplayAction` is a long-lived `useCallback` and `viewerAddress` is not in
+               its deps -- a closure read would show the wallet that was connected when the callback was
+               built, which after a reconnect is somebody else's income. */
+            const round = summarisePrivateRevenueRound(openingPayouts, viewerAddressRef.current);
+            /* ==================================================================
+                DESIGN NOTE 1049b: ONLY WHEN THE READER COLLECTED SOMETHING
+               ==================================================================
+               #967's `null` RULE IS KEPT, and it is what stops this becoming the thing #1047 feared. A player
+               holding no privates has no payment to witness, and a modal telling them so every Operating
+               Round would be an interruption whose entire content is other people's money -- which is #967's
+               objection ("worse than silence") in its strongest form rather than its weakest.
+               IT ALSO ENDS THE FEATURE CLEANLY. Once the privates close in Phase 5 nobody collects, the
+               summary is null for everyone, and the modal simply stops appearing -- because at that point the
+               payout phase genuinely no longer exists. Nothing has to be switched off. */
+            if (round.mine) {
+              const seatIndexOf = (address: string) =>
+                settled.player_addresses.indexOf(address);
+              const viewerSeat = seatIndexOf(viewerAddressRef.current ?? "");
+              /* Design note #1049: THE SHELL RESOLVES THE IDENTITIES. Names come from the room's nickname
+                 registry and colours from the seating index, neither of which a presentation component should
+                 have to reach for -- see the modal's `PrivateRevenueOther` for the argument. */
+              const others: PrivateRevenueOther[] = round.others.map((entry) => {
+                const seat = seatIndexOf(entry.address);
+                return {
+                  name: labelForAddress(entry.address),
+                  // `null` rather than a guessed hue for an address the roster cannot place (#232).
+                  seatColor: seat >= 0 ? seatColor(entry.address, seat) : null,
+                  total: entry.total,
+                };
+              });
+              showPrivatePayoutPhase({
+                viewerName: labelForAddress(viewerAddressRef.current ?? ""),
+                viewerSeatColor:
+                  viewerSeat >= 0 ? seatColor(viewerAddressRef.current ?? "", viewerSeat) : null,
+                lines: round.mine.rows,
+                total: round.mine.total,
+                others,
+                // The round it belongs to, stamped now rather than read later from a board that has moved on.
+                roundLabel: roundLabelFor(settled),
+              });
             }
           }
 
@@ -5730,6 +5868,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       showActionToast,
       // Design note #738: stable, like `showActionToast` beside it -- both are `useCallback` with empty lists.
       showDividendToast,
+      /* Design note #1049: stable for the same reason and named for the same reason -- an omitted stable
+         dependency is indistinguishable from a forgotten one to the next reader. */
+      showPrivatePayoutPhase,
       session,
       refreshGameState,
       spectator,
@@ -6620,6 +6761,34 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           // Design note #1031: the same list, identifying the FLEET SLOT rather than the model, so a
           // corporation with two 5-trains can still be told which one earned what.
           train_indices: turnRoutes.map((entry) => entry.trainIndex),
+          /* ==================================================================
+              DESIGN NOTE 1051: THE DIE IS ROLLED HERE, ONCE, AND THEN IT IS HISTORY
+             ==================================================================
+             THIS IS THE ONLY PLACE IN THE APP THAT DRAWS. The reducer cannot -- it replays on every client --
+             and the old hash could not, which is why it was predictable. One dispatch, one draw, written into
+             the message so every other client reads the number rather than computing one.
+             AND IT IS NOT ALWAYS A DRAW. `seedAlreadyRolled` scans the RAW log, including the entries an undo
+             has killed, for this turn's earlier roll. Found means the player has run, undone and come back:
+             they get the face they already saw, which is the requirement this feature was specified with --
+             "Undoing it should not change their roll, otherwise players would just slot machine their way to
+             +20%." Absent means this turn has genuinely not rolled yet.
+             `sandboxLogRef`, NOT the effective history. Every other reader in this file wants
+             `effectiveActions` and would be wrong here: the entry being looked for is BY DEFINITION one an
+             undo has struck out. See `turnSeed.ts` #1051 -- a tidy-up that "corrects" this to the effective
+             log reinstates the slot machine and nothing fails. */
+          revenue_seed: (() => {
+            const key = turnSeedKey(
+              gameState?.macro_round_number ?? 0,
+              gameState?.sub_round_index ?? 0,
+              actingProtocolId,
+            );
+            return seedAlreadyRolled(sandboxLogRef.current, key) ?? randomTurnSeed();
+          })(),
+          revenue_turn: turnSeedKey(
+            gameState?.macro_round_number ?? 0,
+            gameState?.sub_round_index ?? 0,
+            actingProtocolId,
+          ),
           // Withhold at Routes; the pay-or-withhold decision belongs to the very next step.
           // See docs/ai_architecture/routing_pathfinding.md - App.tsx #373
           payout_strategy: "Withhold",
@@ -7579,6 +7748,27 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     if ((gameState?.current_round_type ?? null) !== "OperatingRound") return null;
     if (spectator) return null;
     /* ==================================================================
+        DESIGN NOTE 1049a: THE PAYOUT IS READ FIRST, AND THIS IS WHERE THAT IS ENFORCED
+       ==================================================================
+       BOTH MODALS CAN COME DUE ON ONE DISPATCH. The private payout fires when an Operating Round opens; a
+       fleet-loss notice fires at the acting corporation's turn, and the first corporation is already acting
+       at that moment. From Phase 4 on -- which is the first phase with rust in it -- that collision is
+       ordinary rather than exotic.
+       THE COST WAS ACCEPTED, WITH A CONDITION IMPLIED BY HOW IT WAS PUT: "they might then get hit with two
+       modals in a row on one OR ... two modals carrying meaningful information does not seem so
+       overwhelming, and one is for players, the other is for the corporation." IN A ROW is the operative
+       phrase, and it is the thing #1047 was right to worry about -- an undifferentiated stack trains a player
+       to click through, and the fleet-loss modal is the one where clicking through costs a turn.
+       SO IT IS A SEQUENCE, NOT A STACK, and the order is the physical one: everybody collects their private
+       income, and then the first corporation acts. Withholding the notice while the payout is open is enough
+       to produce that -- the queue is untouched, `dismissedFleetNoticesRef` is untouched, and the memo
+       recomputes when this clears because the state it reads is in its dependency list. Nothing is lost by
+       waiting; the notice is exactly as due a moment later.
+       NOT DONE WITH Z-INDEX. Two mounted modals with one on top is two things to click through with the
+       second one already visible behind the first, which is the stack this avoids rather than an
+       implementation of avoiding it. */
+    if (privatePayoutPhase !== null) return null;
+    /* ==================================================================
         DESIGN NOTE 981: A BLOCKING MODAL FOR SOMEBODY ELSE'S CORPORATION
        ==================================================================
        REPORTED: "the Rust and Train Limit modals pop up for every player in the room ... Inactive players
@@ -7618,6 +7808,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     turnIdentity,
     sandboxRoomCode,
     viewerAddress,
+    /* Design note #1049a: what makes the suppression above lift on its own. Listed rather than read through a
+       ref precisely BECAUSE this memo must re-run when the payout modal closes -- a ref read would suppress
+       the notice and then never notice it was safe to show it. */
+    privatePayoutPhase,
   ]);
 
   const acknowledgeFleetNotice = useCallback(() => {
@@ -10332,6 +10526,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         durationMs={actionToast?.durationMs}
         // Design note #1016: the ambient toast sits in the corner; every receipt stays on the reader's axis.
         anchor={actionToast?.anchor ?? "center"}
+        // Design note #1047: the one toast that waits for a click instead of a timer.
+        persistent={actionToast?.persistent ?? false}
+        // Design note #1048: whose it is, as a colour.
+        accentColor={actionToast?.accentColor ?? null}
         token={actionToast?.token ?? 0}
         onDismiss={() => setActionToast(null)}
       />
@@ -10383,6 +10581,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           onCancel={handlePowerFlowCancel}
         />
       )}
+      {/* Design note #1049: the phase before any corporation acts, so it is mounted before the modal about the
+          corporation that acts first. The ordering is enforced in `dueFleetNotice` (#1049a) rather than by
+          this position or by z-index; source order here simply agrees with it, so a reader is not looking at
+          two files that appear to disagree about which comes first. */}
+      <PrivateRevenueModal
+        round={privatePayoutPhase}
+        roundLabel={privatePayoutPhase?.roundLabel ?? null}
+        onAcknowledge={() => setPrivatePayoutPhase(null)}
+      />
       {/* Design note #896: unskippable, and above everything -- the turn does not start until it is answered.
           `key` remounts it per notice so the silence checkbox re-seeds from the store for each one. */}
       <FleetLossModal

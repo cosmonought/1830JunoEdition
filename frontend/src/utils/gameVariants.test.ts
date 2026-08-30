@@ -31,7 +31,27 @@ import {
   roundToTen,
   STANDARD_VARIANTS,
   type GameVariants,
+  legacyTurnSeed,
 } from "./gameVariants";
+
+/* ==================================================================
+    DESIGN NOTE 1051 (harness): THESE FIXTURES ASK FOR THE OLD DIE ON PURPOSE
+   ==================================================================
+   THE TURN CARRIES ITS OWN DRAW NOW -- `turnSeed`, a real random integer recorded in the log -- and every
+   assertion in this file was written against the FNV die: specific faces, specific lines, specific spreads.
+   Handing them `legacyTurnSeed` keeps each one measuring exactly what it was written to measure.
+   AND THAT PATH IS STILL LIVE, which is why this is a migration rather than a museum. A game logged before
+   #1051 replays through `legacyTurnSeed` in the reducer, so everything below still guards a code path a real
+   client reaches -- it has simply stopped being the path a NEW turn takes.
+   THE NEW CLAIM IS `batch50.test.ts`'s: that the same extraction behaves over a uniform draw. Retrofitting it
+   here would have meant rewriting cases whose subject is the hash. */
+const seedFor = (macroRound: number, subRound: number, companyId: number) => ({
+  macroRound,
+  subRound,
+  companyId,
+  turnSeed: legacyTurnSeed(macroRound, subRound, companyId),
+});
+
 import { applySandboxAction } from "./sandboxSession";
 import { dealSandboxGame } from "./gameSetup";
 import type { GameStateResponse } from "./gameState";
@@ -117,7 +137,7 @@ describe("the bank is the clock (design note #902)", () => {
 });
 
 describe("the d6 cannot be re-rolled (design note #903)", () => {
-  const turn = { macroRound: 3, subRound: 1, companyId: 6 };
+  const turn = seedFor(3, 1, 6);
 
   it("gives the same face for the same turn, corporation and train", () => {
     /* ==================================================================
@@ -133,11 +153,9 @@ describe("the d6 cannot be re-rolled (design note #903)", () => {
        SO IT IS ASSERTED OVER A SPREAD. Forty distinct turns, each rolled twice, every pair required to match:
        a counter-seeded die would have to collide forty times running, which is (1/6)^40. The cost is nothing
        and the difference is between a property and a coin flip. */
-    const seeds = Array.from({ length: 40 }, (_, at) => ({
-      macroRound: 1 + (at % 7),
-      subRound: 1 + (at % 2),
-      companyId: 1 + (at % 8),
-    }));
+    const seeds = Array.from({ length: 40 }, (_, at) =>
+      seedFor(1 + (at % 7), 1 + (at % 2), 1 + (at % 8)),
+    );
     const firstPass = seeds.map(revenueDieFace);
     const secondPass = seeds.map(revenueDieFace);
     expect(secondPass).toEqual(firstPass);
@@ -177,13 +195,13 @@ describe("the d6 cannot be re-rolled (design note #903)", () => {
     /* Each of the four seed parts must reach the hash. A spread over each one, for the same reason as above:
        individual collisions are legal, a constant is not. */
     const overCompanies = new Set(
-      Array.from({ length: 12 }, (_, at) => revenueDieFace({ ...turn, companyId: at + 1 })),
+      Array.from({ length: 12 }, (_, at) => revenueDieFace(seedFor(3, 1, at + 1))),
     );
     const overRounds = new Set(
-      Array.from({ length: 12 }, (_, at) => revenueDieFace({ ...turn, macroRound: at + 1 })),
+      Array.from({ length: 12 }, (_, at) => revenueDieFace(seedFor(at + 1, 1, 6))),
     );
     const overSubRounds = new Set(
-      Array.from({ length: 12 }, (_, at) => revenueDieFace({ ...turn, subRound: at + 1 })),
+      Array.from({ length: 12 }, (_, at) => revenueDieFace(seedFor(3, at + 1, 6))),
     );
     expect(overCompanies.size).toBeGreaterThan(1);
     expect(overRounds.size).toBeGreaterThan(1);
@@ -208,7 +226,7 @@ describe("the d6 cannot be re-rolled (design note #903)", () => {
     const counts = [0, 0, 0, 0, 0, 0];
     for (let macroRound = 1; macroRound <= 60; macroRound += 1) {
       for (let companyId = 1; companyId <= 8; companyId += 1) {
-        counts[revenueDieFace({ ...turn, macroRound, companyId }) - 1] += 1;
+        counts[revenueDieFace(seedFor(macroRound, 1, companyId)) - 1] += 1;
       }
     }
     expect(counts.filter((n) => n === 0)).toEqual([]);
@@ -222,7 +240,7 @@ describe("the d6 cannot be re-rolled (design note #903)", () => {
       /* Design note #941: swept over corporations rather than train ordinals -- the ordinal is no longer a
          seed part, and the sweep still has to cross enough distinct keys to catch a sign error. */
       for (let companyId = 0; companyId < 4; companyId += 1) {
-        const face = revenueDieFace({ ...turn, macroRound, companyId });
+        const face = revenueDieFace(seedFor(macroRound, 1, companyId));
         expect(Number.isInteger(face)).toBe(true);
         expect(face).toBeGreaterThanOrEqual(1);
         expect(face).toBeLessThanOrEqual(6);
@@ -294,11 +312,7 @@ describe("the modifier table and its arithmetic (design note #903)", () => {
       ...base,
       variants: { ...STANDARD_VARIANTS, unpredictableRevenue: true },
     });
-    const expected = rollTurnRevenue(printed, {
-      macroRound: 3,
-      subRound: 1,
-      companyId: 6,
-    });
+    const expected = rollTurnRevenue(printed, seedFor(3, 1, 6));
     expect(Number(varied.public_companies[0].last_route_revenue)).toBe(expected.adjusted);
     /* AND THE COUNTER MOVED, which is what gives the turn's SECOND train a different die. A modifier applied
        without advancing this would give every train on the turn one face. */
@@ -308,7 +322,7 @@ describe("the modifier table and its arithmetic (design note #903)", () => {
   it("reports what it did, not just the result", () => {
     /* The roll carries its face and percentage because the Activity Log has to explain the number -- a
        corporation that ran for $230 when the board says $255 needs the sentence, not just the figure. */
-    const roll = rollTurnRevenue(255, { macroRound: 3, subRound: 1, companyId: 6 });
+    const roll = rollTurnRevenue(255, seedFor(3, 1, 6));
     expect(roll.printed).toBe(255);
     expect(REVENUE_MODIFIER_BY_FACE[roll.face - 1]).toBe(roll.percent);
     /* Design note #938: AND THE ROUNDING IS PART OF THE ANSWER. This asserted `applyRevenuePercent` alone and

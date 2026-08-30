@@ -125,12 +125,36 @@ describe("a toast marks a move, not a catch-up (design note #825)", () => {
       .replace(/^\s*\/\/.*$/gm, "");
   })();
 
-  it("gates both doors rather than the call sites", () => {
+  it("gates every door rather than the call sites", () => {
     /* #748a's rule: a call site that has to remember is one that will forget, and the next toast added would
-       have forgotten too. Two entry points, two guards, three call sites covered. */
-    expect(APP.match(/if \(replayingHistory\) return;/g)).toHaveLength(2);
+       have forgotten too. Entry points carry the guard; call sites carry nothing.
+
+       ==================================================================
+        DESIGN NOTE 1049: THIS PINNED THE NUMBER 2, AND THE NUMBER WAS NEVER THE PROPERTY
+       ==================================================================
+
+       A THIRD RAISER ARRIVED -- `showPrivatePayoutPhase`, for the payout phase that used to be a toast -- and
+       it carries the guard exactly as the rule requires. The case failed anyway, because it asserted "there
+       are two guards" where the rule is "every raiser has one". A correct change broke a test that was
+       measuring a proxy for what it cared about, which is this codebase's fifth recurring bug shape sitting
+       inside the harness rather than the source.
+
+       SO THE COUNT IS DERIVED NOW INSTEAD OF WRITTEN DOWN TWICE. Every `const show* = useCallback(` in this
+       file is a raise-a-notification entry point, and the assertion is that the guards and the doors are the
+       same number. A fourth raiser added WITH a guard passes without anybody editing this file; a fourth
+       added WITHOUT one fails, which is the failure the case exists to produce.
+
+       THE THREE ARE STILL NAMED BELOW, deliberately. The derived count alone would be satisfied by zero
+       doors and zero guards -- the vacuity #886 is about -- so the roster is what proves there is something
+       under it, and a raiser RENAMED out of the `show*` shape would take its guard off this count silently. */
+    const doors = APP.match(/const show[A-Za-z]* = useCallback\(/g) ?? [];
+    const guards = APP.match(/if \(replayingHistory\) return;/g) ?? [];
+    expect(doors.length).toBeGreaterThanOrEqual(3);
+    expect(guards).toHaveLength(doors.length);
     expect(APP).toContain("const showDividendToast = useCallback(");
     expect(APP).toContain("const showActionToast = useCallback(");
+    // Design note #1049: the payout phase's raiser -- a modal rather than a toast, and the same rule applies.
+    expect(APP).toContain("const showPrivatePayoutPhase = useCallback(");
   });
 
   it("takes the answer from the drain's own predicate", () => {

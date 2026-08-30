@@ -72,8 +72,19 @@ describe("the private-revenue toast is short and stacked (design notes #983/#984
        copy of it -- which is the only reason the case above can assert a number at all. */
     /* Design note #1016: the call site gained an `anchor` argument, so the two are no longer adjacent -- the
        claim is that the constant is NAMED at the call site rather than inlined, which is what makes the case
-       above able to read it instead of a copy of it. */
-    expect(APP).toContain("PRIVATE_REVENUE_TOAST_MS,");
+       above able to read it instead of a copy of it.
+       ==================================================================
+        DESIGN NOTE 1049: THERE IS NO CALL SITE LEFT, AND THE FIGURE IS STILL NAMED ONCE
+       ==================================================================
+       THIS PINNED `PRIVATE_REVENUE_TOAST_MS,` IN `App.tsx`. The private payout became a modal, so `App.tsx`
+       neither imports nor names the constant -- and an assertion that it does could now only be satisfied by
+       putting a duration back into a file that no longer has anything to time.
+       THE PROPERTY THIS CASE DEFENDS IS "ONE PLACE, NOT A COPY", and it moves to where the one place is. The
+       declaration is asserted directly, and the NEGATIVE below is kept exactly as it was: it forbids the
+       literal being written out at a call site, which is the failure the case exists to catch and is still
+       possible for any future caller. Keeping the negative is what stops this becoming a case that passes by
+       having nothing to check. */
+    expect(TOAST).toContain("export const PRIVATE_REVENUE_TOAST_MS = ");
     expect(APP).not.toContain("showDividendToast(mine.text, mine.detail, null, 3200");
   });
 

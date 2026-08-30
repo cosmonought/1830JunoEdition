@@ -600,6 +600,78 @@ export interface RevenueSeedParts {
      THE HASH IS UNCHANGED, so a given turn's face is whatever the FNV of those three parts always was. Games
      logged before this batch replay to different figures than they were played at -- unavoidable when the
      seeding unit changes, and worth stating rather than discovering. */
+  /* ==================================================================
+      DESIGN NOTE 1051: THE DIE IS ROLLED NOW, NOT LOOKED UP
+     ==================================================================
+
+     REPORTED: "if the die rolls are fixed by the game seed, does this mean a savvy player could look up the
+     game state and use this to their advantage? I think many players would feel a bit deflated/let down by an
+     'Unpredictable' variant that actually is predictable, if you know where to look."
+
+     AND IT WAS WORSE THAN "IF YOU KNOW WHERE TO LOOK". The three parts above are the WHOLE input, so the face
+     was a pure function of (round, sub-round, corporation) -- the same in every game anybody has ever played.
+     Measured before this change: the ERIE drew 120% on its first run and the PRR drew 80%, in every game,
+     forever. And the algorithm ships to the browser, so computing the rest of the game's table needed no
+     insight at all, just the file this note is in.
+
+     IT ALSO MADE ONE FEATURE FLATLY IMPOSSIBLE. The Yellow Sign needs face 1 AND the flavour index to land on
+     one specific line of 115 -- one of 690 pairs. A real game reaches about 600 turn keys, and none of them
+     produced that pair, so the event could never fire. Not rare: absent. That is the failure mode of drawing
+     a rare event from a fixed table rather than from a die.
+
+     WHY IT WAS A HASH AT ALL, because the reasoning was sound and only its conclusion was wrong. Two
+     properties are genuinely required. UNDO MUST NOT RE-ROLL, or a player runs, dislikes -20%, undoes and
+     tries again until the die is kind. And EVERY CLIENT MUST AGREE, because there is no server: each browser
+     rebuilds the board by replaying the log, so a `Math.random()` in one of them would have the four players
+     disagreeing about how much money exists. A hash of the turn satisfies both trivially -- same turn, same
+     answer, computed independently and identically everywhere.
+
+     WHAT UNLOCKS THE REAL DIE IS THAT UNDO IS APPEND-ONLY. `RevertTo { index }` is itself a log entry meaning
+     "everything from here on did not happen" (`logRevert.ts` #591); the entries it kills are filtered out of
+     the replay but are still physically in the log, and the drain keeps the unfiltered list. So a number
+     written into an action SURVIVES AN UNDO even though the action does not -- which means the roll can be
+     drawn once, recorded, and found again on the re-run.
+
+     SO THE TURN CARRIES ITS OWN DRAW. `turnSeed` is a real random 32-bit integer, drawn by the acting
+     client at the moment Run Routes is dispatched and written into the message. Every client replays the
+     number the log holds, so they still agree. A re-run after an undo finds the earlier draw and reuses it,
+     so there is still no slot machine. And nobody can compute it in advance, because until the button is
+     pressed it does not exist.
+
+     THE EXTRACTION IS UNCHANGED, deliberately: the face is still `% 6`, the flavour line is still
+     `floor(/6) % length` (#969), and `carcosaRollHits` still takes its own slice. Only the SOURCE moved, from
+     a hash of the turn's coordinates to a number the turn actually rolled -- so every distribution argument
+     those notes make survives, and a truly uniform input is strictly better for all of them than a hash was.
+
+     THE HONEST LIMIT, recorded because it is the reason this shape is not the last word. The acting client
+     supplies the number, so a modified client could choose a favourable one. In the sandbox that is already
+     true of everything -- the client is the authority there. On chain it will not be: the contract cannot call
+     `Math.random` either, and will want block-derived randomness or a commit-reveal rather than trusting the
+     caller. That is Phase 5's problem, and this field is the shape it will want to fill. */
+  turnSeed: number;
+}
+
+/** A fresh 32-bit draw for one corporation's operating turn.
+ *
+ *  Design note #1051: `Math.random()` and nothing cleverer. The number is written into the log the instant it
+ *  is drawn, so it needs no reproducibility of its own -- reproducibility is what the LOG provides, and a
+ *  seeded generator here would need an ordering across turns that the log does not have. That was the
+ *  argument for the hash and it is the argument against a PRNG object now.
+ *
+ *  UNSIGNED 32 BITS, matching what the hash returned, so every downstream extraction keeps working on the
+ *  range it was written for. */
+export function randomTurnSeed(): number {
+  return Math.floor(Math.random() * 0x100000000) >>> 0;
+}
+
+/** The face and flavour a turn would have drawn before #1051, for a log entry that carries no `turnSeed`.
+ *
+ *  Design note #1051: KEPT, AND ONLY FOR THAT. Every game logged before the die became a real roll replays
+ *  through here, so an old log still rebuilds to the board it was played on rather than throwing or drawing
+ *  fresh numbers on every client. Nothing else may call it -- a new roll that reached this function would be
+ *  predictable again, which is the whole defect #1051 exists to remove. */
+export function legacyTurnSeed(macroRound: number, subRound: number, companyId: number): number {
+  return revenueSeedHash({ macroRound, subRound, companyId, turnSeed: 0 });
 }
 
 /** A 32-bit FNV-1a hash of the seed parts.
@@ -649,7 +721,11 @@ export function revenueSeedHash(parts: RevenueSeedParts): number {
 
 /** The face this train rolls, 1-6. */
 export function revenueDieFace(parts: RevenueSeedParts): number {
-  return (revenueSeedHash(parts) % 6) + 1;
+  /* Design note #1051: THE TURN'S OWN DRAW, not a hash of its coordinates. `% 6` is unchanged and every
+     argument #903 and #941 make about it still holds -- what changed is that the number being divided is a
+     real roll rather than a lookup, so the six faces are now reachable per turn instead of per (round,
+     sub-round, corporation) forever. */
+  return (parts.turnSeed % 6) + 1;
 }
 
 /** `revenue * percent`, rounded half away from zero, in integers only -- see #903. */
@@ -738,7 +814,11 @@ export function flavorBucketFor(roll: RevenueRoll): FlavorBucket {
 export function revenueFlavourClause(roll: RevenueRoll, parts: RevenueSeedParts): string {
   const bucket = flavorBucketFor(roll);
   const lines = UNPREDICTABLE_REVENUE_FLAVOR[bucket];
-  return lines[Math.floor(revenueSeedHash(parts) / 6) % lines.length];
+  /* Design note #969's division survives #1051 intact. The face takes the low factor of six and the line
+     takes what is left, so the two cannot be the same number read twice -- the hazard that note measured. The
+     only change is that the dividend is `turnSeed` rather than a hash, which is a strictly better input: a
+     uniform 32-bit draw has none of the modular structure #969 had to reason about. */
+  return lines[Math.floor(parts.turnSeed / 6) % lines.length];
 }
 
 /* ==================================================================

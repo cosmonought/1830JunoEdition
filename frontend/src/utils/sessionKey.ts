@@ -364,6 +364,33 @@ export type GameplayExecuteMsg =
          *  change, and every log written before this field replays exactly as it did. Absent is #232's "the
          *  log does not say", which is what the chip's presence and pricing fallbacks are for. */
         train_indices?: readonly number[];
+        /** ==================================================================
+         *   DESIGN NOTE 1051: THE DIE THIS TURN ACTUALLY ROLLED
+         *  ==================================================================
+         *
+         * THE FACE USED TO BE COMPUTED, from an FNV hash of (round, sub-round, corporation) -- which meant it
+         * was the same in every game ever played, and a player with the browser console open could read the
+         * whole game's table off a function that ships to their machine. See `gameVariants.ts` #1051 for the
+         * measurement and for why the hash was there in the first place.
+         *
+         * SO THE ROLL TRAVELS INSTEAD OF BEING DERIVED. The acting client draws a uniform 32-bit integer when
+         * it dispatches the run and writes it here; every other client reads it back out of the log, so the
+         * table still agrees about the figure without anybody being able to predict it.
+         *
+         * `revenue_turn` IS THE KEY, NOT DECORATION. After an undo the run is re-dispatched, and the new
+         * dispatch must find the earlier draw rather than take a fresh one -- otherwise undo becomes a
+         * re-roll, which is the one thing this feature was explicitly required not to be. The scan happens
+         * over the raw log (`turnSeed.ts` #1051), where `protocol_id` identifies the corporation but nothing
+         * identifies the ROUND: that lives in the state, which a log scan does not have. So the turn says its
+         * own name.
+         *
+         * OPTIONAL AND ADDITIVE, on `trains`' and `train_indices`' exact terms. Every entry already in a saved
+         * log lacks both, and #232's rule covers the absence: a log that does not say what it rolled is a log
+         * that does not say, and the reducer falls back to `legacyTurnSeed` so historical games still rebuild
+         * to the board they were played on rather than throwing or drawing fresh numbers per client. */
+        revenue_seed?: number;
+        /** The turn `revenue_seed` belongs to -- see above. `turnSeed.ts`'s `turnSeedKey` builds it. */
+        revenue_turn?: string;
         payout_strategy: PayoutStrategyDto;
       };
     }

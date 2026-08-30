@@ -38,7 +38,9 @@
 // desynchronised board.
 
 import { UNPREDICTABLE_REVENUE_FLAVOR } from "../constants/flavorText";
-import { revenueSeedHash, type FlavorBucket, type RevenueSeedParts } from "./gameVariants";
+// Design note #1051: `revenueSeedHash` is no longer imported here -- every draw this file makes comes out of
+// the turn's own recorded roll now, so there is nothing left for it to hash.
+import { type FlavorBucket, type RevenueSeedParts } from "./gameVariants";
 import { DEPOT_COST, TIER_ORDER, trainTier, type TrainTier } from "./gamePhase";
 
 /** The Stage 1 line, verbatim from `criticalMalus`. */
@@ -49,8 +51,48 @@ export const YELLOW_SIGN_MALUS_LINE =
 export const YELLOW_SIGN_BONUS_LINE =
   "A strange man proclaimed that the Yellow Sign had brought him to the railway, then purchased the entire first-class carriage.";
 
-/** One chance in ten, per the ruling. */
-export const CARCOSA_CHANCE = 0.1;
+/* ==================================================================
+    DESIGN NOTE 1051: ONE IN FIVE, CHOSEN -- AND THE OLD NUMBER WAS NEVER THE REAL ONE
+   ==================================================================
+
+   THIS WAS `CARCOSA_CHANCE = 0.1`, "one chance in ten, per the ruling", and the code under it did not deliver
+   ten percent. `carcosaRollHits` read `spun % 10`, and `revenueDieFace` read `hash % 6` -- both of which turn
+   on the low bit of an FNV hash of two nearly identical short strings. Measured across every turn key a real
+   game can produce: the roll fired 29% of the time at face 6, which is the ONLY face that can reach it, and
+   between 1% and 3% at the odd faces. The decorrelation constant added 7919 to the macro round, changing the
+   FRONT of the key, and FNV-1a's low bits are dominated by the characters it processes LAST -- which were
+   identical. Salting the end instead measured WORSE: 0% at faces 2, 4 and 6.
+
+   THAT WHOLE PROBLEM IS GONE WITH THE HASH (`gameVariants.ts` #1051). A uniform 32-bit draw has no low-bit
+   structure to share, so the roll is whatever fraction it is written to be.
+
+   TWENTY PERCENT, AS A DECISION. Told "I am also okay with a player who gets marked by the sign have a 29%
+   chance for Carcosa on a 1 in 6 die roll" -- but 29% was an artifact, not a setting, and it varied with the
+   key space rather than staying put. Offered 10%, 20% and 30% as real numbers and 20% was chosen. So the
+   figure a player experiences is now roughly what it was during playtest, and it is in the code on purpose.
+
+   AN INTEGER OUT OF A HUNDRED, not a float. `0.1` was never compared against anything -- the test was
+   `% 10 === 0`, so the constant and the behaviour were two separate claims that happened to agree, which is
+   #891's shape in a probability. This one IS the comparison. */
+export const CARCOSA_CHANCE_IN_100 = 20;
+
+/** The stride that puts the Carcosa roll on bits neither the die nor the flavour line can reach.
+ *
+ *  Design note #1051: THE THREE DRAWS COME OUT OF ONE NUMBER, so they have to be given disjoint slices of it
+ *  or they are the same coin flip wearing three hats -- which is exactly the bug this batch removes.
+ *  `revenueDieFace` consumes the low factor of six; `revenueFlavourClause` consumes `floor(/6) % length`,
+ *  which at the widest bucket reaches this far and no further. Everything above is free.
+ *
+ *  MEASURED FROM THE PAYLOAD RATHER THAN WRITTEN DOWN. A bucket that grew past the hardcoded figure would
+ *  silently start overlapping the line index, and nothing would fail -- the rate would just drift and no test
+ *  would know why. Computed here, the stride cannot fall behind the thing it is protecting against. */
+export const CARCOSA_SLICE = (() => {
+  let widest = 0;
+  for (const key of Object.keys(UNPREDICTABLE_REVENUE_FLAVOR)) {
+    widest = Math.max(widest, UNPREDICTABLE_REVENUE_FLAVOR[key as FlavorBucket].length);
+  }
+  return 6 * widest;
+})();
 
 /** ==================================================================
  *   DESIGN NOTE 1046: EACH STAGE HAS A WINDOW
@@ -179,8 +221,11 @@ function tickerFrom(label: string): string | null {
  *  the critical bonus in the first place -- the same decorrelation #907 had to add to the line index when it
  *  found `gcd(6, 50)` eating half of every bucket. */
 export function carcosaRollHits(parts: RevenueSeedParts): boolean {
-  const spun = revenueSeedHash({ ...parts, macroRound: parts.macroRound + 7919 });
-  return spun % 10 === 0;
+  /* Design note #1051: THE HIGH SLICE OF THE TURN'S OWN DRAW. The old body hashed the parts a second time
+     with a salted macro round to decorrelate this from the die; it did the opposite, and the measurement is
+     in `CARCOSA_CHANCE_IN_100`'s note above. Taking a slice the other two draws cannot reach is decorrelation
+     by construction rather than by hoping a hash mixes well. */
+  return Math.floor(parts.turnSeed / CARCOSA_SLICE) % 100 < CARCOSA_CHANCE_IN_100;
 }
 
 /** Ruled appendices, added to the flavour sentence when a stage fires. */
@@ -274,7 +319,9 @@ export function resolveFlavourLine(input: {
  *  bucket that somehow contained nothing else returns what it was given rather than looping. */
 function skipFrom(bucket: FlavorBucket, parts: RevenueSeedParts, fallback: string): string {
   const lines = UNPREDICTABLE_REVENUE_FLAVOR[bucket];
-  const start = Math.floor(revenueSeedHash(parts) / 6) % lines.length;
+  // Design note #1051: the same index `revenueFlavourClause` computed, off the same draw, so the skip starts
+  // where the natural draw landed rather than somewhere else in the bucket.
+  const start = Math.floor(parts.turnSeed / 6) % lines.length;
   for (let step = 1; step <= lines.length; step += 1) {
     const candidate = lines[(start + step) % lines.length];
     if (candidate !== YELLOW_SIGN_MALUS_LINE && candidate !== YELLOW_SIGN_BONUS_LINE) return candidate;

@@ -26,9 +26,29 @@ import {
   rollTurnRevenue,
   turnRevenueSentence,
   type RevenueRoll,
+  legacyTurnSeed,
 } from "./gameVariants";
 
-const seedAt = (companyId: number) => ({ macroRound: 3, subRound: 1, companyId });
+/* ==================================================================
+    DESIGN NOTE 1051 (harness): THESE FIXTURES ASK FOR THE OLD DIE ON PURPOSE
+   ==================================================================
+   THE TURN CARRIES ITS OWN DRAW NOW -- `turnSeed`, a real random integer recorded in the log -- and every
+   assertion in this file was written against the FNV die: specific faces, specific lines, specific spreads.
+   Handing them `legacyTurnSeed` keeps each one measuring exactly what it was written to measure.
+   AND THAT PATH IS STILL LIVE, which is why this is a migration rather than a museum. A game logged before
+   #1051 replays through `legacyTurnSeed` in the reducer, so everything below still guards a code path a real
+   client reaches -- it has simply stopped being the path a NEW turn takes.
+   THE NEW CLAIM IS `batch50.test.ts`'s: that the same extraction behaves over a uniform draw. Retrofitting it
+   here would have meant rewriting cases whose subject is the hash. */
+const seedFor = (macroRound: number, subRound: number, companyId: number) => ({
+  macroRound,
+  subRound,
+  companyId,
+  turnSeed: legacyTurnSeed(macroRound, subRound, companyId),
+});
+
+
+const seedAt = (companyId: number) => seedFor(3, 1, companyId);
 
 describe("the payload's shape (design note #944)", () => {
   it("has the lengths the index rules assume", () => {
@@ -236,7 +256,7 @@ describe("the line is drawn by the turn's own seed (design note #944)", () => {
        the log as the word "undefined" rather than throwing. */
     for (let macroRound = 1; macroRound <= 12; macroRound += 1) {
       for (let companyId = 0; companyId < 12; companyId += 1) {
-        const parts = { macroRound, subRound: 1, companyId };
+        const parts = seedFor(macroRound, 1, companyId);
         const clause = revenueFlavourClause(rollTurnRevenue(170, parts), parts);
         expect(typeof clause).toBe("string");
         expect(clause.length).toBeGreaterThan(0);
@@ -277,7 +297,7 @@ describe("every line is reachable (design note #944)", () => {
   for (let macroRound = 1; macroRound <= 200; macroRound += 1) {
     for (let subRound = 1; subRound <= 3; subRound += 1) {
       for (let companyId = 1; companyId <= 8; companyId += 1) {
-        const parts = { macroRound, subRound, companyId };
+        const parts = seedFor(macroRound, subRound, companyId);
         const roll = rollTurnRevenue(170, parts);
         seen[flavorBucketFor(roll)].add(revenueFlavourClause(roll, parts));
       }

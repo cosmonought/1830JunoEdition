@@ -210,10 +210,21 @@ describe("the private payout toast is readable and out of the way", () => {
 
   it("anchors in the corner through an explicit prop", () => {
     /* NOT INFERRED FROM `detailRows`. Position is its own decision; keying it off the one caller that happens
-       to pass a table is this codebase's fifth recurring bug shape. */
+       to pass a table is this codebase's fifth recurring bug shape.
+       ==================================================================
+        DESIGN NOTE 1049: THE CALLER THAT WANTED THE CORNER IS GONE, THE ARGUMENT IS NOT
+       ==================================================================
+       THIS ALSO PINNED `"bottom-right"` IN `App.tsx`, which was the one caller asking for the corner -- the
+       private payout, now a modal. `App.tsx` passes no anchor at all today and every remaining toast takes
+       the default.
+       WHAT THIS CASE IS FOR IS THE MECHANISM, AND IT IS INTACT: the anchor is a PROP with a default, not a
+       thing derived from whether a caller happened to pass rows. Both assertions that check that still stand,
+       and the corner variant is still built and still clears the centring transform (the case below).
+       THE APP ASSERTION IS DROPPED RATHER THAN INVERTED. `not.toContain('"bottom-right"')` would pin the
+       ABSENCE of a caller, which is not a property worth defending -- the next toast that wants the corner is
+       welcome to it. */
     expect(TOAST).toContain("anchor = \"center\"");
     expect(TOAST).toContain("styles.toastCorner");
-    expect(APP).toContain('"bottom-right"');
   });
 
   it("clears the centring transform in the corner", () => {

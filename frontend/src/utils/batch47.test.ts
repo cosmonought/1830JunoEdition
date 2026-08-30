@@ -21,11 +21,19 @@ const {
   NO_YELLOW_SIGN,
   yellowSignStateFrom,
   carcosaRollHits,
+  CARCOSA_CHANCE_IN_100,
   resolveFlavourLine,
 } = require("./yellowSign") as typeof import("./yellowSign");
 const { UNPREDICTABLE_REVENUE_FLAVOR } =
   require("../constants/flavorText") as typeof import("../constants/flavorText");
-const { turnRevenueSentence, rollTurnRevenue, revenueFlavourClause, flavorBucketFor } =
+const {
+  turnRevenueSentence,
+  rollTurnRevenue,
+  revenueFlavourClause,
+  flavorBucketFor,
+  legacyTurnSeed,
+  revenueDieFace,
+} =
   require("./gameVariants") as typeof import("./gameVariants");
 const { variantCueFor } = require("./variantSfx") as typeof import("./variantSfx");
 const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
@@ -34,10 +42,14 @@ const APP = readStripped("App.tsx");
 const OVERLAY = readStripped("components/YellowSignOverlay.tsx");
 const SIGN = readStripped("utils/yellowSign.ts");
 
+/* Design note #1051: the pre-#1051 die, asked for by name. Every case in this file was written against the
+   FNV hash and measures its behaviour; `legacyTurnSeed` is that hash, and it is still the path a game logged
+   before the roll was recorded replays through. `batch50.test.ts` owns the claim about a real draw. */
 const parts = (companyId: number, macroRound = 3, subRound = 1) => ({
   macroRound,
   subRound,
   companyId,
+  turnSeed: legacyTurnSeed(macroRound, subRound, companyId),
 });
 const resolve = (over: Partial<Parameters<typeof resolveFlavourLine>[0]>) =>
   resolveFlavourLine({
@@ -199,13 +211,28 @@ describe("the escalation belongs to the marked corporation alone", () => {
     }
   });
 
-  it("is a tenth, not a certainty", () => {
+  it("is a chance, not a certainty, at whatever rate the constant names", () => {
     /* THE CHANCE IS REAL and this is the case that says so -- a rule that always fired would pass every
-       assertion above. Measured across 4000 turns rather than asserted at a point. */
+       assertion above. Measured across 4000 turns rather than asserted at a point.
+       ==================================================================
+        DESIGN NOTE 1051: THE BAND WAS 6%-15% AND THE RATE IS 20% NOW
+       ==================================================================
+       THE FIGURE WAS RULED UP -- offered 10%, 20% and 30% as real numbers once the die became a real draw,
+       and 20% was chosen. This case failed on that, correctly: it was the only thing in the tree still
+       asserting one-in-ten.
+       DERIVED FROM THE CONSTANT NOW, NOT WRITTEN OUT. `0.06` and `0.15` were a band drawn around a number
+       that lived somewhere else, which is the same shape #891 keeps naming and the same shape
+       `CARCOSA_CHANCE_IN_100`'s own note describes: the constant and the behaviour were two claims that
+       happened to agree. Re-tuning the rate should move this band by itself or the case is a second place to
+       remember.
+       +/- 20% OF THE EXPECTED COUNT. At 4000 draws and p = 0.2 the standard deviation is about 25 counts, so
+       a 160-count band is over six sigma -- wide enough never to flake, narrow enough that a roll stuck at
+       certainty or silence still fails it. */
     let hits = 0;
     for (let id = 1; id <= 4000; id += 1) if (carcosaRollHits(parts(id))) hits += 1;
-    expect(hits).toBeGreaterThan(4000 * 0.06);
-    expect(hits).toBeLessThan(4000 * 0.15);
+    const expected = 4000 * (CARCOSA_CHANCE_IN_100 / 100);
+    expect(hits).toBeGreaterThan(expected * 0.8);
+    expect(hits).toBeLessThan(expected * 1.2);
   });
 
   it("keeps the escalation out of the pool by any other route", () => {
@@ -285,11 +312,46 @@ describe("two clients replaying one log agree", () => {
     expect(SIGN).not.toContain("Math.random");
   });
 
-  it("decorrelates the tenth from the die that produced the bonus", () => {
-    /* #907's LESSON, applied to a second roll off the same key. Both would otherwise be functions of one
-       hash, and a critical bonus is already a filtered subset of faces -- so an undecorrelated tenth could
-       be near-certain or near-impossible rather than one in ten. */
-    expect(SIGN).toContain("macroRound: parts.macroRound + 7919");
+  it("decorrelates the roll from the die that produced the bonus", () => {
+    /* ==================================================================
+        DESIGN NOTE 1051: THIS CASE ENFORCED THE BUG IT WAS WRITTEN TO PREVENT
+       ==================================================================
+       IT ASSERTED `SIGN).toContain("macroRound: parts.macroRound + 7919")` -- the presence of a salt -- and
+       its own note states the requirement correctly: "an undecorrelated tenth could be near-certain or
+       near-impossible rather than one in ten." It then checked that a decorrelation had been WRITTEN, never
+       that one had been ACHIEVED.
+       IT HAD NOT. Measured across every turn key a real game can reach, the roll fired 29% of the time at
+       face 6 -- the only face that can reach it -- and about 2% at the odd faces. The salt changed the FRONT
+       of the hashed key and FNV-1a's low bits are dominated by what it reads LAST, which was identical; both
+       `% 6` and `% 10` turn on that low bit. The mechanism was present, named, and inert. Salting the end
+       instead measured worse: 0% at faces 2, 4 and 6.
+       THE FOURTH RECURRING BUG SHAPE IN THIS CODEBASE, from the inside: a test that pins the mechanism its
+       note describes instead of the property its note claims. A source scan cannot tell a decorrelation from
+       a comment about one, and this one could not tell it from a decorrelation that did nothing.
+       SO IT MEASURES NOW. `turnSeed` is a real draw (#1051), so the question is whether the extraction keeps
+       the roll independent of the face -- which is a distribution, and distributions have to be counted. */
+    const faces = [0, 0, 0, 0, 0, 0];
+    const hits = [0, 0, 0, 0, 0, 0];
+    /* A DETERMINISTIC SWEEP, NOT `Math.random`. A flaky probability case is worse than none -- it teaches the
+       reader to re-run rather than to read. The LCG below is the standard Numerical Recipes one; all that is
+       being asked of it is that it walks the whole 32-bit range instead of one residue class, which is the
+       hazard #969 measured when a fixture and the thing under test shared a factor. */
+    let x = 12345;
+    for (let at = 0; at < 60000; at += 1) {
+      x = (Math.imul(x, 1664525) + 1013904223) >>> 0;
+      const seeded = { macroRound: 3, subRound: 1, companyId: 1, turnSeed: x };
+      const face = revenueDieFace(seeded);
+      faces[face - 1] += 1;
+      if (carcosaRollHits(seeded)) hits[face - 1] += 1;
+    }
+    /* EVERY FACE, not just the one the feature uses. Face 6 is what gates the escalation, so a rate correct
+       only there would pass a narrower case while still proving the two draws move together -- the old
+       failure had 29% at face 6 and 2% at face 1, and it is the SPREAD between them that names it. */
+    for (let face = 0; face < 6; face += 1) {
+      const rate = (100 * hits[face]) / faces[face];
+      expect(rate).toBeGreaterThan(CARCOSA_CHANCE_IN_100 - 3);
+      expect(rate).toBeLessThan(CARCOSA_CHANCE_IN_100 + 3);
+    }
   });
 
   it("derives the state rather than storing a flag", () => {

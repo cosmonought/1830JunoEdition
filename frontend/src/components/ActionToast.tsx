@@ -48,6 +48,12 @@
 import React, { useEffect } from "react";
 
 import { FONT_SIZE } from "../styles/typography";
+/* Design note #1048: the auction private cards' own surface, shared rather than matched by eye.
+   `CARD_ACCENT` WAS IMPORTED HERE AND NEVER USED -- #1048 left it behind when the accent turned out to belong
+   at the CALL SITE (the caller decides whose toast it is; this file only paints what it is handed). Removed
+   while this file was open for #1049, because an unused import is invisible to `tsc` under these settings and
+   reads to the next person as a colour this component applies somewhere. */
+import { CARD_SURFACE } from "../styles/palette";
 
 /** Design note #928's window, named so #967's longer one can be expressed as a multiple of it rather than as
  *  a second magic number that has to be kept in step by hand. */
@@ -128,6 +134,22 @@ export const PRIVATE_REVENUE_TOAST_MS = 3200;
  *  for why the private payout is the exception. */
 export type ToastAnchor = "center" | "bottom-right";
 
+/** Adds up a detail column that holds money strings like `"$25"`.
+ *
+ *  Design note #1047: PARSED RATHER THAN REQUIRED AS NUMBERS, because `detailRows` is a display shape and has
+ *  been since #984 -- changing it to carry numbers would touch every caller for the benefit of one. Digits are
+ *  extracted rather than the string being trusted, so a row reading "$25/OR" still contributes 25 and a row
+ *  with no figure at all contributes nothing instead of `NaN`, which would poison the whole sum. */
+export function sumRows(rows: readonly { value: string }[]): string {
+  let total = 0;
+  for (const row of rows) {
+    const digits = row.value.replace(/[^0-9-]/g, "");
+    const amount = Number.parseInt(digits, 10);
+    if (Number.isFinite(amount)) total += amount;
+  }
+  return `$${total}`;
+}
+
 export interface ActionToastProps {
   /** The sentence, or `null` for nothing pending. */
   message: string | null;
@@ -195,6 +217,71 @@ export interface ActionToastProps {
    *  (The request said 2.7s; the value in the code was 2.6s. Moved to the stated TARGET of 3.7s rather than
    *  by the stated delta, since the target is the thing that was actually judged against a screen.) */
   durationMs?: number;
+  /** ==================================================================
+   *   DESIGN NOTE 1047: THE ONE TOAST THAT WAITS
+   *  ==================================================================
+   *
+   * REPORTED: "there can be so much variability in what's on them that there's no good way to standardize a
+   * time for them ... I worry the toast that disappears suggests the information is less strategic than it
+   * actually is."
+   *
+   * AND THIS FILE ALREADY RECORDED THE PROBLEM WITHOUT NAMING IT. The private-revenue toast has been tuned in
+   * BOTH directions: #967 set it to 1.5x standard because "this is the one toast in the app that is a LIST
+   * rather than a sentence", and #1013 brought it back down after it was reported as staying up far too long.
+   * That is not a number nobody has found yet -- it is evidence that no single number fits content whose
+   * length depends on how many privates a player happens to hold.
+   *
+   * SO THIS ONE STOPS GUESSING AND WAITS. `durationMs` is ignored when this is set; the toast stays until the
+   * player closes it.
+   *
+   * A MODAL WAS THE OTHER CANDIDATE AND WAS DECLINED. Private income is paid every Operating Round,
+   * deterministically, with no decision in it -- and #1032 was reported precisely because modals "kept firing
+   * at the start of basically every operating round". A recurring modal for the least surprising event in the
+   * game would spend the interruption budget where it buys least, and would train players to dismiss the
+   * fleet-loss modal, where dismissing without reading costs a turn.
+   *
+   * ==================================================================
+   *  DESIGN NOTE 1049: THE MODAL WON, AND THE PARAGRAPH ABOVE IS WHY IT SHOULD NOT HAVE BEEN DECLINED
+   * ==================================================================
+   *
+   * THE PREMISE WAS WRONG AND WAS CORRECTED BY THE REPORTER: "the reason the modals happening every Operating
+   * Round was annoying is that the information they were displaying was irrelevant/old." The paragraph above
+   * cites #1032 as evidence that recurring modals are unwelcome; #1032 is evidence that STALE ones are, and
+   * #1032 fixed the staleness. A payout modal is about money that moved a moment ago and cannot be old.
+   * The desensitisation worry was the half worth keeping and is answered in `App.tsx` #1049a by SEQUENCING the
+   * two modals rather than by omitting one, so they are never a stack to click through.
+   * KEPT IN PLACE, NOT DELETED, because a note that quietly loses its argument teaches the next reader that
+   * the question was never asked.
+   *
+   * `persistent` HAS NO CALLER TODAY. Its one user was the private payout, which is now
+   * `PrivateRevenueModal`. The prop and its close button survive because they are a working, harnessed
+   * capability and the reasoning at the top of this block is still sound about toasts in general -- there is
+   * no number that fits content of variable length. If nothing has claimed it by the next pass through this
+   * file, delete it: an unused prop is invisible to `tsc` and to ESLint, and only a comment marks it. */
+  persistent?: boolean;
+  /** ==================================================================
+   *   DESIGN NOTE 1048: WHOSE TOAST THIS IS, AS A COLOUR
+   *  ==================================================================
+   *
+   * ASKED: "may I ask that the toast notification be the white/cream/whatever background the PC cards have in
+   * the Auction Round? and that all other player-focused toasts be in the player-color?"
+   *
+   * AND THE GROUND WAS ALREADY ALMOST THAT, BY COINCIDENCE. #1030 moved this toast to `#f6f1e4` to get it off
+   * the dark map; the auction's private cards use `CARD_SURFACE` at `#f7f5f0`. Two hand-picked creams a shade
+   * apart is the #891 shape waiting to happen, so the toast now takes the SHARED constant -- they cannot
+   * drift, and the resemblance becomes a statement rather than an accident.
+   *
+   * THE ACCENT IS THE IDENTITY. A private payout wears the private cards' own accent; a toast about the
+   * viewer's own money wears their seat colour. The era toast, which is a fact about the table rather than
+   * about anybody, passes nothing and is unchanged.
+   *
+   * AN EDGE, NOT A GROUND, AND THAT IS A DEVIATION FROM THE LITERAL REQUEST. Seat colours are chosen to be
+   * distinguishable from each other, not to carry dark text -- #702 measured one livery pair at 1.00:1 against
+   * the ink it was meant to be read against, and #1030 exists because this very toast once blended into what
+   * it sat on. So the colour goes on a 5px left border, exactly as the auction card carries its own, and the
+   * ground and ink stay the pair that was measured. The toast is identifiably yours from across the screen and
+   * still readable up close. */
+  accentColor?: string | null;
   /** Design note #929: the era transition this toast is announcing, when it is announcing one. A DESCRIPTOR
    *  rather than a node, so the toast's state stays plain data and this component keeps sole ownership of how
    *  a hex is drawn -- a caller passing JSX would be a second place that decides what Green looks like. */
@@ -237,15 +324,19 @@ export function ActionToast({
   durationMs = STANDARD_TOAST_MS,
   eraTransition = null,
   anchor = "center",
+  persistent = false,
+  accentColor = null,
 }: ActionToastProps) {
   useEffect(() => {
     if (message === null) return undefined;
+    // Design note #1047: a persistent toast has no clock at all -- it waits for the X.
+    if (persistent) return undefined;
     const timer = window.setTimeout(onDismiss, durationMs);
     /* Cleared on `token` as well as on unmount: a second action inside the
        window restarts the clock rather than inheriting the first one's
        remaining time and vanishing early. */
     return () => window.clearTimeout(timer);
-  }, [message, token, onDismiss, durationMs]);
+  }, [message, token, onDismiss, durationMs, persistent]);
 
   if (message === null) return null;
 
@@ -264,9 +355,37 @@ export function ActionToast({
         key={token}
         /* Design note #1016: the corner variant OVERRIDES `left`/`transform`, so it must come second -- a
            spread that merely added `right` would leave `left: 50%` in place and put the toast off-screen. */
-        style={{ ...styles.toast, ...(anchor === "bottom-right" ? styles.toastCorner : {}) }}
+        style={{
+          ...styles.toast,
+          ...(anchor === "bottom-right" ? styles.toastCorner : {}),
+          // Design note #1048: the identity edge, matching the auction card's own left rule.
+          ...(accentColor
+            ? { borderLeftWidth: "5px", borderLeftStyle: "solid", borderLeftColor: accentColor }
+            : {}),
+        }}
         className={anchor === "bottom-right" ? "app-action-toast-corner" : "app-action-toast"}
       >
+        {persistent && (
+          /* ==================================================================
+              DESIGN NOTE 1047: ONE LIVE TARGET IN AN INERT PANEL
+             ==================================================================
+             THE TOAST IS DELIBERATELY CLICK-THROUGH -- `pointerEvents: "none"`, with the standing rule that
+             "it reports; it does not receive. Clicks fall through to whatever it is covering, so a toast can
+             never eat the next purchase." A close button needs the opposite.
+             SO THE EXCEPTION IS THE BUTTON AND NOTHING ELSE. `pointerEvents: "auto"` is re-enabled on this
+             one element, which is about twenty pixels square in a corner; the rest of the panel stays inert
+             and the rule it was written for still holds everywhere it mattered. Widening the exception to the
+             container would be the tidier-looking edit and would reintroduce exactly the swallowed click. */
+          <button
+            type="button"
+            style={styles.close}
+            onClick={onDismiss}
+            aria-label="Dismiss"
+            title="Dismiss"
+          >
+            ×
+          </button>
+        )}
         <span style={styles.check} aria-hidden="true">
           ✓
         </span>
@@ -318,6 +437,24 @@ export function ActionToast({
                   <span style={styles.detailRowValue}>{row.value}</span>
                 </React.Fragment>
               ))}
+              {detailRows.length > 1 && (
+                /* ==================================================================
+                    DESIGN NOTE 1047: THE TOTAL, WHERE THE LIST ALREADY IS
+                   ==================================================================
+                   ASKED: a standing private-income total, and then -- "Why don't we instead put that on the
+                   toast notification?" Which is the better home: this panel IS the list, so the sum belongs
+                   at its foot rather than on a surface that would have to repeat the breakdown to explain
+                   itself. It also costs no new screen real estate, which the player card version would have.
+                   ONLY WHEN THERE IS SOMETHING TO ADD UP. One private is its own total, and a "Total" row
+                   under a single line restates it -- the shape #697 argues against for the ordinary receipt.
+                   SUMMED FROM THE ROWS RATHER THAN PASSED IN, deliberately: a caller-supplied figure could
+                   disagree with the rows above it, and a total that does not match its own column is worse
+                   than no total. The rows are the source; this is arithmetic on them. */
+                <>
+                  <span style={styles.detailTotalLabel}>Total</span>
+                  <span style={styles.detailTotalValue}>{sumRows(detailRows)}</span>
+                </>
+              )}
             </span>
           )}
         </span>
@@ -396,6 +533,23 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
   },
   detailRowLabel: { color: "#5a6070", textAlign: "left" },
+  /* Design note #1047: the total reads as a sum rather than another row -- a rule above it and the label in
+     the same muted ink as the names, so the eye lands on the figure. */
+  detailTotalLabel: {
+    color: "#5a6070",
+    textAlign: "left",
+    borderTop: "1px solid #b9ae91",
+    paddingTop: "3px",
+    marginTop: "2px",
+  },
+  detailTotalValue: {
+    color: "#12151d",
+    textAlign: "right",
+    fontWeight: 700,
+    borderTop: "1px solid #b9ae91",
+    paddingTop: "3px",
+    marginTop: "2px",
+  },
   /* Brighter than the label: on a row of two facts the figure is the one being compared, and #670's rule for
      the dividend block applies here too -- the number carries the decision, the name only says whose it is. */
   // Design note #1030: darker than the label, for the same reason it used to be brighter -- the figure carries
@@ -461,7 +615,9 @@ const styles: Record<string, React.CSSProperties> = {
 
        THE GREEN SURVIVES WHERE IT MEANS SOMETHING: the check glyph below keeps #670's rule that green is
        money or a thing arriving. What changes is that it now sits on a ground it can be read against. */
-    backgroundColor: "#f6f1e4",
+    /* Design note #1048: the auction private cards' own surface, shared rather than matched by eye. #1030
+       picked `#f6f1e4` independently and landed one shade away, which is two constants meaning one thing. */
+    backgroundColor: CARD_SURFACE,
     border: "1px solid #b9ae91",
     boxShadow: "0 8px 24px rgba(0, 0, 0, 0.55)",
     color: "#1d2230",
@@ -476,6 +632,22 @@ const styles: Record<string, React.CSSProperties> = {
      an action that succeeded is the plainest case of it. */
   /* Design note #1030: deepened from `#4ea172`, which was chosen against a near-black ground and is washed
      out on cream. Same hue, same meaning, legible where it now lives. */
+  /* Design note #1047: the one element in the panel that receives a click. Positioned in the panel's own
+     corner rather than in the flow, so adding it does not reflow a layout four other toasts share. */
+  close: {
+    position: "absolute",
+    top: "4px",
+    right: "6px",
+    pointerEvents: "auto",
+    cursor: "pointer",
+    border: "none",
+    background: "none",
+    padding: "0 4px",
+    lineHeight: 1,
+    fontSize: FONT_SIZE.strong,
+    color: "#5a6070",
+    font: "inherit",
+  },
   check: { color: "#1f7a4d", fontWeight: 700, flexShrink: 0 },
   text: { minWidth: 0 },
 };

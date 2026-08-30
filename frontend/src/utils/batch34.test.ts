@@ -175,7 +175,19 @@ describe("the toast stands off the board", () => {
   const body = sliceBetween(TOAST, "  toast: {", "  },");
 
   it("is a light ground with dark text", () => {
-    expect(body).toContain('backgroundColor: "#f6f1e4"');
+    /* ==================================================================
+        DESIGN NOTE 1048: THE GROUND IS A SHARED CONSTANT NOW, NOT A LITERAL
+       ==================================================================
+       THIS PINNED `#f6f1e4`, the hex #1030 chose to get the toast off the dark map. The auction's private
+       cards were independently using `CARD_SURFACE` at `#f7f5f0` -- two hand-picked creams one shade apart,
+       meaning the same thing and free to drift, which is #891's shape in a palette. The toast now takes the
+       shared constant, so the resemblance is a statement rather than a coincidence.
+       WHAT THIS CASE IS FOR SURVIVES INTACT: a LIGHT ground with DARK text, which is the pair #1030 measured
+       and the reason the toast is legible over the board at all. The ink is still asserted literally, because
+       it has no shared constant to point at -- and the negative case below still forbids the dark green.
+       ASSERTED AS THE CONSTANT rather than as its value, deliberately. Re-pinning `#f7f5f0` here would put a
+       third copy of the colour in the tree and defeat the point of sharing it. */
+    expect(body).toContain("backgroundColor: CARD_SURFACE,");
     expect(body).toContain('color: "#1d2230"');
   });
 

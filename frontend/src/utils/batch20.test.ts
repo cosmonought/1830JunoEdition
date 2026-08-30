@@ -24,6 +24,7 @@ import {
   revenueDieFace,
   roundToTen,
   STANDARD_VARIANTS,
+  legacyTurnSeed,
 } from "./gameVariants";
 import type { GameStateResponse } from "./gameState";
 import { readStripped, sliceBetween } from "./sourceScan";
@@ -31,7 +32,7 @@ import { readStripped, sliceBetween } from "./sourceScan";
 /* A corporation whose turn actually rolls something -- corporation 4's seed is a 100% face, which would make
    every assertion below compare the identity function with itself. The guard case says so out loud. */
 const BO = 6;
-const TURN = { macroRound: 3, subRound: 1, companyId: BO };
+const TURN = { macroRound: 3, subRound: 1, companyId: BO, turnSeed: legacyTurnSeed(3, 1, BO) };
 
 const board = (): GameStateResponse =>
   ({
@@ -267,13 +268,25 @@ describe("the consolidated private revenue toast (design note #967)", () => {
   });
 
   it("fires once at the OR opening, beside the per-private log lines", () => {
-    /* THE LOG KEEPS ITS RECORD. One line per private is what makes a payment findable later; the toast is
-       the surface that consolidates. Both, not one. */
+    /* THE LOG KEEPS ITS RECORD. One line per private is what makes a payment findable later; the consolidated
+       surface is a second thing, not a replacement. Both, not one.
+       ==================================================================
+        DESIGN NOTE 1049: THE SURFACE CHANGED TWICE UNDER THIS CASE AND THE CASE IS ABOUT NEITHER
+       ==================================================================
+       THIS PINNED `summarisePrivateRevenueForPlayer(openingPayouts` AND `PRIVATE_REVENUE_TOAST_MS`, which
+       between them named the summariser AND the fact that a toast with its own duration was raised. The
+       payout is a modal now (#1049) -- no duration, and the shell asks `summarisePrivateRevenueRound` so it
+       gets the other seats' totals from the same read.
+       WHAT THIS CASE IS ACTUALLY FOR SURVIVES UNCHANGED, and it is the pairing: the per-private log lines and
+       the consolidated summary are raised together, at the OR opening, from one place. That is #967's
+       decision and it has outlived three renderings of the panel.
+       THE DURATION ASSERTION IS DROPPED RATHER THAN MOVED. It was standing in for "a toast is raised here",
+       which is no longer a fact about this file -- and "runs on a window of its own" below still owns the
+       constant itself, where it reads `ActionToast.tsx` directly. */
     const APP = readStripped("App.tsx");
     const opening = sliceBetween(APP, "const openingPayouts =", "sandboxStateRef.current = after;");
     expect(opening).toContain('logInfo("Private Revenue"');
-    expect(opening).toContain("summarisePrivateRevenueForPlayer(openingPayouts");
-    expect(opening).toContain("PRIVATE_REVENUE_TOAST_MS");
+    expect(opening).toContain("summarisePrivateRevenueRound(openingPayouts");
   });
 
   it("runs on a window of its own", () => {

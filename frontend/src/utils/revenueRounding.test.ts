@@ -23,6 +23,7 @@ import {
   roundToTen,
   STANDARD_VARIANTS,
   turnRevenueSentence,
+  legacyTurnSeed,
 } from "./gameVariants";
 import { dividendSplit } from "./dividendSplit";
 import { describeGameplayAction } from "./actionLog";
@@ -64,17 +65,39 @@ describe("rounding to the nearest ten (design note #938)", () => {
 });
 
 describe("the roll is rounded before anyone reads it (design note #938)", () => {
-  const seed = { macroRound: 3, subRound: 1, companyId: 4 };
+  /* ==================================================================
+      DESIGN NOTE 1051: THE SPREAD HAS TO CARRY THE DRAW WITH IT
+     ==================================================================
+     THESE SWEPT `{ ...seed, companyId: ordinal }`, which varied six seeds while the seed WAS its coordinates.
+     The turn carries its own draw now, so overriding `companyId` beside a fixed `turnSeed` leaves every
+     "different corporation" on one face -- and every case in this describe would still have passed, because
+     each asserts a property that holds for one face as readily as six. Vacuous rather than wrong, which is
+     the harder kind to notice: #941's note above says what these need is "many distinct seeds", and the
+     spread had quietly stopped supplying them.
+     `seedByCompany` BUILDS THE DRAW FROM THE COORDINATE, so a sweep over corporations cannot fail to be a
+     sweep over faces. Found by the class sweep after the sibling case below failed loudly on the same shape;
+     it is the third file this session where a spread stopped meaning what it used to. */
+  const seedByCompany = (companyId: number) => ({
+    macroRound: 3,
+    subRound: 1,
+    companyId,
+    turnSeed: legacyTurnSeed(3, 1, companyId),
+  });
+
 
   it("hands out only multiples of ten", () => {
     /* ROUNDED IN `rollTurnRevenue` RATHER THAN AT THE CALL SITES, which is the whole reason the reducer and
        the log cannot disagree: there is one `adjusted` and everything reads it. Driven across every face and
        a spread of printed values, because a rounding applied on only some branches is the failure mode. */
     for (let printed = 0; printed <= 300; printed += 10) {
-      for (let ordinal = 0; ordinal < 6; ordinal += 1) {
+      /* Design note #1051: EIGHT, NOT SIX. Six corporations reached four of the die's faces once the seed stopped
+           being a spread over coordinates; eight reaches all six, so "every face" in the case's own note is true
+           again rather than nearly true. The bound is the number of DISTINCT SEEDS the sweep needs, which was
+           never the number of corporations 1830 has. */
+        for (let ordinal = 0; ordinal < 8; ordinal += 1) {
         /* Design note #941: a sweep over CORPORATIONS now. The ordinal left the seed when the die became a
            once-per-turn roll; what these cases need is many distinct seeds, which any varying part supplies. */
-        const roll = rollTurnRevenue(printed, { ...seed, companyId: ordinal });
+        const roll = rollTurnRevenue(printed, seedByCompany(ordinal));
         expect([printed, ordinal, roll.adjusted % 10]).toEqual([printed, ordinal, 0]);
       }
     }
@@ -85,10 +108,14 @@ describe("the roll is rounded before anyone reads it (design note #938)", () => 
        "multiple of ten" case above and apply no modifier at all. Checked against the two steps composed in
        the right order, from the same table the roll uses. */
     for (let printed = 20; printed <= 300; printed += 10) {
-      for (let ordinal = 0; ordinal < 6; ordinal += 1) {
+      /* Design note #1051: EIGHT, NOT SIX. Six corporations reached four of the die's faces once the seed stopped
+           being a spread over coordinates; eight reaches all six, so "every face" in the case's own note is true
+           again rather than nearly true. The bound is the number of DISTINCT SEEDS the sweep needs, which was
+           never the number of corporations 1830 has. */
+        for (let ordinal = 0; ordinal < 8; ordinal += 1) {
         /* Design note #941: a sweep over CORPORATIONS now. The ordinal left the seed when the die became a
            once-per-turn roll; what these cases need is many distinct seeds, which any varying part supplies. */
-        const parts = { ...seed, companyId: ordinal };
+        const parts = seedByCompany(ordinal);
         const percent = REVENUE_MODIFIER_BY_FACE[revenueDieFace(parts) - 1];
         expect(rollTurnRevenue(printed, parts).adjusted).toBe(
           roundToTen(applyRevenuePercent(printed, percent)),
@@ -100,10 +127,14 @@ describe("the roll is rounded before anyone reads it (design note #938)", () => 
   it("is still stable under replay", () => {
     /* #903'S RULE, re-asked after the change: an Undo replays the log, and a rounding that depended on
        anything but the seed would move money between two identical replays. */
-    for (let ordinal = 0; ordinal < 6; ordinal += 1) {
+    /* Design note #1051: EIGHT, NOT SIX. Six corporations reached four of the die's faces once the seed stopped
+           being a spread over coordinates; eight reaches all six, so "every face" in the case's own note is true
+           again rather than nearly true. The bound is the number of DISTINCT SEEDS the sweep needs, which was
+           never the number of corporations 1830 has. */
+        for (let ordinal = 0; ordinal < 8; ordinal += 1) {
         /* Design note #941: a sweep over CORPORATIONS now. The ordinal left the seed when the die became a
            once-per-turn roll; what these cases need is many distinct seeds, which any varying part supplies. */
-      const parts = { ...seed, companyId: ordinal };
+      const parts = seedByCompany(ordinal);
       expect(rollTurnRevenue(170, parts).adjusted).toBe(rollTurnRevenue(170, parts).adjusted);
     }
   });
@@ -216,14 +247,28 @@ const BO = 4;
    PER-ROUTE log line, which was right while the die was per route. The die is now one roll per turn, so a
    four-train corporation would have printed four bonus sentences about one roll -- the reported complaint in
    a second currency. `turnRevenueSentence` is where they live now, and it is what these drive. */
-const turnSeed = { macroRound: 3, subRound: 1, companyId: BO };
+/* ==================================================================
+    DESIGN NOTE 1051: A SPREAD OVER `companyId` HAS TO MOVE THE SEED WITH IT
+   ==================================================================
+   THIS WAS `{ ...turnSeed, companyId }`, and that was correct while the seed WAS its three coordinates: the
+   spread changed the corporation and the hash downstream produced a different face. It is wrong the moment
+   the turn carries its own draw. `turnSeed` is a value now, and overriding `companyId` beside it leaves the
+   DRAW untouched -- so fourteen "different corporations" all rolled one face, and two of the three outcome
+   branches the cases below filter for came back empty while the fixture looked like a sweep.
+   MY OWN MISTAKE, AND THE THIRD FILE IT APPEARED IN. `gameVariants.test.ts` and `flavorText.test.ts` had the
+   same shape and I converted both; this one is the same edit I did not make, and the case that caught it did
+   so by measuring an outcome rather than by checking a mechanism -- which is what those cases are for.
+   THE SEED IS BUILT FROM THE COORDINATES, so changing a coordinate necessarily changes the draw. A helper
+   rather than a spread is what makes that impossible to get wrong again. */
+const seedFor = (companyId: number) => ({
+  macroRound: 3,
+  subRound: 1,
+  companyId,
+  turnSeed: legacyTurnSeed(3, 1, companyId),
+});
 
 const turnLine = (printedTotal: number, companyId = BO) =>
-  turnRevenueSentence(
-    "B&O",
-    rollTurnRevenue(printedTotal, { ...turnSeed, companyId }),
-    { ...turnSeed, companyId },
-  );
+  turnRevenueSentence("B&O", rollTurnRevenue(printedTotal, seedFor(companyId)), seedFor(companyId));
 
 describe("the turn's one line reads as prose (design notes #939 -> #941)", () => {
   /* Swept over corporations rather than train ordinals -- the ordinal has left the seed, and what these cases

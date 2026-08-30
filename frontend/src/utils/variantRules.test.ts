@@ -29,6 +29,7 @@ import {
   turnRevenueSentence,
   rollTurnRevenue,
   STANDARD_VARIANTS,
+  legacyTurnSeed,
 } from "./gameVariants";
 import {
   PRICE_GRID,
@@ -729,7 +730,7 @@ describe("the die gets a sentence (design notes #907 -> #944)", () => {
     /* #907'S ACTUAL JOB, re-asked at its new address: "a corporation that ran a $255 route and banked $230
        has a discrepancy on its chips, and without a sentence the player's first thought is that the route
        tracer is broken". The figure and the reason must both be in the line. */
-    const parts = { macroRound: 3, subRound: 1, companyId: 6 };
+    const parts = { macroRound: 3, subRound: 1, companyId: 6, turnSeed: legacyTurnSeed(3, 1, 6) };
     const line = turnRevenueSentence("PRR", rollTurnRevenue(255, parts), parts);
     expect(line).toContain("PRR ran for $");
     expect(line.length).toBeGreaterThan("PRR ran for $260.".length);

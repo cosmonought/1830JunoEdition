@@ -27,12 +27,13 @@ import {
   revenueDieFace,
   roundToTen,
   STANDARD_VARIANTS,
+  legacyTurnSeed,
 } from "./gameVariants";
 import type { GameStateResponse } from "./gameState";
 import { readStripped, sliceBetween } from "./sourceScan";
 
 const BO = 6;
-const TURN = { macroRound: 3, subRound: 1, companyId: BO };
+const TURN = { macroRound: 3, subRound: 1, companyId: BO, turnSeed: legacyTurnSeed(3, 1, BO) };
 const LEG = [{ hex: "F2" }, { hex: "A9" }];
 
 const board = (unpredictable = true): GameStateResponse =>

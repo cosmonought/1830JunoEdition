@@ -29,6 +29,7 @@ import {
   REVENUE_MODIFIER_BY_FACE,
   roundToTen,
   STANDARD_VARIANTS,
+  legacyTurnSeed,
 } from "./gameVariants";
 import type { GameStateResponse } from "./gameState";
 
@@ -133,7 +134,12 @@ describe("three trains under Unpredictable Revenue (design notes #933 -> #941)",
      corporation whose turn actually rolls something, and the guard below fails loudly if a future change to
      the hash makes it neutral again. */
   const VARIED_CORP = 6;
-  const turnSeed = { macroRound: 3, subRound: 1, companyId: VARIED_CORP };
+  const turnSeed = {
+  macroRound: 3,
+  subRound: 1,
+  companyId: VARIED_CORP,
+  turnSeed: legacyTurnSeed(3, 1, VARIED_CORP),
+};
 
   it("uses a turn whose die actually moves the figure", () => {
     /* THE GUARD, and it is about the FIXTURE rather than about the reducer -- if it trips, pick another

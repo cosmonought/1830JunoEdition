@@ -27,35 +27,60 @@ export type TrainTier = "2" | "3" | "4" | "5" | "6" | "D";
  *  the same ordering everything else uses, rather than restating it. */
 export const TIER_ORDER: readonly TrainTier[] = ["2", "3", "4", "5", "6", "D"];
 
-/** What a player calls a train of this tier -- `"3-Train"`, or `"Diesel"`.
+/** What the app calls a train of this tier -- `"3-Train"`, `"D-Train"`. No tier is a special case.
  *
  *  ==================================================================
- *   DESIGN NOTE 1007: "D-TRAIN" IS NOT A THING ANYBODY SAYS
+ *   DESIGN NOTE 1007: ONE SPELLING, CHOSEN -- NOT ONE SPELLING, CORRECT
  *  ==================================================================
  *
- *  The five numbered tiers are named by their number and the sixth is not: 1830's last train is a Diesel, and
- *  `${tier}-train` renders it "D-train" -- which is not wrong so much as not English.
+ *  THIS NOTE ORIGINALLY READ "'D-TRAIN' IS NOT A THING ANYBODY SAYS", and argued that `${tier}-train` renders
+ *  the sixth tier as "D-train", "which is not wrong so much as not English". THAT CLAIM WAS FALSE, and it is
+ *  quoted here rather than deleted because the ERROR is the useful part: "D-train" is ordinary 18xx usage and
+ *  appears in rulebooks across the family. I asserted a usage fact I had not checked, and dressed a
+ *  house-style preference as a correctness argument. Reported by the player who plays these games: "I'd push
+ *  back on the assertion that 'nobody says D-train'."
  *
- *  ONE SITE IN THE APP ALREADY KNEW THIS. `TrainBadges.tsx` has carried `trigger === "D" ? "Diesel" :
- *  \`${trigger}-Train\`` inline since the rust tooltips were written, and roughly twenty other places build
- *  the phrase with a bare template literal. That is the shape this codebase keeps producing -- a rule stated
- *  in one place and never asked in its siblings -- so the rule moves here, beside the type it is about, and
- *  the sites are converted as they are touched rather than in one sweep.
+ *  SO THE FUNCTION NO LONGER SPECIAL-CASES `D`, and every tier is named by its symbol. What survives the
+ *  correction is the reason this function exists at all, which was never the "Diesel" spelling.
+ *
+ *  THE DEFECT IS DISAGREEMENT BETWEEN SURFACES (#891's shape), not incorrectness at any one of them. The tree
+ *  has carried both spellings since v1.0alpha -- `TrainBadges.tsx` had `trigger === "D" ? "Diesel" :
+ *  \`${trigger}-Train\`` inline, while `RulesReference`'s rust column said "When the first D-train is bought"
+ *  -- so a player reading two panels was told two things. Either spelling would have done. Having two is the
+ *  bug, and one function that every naming site calls is what stops it recurring.
+ *
+ *  THE BARE `${tier}-train` SITES ARE NOT SWEPT, and that is now a conclusion rather than a deferral. Roughly
+ *  twenty-nine of them build the phrase inline across `App.tsx`, `RoutePlannerPanel`,
+ *  `EmergencyTrainPurchaseModal` and this panel -- and with `D` no longer special, every one of them already
+ *  renders what this function renders. Converting them would change no output at all. They differ only in
+ *  case: the helper title-cases ("Buy D-Trains from the Bank Depot") because its callers are headings and
+ *  buttons, and the inline sites are mid-sentence ("NYC bought a D-train for $1100"), where lower case is
+ *  right. Churning twenty-nine call sites for an identical string is the kind of tidying that reads as
+ *  progress and buys nothing.
+ *
+ *  THE PHASE IS NOT THE TRAIN, and that boundary is why "Diesel" still appears in this file. `depotSchedule`'s
+ *  "Diesel Era" and `PHASE_EFFECTS`'s "Phase D (Diesel)" name a PHASE OF THE GAME, which is what 1830 itself
+ *  calls it; `TutorialModal` and `RulesReference` use it in prose explaining that its capacity is unlimited.
+ *  None of those is naming a train a corporation can buy, so none of them is this function's business.
  *
  *  HERE, BESIDE `TrainTier`, RATHER THAN IN A MODULE OF ITS OWN. Naming a tier is a property of the tier, and
  *  this file is already the authority on what tiers exist and how they order. A `trainNaming.ts` holding two
  *  functions would be a module whose only content is the thing this one is for. */
 export function trainTierName(tier: string): string {
-  return tier === "D" ? "Diesel" : `${tier}-Train`;
+  return `${tier}-Train`;
 }
 
-/** The same name in the plural -- `"3-Trains"`, `"Diesels"`.
+/** The same name in the plural -- `"3-Trains"`, `"D-Trains"`.
  *
  *  Design note #1007: A SEPARATE FUNCTION RATHER THAN A COUNT ARGUMENT. Every caller so far knows at the call
  *  site which it wants: a heading naming a category is always plural, and a button naming one purchase is
  *  singular. A `count` parameter would make both of them pass a number they do not have in order to select a
  *  suffix they already know. `countPhrase` in `App.tsx` remains the tool for "n of these", and it composes
- *  with the singular form. */
+ *  with the singular form.
+ *
+ *  KEPT AS A FUNCTION THOUGH IT IS NOW ONE INTERPOLATION. It would be shorter inline at both call sites, and
+ *  that is exactly the state the tree was in when it drifted into two spellings. The point of the seam is not
+ *  that the rule is complicated; it is that there is one place to change it. */
 export function trainTierNamePlural(tier: string): string {
   return `${trainTierName(tier)}s`;
 }
@@ -229,7 +254,14 @@ export interface DepotTier {
   rustPhaseLabel: string | null;
 }
 
-const DEPOT_COST: Readonly<Record<TrainTier, number>> = {
+/** The printed depot price per tier.
+ *
+ *  Design note #1046: EXPORTED, because the Yellow Sign pays a fraction of a train's depot value and needs
+ *  the same figure the depot table shows. A SECOND COPY LIVES IN `sandboxSession.ts` as `TIER_COST`, used by
+ *  the train-limit trim to decide which train is cheapest -- flagged rather than merged, because unifying
+ *  them touches the reducer's discard ordering and that is not this batch's business. If the two ever
+ *  disagree, the trim and the payout will disagree about what a train is worth. */
+export const DEPOT_COST: Readonly<Record<TrainTier, number>> = {
   "2": 80,
   "3": 180,
   "4": 300,
@@ -400,11 +432,30 @@ export function derivePhase(gameState: GameStateResponse | null): GamePhase | nu
     // evidence that the field is supported. `[]` is a real answer.
     if (trains == null) continue;
     known = true;
+    /* ==================================================================
+        DESIGN NOTE 1046: A GHOST TRAIN WAS NEVER IN THE DEPOT
+       ==================================================================
+       RULED of the Yellow Sign's gift: "it does not deplete the bank's supply." This function is where the
+       supply lives -- `depotRemaining` is `TOTAL - owned`, so a train nobody bought would otherwise take one
+       off the shelf. It would also pull the phase-change countdown forward and could trip "shift imminent",
+       and #1035's "Privates Close in N Buys" reads the same figure.
+       SUBTRACTED FROM THE TALLY, NOT FROM THE ROSTER. The ghost still counts toward `highest`, because it is
+       a real train the corporation owns and the PHASE is "the highest tier anybody owns" (#1) -- a phase-6
+       gift in a phase-6 game changes nothing there, and hiding it would be the #906 mistake of enforcing a
+       rule by withholding a value.
+       A MULTISET WALK, matching `pending_rust_trains` everywhere else: one ghost 6 and one bought 6 is one
+       train off the shelf, not two and not none. */
+    const ghosts = [...(company.ghost_trains ?? [])];
     for (const model of trains) {
       const tier = trainTier(model);
       if (!tier) continue;
-      ownedByTier.set(tier, (ownedByTier.get(tier) ?? 0) + 1);
       highest = Math.max(highest, TIER_ORDER.indexOf(tier));
+      const ghostAt = ghosts.indexOf(model);
+      if (ghostAt >= 0) {
+        ghosts.splice(ghostAt, 1);
+        continue;
+      }
+      ownedByTier.set(tier, (ownedByTier.get(tier) ?? 0) + 1);
     }
   }
 

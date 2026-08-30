@@ -297,10 +297,28 @@ function CorporationRoster({
            begins (`utils/corporationCardOrder.ts`) and held until the next one. */}
         {applyCardOrder(publicCompanies, cardOrder).map((company) => {
           const color = tickerColor(company.company_id);
-          /* Design note #447: `last_route_revenue` is optional and `gameState.ts` is explicit that `undefined`
-             means "this build cannot tell you" while "0" means "it earned nothing" -- and a company that never
-             operated reports "0" too. The honest test is a positive figure; anything else is a dash. */
-          const hasRunRoutes = (Number(company.last_route_revenue ?? 0) || 0) > 0;
+          /* Design note #447: the field is optional and `gameState.ts` is explicit that `undefined` means
+             "this build cannot tell you" while "0" means "it earned nothing" -- and a company that never
+             operated reports "0" too. The honest test is a positive figure; anything else is a dash.
+
+             ==================================================================
+              DESIGN NOTE 1028: THE PERSISTENT FIGURE FIRST
+             ==================================================================
+             REPORTED: "all corporation cards on the Stock tab have 'Last Run --' during an Operating Round ...
+             it was only printing the Last Run value of the last corporation to run."
+
+             `last_route_revenue` IS TURN-SCOPED and #777 clears it on every turn change, so the only card
+             still holding a figure was whichever corporation was mid-turn. This panel was rendering the field
+             faithfully; the field does not mean what "Last run" means.
+
+             THE LIVE FIGURE STILL WINS WHERE IT EXISTS, which is the corporation currently operating: its run
+             has happened and has not yet been filed away, and showing the stale one there would be a card
+             disagreeing with the board in front of the player. `last_completed_run_revenue` answers for
+             everybody else. */
+          const liveRun = Number(company.last_route_revenue ?? 0) || 0;
+          const filedRun = Number(company.last_completed_run_revenue ?? 0) || 0;
+          const lastRun = liveRun > 0 ? liveRun : filedRun;
+          const hasRunRoutes = lastRun > 0;
           // Design note #389: derived from the fill, so every corporation's
           // stripe is legible without a per-company decision.
           const liveryInk = bestContrastTextColor(color);
@@ -450,7 +468,7 @@ function CorporationRoster({
                       title={
                         company.is_floated
                           ? hasRunRoutes
-                            ? `${company.ticker} last ran its trains for $${company.last_route_revenue}.`
+                            ? `${company.ticker} last ran its trains for $${lastRun}.`
                             : `${company.ticker} has floated but has not yet run its trains.`
                           : `${soldFromIpoPercent(company)}% has left the IPO; ${FLOAT_THRESHOLD_PERCENT}% floats this corporation.`
                       }
@@ -458,7 +476,7 @@ function CorporationRoster({
                       {company.is_floated ? (
                         <>
                           <span style={styles.rosterLiveryBadgeCaption}>Last run</span>
-                          {hasRunRoutes ? `$${company.last_route_revenue}` : "--"}
+                          {hasRunRoutes ? `$${lastRun}` : "--"}
                         </>
                       ) : (
                         `${soldFromIpoPercent(company)}% / ${FLOAT_THRESHOLD_PERCENT}%`
@@ -553,6 +571,7 @@ function CorporationRoster({
                         surface="light"
                         compact
                         outlook={outlook}
+                        reprieved={company.pending_rust_trains}
                       />
                     ) : (
                       <span style={styles.assetEmpty}>none</span>

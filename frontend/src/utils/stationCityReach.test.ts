@@ -68,12 +68,20 @@ const HEX = (label: string) => {
   return hex;
 };
 
-type LoggedAction = { index: number; actor: string; payload: string; msg: Record<string, unknown> };
+/** Design note #1026: `id` joins the shape because `effectiveActions` keys its dead-set on identity now. A
+ *  dump has one entry per index, so minting it from the index preserves this fixture's behaviour exactly. */
+type LoggedAction = {
+  index: number;
+  id: string;
+  actor: string;
+  payload: string;
+  msg: Record<string, unknown>;
+};
 
 /** The live log: every action the reverts did not kill, in index order. */
 const LIVE: LoggedAction[] = effectiveActions(
   (FIXTURE.actions as ReadonlyArray<{ index: number; actor: string | null; msg: Record<string, unknown> }>).map(
-    (a) => ({ index: a.index, actor: a.actor ?? "", payload: "", msg: a.msg }),
+    (a) => ({ index: a.index, id: `dump-${a.index}`, actor: a.actor ?? "", payload: "", msg: a.msg }),
   ),
 );
 

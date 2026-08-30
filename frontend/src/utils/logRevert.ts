@@ -17,6 +17,26 @@ import { isRevertToMsg } from "./gameSetup";
  *  Firestore bridge. */
 export interface RevertableAction {
   index: number;
+  /** ==================================================================
+   *   DESIGN NOTE 1026: THE ENTRY'S OWN IDENTITY, WHICH `index` WAS STANDING IN FOR
+   *  ==================================================================
+   *
+   * REPORTED, of a room that rebuilt shorter than it had been: "restarting the server caused the active game
+   * room to roll back to a much earlier state."
+   *
+   * `dead` WAS A `Set<number>` OF INDICES, and indices were not unique. `appendSandboxAction` took the index
+   * from the caller and wrote it unchecked (#1026 there), so two clients dispatching at once both wrote the
+   * same one -- and `SandboxAction`'s own field comment has said so all along: the document id is "the
+   * deterministic tie-break for two entries that raced onto the same index."
+   *
+   * SO ONE `RevertTo` KILLED BOTH. An undo aimed at a shared index marked that number dead, and the filter
+   * then dropped every entry carrying it -- including the one nobody undid. Invisible while a client holds
+   * the game in memory, and permanent from the next replay onward, which is exactly the shape of the report.
+   *
+   * REQUIRED, NOT OPTIONAL. An `id?: string` with a fallback to `index` would reproduce the bug for every
+   * caller that forgot it, silently. Making it required turns each such caller into a type error, which is
+   * the difference between a fix and a convention. */
+  id: string;
   payload: string;
   actor: string;
   /** Design note #668: the game dispatched this, not the player. Optional
@@ -61,24 +81,35 @@ export function revertTargetOf(action: { payload: string }): number | null {
 export function effectiveActions<T extends RevertableAction>(
   actions: readonly T[],
 ): T[] {
-  const dead = new Set<number>();
+  const dead = new Set<string>();
 
   for (let at = actions.length - 1; at >= 0; at -= 1) {
     const action = actions[at];
     // A revert that was itself reverted does nothing.
-    if (dead.has(action.index)) continue;
+    if (dead.has(action.id)) continue;
     const target = revertTargetOf(action);
     if (target === null) continue;
 
     /* The revert is never a game action -- it is an instruction about the
        log, and replaying it would mean the reducer had to know about it. */
-    dead.add(action.index);
+    dead.add(action.id);
+    /* ==================================================================
+       DESIGN NOTE 1026: THE RANGE IS STILL INDICES; THE KILL LIST IS IDENTITIES
+       ==================================================================
+       `RevertTo { index }` means "everything from here onward did not happen", which is a statement about
+       POSITIONS -- so the range test keeps reading `index` and is unchanged.
+       WHAT CHANGES IS WHAT GETS MARKED. Each entry in that range is killed by its own id, so an entry that
+       merely shares a number with one of them survives. `< action.index` also leaves an entry sitting on the
+       revert's own index alive: whether an undo swallows something written at the same instant is genuinely
+       ambiguous, and this fix exists to stop valid actions being destroyed, so the ambiguous case resolves
+       toward keeping them. Once allocation is transactional (#1026 in `sandboxRoom.ts`) no new log can
+       produce the case at all -- this is what protects the logs that already have. */
     for (const other of actions) {
-      if (other.index >= target && other.index < action.index) dead.add(other.index);
+      if (other.index >= target && other.index < action.index) dead.add(other.id);
     }
   }
 
-  return actions.filter((action) => !dead.has(action.index) && revertTargetOf(action) === null);
+  return actions.filter((action) => !dead.has(action.id) && revertTargetOf(action) === null);
 }
 
 /* Design note #592: who may undo what. INSTRUCTED that players undo their own

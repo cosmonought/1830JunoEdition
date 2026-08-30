@@ -76,12 +76,26 @@ const ERIE_PROTOCOL_ID = 6;
 /** The dump's shape, plus the two fields `RevertableAction` requires -- `effectiveActions` reads `index` to
  *  decide what a revert kills and `actor` to attribute it, and the dump carries both. `payload` is
  *  reconstituted from `msg` because the helper's type asks for it; nothing here reads it back. */
-type Action = { index: number; actor: string | null; payload: string; msg: Record<string, unknown> };
+type Action = {
+  index: number;
+  /** Design note #1026: `effectiveActions` keys its dead-set on identity now. A dump has one entry per index,
+   *  so minting the id from the index preserves exactly the behaviour this fixture always had. */
+  id: string;
+  actor: string | null;
+  payload: string;
+  msg: Record<string, unknown>;
+};
 
 /** The live log: every action the reverts did not kill, in index order. */
 const LIVE: Action[] = effectiveActions(
   (FIXTURE.actions as ReadonlyArray<{ index: number; actor: string | null; msg: Record<string, unknown> }>).map(
-    (a) => ({ index: a.index, actor: a.actor ?? "", payload: JSON.stringify(a.msg), msg: a.msg }),
+    (a) => ({
+      index: a.index,
+      id: `dump-${a.index}`,
+      actor: a.actor ?? "",
+      payload: JSON.stringify(a.msg),
+      msg: a.msg,
+    }),
   ),
 );
 

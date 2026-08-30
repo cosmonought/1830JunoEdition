@@ -122,12 +122,49 @@ export function privatePowerHexKeys(
  *  action they already agreed to.
  *  AND ONLY FOR THE ACTING VIEWER, per #413/#809: a watcher clicking F16 is inspecting the board, and an
  *  offer to use somebody else's power is an instruction they cannot follow. */
+/** The Operating Round step at which a hex power may be raised.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 1027: A POWER THAT LAYS TRACK BELONGS TO THE LAY TRACK STEP
+ *  ==================================================================
+ *
+ *  REPORTED: "A player clicked a special Private Company hex during the 'Buy/Skip Private' subphase. The 'Use
+ *  Private Power' modal popped up prematurely. Lying track failed."
+ *
+ *  THIS FUNCTION ASKED WHO WAS CLICKING AND NEVER ASKED WHEN. #845 gave the ringed hex an answer to a click,
+ *  and gated it on the two things that were wrong at the time -- a watcher clicking somebody else's power, and
+ *  a click arriving while the errand was already armed. Neither is about the STEP, and the powers it raises
+ *  (the D&H's track, the C&SL's tile) are lay-track actions: offered at Buy Private, the modal opens, the
+ *  player accepts, and the lay then fails because the game is not at the step that lays anything.
+ *
+ *  GATED HERE RATHER THAN AT THE CLICK, for #1006's reason two batches ago: a rule the deciding caller has to
+ *  remember is a rule with a door beside it, and this function already owns "may this click raise an offer". */
+export const PRIVATE_POWER_SUB_PHASE = "Track";
+
+/** The offer a click on `hexKey` should raise, or `null` when the click is somebody else's business.
+ *
+ *  REFUSED WHILE AN ERRAND IS ARMED. Once a power is armed the same hex is where the player LAYS -- #725
+ *  exists so that click reaches the tile picker -- so asking again would put a modal between them and the
+ *  action they already agreed to.
+ *  AND ONLY FOR THE ACTING VIEWER, per #413/#809: a watcher clicking F16 is inspecting the board, and an
+ *  offer to use somebody else's power is an instruction they cannot follow. */
 export function privatePowerOfferAt(input: {
   hexKey: string;
   actingViewer: boolean;
   errandArmed: boolean;
   offers: readonly PrivatePowerOffer[];
+  /** Design note #1027: the cursor. `undefined` means the caller cannot say, which keeps every pre-#1027
+   *  caller behaving exactly as it did -- and is a real state, since `operating_sub_phase` is optional on the
+   *  response and `dividendGate` treats an absent cursor the same way. */
+  subPhase?: string | null;
 }): PrivatePowerOffer | null {
   if (!input.actingViewer || input.errandArmed) return null;
+  if (
+    input.subPhase !== undefined &&
+    input.subPhase !== null &&
+    input.subPhase !== PRIVATE_POWER_SUB_PHASE
+  ) {
+    return null;
+  }
   return input.offers.find((offer) => offer.hexKey === input.hexKey) ?? null;
 }

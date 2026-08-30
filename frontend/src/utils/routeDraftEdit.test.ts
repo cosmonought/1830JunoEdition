@@ -19,8 +19,31 @@ import type { MapGridResponse } from "../components/hexContractTypes";
 import { STATIC_BOARD_HEXES } from "../components/hexBoardData";
 import { liveEdgesForHex } from "../components/hexGeometry";
 
-/** A bare board: preprinted track only, nothing laid. */
-const GRID: MapGridResponse = { game_id: 1, tiles: [] };
+/* ==================================================================
+    DESIGN NOTE 1025: "ADJACENT" IS NOT "JOINED", AND THIS FIXTURE ASSUMED IT WAS
+   ==================================================================
+   THIS WAS A BARE BOARD, and its own note described A9 and A11 as "two adjacent preprinted termini ... the
+   simplest legal two-stop route". They are adjacent. They are not JOINED: on a bare grid A9 carries one
+   printed rail, reaching an edge that does not face A11, so no track runs between them.
+
+   IT PASSED BECAUSE THE RULE IT WAS TESTING DID NOT EXIST. `editRouteDraft` rule 6 appended any adjacent
+   click without asking whether a rail joined the two hexes -- which is precisely what was reported: "the UI
+   will draw discontinuous bits of route as though that were legal." So this suite was pinning the bug, and
+   several of its cases could only ever have exercised the rules they name once that hole was closed.
+
+   THE FIX IS TO LAY THE TRACK THE FIXTURE ALWAYS CLAIMED. Tile 9 is the plain straight (edges 0-3), which is
+   the minimum that makes each pair a corridor -- and the assertions below still check every property this
+   file relied on, so a laid tile that changed one of them would say so rather than pass quietly. */
+const GRID: MapGridResponse = {
+  game_id: 1,
+  tiles: [
+    // A9 <-> A11 run east-west, as do A19 <-> A17.
+    { q: 4, r: 0, tile_id: 9, orientation: 0 },
+    { q: 5, r: 0, tile_id: 9, orientation: 0 },
+    { q: 9, r: 0, tile_id: 9, orientation: 0 },
+    { q: 8, r: 0, tile_id: 9, orientation: 0 },
+  ],
+} as MapGridResponse;
 
 const at = (label: string): RoutePoint => {
   const hex = STATIC_BOARD_HEXES.find((entry) => entry.label === label);

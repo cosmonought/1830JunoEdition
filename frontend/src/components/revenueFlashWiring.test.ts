@@ -237,10 +237,27 @@ describe("the shell raises it once per TURN (design notes #940 -> #941)", () => 
 
   it("asks the shared predicate, not the percentage", () => {
     /* `percent !== 100` is true for a 90% roll that rounded back to the printed figure, and would flash a
-       malus over a turn that lost nothing. #938's `revenueOutcome` is the one both surfaces ask. */
-    expect(runBlock).toContain('if (revenueOutcome(roll) !== "normal")');
+       malus over a turn that lost nothing. #938's `revenueOutcome` is the one both surfaces ask.
+       ==================================================================
+        DESIGN NOTE 1040: THE CONDITION GAINED A SECOND CONJUNCT
+       ==================================================================
+       THIS ASSERTED THE WHOLE EXPRESSION INCLUDING ITS CLOSING PAREN -- `!== "normal")` -- so adding the
+       Yellow Sign's suppression to the same `if` broke it. The predicate it exists to pin did not change.
+       RE-ANCHORED ON THE PREDICATE ALONE, which is what the case is named for and is the part a future edit
+       could get wrong; the `not.toContain` pair below is what actually forbids the percentage comparison, and
+       neither needed touching. A trailing paren in an assertion is a claim that nothing will ever be added to
+       the condition, which is a promise no harness should make. */
+    expect(runBlock).toContain('revenueOutcome(roll) !== "normal"');
     expect(runBlock).not.toContain("percent !== 100");
     expect(runBlock).not.toContain("percent === 100");
+  });
+
+  it("does not flash over the Yellow Sign's own haunting", () => {
+    /* Design note #1040: ruled as "completely suppress the standard default visual UI animations ... The
+       player should only see the 10000ms video overlay and the updated Activity Log styling." Asserted HERE
+       rather than only in `batch46` because this file is the one that owns what raises the flash -- a later
+       edit tidying the condition would be read against this suite. */
+    expect(runBlock).toContain("!cue.suppressStandardVisuals");
   });
 
   it("flashes the die's nominal swing", () => {

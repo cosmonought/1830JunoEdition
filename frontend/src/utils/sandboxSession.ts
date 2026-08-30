@@ -759,6 +759,34 @@ export function openingStockRoundReset(
   };
 }
 
+
+/** Ghost trains become ordinary at the end of an Operating Round, and the fleet is trimmed if that puts a
+ *  corporation over the limit -- design note #1046. */
+function expireGhostTrains(state: GameStateResponse): GameStateResponse {
+  const hasGhost = (state.public_companies ?? []).some(
+    (company) => (company.ghost_trains?.length ?? 0) > 0,
+  );
+  if (!hasGhost) return state;
+  const limit = limitForTier(state, derivePhase(state)?.tier ?? "2");
+  return {
+    ...state,
+    public_companies: state.public_companies.map((company) => {
+      if ((company.ghost_trains?.length ?? 0) === 0) return company;
+      const trimmed = trimToTrainLimit({
+        owned: company.owned_trains ?? [],
+        reprieved: company.pending_rust_trains ?? [],
+        limit,
+        cost: (model) => TIER_COST[model] ?? 0,
+      });
+      return {
+        ...company,
+        ...(company.owned_trains == null ? {} : { owned_trains: [...trimmed.owned] }),
+        ghost_trains: [],
+      };
+    }),
+  };
+}
+
 /** Applies a phase change's consequences; unchanged state when the purchase triggers nothing.
  *  See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #284 */
 export function applyPhaseChange(
@@ -835,8 +863,33 @@ export function applyPhaseChange(
     // this build cannot see would invent one.
     if (owned == null) return company;
 
-    // 1. Rust.
-    const rustedNow = doomed.size === 0 ? [] : owned.filter((model) => doomed.has(model));
+    /* 1. Rust.
+       ==================================================================
+        DESIGN NOTE 1032: A TRAIN ALREADY UNDER SENTENCE IS NOT SENTENCED AGAIN
+       ==================================================================
+       REPORTED: modals "listing trains and quantities that didn't always make sense".
+       THIS FILTER ASKED ONLY WHETHER THE MODEL IS DOOMED, never whether this particular train had already
+       been marked -- so a corporation holding two marked 2-trains, met by a second `applyPhaseChange` for the
+       same tier, left with `pending_rust_trains` of `["2","2","2","2"]`: four sentences for two trains.
+       `describeFleetLosses` diffs that list to find the rust event, so it reported two fresh rusts for trains
+       already awaiting execution, and `trimToTrainLimit` then read four reprieved slots against a fleet
+       holding two.
+       THE INVARIANT IS THAT `pending_rust_trains` IS A SUB-MULTISET OF `owned_trains`, and this is the write
+       that could break it. Stated as a multiset walk rather than a `Set` for the reason every other list in
+       this file is: two 2-trains are two trains, one of which may be marked while the other is not. */
+    const alreadyMarked = [...(company.pending_rust_trains ?? [])];
+    const rustedNow =
+      doomed.size === 0
+        ? []
+        : owned.filter((model) => {
+            if (!doomed.has(model)) return false;
+            const at = alreadyMarked.indexOf(model);
+            if (at >= 0) {
+              alreadyMarked.splice(at, 1);
+              return false;
+            }
+            return true;
+          });
     /* ==================================================================
         DESIGN NOTE 979: THE REPRIEVE IS A MARK ON THE TRAIN, NOT A PLACE IT GOES
        ==================================================================
@@ -1993,6 +2046,24 @@ function settleOperatingCursor(
            `pending_rust_trains: []` RATHER THAN THE FIELD REMOVED: by the time this runs the state has
            certainly reported a reprieve -- `done` requires a non-empty one -- so an empty list here is a
            fact rather than an invention. */
+        /* ==================================================================
+            DESIGN NOTE 1032: THIS FUNCTION WAS NOT THE ZOMBIE, AND THE AUDIT SAYS SO
+           ==================================================================
+           REPORTED: "once a reprieved train completes its Final Run ... it is permanently and completely
+           removed from the corporation's roster array. They must not persist as invisible data objects that
+           get re-evaluated during later phase changes."
+           IT ALREADY IS. The walk below takes each marked model out of `owned_trains` and the whole mark list
+           is replaced with `[]`, so after this runs there is no train and no mark. Driving the reducer
+           through the reported sequence confirmed it: the trains are gone from both arrays.
+           WHAT PRODUCED THE SYMPTOM WAS UPSTREAM. `applyPhaseChange` re-marked trains that were already
+           marked (#1032, at the rust filter), so `pending_rust_trains` could hold four entries for two
+           trains -- and a mark list longer than the fleet is what "invisible data objects" describes. The
+           surplus marks matched nothing here, survived as far as the next `describeFleetLosses` diff, and
+           were reported as fresh rusts. Fixed at the write rather than swept up at the read: a sweep here
+           would have hidden the doubling while leaving every other reader of the field holding the wrong
+           list.
+           NOTHING IS CHANGED IN THIS FUNCTION. Recorded because "I checked and it was already correct" is a
+           finding, and the next reader chasing this report deserves to be told where not to look. */
         const survivors = [...(company.owned_trains ?? [])];
         for (const model of company.pending_rust_trains ?? []) {
           const at = survivors.indexOf(model);
@@ -2011,8 +2082,22 @@ function settleOperatingCursor(
      See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #656 */
   if (after.current_round_type !== "OperatingRound") {
     const expired = expireReprieveFor(after, outgoingCorporation);
-    if (expired.operating_sub_phase === undefined) return expired;
-    return { ...expired, operating_sub_phase: undefined };
+    /* ==================================================================
+        DESIGN NOTE 1046: THE GHOST STOPS BEING ONE WHEN THE ROUND ENDS
+       ==================================================================
+       RULED: the gift "bypasses train limit checks until the end of the Operating Round", and asked what
+       happens then -- "Becomes an ordinary train; discard if over." So the exemption expires HERE, at the
+       round boundary rather than at a turn change, because that is what the ruling names.
+       THE TRIM RUNS IMMEDIATELY AFTER, in the same transition. Clearing the marks without trimming would
+       leave a corporation sitting over the limit indefinitely: `applyPhaseChange` is the only other place
+       that trims, and it fires on a phase change, which may never come again.
+       CHEAPEST-FIRST AND REPRIEVED-EXEMPT, through the same `trimToTrainLimit` every other caller uses --
+       #1034's rule, so the newly-ordinary ghost competes with the rest of the fleet on the ordinary terms
+       rather than being singled out. It is usually the newest and most expensive train, so it usually
+       survives, which is the generous reading of a gift. */
+    const settled = expireGhostTrains(expired);
+    if (settled.operating_sub_phase === undefined) return settled;
+    return { ...settled, operating_sub_phase: undefined };
   }
 
   const turnChanged =
@@ -2070,17 +2155,61 @@ function settleOperatingCursor(
        well as this turn's. The corporation would be paid for track it did not run, from a field nobody was
        looking at. Cleared in the same expression as its two siblings for exactly #777's reason -- two resets
        of one turn-scoped idea are two things that can drift. */
+    /* Design note #1031: THE BREAKDOWN IS THE FOURTH TURN-SCOPED FIGURE, and it is listed here as well as
+       cleared below because the other three can all be zero while it is not -- a turn whose routes earned
+       nothing still ran trains. Left out of this predicate, such a turn would leave a breakdown standing that
+       no later clear would ever reach. */
     const staleRun = (company: (typeof after.public_companies)[number]) =>
       (company.last_route_revenue ?? "0") !== "0" ||
       (company.printed_route_revenue ?? "0") !== "0" ||
+      (company.last_run_breakdown?.length ?? 0) !== 0 ||
       (company.routes_run_this_turn ?? 0) !== 0;
+    /* ==================================================================
+       DESIGN NOTE 1028: REMEMBER IT ON THE WAY OUT
+       ==================================================================
+       REPORTED: "all corporation cards on the Stock tab have 'Last Run --' during an Operating Round ... it
+       was only printing the Last Run value of the last corporation to run."
+
+       AND THIS IS THE LINE THAT ERASED THEM. #777's clear is right -- a turn-scoped total left standing makes
+       the NEXT turn's die apply to last turn's routes -- but the figure it wipes is exactly the completed run
+       the card wants to show, so the only corporation still holding one was whichever was mid-turn.
+
+       COPIED, NOT KEPT. `last_completed_run_revenue` is written in the same expression that zeroes its
+       turn-scoped sibling, which is the one moment both values are in hand and the reason this is not a
+       second clear to fall out of step with the first (#777's own argument for doing all three together).
+
+       ONLY WHEN SOMETHING RAN. A turn that earned nothing must not overwrite the last figure the corporation
+       actually earned with a zero -- "Last Run" would then read $0 for a corporation whose trains were simply
+       idle that round, which is a different claim from the one the card is making. */
     const cleared = withReprieveExpired.public_companies.some(staleRun)
       ? withReprieveExpired.public_companies.map((company) =>
           staleRun(company)
             ? {
                 ...company,
+                ...(Number(company.last_route_revenue ?? 0) > 0
+                  ? { last_completed_run_revenue: company.last_route_revenue }
+                  : {}),
                 last_route_revenue: "0",
                 printed_route_revenue: "0",
+                /* ==================================================================
+                    DESIGN NOTE 1031: CLEARED, WHERE #1028's FIGURE IS COPIED FORWARD
+                   ==================================================================
+                   THE OPPOSITE TREATMENT TO ITS NEIGHBOUR TWO LINES UP, and the difference is who reads it.
+                   `last_completed_run_revenue` is shown on the Stock tab for corporations that are NOT
+                   operating, so clearing it was the #1028 bug -- it erased the very thing the card wanted.
+                   The breakdown is read only through the acting corporation's train chips, which exist only
+                   while that corporation is the one operating. A breakdown that outlived its turn could
+                   therefore only ever be read as a claim about the WRONG turn: a watcher opening the chips
+                   before this corporation has run would be shown last round's figures as though the trains
+                   had already gone out.
+                   STRUCTURALLY IMPOSSIBLE RATHER THAN GUARDED. The alternative was to keep the field and gate
+                   the chip on `routes_run_this_turn > 0`, which works right up until a second caller reads
+                   the field without asking the same question -- #1006's shape, and this project's most
+                   frequent one. A field that cannot be stale needs no caller to remember anything.
+                   AN EMPTY ARRAY, NOT `undefined`. #232 reserves absence for "the log does not say", which is
+                   what an old replay means and what the chip's pricing fallback answers. "This corporation
+                   has not run this turn" is a positive fact and says so. */
+                last_run_breakdown: [],
                 routes_run_this_turn: 0,
               }
             : company,
@@ -2933,8 +3062,74 @@ function applyOneAction(
      turn-change clear is what bounds this rather than an assumption about the caller.
      `routes_run_this_turn` COUNTS THE ROUTES, not the messages. It exists for the log and for #777's clear,
      and a four-train turn that arrived as one message still ran four trains. */
+  /* ==================================================================
+      DESIGN NOTE 1046: THE SIGN CHANGES THE BOARD, SO THE REDUCER DOES IT
+     ==================================================================
+     THE ACTING CLIENT DECIDED AND THIS APPLIES. `model` and `cash` are carried on the message rather than
+     re-derived here, because by the time a replay reaches this action the fleet has moved on -- re-deriving
+     "the cheapest train" against a later roster would take a different train on the rebuild than it took in
+     the game, which is the whole class of bug #902's "an old log replays to the game it was played as" rule
+     exists to prevent.
+     REFUSES BY RETURNING THE STATE IT WAS HANDED (#778), like every other gate here. */
+  if ("YellowSignEvent" in msg) {
+    const { protocol_id, stage, model, cash } = msg.YellowSignEvent;
+    const company = state.public_companies.find((entry) => entry.company_id === protocol_id);
+    if (!company) return state;
+
+    if (stage === "mark") {
+      /* THE TRAIN GOES AND THE TURN EARNS NOTHING. Ruled: "loses its lowest value train. It receives no
+         standard route revenue for this submission. Instead, award the corporation cash equal to 0.5x the
+         deleted train's depot value."
+         BOTH REVENUE FIELDS ARE ZEROED, not just the modified one. `printed_route_revenue` is what the next
+         train's roll accumulates onto (#941), so leaving it would pay for these routes on the corporation's
+         NEXT dispatch -- the silent double-payment #934 was reported for. */
+      const owned = company.owned_trains;
+      if (owned == null) return state;
+      const at = owned.indexOf(model);
+      if (at < 0) return state;
+      const survivors = [...owned];
+      survivors.splice(at, 1);
+      const award = Math.max(0, Number(cash ?? 0) || 0);
+      return {
+        ...state,
+        public_companies: state.public_companies.map((entry) =>
+          entry.company_id === protocol_id
+            ? {
+                ...entry,
+                owned_trains: survivors,
+                has_yellow_sign: true,
+                treasury: String((Number(entry.treasury ?? 0) || 0) + award),
+                last_route_revenue: "0",
+                printed_route_revenue: "0",
+              }
+            : entry,
+        ),
+      };
+    }
+
+    /* THE GIFT. Ruled: "instantly gains a train matching the current phase's tier ... it does not deplete the
+       bank's supply ... and it bypasses train limit checks until the end of the Operating Round."
+       IT JOINS `owned_trains` LIKE ANY OTHER TRAIN and is ALSO listed in `ghost_trains`, which is #979's
+       shape: the roster stays the one place a fleet lives, and the exception is a mark beside it. A separate
+       array of ghost trains would be a second roster to fall out of step with the first.
+       THE FLAG IS CLEARED HERE. "Remove the corporation's flag ... so it cannot re-occur." */
+    return {
+      ...state,
+      public_companies: state.public_companies.map((entry) =>
+        entry.company_id === protocol_id
+          ? {
+              ...entry,
+              owned_trains: [...(entry.owned_trains ?? []), model],
+              ghost_trains: [...(entry.ghost_trains ?? []), model],
+              has_yellow_sign: false,
+            }
+          : entry,
+      ),
+    };
+  }
+
   if ("RunMultipleRoutes" in msg) {
-    const { protocol_id, routes } = msg.RunMultipleRoutes;
+    const { protocol_id, routes, trains, train_indices } = msg.RunMultipleRoutes;
     const variants = resolveVariants(state.variants);
     const priced = routes.map((path) =>
       ctx?.mapGrid
@@ -2942,6 +3137,29 @@ function applyOneAction(
         : SANDBOX_NOMINAL_ROUTE_REVENUE,
     );
     const printedThisMessage = priced.reduce((sum, value) => sum + value, 0);
+    /* ==================================================================
+        DESIGN NOTE 1031: THE BREAKDOWN WAS ALREADY COMPUTED AND THEN DISCARDED
+       ==================================================================
+       `priced` HAS HELD THE PER-TRAIN FIGURES ALL ALONG and this arm summed them and dropped the rest, which
+       is why a watcher could be told the corporation earned $640 and never which train earned which half.
+       Nothing new is calculated here; what changes is that the array survives the reduce.
+       WRITTEN ONLY WHERE THE LOG IDENTIFIES THE TRAINS. `train_indices` is optional (#232), and a breakdown
+       built from routes whose trains cannot be named would be a list of figures attached to guesses -- worse
+       than the absence, because the chip's fallbacks are honest about not knowing and a wrong index is not.
+       So an old log leaves the field untouched and the chip prices what it can, exactly as before.
+       IT REPLACES RATHER THAN APPENDS, where the two revenue totals accumulate. That asymmetry is deliberate:
+       #968 keeps adding to `printed_route_revenue` because a corporation could in principle run twice in one
+       turn and the money must not be discarded. A SECOND run's breakdown, though, describes the same fleet
+       slots as the first -- appending would put two entries on one chip, and the later one is the current
+       truth about that train. Money accumulates; the account of which train is where does not. */
+    const breakdown =
+      train_indices && train_indices.length === routes.length
+        ? routes.map((_path, at) => ({
+            train_index: train_indices[at],
+            model: trains?.[at] ?? "",
+            printed_revenue: String(priced[at]),
+          }))
+        : null;
     const company = state.public_companies.find((entry) => entry.company_id === protocol_id);
     const previousPrinted = Math.max(0, Number(company?.printed_route_revenue ?? 0) || 0);
     const printedTotal = previousPrinted + printedThisMessage;
@@ -2961,6 +3179,9 @@ function applyOneAction(
               ...entry,
               last_route_revenue: String(running),
               printed_route_revenue: String(printedTotal),
+              // Design note #1031: only when the log named the trains; otherwise the field keeps whatever it
+              // held, because "this message could not say" is not "the previous answer was wrong".
+              ...(breakdown ? { last_run_breakdown: breakdown } : {}),
               routes_run_this_turn: (entry.routes_run_this_turn ?? 0) + routes.length,
             }
           : entry,

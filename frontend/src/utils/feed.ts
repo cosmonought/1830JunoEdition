@@ -62,6 +62,20 @@ export interface ActionLogEntry {
   timestamp: string;
   /** Real sortable epoch-ms, stamped at construction -- see design note #2. */
   timestampMs: number;
+  /** ==================================================================
+   *   DESIGN NOTE 1042: WHICH WAY THE VARIANT WENT, FOR THE READER
+   *  ==================================================================
+   *
+   * RULED: "Apply distinct CSS classes to variant flavor text entries in the Activity Log. Use a subtle gold
+   * background for bonuses and a subtle red background for maluses, italicizing the text."
+   *
+   * STAMPED ON THE ENTRY RATHER THAN RE-DERIVED AT RENDER, which is #343's rule for the round prefix and is
+   * right here for the same reason: the tint is a fact about the roll that produced this line, and a renderer
+   * that re-read the CURRENT variant state would repaint every historic entry the moment a later turn rolled
+   * differently.
+   * ABSENT ON EVERY OTHER LINE, so the log's ordinary entries are untouched -- this marks the variant's
+   * flavour text and nothing else. */
+  tone?: "bonus" | "malus";
 }
 
 export type FeedFilter = "all" | "chat" | "log";
@@ -89,6 +103,8 @@ export interface FeedItem {
   logRound?: string;
   logStatus?: ActionLogStatus;
   logDetail?: string;
+  /** Design note #1042: the variant tint, carried through the merge. */
+  logTone?: "bonus" | "malus";
 }
 
 /** Oldest-first, matching ordinary chat reading order, since the feed auto-scrolls to the bottom on new arrivals.
@@ -150,6 +166,7 @@ export function mergeFeedItems(
       logRound: entry.round,
       logStatus: entry.status,
       logDetail: entry.detail,
+      logTone: entry.tone,
     };
   });
 

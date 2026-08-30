@@ -36,10 +36,13 @@ import { TrainGlyph } from "./TrainGlyph";
 import {
   phaseAlertLevel,
   trainTier,
+  trainTierName,
   type GamePhase,
   type TierRustOutlook,
   type TrainTier,
 } from "../utils/gamePhase";
+// Design note #1034: the one place that says a reprieved train occupies no limit slot.
+import { countableTrainCount } from "../utils/trainLimit";
 
 export type BadgeSurface = "dark" | "light";
 
@@ -132,7 +135,11 @@ function rustTooltip(
   // No outlook supplied: fall back to the static rule, which is still true.
   const trigger = entry?.rustedBy ?? STATIC_RUST_TRIGGER[tier];
   if (!trigger) return "Permanent: Never rusts.";
-  const triggerName = trigger === "D" ? "Diesel" : `${trigger}-Train`;
+  /* Design note #1007: THE ORIGINAL OF THE SPECIAL CASE, now deferring to the shared namer. This inline
+     ternary predates the helper -- it is where "Diesel" entered the tree, and every other surface spelling it
+     that way was copying this line. It is converted rather than left because a rule stated in one place and
+     restated in its siblings is how the two spellings arose. */
+  const triggerName = trainTierName(trigger);
   const away = entry?.purchasesAway;
   return away == null
     ? `Vulnerable: Rusts when the first ${triggerName} is purchased.`
@@ -356,12 +363,36 @@ export function TrainChips({
 export interface CapacityPillProps extends TrainBadgeCommonProps {
   trains?: string[] | null;
   phase: GamePhase | null;
+  /** Design note #1034: the models under a Gentle Rust reprieve, which occupy no limit slot. Absent means
+   *  "none marked" rather than "unknown" -- most call sites have no reprieve to report, and a standard game
+   *  never has one. */
+  reprieved?: readonly string[] | null;
+  /** Design note #1046: the Yellow Sign's gift, exempt from the limit until the Operating Round ends. A
+   *  second list rather than a wider `reprieved` -- they expire on different clocks. */
+  ghosts?: readonly string[] | null;
 }
 
-export function CapacityPill({ trains, phase, surface, compact }: CapacityPillProps) {
+export function CapacityPill({
+  trains,
+  phase,
+  surface,
+  compact,
+  reprieved,
+  ghosts,
+}: CapacityPillProps) {
   const ink = surface === "light" ? lightInk : darkInk;
   const size = compact ? FONT_SIZE.small : FONT_SIZE.strong;
-  const atLimit = phase != null && trains != null && trains.length >= phase.trainLimit;
+  /* ==================================================================
+      DESIGN NOTE 1034: THE PILL COUNTS WHAT THE LIMIT COUNTS
+     ==================================================================
+     RULED, following 1846's delayed obsolescence: gently rusted trains "stop counting to the train limit".
+     THIS PILL IS WHERE A PLAYER CHECKS THAT, so a numerator that disagreed with the gate would be the #979
+     report again -- one rule, two figures, and the player believing the one on screen. The chips beside it
+     still show every train including the condemned ones (that is the ruling's other half); this figure is
+     about SLOTS, and the two differing is the fact being communicated rather than an inconsistency.
+     `??` NOT `||` ON THE COUNT: zero countable trains is a real answer. */
+  const countable = trains == null ? null : countableTrainCount(trains, reprieved, ghosts);
+  const atLimit = phase != null && countable != null && countable >= phase.trainLimit;
 
   return (
     <span
@@ -375,14 +406,19 @@ export function CapacityPill({ trains, phase, surface, compact }: CapacityPillPr
       }}
       title={
         phase
-          ? `Phase ${phase.tier} allows ${phase.trainLimit} train${phase.trainLimit === 1 ? "" : "s"} per corporation.`
+          ? `Phase ${phase.tier} allows ${phase.trainLimit} train${phase.trainLimit === 1 ? "" : "s"} per corporation.` +
+            /* Design note #1034: the exemption is stated where the number is, because a pill reading "2 / 2"
+               beside three chips is otherwise a corporation that appears to be miscounting its own fleet. */
+            (reprieved && reprieved.length > 0
+              ? ` ${reprieved.length} on a final run under Gentle Rust and not counted.`
+              : "")
           : undefined
       }
     >
       {/* `owned_trains == null` is UNKNOWN, not zero -- "0 / 3" against a
           contract that never told us would read as "buy more trains" when
           the truth is "we cannot see them". */}
-      {trains == null ? "?" : trains.length} / {phase ? phase.trainLimit : "?"}
+      {countable == null ? "?" : countable} / {phase ? phase.trainLimit : "?"}
       {atLimit && <span style={styles.pillMax}>MAX</span>}
     </span>
   );

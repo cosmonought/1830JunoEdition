@@ -388,20 +388,20 @@ describe("gentle rust reprieves a train for one turn (design note #906)", () => 
     expect(isTrainLocked(pr.owned_trains?.length ?? 0, 3)).toBe(true);
   });
 
-  it("forces a discard when the new limit is below the whole fleet", () => {
-    /* RULED: "If a phase change drops the corporate train limit lower than a corporation's current total
-       train count (including gently rusted trains), force the immediate discard of a train (which will
-       typically be the gently rusted train)."
-       PHASE 6 CUTS THE LIMIT TO 2 and this corporation holds four, so two must go. The first 6-train rusts
-       the 3s (`RUSTS_ON`), which under this variant marks them rather than taking them -- and the fleet is
-       then over by exactly the pair the trim should reach for first.
-       THE FIXTURE HAD TO ARRIVE AT 6, NOT 5. My first version bought a 5 and asserted a reprieve: nothing
-       rusts on 5 in 1830 (2s go on the first 4, 3s on the first 6, 4s on the first Diesel), so the case was
-       testing a plain cheapest-first trim and calling it a reprieve test. It passed on `owned_trains` and
-       only the `pending_rust_trains` assertion noticed.
-       ASSERTED ON WHICH TRAINS SURVIVE, not just on the count. A cheapest-first trim that ignored the marks
-       would leave the same NUMBER of trains and the wrong ones -- a corporation holding two reprieved trains
-       that die at the end of the turn, having just scrapped the two that would have run all game. */
+  it("forces no discard when only the exempt trains put it over", () => {
+    /* ==================================================================
+        DESIGN NOTE 1034: THE RULING THIS CASE QUOTED HAS BEEN REPLACED
+       ==================================================================
+       IT QUOTED, and enforced: "If a phase change drops the corporate train limit lower than a corporation's
+       current total train count (INCLUDING gently rusted trains), force the immediate discard of a train
+       (which will typically be the gently rusted train)." That is #979, and this case asserted it faithfully.
+       RULED SINCE, on 1846's precedent: gently rusted trains "stop counting to the train limit". The
+       parenthetical above is exactly the clause that changed, so the expected answer inverts.
+       PHASE 6 CUTS THE LIMIT TO 2 and this corporation holds four -- but the first 6-train marks both 3s, so
+       it holds TWO countable trains and is already legal. Nothing goes, and the 3s get the final run the
+       variant exists to give them.
+       THE FIXTURE IS UNCHANGED, including the note below about why it had to arrive at 6 rather than 5. It
+       was well chosen; only the rule it measures moved. */
     const gentle = { ...STANDARD_VARIANTS, gentleRust: true };
     const before = phaseFour(gentle);
     const fleet = {
@@ -412,14 +412,18 @@ describe("gentle rust reprieves a train for one turn (design note #906)", () => 
     } as unknown as GameStateResponse;
     const after = applyPhaseChange(fleet, "6");
     const pr = after.public_companies[0];
-    expect(pr.owned_trains).toEqual(["5", "6"]);
-    expect(pr.pending_rust_trains).toEqual([]);
+    expect(pr.owned_trains).toEqual(["3", "3", "5", "6"]);
+    expect(pr.pending_rust_trains).toEqual(["3", "3"]);
   });
 
-  it("takes a live train too when the reprieved ones are not enough", () => {
-    /* THE OTHER SIDE OF "REPRIEVED FIRST": it is an ORDERING, not a rule that only reprieved trains may go.
-       One reprieved 3 and three live trains against a limit of 2 means two departures, and the second has to
-       come out of the live fleet cheapest-first -- #284's rule, still in force under the reprieved ones. */
+  it("takes only live trains when the live fleet is over", () => {
+    /* WAS "takes a live train too when the reprieved ones are not enough", asserting that reprieved-first was
+       an ORDERING rather than a restriction. Under #1034 the marked train is not a candidate at all, so the
+       rule it demonstrates is now #284's plain cheapest-first with one fewer participant.
+       THE SAME FIXTURE STILL SEPARATES THE TWO IMPLEMENTATIONS, which is why it is kept: three live trains
+       (4, 5, 6) against a limit of 2 means ONE departure, and it must be the 4. A trim that still reached for
+       the marked 3 would leave `["4","5","6"]` -- the same count as a correct answer under the old rule, and
+       the wrong trains under this one. */
     const gentle = { ...STANDARD_VARIANTS, gentleRust: true };
     const before = phaseFour(gentle);
     const fleet = {
@@ -430,17 +434,20 @@ describe("gentle rust reprieves a train for one turn (design note #906)", () => 
     } as unknown as GameStateResponse;
     const after = applyPhaseChange(fleet, "6");
     const pr = after.public_companies[0];
-    /* The reprieved 3 goes first, then the cheapest live train -- the 4. */
-    expect(pr.owned_trains).toEqual(["5", "6"]);
-    expect(pr.pending_rust_trains).toEqual([]);
+    expect(pr.owned_trains).toEqual(["3", "5", "6"]);
+    expect(pr.pending_rust_trains).toEqual(["3"]);
   });
 
-  it("does not leave a mark behind on a train the limit took", () => {
+  it("cannot leave a mark behind, because the limit can no longer take a marked train", () => {
     /* THE SILENT FAILURE THIS PREVENTS, and it is worse than a stale field. The reprieve expires by MULTISET
        REMOVAL from `owned_trains`, so a "3" left in `pending_rust_trains` after its own train was discarded
        would, at the end of the turn, remove a DIFFERENT 3 -- a live train, scrapped for a mark belonging to
-       one that left two phases ago. Asserted through the trim rather than by inspecting the helper, because
-       the two lists are only wrong together. */
+       one that left two phases ago.
+       DESIGN NOTE 1034: THE HAZARD IS NOW STRUCTURAL RATHER THAN GUARDED. #979 had to strip the mark of any
+       reprieved train the trim took; nothing can take one, so no mark can be orphaned. The case is kept
+       because the INVARIANT is what matters -- every mark still names a train the fleet holds -- and that is
+       what a future edit reintroducing reprieved-discards would break.
+       BOTH 3s ARE MARKED AND BOTH SURVIVE: one countable train (the 5) against phase 6's limit of two. */
     const gentle = { ...STANDARD_VARIANTS, gentleRust: true };
     const before = phaseFour(gentle);
     const fleet = {
@@ -451,8 +458,12 @@ describe("gentle rust reprieves a train for one turn (design note #906)", () => 
     } as unknown as GameStateResponse;
     const after = applyPhaseChange(fleet, "6");
     const pr = after.public_companies[0];
-    expect(pr.owned_trains).toEqual(["3", "5"]);
-    expect(pr.pending_rust_trains).toEqual(["3"]);
+    expect(pr.owned_trains).toEqual(["3", "3", "5"]);
+    expect(pr.pending_rust_trains).toEqual(["3", "3"]);
+    // The invariant itself: every mark names a train still held.
+    for (const mark of pr.pending_rust_trains ?? []) {
+      expect(pr.owned_trains).toContain(mark);
+    }
   });
 
   it("scraps them at the end of that corporation's turn", () => {

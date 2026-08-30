@@ -31,6 +31,10 @@ import { FONT_SIZE } from "../styles/typography";
 // other surface showed names.
 import { sandboxPlayerLabel } from "../utils/playerLabels";
 import {
+  ALERT_CRITICAL_BORDER,
+  ALERT_CRITICAL_INK,
+  ALERT_WARN_BORDER,
+  ALERT_WARN_INK,
   CARD_HIGHLIGHT_BORDER,
   CHIP_INERT_BG,
   CHIP_INERT_BORDER,
@@ -38,6 +42,8 @@ import {
 } from "../styles/palette";
 import { corporationFullName, corporationTitle } from "../utils/corporationNames";
 import { depotInventory, derivePhase, rustOutlook } from "../utils/gamePhase";
+// Design note #1035: how close the privates are to closing, for the pills that show them.
+import { privateClosureAlert } from "../utils/purchaseWarnings";
 import { formatNativeAmountCompact, NATIVE_DENOM_DISPLAY } from "../config";
 import { stationTickerColor } from "./hexContractTypes";
 import { PrivateCompanyPills } from "./PrivateCompanyPills";
@@ -146,8 +152,10 @@ function BankTreasurySection({ gameState }: { gameState: GameStateResponse }) {
     Number.isFinite(start) && start > 0 ? Math.round(((start - current) / start) * 100) : null;
 
   return (
-    <section style={{ ...styles.section, ...styles.sectionBank }}>
-      <h3 style={{ ...styles.sectionTitle, ...styles.sectionTitleBank }}>Bank Treasury</h3>
+    <details style={{ ...styles.section, ...styles.sectionBank }}>
+      <summary style={{ ...styles.sectionTitle, ...styles.sectionTitleBank, ...styles.sectionSummary }}>
+        Bank Treasury
+      </summary>
       <div style={styles.tableScroll}>
         <table style={styles.table}>
           <thead>
@@ -184,7 +192,7 @@ function BankTreasurySection({ gameState }: { gameState: GameStateResponse }) {
       </div>
 
       <DepotInventoryTable gameState={gameState} />
-    </section>
+    </details>
   );
 }
 
@@ -359,6 +367,9 @@ export function PlayerAssetsSection({
 }: PlayerAssetsSectionProps) {
   // Design note #7 in `utils/gameState.ts`: Yellow/Orange/Brown holdings
   // are exempt from the certificate limit, which needs live prices.
+  /* Design note #1035: the SAME pure function every other surface asks, on the same state. Two callers of
+     one rule is not the drift #867 warns about -- two implementations would be. */
+  const closureAlert = privateClosureAlert(derivePhase(gameState), depotInventory(gameState));
   const marketPrices: Record<number, number | null> = {};
   for (const entry of marketGrid?.positions ?? []) {
     const value = Number(entry.price);
@@ -400,8 +411,10 @@ export function PlayerAssetsSection({
     "arithmetic, run here.";
 
   return (
-    <section style={{ ...styles.section, ...styles.sectionPlayers }}>
-      <h3 style={{ ...styles.sectionTitle, ...styles.sectionTitlePlayers }}>Player Assets</h3>
+    <details style={{ ...styles.section, ...styles.sectionPlayers }}>
+      <summary style={{ ...styles.sectionTitle, ...styles.sectionTitlePlayers, ...styles.sectionSummary }}>
+        Player Assets
+      </summary>
       {gameState.player_addresses.length === 0 ? (
         <p style={styles.placeholderText}>No registered players yet.</p>
       ) : (
@@ -596,6 +609,7 @@ export function PlayerAssetsSection({
                         privates={privates}
                         surface="table"
                         emptyLabel="None"
+                        closureAlert={closureAlert}
                       />
                     </td>
                     {companies.map((company, index) => {
@@ -632,7 +646,7 @@ export function PlayerAssetsSection({
       {netWorthsEnabled && netWorthsError && (
         <p style={styles.footnote}>Net worth query failed: {netWorthsError}</p>
       )}
-    </section>
+    </details>
   );
 }
 
@@ -665,6 +679,10 @@ function CorporationAssetsSection({
 }) {
   const phase = derivePhase(gameState);
   const outlook = rustOutlook(gameState);
+  /* Design note #1035: the SAME pure function every other surface asks, on the same state. Two callers of
+     one rule is not the drift #867 warns about -- two implementations would be. */
+  const closureAlert = privateClosureAlert(derivePhase(gameState), depotInventory(gameState));
+
   const priceByCompany = new Map<number, number>();
   for (const entry of marketGrid?.positions ?? []) {
     const value = Number(entry.price);
@@ -672,8 +690,10 @@ function CorporationAssetsSection({
   }
 
   return (
-    <section style={{ ...styles.section, ...styles.sectionCorps }}>
-      <h3 style={{ ...styles.sectionTitle, ...styles.sectionTitleCorps }}>Corporation Assets</h3>
+    <details style={{ ...styles.section, ...styles.sectionCorps }}>
+      <summary style={{ ...styles.sectionTitle, ...styles.sectionTitleCorps, ...styles.sectionSummary }}>
+        Corporation Assets
+      </summary>
       {gameState.public_companies.length === 0 ? (
         <p style={styles.placeholderText}>No corporations yet.</p>
       ) : (
@@ -755,6 +775,7 @@ function CorporationAssetsSection({
                         surface="dark"
                         compact
                         outlook={outlook}
+                        reprieved={company.pending_rust_trains}
                       />
                     </td>
                     <td style={styles.tdCenterB}>
@@ -763,6 +784,7 @@ function CorporationAssetsSection({
                         phase={phase}
                         surface="dark"
                         compact
+                        reprieved={company.pending_rust_trains}
                       />
                     </td>
                     <td style={styles.tdNumB}>
@@ -781,8 +803,26 @@ function CorporationAssetsSection({
                           {corporatePrivates.map((priv) => (
                             <span
                               key={priv.private_id}
-                              style={styles.corpPrivateChip}
-                              title={`${priv.name} — $${priv.revenue_per_or} per Operating Round, paid to ${company.ticker}'s treasury.`}
+                              /* Design note #1035: a corporation's privates close on the same purchase as a
+                                 player's, and this list is a second hand-rolled chip renderer (#423 records
+                                 why that is a hazard) -- so it escalates on the same value rather than
+                                 quietly staying calm while the pills beside it turn red. */
+                              style={{
+                                ...styles.corpPrivateChip,
+                                ...(closureAlert === "critical"
+                                  ? styles.corpPrivateChipCritical
+                                  : closureAlert === "warn"
+                                    ? styles.corpPrivateChipWarn
+                                    : {}),
+                              }}
+                              title={
+                                `${priv.name} — $${priv.revenue_per_or} per Operating Round, paid to ${company.ticker}'s treasury.` +
+                                (closureAlert === "critical"
+                                  ? " CLOSING: the next train purchase closes every private company."
+                                  : closureAlert === "warn"
+                                    ? " Closing soon: two more train purchases close every private company."
+                                    : "")
+                              }
                             >
                               {/* Design note #407: THE REVENUE IS ON THE CHIP. Privates must display their per-OR revenue wherever they
                                  are listed outside the auction -- it is what certificate-exchange timing is judged on. Every one of these
@@ -808,7 +848,7 @@ function CorporationAssetsSection({
           </table>
         </div>
       )}
-    </section>
+    </details>
   );
 }
 
@@ -972,6 +1012,38 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#9aa0ac",
     margin: 0,
   },
+  /** ==================================================================
+   *   DESIGN NOTE 1033: THE THREE TABLES FOLD AWAY
+   *  ==================================================================
+   *
+   * REPORTED: "The Game Ledger currently forces players to scroll through a massive vertical list of Bank,
+   * Player, and Corporation information", with the fix ruled as three collapsible panels defaulting to
+   * collapsed.
+   *
+   * `<details>` RATHER THAN STATE, and the ruling offered it first. Three booleans and three click handlers
+   * would reimplement disclosure that the element already does -- including the keyboard behaviour, the
+   * `aria-expanded` a screen reader needs, and Ctrl-F opening a panel to reveal a match inside it, which is
+   * exactly what a player hunting one corporation's cash wants and what no hand-rolled version gives free.
+   *
+   * COLLAPSED BY DEFAULT FALLS OUT OF THE ELEMENT: `<details>` without `open` is shut, so there is no initial
+   * state to get wrong on a remount.
+   *
+   * THE `<h3>` BECAME THE `<summary>` rather than sitting inside one. A heading nested in the summary would
+   * put the title twice into the accessibility tree -- once as the disclosure's label and once as a heading --
+   * and the section colour coding (#9) is what tells the three apart at a glance, which the summary keeps.
+   * THE HEADING LEVEL IS THE THING GIVEN UP, and it is worth naming: the ledger's outline is now one `<h2>`
+   * and three summaries. For three sibling panels under one page title, disclosure is the more useful
+   * structure than depth, and `<summary>` is announced as a control with its expanded state either way.
+   *
+   * NOT PERSISTED. Which panels a player left open is a per-viewer convenience with nowhere honest to live:
+   * this app's state is a replayed action log, and a UI preference has no business in it. Reopening on
+   * navigation is the cost, and it is smaller than a disclosure state that could desync between clients. */
+  sectionSummary: {
+    cursor: "pointer",
+    /* The marker is the affordance -- `listStyle: none` here would remove the triangle and leave a heading
+       that silently happens to be clickable. */
+    userSelect: "none",
+  },
   /** The inline Priority Deal marker. Bare text on purpose -- no pill, no border, no background: this sits
    *  beside a player's name in a dense table that already carries a crown and an ACTIVE badge elsewhere, and a
    *  third boxed element would turn the name column into a row of competing containers.
@@ -1016,6 +1088,9 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#1d7a45",
     fontVariantNumeric: "tabular-nums",
   },
+  /* Design note #1035: BORDER AND INK, matching the pills and the train chips. No fill -- #702's rule. */
+  corpPrivateChipWarn: { borderColor: ALERT_WARN_BORDER, color: ALERT_WARN_INK },
+  corpPrivateChipCritical: { borderColor: ALERT_CRITICAL_BORDER, color: ALERT_CRITICAL_INK },
   corpPrivateChip: {
     fontSize: FONT_SIZE.micro,
     fontWeight: 700,

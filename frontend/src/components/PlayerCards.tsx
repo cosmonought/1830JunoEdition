@@ -28,6 +28,9 @@ import { bestContrastTextColor } from "../styles/corporationLivery";
 // Design note #819: its own file now -- the strip it used to live in has been replaced by these cards.
 import { CashDeltaBadge } from "./CashDeltaBadge";
 import type { PlayerFinances } from "../utils/playerFinance";
+// Design note #1035: the same escalation the train chips and the private pills use.
+import { ALERT_CRITICAL_INK, ALERT_WARN_INK } from "../styles/palette";
+import type { PrivateClosureAlert } from "../utils/purchaseWarnings";
 
 export interface PlayerCardsProps {
   /** In seating order. */
@@ -55,6 +58,21 @@ export interface PlayerCardsProps {
    *  nothing recent. A FUNCTION rather than a map, so the card asks the same
    *  question the strip asks and neither has to know how the answer is stored. */
   cashDelta?: (address: string) => number;
+  /** ==================================================================
+   *   DESIGN NOTE 1035: THE PRIVATES ON THESE CARDS ARE ABOUT TO STOP PAYING
+   *  ==================================================================
+   *
+   * RULED: "make the PC lines/chips on the player cards (in Stock Round and Operating Round) and on the
+   * player information on the Game Ledger using the amber/red alert system when two/one buy away from
+   * closure."
+   *
+   * THIS CARD IS WHERE THE INCOME COLUMN LIVES, which is what makes it the right surface: the row says "$25
+   * per Operating Round" and in two purchases that becomes nothing. A player reading the column has the
+   * question this answers.
+   *
+   * AN INPUT, NOT A DERIVATION -- see `PrivateCompanyPills`, which takes the same value for the same reason.
+   * Absent means "not near" rather than "unknown", so an untaught caller renders the cards it always did. */
+  privateClosureAlert?: PrivateClosureAlert | null;
 }
 
 /* Design note #569: the palette moved to `utils/playerLabels.ts`, beside the
@@ -99,6 +117,7 @@ export function PlayerCards({
   colorForSeat,
   privateDescription,
   cashDelta,
+  privateClosureAlert = null,
 }: PlayerCardsProps) {
   /* Design note #568: which private row is open, keyed by id. One map for
      the whole grid rather than state per card -- a player may want the
@@ -289,6 +308,21 @@ export function PlayerCards({
                 </thead>
                 <tbody>
                   {player.privates.map((entry) => {
+                    /* Design note #1035: one derivation for the row, so the two name branches cannot drift.
+                       The title REPLACES the ordinary one rather than appending: at one buy out, what this
+                       private is about to do matters more than what it does. */
+                    const closureInk =
+                      privateClosureAlert === "critical"
+                        ? styles.privateNameCritical
+                        : privateClosureAlert === "warn"
+                          ? styles.privateNameWarn
+                          : {};
+                    const closureTitle =
+                      privateClosureAlert === "critical"
+                        ? "CLOSING: the next train purchase closes every private company."
+                        : privateClosureAlert === "warn"
+                          ? "Closing soon: two more train purchases close every private company."
+                          : null;
                     const description = privateDescription?.(entry.privateId) ?? null;
                     const open = openPrivates[entry.privateId] === true;
                     /* Design note #568: the NUMBER stays, on instruction -- "referring to Private Company 1 is easier than
@@ -299,13 +333,26 @@ export function PlayerCards({
                       <React.Fragment key={entry.privateId}>
                         <tr>
                           <td style={styles.privateName}>
+                            {/* ==================================================================
+                                 DESIGN NOTE 1035: THE NAME ESCALATES, NOT THE INCOME
+                                ==================================================================
+                                MY FIRST VERSION COLOURED THE INCOME COLUMN, reasoning that it was "the figure
+                                that dies". Corrected: "I don't like the color being on the income column --
+                                the income is green until it's gone."
+                                AND THAT IS RIGHT, because the income has not changed. A private two buys from
+                                closure pays exactly what it paid last round, and recolouring the number says
+                                the number is different. What is ending is the ASSET, so the asset's name is
+                                what carries the warning -- the same thing the pills and the corporation chips
+                                do, where the acronym IS the whole chip.
+                                BOTH BRANCHES, because a private with no rules text renders as a plain span
+                                rather than a button and would otherwise be the one row that never warns. */}
                             {description ? (
                               <button
                                 type="button"
-                                style={styles.privateButton}
+                                style={{ ...styles.privateButton, ...closureInk }}
                                 onClick={() => togglePrivate(entry.privateId)}
                                 aria-expanded={open}
-                                title={`${title} — what it does`}
+                                title={closureTitle ?? `${title} — what it does`}
                               >
                                 <span style={styles.privateCaret} aria-hidden="true">
                                   {open ? "▾" : "▸"}
@@ -313,7 +360,10 @@ export function PlayerCards({
                                 <span style={styles.privateLabel}>{title}</span>
                               </button>
                             ) : (
-                              <span style={styles.privateLabel} title={title}>
+                              <span
+                                style={{ ...styles.privateLabel, ...closureInk }}
+                                title={closureTitle ?? title}
+                              >
                                 {title}
                               </span>
                             )}
@@ -608,4 +658,9 @@ export const styles: Record<string, React.CSSProperties> = {
     fontWeight: 800,
     padding: "2px 10px",
   },
+  /* Design note #1035: INK ONLY, ON THE NAME. A border would draw a box round one cell of a three-column row
+     and a fill would fight the card's livery header -- and the ink lands on the asset rather than on the
+     money, which is the correction this note records. */
+  privateNameWarn: { color: ALERT_WARN_INK },
+  privateNameCritical: { color: ALERT_CRITICAL_INK },
 };

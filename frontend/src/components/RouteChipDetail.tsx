@@ -41,10 +41,37 @@ export interface RouteChipDetailProps {
   /** Whether this viewer may clear the route -- the acting president alone. */
   canClear: boolean;
   onClearRoute: (trainIndex: number) => void;
+  /** ==================================================================
+   *   DESIGN NOTE 1024: REMOVE ONE STOP, NOT THE WHOLE ROUTE
+   *  ==================================================================
+   *
+   * REQUESTED: "the only option to modify the route is a global 'Clear' button that completely wipes the
+   * entire array ... Add a 'Remove' button (such as a small 'X' icon) to each individual hex/stop."
+   *
+   * KEYED BY HEX LABEL RATHER THAN BY INDEX. This list renders `draft.stops` -- the PAYING revenue centres --
+   * while the array being spliced is `routeDrafts[trainIndex]`, the full walk including the plain track
+   * between them. The two are different lengths, so an index here means nothing there; the label is the one
+   * value both surfaces agree on. An index would have been a proxy that stops standing for its subject, which
+   * is this codebase's fifth recurring bug shape.
+   *
+   * OPTIONAL, so a caller that offers no removal renders the list exactly as it did before #1024. */
+  onRemoveStop?: (trainIndex: number, hexLabel: string) => void;
+  /** How many drafted hexes removing a given stop would take with it -- see `routeTruncate.ts` on why a route
+   *  truncates rather than splicing from the middle. Supplied by the caller because it owns the full walk;
+   *  this component only ever sees the paying stops. */
+  stopsRemovedBy?: (trainIndex: number, hexLabel: string) => number;
   /** Closes the detail without touching the route. */
   onClose: () => void;
   /** The panel's own click feedback, so a refused draft explains itself here rather than nowhere. */
   feedback?: string | null;
+}
+
+/** Design note #1024: one sentence, so the tooltip and the accessible name cannot drift apart -- and so the
+ *  interior case names its cost rather than leaving the player to discover it. */
+export function removeStopTitle(hex: string, hexesRemoved: number): string {
+  return hexesRemoved <= 1
+    ? `Remove ${hex} from this route. The route then ends at the stop before it.`
+    : `Remove ${hex} and the ${hexesRemoved - 1} hex${hexesRemoved === 2 ? "" : "es"} drawn after it — a route is a single path, so the tail goes with it. You can carry on drawing from the new end.`;
 }
 
 /** The open chip's route, or nothing. */
@@ -52,6 +79,8 @@ export function RouteChipDetail({
   draft,
   canClear,
   onClearRoute,
+  onRemoveStop,
+  stopsRemovedBy,
   onClose,
   feedback,
 }: RouteChipDetailProps): React.ReactElement | null {
@@ -114,6 +143,30 @@ export function RouteChipDetail({
                   {/* The per-stop value is what makes this a REVENUE readout rather than a list of hexes --
                       and it is the figure the report says watchers could not see. */}
                   <span style={styles.stopValue}>${stop.value}</span>
+                  {/* ==================================================================
+                       DESIGN NOTE 1024: THE 'X' SAYS WHAT IT WILL TAKE
+                      ==================================================================
+                      An 'X' reads as "remove this one", and that is true only of the LAST stop -- a route is a
+                      contiguous path, so removing an interior hex takes the tail with it (`routeTruncate.ts`).
+                      Rather than hide that or refuse the control on interior stops, the count goes in the
+                      tooltip and the accessible name: #783's rule that a control whose effect a player cannot
+                      predict is worse than one they cannot press.
+                      GATED ON `canClear`, the same permission the Clear button carries -- a watcher may read
+                      the route and may not edit it. */}
+                  {canClear && onRemoveStop && (
+                    <button
+                      type="button"
+                      style={styles.removeStop}
+                      onClick={() => onRemoveStop(draft.trainIndex, stop.hex)}
+                      title={removeStopTitle(stop.hex, stopsRemovedBy?.(draft.trainIndex, stop.hex) ?? 1)}
+                      aria-label={removeStopTitle(
+                        stop.hex,
+                        stopsRemovedBy?.(draft.trainIndex, stop.hex) ?? 1,
+                      )}
+                    >
+                      &times;
+                    </button>
+                  )}
                 </span>
               </React.Fragment>
             ))}
@@ -199,6 +252,29 @@ const styles: Record<string, React.CSSProperties> = {
   },
   empty: { color: "#8f98a8" },
   problem: { color: "#e0a76a", flexBasis: "100%" },
+  /* ==================================================================
+      DESIGN NOTE 1024: A GLYPH BESIDE A FIGURE, NOT A BUTTON UNDER IT
+     ==================================================================
+     This strip is one wrapping ROW (#802), so a removal control has to sit INSIDE the stop it belongs to or
+     the association is lost the moment the line wraps. Hence a bare glyph with no border and no background:
+     the stop is the object, and the X is a handle on it rather than a second control competing with it.
+     DIMMER THAN THE HEX AND THE FIGURE, which are the things being read. It brightens on nothing -- inline
+     styles cannot express `:hover` (#46) -- so it is legible at rest instead, which is the honest trade on a
+     surface that cannot have a hover state.
+     THE CLOSE BUTTON KEEPS ITS OWN STYLE. Both draw a multiplication sign and they do different things: one
+     shuts the readout, one edits the route. Sharing a style would make them look like one control appearing
+     twice. */
+  removeStop: {
+    marginLeft: "4px",
+    padding: "0 2px",
+    border: "none",
+    background: "none",
+    color: "#8a92a6",
+    fontFamily: "inherit",
+    fontSize: FONT_SIZE.micro,
+    lineHeight: 1,
+    cursor: "pointer",
+  },
   clear: {
     padding: "2px 9px",
     borderRadius: "5px",

@@ -15,7 +15,10 @@
 // See docs/ai_architecture/firebase_middleware.md - sandboxRoom.ts #0, #1, #2
 
 import {
-  addDoc,
+  /* Design note #1026: `addDoc` is GONE. It was the append's writer, and a transaction cannot use it -- a
+     transaction needs its writes named up front, so the ref is minted with `doc(collection)` and set.
+     Dropped rather than left imported, for #686's reason about `liveEdgesForHex`: an unused import of the
+     non-transactional writer is an invitation to reach for it again, and reaching for it is exactly the bug. */
   collection,
   doc,
   getDocs,
@@ -196,8 +199,48 @@ export async function hostSandboxRoom(hostId: string, nickname: string): Promise
   return code;
 }
 
-/** nextIndex comes from the CALLER, which is why this is not a transaction: the caller is already subscribed to the log, and a re-read per dispatch buys a guarantee #2 says is unobtainable anyway.
- *  See docs/ai_architecture/firebase_middleware.md - sandboxRoom.ts #2 */
+/** The room field that hands out indices -- design note #1026. */
+export const SANDBOX_NEXT_INDEX_FIELD = "nextActionIndex";
+
+/** Append one action to a room's log, on an index nobody else can be given.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 1026: THE INDEX WAS THE CALLER'S GUESS, AND TWO CLIENTS GUESS ALIKE
+ *  ==================================================================
+ *
+ *  REPORTED: "restarting the server caused the active game room to roll back to a much earlier state."
+ *
+ *  THERE IS NO SERVER HOLDING THAT STATE, which is the first thing worth writing down. This app has no
+ *  backend: the log below IS the persistence, every action is already written as its own document at dispatch
+ *  time, and `subscribeSandboxLog` already hands back the WHOLE log rather than a delta. A restart loses
+ *  nothing that was written. What a restart DOES do is force a replay from scratch -- and a replay is where a
+ *  log that has been quietly damaged stops agreeing with the client that was holding the game in memory.
+ *
+ *  THE DAMAGE IS DUPLICATE INDICES. This function took `nextIndex` FROM THE CALLER and wrote it unchecked.
+ *  Its own note argued that was fine -- "the caller is already subscribed to the log, and a re-read per
+ *  dispatch buys a guarantee #2 says is unobtainable anyway" -- and that argument is about ORDERING, which is
+ *  genuinely unobtainable this way. It is not about UNIQUENESS, which is obtainable and which the rest of the
+ *  system assumes:
+ *    `effectiveActions` keyed its dead-set on `index` (#1026 in `logRevert.ts`), so one `RevertTo` aimed at a
+ *    shared index killed BOTH entries sitting on it -- permanently, on every future replay.
+ *    #668 records the other half: two clients on one index each see their own optimistic entry first, and the
+ *    doc-id tie-break then REPLACES an applied entry with a different one at the same length, so nothing
+ *    shrinks and nothing notices.
+ *  Both are invisible while a client holds the state in memory. Both surface the moment it replays.
+ *
+ *  SO THE INDEX IS ALLOCATED, NOT SUPPLIED. A transaction reads the room's counter, hands out the next value
+ *  and writes the entry in one atomic step; a second client racing it is aborted and retried by Firestore
+ *  against the counter the first one wrote. That is the one guarantee a transaction actually buys here, and
+ *  it is the one the log needed.
+ *
+ *  THE CALLER'S FIGURE SURVIVES AS A FLOOR. A room created before this field existed has no counter, and
+ *  seeding one from zero would hand out indices the log already contains. `Math.max` uses the client's view
+ *  of the log length for exactly that case -- and once two clients race on a legacy room, the transaction's
+ *  retry makes the second read the counter the first has just written.
+ *
+ *  RETURNS THE INDEX IT USED, rather than a bare boolean. The caller's guess may not be what it got, and a
+ *  caller that advances its cursor by its own guess would desync on the first collision this function
+ *  prevented -- which would be a poor way to pay for the fix. `null` is the failure. */
 export async function appendSandboxAction(
   roomCode: string,
   nextIndex: number,
@@ -210,20 +253,36 @@ export async function appendSandboxAction(
    *  Written into the entry, because a client replaying somebody else's log has
    *  no other way to tell an auto-skip from a deliberate one. */
   derived = false,
-): Promise<boolean> {
+): Promise<number | null> {
   const db = getFirestoreDb();
-  if (!db) return false;
-  await addDoc(
-    collection(db, SANDBOX_ROOMS_COLLECTION, roomCode, SANDBOX_ACTIONS_SUBCOLLECTION),
-    {
-      index: nextIndex,
+  if (!db) return null;
+  const roomRef = doc(db, SANDBOX_ROOMS_COLLECTION, roomCode);
+  const actionsRef = collection(roomRef, SANDBOX_ACTIONS_SUBCOLLECTION);
+  const payload = JSON.stringify(msg);
+
+  return runTransaction(db, async (tx) => {
+    const room = await tx.get(roomRef);
+    const counter = Number(room.data()?.[SANDBOX_NEXT_INDEX_FIELD]);
+    /* THE FLOOR IS THE CALLER'S VIEW, for a legacy room whose counter does not exist yet. A finite counter
+       always wins where it is higher; where it is absent or corrupt, `nextIndex` is the only evidence of how
+       long the log already is. */
+    const allocated = Number.isFinite(counter) ? Math.max(counter, nextIndex) : nextIndex;
+
+    /* THE COUNTER AND THE ENTRY IN ONE TRANSACTION. Written to the ROOM document, which every appending
+       client reads -- that shared read is what makes two simultaneous appends conflict, and a conflict is
+       what makes Firestore retry the loser against the winner's counter. */
+    tx.set(roomRef, { [SANDBOX_NEXT_INDEX_FIELD]: allocated + 1 }, { merge: true });
+    /* `doc(collection)` MINTS THE ID LOCALLY, which is what lets a create happen inside a transaction --
+       `addDoc` cannot, because a transaction needs its writes named up front. */
+    tx.set(doc(actionsRef), {
+      index: allocated,
       actor,
-      payload: JSON.stringify(msg),
+      payload,
       derived,
       createdAt: serverTimestamp(),
-    },
-  );
-  return true;
+    });
+    return allocated;
+  }).catch(() => null);
 }
 
 /** Reads the whole log once. Used to decide whether a joined room exists and

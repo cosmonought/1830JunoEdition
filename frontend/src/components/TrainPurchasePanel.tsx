@@ -23,14 +23,21 @@ import React, { useEffect, useMemo, useState } from "react";
 import { FONT_SIZE } from "../styles/typography";
 import { corporationLabel } from "../utils/corporationNames";
 import { purchaseCeiling } from "../utils/purchaseCeiling";
-import { buyableNow, isTrainLocked, quantityOptionCount } from "../utils/trainLimit";
+import {
+  buyableNow,
+  countableTrainCount,
+  isTrainLocked,
+  quantityOptionCount,
+} from "../utils/trainLimit";
 import { STICKY_OPTIONAL } from "../utils/stickyCollapse";
 // Design note #702: moved to its own file, because the train CHIPS draw it now too.
 import { TrainGlyph } from "./TrainGlyph";
 import type { DepotTier, PhaseTint } from "../utils/gamePhase";
 // Design note #632: one tier-to-era lookup, shared with the phase badge.
-// Design note #1007: `trainTierNamePlural` names the tier the way a player says it -- "Diesels", not "D-Trains".
-import { tierTint, trainTierNamePlural } from "../utils/gamePhase";
+// Design note #1007: the shared namer, so this panel and the rust badges spell a tier the same way. It used to
+// render "D" as "Diesel"; that special case is gone (the note records why), and what the seam is for is that
+// there be exactly one answer, not that any particular answer is correct.
+import { tierTint, trainTierName, trainTierNamePlural } from "../utils/gamePhase";
 import { stationTickerColor } from "./hexContractTypes";
 
 /** The subset of a corporation both sections need. */
@@ -40,6 +47,14 @@ export interface TrainPurchaseCompany {
   president: string | null;
   /** `Uint128` on the wire, so a string here too. */
   treasury: string;
+  /** Design note #1034: the models on a Gentle Rust final run. They stay in `owned_trains` -- they still run
+   *  and still draw a chip -- and occupy no train-limit slot, so this panel subtracts them before measuring
+   *  headroom. Optional, and absent means "none marked" rather than "unknown": a standard game never has one,
+   *  and treating absence as unknown would make every ordinary purchase unanswerable. */
+  pending_rust_trains?: readonly string[];
+  /** Design note #1046: the Yellow Sign's gift, exempt from the limit until the Operating Round ends. Same
+   *  optional-and-absent-means-none convention as the reprieve above. */
+  ghost_trains?: readonly string[];
   /** Models currently held, e.g. `["2", "2", "4"]` -- duplicates are meaningful and drive the badge counts.
    *  `null`/`undefined` means UNKNOWN (a chain predating `owned_trains`), NOT "owns nothing": the corporate
    *  section says so rather than rendering an empty roster that looks like a board where nobody has bought. */
@@ -269,7 +284,13 @@ export function TrainPurchasePanel({
      Both figures are derived and named now, equal on an ordinary purchase and differing on exactly the one
      that advances the phase. ENFORCEMENT STAYS ON THE AFTER-VALUE: buying the first 4-train starts Phase 4
      and the limit drops with it, so capping against the old one would offer a quantity the rules take back. */
-  const ownedTrainCount = buyer?.owned_trains?.length ?? 0;
+  /* Design note #1034: THE COUNTABLE FLEET, not the roster length. A gently-rusted train stays in
+     `owned_trains` so it can run and draw a chip, and occupies no limit slot -- so this panel's headroom, its
+     greying threshold, its quantity row and its refusal sentence must all measure the same subtracted figure.
+     #703's REPORT WAS THIS EXACT FAULT with a different subtrahend: the panel and the auto-skip enforced one
+     rule against two different numbers, and the player was refused by the surface the gate had waved through.
+     Both now ask `countableTrainCount`. */
+  const ownedTrainCount = countableTrainCount(buyer?.owned_trains, buyer?.pending_rust_trains, buyer?.ghost_trains);
   const currentTrainLimit = useMemo(
     () => depot.find((row) => row.isCurrent)?.trainLimit ?? null,
     [depot],
@@ -683,9 +704,11 @@ export function TrainPurchasePanel({
                   style={styles.limitReadout}
                   title={
                     nextTier.remaining === null
-                      ? "Diesels are unlimited — the Bank Depot never runs out of them."
-                      : `The Bank Depot holds ${nextTier.remaining} ${nextTier.tier}-train${
-                          nextTier.remaining === 1 ? "" : "s"
+                      ? `${trainTierNamePlural(nextTier.tier)} are unlimited — the Bank Depot never runs out of them.`
+                      : `The Bank Depot holds ${nextTier.remaining} ${
+                          nextTier.remaining === 1
+                            ? trainTierName(nextTier.tier)
+                            : trainTierNamePlural(nextTier.tier)
                         }. The quantity selector cannot exceed it.`
                   }
                 >

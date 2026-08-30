@@ -406,9 +406,14 @@ describe("the flavour payload grew (design note #993)", () => {
        A further 63 lines followed -- 19 Major Malus, 20 Minor Malus, 16 Unchanged, 8 Major Bonus -- and the
        same check found ZERO duplicates against a payload that by then held 357. Worth recording, because it
        is the evidence that the first batch's 63 collisions were a property of THAT list rather than of the
-       check being too eager: the comparison is the same one, normalised for curly quotes and case. */
+       check being too eager: the comparison is the same one, normalised for curly quotes and case.
+       ==================================================================
+        AND A THIRD LIST, FIFTY LINES, ALSO OVERLAPPING NOTHING (design note #1039)
+       ==================================================================
+       Ten per bucket this time, checked the same way against a payload of 545 and again finding no
+       collisions. The counts move to 115/115/130/115/120. */
     const counts = BUCKETS.map((key) => UNPREDICTABLE_REVENUE_FLAVOR[key].length);
-    expect(counts).toEqual([105, 105, 120, 105, 110]);
+    expect(counts).toEqual([115, 115, 130, 115, 120]);
   });
 
   it("repeats no line anywhere in the payload", () => {
@@ -434,18 +439,35 @@ describe("the flavour payload grew (design note #993)", () => {
     /* THE ORDER IS NOT COSMETIC. The selector is `hash % length`, so inserting into the middle would
        re-point every index after the insertion -- and #903's replay stability is about a build producing the
        same line for the same turn. Appending changes which lines are reachable, never which existing entry
-       an index names. */
-    expect(UNPREDICTABLE_REVENUE_FLAVOR.criticalMalus.at(-1)).toBe(
+       an index names.
+       ==================================================================
+        DESIGN NOTE 1039: PINNED BY INDEX, BECAUSE `at(-1)` MEANT "PINNED BY BATCH"
+       ==================================================================
+       THIS CASE ASSERTED THE TAIL of three buckets -- the last line of the previous append -- and so it broke
+       the moment a further fifty lines arrived, reporting the new tail against the old one. That is a
+       harness that has to be edited every time the payload grows, which makes it noise rather than a guard:
+       the third such edit is the one where somebody stops reading the diff and just pastes the new value.
+       AND THE TAIL WAS NEVER THE PROPERTY. What this case is about is stated in its own first sentence --
+       appending must not RE-POINT AN EXISTING INDEX. So it asks that directly: the lines the previous two
+       batches ended on are still exactly where they were. An insertion into the middle, a re-sort, or a
+       wholesale replacement all move them; a further append never can, so this survives the next batch.
+       THE SAME THREE BUCKETS, deliberately. #993b chose them because Minor Bonus received nothing in the
+       second list, which made its position the cheapest proof that an append touched only the buckets it was
+       given -- and that argument is about these particular lines, not about their being last. */
+    expect(UNPREDICTABLE_REVENUE_FLAVOR.criticalMalus[104]).toBe(
       "A competing line poached the entire station agent staff overnight.",
     );
-    expect(UNPREDICTABLE_REVENUE_FLAVOR.unchanged.at(-1)).toBe(
+    expect(UNPREDICTABLE_REVENUE_FLAVOR.unchanged[119]).toBe(
       "It was a quiet week, the calm before or after something else.",
     );
-    /* #993b: EVERY BUCKET RECEIVED TWENTY-FIVE THIS TIME, so the tails move together -- unlike the second
-       list, where Minor Bonus got nothing and its unchanged tail was the cheapest proof that an append
-       touched only the buckets it was given. */
-    expect(UNPREDICTABLE_REVENUE_FLAVOR.minorBonus.at(-1)).toBe(
+    expect(UNPREDICTABLE_REVENUE_FLAVOR.minorBonus[104]).toBe(
       "A visiting dignitary\u2019s tour brought favorable press and new riders.",
+    );
+    /* AND THE NEWEST BATCH IS AT THE END, which is the other half and is allowed to be batch-specific: it
+       says where THIS append went, and a later one will move it. Kept to one bucket so the update is one
+       line rather than three. */
+    expect(UNPREDICTABLE_REVENUE_FLAVOR.criticalMalus.at(-1)).toBe(
+      "A mysterious man appeared at the station and announced that the railway had awakened something beneath the earth.",
     );
   });
 });

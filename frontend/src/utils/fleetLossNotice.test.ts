@@ -42,7 +42,9 @@ const loss = (over: Partial<FleetLoss> = {}): FleetLoss => ({
   ...over,
 });
 
-const TURN = { macro_round_number: 2, sub_round_index: 1, active_corporation_index: 3 };
+/* Design note #1032: THE TURN IS NO LONGER PART OF A NOTICE'S IDENTITY, so this fixture is gone with the
+   parameter it fed. It described the showing; the key now describes the event, which is what made a dismissal
+   survive into the next operating round. */
 
 beforeEach(() => resetNoticeSilenceCache());
 
@@ -177,28 +179,44 @@ describe("the copy tells a president what happened and what it costs", () => {
   });
 });
 
-describe("the dismissal key survives a replay (design note #896)", () => {
+describe("the dismissal key names the event, not the showing (design notes #896, #1032)", () => {
   const [rust, limit] = fleetLossNotices(loss({ rusted: ["2"], discarded: ["3"] }), "4", 3);
 
-  it("is the same key for the same turn, which is the whole point", () => {
-    /* THE REPLAY PROPERTY. Undo rebuilds state by replaying the log, so the phase change runs again and the
-       notice is re-queued. The key is built from game state rather than counted locally (#653's rule), so the
-       rebuild lands on the same string and a dismissed notice stays dismissed. */
-    expect(noticeDismissKey(TURN, rust)).toBe(noticeDismissKey({ ...TURN }, rust));
+  it("is the same key on a replay, which is the whole point", () => {
+    /* THE REPLAY PROPERTY, UNCHANGED BY #1032. Undo rebuilds state by replaying the log, so the phase change
+       runs again and the notice is re-derived. The key is built from the notice's own content -- which the
+       log reproduces exactly -- so the rebuild lands on the same string and a dismissed notice stays
+       dismissed. #896 wanted this and reached for `turnGuardKey` to get it; the content was always the part
+       doing the work. */
+    expect(noticeDismissKey(rust)).toBe(noticeDismissKey({ ...rust, trains: ["2"] }));
+  });
+
+  it("does not change when the turn does", () => {
+    /* THE BUG, AS AN ASSERTION. The key was `turnGuardKey(turn, company, cause)`, so the SAME event acquired
+       a new key every operating round -- a notice dismissed in OR 6.2 was unrecognised in OR 7.1, re-queued
+       by the replay, and shown again. Reported as "modals kept firing at the start of basically every
+       operating round". There is no turn in this key to vary, and this case is what would fail if one were
+       reintroduced. */
+    expect(noticeDismissKey.length).toBe(1);
   });
 
   it("tells the two causes apart", () => {
     /* Otherwise dismissing the rust notice would swallow the limit notice that arrived in the same phase
        change -- the player would be told about half of what happened to them. */
-    expect(noticeDismissKey(TURN, rust)).not.toBe(noticeDismissKey(TURN, limit));
+    expect(noticeDismissKey(rust)).not.toBe(noticeDismissKey(limit));
   });
 
-  it("tells two corporations and two turns apart", () => {
+  it("tells two corporations apart", () => {
     const other: FleetLossNotice = { ...rust, companyId: 8, ticker: "B&M" };
-    expect(noticeDismissKey(TURN, other)).not.toBe(noticeDismissKey(TURN, rust));
-    expect(noticeDismissKey({ ...TURN, macro_round_number: 3 }, rust)).not.toBe(
-      noticeDismissKey(TURN, rust),
-    );
+    expect(noticeDismissKey(other)).not.toBe(noticeDismissKey(rust));
+  });
+
+  it("tells two phase changes apart", () => {
+    /* WHAT REPLACES THE TURN AS THE DISTINGUISHING FIELD. Two different rust events must not collapse onto
+       one key, or dismissing the first would suppress the second. The arriving tier is monotonic, so it is
+       the honest discriminator: the same tier cannot arrive twice. */
+    expect(noticeDismissKey({ ...rust, arrivingTier: "6" })).not.toBe(noticeDismissKey(rust));
+    expect(noticeDismissKey({ ...rust, trains: ["2", "2"] })).not.toBe(noticeDismissKey(rust));
   });
 });
 
@@ -208,25 +226,25 @@ describe("choosing which notice to raise", () => {
   const noneSilenced = () => false;
 
   it("raises the first unanswered one", () => {
-    expect(nextDueNotice(queue, TURN, noneSilenced, new Set())).toBe(rust);
+    expect(nextDueNotice(queue, noneSilenced, new Set())).toBe(rust);
   });
 
   it("skips a silenced cause and still raises the other", () => {
     /* THE CONTROL THAT MATTERS MOST for a per-cause toggle: silencing rust must leave the limit notice
        standing. A store keyed per corporation and not per cause would fail exactly here. */
     const rustSilenced = (notice: FleetLossNotice) => notice.cause === "rust";
-    expect(nextDueNotice(queue, TURN, rustSilenced, new Set())).toBe(limit);
+    expect(nextDueNotice(queue, rustSilenced, new Set())).toBe(limit);
   });
 
   it("moves to the next once the first is dismissed", () => {
-    const dismissed = new Set([noticeDismissKey(TURN, rust)]);
-    expect(nextDueNotice(queue, TURN, noneSilenced, dismissed)).toBe(limit);
+    const dismissed = new Set([noticeDismissKey(rust)]);
+    expect(nextDueNotice(queue, noneSilenced, dismissed)).toBe(limit);
   });
 
   it("raises nothing when everything is answered", () => {
-    const dismissed = new Set([noticeDismissKey(TURN, rust), noticeDismissKey(TURN, limit)]);
-    expect(nextDueNotice(queue, TURN, noneSilenced, dismissed)).toBeNull();
-    expect(nextDueNotice([], TURN, noneSilenced, new Set())).toBeNull();
+    const dismissed = new Set([noticeDismissKey(rust), noticeDismissKey(limit)]);
+    expect(nextDueNotice(queue, noneSilenced, dismissed)).toBeNull();
+    expect(nextDueNotice([], noneSilenced, new Set())).toBeNull();
   });
 
   it("does not let silencing stand in for having been seen", () => {
@@ -234,8 +252,8 @@ describe("choosing which notice to raise", () => {
        because it was silenced was never DISMISSED, so switching the toggle back off raises it again. If the
        two were collapsed, a player who silenced a notice and changed their mind would silently never see it. */
     const silencedNow = (notice: FleetLossNotice) => notice.cause === "rust";
-    expect(nextDueNotice([rust], TURN, silencedNow, new Set())).toBeNull();
-    expect(nextDueNotice([rust], TURN, noneSilenced, new Set())).toBe(rust);
+    expect(nextDueNotice([rust], silencedNow, new Set())).toBeNull();
+    expect(nextDueNotice([rust], noneSilenced, new Set())).toBe(rust);
   });
 });
 

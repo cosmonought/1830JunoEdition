@@ -154,7 +154,17 @@ export const UNPREDICTABLE_REVENUE_FLAVOR = {
     "A saboteur, never identified, loosened a critical rail joint.",
     "Drought dried up the water towers, stranding steam locomotives.",
     "The board wasted a fortune on a lavish but pointless inaugural ceremony.",
-    "A competing line poached the entire station agent staff overnight."
+    "A competing line poached the entire station agent staff overnight.",
+    "A locomotive struck a fallen tree and derailed.",
+    "A sudden rockslide buried a freight convoy.",
+    "A warehouse roof collapsed beneath the weight of a winter snow.",
+    "A boiler’s safety valve failed and filled the platform with steam.",
+    "A drunken engineer took the express down the wrong line and into a siding.",
+    "A swarm of angry bees drove the passengers from the station.",
+    "A great wave of river ice smashed into the company’s riverside facilities.",
+    "A mob of striking workers seized the company’s locomotives.",
+    "A shipment of dynamite was discovered to have been loaded beside the coal.",
+    "A mysterious man appeared at the station and announced that the railway had awakened something beneath the earth."
   ],
   minorMalus: [
     "The accountants finally discovered that optimism is not legal tender.",
@@ -261,7 +271,17 @@ export const UNPREDICTABLE_REVENUE_FLAVOR = {
     "Unseasonable heat warped a short stretch of rail.",
     "A competing stagecoach line undercut fares on a parallel route.",
     "The company’s newest hire derailed a handcar in the yard (no injuries, much embarrassment).",
-    "A late harvest meant fewer grain shipments than projected."
+    "A late harvest meant fewer grain shipments than projected.",
+    "A passenger’s luggage burst open on the platform.",
+    "A flock of ducks wandered into the station concourse.",
+    "A carriage axle began making an alarming noise.",
+    "A passenger’s pocket watch fell between the platform boards.",
+    "A sudden downpour caught the waiting passengers without umbrellas.",
+    "A porter accidentally sent a trunk rolling down the platform.",
+    "A telegraph operator received a message that made him sigh heavily.",
+    "A gentleman’s top hat was carried away by a sudden gust.",
+    "A passenger discovered that his ticket had been issued for yesterday.",
+    "A station cat fell asleep on the timetable and refused to move."
   ],
   unchanged: [
     "Nothing unexpected happened. The accountants were suspicious.",
@@ -383,7 +403,17 @@ export const UNPREDICTABLE_REVENUE_FLAVOR = {
     "Trains arrived and departed within normal tolerances.",
     "The company’s books balanced without surprises.",
     "Livestock shipments matched seasonal averages.",
-    "It was a quiet week, the calm before or after something else."
+    "It was a quiet week, the calm before or after something else.",
+    "A photographer took a portrait of the locomotive and its crew.",
+    "A newspaper vendor announced the afternoon edition to the waiting passengers.",
+    "A church procession crossed the square while the train waited.",
+    "A military band marched past the station without stopping.",
+    "A gentleman practiced his violin in an empty waiting room.",
+    "A pair of newlyweds departed beneath a shower of rice.",
+    "A traveling lecturer demonstrated a peculiar electrical apparatus.",
+    "A child counted the wheels as the locomotive passed.",
+    "A gentleman attempted to impress the passengers with a magic trick.",
+    "A stray parrot repeated the stationmaster’s announcements."
   ],
   minorBonus: [
     "The railway finally discovered that people are willing to pay for this service.",
@@ -490,7 +520,17 @@ export const UNPREDICTABLE_REVENUE_FLAVOR = {
     "A local factory opened and signed a shipping contract.",
     "Favorable river levels allowed smoother connections at the wharf.",
     "The company hosted a well-attended excursion to the coast.",
-    "A visiting dignitary’s tour brought favorable press and new riders."
+    "A visiting dignitary’s tour brought favorable press and new riders.",
+    "A local orchestra drew an enthusiastic crowd to the station.",
+    "A popular boxing match brought spectators from three neighboring towns.",
+    "A celebrated author’s new book sent readers rushing to the bookseller.",
+    "A wealthy family arranged an elaborate country excursion.",
+    "A local brewery began sending its barrels by rail.",
+    "A shipment of fine china arrived safely and impressed its purchaser.",
+    "A traveling auctioneer filled the station with eager buyers.",
+    "A famous racehorse was transported to town for an important event.",
+    "A merchant discovered that the railway could deliver his goods before his competitors.",
+    "A local inventor demonstrated a machine that attracted considerable attention."
   ],
   criticalBonus: [
     "The railway apparently discovered where all the money is.",
@@ -602,6 +642,16 @@ export const UNPREDICTABLE_REVENUE_FLAVOR = {
     "The company’s daring night-service gambit paid off spectacularly.",
     "A visiting head of state’s chartered train brought enormous prestige and fares.",
     "The line became the preferred route for a booming immigrant wave.",
-    "An unexpected merger offer validated the line’s soaring value, and business boomed alongside it."
+    "An unexpected merger offer validated the line’s soaring value, and business boomed alongside it.",
+    "A presidential candidate’s speaking tour filled the railway’s carriages for an entire week.",
+    "A vast shipment of iron arrived just as a new factory began production.",
+    "A spectacular theatrical production brought visitors from every town along the line.",
+    "A celebrated foreign dignitary arrived with an entourage large enough to fill several trains.",
+    "A devastating fire in a neighboring town sent merchants rushing to rebuild through the railway.",
+    "A new invention was demonstrated to an enormous crowd, and everyone wanted to see it.",
+    "A wealthy railroad speculator arrived with a trunk full of cash and an appetite for expansion.",
+    "A mysterious benefactor paid for an entire trainload of passengers to travel west.",
+    "A newly struck gold vein sent prospectors rushing toward the company’s western terminus.",
+    "A massive government construction project required every available freight car."
   ]
 };

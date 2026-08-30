@@ -37,7 +37,22 @@ import { readStripped, sliceBetween } from "./sourceScan";
 const COST: Readonly<Record<string, number>> = { "2": 80, "3": 180, "4": 300, "5": 450, "6": 630 };
 const cost = (model: string) => COST[model] ?? 0;
 
-describe("the trim takes the reprieved trains first (design note #979)", () => {
+describe("the trim leaves the reprieved trains alone (design note #1034, superseding #979)", () => {
+  /* ==================================================================
+      THIS DESCRIBE IS THE THIRD RULE THIS FEATURE HAS HAD, AND SAYS SO
+     ==================================================================
+     #906  exempted reprieved trains from the limit by MOVING them out of `owned_trains` -- which also moved
+           them out of the roster the planner draws from, so the grace run was unreachable.
+     #979  made them count, which fixed the disappearance by removing the exemption rather than its mechanism.
+           This file was written for that ruling and its title was "the trim takes the reprieved trains first".
+     #1034 exempts them again, and this time as a subtraction each counting site performs, with the train left
+           in the fleet where it can be seen and run.
+     RULED: "1846 officially implements the 'delayed obsolescence' rule, and in that version when trains gently
+     rust, they stop counting to the train limit and players turn the train cards sideways to indicate they
+     have one run left."
+     THE CASES BELOW ARE REWRITTEN RATHER THAN REPLACED, because the fixtures were well chosen and only their
+     expected answers moved. What each one is FOR is unchanged. */
+
   it("leaves a fleet under the limit alone", () => {
     /* THE CONTROL ON EVERY CASE BELOW. A trim that fired unconditionally would satisfy most of them by
        accident, and the common case at a phase change is a corporation that is already legal. */
@@ -47,69 +62,69 @@ describe("the trim takes the reprieved trains first (design note #979)", () => {
     expect(result.discarded).toEqual([]);
   });
 
-  it("counts the reprieved trains toward the limit", () => {
-    /* THE RULING ITSELF. Three trains against a limit of two is over by one however many of them are marked
-       -- which under #906 was not true, because two of these would not have been in the array at all. */
+  it("does not count the reprieved trains toward the limit", () => {
+    /* THE RULING ITSELF, INVERTED. It read "counts the reprieved trains toward the limit ... three trains
+       against a limit of two is over by one however many of them are marked". Two marked 3s and a live 5 is
+       ONE countable train, so this fleet is under a limit of two and nothing goes. */
     const result = trimToTrainLimit({ owned: ["3", "3", "5"], reprieved: ["3", "3"], limit: 2, cost });
-    expect(result.owned).toHaveLength(2);
-    expect(result.discarded).toHaveLength(1);
+    expect(result.owned).toEqual(["3", "3", "5"]);
+    expect(result.discarded).toEqual([]);
   });
 
-  it("discards a reprieved train before a cheaper live one", () => {
-    /* THE ORDERING, WITH THE TWO RULES IN CONFLICT so the case can tell which won. The reprieved train here
-       is the EXPENSIVE one, so a plain cheapest-first trim would keep it and scrap the live 2 -- leaving the
-       corporation a train that dies at the end of this turn instead of one that runs all game.
-       "which will typically be the gently rusted train" is the ruling's own expectation, and this is the
-       fixture where "typically" and "cheapest" disagree. */
+  it("does not discard a reprieved train to make room", () => {
+    /* THE FIXTURE WHERE THE OLD RULE AND THE NEW ONE DISAGREE MOST SHARPLY, kept for exactly that. #979 took
+       the reprieved 5 here and its reasoning was sound under its own rule -- "a reprieved train is worth
+       exactly one more run; a live train is worth every run for the rest of the game". That only holds while
+       it occupies a slot. It does not, so taking it would free nothing and cost the corporation its last run. */
     const result = trimToTrainLimit({ owned: ["2", "5"], reprieved: ["5"], limit: 1, cost });
-    expect(result.owned).toEqual(["2"]);
-    expect(result.discarded).toEqual(["5"]);
-    expect(result.reprieved).toEqual([]);
+    expect(result.owned).toEqual(["2", "5"]);
+    expect(result.discarded).toEqual([]);
+    expect(result.reprieved).toEqual(["5"]);
   });
 
-  it("falls back to cheapest-first among the live trains", () => {
-    /* #284'S RULE, STILL IN FORCE under the reprieved ones. Reprieved-first is an ORDERING, not a rule that
-       only marked trains may go: when the marks run out the trim keeps taking, and it takes the cheapest. */
+  it("takes the cheapest LIVE train when the live fleet is over", () => {
+    /* #284'S RULE, WHICH IS NOW THE ONLY ORDERING. It read "reprieved-first is an ORDERING, not a rule that
+       only marked trains may go"; there is no reprieved-first any more, and the marked train is simply not a
+       candidate. Three live trains (4, 5, 6) against a limit of two loses the 4. */
     const result = trimToTrainLimit({ owned: ["3", "4", "5", "6"], reprieved: ["3"], limit: 2, cost });
-    expect(result.owned).toEqual(["5", "6"]);
-    expect(result.discarded).toEqual(["3", "4"]);
+    expect(result.owned).toEqual(["3", "5", "6"]);
+    expect(result.discarded).toEqual(["4"]);
   });
 
-  it("marks one train per mark, not every train of that model", () => {
-    /* THE MULTISET RULE. A corporation holding one reprieved 3 and one live 3 must lose exactly one of them,
-       and the survivor must no longer be marked. */
+  it("exempts one train per mark, not every train of that model", () => {
+    /* THE MULTISET RULE, WHICH SURVIVES THE REVERSAL AND CHANGES SIDES. It used to stop a `Set` from marking
+       both 3s as discardable; it now stops one from EXEMPTING both. A corporation with one reprieved 3 and
+       one live 3 has one countable 3 -- so with a 6 beside them and a limit of 2 it is exactly at the limit
+       and nothing goes. A set-based version would report one countable train and also do nothing, so the
+       case below is what actually separates them. */
     const result = trimToTrainLimit({ owned: ["3", "3", "6"], reprieved: ["3"], limit: 2, cost });
-    expect(result.owned).toEqual(["3", "6"]);
-    expect(result.discarded).toEqual(["3"]);
-    expect(result.reprieved).toEqual([]);
+    expect(result.owned).toEqual(["3", "3", "6"]);
+    expect(result.discarded).toEqual([]);
   });
 
-  it("keeps the unmarked twin when two trains must go", () => {
+  it("still counts the unmarked twin when the fleet is over", () => {
     /* ==================================================================
-        ADDED BECAUSE THE CASE ABOVE COULD NOT SEE THE BUG IT WAS NAMED FOR
+        THE CASE THAT SEPARATES A MULTISET FROM A SET, REAIMED
        ==================================================================
-       A CONTROL THAT STOPPED DECREMENTING THE MARK COUNT -- treating every train of a reprieved model as
-       reprieved, the `Set` mistake this rule exists to avoid -- PASSED the case above. With only ONE train
-       over the limit the two implementations agree by construction: the first 3 is discarded either way, and
-       nothing downstream distinguishes them.
-       IT TAKES TWO DEPARTURES TO SEPARATE THEM. Here the correct trim takes the marked 3 and then the
-       cheapest LIVE train -- the 2 -- leaving the unmarked 3, which runs for the rest of the game. The
-       set-based version treats both 3s as marked, takes them both, and leaves the corporation the 2: a
-       strictly worse fleet, arrived at by an off-by-one in a lookup, with nothing on screen to explain it.
-       RECORDED because "assert the multiset" reads as obviously covered by the case above, and was not. */
+       ITS PREDECESSOR MADE THE SAME POINT ABOUT DISCARD ORDER and recorded that the obvious fixture could not
+       see the bug -- "it takes two departures to separate them". The same is true of the exemption: with one
+       marked 3 and one live 3, a `Set` exempts both and reports one fewer countable train than there is.
+       HERE THAT DIFFERENCE DECIDES A DISCARD. Countable is {3, 2} = two against a limit of one, so the
+       cheapest live train -- the 2 -- goes. A set-based count would see only the 2, call the fleet legal, and
+       leave a corporation holding two countable trains against a limit of one. */
     const result = trimToTrainLimit({ owned: ["3", "3", "2"], reprieved: ["3"], limit: 1, cost });
-    expect(result.owned).toEqual(["3"]);
-    expect(result.discarded).toEqual(["3", "2"]);
+    expect(result.owned).toEqual(["3", "3"]);
+    expect(result.discarded).toEqual(["2"]);
   });
 
-  it("takes the mark away with the train it belonged to", () => {
-    /* THE SILENT CORRUPTION THIS PREVENTS, and it is worse than a stale field. The reprieve expires by
-       multiset removal from `owned_trains`, so a mark left behind for a train the trim already took would,
-       at the end of the turn, remove a DIFFERENT train of that model -- a live one, scrapped for a mark that
-       belonged to a train discarded two steps earlier, with nothing on screen to explain it. */
+  it("returns the marks untouched", () => {
+    /* THE SILENT CORRUPTION THIS PREVENTS, restated for the new rule. #979 had to STRIP a mark whose train the
+       trim had taken, or the expiry -- also a multiset removal -- would later scrap a different live train of
+       that model. No reprieved train can be taken now, so the correct behaviour is that the mark list comes
+       back exactly as it went in. A trim that started editing it again would be the old bug returning. */
     const result = trimToTrainLimit({ owned: ["3", "3", "3"], reprieved: ["3", "3"], limit: 2, cost });
-    expect(result.reprieved).toHaveLength(1);
-    expect(result.owned).toHaveLength(2);
+    expect(result.reprieved).toEqual(["3", "3"]);
+    expect(result.owned).toEqual(["3", "3", "3"]);
   });
 
   it("keeps the surviving fleet in its original order", () => {
@@ -184,15 +199,26 @@ describe("the reprieved train stays in the fleet (design note #979)", () => {
     expect(loss.discarded).toEqual([]);
   });
 
-  it("calls a train the limit took a limit loss, not a rust one", () => {
-    /* UNDER THIS VARIANT RUST TAKES NOTHING -- it only marks -- so anything that actually LEFT the fleet at a
-       phase change left because the trim took it. That is also the more useful thing to tell the player,
-       whose question is why the train they were just promised a grace run for is already gone. */
+  it("no longer reports one phase change as both a rust and a discard", () => {
+    /* ==================================================================
+        DESIGN NOTE 1034: BATCH 37'S FIRST REPORT, ANSWERED BY THE RULE CHANGE
+       ==================================================================
+       THIS CASE USED TO EXPECT `rusted: ["3"], discarded: ["3"]` and its note explained why that was right:
+       "under this variant rust takes nothing -- it only marks -- so anything that actually LEFT the fleet at a
+       phase change left because the trim took it."
+       THAT WAS AN ACCURATE DESCRIPTION OF A BEHAVIOUR THE PLAYER THEN REPORTED AS A BUG: "the engine currently
+       reports the same trains as rusting and being discarded by the train limit." Under #979 it was not a bug
+       and I said so -- the marked train counted, it was the cheapest, the trim took it, and both sentences
+       were true of the same tier in one event.
+       UNDER #1034 IT CANNOT HAPPEN. A marked train is not a candidate for the trim, so no train can appear in
+       both lists from one phase change. The complaint is answered by the rule rather than by suppressing a
+       message, which is the better kind of fix and was not available before.
+       BOTH 3s ARE MARKED AND NOTHING IS DISCARDED: countable is the 6 alone, against phase 6's limit of two. */
     const before = phase(["3", "3", "6"], true);
     const after = applyPhaseChange(before, "6");
     const [loss] = describeFleetLosses(before, after);
-    expect(loss.rusted).toEqual(["3"]);
-    expect(loss.discarded).toEqual(["3"]);
+    expect(loss.rusted).toEqual(["3", "3"]);
+    expect(loss.discarded).toEqual([]);
   });
 
   it("keeps the standard tier split when the variant is off", () => {

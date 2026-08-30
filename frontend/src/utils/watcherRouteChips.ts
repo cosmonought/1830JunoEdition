@@ -102,8 +102,27 @@ export function watcherTrainDrafts(input: {
    * document written by a client that does not publish figures -- #232's rule, and the reason this is
    * `?? priceRoute(...)` rather than a replacement. */
   valueFor?: (trainIndex: number) => number | null | undefined;
+  /** ==================================================================
+   *   DESIGN NOTE 1031: THE FIGURE THAT SURVIVES THE DRAFTING
+   *  ==================================================================
+   *
+   * REQUESTED (Batch 33 item 7): revenue on rival train chips. #1021 got the LIVE figure onto them by
+   * preferring what the president publishes. What it could not do is answer a watcher who looks after the
+   * run, or one who joins mid-turn: presence is scratch, written while the president draws and gone when the
+   * turn moves on, so the chips fell back to pricing a draft that no longer existed and showed nothing.
+   *
+   * READ FROM STATE, WHICH EVERY CLIENT REPLAYS IDENTICALLY, so this is the one figure in the chain that
+   * cannot desync -- the reducer priced it once, at commit, against the board the log describes. That is why
+   * it sits ABOVE presence rather than below it: `routeValues` is the planner's pre-commit number, computed
+   * on each client from its own idea of the era and the bypasses, which is precisely the $440-versus-$450
+   * disagreement #1021 was reported for. Once a committed figure exists it is simply better evidence.
+   *
+   * #1021'S RULE IS NOT SUPERSEDED, because the two never contend. While the president is drafting there is
+   * nothing committed, so presence wins every time it is the only answer -- which is every time it is the
+   * live one. */
+  bankedFor?: (trainIndex: number) => number | null | undefined;
 }): WatcherChip[] {
-  const { roster, actorDrafts, labelForHex, priceRoute, stopsFor, valueFor } = input;
+  const { roster, actorDrafts, labelForHex, priceRoute, stopsFor, valueFor, bankedFor } = input;
   return roster.map((train) => {
     const hexes = actorDrafts?.[train.trainIndex] ?? [];
     const labels = hexes
@@ -129,11 +148,18 @@ export function watcherTrainDrafts(input: {
          are NOT the acting corporation's. */
       trainIndex: train.trainIndex,
       model: train.model,
-      /* THE PUBLISHED FIGURE FIRST, and only for a route that IS a route: a one-stop draft has no value on
-         either side of the channel, and #498's em dash is the honest rendering of that. `?? priceRoute` keeps
-         every pre-#1021 presence document rendering exactly as it did. */
+      /* THREE SOURCES, IN ORDER OF HOW SETTLED THEY ARE (#1031): the committed figure, then the one the
+         president is publishing, then this client's own pricing of the drawn path.
+         THE TWO-STOP GATE BINDS THE LAST TWO ONLY, and that is the change #1031 makes to the shape of this
+         line rather than to its rule. #498's em dash exists because a draft still being drawn has no value on
+         either side of the channel -- a true statement about a DRAFT. A committed run is not a draft: it
+         happened, the money moved, and the watcher who arrives after it has no drafts at all. Gating the
+         banked figure on the path would hide it in exactly the case it was added for.
+         `?? priceRoute` STILL KEEPS every pre-#1021 presence document rendering as it did, and an old log
+         with no breakdown falls through both new branches to reach it. */
       value:
-        labels.length >= 2 ? (valueFor?.(train.trainIndex) ?? priceRoute(labels)) : null,
+        bankedFor?.(train.trainIndex) ??
+        (labels.length >= 2 ? (valueFor?.(train.trainIndex) ?? priceRoute(labels)) : null),
       hexLabels: labels,
       stops: labels.length >= 2 && stopsFor ? stopsFor(labels) : [],
     };

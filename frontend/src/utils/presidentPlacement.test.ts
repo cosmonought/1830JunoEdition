@@ -243,6 +243,12 @@ describe("the corporation card did not grow a row", () => {
     // Stations, Trains and Privates are untouched siblings; only the first cell became a column.
     expect(CODE).toContain("<span style={styles.orContextFact}>");
     expect(CODE).toContain("<StationTokenRow");
-    expect(CODE).toContain("Train limit: {activeCorporation.trains.length} / {phase.trainLimit}");
+    /* Design note #1034: THE FIGURE MOVED, THE FACT DID NOT. This asserted
+       `{activeCorporation.trains.length}` -- the roster length -- and the train-limit line now shows the
+       COUNTABLE fleet, because a gently rusted train occupies no slot. What this case is for is unchanged:
+       the rail still carries a train-limit fact in the same place, which is the claim a layout change could
+       break. Re-anchored on the label rather than on the expression, so the next change to how the figure is
+       derived does not fail a test about where the rail's facts live. */
+    expect(CODE).toContain("Train limit: {countableTrains} / {phase.trainLimit}");
   });
 });

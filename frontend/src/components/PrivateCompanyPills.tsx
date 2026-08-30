@@ -16,7 +16,17 @@
 import React, { useState } from "react";
 
 import { FONT_SIZE } from "../styles/typography";
+/* Design note #1035: the SAME four constants the train chips and the phase badge escalate on. A private
+   about to close and a train about to rust are both "an asset the next purchases take away", and a warning
+   drawn differently from the warning beside it reads as a different KIND of thing (#839). */
+import {
+  ALERT_CRITICAL_BORDER,
+  ALERT_CRITICAL_INK,
+  ALERT_WARN_BORDER,
+  ALERT_WARN_INK,
+} from "../styles/palette";
 import { PRIVATE_COMPANY_CATALOG, privateAcronym } from "../utils/privateCatalog";
+import type { PrivateClosureAlert } from "../utils/purchaseWarnings";
 
 /** The shape both tables already hold -- a subset of `PrivateCompanyState`,
  *  narrowed so a caller does not have to pass fields this never reads. */
@@ -33,12 +43,30 @@ export interface PrivateCompanyPillsProps {
   surface?: "card" | "table";
   /** Rendered when the player or corporation holds none. */
   emptyLabel?: string;
+  /** ==================================================================
+   *   DESIGN NOTE 1035: HOW CLOSE THESE ARE TO CLOSING
+   *  ==================================================================
+   *
+   * RULED: "make the PC lines/chips on the player cards (in Stock Round and Operating Round) and on the
+   * player information on the Game Ledger using the amber/red alert system when two/one buy away from
+   * closure."
+   *
+   * AN INPUT RATHER THAN A DERIVATION, which is #1004's shape for the reprieved train chips and is right for
+   * the same reason: this component is handed a list of privates and knows nothing about the depot. Deriving
+   * urgency here would mean threading the phase and the depot into a pill renderer so it could recompute a
+   * figure `privateClosureAlert` already produces -- the second implementation this project keeps finding.
+   *
+   * ABSENT MEANS "NOT NEAR", NOT "UNKNOWN", and that is the safe direction here: a caller that has not been
+   * taught to pass it draws ordinary pills, which is exactly what it drew before. The failure mode is a
+   * missing warning rather than an invented one. */
+  closureAlert?: PrivateClosureAlert | null;
 }
 
 export function PrivateCompanyPills({
   privates,
   surface = "card",
   emptyLabel = "none",
+  closureAlert = null,
 }: PrivateCompanyPillsProps) {
   const [openId, setOpenId] = useState<number | null>(null);
 
@@ -67,9 +95,27 @@ export function PrivateCompanyPills({
               style={{
                 ...styles.pill,
                 ...(surface === "table" ? styles.pillTable : styles.pillCard),
+                /* THE ALERT SITS UNDER THE OPEN STATE, deliberately. A pressed pill is the one the panel
+                   below belongs to and that link has to stay unambiguous (#423); a pill that kept its amber
+                   while open would compete with it. The warning is still true and the panel says so. */
+                ...(closureAlert === "critical"
+                  ? styles.pillCritical
+                  : closureAlert === "warn"
+                    ? styles.pillWarn
+                    : {}),
                 ...(isOpen ? styles.pillOpen : {}),
               }}
-              title={`${priv.name} — $${priv.revenue_per_or} per Operating Round. Click for its rules text.`}
+              title={
+                `${priv.name} — $${priv.revenue_per_or} per Operating Round. Click for its rules text.` +
+                /* Design note #1035: the countdown is NOT stated here as a number. The pill has no room for
+                   one and `privateClosureAlert` deliberately reports a level rather than a count -- a figure
+                   on six pills at once would be the same fact repeated six times. */
+                (closureAlert === "critical"
+                  ? " CLOSING: the next train purchase closes every private company."
+                  : closureAlert === "warn"
+                    ? " Closing soon: two more train purchases close every private company."
+                    : "")
+              }
               onClick={() => setOpenId(isOpen ? null : priv.private_id)}
             >
               {acronym}
@@ -132,6 +178,12 @@ const styles: Record<string, React.CSSProperties> = {
      highlighted one -- it is the thing the panel below belongs to, and
      with several pills in a row that link has to be unambiguous. */
   pillOpen: { backgroundColor: "#3a4661", borderColor: "#5b7099", color: "#ffffff" },
+  /* Design note #1035: BORDER AND INK, NOT A FILL. #702 took the translucent alert BACKGROUNDS off the train
+     chips because they let the corporation's livery through and made the chip look faulty; these pills sit on
+     two different surfaces for the same reason, so they escalate the same way -- the two properties that read
+     identically on both. */
+  pillWarn: { borderColor: ALERT_WARN_BORDER, color: ALERT_WARN_INK },
+  pillCritical: { borderColor: ALERT_CRITICAL_BORDER, color: ALERT_CRITICAL_INK },
   panel: {
     display: "flex",
     flexDirection: "column",

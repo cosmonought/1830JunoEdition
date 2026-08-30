@@ -234,9 +234,19 @@ describe("the modal waits for the train to actually die (design note #1002)", ()
   it("stays idempotent across a replay", () => {
     /* UNDO REBUILDS BY REPLAYING THE LOG, so this block runs again for an expiry the player has already
        acknowledged -- the same hazard #706 records for the phase-change queue beside it, and keyed the same
-       way: by CONTENT, so two different expiries both survive and a replay of one adds nothing. */
+       way: by CONTENT, so two different expiries both survive and a replay of one adds nothing.
+       ==================================================================
+        DESIGN NOTE 1032: AND CONTENT ALONE WAS NOT ENOUGH
+       ==================================================================
+       THIS CASE PASSED THROUGHOUT THE REPORTED BUG, which is why it is rewritten rather than left alone. It
+       asked whether the queue was checked before pushing -- true, and irrelevant to the failure: dismissing a
+       notice REMOVES it from that queue, so the next replay found no match and re-queued it. The dedupe was
+       idempotent against itself and not against the player's own acknowledgement.
+       BOTH SOURCES ARE NOW ASSERTED. The `some` walk stays because two expiries in one dispatch still have to
+       be told apart; `dismissedFleetNoticesRef` is what makes "already seen" count as already queued. */
     const block = sliceBetween(APP, "const expiries = describeReprieveExpiries(before, after);", "if (expiryQueue.length");
-    expect(block).toContain("const already = expiryQueue.some(");
+    expect(block).toContain("expiryQueue.some((entry) => noticeDismissKey(entry) === key)");
+    expect(block).toContain("dismissedFleetNoticesRef.current.has(key)");
   });
 
   it("still writes the Activity Log line at the phase change", () => {
@@ -295,16 +305,25 @@ describe("the warning survives the phase change (design note #1004)", () => {
   });
 
   it("keeps a persistent badge while any mark stands", () => {
-    /* RULED: "retain a persistent warning badge reading 'Rust Imminent: [type]-train' for any corporation
-       holding gently rusted trains until they are destroyed."
-       ONE BADGE PER TIER, NOT PER TRAIN: two reprieved 3-trains are one fact, and the ruled label names a
-       type rather than a count. */
+    /* RULED (#1004): "retain a persistent warning badge reading 'Rust Imminent: [type]-train' for any
+       corporation holding gently rusted trains until they are destroyed."
+       ONE BADGE PER TIER, NOT PER TRAIN: two reprieved 3-trains are one fact.
+       ==================================================================
+        DESIGN NOTE 1033: THE LABEL IS SUPERSEDED; THE PERSISTENCE IS NOT
+       ==================================================================
+       RULED SINCE: "the badge must dynamically update to read 'Final Run: [type]-trains'." The #1004 wording
+       is quoted above rather than deleted because it was ruled verbatim too, and the reason it could not
+       survive is worth keeping: #1033 gives the PRE-purchase countdown "Rust Imminent:" at one buy away, so
+       leaving it here would put identical words on two badges meaning two different things.
+       WHAT THIS CASE STILL GUARDS is everything except the string -- that the badge is derived from the
+       corporation's own marks and vanishes only when they clear. That was #1004's actual subject. */
     /* `no-template-curly-in-string` RIGHTLY OBJECTS to `${...}` inside a plain string, so the interpolation
        is assembled -- #779's harness uses the same dodge for its dollar sign. What is asserted is the source
        text of a template literal, which is a string to this file. */
     const DOLLAR = String.fromCharCode(36);
-    expect(BAR).toContain("Rust Imminent: " + DOLLAR + "{tiers.map(");
-    expect(BAR).toContain(DOLLAR + "{tier}-train");
+    expect(BAR).toContain("Final Run: " + DOLLAR + "{tiers.map(");
+    expect(BAR).toContain(DOLLAR + "{tier}-trains");
+    expect(BAR).not.toContain("Rust Imminent: " + DOLLAR + "{tiers.map(");
     expect(BAR).toContain("const marks = activeCorporation?.reprievedTrains ?? [];");
     expect(BAR).toContain("if (marks.length === 0) return null;");
   });

@@ -437,8 +437,30 @@ describe("the off switch is always reachable", () => {
 
   it("never disables it while armed", () => {
     /* (2) THE SESSION GATE. A dropped connection must not trap a player inside a setting that keeps taking
-       their turns. Arming still needs a session; clearing does not. */
-    expect(bar).toContain("disabled={!autoPass.armed && !sessionReady}");
+       their turns. Arming still needs a session; clearing does not.
+       ==================================================================
+        DESIGN NOTE 1036: THE GATE IS THE CONNECTION, AND IT USED TO BE THE TURN AS WELL
+       ==================================================================
+       THIS ASSERTED `!sessionReady`, and the shell hands that prop `controlsEnabled && isMyTurn`. The
+       reasoning above is entirely about the SESSION -- and the flag it reached for carried a second fact, so
+       arming was dead for the whole round except on the player's own turn. Reported as: "the ability to
+       enable Auto-Pass during a Stock Round even when it is not currently their turn".
+       WHAT THE CASE IS FOR IS UNCHANGED: armed, the button is never disabled, whatever the connection says. */
+    expect(bar).toContain("disabled={!autoPass.armed && !autoPass.canArm}");
+  });
+
+  it("does not gate arming on whose turn it is", () => {
+    /* THE FEATURE, AND THE HALF A `canArm` RENAME COULD STILL GET WRONG. The prop exists so the two questions
+       can be answered separately; handing it `controlsEnabled && isMyTurn` at the call site would satisfy the
+       case above and change nothing a player can see. */
+    expect(app).toContain("canArm: controlsEnabled,");
+    expect(app).not.toContain("canArm: controlsEnabled && isMyTurn");
+  });
+
+  it("still gates Pass itself on the turn", () => {
+    /* THE CONTROL ON THE SPLIT. `sessionReady` was not weakened -- it was left alone and a second predicate
+       carved out beside it, so the button that ENDS a turn still needs one. */
+    expect(app).toContain("sessionReady={controlsEnabled && isMyTurn}");
   });
 
   it("keeps offering it through the auction while armed", () => {
@@ -523,8 +545,11 @@ describe("one standing instruction passes a turn once", () => {
     );
     expect(app).toContain("autoPassedAtLogIndexRef.current = lastLogIndex;");
     expect(app).not.toContain("active_player_index}`;");
-    // Cleared on both arm and disarm, so re-arming can act on the very turn it was set in.
-    expect(app.match(/autoPassedAtLogIndexRef\.current = null;/g) ?? []).toHaveLength(2);
+    /* Cleared on arm and on disarm, so re-arming can act on the very turn it was set in -- and, since
+       #1036, on the round change that clears a spent arm. THREE, not two: the count is asserted rather than
+       the presence because a clear that went missing would leave a fresh arm silently guarded off for one
+       turn, which is exactly the bug #816 was reported for. */
+    expect(app.match(/autoPassedAtLogIndexRef\.current = null;/g) ?? []).toHaveLength(3);
   });
 
   it("leaves the wake path able to say so out loud", () => {

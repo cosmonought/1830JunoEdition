@@ -82,6 +82,66 @@ export interface PublicCompanyState {
      OPTIONAL, AND #232'S RULE APPLIES: `undefined` means "this build does not report it", never "zero".
      Turn-scoped, and cleared beside `last_route_revenue` by #777's turn-change rule. */
   printed_route_revenue?: string;
+  /** ==================================================================
+   *   DESIGN NOTE 1028: THE FIGURE THAT OUTLIVES THE TURN
+   *  ==================================================================
+   *
+   * REPORTED: "corporations are displaying 'Last Run --' instead of their previous route value", and then,
+   * decisively: "all corporation cards on the Stock tab have 'Last Run --' during an Operating Round ... it
+   * was only printing the Last Run value of the last corporation to run."
+   *
+   * THAT SECOND SENTENCE IS THE WHOLE DIAGNOSIS. `last_route_revenue` is TURN-SCOPED and #777 clears it on
+   * every turn change -- correctly, because leaving it would make the next turn's die apply to last turn's
+   * routes. So the only corporation whose figure survives is the one currently operating, and every card that
+   * has already run this round reads zero. The Stock tab was rendering the field faithfully; the field simply
+   * does not mean what "Last Run" means.
+   *
+   * SO THIS ONE IS NOT CLEARED, EVER. It is written at the same moment #777 zeroes its turn-scoped sibling --
+   * the figure being wiped is precisely the completed run worth remembering -- and it is per corporation, so
+   * eight cards carry eight answers rather than sharing one.
+   *
+   * THE VARIANT-ADJUSTED FIGURE, not the printed one. `last_route_revenue` holds what the corporation was
+   * actually paid (#903 applies the die there), and "Last Run" is a claim about money. Copying the printed
+   * total instead would put a number on the card that nobody ever received.
+   *
+   * OPTIONAL, AND #232'S RULE APPLIES: `undefined` means "this build does not report it", never "$0". A
+   * corporation that has genuinely never run is `undefined` here and reads as "--", which is the honest
+   * rendering and the one the panel already had. */
+  last_completed_run_revenue?: string;
+  /** ==================================================================
+   *   DESIGN NOTE 1031: WHAT EACH TRAIN EARNED, FOR THE PEOPLE NOT DRIVING
+   *  ==================================================================
+   *
+   * REQUESTED (Batch 33 item 7): rival train chips should show revenue. Watchers could see WHICH trains the
+   * acting corporation was running -- the roster is derived from this state, so every client agrees on it --
+   * but not what any of them earned.
+   *
+   * PRESENCE ALONE COULD NOT ANSWER IT. `routeValues` is the president's live scratch: published while they
+   * draft, gone when the turn moves on, and absent entirely for a watcher who joins late or reloads. It is
+   * the right channel for a figure that is still changing and the wrong one for a figure that is settled.
+   *
+   * SO THE SETTLED FIGURE LIVES HERE, in the log-replayed state every client rebuilds identically. The two
+   * are not redundant: presence answers "what is the president looking at right now", this answers "what did
+   * that train earn", and the chip prefers the first while it exists.
+   *
+   * PRINTED VALUES, NOT ADJUSTED ONES, and that is a rules constraint rather than a convenience. #941 rules
+   * the Unpredictable Revenue die is rolled ONCE per corporation turn and applied to the aggregate, so no
+   * train has an adjusted figure of its own. Splitting the adjusted total back across trains would require an
+   * apportionment 1830 does not define, and #938's rounding is lossy besides -- the per-train shares would
+   * not re-sum to the figure the treasury actually received. The corporation-level fields remain the
+   * authority on money; this is the authority on which train ran where.
+   *
+   * `train_index` IS THE FLEET SLOT (#1031 on the payload), because a model cannot identify a train when a
+   * corporation owns two of the same one.
+   *
+   * OPTIONAL, AND #232'S RULE APPLIES: `undefined` means "this log does not say", never "the trains earned
+   * nothing" -- which is exactly the case the chip's `priceRoute` fallback still exists to cover. */
+  last_run_breakdown?: ReadonlyArray<{
+    train_index: number;
+    model: string;
+    /** `Uint128` on the wire, so a string here too -- the printed revenue of this train's route. */
+    printed_revenue: string;
+  }>;
   president: string | null;
   ipo_pool_percentage: number;
   bank_pool_percentage: number;
@@ -128,6 +188,36 @@ export interface PublicCompanyState {
    *  They still RUN. `settleRoundTransitions` clears them at the end of that corporation's next Operating
    *  Round turn (#906a), which is after its revenue has been recorded. */
   pending_rust_trains?: readonly string[];
+  /** ==================================================================
+   *   DESIGN NOTE 1046: THE CORPORATION THE SIGN MARKED
+   *  ==================================================================
+   *
+   * RULED: "Flag the specific corporation with a tracker (e.g. `hasYellowSign`)."
+   *
+   * A REAL STATE FIELD THIS TIME, and #1044 said the opposite for a reason that has now expired. While the
+   * Easter egg was cosmetic, deriving the mark from the Activity Log was right: nothing was stored, and every
+   * client agreed because every client replays the same log. The mark now DELETES A TRAIN AND MOVES MONEY, so
+   * it is board state -- and board state in this app is written by the reducer from a replayed action, or it
+   * is one browser's private opinion.
+   * SET BY THE REDUCER, CLEARED BY THE REDUCER, and never written from the shell. */
+  has_yellow_sign?: boolean;
+  /** ==================================================================
+   *   DESIGN NOTE 1046: TRAINS THE BANK NEVER SOLD
+   *  ==================================================================
+   *
+   * RULED of the Stage 2 gift: "it does not deplete the bank's supply ... and it bypasses train limit checks
+   * until the end of the Operating Round."
+   *
+   * A MULTISET BESIDE `owned_trains`, exactly like `pending_rust_trains`, and for the same reason: the train
+   * IS in the fleet -- it draws a chip, it can be sold, it runs from next turn -- and one fact about it is
+   * different. A separate array would be a second roster to fall out of step with the first (#979's lesson,
+   * which cost two batches).
+   * EMPTIED AT THE OPERATING ROUND BOUNDARY, which is what "until the end of the Operating Round" means: the
+   * exemption expires, the train becomes ordinary, and a corporation left over the limit discards down.
+   *
+   * OPTIONAL, AND #232'S RULE APPLIES: `undefined` is "this build does not report it", never "there are
+   * none" -- and a standard game never has one. */
+  ghost_trains?: readonly string[];
 }
 
 export interface PrivateCompanyState {

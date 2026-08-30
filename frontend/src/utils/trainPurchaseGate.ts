@@ -51,7 +51,7 @@
 
 import type { GameStateResponse } from "./gameState";
 import { operatingCorporationId } from "./dividendGate";
-import { isTrainLocked } from "./trainLimit";
+import { countableTrainCount, isTrainLocked } from "./trainLimit";
 
 /** The step at which a depot purchase belongs. `"Hardware"` is the Buy Trains step's internal name. */
 export const TRAIN_PURCHASE_SUB_PHASE = "Hardware";
@@ -120,9 +120,18 @@ export function trainPurchaseRefusal(
 
   /* THE LIMIT THROUGH THE SHARED RULE, not a second `>=` -- #703's fix, which found the auto-skip and the
      panel enforcing the same rule against two different tiers. */
+  /* Design note #1034: THE COUNT, NOT THE ROSTER LENGTH. A gently-rusted train stays in `owned_trains` -- it
+     still runs, and it still draws a chip -- but occupies no limit slot, so a corporation holding two live
+     trains and one condemned one is at two against the limit rather than three. Locking it out on the roster
+     length would refuse a purchase the rules allow, and the sentence would name a figure the player cannot
+     see anywhere else on screen.
+     THE SENTENCE REPORTS THE SAME FIGURE THE GATE JUDGED. #979's report was that the panel and the auto-skip
+     enforced one rule against two different numbers; a refusal that measures one thing and explains another
+     is the same fault one layer up. */
   const owned = company.owned_trains;
-  if (owned !== undefined && owned !== null && isTrainLocked(owned.length, trainLimit)) {
-    return `Train limit reached — ${company.ticker ?? "this corporation"} already holds ${owned.length} of a maximum ${trainLimit}.`;
+  const countable = countableTrainCount(owned, company.pending_rust_trains, company.ghost_trains);
+  if (owned !== undefined && owned !== null && isTrainLocked(countable, trainLimit)) {
+    return `Train limit reached — ${company.ticker ?? "this corporation"} already holds ${countable} of a maximum ${trainLimit}.`;
   }
 
   if (requireFunds) {

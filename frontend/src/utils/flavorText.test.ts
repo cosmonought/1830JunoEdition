@@ -40,10 +40,10 @@ describe("the payload's shape (design note #944)", () => {
       UNPREDICTABLE_REVENUE_FLAVOR.unchanged.length,
       UNPREDICTABLE_REVENUE_FLAVOR.minorBonus.length,
       UNPREDICTABLE_REVENUE_FLAVOR.criticalBonus.length,
-    ]).toEqual([105, 105, 120, 105, 110]);
+    ]).toEqual([115, 115, 130, 115, 120]);
   });
 
-  it("holds 545 lines in total", () => {
+  it("holds 595 lines in total", () => {
     /* ==================================================================
         THE COUNTS MOVED, AND THE MODULO DID NOT HAVE TO
        ==================================================================
@@ -55,9 +55,13 @@ describe("the payload's shape (design note #944)", () => {
        the time -- "so the modulus cannot come apart from the payload the way a hard-coded 25 would the first
        time a line is added or removed" -- and this is the first time it was tested.
        THESE COUNT CASES ARE THE PART THAT HAD TO MOVE, which is the right split: the payload's shape is a
-       fact worth pinning, and the code reads that shape rather than repeating it. */
+       fact worth pinning, and the code reads that shape rather than repeating it.
+       FIFTY MORE ARRIVED LATER -- ten per bucket, taking the five to 115/115/130/115/120 and the total to 595.
+       Again no arithmetic changed, for the same reason, and again the two count cases and the reachability
+       figures below were the whole of the edit. Recorded because a third batch will land eventually and the
+       useful thing to know is that this file is the only place that has to move. */
     const all = Object.values(UNPREDICTABLE_REVENUE_FLAVOR).flat();
-    expect(all).toHaveLength(545);
+    expect(all).toHaveLength(595);
   });
 
   it("repeats no line, within a bucket or across them", () => {
@@ -289,7 +293,7 @@ describe("every line is reachable (design note #944)", () => {
       seen.unchanged.size,
       seen.minorBonus.size,
       seen.criticalBonus.size,
-    ]).toEqual([105, 105, 120, 105, 110]);
+    ]).toEqual([115, 115, 130, 115, 120]);
   });
 });
 

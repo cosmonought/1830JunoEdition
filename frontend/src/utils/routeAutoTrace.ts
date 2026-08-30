@@ -40,6 +40,8 @@ import type { TileColorTier } from "../components/hexTileCatalog";
 import { isRouteTerminusHex, sandboxRouteBreakdown } from "./sandboxSession";
 // Design note #730: which city an arrival lands in -- shared with the network walk so both ask one question.
 import { cityForArrival, type StationToken } from "./trackReach";
+// Design note #1023: the same shut-city predicate the network walk and the auto-tracer already ask.
+import { cityShutAt } from "./cityBypass";
 import {
   neighbourAcross,
   segmentsTouchingEdge,
@@ -109,6 +111,21 @@ export function bridgeWaypoints(
   from: TracedHex,
   to: TracedHex,
   avoid: ReadonlySet<string> = new Set(),
+  /** ==================================================================
+   *   DESIGN NOTE 1023: THE THIRD WALK, AND THE ONE THAT NEVER LEARNED THE RULE
+   *  ==================================================================
+   *
+   * REPORTED: "When trying to route C&O past Altoona, the router snaps to the tokened-out PRR city and throws
+   * an error. Worse, it completely refuses to draw a path along the bypass track."
+   *
+   * `blocksThrough` HAS BEEN THREADED THROUGH TWO WALKS AND NOT THIS ONE. #729 taught the network reach about
+   * tokens, #730 taught the auto-tracer, and #820 taught both about the bow -- "the wall has a door in it".
+   * The MANUAL bridge, which is what fills the gap between two clicked hexes, was never given the predicate at
+   * all. It is the same omission #808's own note lists as its first finding, one walk over: "this walk may
+   * still explore out of the wrong arm ... so it can propose a bridge the token rule will then refuse."
+   *
+   * OMITTED MEANS NO BLOCKING, reproducing every pre-#1023 caller exactly. */
+  blocksThrough?: (q: number, r: number, cityIndex: number) => boolean,
 ): TracedHex[] | null {
   const fromKey = `${from.q},${from.r}`;
   const toKey = `${to.q},${to.r}`;
@@ -141,15 +158,36 @@ export function bridgeWaypoints(
      routing hallucinated -- and the previous report had named the auto-router.
      The walk is over (HEX, ARRIVAL EDGE) states now. One hex may legitimately be visited twice by two different
      rails, so the visited set is keyed on the state rather than the hex. */
+  /* ==================================================================
+      DESIGN NOTE 1023: THE BOW IS A DISTINCT EDGE, AND THIS GRAPH HAD COLLAPSED IT
+     ==================================================================
+     REPORTED: "The pathfinding algorithm is treating the bypass track as non-existent or inextricably linked
+     to the blocked city node."
+
+     EXACTLY SO, AND THE COLLAPSE WAS ONE `.map`. The expansion read
+       `traversalsFrom(...).map((transit) => transit.exitEdge)`
+     which throws away everything #737 built that list to preserve: it "yields one entry per WAY through, not
+     per exit", and Altoona's two tracks join the SAME two edges. Mapping to `exitEdge` turns two distinct arms
+     into one number, so the graph could not represent the bow at all -- and the node it emitted carried
+     neither `variant` nor `bypass`, so even a crossing that had taken the bow was recorded as a crossing
+     through the station.
+
+     THE STATE CARRIES THE ARM NOW. `variant` joins the key, so the two ways through one hex are two states
+     rather than one that dedupes the other away -- the same fix #4 made to the network walk when a crossover
+     was two rails rather than a junction. */
   interface BridgeState {
     q: number;
     r: number;
     /** `null` only for the start, which the player is standing on and may
      *  leave by any of its rails. */
     arrivalEdge: number | null;
+    /** Design note #1023: which authored way through this hex was taken to reach it. */
+    variant?: number;
+    /** Design note #1023: that way missed the hex's revenue centre. */
+    bypass?: boolean;
   }
   const stateKey = (state: BridgeState) =>
-    `${state.q},${state.r}:${state.arrivalEdge ?? "start"}`;
+    `${state.q},${state.r}:${state.arrivalEdge ?? "start"}:${state.variant ?? 0}`;
 
   const startState: BridgeState = { q: from.q, r: from.r, arrivalEdge: null };
   const dist = new Map<string, number>([[stateKey(startState), 0]]);
@@ -160,6 +198,8 @@ export function bridgeWaypoints(
   const stateAt = new Map<string, BridgeState>([[stateKey(startState), startState]]);
   const nodeAt = new Map<string, TracedHex>([[stateKey(startState), from]]);
   const settled = new Set<string>();
+  /** Design note #1023: how each settled state was CROSSED on the way out of it. */
+  const crossingAt = new Map<string, { variant?: number; bypass?: boolean }>();
 
   let arrivedKey: string | null = null;
 
@@ -184,12 +224,37 @@ export function bridgeWaypoints(
     /* From the start hex, every rail on it is available -- the player is
        standing in the city. Having arrived on a rail, only the exits that
        rail actually reaches. */
-    const exits =
-      at.arrivalEdge === null
-        ? liveEdgesForHex(mapGrid, at.q, at.r)
-        : traversalsFrom(mapGrid, at.q, at.r, at.arrivalEdge).map((transit) => transit.exitEdge);
+    /* ==================================================================
+        DESIGN NOTE 1023: A SHUT CITY LEAVES ONLY THE WAYS THAT MISS IT
+       ==================================================================
+       This is #820's rule, applied to the third walk. That note fixed the network reach: "a city full of other
+       corporations' tokens has nothing to say about track that never touches it", so a blocked hex keeps its
+       BYPASS arms and loses the rest.
 
-    for (const edge of exits) {
+       WHICH IS ALSO ITEM 2 OF THE REPORT -- "the algorithm must dynamically weight tokened-out city nodes as
+       impassable ... This must force the algorithm to naturally traverse the bypass edge." Impassable rather
+       than expensive, deliberately: a weight can always be outbid by a long enough detour, and a route through
+       a shut city is not a worse route, it is an illegal one. The bow becomes the only way across, which is
+       what makes the player's click land on it without any snapping rule of its own.
+
+       ASKED ON THE HEX BEING LEFT, not the one being entered -- the arm is a property of the crossing, which
+       is #820's own correction to #729's arrival-time check.
+
+       THE START IS EXEMPT. `arrivalEdge === null` is the hex the player is standing on; a corporation is not
+       blocked by a city it is already in, and the terminus rule (#730) says a run may END in a shut city. */
+    const shutHere =
+      at.arrivalEdge !== null && blocksThrough
+        ? cityShutAt(at.q, at.r, blocksThrough)
+        : false;
+    const transits: { exitEdge: number; variant?: number; bypass?: boolean }[] =
+      at.arrivalEdge === null
+        ? liveEdgesForHex(mapGrid, at.q, at.r).map((exitEdge) => ({ exitEdge }))
+        : traversalsFrom(mapGrid, at.q, at.r, at.arrivalEdge).filter(
+            (transit) => !shutHere || transit.bypass === true,
+          );
+
+    for (const transit of transits) {
+      const edge = transit.exitEdge;
       const next = neighbourAcross(mapGrid, at.q, at.r, edge);
       if (!next) continue;
       const hexLabel = labelFor(next.q, next.r);
@@ -201,6 +266,9 @@ export function bridgeWaypoints(
       // rule rather than this function's business.
       if (!isDestination && avoid.has(`${next.q},${next.r}`)) continue;
 
+      /* Design note #1023: the arm is a property of the crossing that LEAVES a hex, so it is recorded on the
+         state that arrives at the next one -- and reconstructed onto the predecessor when the path is walked
+         back, which is where it belongs on a waypoint. */
       const nextState: BridgeState = { q: next.q, r: next.r, arrivalEdge: next.arrivalEdge };
       const key = stateKey(nextState);
       if (settled.has(key)) continue;
@@ -217,6 +285,15 @@ export function bridgeWaypoints(
         cameFrom.set(key, bestKey as string);
         stateAt.set(key, nextState);
         nodeAt.set(key, { q: next.q, r: next.r, hexLabel });
+        /* Design note #1023: the crossing that got us OUT of `at` describes `at`, not `next`. Recorded against
+           the predecessor's key so the reconstruction below can stamp the hex the bow actually belongs to --
+           without this the flag would land one hex downstream, which prices the wrong tile. */
+        if (transit.bypass === true || transit.variant !== undefined) {
+          crossingAt.set(bestKey as string, {
+            variant: transit.variant,
+            bypass: transit.bypass,
+          });
+        }
       }
     }
   }
@@ -230,7 +307,20 @@ export function bridgeWaypoints(
     const node = nodeAt.get(cursor);
     const previous = cameFrom.get(cursor);
     if (!node || previous === undefined) return null;
-    path.unshift(node);
+    /* Design note #1023: stamp the hex with the way it was crossed. `crossingAt` is keyed by the state the
+       crossing LEFT, which is this node's own key on the way back. `TracedHex` has carried these two fields
+       since #737 and this walk was dropping both -- so a manual bridge over Altoona re-priced through the
+       station even when it had gone round it. */
+    const crossing = crossingAt.get(cursor);
+    path.unshift(
+      crossing === undefined
+        ? node
+        : {
+            ...node,
+            ...(crossing.variant !== undefined ? { variant: crossing.variant } : {}),
+            ...(crossing.bypass === true ? { bypass: true } : {}),
+          },
+    );
     cursor = previous;
     // A corrupt predecessor chain would spin forever; the board is finite
     // and no simple path can exceed it.

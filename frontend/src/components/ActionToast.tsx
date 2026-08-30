@@ -371,12 +371,13 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     gap: "6px",
     marginTop: "6px",
-    color: "#8a90a0",
+    color: "#5a6070",
   },
   eraArrow: { flex: "none" },
   detail: {
     fontSize: FONT_SIZE.micro,
-    color: "#9fb8a4",
+    // Design note #1030: the quieter line on the cream ground -- still secondary, still readable.
+    color: "#5a6070",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
   },
   /* Design note #984: two columns -- names flush left, figures flush right in tabular figures, so the digits
@@ -394,10 +395,12 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.micro,
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
   },
-  detailRowLabel: { color: "#9fb8a4", textAlign: "left" },
+  detailRowLabel: { color: "#5a6070", textAlign: "left" },
   /* Brighter than the label: on a row of two facts the figure is the one being compared, and #670's rule for
      the dividend block applies here too -- the number carries the decision, the name only says whose it is. */
-  detailRowValue: { color: "#d8e6da", textAlign: "right", fontVariantNumeric: "tabular-nums" },
+  // Design note #1030: darker than the label, for the same reason it used to be brighter -- the figure carries
+  // the decision and the contrast has simply inverted with the ground.
+  detailRowValue: { color: "#12151d", textAlign: "right", fontVariantNumeric: "tabular-nums" },
   /* Design note #697: BOTTOM CENTRE, above the status dock. Not top -- the action bar is sticky there and a
      toast over it would cover the controls the player is mid-sequence with, which is the one place it must
      not be. Not a corner either: a receipt for a deliberate action should be on the axis the reader is
@@ -435,10 +438,33 @@ const styles: Record<string, React.CSSProperties> = {
     maxWidth: "min(560px, calc(100vw - 32px))",
     padding: "10px 16px",
     borderRadius: "10px",
-    backgroundColor: "#16211a",
-    border: "1px solid #3f7a55",
-    boxShadow: "0 6px 20px rgba(0, 0, 0, 0.5)",
-    color: "#e6e8ef",
+    /* ==================================================================
+        DESIGN NOTE 1030: CREAM ON THE DARK BOARD, NOT DARK GREEN ON IT
+       ==================================================================
+       REPORTED: "The dark green toast notifications blend in too heavily with the map background and app UI."
+
+       AND THE WHOLE APP IS DARK, which is what makes a dark toast the wrong answer however carefully it is
+       tuned. `#16211a` on a `#12141b` shell over a board of dark cardboard is a panel among panels; the one
+       surface that has to be seen over everything else was the one competing with everything else. #810 found
+       the same failure on the Buy Trains panel -- "a surface that sinks below its own container reads as a
+       well" -- and this is that diagnosis applied to the element with the strongest claim to stand out.
+
+       CREAM RATHER THAN WHITE. Pure white on this palette is a hole; `#f6f1e4` is the parchment the
+       corporation and player cards already use, so the toast reads as a card that has arrived rather than as
+       a new material. The app has exactly one light surface language and this joins it.
+
+       NOT THE ACTING CORPORATION'S LIVERY, which the report offered as the alternative. Two reasons: this
+       toast is often about a corporation the reader does not control (the private payout is the ambient one,
+       #1016), so tinting it by whoever is operating would attach a colour to the wrong subject -- and #702
+       measured a 1.00:1 contrast between a train chip and NNH's livery, which is the same trap one surface
+       over. One legible ground, and colour reserved for the tick and the figures.
+
+       THE GREEN SURVIVES WHERE IT MEANS SOMETHING: the check glyph below keeps #670's rule that green is
+       money or a thing arriving. What changes is that it now sits on a ground it can be read against. */
+    backgroundColor: "#f6f1e4",
+    border: "1px solid #b9ae91",
+    boxShadow: "0 8px 24px rgba(0, 0, 0, 0.55)",
+    color: "#1d2230",
     fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif",
     fontSize: FONT_SIZE.body,
     lineHeight: 1.45,
@@ -448,6 +474,8 @@ const styles: Record<string, React.CSSProperties> = {
   },
   /* Green, and the only place this toast uses colour. #670's rule: green means money or a thing arriving, and
      an action that succeeded is the plainest case of it. */
-  check: { color: "#4ea172", fontWeight: 700, flexShrink: 0 },
+  /* Design note #1030: deepened from `#4ea172`, which was chosen against a near-black ground and is washed
+     out on cream. Same hue, same meaning, legible where it now lives. */
+  check: { color: "#1f7a4d", fontWeight: 700, flexShrink: 0 },
   text: { minWidth: 0 },
 };

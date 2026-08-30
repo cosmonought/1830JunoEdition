@@ -321,6 +321,14 @@ function LogEntry({ item }: { item: FeedItem }) {
         style={{
           ...styles.logLabelFull,
           ...(item.logStatus === "error" ? styles.logLabelError : {}),
+          /* Design note #1042: the variant's own lines, tinted by direction. AFTER the error style, because
+             a failed action is a more urgent fact about a line than which way its die rolled -- and the two
+             cannot co-occur today, so the order is a statement of precedence rather than a live conflict. */
+          ...(item.logTone === "bonus"
+            ? styles.logToneBonus
+            : item.logTone === "malus"
+              ? styles.logToneMalus
+              : {}),
         }}
       >
         {feedItemText(item)}
@@ -626,6 +634,29 @@ const styles: Record<string, React.CSSProperties> = {
      survives being copied out of the panel as plain text, which a coloured
      glyph never did. */
   logLabelError: { color: "#f0a3a3" },
+  /* ==================================================================
+      DESIGN NOTE 1042: SUBTLE, BECAUSE EVERY THIRD LINE IS ONE OF THESE
+     ==================================================================
+     RULED as "a subtle gold background for bonuses and a subtle red background for maluses, italicizing the
+     text". The alphas are low deliberately: under the Unpredictable Revenue variant a flavour line lands on
+     most operating turns, so a saturated fill would turn the Activity Log into stripes and stop reading as
+     emphasis at all. The italic is doing most of the work; the tint says which direction.
+     PADDING AND A RADIUS COME WITH THE FILL, because a background flush against the text reads as a
+     rendering artefact rather than a highlight. */
+  logToneBonus: {
+    backgroundColor: "rgba(201, 169, 76, 0.12)",
+    color: "#e2d3a2",
+    fontStyle: "italic",
+    padding: "1px 6px",
+    borderRadius: "4px",
+  },
+  logToneMalus: {
+    backgroundColor: "rgba(244, 63, 94, 0.11)",
+    color: "#efc0c6",
+    fontStyle: "italic",
+    padding: "1px 6px",
+    borderRadius: "4px",
+  },
   timestamp: {
     fontSize: FONT_SIZE.small,
     color: "#6f7480",

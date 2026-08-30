@@ -1,12 +1,21 @@
 /** @jest-environment node */
 //
 // ==================================================================
-//  DESIGN NOTE 1007 (harness): THE HEADING NAMES THE TIER, AND "D" IS NOT A NUMBER
+//  DESIGN NOTE 1007 (harness): THE HEADING NAMES THE TIER, AND EVERY TIER IS NAMED THE SAME WAY
 // ==================================================================
 //
 // REPORTED: "The current subpanel header reads statically as 'Buy Trains from the Bank Depot'. Update this
 // string to dynamically inject the name/type of the current cheapest available train in the depot ...
 // 'Buy 3-Trains from the Bank Depot' or 'Buy Diesels from the Bank Depot'."
+//
+// THIS FILE'S FIRST DRAFT ASSERTED THE OPPOSITE OF WHAT IT NOW ASSERTS, and the reversal is left visible
+// because a harness that quietly flips is a harness nobody can trust. It required `trainTierName("D")` to be
+// "Diesel" and carried a case titled "never says D-Train for any tier the game has" -- written to enforce a
+// claim I had made without checking, that "D-train" is not real usage. It is: the player who plays these games
+// pushed back, and they are right. The spec sentence above is quoted unchanged, because it is what was asked
+// for at the time and the change of mind belongs on the record next to it.
+//
+// WHAT THE FILE IS FOR DID NOT CHANGE. The bug was ever only that two surfaces spelled one train two ways.
 //
 // TWO ASSERTIONS OF DIFFERENT KINDS, and the split is deliberate. The NAMING is a pure function and is tested
 // as one -- called, with its answers compared -- because that is the half where "D-Trains" would be wrong and
@@ -31,30 +40,51 @@ describe("a tier is named the way a player says it", () => {
     expect(trainTierNamePlural("6")).toBe("6-Trains");
   });
 
-  it("names the last tier a Diesel", () => {
-    /* THE WHOLE REASON THIS IS A FUNCTION. `${tier}-Train` is correct for five of the six tiers, which is why
-       roughly twenty sites in this app do exactly that and why the sixth went unnoticed: "D-train" is
-       readable, so it never looked like a bug, it looked like a label. */
-    expect(trainTierName("D")).toBe("Diesel");
-    expect(trainTierNamePlural("D")).toBe("Diesels");
+  it("names the last tier by its symbol, like every other tier", () => {
+    /* THE REVERSED CASE. It read `expect(trainTierName("D")).toBe("Diesel")` and was titled "names the last
+       tier a Diesel". "D-Train" is ordinary 18xx usage, so there was never a correctness argument for the
+       special case -- only a preference I had presented as one. */
+    expect(trainTierName("D")).toBe("D-Train");
+    expect(trainTierNamePlural("D")).toBe("D-Trains");
   });
 
-  it("never says D-Train for any tier the game has", () => {
+  it("special-cases no tier at all", () => {
     /* ASKED OVER `TIER_ORDER` RATHER THAN OVER A LIST TYPED HERE, so a seventh tier added to the game is
-       covered by this file the day it exists rather than the day somebody remembers to widen the test. */
+       covered by this file the day it exists rather than the day somebody remembers to widen the test.
+       THIS IS THE CASE THAT REPLACES "never says D-Train", and it is a stronger claim than either spelling:
+       whatever the naming rule is, it is the SAME rule for every tier. A future change back to "Diesel" would
+       have to fail this deliberately rather than slip past it. */
     for (const tier of TIER_ORDER) {
-      expect(trainTierName(tier)).not.toBe("D-Train");
-      expect(trainTierNamePlural(tier)).not.toBe("D-Trains");
+      expect(trainTierName(tier)).toBe(`${tier}-Train`);
     }
   });
 
   it("keeps the plural exactly one letter from the singular", () => {
     /* THE PROPERTY, NOT SIX MORE LITERALS. Stated this way because the singular is the form that composes
-       with `countPhrase`, and a plural that drifted from it -- "Dieselss", or a special case for one tier --
+       with `countPhrase`, and a plural that drifted from it -- "D-Trainss", or a special case for one tier --
        would put two spellings of one train in front of the same player. */
     for (const tier of TIER_ORDER) {
       expect(trainTierNamePlural(tier)).toBe(`${trainTierName(tier)}s`);
     }
+  });
+
+  it("leaves the rust badge asking the same function", () => {
+    /* THE SITE WHERE "Diesel" ENTERED THE TREE. `TrainBadges.tsx` carried `trigger === "D" ? "Diesel" : ...`
+       inline since v1.0alpha; every other surface spelling it that way was copying this line. An inline
+       ternary restored here would put two spellings back in front of one player -- which is the entire defect
+       -- and no assertion about the helper alone would notice. */
+    const BADGES = readStripped("components/TrainBadges.tsx");
+    expect(BADGES).toContain("const triggerName = trainTierName(trigger);");
+    expect(BADGES).not.toContain('trigger === "D" ? "Diesel"');
+  });
+
+  it("leaves the depot's stock readout asking it too", () => {
+    /* THE OTHER HALF OF THE SAME PANEL. The heading below was converted in Batch 30; the tooltip a few lines
+       under it still said "Diesels are unlimited" and interpolated a bare `${tier}-train` on the other branch
+       -- one panel, three spellings, which is how this defect stays alive after a fix. */
+    const PANEL_RAW = readStripped("components/TrainPurchasePanel.tsx");
+    expect(PANEL_RAW).toContain("trainTierNamePlural(nextTier.tier)} are unlimited");
+    expect(PANEL_RAW).not.toContain('"Diesels are unlimited');
   });
 });
 
@@ -105,13 +135,20 @@ describe("the note and the code agree", () => {
     expect(RAW).toContain("THE EMPTY DEPOT KEEPS THE OLD WORDS");
   });
 
-  it("leaves the twenty other sites alone, and says so", () => {
-    /* SCOPE, PINNED. `trainTierName` is the rule for every "n-train" phrase in the app and this batch changed
-       ONE caller. That is a deliberate limit rather than an oversight, so the note has to say it -- otherwise
-       the next reader finds a helper with one caller and reasonably concludes it was abandoned.
-       This assertion is what makes the limit visible in the test run rather than only in a comment. */
+  it("draws the scope line at the phase, and says so", () => {
+    /* SCOPE, PINNED -- AND REDRAWN. This case used to assert the note said the other sites were "converted as
+       they are touched rather than in one sweep", which was true while the sweep was an open question. It is
+       decided now, so the sentence it guarded is gone and this guards the boundary that replaced it.
+       THE BOUNDARY IS TRAIN VERSUS PHASE. "Diesel Era" and "Phase D (Diesel)" name a phase of 1830, which is
+       what the game itself calls it, and the tutorial's "2, 3, 4, 5, 6, and Diesel" is prose about capacity.
+       None of those names a train a corporation buys. A later sweep that took "Diesel" out of the phase labels
+       on a grep would be reading this rule as a spelling ban, which it is not -- so the reason is in the note
+       and this is what makes it visible in a test run. */
     // `readSource` resolves from `src/`, not from this file -- #886's one reader, one root.
     const RAW = readSource("utils/gamePhase.ts");
-    expect(RAW).toContain("converted as they are touched rather than in one sweep");
+    expect(RAW).toContain("THE PHASE IS NOT THE TRAIN");
+    // And the phase labels themselves still say it, which is the fact the note is defending.
+    expect(readStripped("utils/gamePhase.ts")).toContain('"Phase D (Diesel)"');
+    expect(readStripped("utils/depotSchedule.ts")).toContain('phase: "Diesel Era"');
   });
 });

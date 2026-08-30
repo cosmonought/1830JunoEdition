@@ -28,7 +28,9 @@ import { operatingOrderRanks, sortForOperatingOrder } from "../utils/operatingOr
 // went with the footer table they fed. The Ledger still owns both.
 import { PrivateCompanyPills } from "./PrivateCompanyPills";
 import { corporationFullName } from "../utils/corporationNames";
-import { derivePhase, rustOutlook } from "../utils/gamePhase";
+import { depotInventory, derivePhase, rustOutlook } from "../utils/gamePhase";
+// Design note #1035: how close the privates are to closing, for the pills that show them.
+import { privateClosureAlert } from "../utils/purchaseWarnings";
 import { CapacityPill, LastRoutePayout, TrainChips } from "./TrainBadges";
 import { stationTickerColor } from "./hexContractTypes";
 import type { MarketGridResponse } from "./StockMarketRenderer";
@@ -176,6 +178,10 @@ function OperatingRoundCorporationPanel({
   // corporation -- 4 through Phases 2-3, 3 in Phase 4, 2 from Phase 5 on --
   // so it is derived once for the table rather than per row.
   const phase = derivePhase(gameState);
+  /* Design note #1035: computed from the ONE rule rather than re-derived. Several surfaces ask this and
+     each asks the same pure function on the same state -- which is not the drift #867 warns about (two
+     implementations), only two callers of one. */
+  const closureAlert = privateClosureAlert(phase, depotInventory(gameState));
   // Design note #4 in `TrainBadges.tsx`: lets every chip count, not just
   // the tier currently in the danger window.
   const outlook = rustOutlook(gameState);
@@ -384,17 +390,33 @@ function OperatingRoundCorporationPanel({
                    the auction table and the Ledger render, so a private looks the same wherever it is listed and its rules text
                    is one click away here too. */}
                 <td style={styles.tdB}>
-                  <PrivateCompanyPills privates={privates} surface="table" emptyLabel="--" />
+                  <PrivateCompanyPills
+                    privates={privates}
+                    surface="table"
+                    emptyLabel="--"
+                    closureAlert={closureAlert}
+                  />
                 </td>
 
                 {/* ---- Trains, as chips ---- */}
                 <td style={styles.tdCenterB}>
-                  <TrainChips trains={trains} phase={phase} surface="dark" outlook={outlook} />
+                  <TrainChips
+                    trains={trains}
+                    phase={phase}
+                    surface="dark"
+                    outlook={outlook}
+                    reprieved={company.pending_rust_trains}
+                  />
                 </td>
 
                 {/* ---- Capacity pill ---- */}
                 <td style={styles.tdCenter}>
-                  <CapacityPill trains={trains} phase={phase} surface="dark" />
+                  <CapacityPill
+                    trains={trains}
+                    phase={phase}
+                    surface="dark"
+                    reprieved={company.pending_rust_trains}
+                  />
                 </td>
               </tr>
             );

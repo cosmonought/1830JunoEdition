@@ -27,8 +27,13 @@ import {
 const ADA = "p-ada";
 const BEN = "p-ben";
 
+/* Design note #1026: `id` is required now, and these fixtures mint one from the index. That is EXACTLY the
+   identity the old code assumed -- one entry per index -- so every case below keeps testing what it always
+   tested. The cases that are about a COLLISION supply their own ids, because minting from the index is the
+   thing they need not to do. */
 const act = (index: number, actor: string, what = "BuyStock"): RevertableAction => ({
   index,
+  id: `a${index}`,
   actor,
   payload: JSON.stringify({ [what]: { game_id: 1 } }),
 });
@@ -44,6 +49,7 @@ const derived = (
 
 const revert = (index: number, to: number, actor: string): RevertableAction => ({
   index,
+  id: `r${index}`,
   actor,
   payload: JSON.stringify({ RevertTo: { index: to, player: actor, summary: "x" } }),
 });

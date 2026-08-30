@@ -204,7 +204,9 @@ import {
   tierEra,
 } from "./utils/gamePhase";
 // Design note #703: the train-limit rule, so this gate and the Buy Trains panel cannot drift apart again.
-import { isTrainLocked } from "./utils/trainLimit";
+import { countableTrainCount, isTrainLocked } from "./utils/trainLimit";
+// Design note #1035: how close the privates are to closing, threaded to every surface that draws one.
+import { privateClosureAlert } from "./utils/purchaseWarnings";
 // Design note #705: the Pay column's before-and-after, alongside the Withhold column's.
 import { projectDividendPayouts } from "./utils/dividendProjection";
 // Design note #712: the market-zone purchase rules.
@@ -309,7 +311,20 @@ import {
 // Design note #1008: the glow's condition travels beside `isMyTurn`, never folded into it.
 import { useDocumentTitleFlash, useTurnGlowActive } from "./utils/turnAlert";
 // Design note #1009: the whistle takes the same `isMyTurn` the other two turn alerts do.
-import { RADIO_STREAM_URL, useRadioStream, useTurnWhistle } from "./utils/audio";
+import { duckRadio, playVariantCue, RADIO_STREAM_URL, useRadioStream, useTurnWhistle } from "./utils/audio";
+// Design note #1040: which sound a flavour line earns, and whether it brings a video with it.
+import { isBonusBucket, variantCueFor } from "./utils/variantSfx";
+// Design note #1044: the two-stage Easter egg, derived from the replayed log rather than a hidden flag.
+import {
+  escalationTier,
+  ESCALATION_APPENDIX,
+  lowestValueTrain,
+  markPayout,
+  MARK_APPENDIX,
+  resolveFlavourLine,
+  yellowSignStateFrom,
+} from "./utils/yellowSign";
+import YellowSignOverlay from "./components/YellowSignOverlay";
 // Design note #1018: the auto-skip acts on a definite refusal, never on an unsettled one.
 import { earnableRevenueVerdict, skipReasonFor } from "./utils/earnableRevenue";
 import {
@@ -342,6 +357,8 @@ import {
   revenueDeltaPercent,
   revenueOutcome,
   rollTurnRevenue,
+  flavorBucketFor,
+  revenueFlavourClause,
   turnRevenueSentence,
 } from "./utils/gameVariants";
 import {
@@ -489,6 +506,8 @@ import { RIVAL_ROUTE_INDEX_BASE, watcherTrainDrafts } from "./utils/watcherRoute
 import { autoSkipExit } from "./utils/autoSkipExit";
 import { overrunsReach, reachForDrafting } from "./utils/trainReach";
 import { editRouteDraft } from "./utils/routeDraftEdit";
+// Design note #1024: the splice is a rule about an array, so it lives where it can be tested as one.
+import { stopsRemovedByTruncating, truncateRouteAtHex } from "./utils/routeTruncate";
 import { runnableDrafts, runTrainsRefusal } from "./utils/runTrainsRules";
 import { errandLaysBonus } from "./utils/bonusLay";
 import { stepsFor } from "./utils/operatingCursor";
@@ -815,6 +834,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   const queryClient = sandbox ? undefined : (wallet.signingClient ?? readOnlyClient ?? undefined);
 
   const [actionLog, setActionLog] = useState<ActionLogEntry[]>([]);
+  /* Design note #1040: the log, readable from inside a dispatch handler. The Yellow Sign counts previous
+     sightings and that count must be of the REPLAYED record every client shares -- reading the state
+     directly from a closure built several commits earlier would count a stale log. */
+  const actionLogRef = useRef<ActionLogEntry[]>([]);
+  actionLogRef.current = actionLog;
   const [activeMainTab, setActiveMainTab] = useState<MainTab>("map");
   // The OR cursor is READ from the reducer's operating_sub_phase when present; this local state is what a live room follows until GetGameState reports one.
   // See docs/ai_architecture/state_machine.md - App.tsx #656
@@ -972,6 +996,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   // Renders the whole depot tier by tier; depotInventory already applies the cheapest-first queue rule.
   // See docs/ai_architecture/contract_economy.md - App.tsx #203
   const depot = useMemo(() => depotInventory(gameState), [gameState]);
+  /** Design note #1035: how close the private companies are to closing, for every surface that draws one.
+   *
+   *  DERIVED ONCE IN THE SHELL rather than in each card, which is the same division `outlook` and `depot`
+   *  already follow: the components are handed a value and do not each reach for `gameState`. The rule itself
+   *  lives in `purchaseWarnings`, beside the countdown it reads. */
+  const closureAlert = useMemo(
+    () => privateClosureAlert(currentPhase ?? null, depot),
+    [currentPhase, depot],
+  );
 
   const ownsAnyTrain = useMemo(() => {
     const company = gameState?.public_companies.find(
@@ -1090,6 +1123,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
          cannot derive this -- the depot outlook has already moved past the tier that doomed them -- so it is
          the one fact about the fleet that has to travel rather than be recomputed. */
       reprievedTrains: company.pending_rust_trains ?? [],
+      // Design note #1046: exempt from the limit until the Operating Round ends.
+      ghostTrains: company.ghost_trains ?? [],
     };
   }, [gameState, actingProtocolId]);
 
@@ -1581,6 +1616,20 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      fires -- and if the browser refuses it before the player's first click, `playQuietly` swallows it. Music
      defaults OFF, which is the autoplay rule stated as an initial value rather than enforced by a try/catch. */
   const [sfxEnabled, setSfxEnabled] = useState(true);
+  /** Design note #1043: the clip currently haunting the board, or `null`. Held in the shell because the
+   *  event that raises it is a dispatch, and cleared by its own timer rather than by the next render. */
+  const [hauntingSrc, setHauntingSrc] = useState<string | null>(null);
+  /* Design note #1040: read inside a dispatch handler long after the commit that set it, so refs rather than
+     the state -- the same reason `useSoundEffect` holds its mute in one (#1009). */
+  const sfxEnabledRef = useRef(sfxEnabled);
+  sfxEnabledRef.current = sfxEnabled;
+  const hauntingTimerRef = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (hauntingTimerRef.current !== null) window.clearTimeout(hauntingTimerRef.current);
+    },
+    [],
+  );
   const radio = useRadioStream(RADIO_STREAM_URL);
   useTurnWhistle(isMyTurn, sfxEnabled);
 
@@ -2071,6 +2120,33 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     privatePowerOffersRef.current = privatePowerOfferList;
   }, [privatePowerOfferList]);
 
+  /* Design note #1027: the cursor, mirrored for the canvas click handler. Read through a ref for #850's
+     reason -- the handler is a `useCallback` the canvas holds across renders, and a click is a user event
+     long after the commit that set it, so a closure would answer with the step the handler was built in. */
+  const orSubPhaseRef = useRef(orSubPhase);
+  useEffect(() => {
+    orSubPhaseRef.current = orSubPhase;
+  }, [orSubPhase]);
+
+  /* ==================================================================
+      DESIGN NOTE 1027: THE MODAL RESETS WHEN THE STEP TURNS
+     ==================================================================
+     REPORTED, the second half: "when they correctly entered the 'Lay Track' subphase, clicking the UI button
+     applied the power but failed to show the modal."
+
+     `privatePowerRequest` HOLDS AN ABILITY KEY, and `setPrivatePowerRequest(sameKey)` is a no-op to React --
+     the state has not changed, so nothing re-renders and the modal does not re-open. The premature click at
+     Buy Private had already parked that key there; by the time the player reached Lay Track and pressed the
+     button, the request was ALREADY the value the button sets.
+
+     SO THE STEP CHANGING CLEARS IT. A request raised at one step is not an answer to a question asked at
+     another, and clearing on the boundary is what makes the button work the first time rather than the
+     second. The phase gate above stops the key being parked in the first place; this is what unsticks a game
+     that has already parked one. */
+  useEffect(() => {
+    setPrivatePowerRequest(null);
+  }, [orSubPhase]);
+
   /* ==================================================================
    *  DESIGN NOTE 729: WHOSE CITIES ARE SHUT
    * ==================================================================
@@ -2311,6 +2387,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         actingViewer: isMyTurnRef.current,
         errandArmed: privateTileHexKeyRef.current !== null,
         offers: privatePowerOffersRef.current,
+        /* Design note #1027: and only at the step that can act on it. A D&H or C&SL power raised during Buy
+           Private opens a modal for a lay the game is not ready to make. */
+        subPhase: orSubPhaseRef.current,
       });
       if (powerOffer) {
         setRadialSelector(null);
@@ -2548,6 +2627,55 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     openRingHexRef.current = radialSelector ? { q: radialSelector.q, r: radialSelector.r } : null;
   }, [radialSelector]);
 
+  /* ==================================================================
+   *  DESIGN NOTE 1037: LEAVING THE MAP CLOSES WHAT WAS OPEN ON IT
+   * ==================================================================
+   *
+   * REPORTED: "If a player clicks away from the Rail Map tab and then returns, the tile selector radial menu
+   * is inappropriately opening/staying open on a hex."
+   *
+   * AND THE RING WAS NEVER RENDERED WHILE THEY WERE AWAY. `RadialTileSelector` is already gated on
+   * `activeMainTab === "map"` (#199, layer 3), so nothing was on screen -- the STATE simply outlived the
+   * view. The ring is held here in the shell, which does not unmount when a tab changes, so returning to the
+   * map re-rendered a selection made minutes earlier on a board the player has stopped thinking about.
+   * A CONDITIONAL RENDER IS NOT A LIFECYCLE. That is the whole shape of this bug: hiding a component looks
+   * like closing it right up until the moment it comes back.
+   *
+   * THIS WAS NOT THE REPORTED FAULT, AND THE NOTE SAID IT WAS. Given the reproduction -- "the exact same hex
+   * (F16, where I had used DH's private power) ... only after I used the DH private power" -- the ring was
+   * being RE-OPENED on every return by a one-shot auto-select whose consumed-token memory lived inside the
+   * board component and died with it. #1038 fixes that, and it is the fix that cures the report.
+   * THIS EFFECT IS KEPT ANYWAY, on its own merits: a ring the player opened by hand before wandering off
+   * should not be waiting for them either, and that case is real and independent. Recorded rather than
+   * quietly re-scoped, because a note claiming to fix a report it did not fix is worse than no note.
+   *
+   * WHAT IS CLEARED IS VIEW STATE ONLY, and the boundary matters more than the fix. These four are answers to
+   * "what is open on the board right now":
+   *   `radialSelector`  the tile ring, the reported symptom
+   *   `pendingToken`    the station confirm ring, which is the same component (#201) with the same fault and
+   *                     would otherwise be the half-fix this codebase keeps producing
+   *   `previewTile`     the rotation preview the ring drives; #625 already clears these two together
+   *   `hexClickQuery`   the in-flight lookup whose spinner is itself gated on the map tab
+   *
+   * WHAT IS DELIBERATELY LEFT ALONE is everything that describes the player's TURN rather than their screen:
+   * `tileInspectorArmed`, `armedErrand`, `homeStationPlacement`, `routeDrafts`, `routeSelectMode`,
+   * `tokenTargetMode`. A player who opens the Ledger to check a rival's cash has not abandoned a drafted
+   * Diesel route or a Champlain & St. Lawrence errand, and clearing those would be a far worse bug than the
+   * one being fixed -- silent, mid-turn, and costing real work. "Reset the local state" is easy to read as
+   * "reset everything local", and everything local includes the turn.
+   *
+   * THE TOKEN RING IS THE ONE JUDGEMENT CALL. Closing it discards an uncommitted placement, so a player who
+   * clicked a hex, wandered off and came back must click it again. That is recoverable in one click and it is
+   * what "a clean map with no menus open" asks for; the alternative is a confirm ring floating over a board
+   * whose context the player has lost. Nothing is dispatched either way -- the placement was never committed. */
+  useEffect(() => {
+    if (activeMainTab === "map") return;
+    setRadialSelector(null);
+    setPendingToken(null);
+    setPreviewTile(null);
+    setHexClickQuery(null);
+  }, [activeMainTab]);
+
   /* A corporation handover closes the open picker and returns the new acting president to the board. Once per handover, and only for them.
      See docs/ai_architecture/state_machine.md - App.tsx #625 */
   const prevActingCorporationRef = useRef<number | null>(null);
@@ -2707,6 +2835,45 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
        fills by clicking, which is what the map has always allowed. */
   }, []);
 
+  /* ==================================================================
+      DESIGN NOTE 1024: ONE STOP, NOT THE WHOLE DRAFT
+     ==================================================================
+     REQUESTED: "the only option to modify the route is a global 'Clear' button that completely wipes the
+     entire array ... allowing the player to seamlessly resume drawing from the new end point."
+
+     THE SPLICE IS `routeTruncate`'s, not this callback's -- it is a rule about an array and belongs where it
+     can be tested as one. What is here is the state write and the two things only the shell knows: which
+     array the label refers to, and that a route reduced to nothing should leave no key behind.
+
+     AN EMPTY RESULT DELETES THE ENTRY rather than storing `[]`, which is what `handleClearRoute` above does
+     and what every reader downstream expects: `routeDrafts[i] ?? []` is the idiom throughout, so an empty
+     array and an absent key are the same thing to every consumer and only one of them is the shape the rest
+     of this file writes.
+
+     UNCHANGED IS UNCHANGED. `truncateRouteAtHex` returns the SAME array when the label is not in the route --
+     a stale click on a stop that has already gone -- so `prev` is returned by reference and React re-renders
+     nothing. That is the difference between a no-op and a wipe on a control a player can double-fire. */
+  const handleRemoveRouteStop = useCallback((trainIndex: number, hexLabel: string) => {
+    setRouteDrafts((prev) => {
+      const points = prev[trainIndex] ?? [];
+      const next = truncateRouteAtHex(points, hexLabel);
+      if (next === points) return prev;
+      const updated = { ...prev };
+      if (next.length === 0) delete updated[trainIndex];
+      else updated[trainIndex] = next as RoutePoint[];
+      return updated;
+    });
+    setRouteFeedback(null);
+  }, []);
+
+  /** Design note #1024: what that removal would cost, for the control's own label. Read from render state --
+   *  this feeds a tooltip, not a dispatch, so the ref's argument (#275) does not apply. */
+  const stopsRemovedByRemoval = useCallback(
+    (trainIndex: number, hexLabel: string) =>
+      stopsRemovedByTruncating(routeDrafts[trainIndex] ?? [], hexLabel),
+    [routeDrafts],
+  );
+
   /** Design note #275: which train the map is drafting for. */
   const handleSelectRouteTrain = useCallback((trainIndex: number) => {
     setActiveTrainIndex(trainIndex);
@@ -2844,6 +3011,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           maxDistance: ownedTrainRosterRef.current.find(
             (train) => train.trainIndex === trainIndex,
           )?.maxDistance,
+          /* Design note #1023: the same wall the network reach and the auto-tracer walk. Read through the ref
+             for #850's reason -- this is a click handler the canvas holds across renders, so a closure over
+             `blocksThroughCity` would judge the board as it stood when the handler was built. */
+          blocksThrough: blocksThroughCityRef.current,
         });
         if (!edit.ok) {
           setRouteFeedback(edit.reason);
@@ -3083,6 +3254,22 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      THE INDEX CONVENTION SURVIVES. `RIVAL_ROUTE_INDEX_BASE` keeps a watcher's chips from colliding with
      their own drafts on the key three surfaces join by (#373/#740), and the map overlay below still keys
      rival routes the same way -- so hovering a chip still lights the right line. */
+  /** Design note #1031: what the acting corporation's trains actually earned, once the run is committed.
+   *
+   *  ITS OWN MEMO RATHER THAN A READ INSIDE THE CHIP MEMO, for two reasons. The narrow one is dependencies:
+   *  the chip memo lists `ownedTrainRoster` and `actingProtocolId` and adding the whole of `gameState` would
+   *  rebuild every chip on any state change at all. The wider one is that `activeStationCompany` already sits
+   *  a couple of thousand lines up, holding the same lookup under a name about token pricing -- and reusing a
+   *  variable whose name has stopped describing what the caller wants is the shape that keeps producing bugs
+   *  here (a proxy that no longer stands for its subject). A second lookup with an honest name is cheaper than
+   *  a shared one with a misleading one. */
+  const actingRunBreakdown = useMemo(
+    () =>
+      gameState?.public_companies.find((company) => company.company_id === actingProtocolId)
+        ?.last_run_breakdown ?? null,
+    [gameState, actingProtocolId],
+  );
+
   /* Design note #875: the rule lives in `watcherRouteChips.ts` so it can be tested as arithmetic rather than
      scanned for. This memo supplies the board -- the roster from game state, the pricing and the hex names --
      and fills in the fields a watcher's row does not carry. */
@@ -3107,6 +3294,21 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       /* Design note #1021: the acting player's own figure, straight off the presence channel. `undefined`
          when they publish none, which falls through to `priceRoute` above. */
       valueFor: (trainIndex) => actor?.routeValues?.[trainIndex],
+      /* ==================================================================
+          DESIGN NOTE 1031: THE COMMITTED FIGURE, READ OFF THE REPLAYED STATE
+         ==================================================================
+         NOT FROM `actor`, WHICH IS THE POINT. Every other input to this memo that carries a revenue figure
+         comes through presence and therefore exists only while somebody is publishing. This one is read from
+         the corporation the round is operating, so it is there for a watcher who joined after the run, or
+         reloaded, or simply looked at the panel a minute later.
+         `undefined` RATHER THAN `0` WHEN THERE IS NO ENTRY, because the chip's chain distinguishes them:
+         `??` falls through on `undefined` to the live figure, and would stop on a `0` that means "no such
+         train in the breakdown". `find` returning nothing is the "cannot say" case (#232), and a train that
+         genuinely earned nothing has an entry saying "0". */
+      bankedFor: (trainIndex) => {
+        const entry = actingRunBreakdown?.find((row) => row.train_index === trainIndex);
+        return entry === undefined ? undefined : Number(entry.printed_revenue) || 0;
+      },
     }).map((chip) => ({
       ...chip,
       /* Design note #740: the rest of the shape, filled with the honest empties. A watcher's row shows a chip
@@ -3131,7 +3333,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       endsOffTerminus: false,
       tokenBlockReason: null,
     }));
-  }, [rivalPresence, mapGrid, currentPhase, ownedTrainRoster, actingProtocolId]);
+  }, [
+    rivalPresence,
+    mapGrid,
+    currentPhase,
+    ownedTrainRoster,
+    actingProtocolId,
+    // Design note #1031: #1020's lesson at the memo layer -- a figure read inside a memo that does not list it
+    // is a figure that stops updating the moment nothing else in the list changes.
+    actingRunBreakdown,
+  ]);
 
   const manualRouteOverlay = useMemo<RouteOverlay[]>(() => {
     const overlays: RouteOverlay[] = [];
@@ -3810,7 +4021,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
 
   /* round is an optional override; the default ref is right for every caller except a round transition, which announces a round the ref does not know yet.
      See docs/ai_architecture/state_machine.md - App.tsx #659 */
-  const logInfo = useCallback((label: string, detail: string, round?: string | null) => {
+  /* Design note #1042: `tone` is optional and last, so the several dozen existing callers are untouched --
+     only the variant's flavour line passes one. */
+  const logInfo = useCallback((
+    label: string,
+    detail: string,
+    round?: string | null,
+    tone?: "bonus" | "malus",
+  ) => {
     const id = nextLogEntryId++;
     /* Design note #668: the replay clock, not `Date.now()`. Every derived line
        in the app goes through here -- Float, Round, Auto-Skip, Private Revenue
@@ -3831,6 +4049,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         timestamp,
         timestampMs,
         round: (round ?? roundLabelRef.current) ?? undefined,
+        ...(tone ? { tone } : {}),
       },
       ...log,
     ]);
@@ -3974,7 +4193,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
              from the log itself, which stays the authority. A failed write does not advance, so a refused
              append leaves the position free for a retry. */
           const appendAt = appliedIndexRef.current;
-          const ok = await appendSandboxAction(
+          const allocated = await appendSandboxAction(
             roomCode,
             appendAt,
             options?.automatic === true
@@ -3987,8 +4206,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                alone -- Undo lands on the same action for everybody or the
                table disagrees about what was taken back. */
             options?.derived === true,
-          ).catch(() => false);
-          if (!ok) {
+          ).catch(() => null);
+          /* ==================================================================
+             DESIGN NOTE 1026: `null` IS THE FAILURE, AND `0` IS NOT
+             ==================================================================
+             This read `if (!ok)` against a boolean. `appendSandboxAction` now returns the index it ALLOCATED,
+             and index 0 is a real allocation -- the `SetupGame` event that deals the game. A truthiness test
+             would have reported the very first action of every room as a failed write, which is a fault the
+             fix introduced rather than one it found. Compared against `null` explicitly. */
+          if (allocated === null) {
             setSandboxRoomError("Could not reach the room — that action was not sent.");
           } else if (appliedIndexRef.current === appendAt) {
             /* Design note #916: only when nothing else has moved it. A snapshot may already have landed
@@ -4525,14 +4751,28 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             lay.orientation,
             layRefused,
           );
-          /* Design note #768: the tile count, before and after, on every lay. The board cannot legitimately
-             lose a tile, so a fall is unconditionally a bug and this is the line that will name it. */
+          /* ==================================================================
+              DESIGN NOTE 1029: THE INSTRUMENT KEEPS ITS ALARM AND LOSES ITS TICKING
+             ==================================================================
+             REPORTED: "The Activity Log is printing raw board state data like '[OR 6.2--Lay Track] Board --
+             Board now holds 15 tiles (was 14).' This is unnecessary clutter."
+
+             AND IT IS, ON THE EXPLAINED PATH. #768 added this to catch a board LOSING a tile -- "a fall is
+             unconditionally a bug and this is the line that will name it" -- and then printed on every lay,
+             so the one line worth reading arrives buried in one per tile ever placed. A log that reports the
+             normal case as loudly as the impossible one is a log nobody is reading when the impossible one
+             happens.
+
+             SUPPRESSED, NOT DELETED. `describeGridChange` still runs and still classifies; only the
+             `explained` case stops printing. Deleting the check outright would answer the report by removing
+             the instrument, and the thing it watches for is a corrupted board -- which is the one class of
+             bug this project cannot recover from and has already shipped twice.
+
+             THE UNEXPLAINED LINE KEEPS ITS SHOUT, tag and all: it is not "Board", it is "Board
+             (unexplained)", and it is the only board-state line a player will now ever see. */
           const gridChange = describeGridChange(msg, mapGridRef.current, nextGrid, fallbackLabel);
-          if (gridChange) {
-            logInfo(
-              gridChange.unexplained ? "Board (unexplained)" : "Board",
-              gridChangeLine(gridChange),
-            );
+          if (gridChange?.unexplained) {
+            logInfo("Board (unexplained)", gridChangeLine(gridChange));
           }
           if (nextGrid !== mapGridRef.current) {
             mapGridRef.current = nextGrid;
@@ -4883,19 +5123,139 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
               const roll = rollTurnRevenue(printedTurnTotal, seed);
               /* Design note #963: stamped with the step it DESCRIBES. The cursor is on Dividends by now --
                  that is what makes this the right moment to read the total -- so the step is stated. */
+              /* Design note #1046: the ruled stamp -- `[OR X.Y--Yellow Sign]`. Its own step name, because the
+                 event is not part of Run Routes or Dividends and stamping it as either would file it under a
+                 step that did not do it. */
+              const yellowSignStamp = roundStampFor({
+                ...before,
+                operating_sub_phase: "Yellow Sign" as never,
+              } as typeof before);
               const runRoutesStamp = roundStampFor({
                 ...before,
                 operating_sub_phase: "Routes",
               } as typeof before);
+              /* ==================================================================
+                  DESIGN NOTE 1040: THE SENTENCE, ITS SOUND AND ITS TINT, DECIDED TOGETHER
+                 ==================================================================
+                 ONE PLACE, because they are one event. The line is composed here, so this is where the
+                 flavour clause exists to be scanned -- and re-deriving it in an effect downstream would mean
+                 rolling the die twice or parsing the sentence back apart. */
+              const bucket = flavorBucketFor(roll);
+              const ticker = ran?.ticker ?? `Corporation #${companyId}`;
+              /* ==================================================================
+                  DESIGN NOTE 1044: THE STATE COMES OUT OF THE LOG, NOT OUT OF A FLAG
+                 ==================================================================
+                 READ BEFORE THIS LINE IS APPENDED, so a Stage 1 draw sees a game in which the sign has not
+                 yet been seen -- and read from the log every client rebuilds identically, so every client
+                 reaches the same verdict about the same turn. A flag written onto the corporation would live
+                 in one browser's memory and be lost on the first reload. */
+              const signState = yellowSignStateFrom(actionLogRef.current.map((entry) => entry.label));
+              /* THE NATURAL DRAW FIRST, then the Easter egg's rules applied to it -- so this cannot disagree
+                 with `revenueFlavourClause` about what would otherwise have been printed. */
+              const naturalSentence = turnRevenueSentence(ticker, roll, seed);
+              const resolved = resolveFlavourLine({
+                naturalLine: revenueFlavourClause(roll, seed),
+                bucket,
+                ticker,
+                parts: seed,
+                state: signState,
+                /* Design note #1046: the phase BEFORE this dispatch settled, which is the phase the turn was
+                   played in. Reading it off `after` would judge a turn by a phase its own train purchase had
+                   already turned. */
+                phaseTier: derivePhase(before)?.tier ?? "2",
+                owned: ran?.owned_trains,
+              });
+              /* THE SENTENCE IS REBUILT ONLY WHEN THE EGG CHANGED THE CLAUSE, so an ordinary turn goes
+                 through exactly the path it always did and the opening/tense rules (#944, #950) are not
+                 restated here. */
+              const flavourLine =
+                resolved.line === revenueFlavourClause(roll, seed)
+                  ? naturalSentence
+                  : naturalSentence.replace(revenueFlavourClause(roll, seed), resolved.line);
+              /* ==================================================================
+                  DESIGN NOTE 1046: THE APPENDIX, THE ACTION AND THE SECOND LOG LINE
+                 ==================================================================
+                 THE APPENDIX IS PART OF THE SENTENCE, so it goes in before the line is logged -- the ruled
+                 text ("One train mysteriously disappeared...") reads as the second half of the flavour, not
+                 as a separate entry. The MECHANICAL line is separate and comes after, because it is a record
+                 of what changed rather than a piece of atmosphere. */
+              const flavourWithAppendix =
+                resolved.stage === "mark"
+                  ? `${flavourLine} ${MARK_APPENDIX}`
+                  : resolved.stage === "carcosa"
+                    ? `${flavourLine} ${ESCALATION_APPENDIX}`
+                    : flavourLine;
+              const cue = variantCueFor({ line: flavourWithAppendix, bucket, stage: resolved.stage });
               logInfo(
-                turnRevenueSentence(ran?.ticker ?? `Corporation #${companyId}`, roll, seed),
+                flavourWithAppendix,
                 "",
                 runRoutesStamp,
+                /* Design note #1042: `unchanged` earns no tint. It is the bucket that says nothing happened,
+                   and a highlight on it would be the log emphasising the absence of news. */
+                bucket === "unchanged" ? undefined : isBonusBucket(bucket) ? "bonus" : "malus",
               );
+              /* THE MECHANICS GO THROUGH THE LOG AS AN ACTION (#1046), not through a local mutation: they
+                 delete a train and move money, and board state in this app is what the reducer writes while
+                 replaying. Dispatched AFTER the flavour line so the Activity Log reads in the order a player
+                 experiences it -- the sentence, then what it did. */
+              if (resolved.stage === "mark") {
+                const taken = lowestValueTrain(ran?.owned_trains);
+                if (taken) {
+                  const award = markPayout(taken);
+                  logInfo(
+                    `The ${taken}-train disappeared. $${award} found.`,
+                    "",
+                    yellowSignStamp,
+                  );
+                  void runGameplayAction("YellowSignEvent", {
+                    YellowSignEvent: {
+                      game_id: gameId,
+                      protocol_id: companyId,
+                      stage: "mark",
+                      model: taken,
+                      cash: String(award),
+                    },
+                  });
+                }
+              } else if (resolved.stage === "carcosa") {
+                const gifted = escalationTier(derivePhase(before)?.tier ?? "2");
+                if (gifted) {
+                  logInfo(`${ticker} received a ${gifted}-train.`, "", yellowSignStamp);
+                  void runGameplayAction("YellowSignEvent", {
+                    YellowSignEvent: {
+                      game_id: gameId,
+                      protocol_id: companyId,
+                      stage: "carcosa",
+                      model: gifted,
+                    },
+                  });
+                }
+              }
+              playVariantCue(cue.audio, sfxEnabledRef.current);
+              if (cue.video) {
+                if (hauntingTimerRef.current !== null) {
+                  window.clearTimeout(hauntingTimerRef.current);
+                }
+                setHauntingSrc(`/audio/${cue.video}`);
+                /* Design note #1045: the video's own audio is outside `playVariantCue`'s ducking, so the bed
+                   is held down for the clip's whole run and released with it. Without this the radio plays
+                   at full volume under a ten-second haunting. */
+                const releaseHaunting = duckRadio();
+                hauntingTimerRef.current = window.setTimeout(() => {
+                  setHauntingSrc(null);
+                  hauntingTimerRef.current = null;
+                  releaseHaunting();
+                }, cue.videoMs);
+              }
               /* #938'S PREDICATE, not `percent !== 100`: a 90% roll on a $50 turn pays $45, which rounds back
                  to $50, and flashing "-10%" over a turn that lost nothing is the confusion this exists to
                  prevent. */
-              if (revenueOutcome(roll) !== "normal") {
+              /* Design note #1040: AND THE HAUNTING PLAYS ALONE. Ruled: "the engine must completely
+                 suppress the standard default visual UI animations ... for that specific submission. The
+                 player should only see the 10000ms video overlay and the updated Activity Log styling."
+                 ASKED OF THE CUE'S OWN FIELD rather than of `cue.video !== null`, so the rule is read where
+                 it is written -- see the note on `suppressStandardVisuals`. */
+              if (revenueOutcome(roll) !== "normal" && !cue.suppressStandardVisuals) {
                 setRevenueFlash({ delta: revenueDeltaPercent(roll), token: nextRevenueFlashToken() });
               }
             }
@@ -5039,12 +5399,19 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                 /* IDEMPOTENT, for #706's reason one function over: the Undo path replays the whole log, so
                    this block runs again for a phase change the player already saw. Keyed by CONTENT rather
                    than by position -- two different phase changes carry different arriving tiers and both
-                   survive, while a replay of the same one lands on the same key and adds nothing. */
-                const key = `${notice.companyId}:${notice.cause}:${notice.arrivingTier}:${notice.trains.join(",")}`;
-                const already = queuedNotices.some(
-                  (entry) =>
-                    `${entry.companyId}:${entry.cause}:${entry.arrivingTier}:${entry.trains.join(",")}` === key,
-                );
+                   survive, while a replay of the same one lands on the same key and adds nothing.
+                   ==================================================================
+                    DESIGN NOTE 1032: AND "ALREADY SEEN" IS ALSO A REASON NOT TO QUEUE
+                   ==================================================================
+                   REPORTED: the modals "kept firing at the start of basically every operating round". The
+                   dedupe below was asked only of the PENDING queue -- so it stopped a notice being queued
+                   twice while it waited, and said nothing about one that had been queued, shown, dismissed
+                   and thereby REMOVED from the queue. The next replay found the queue empty of it and added
+                   it back. Both questions are the same question, so both now consult the same key. */
+                const key = noticeDismissKey(notice);
+                const already =
+                  dismissedFleetNoticesRef.current.has(key) ||
+                  queuedNotices.some((entry) => noticeDismissKey(entry) === key);
                 if (!already) queuedNotices.push(notice);
               }
             }
@@ -5076,13 +5443,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                 for (const notice of fleetLossNotices(loss, expiryTier, expiryLimit)) {
                   /* IDEMPOTENT ON A REPLAY, by content, exactly as the phase-change queue above is: Undo
                      rebuilds by replaying the log, so this block runs again for an expiry the player has
-                     already acknowledged. */
-                  const key = `${notice.companyId}:${notice.cause}:${notice.arrivingTier}:${notice.trains.join(",")}`;
-                  const already = expiryQueue.some(
-                    (entry) =>
-                      `${entry.companyId}:${entry.cause}:${entry.arrivingTier}:${entry.trains.join(",")}` ===
-                      key,
-                  );
+                     already acknowledged. Design note #1032: and the dismissed set is consulted here too --
+                     this queue had the identical hole, and fixing one of two identical call sites is the
+                     half-fix this codebase keeps producing. */
+                  const key = noticeDismissKey(notice);
+                  const already =
+                    dismissedFleetNoticesRef.current.has(key) ||
+                    expiryQueue.some((entry) => noticeDismissKey(entry) === key);
                   if (!already) expiryQueue.push(notice);
                 }
               }
@@ -6061,6 +6428,32 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
        the decision says pass -- and a "no" DISARMS, so the player keeps the turn it woke them for
      ONE DISPATCH PER TURN is enforced by the arm being cleared on a wake and by `isMyTurn` going false the
      moment the pass lands: the seat advances, the effect re-runs, and there is nothing to do. */
+  /* ==================================================================
+   *  DESIGN NOTE 1036: THE ARM IS CLEARED WHEN ITS ROUND ENDS
+   * ==================================================================
+   *
+   * REQUESTED: "Ensure that a player's `autoPass` flag is automatically reset to `false` at the end of the
+   * Stock Round so they do not accidentally auto-pass their first turn in the next Stock Round."
+   *
+   * THE SECOND HALF WAS ALREADY SAFE and the first was not. `autoPassDecision` refuses on any round but the
+   * one the arm was made in (#717's `macroRoundNumber`), so a stale arm has never been able to pass a turn in
+   * a later round -- it wakes the player and disarms instead. Nothing was ever auto-passed by accident.
+   * WHAT SURVIVED WAS THE CLAIM. The acting effect below returns early outside a Stock Round, so the arm sat
+   * there through the whole Operating Round with the button reading "Auto-Pass: On" -- and it kept reading it
+   * into the next Stock Round until that player's first turn came round and the expiry fired. A control
+   * announcing a setting that is no longer in force is the same fault as one that is missing, and #728 built
+   * the always-visible disarm precisely so a player could trust what that button says.
+   * CLEARED SILENTLY, WITHOUT `handleDisarmAutoPass`. That helper logs "Auto-Pass is off", which is right for
+   * a player pressing the button and wrong here: the round ending is not a decision anybody made, and a line
+   * in the Activity Log for every armed player at every round boundary is noise. The expiry sentence the
+   * player will read if they re-arm and it lapses mid-round is unaffected. */
+  useEffect(() => {
+    if (!autoPassArm || !gameState) return;
+    if (gameState.current_round_type === "StockRound") return;
+    setAutoPassArm(null);
+    autoPassedAtLogIndexRef.current = null;
+  }, [autoPassArm, gameState]);
+
   useEffect(() => {
     if (!autoPassArm || !gameState || !viewerAddress) return;
     if (gameState.current_round_type !== "StockRound") return;
@@ -6180,9 +6573,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
        AND THE FILTER STAYS, because it is a different rule: a draft that passed `runnableDrafts` but resolves
        to fewer than two points is not a route, and the reducer would price an empty path at zero. What
        changes is that it can no longer be fed an empty path by a stale read. */
+    /* Design note #1031: THE FLEET INDEX IS CARRIED THROUGH THE FILTER, not recovered after it. `turnRoutes`
+       drops any draft that resolves to fewer than two points, so the surviving entries are NOT positionally
+       aligned with `runnable` -- a route list of two built from a fleet of three cannot be re-joined to the
+       fleet by position afterwards. Taking `trainIndex` along at the point where the draft is still in hand
+       is the difference between a join that is exact and one that is a guess. */
     const turnRoutes = runnable
       .map((draft) => ({
         train: draft.model,
+        trainIndex: draft.trainIndex,
         points: withForcedBypass(
           routeDrafts[draft.trainIndex] ?? [],
           mapGrid,
@@ -6190,7 +6589,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         ),
       }))
       .filter((entry) => entry.points.length >= 2)
-      .map((entry) => ({ train: entry.train, path: routePointsToWaypoints(entry.points) }));
+      .map((entry) => ({
+        train: entry.train,
+        trainIndex: entry.trainIndex,
+        path: routePointsToWaypoints(entry.points),
+      }));
 
     if (turnRoutes.length > 0) {
       await runGameplayAction("RunMultipleRoutes", {
@@ -6214,6 +6617,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
              is optional, and #232's rule covers its absence: a log that does not say which train ran is a log
              that does not say, and the narration falls back to what it did before. */
           trains: turnRoutes.map((entry) => entry.train),
+          // Design note #1031: the same list, identifying the FLEET SLOT rather than the model, so a
+          // corporation with two 5-trains can still be told which one earned what.
+          train_indices: turnRoutes.map((entry) => entry.trainIndex),
           // Withhold at Routes; the pay-or-withhold decision belongs to the very next step.
           // See docs/ai_architecture/routing_pathfinding.md - App.tsx #373
           payout_strategy: "Withhold",
@@ -7020,7 +7426,19 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
        the same question -- is this corporation train-locked -- and they DISAGREED: the auto-skip read the
        CURRENT phase (correctly) while the panel enforced against the tier being bought, so a corporation the
        skip let through was refused by the panel it was sent to. One expression now, in `trainLimit.ts`. */
-    return isTrainLocked(owned, depot.find((tier) => tier.isCurrent)?.trainLimit ?? null);
+    /* Design note #1034: THE COUNTABLE FLEET, so this gate and `trainPurchaseRefusal` still answer with one
+       number. #703's whole point was that these two disagreed; letting only the panel learn the exemption
+       would reproduce that with the sides swapped -- the skip sending a corporation past Buy Trains that the
+       panel would happily have served. */
+    return isTrainLocked(
+      countableTrainCount(
+        company?.owned_trains,
+        company?.pending_rust_trains,
+        // Design note #1046: and the Yellow Sign's gift, which is exempt until the round ends.
+        company?.ghost_trains,
+      ),
+      depot.find((tier) => tier.isCurrent)?.trainLimit ?? null,
+    );
   }, [gameState, actingProtocolId, depot]);
 
   /* Owning a train is necessary and not sufficient. The probe is assignRouteSet, the same search Auto Route runs; null means "could not tell", never zero.
@@ -7188,7 +7606,6 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     });
     return nextDueNotice(
       mine,
-      turnIdentity,
       (notice) => isNoticeSilenced(sandboxRoomCode, notice.companyId, notice.cause),
       dismissedFleetNoticesRef.current,
     );
@@ -7207,12 +7624,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     const notice = dueFleetNotice;
     if (!notice) return;
     /* BOTH, and they do different jobs. Dropping it from the queue closes this modal now; remembering the
-       turn key is what stops a log replay from raising it again -- see `fleetLossNotice.ts` #896. */
-    dismissedFleetNoticesRef.current.add(noticeDismissKey(turnIdentity, notice));
+       EVENT key is what stops a log replay from raising it again -- see `fleetLossNotice.ts` #896, and #1032
+       for why that key can no longer be the turn's. */
+    dismissedFleetNoticesRef.current.add(noticeDismissKey(notice));
     const next = pendingFleetNoticesRef.current.filter((entry) => entry !== notice);
     pendingFleetNoticesRef.current = next;
     setPendingFleetNotices(next);
-  }, [dueFleetNotice, turnIdentity]);
+  }, [dueFleetNotice]);
 
   const toggleFleetNoticeSilence = useCallback(
     (silenced: boolean) => {
@@ -8159,7 +8577,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     setSandboxRoomError(null);
     try {
       const seated = shuffleForTurnOrder(toSetupPlayers(sandboxRoom));
-      const ok = await appendSandboxAction(sandboxRoomCode, appliedIndexRef.current, localId, {
+      const allocated = await appendSandboxAction(sandboxRoomCode, appliedIndexRef.current, localId, {
         /* ==================================================================
             DESIGN NOTE 910: THE VARIANTS TRAVEL WITH THE SETUP, OR THEY DO NOT EXIST
            ==================================================================
@@ -8172,7 +8590,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
            available here. */
         SetupGame: { players: seated, variants: sandboxRoom.variants },
       });
-      if (!ok) {
+      // Design note #1026: `null` is the failure; the setup event legitimately lands on index 0.
+      if (allocated === null) {
         setSandboxRoomError("Could not reach the room — the game was not started.");
         return;
       }
@@ -8673,6 +9092,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           privateDescription={(privateId) =>
             PRIVATE_COMPANY_CATALOG[privateId]?.ability ?? null
           }
+          // Design note #1035: amber at two buys from closure, red at one.
+          privateClosureAlert={closureAlert}
           /* Design note #670: the same confirmation the Operating Round's cash
              strip gives, on the surface that owns cash in these two rounds. A
              share bought is a cash change like any other. */
@@ -9062,6 +9483,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                      rust and limit countdowns are not, and reading them off `trainPurchase` is what made the
                      limit badge vanish when the step turned rather than when the threshold cleared. */
                   depot={depot}
+                  // Design note #1033: the rust countdown's wording, and whether that badge pulses.
+                  gentleRust={resolveVariants(gameState?.variants).gentleRust}
                   orSequence={
                     gameState
                       ? {
@@ -9092,6 +9515,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                       ? null
                       : {
                           armed: autoPassArm !== null,
+                          /* Design note #1036: `controlsEnabled` ALONE, deliberately not the `sessionReady`
+                             below it. That one is `controlsEnabled && isMyTurn`, which is right for Pass and
+                             wrong for a standing instruction: arming writes local state and the dispatch it
+                             causes happens on this player's own turn, which the acting effect tests for
+                             itself. Gating it on the turn made the control dead for the whole round except
+                             the one turn a player least needs it. */
+                          canArm: controlsEnabled,
                           onOpenSettings: () => setAutoPassOpen(true),
                           onDisarm: handleDisarmAutoPass,
                         }
@@ -9349,6 +9779,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                   activeTrainIndex={activeTrainIndex}
                   routeFeedback={routeFeedback}
                   onClearRoute={handleClearRoute}
+                  // Design note #1024: the granular edit the report asked for.
+                  onRemoveRouteStop={handleRemoveRouteStop}
+                  stopsRemovedByRemoval={stopsRemovedByRemoval}
                   currentGlobalEra={gameState?.current_global_era ?? null}
                   isMyTurn={isMyTurn}
                   // Design note #1008: the ATTENTION flag, separate from the rules flag beside it.
@@ -9632,6 +10065,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                       onAutoStageStation={handleAutoStageStation}
                       /* Design note #873: the one-shot that opens the picker where the errand points. */
                       autoSelectHex={autoSelectHex}
+                      /* Design note #1038: the instruction is spent once the board has carried it out. Guarded
+                         on the token so a clear cannot swallow a NEWER instruction issued between the select
+                         and this commit -- #873's whole reason for keying on a token rather than a
+                         coordinate, applied to the other end of the handshake. */
+                      onAutoSelectConsumed={(token) =>
+                        setAutoSelectHex((current) => (current?.token === token ? null : current))
+                      }
                       /* Design note #888: the Lay Track jump's destination, as a one-shot token. */
                       previewTile={previewTile}
                       currentEra={gameState?.current_global_era ?? "Yellow"}
@@ -9747,6 +10187,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                     colorForSeat={(index) =>
                       seatColor(gameState.player_addresses[index] ?? "", index)
                     }
+                    // Design note #1035: the same escalation the Stock Round cards carry.
+                    privateClosureAlert={closureAlert}
                     privateDescription={(privateId) =>
                       PRIVATE_COMPANY_CATALOG[privateId]?.ability ?? null
                     }
@@ -10000,6 +10442,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         onAccept={handleAcceptPrivateOffer}
         onReject={handleRejectPrivateOffer}
       />
+      {/* Design note #1043: the ten-second haunting. Inert to the pointer and screen-blended, so the player
+          keeps their turn and the board shows through -- both ruled, both in the component. */}
+      <YellowSignOverlay src={hauntingSrc} sfxEnabled={sfxEnabled} />
       {/* Design note #201: the station token's confirm ring -- the same
           component the tile selector renders through (design note #200), so
           the red X and green check are identical by construction rather

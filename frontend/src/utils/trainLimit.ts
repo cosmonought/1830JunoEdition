@@ -94,6 +94,72 @@ export function isTrainLocked(owned: number, currentLimit: number | null): boole
   return currentLimit !== null && owned >= currentLimit;
 }
 
+/** How many of a fleet's trains actually occupy a train-limit slot.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 1034: THE EXEMPTION IS A RULE NOW, NOT A HIDING PLACE
+ *  ==================================================================
+ *
+ *  RULED, with the precedent: "1846 officially implements the 'delayed obsolescence' rule, and in that version
+ *  when trains gently rust, they stop counting to the train limit and players turn the train cards sideways to
+ *  indicate they have one run left." 1830's own variant text is silent, so 1846's is the one to follow.
+ *
+ *  THIS IS THE THIRD POSITION ON THE QUESTION AND THE FIRST ONE THAT CAN WORK. It is worth setting all three
+ *  out, because two of them have already shipped:
+ *    #906  -- exempt, implemented by MOVING the train out of `owned_trains`. Its own harness said so: "every
+ *             surface that counts trains counts that array, so this is what implements 'a pending-rust train
+ *             occupies no train-limit slot' without any of them being told."
+ *    #979  -- not exempt. Adopted after #906's mechanism was found to have made the grace run unreachable:
+ *             `ownedTrainRoster` is that same array, so a train outside it has no roster entry, no route
+ *             draft, and cannot be run. "A rule enforced by withholding a value from every reader is enforced
+ *             nowhere in particular."
+ *    #1034 -- exempt, and asked. The train stays in the fleet, where the planner and the chips can see it, and
+ *             every site that COUNTS subtracts it here.
+ *
+ *  SO THE DANGER IN THIS CHANGE IS REGRESSING TO #906, which is the tempting one-line version: the exemption
+ *  is trivially "implemented" by removing the train, and that breaks the feature invisibly, because nothing
+ *  fails -- the train simply never appears. #979's note is kept verbatim in this file for that reason, and the
+ *  ruling that came with this one names the constraint directly: "you need to make sure the train chips for
+ *  the gently rusting trains continue displaying on their final run."
+ *
+ *  A MULTISET SUBTRACTION, for the reason every list in this feature is one: a corporation holding a reprieved
+ *  3 and a live 3 is at ONE countable train, not zero. `owned.filter(m => !reprieved.includes(m))` would
+ *  exempt both -- the same off-by-one `trimToTrainLimit` and `describeFleetLosses` each record.
+ *
+ *  DEFENSIVE ABOUT MARKS THAT NAME NO TRAIN. A mark matching nothing in the fleet subtracts nothing, so a
+ *  desynced list can never drive the count below zero and hand a corporation free slots. #1032 fixed the one
+ *  known source of surplus marks; this makes the count safe regardless. */
+export function countableTrainCount(
+  owned: readonly string[] | null | undefined,
+  reprieved: readonly string[] | null | undefined,
+  /** ==================================================================
+   *   DESIGN NOTE 1046: THE SECOND KIND OF EXEMPT TRAIN
+   *  ==================================================================
+   *
+   * RULED of the Yellow Sign's gift: "it bypasses train limit checks until the end of the Operating Round."
+   *
+   * A SECOND LIST RATHER THAN A WIDER `reprieved`, because they expire on different clocks and for different
+   * reasons: a reprieved train is dying and is exempt because it is already condemned (#1034), a ghost is
+   * brand new and is exempt because the gift would otherwise be unusable. Merging them would make one
+   * argument answer two questions -- #732 -- and the day one expires and the other does not, nothing would
+   * say so.
+   * OPTIONAL, so every existing caller keeps its behaviour untouched. */
+  ghosts?: readonly string[] | null,
+): number {
+  // #232: `undefined` is "the chain did not say", and a fleet nobody reported has no countable trains to
+  // report either. The callers already distinguish absent from empty before they get here.
+  if (owned == null) return 0;
+  const pool = [...(reprieved ?? []), ...(ghosts ?? [])];
+  if (pool.length === 0) return owned.length;
+  let countable = 0;
+  for (const model of owned) {
+    const at = pool.indexOf(model);
+    if (at >= 0) pool.splice(at, 1);
+    else countable += 1;
+  }
+  return countable;
+}
+
 /** How many options the quantity selector shows.
  *
  *  Design note #719: THE ROW'S LENGTH IS ONE RULE, AND ITS GREYING IS THE OTHERS.
@@ -164,25 +230,36 @@ export interface TrimResult {
   discarded: readonly string[];
 }
 
-/** Discard down to the limit: reprieved trains first, then cheapest first.
+/** Discard down to the limit, counting and taking only the trains that occupy a slot.
  *
- *  REPRIEVED FIRST IS THE RULING'S OWN EXPECTATION -- "which will typically be the gently rusted train" -- and
- *  it is also the only ordering that is right on the merits. A reprieved train is worth exactly one more run;
- *  a live train is worth every run for the rest of the game. Cheapest-first alone would hand a corporation the
- *  reprieved 4-train and take its live 2, which is a worse fleet on every subsequent turn.
+ *  ==================================================================
+ *   DESIGN NOTE 1034: A TRAIN THAT OCCUPIES NO SLOT CANNOT FREE ONE
+ *  ==================================================================
  *
- *  CHEAPEST-FIRST WITHIN EACH GROUP, so #284's rule survives where it still applies and the corporation is
- *  left with the most valuable fleet the limit allows.
+ *  #979 SORTED REPRIEVED TRAINS TO THE FRONT OF THE DISCARD ORDER and its reasoning was sound under its own
+ *  rule: "a reprieved train is worth exactly one more run; a live train is worth every run for the rest of the
+ *  game", so if something must go, it should be the one already dying. That argument only holds while a
+ *  reprieved train COUNTS. Under #1034 it does not, and the same sort becomes incoherent -- discarding a train
+ *  that was never occupying a slot reduces the countable fleet by nothing, so the trim would take it and then
+ *  still be over the limit.
  *
- *  A MULTISET WALK RATHER THAN A `Set`, for the reason `describeFleetLosses` gives: two 3-trains are two
- *  trains, and a corporation with one reprieved 3 and one live 3 must not have both treated as reprieved.
- *  Slots carry their index so the surviving fleet keeps its original order -- a fleet that re-sorted itself
- *  every phase change would move the chips under the player for no reason. */
+ *  IT ALSO EXPLAINS A SYMPTOM I REPORTED AND COULD NOT FIX UNDER THE OLD RULE. Driving the reducer, a fleet of
+ *  `["3","4","5"]` entering phase 6 had its 3 marked and then immediately trimmed away, leaving `reprieved:
+ *  []` -- no grace run at all. Under #979 that was correct behaviour and I said so. It was also the variant
+ *  cancelling itself in every game where the phase change drops the limit, which is most of them.
+ *
+ *  SO THE REPRIEVED TRAINS ARE SET ASIDE ENTIRELY: not counted, not sorted, not discarded, and returned
+ *  untouched. They leave the fleet at their own expiry (`expireReprieveFor`) and by no other route.
+ *
+ *  CHEAPEST-FIRST AMONG THE REST, which is #284's original rule with the exception removed rather than a new
+ *  ordering. Slots carry their index so the surviving fleet keeps its original order -- a fleet that re-sorted
+ *  itself every phase change would move the chips under the player for no reason.
+ *
+ *  `reprieved` IS STILL AN INPUT, and it would be tempting to drop it now that it is not sorted on. It is what
+ *  tells the walk WHICH trains to set aside, and it is a multiset: a corporation with one reprieved 3 and one
+ *  live 3 must set aside exactly one of them. */
 export function trimToTrainLimit(input: TrimInput): TrimResult {
   const { owned, reprieved, limit, cost } = input;
-  if (!Number.isFinite(limit) || owned.length <= limit) {
-    return { owned, reprieved, discarded: [] };
-  }
 
   const stillReprieved = new Map<string, number>();
   for (const model of reprieved) stillReprieved.set(model, (stillReprieved.get(model) ?? 0) + 1);
@@ -192,34 +269,33 @@ export function trimToTrainLimit(input: TrimInput): TrimResult {
     return { model, index, isReprieved: left > 0 };
   });
 
-  const order = [...slots].sort((a, b) => {
-    if (a.isReprieved !== b.isReprieved) return a.isReprieved ? -1 : 1;
-    return cost(a.model) - cost(b.model);
-  });
-  const doomed = new Set(order.slice(0, owned.length - limit).map((slot) => slot.index));
+  /* THE COUNT THE LIMIT IS TESTED AGAINST. `owned.length` was the old measure and is now the wrong one --
+     `countableTrainCount` states the same subtraction this walk performs, and both are here rather than one
+     calling the other because this one needs the per-slot marks anyway. They are asserted to agree. */
+  const countable = slots.filter((slot) => !slot.isReprieved);
+  if (!Number.isFinite(limit) || countable.length <= limit) {
+    return { owned, reprieved, discarded: [] };
+  }
+
+  const order = [...countable].sort((a, b) => cost(a.model) - cost(b.model));
+  const doomed = new Set(order.slice(0, countable.length - limit).map((slot) => slot.index));
 
   const keptOwned: string[] = [];
   const discarded: string[] = [];
-  const droppedReprieved: string[] = [];
   for (const slot of slots) {
     if (!doomed.has(slot.index)) {
       keptOwned.push(slot.model);
       continue;
     }
     discarded.push(slot.model);
-    if (slot.isReprieved) droppedReprieved.push(slot.model);
   }
 
-  /* THE MARK LEAVES WITH THE TRAIN. A model left in `reprieved` after its train has gone would expire against
-     a fleet that no longer holds it -- and because the expiry is a multiset removal too, it would take a
-     DIFFERENT train of the same tier with it at the end of the turn. */
-  const keptReprieved = [...reprieved];
-  for (const model of droppedReprieved) {
-    const at = keptReprieved.indexOf(model);
-    if (at >= 0) keptReprieved.splice(at, 1);
-  }
-
-  return { owned: keptOwned, reprieved: keptReprieved, discarded };
+  /* THE MARKS SURVIVE INTACT, and that is a change of kind rather than of detail. #979 had to strip a mark
+     whose train the trim had taken, or the expiry would later remove a DIFFERENT train of the same tier. No
+     reprieved train can be taken now, so no mark can be orphaned here -- and `reprieved` is returned exactly
+     as it arrived rather than copied and filtered, so a future edit that starts discarding them again fails
+     loudly at the expiry instead of quietly retiring the wrong train. */
+  return { owned: keptOwned, reprieved, discarded };
 }
 
 export function quantityOptionCount(currentLimit: number | null, buyable: number): number {

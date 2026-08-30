@@ -74,6 +74,139 @@ export function playQuietly(element: HTMLAudioElement): void {
   }
 }
 
+/* ==================================================================
+ *  DESIGN NOTE 1041: THE BED GETS OUT OF THE WAY
+ * ==================================================================
+ *
+ * RULED: "The audio engine must 'duck' the volume of the in-game radio (dropping it to ~20%) whenever ANY
+ * variant sound effect or turn-based train whistle plays, fading it back up smoothly when the clip ends."
+ *
+ * A MODULE-LEVEL REGISTRY RATHER THAN A PROP CHAIN, and that is the one design decision here worth arguing.
+ * The radio lives in one hook and the effects fire from three unrelated places -- the whistle's edge, the
+ * variant cue on a dispatch, and whatever comes next. Threading a ducking callback from the radio down to
+ * each of them would make every caller know about the radio, which is exactly the coupling that ends with
+ * two of them forgetting. The radio REGISTERS itself as duckable; anything that makes a noise asks for a
+ * duck and is handed a release. Neither side knows the other exists.
+ *
+ * REFERENCE-COUNTED, because the concurrency limit below permits overlap. Two effects playing together must
+ * duck once and restore once, and the second one ending must not raise the bed while the first is still
+ * sounding -- a plain boolean would do exactly that. The count is what makes "fading it back up when the
+ * clip ends" mean "when the LAST clip ends".
+ *
+ * THE FADE IS A TIMER, NOT A TRANSITION. `HTMLMediaElement.volume` is a plain property with no CSS behind
+ * it, so a smooth return has to be stepped. Down is immediate and up is gradual, which is the shape every
+ * broadcast ducking uses and the right one here: the point is to hear the effect NOW, and to not notice the
+ * music returning. */
+
+/** How far the bed drops while anything else is playing -- the ruled "~20%". */
+export const DUCKED_RADIO_VOLUME = RADIO_VOLUME * 0.2;
+/** Total time the bed takes to come back, and the step between adjustments. */
+export const DUCK_FADE_MS = 900;
+const DUCK_FADE_STEP_MS = 60;
+
+type DuckTarget = { setVolume: (value: number) => void };
+
+let duckTarget: DuckTarget | null = null;
+let duckDepth = 0;
+let fadeTimer: ReturnType<typeof setInterval> | null = null;
+
+/** The radio calls this once; anything that plays a sound never has to know it happened. */
+export function registerDuckTarget(target: DuckTarget | null): void {
+  duckTarget = target;
+  if (target === null) {
+    duckDepth = 0;
+    if (fadeTimer !== null) {
+      clearInterval(fadeTimer);
+      fadeTimer = null;
+    }
+  }
+}
+
+function stopFade(): void {
+  if (fadeTimer === null) return;
+  clearInterval(fadeTimer);
+  fadeTimer = null;
+}
+
+/** Duck now; the returned function releases this hold. Safe to call when nothing is registered. */
+export function duckRadio(): () => void {
+  duckDepth += 1;
+  stopFade();
+  duckTarget?.setVolume(DUCKED_RADIO_VOLUME);
+
+  let released = false;
+  return () => {
+    /* IDEMPOTENT, because a release can arrive twice: once from the clip ending and once from a cleanup on
+       unmount. A second decrement would take the count negative and leave the bed ducked forever. */
+    if (released) return;
+    released = true;
+    duckDepth = Math.max(0, duckDepth - 1);
+    if (duckDepth > 0) return;
+
+    const from = DUCKED_RADIO_VOLUME;
+    const distance = RADIO_VOLUME - from;
+    const steps = Math.max(1, Math.round(DUCK_FADE_MS / DUCK_FADE_STEP_MS));
+    let step = 0;
+    stopFade();
+    fadeTimer = setInterval(() => {
+      step += 1;
+      /* A NEW DUCK DURING THE FADE cancels it -- `duckRadio` calls `stopFade` and slams the volume back
+         down, so this interval is already cleared before the next tick. The guard is for the frame in
+         between. */
+      if (duckDepth > 0) {
+        stopFade();
+        return;
+      }
+      const next = step >= steps ? RADIO_VOLUME : from + (distance * step) / steps;
+      duckTarget?.setVolume(next);
+      if (step >= steps) stopFade();
+    }, DUCK_FADE_STEP_MS);
+  };
+}
+
+/** How many effect clips may sound at once.
+ *
+ *  Design note #1041: RULED as "graceful handling of overlapping triggers using a debounce or concurrency
+ *  limit", and a limit is the right one of the two. A debounce DROPS the second event, and these clips are
+ *  the game telling a player what just happened -- silence would be the feature failing quietly. A limit
+ *  keeps the first three and drops only the fourth, which is a wall of noise nobody could parse anyway. */
+export const MAX_CONCURRENT_SFX = 3;
+
+let liveSfx = 0;
+
+/** Play a one-shot with ducking and a concurrency cap. `enabled` is the SFX mute, checked here so every
+ *  caller gets it for free rather than each remembering.
+ *
+ *  Design note #1041: THE ELEMENT IS BUILT PER CALL, unlike `useSoundEffect`'s single reused one. These
+ *  clips are chosen per event out of fifty-odd files, so there is no stable `src` to hold -- and two
+ *  different sounds overlapping is the case the concurrency limit exists to allow. */
+export function playVariantCue(file: string, enabled: boolean): void {
+  if (!enabled) return;
+  if (liveSfx >= MAX_CONCURRENT_SFX) return;
+
+  let element: HTMLAudioElement;
+  try {
+    element = new Audio(`/audio/${file}`);
+  } catch {
+    /* jsdom and any engine without a media stack. Nothing to play and nothing to duck. */
+    return;
+  }
+  element.volume = SFX_VOLUME;
+
+  liveSfx += 1;
+  const release = duckRadio();
+  const done = () => {
+    liveSfx = Math.max(0, liveSfx - 1);
+    release();
+  };
+  element.addEventListener("ended", done, { once: true });
+  element.addEventListener("error", done, { once: true });
+  /* A CLIP THAT NEVER FIRES `ended` -- a 404, a codec the engine will not decode -- would hold the bed down
+     for the rest of the session. The timer is the backstop, generous enough not to cut a real clip short. */
+  window.setTimeout(done, 15000);
+  playQuietly(element);
+}
+
 /** A short sound effect, ready to fire repeatedly.
  *
  *  Returns a stable `play` callback. `enabled` is read through a ref rather than closed over, so muting does
@@ -100,6 +233,13 @@ export function useSoundEffect(src: string, enabled: boolean): () => void {
     if (!enabledRef.current) return;
     const element = elementRef.current;
     if (!element) return;
+    /* Design note #1041: the whistle ducks too -- ruled as "ANY variant sound effect OR turn-based train
+       whistle". Released on `ended` rather than after a fixed delay so the bed comes back when the sound
+       actually finishes, and on `error` so a missing file cannot hold it down. */
+    const release = duckRadio();
+    element.addEventListener("ended", release, { once: true });
+    element.addEventListener("error", release, { once: true });
+    window.setTimeout(release, 15000);
     /* REWOUND BEFORE EVERY PLAY. A second turn arriving while the first whistle is still sounding would
        otherwise be silent -- `play()` on an already-playing element is a no-op, so the notification for the
        event the player actually needs to hear is the one that gets swallowed. */
@@ -143,7 +283,15 @@ export function useRadioStream(url: string): RadioStream {
        stop-and-start does not quietly come back at full volume. */
     element.volume = RADIO_VOLUME;
     elementRef.current = element;
+    /* Design note #1041: the bed announces itself as duckable. Nothing that plays a sound has to know the
+       radio exists, and the radio does not have to know what is playing. */
+    registerDuckTarget({
+      setVolume: (value) => {
+        element.volume = value;
+      },
+    });
     return () => {
+      registerDuckTarget(null);
       element.pause();
       element.removeAttribute("src");
       element.load();
@@ -199,3 +347,4 @@ export function useTurnWhistle(isMyTurn: boolean, enabled: boolean): void {
     wasMyTurn.current = isMyTurn;
   }, [isMyTurn, play]);
 }
+

@@ -106,6 +106,9 @@ export const GAMEPLAY_MESSAGE_KEYS = [
      AND IT IS ALSO THE HONEST SHAPE. #941 already made the die ONE roll per turn on the aggregated revenue --
      the dispatch was the last surface still pretending a turn was several independent events. */
   "RunMultipleRoutes",
+  /* Design note #1046: the Yellow Sign's mechanical half. Pure VGP/gameplay state like every entry here -- it
+     deletes a train and moves virtual game points; it moves no real JUNO. */
+  "YellowSignEvent",
   "BuyHardwareFromPool",
   "EmergencyBuyHardware",
   "PassTurn",
@@ -313,6 +316,30 @@ export type GameplayExecuteMsg =
    *  applied N times rather than a second implementation for the bulk case.
    *  `RunManualRoute` SURVIVES and is not deprecated away: every game already logged contains them, and #902's
    *  rule is that an old log replays to the game it was played as. The reducer keeps both arms. */
+  /* ==================================================================
+      DESIGN NOTE 1046: THE EASTER EGG BECOMES AN ACTION
+     ==================================================================
+     BATCHES 46 AND 47 KEPT IT COSMETIC, so it could be derived in the shell and no action was needed. This
+     one DELETES A TRAIN AND MOVES MONEY, and board state in this app is what the reducer writes while
+     replaying the log -- a shell that mutated a corporation would change one browser's board, be lost on
+     reload, and be unreachable by Undo.
+     THE DECISION STAYS IN THE SHELL AND THE CONSEQUENCE MOVES HERE, which is how every other action already
+     works: the acting client decides, dispatches, and everybody replays the recorded decision. That also
+     removes #1044's determinism burden entirely -- the roll no longer has to be reproducible on every client,
+     because only one client ever makes it and the answer is in the log.
+     THE FIGURES ARE CARRIED, NOT RECOMPUTED. `train` and `cash` are what the acting client decided; a reducer
+     that re-derived them from the fleet would read a fleet that later actions had already changed. */
+  | {
+      YellowSignEvent: {
+        game_id: number;
+        protocol_id: number;
+        stage: "mark" | "carcosa";
+        /** Stage 1: the model taken. Stage 2: the model gifted. */
+        model: string;
+        /** Stage 1 only: the treasury award, already halved and floored. */
+        cash?: string;
+      };
+    }
   | {
       RunMultipleRoutes: {
         game_id: number;
@@ -325,6 +352,18 @@ export type GameplayExecuteMsg =
          *  the element type would make historical entries unreadable. Absent means "this log does not say",
          *  which is #232's rule and the case the narration falls back for. */
         trains?: readonly string[];
+        /** Design note #1031: WHICH TRAIN OF THE FLEET, where `trains[i]` says only which MODEL.
+         *
+         *  THE MODEL CANNOT IDENTIFY A TRAIN. A corporation may own two 5-trains, and #1020 put the model on
+         *  the wire for a sentence -- "ran a $200 route with a 5-train" -- where either 5-train makes the
+         *  sentence true. A per-train figure joined back to a chip cannot use it: the two chips would both
+         *  match the first entry.
+         *
+         *  SO THE FLEET INDEX RIDES ALONGSIDE, on the same parallel-array terms and for the same reason
+         *  #1020 chose them: `train_indices[i]` describes `routes[i]`, the element type of `routes` does not
+         *  change, and every log written before this field replays exactly as it did. Absent is #232's "the
+         *  log does not say", which is what the chip's presence and pricing fallbacks are for. */
+        train_indices?: readonly number[];
         payout_strategy: PayoutStrategyDto;
       };
     }

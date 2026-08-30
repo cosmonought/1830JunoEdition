@@ -14,6 +14,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { FONT_SIZE } from "../styles/typography";
+import { privateClosureTier } from "../utils/purchaseWarnings";
 import { PRIVATE_COMPANY_CATALOG } from "../utils/privateCatalog";
 import { SpecialPowerBlock } from "./SpecialPowerBlock";
 import { auctionFunds, bidRejectionReason, type PlayerAuctionFunds } from "../utils/auctionEscrow";
@@ -381,6 +382,8 @@ function PrivateCard({
   onMiniAuctionPass: () => void;
 }) {
   const catalogEntry = PRIVATE_COMPANY_CATALOG[priv.private_id];
+  // Design note #1035: the tier that ends every private's income, from the schedule the reducer reads.
+  const closingTier = privateClosureTier();
   const sortedBids = priv.bids.slice().sort((a, b) => Number(b.bid_amount) - Number(a.bid_amount));
 
   // Status indicators, grounded in `waterfall.rs`'s cascade semantics (module doc #3): 0 bids leaves a
@@ -533,6 +536,27 @@ function PrivateCard({
             </div>
           )}
         </div>
+
+        {/* ==================================================================
+             DESIGN NOTE 1035: THE END DATE, WHERE THE PRICE IS
+            ==================================================================
+            REPORTED: "I don't think we have added the 'Automatically closes on Phase 5' or 'Closes on
+            purchase of first 5-train' on the Auction Round PC cards to flag this to players at the start."
+            AND IT IS THE ONE FIGURE THIS CARD WAS MISSING. The card already pairs face value with revenue per
+            OR because those are "the two numbers a player compares across cards" -- but revenue per OR is
+            only half a valuation without knowing how many ORs there are. A player bidding $200 on a private
+            paying $25 is doing arithmetic whose answer depends entirely on this sentence, and nothing on
+            screen said it.
+            STATIC TEXT, NOT THE COUNTDOWN. The alert levels the pills carry are for mid-game, when the
+            closure is two purchases off; here the game has not started and there is nothing to count. What a
+            bidder needs is the RULE.
+            THE TIER IS LOOKED UP, NOT TYPED, for #736's reason: this rule once lived in a caption while the
+            code did something else, and a hard-coded "5" here would be a third statement of it. */}
+        {closingTier !== null && (
+          <div style={styles.privateCardClosure}>
+            Closes when the first {closingTier}-train is bought
+          </div>
+        )}
       </div>
 
       {/* Special power. Design note #13: no enforcement badge -- all six
@@ -1153,6 +1177,15 @@ const styles: Record<string, React.CSSProperties> = {
     color: CARD_INK_FAINT,
     textTransform: "uppercase",
     letterSpacing: "0.4px",
+  },
+  /* Design note #1035: QUIET, AND NOT A WARNING. Six of these are on screen at once and nothing is imminent
+     -- the game has not started. This is the card's small print, sitting under the figures it qualifies, in
+     the same faint ink as their labels rather than in the amber the mid-game pills use. */
+  privateCardClosure: {
+    marginTop: "6px",
+    fontSize: FONT_SIZE.micro,
+    color: CARD_INK_FAINT,
+    fontStyle: "italic",
   },
   /* ---- Special power ---- The three keys that lived here (`privateCardAbility`, `...Block`, `...Label`)
      moved into `SpecialPowerBlock` with #772's markup. Deleted rather than left: `styles` is typed

@@ -84,6 +84,8 @@ import {
 } from "../utils/stickyCollapse";
 import type { DepotTier } from "../utils/gamePhase";
 import { purchaseWarnings } from "../utils/purchaseWarnings";
+// Design note #1034: the one place that says a reprieved train occupies no limit slot.
+import { countableTrainCount } from "../utils/trainLimit";
 import { dividendDeclaration, marketMoveDirection } from "../utils/dividendStep";
 // Design note #494: the per-train route ink, so the collapsed chips match
 // the lines on the map.
@@ -626,6 +628,7 @@ export default function ContextualActionBar({
   operatingOrder = [],
   trainPurchase = null,
   depot = [],
+  gentleRust = false,
   armedErrand = null,
   mapEl = null,
   onShowMap,
@@ -665,6 +668,8 @@ export default function ContextualActionBar({
   activeTrainIndex,
   routeFeedback,
   onClearRoute,
+  onRemoveRouteStop,
+  stopsRemovedByRemoval,
   currentGlobalEra,
   activeTab,
   onSelectTab,
@@ -686,6 +691,26 @@ export default function ContextualActionBar({
   /** Design note #717: the standing-pass control. `null` where there is no such thing to offer. */
   autoPass?: {
     armed: boolean;
+    /** ==================================================================
+     *   DESIGN NOTE 1036: ARMING NEEDS A CONNECTION, NOT A TURN
+     *  ==================================================================
+     *
+     * REQUESTED: "the ability to enable Auto-Pass during a Stock Round even when it is not currently their
+     * turn, similar to standard digital 18xx implementations."
+     *
+     * AND THE BUTTON READ `sessionReady`, WHICH IS `controlsEnabled && isMyTurn`. #728 gated arming on it for
+     * a sound reason -- "a standing instruction that will dispatch needs a session to dispatch through" --
+     * but the flag it reached for carries a SECOND fact, and that one had no business here. Arming dispatches
+     * nothing: it writes local state, and the dispatch happens later, on this player's own turn, where
+     * `isMyTurn` is true by construction because the acting effect tests it itself.
+     *
+     * SO THE CONTROL GETS ITS OWN PREDICATE and `sessionReady` keeps its meaning for the Pass button beside
+     * it, which genuinely does need the turn. One field answering two questions is #732's rule, and this is
+     * the second time this batch's neighbourhood has produced it.
+     *
+     * `false` WHEN THE CALLER CANNOT SAY, which is the same direction #728 chose: a player who cannot reach
+     * the room must not be able to set an instruction that will not run. */
+    canArm: boolean;
     onOpenSettings: () => void;
     onDisarm: () => void;
   } | null;
@@ -736,6 +761,8 @@ export default function ContextualActionBar({
     trains: readonly string[];
     /** Design note #1004: the models on their final run under Gentle Rust. Empty in every standard game. */
     reprievedTrains: readonly string[];
+    /** Design note #1046: the Yellow Sign's gift, exempt from the limit until the round ends. */
+    ghostTrains: readonly string[];
   } | null;
   /** Design note #673: the tile lay currently being previewed, or `null` when
    *  none is or when it is free.
@@ -803,6 +830,10 @@ export default function ContextualActionBar({
   /** Design note #890: the Bank Depot's tiers, always -- `buyWarnings` reads it to know what the NEXT phase's
    *  train limit will be, and that question is live all round rather than only while the buy panel is up. */
   depot?: readonly DepotTier[];
+  /** Design note #1033: whether the table is playing Gentle Rust. It changes the rust countdown's WORDING and
+   *  whether that one badge animates -- see `purchaseWarnings`. Defaults to `false`, so a caller that has not
+   *  been taught to pass it shows the standard strings rather than nothing. */
+  gentleRust?: boolean;
   orSequence?: { cycle: number; index: number } | null;
   /* ==================================================================
       DESIGN NOTE 889: WHO OPERATES NEXT, ON THE BAR THAT SAYS WHO OPERATES NOW
@@ -986,6 +1017,11 @@ export default function ContextualActionBar({
    *  for itself -- only the click handler knows this one. */
   routeFeedback: string | null;
   onClearRoute: (trainIndex: number | null) => void;
+  /** Design note #1024: remove one stop and everything drawn after it. Keyed by hex label, because this
+   *  panel lists PAYING stops while the array being spliced is the full walk. */
+  onRemoveRouteStop?: (trainIndex: number, hexLabel: string) => void;
+  /** How many drafted hexes that removal would take. The shell owns the walk; the panel only sees the stops. */
+  stopsRemovedByRemoval?: (trainIndex: number, hexLabel: string) => number;
   /** Buy Private Company Action Tray -- design note #14. Already filtered
    *  down to what `activePlayerAddress` actually still owns and could sell
    *  (`playerSellablePrivateCompanies`), not the full room-wide list. */
@@ -1044,9 +1080,14 @@ export default function ContextualActionBar({
      and handed to the purchase panel; this asks the same value for a different reason, which is why it is a
      second prop rather than a reshaped `trainPurchase`. A warning about the next purchase is not a property
      of the step in which purchases happen. */
+  /* Design note #1033: the variant reaches the countdown, because the countdown's WORDING depends on it and
+     nothing else on this bar can say so. Derived from the shell rather than from `reprievedTrains` -- the
+     obvious shortcut and a wrong one: marks exist only after the trigger is bought, and the two strings this
+     changes are both shown BEFORE that. A proxy that is empty in exactly the case it is consulted for is
+     #1006's shape. */
   const buyWarnings = React.useMemo(
-    () => purchaseWarnings(phase ?? null, depot),
-    [phase, depot],
+    () => purchaseWarnings(phase ?? null, depot, gentleRust),
+    [phase, depot, gentleRust],
   );
   /** Design note #297/#298: pinned to the top, so the bar sheds its
    *  orientation rows and keeps only what is needed while reading the map. */
@@ -1878,13 +1919,44 @@ export default function ContextualActionBar({
      would read as two separate warnings.
      SORTED, so two tiers under reprieve appear in a stable order rather than in whatever order the reducer
      happened to append them; an order that changed between renders would read as the badges rearranging
-     themselves. */
+     themselves.
+     ==================================================================
+      DESIGN NOTE 1033: "Final Run", BECAUSE "Rust Imminent" NOW MEANS THE STEP BEFORE THIS ONE
+     ==================================================================
+     #1004 RULED THIS LABEL VERBATIM as "Rust Imminent: [type]-train" and it is superseded, not drifted.
+     RULED NOW: "Once the phase-change train is purchased and the trains are in their reprieved/final-run
+     state, the badge must dynamically update to read 'Final Run: [type]-trains'."
+     AND THE OLD LABEL BECAME AMBIGUOUS THE MOMENT THE COUNTDOWN GOT ONE. #1033 gives the pre-purchase badge
+     "Rust Imminent:" at one buy away, so keeping it here would put the identical words on two badges meaning
+     two different things -- the trigger is one purchase away, versus the trains are condemned and running
+     their last. Two states, one string, is the #891 shape this project keeps finding.
+     PLURAL, following the ruling's own example ("Final Run: 2-trains"). #1004 argued for the singular type on
+     the grounds that a count would read as two warnings; the plural here is a category, not a count, and it
+     is what the corporation is looking at -- every 2-train it holds is on its last run, not one of them. */
+  /** Design note #1034: the trains this corporation holds that occupy a limit slot, and the phrase naming the
+   *  ones that do not. Both derived here so the figure and its explanation cannot disagree -- the failure
+   *  #979 was reported for, one surface up. `null` rather than an empty string when nothing is exempt, so the
+   *  render can drop the whole parenthetical rather than emit "()" in every standard game. */
+  const countableTrains = countableTrainCount(
+    activeCorporation?.trains,
+    activeCorporation?.reprievedTrains,
+    activeCorporation?.ghostTrains,
+  );
+  const reprievedNames = React.useMemo(() => {
+    const marks = activeCorporation?.reprievedTrains ?? [];
+    if (marks.length === 0) return null;
+    return Array.from(new Set(marks))
+      .sort()
+      .map((tier) => `${tier}-trains`)
+      .join(", ");
+  }, [activeCorporation]);
+
   const reprieveWarning = React.useMemo(() => {
     const marks = activeCorporation?.reprievedTrains ?? [];
     if (marks.length === 0) return null;
     const tiers = Array.from(new Set(marks)).sort();
     return {
-      label: `Rust Imminent: ${tiers.map((tier) => `${tier}-train`).join(", ")}`,
+      label: `Final Run: ${tiers.map((tier) => `${tier}-trains`).join(", ")}`,
       detail:
         tiers.length === 1
           ? `This corporation's ${tiers[0]}-train has already rusted. Gentle Rust lets it run once more; it is destroyed at the end of this turn's Run Routes step.`
@@ -2628,21 +2700,40 @@ export default function ContextualActionBar({
                       style={{
                         ...styles.orContextFactValue,
                         color:
-                          activeCorporation.trains.length >= phase.trainLimit
-                            ? "#e0c97a"
-                            : corporationBarInk.ink,
+                          countableTrains >= phase.trainLimit ? "#e0c97a" : corporationBarInk.ink,
                       }}
                       title={
-                        activeCorporation.trains.length >= phase.trainLimit
+                        (countableTrains >= phase.trainLimit
                           ? `At the limit — ${phase.tier}-phase corporations may hold ${phase.trainLimit}. The Buy Trains step is skipped automatically.`
-                          : `${phase.tier}-phase corporations may hold ${phase.trainLimit} trains.`
+                          : `${phase.tier}-phase corporations may hold ${phase.trainLimit} trains.`) +
+                        (reprievedNames === null
+                          ? ""
+                          : ` Its ${reprievedNames} are on a final run and do not count toward the limit.`)
                       }
                     >
                       {/* A bare "2 / 4" beside a row of train chips reads as
                           a second count OF those chips. Naming it is the
                           whole fix: the number was never ambiguous to
                           anyone who already knew what it was. */}
-                      Train limit: {activeCorporation.trains.length} / {phase.trainLimit}
+                      {/* ==================================================================
+                           DESIGN NOTE 1034: THE FIGURE AND ITS EXEMPTION, TOGETHER
+                          ==================================================================
+                          RULED: "we have to find some way to indicate that the trains have one run left AND
+                          that they don't count to the train limit ... we might do that PLUS add an additional
+                          parenthetical to the Train Limit like (Gently Rusting: 3-trains)".
+                          THE PARENTHETICAL IS WHY THE NUMBER IS BELIEVABLE. Without it this line reads "2 / 2"
+                          beside three chips, which looks like the bar miscounting the fleet in front of it --
+                          and a player who distrusts one figure on this bar has no way to tell which others to
+                          trust. It is placed here rather than on the capacity pill because this line has the
+                          room for the full phrase and sits beside the Final Run badge naming the same trains.
+                          ABSENT WHEN THERE IS NOTHING TO EXEMPT, so a standard game's bar is untouched. */}
+                      Train limit: {countableTrains} / {phase.trainLimit}
+                      {reprievedNames !== null && (
+                        <span style={{ color: corporationBarInk.inkMuted }}>
+                          {" "}
+                          (Gently Rusting: {reprievedNames})
+                        </span>
+                      )}
                     </span>
                   )}
                 </span>
@@ -2799,7 +2890,7 @@ export default function ContextualActionBar({
                 {buyWarnings.map((warning) => (
                   <span
                     key={warning.key}
-                    className={warning.imminent ? "app-phase-shift-critical" : undefined}
+                    className={warning.pulses ? "app-phase-shift-critical" : undefined}
                     style={{
                       ...styles.phaseShiftBadge,
                       ...(warning.imminent ? styles.phaseShiftBadgeCritical : styles.phaseShiftBadgeWarn),
@@ -3229,6 +3320,9 @@ export default function ContextualActionBar({
               draft={openDraft}
               canClear={mayActThisTurn && sessionReady}
               onClearRoute={onClearRoute}
+              /* Design note #1024: the granular edit, beside the global one. */
+              onRemoveStop={onRemoveRouteStop}
+              stopsRemovedBy={stopsRemovedByRemoval}
               onClose={() => setOpenTrainIndex(null)}
               /* #802: the panel's click feedback had nowhere else to go. A refused draft explaining itself
                  here beats it explaining itself nowhere, which is what deleting the panel would otherwise
@@ -3555,7 +3649,7 @@ export default function ContextualActionBar({
           {buyWarnings.map((warning) => (
             <span
               key={warning.key}
-              className={warning.imminent ? "app-phase-shift-critical" : undefined}
+              className={warning.pulses ? "app-phase-shift-critical" : undefined}
               style={{
                 ...styles.phaseShiftBadge,
                 ...(warning.imminent ? styles.phaseShiftBadgeCritical : styles.phaseShiftBadgeWarn),
@@ -3605,18 +3699,23 @@ export default function ContextualActionBar({
               style={{
                 ...styles.actionBarButton,
                 ...(autoPass.armed ? styles.autoPassArmed : {}),
-                ...(!autoPass.armed && !sessionReady ? styles.actionBarButtonDisabled : {}),
+                ...(!autoPass.armed && !autoPass.canArm ? styles.actionBarButtonDisabled : {}),
               }}
               onClick={autoPass.armed ? autoPass.onDisarm : autoPass.onOpenSettings}
-              /* Design note #728: never disabled while armed. `sessionReady` gates ARMING because a standing
-                 instruction that will dispatch needs a session to dispatch through; clearing one is a local
-                 state write that needs nothing. A dropped connection must not trap a player inside a setting
-                 that keeps taking their turns. */
-              disabled={!autoPass.armed && !sessionReady}
+              /* Design note #728: never disabled while armed. Arming is gated because a standing instruction
+                 that will dispatch needs a session to dispatch through; clearing one is a local state write
+                 that needs nothing. A dropped connection must not trap a player inside a setting that keeps
+                 taking their turns.
+                 Design note #1036: THE GATE IS `canArm`, NOT `sessionReady`. The reasoning above is about the
+                 CONNECTION and the flag it used to read also carried whose turn it is -- so the control was
+                 dead for the whole round except on the one turn a player least needs it. */
+              disabled={!autoPass.armed && !autoPass.canArm}
               title={
                 autoPass.armed
                   ? "Auto-Pass is on for this Stock Round. Click to turn it off."
-                  : "Pass automatically until something happens that affects you, or the Stock Round ends."
+                  : autoPass.canArm
+                    ? "Pass automatically until something happens that affects you, or the Stock Round ends. You can set this at any point in the round."
+                    : "Auto-Pass needs a live connection to the room."
               }
             >
               {autoPass.armed ? "Auto-Pass: On" : "Auto-Pass"}

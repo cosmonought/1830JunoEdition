@@ -319,6 +319,31 @@ export interface HexGridRendererProps {
      clears it once the board has acted on it. */
   /** A one-shot request: resolve this hex as though it had been clicked. Changing the token re-fires. */
   autoSelectHex?: { q: number; r: number; token: number } | null;
+  /** ==================================================================
+   *   DESIGN NOTE 1038: THE ONE-SHOT REPORTS BACK THAT IT FIRED
+   *  ==================================================================
+   *
+   * REPORTED: "every time I clicked another tab and came back to Rail Map, the exact same hex (F16, where I
+   * had used DH's private power) had its radial menu open, and this occurred only after I used the DH private
+   * power."
+   *
+   * AND THAT DETAIL IS THE DIAGNOSIS. #1037 assumed the ring's state simply outlived the view and cleared it
+   * on leaving the map -- which did not cure this, because nothing was persisting. The ring was being OPENED
+   * AGAIN, once per return, by the effect below.
+   *
+   * THE GUARD OUTLIVED BY ITS OWN COMPONENT. `lastAutoSelectRef` remembers which token has been consumed and
+   * lives HERE; this component is conditionally rendered on the map tab, so leaving unmounts it and the
+   * memory goes with it. The instruction itself lives in the shell, which does not unmount. Come back, remount
+   * with a blank ref, meet a token it has no record of consuming, and select the hex again.
+   * WHICH IS WHY ONLY THE D&H DID IT. `setAutoSelectHex` is reached from the private-tile reservation path and
+   * nothing else, so F16 was the only hex an instruction was ever left pointing at.
+   *
+   * SO THE ISSUER SPENDS IT. A one-shot whose "already fired" memory sits on the consumer is only one-shot for
+   * as long as the consumer lives -- the ref was never wrong, it was in the wrong place. Reporting back lets
+   * the shell drop the instruction, which is the only record that survives a remount.
+   * THE REF STAYS. It still stops a re-render of a mounted board from firing twice before the shell's clear
+   * commits, which is the race #873 built it for. Two guards, two lifetimes. */
+  onAutoSelectConsumed?: (token: number) => void;
   /* Design note #987: `frameHexRequest` IS GONE, with #888's framing effect -- see the note at that effect's
      old site for what it did and why. #888's observation survives it and is worth keeping: this component
      locks its camera at `fitView` while `detailedView` is false, so a player at the default pose already has
@@ -521,6 +546,7 @@ export function HexGridRenderer({
   autoStageStation = null,
   onAutoStageStation,
   autoSelectHex = null,
+  onAutoSelectConsumed,
   previewTile,
   currentEra = "Yellow",
   publicCompanies = EMPTY_PUBLIC_COMPANIES,
@@ -2490,7 +2516,7 @@ export function HexGridRenderer({
     }
     if (lastAutoSelectRef.current === autoSelectHex.token) return;
     lastAutoSelectRef.current = autoSelectHex.token;
-    const { q, r } = autoSelectHex;
+    const { q, r, token } = autoSelectHex;
     const centre = axialToPixel(q, r, hexSize);
     const rect = canvasRef.current?.getBoundingClientRect();
     const left = rect?.left ?? 0;
@@ -2504,7 +2530,10 @@ export function HexGridRenderer({
          when the geometry cannot say -- see `onHexClick`'s own note (#453). */
       cityIndexAtPoint2: null,
     });
-  }, [autoSelectHex, selectHex, hexSize, view.zoom, view.panX, view.panY]);
+    // Design note #1038: delivered, so the shell may drop it. After `selectHex`, not before -- a clear that
+    // raced ahead of the selection would be an instruction nobody carried out.
+    onAutoSelectConsumed?.(token);
+  }, [autoSelectHex, selectHex, hexSize, view.zoom, view.panX, view.panY, onAutoSelectConsumed]);
 
   const handlePointerUp = useCallback(
     (event: React.PointerEvent<HTMLCanvasElement>) => {

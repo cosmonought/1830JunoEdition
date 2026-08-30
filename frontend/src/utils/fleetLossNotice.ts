@@ -33,18 +33,23 @@
  * can be tested without a browser.
  *
  * THE REPLAY HAZARD IS REAL AND IS GUARDED, not hand-waved. Undo rebuilds state by replaying the log, which
- * re-runs `applyPhaseChange` and re-queues every notice. Dismissal is therefore remembered against
- * `turnGuardKey` -- #653's key, derived from game state rather than counted locally, so a rebuild produces the
- * same key and a dismissed notice stays dismissed.
- * WHAT THAT KEY CANNOT TELL APART is the same turn reached twice by different histories: undo to a much
- * earlier point, play differently, arrive at OR 2.1 with corporation 3 again, and a notice dismissed in the
- * abandoned line is suppressed in the new one. #653 accepted the same trade for auto-skip. It is recorded here
- * rather than discovered later, and the failure mode is a missing notice rather than a wrong game state.
+ * re-runs `applyPhaseChange` and re-queues every notice. Dismissal is therefore remembered against the
+ * notice's own content -- see `noticeDismissKey` -- so a rebuild produces the same key and a dismissed notice
+ * stays dismissed.
+ * DESIGN NOTE 1032 CORRECTED THIS PARAGRAPH. It read "remembered against `turnGuardKey` -- #653's key, derived
+ * from game state rather than counted locally", and named a trade-off that was not the real one: "what that
+ * key cannot tell apart is the same turn reached twice by different histories". The far larger thing it could
+ * not tell apart was the same EVENT seen from two different turns, which is every turn after the first -- so
+ * the modal returned every operating round for the rest of the game. Kept here because the note reasoned
+ * carefully about a secondary hazard while the primary one went unstated, which is the more instructive
+ * failure.
  *
  * See docs/ai_architecture/state_machine.md, fleetLossNotice.ts #896. */
 
 import type { FleetLoss } from "./sandboxSession";
-import { turnGuardKey, type OperatingTurnIdentity } from "./turnGuardKey";
+// Design note #1032: `turnGuardKey` is no longer imported. It is still the right tool for a guard that SHOULD
+// reset each turn -- `App.tsx` uses it for two of those -- and was the wrong one here, where the thing being
+// remembered is an event rather than a showing. Its absence is the fix.
 
 /** Why the trains left. The toggle in the modal is per cause, so this is also the silence vocabulary. */
 export type FleetLossCause = "rust" | "limit";
@@ -213,15 +218,45 @@ export function silenceLabel(notice: FleetLossNotice): string {
     : `Don't notify me about train limit drops for ${notice.ticker}`;
 }
 
-/** Names one showing of one notice, so a replay cannot re-raise a dismissed one -- see the header.
+/** Names the EVENT a notice is about, so a dismissed one can never be raised again.
  *
- *  THE STEP IS THE CAUSE, which is what keeps a dismissed rust notice from also swallowing the limit notice
- *  that arrived in the same phase change. They are two modals in sequence, not one with two paragraphs. */
-export function noticeDismissKey(
-  turn: OperatingTurnIdentity | null | undefined,
-  notice: FleetLossNotice,
-): string {
-  return turnGuardKey(turn, notice.companyId, `fleetLoss:${notice.cause}`);
+ *  ==================================================================
+ *   DESIGN NOTE 1032: A DISMISSAL THAT ONLY LASTED THE TURN
+ *  ==================================================================
+ *
+ *  REPORTED: "Rust and Train Limit modals kept firing at the start of basically every operating round, listing
+ *  trains and quantities that didn't always make sense ... multiple times I received a modal that multiple
+ *  trains had been discarded due to the train limit, even though the train limit had only changed once."
+ *
+ *  AND THE QUANTITIES WERE RIGHT ALL ALONG. Nothing was miscounting: it was ONE event's notice, re-raised every
+ *  round, and a player seeing "two trains discarded" four times reasonably reads it as four discards.
+ *
+ *  TWO GUARDS THAT LOOKED LIKE THREE. The shell dedupes at QUEUE time by content, so an event already waiting
+ *  is not queued twice. This key guarded DISPLAY time, and it was `turnGuardKey(turn, company, cause)` -- which
+ *  contains the round and the corporation index. Between them they cover "queued twice at once" and "shown
+ *  twice in one turn", and neither covers the actual path: dismiss the notice, which REMOVES it from the queue;
+ *  the next Firestore snapshot replays the whole log; `applyPhaseChange` runs again; `describeFleetLosses`
+ *  reports the same loss; the queue no longer holds it, so it is queued afresh; the turn has moved on, so the
+ *  dismissal key no longer matches. Every operating round, forever.
+ *
+ *  SO THE KEY IS THE EVENT, NOT THE SHOWING. A phase change happens once -- the arriving tier is monotonic --
+ *  so `company:cause:tier:trains` names an occurrence that cannot recur, and is identical on every replay
+ *  because it is built from the state the log produces. That is strictly what #896 wanted when it reached for
+ *  `turnGuardKey`: replay-stability. The turn was never part of the identity; it was smuggled in by the helper.
+ *
+ *  IT IS ALSO THE KEY THE QUEUE ALREADY USES, spelled once here instead of inline at two call sites in
+ *  `App.tsx`. Two dedupe rules for one question, written separately, is how they came to disagree.
+ *
+ *  THE STEP IS STILL THE CAUSE, which is what keeps a dismissed rust notice from also swallowing the limit
+ *  notice that arrived in the same phase change. They are two modals in sequence, not one with two paragraphs.
+ *
+ *  WHAT THIS GIVES UP is #896's stated tolerance for undo-and-replay-differently: dismissing a notice in an
+ *  abandoned line of play now suppresses the same notice in a new one. That was already the behaviour inside a
+ *  turn, the failure mode is a missing notice rather than a wrong game state, and the Activity Log line is
+ *  written regardless -- #896's own standing rule that silencing changes WHEN a player finds out, never
+ *  whether the game told them. */
+export function noticeDismissKey(notice: FleetLossNotice): string {
+  return `${notice.companyId}:${notice.cause}:${notice.arrivingTier}:${notice.trains.join(",")}`;
 }
 
 /** The first notice this corporation should be stopped for, or `null`.
@@ -234,13 +269,12 @@ export function noticeDismissKey(
  *  retroactively mark it seen, which matters the moment the player switches it back on. */
 export function nextDueNotice(
   queued: readonly FleetLossNotice[],
-  turn: OperatingTurnIdentity | null | undefined,
   isSilenced: (notice: FleetLossNotice) => boolean,
   dismissed: ReadonlySet<string>,
 ): FleetLossNotice | null {
   for (const notice of queued) {
     if (isSilenced(notice)) continue;
-    if (dismissed.has(noticeDismissKey(turn, notice))) continue;
+    if (dismissed.has(noticeDismissKey(notice))) continue;
     return notice;
   }
   return null;

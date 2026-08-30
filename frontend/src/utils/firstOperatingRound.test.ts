@@ -114,6 +114,42 @@ const END_TURN = { PassTurn: { game_id: 1 } } as const;
 const buyTrain = (protocolId: number) =>
   ({ BuyHardwareFromPool: { game_id: 1, protocol_id: protocolId } }) as const;
 
+/* ==================================================================
+    DESIGN NOTE 1019 (harness): THESE TESTS WERE BUYING TRAINS OUT OF PHASE
+   ==================================================================
+   Every purchase below used to be dispatched straight after `beginOperatingRound`, which opens the cursor on
+   the FIRST step -- Lay Track. The reducer accepted it because `buyDepotTrain` had no gate of any kind, so
+   the shortcut worked and nobody noticed it was a shortcut.
+
+   IT IS THE SAME HOLE THE HOTFIX IS ABOUT. A playtest log showed a D-train bought during the Dividends step,
+   which turned the phase and moved the cursor out from under the player's withhold. This file was quietly
+   relying on the same missing rule, one step earlier in the turn.
+
+   SO THE HELPER PUTS THE TURN WHERE A PURCHASE BELONGS. Written as a direct field set rather than by walking
+   `AdvanceOperatingSubPhase`: these tests are about round SEQUENCING -- whether OR 1.2 can exist -- and
+   marching each fixture through Lay Track and Tokens would put four unrelated rules between the setup and the
+   assertion. The cursor is the input; the sequence is the subject. */
+const atBuyTrains = (state: GameStateResponse): GameStateResponse => ({
+  ...state,
+  operating_sub_phase: "Hardware",
+});
+
+/* AND THE TRAIN LIMIT IS REAL NOW TOO. Phase 2 caps a corporation at four trains, so the six 2-trains a game
+   needs to reach Phase 3 cannot leave the depot into one fleet -- which two of these tests used to do. They
+   spread the purchases across the corporations that are actually operating, which is how a real board gets
+   there and is what the reported screenshot described in the first place. */
+const buyUpTo = (
+  state: GameStateResponse,
+  protocolId: number,
+  count: number,
+): GameStateResponse => {
+  let next = atBuyTrains(state);
+  for (let buy = 0; buy < count; buy += 1) {
+    next = atBuyTrains(applySandboxAction(next, buyTrain(protocolId)));
+  }
+  return next;
+};
+
 describe("the first Operating Round of a game", () => {
   it("opens at 1.1 in Phase 2, with a one-round cycle", () => {
     const opened = beginOperatingRound(stockRoundHandover());
@@ -137,9 +173,14 @@ describe("the first Operating Round of a game", () => {
     const queue = state.active_operating_order;
     expect(queue).toHaveLength(3);
 
-    // First two corporations operate and end their turns.
+    /* Design note #1019: THE FIRST TWO CORPORATIONS BUY, rather than passing straight through. Phase 2 caps a
+       fleet at four trains, so the six 2-trains that stand between the opening and Phase 3 cannot all go to
+       the corporation acting last -- which is what this test used to do, and what the reducer used to allow.
+       Two each is the ordinary way a table clears the 2-train row. */
+    state = buyUpTo(state, queue[0], 2);
     state = applySandboxAction(state, END_TURN);
     expect(inOperatingRound(state)).toBe(true);
+    state = buyUpTo(state, queue[1], 2);
     state = applySandboxAction(state, END_TURN);
     expect(inOperatingRound(state)).toBe(true);
 
@@ -153,7 +194,7 @@ describe("the first Operating Round of a game", () => {
        than the rule. */
     const lastCompany = queue[state.active_corporation_index];
     for (let buy = 0; buy < 12 && derivePhase(state)?.tier !== "3"; buy += 1) {
-      state = applySandboxAction(state, buyTrain(lastCompany));
+      state = buyUpTo(state, lastCompany, 1);
     }
     expect(derivePhase(state)?.tier).toBe("3");
 
@@ -179,7 +220,7 @@ describe("the first Operating Round of a game", () => {
       const acting = state.active_operating_order[state.active_corporation_index];
       // Buy a train whenever one is affordable, to push the phase as hard as
       // the sequence allows.
-      state = applySandboxAction(state, buyTrain(acting));
+      state = buyUpTo(state, acting, 1);
       state = applySandboxAction(state, END_TURN);
       expect(state.sub_round_index).toBeLessThanOrEqual(1);
       if (roundHasEnded(state)) return;
@@ -215,16 +256,16 @@ describe("the reported board: two floated corporations", () => {
     expect(state.sub_round_index).toBe(1);
     expect(state.operating_round_sequence_length).toBe(1);
 
-    // B&O buys four 2-trains, then ends its turn.
+    // B&O buys four 2-trains -- exactly its Phase 2 limit -- then ends its turn.
     const first = state.active_operating_order[0];
-    for (let buy = 0; buy < 4; buy += 1) state = applySandboxAction(state, buyTrain(first));
+    state = buyUpTo(state, first, 4);
     state = applySandboxAction(state, END_TURN);
     expect(inOperatingRound(state)).toBe(true);
     expect(state.active_corporation_index).toBe(1);
 
     // PRR takes the last two 2-trains and then the first 3-train.
     const second = state.active_operating_order[1];
-    for (let buy = 0; buy < 3; buy += 1) state = applySandboxAction(state, buyTrain(second));
+    state = buyUpTo(state, second, 3);
     expect(derivePhase(state)?.tier).toBe("3");
 
     /* THE MOMENT THE REPORT IS ABOUT. Ending here must close the CYCLE. If
@@ -249,9 +290,13 @@ describe("the reported board: two floated corporations", () => {
        EMPTY queue -- and that recovery path resets the cursor to zero while
        leaving `sub_round_index` at 1, which is the screenshot exactly. So the
        queue surviving `applyPhaseChange` is worth asserting on its own. */
+    /* Design note #1019: SEVEN TRAINS INTO ONE FLEET was the old shape and Phase 2 caps it at four. Split
+       across the two corporations the way the report described -- B&O four, PRR the last two plus the first
+       3-train -- which reaches the same phase change through a position the board can actually be in. */
     let state = beginOperatingRound(twoFloated());
-    const acting = state.active_operating_order[0];
-    for (let buy = 0; buy < 7; buy += 1) state = applySandboxAction(state, buyTrain(acting));
+    state = buyUpTo(state, state.active_operating_order[0], 4);
+    state = applySandboxAction(state, END_TURN);
+    state = buyUpTo(state, state.active_operating_order[1], 3);
     expect(derivePhase(state)?.tier).toBe("3");
     expect(state.active_operating_order).toHaveLength(2);
   });

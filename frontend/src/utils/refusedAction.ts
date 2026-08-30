@@ -39,6 +39,9 @@ import type { GameStateResponse } from "./gameState";
 import { sharePurchaseBlock, type PriceZone } from "./sharePurchase";
 import { shareSaleBlock } from "./shareSale";
 import { dividendRefusal } from "./dividendGate";
+// Design note #1019: the purchase gate, asked here on the same state the reducer asked it on.
+import { trainPurchaseRefusal } from "./trainPurchaseGate";
+import { depotInventory } from "./gamePhase";
 
 /** Messages that legitimately leave sandbox state untouched, so an unchanged board is not a refusal.
  *  Kept as an explicit list for the reason in the note: an exemption should be a decision. */
@@ -157,6 +160,42 @@ export function refusalReasonFor(
   if ("DeclareDividends" in msg) {
     const declare = (msg as { DeclareDividends: { protocol_id: number } }).DeclareDividends;
     return dividendRefusal(before, declare.protocol_id);
+  }
+
+  /* ==================================================================
+      DESIGN NOTE 1019: THE PURCHASE OWNS UP TOO
+     ==================================================================
+     REPORTED: "the reducer partially executed, drained the $340 to $0, failed to award the train, but still
+     printed a success log."
+
+     THE SUCCESS LOG WAS A CONSEQUENCE, NOT A SECOND BUG. #778 detects a refusal by identity, and a reducer
+     that mutates has not refused -- so the log was reporting exactly what happened. With the gate in place the
+     purchase returns its state unchanged, the drain sees the identity, and this arm supplies the sentence.
+
+     THE SAME CALL THE REDUCER MADE, on the same `before` state and the same tier lookup -- #784's whole
+     argument for this function existing. A second opinion assembled here would be a guess about which rule
+     fired, and a confident wrong reason in an authoritative log is what cost an earlier session three
+     investigations.
+
+     BOTH MESSAGES, because both reach `buyDepotTrain`. `EmergencyBuyHardware` waives only the funds check --
+     it has already covered the shortfall by the time the reducer charges -- so it is asked with
+     `requireFunds: false` here for the same reason it is there: a reason that named a shortfall the president
+     had just paid would be a false accusation. */
+  const purchase =
+    "BuyHardwareFromPool" in msg
+      ? { companyId: (msg as { BuyHardwareFromPool: { protocol_id: number } }).BuyHardwareFromPool.protocol_id, requireFunds: true }
+      : "EmergencyBuyHardware" in msg
+        ? { companyId: (msg as { EmergencyBuyHardware: { protocol_id: number } }).EmergencyBuyHardware.protocol_id, requireFunds: false }
+        : null;
+  if (purchase) {
+    const tier = depotInventory(before).find(
+      (row) => row.remaining === null || row.remaining > 0,
+    );
+    return trainPurchaseRefusal(before, purchase.companyId, {
+      cost: tier?.cost ?? null,
+      trainLimit: tier?.trainLimit ?? null,
+      requireFunds: purchase.requireFunds,
+    });
   }
 
   return null;

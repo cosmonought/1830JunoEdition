@@ -33,6 +33,27 @@ export const WHISTLE_SRC = "/audio/whistle.mp3";
 /** The station. A LIVE stream, which is what shapes `useRadioStream` below. */
 export const RADIO_STREAM_URL = "https://s3.radio.co/s39c195d74/listen";
 
+/* ==================================================================
+    DESIGN NOTE 1013: THE MIX, NOT THE VOLUME
+   ==================================================================
+   REPORTED: "The train whistle sound effect is too quiet compared to the radio stream. Increase the default
+   volume of the SFX Audio object (or slightly lower the radio's default volume to balance the mix)."
+
+   BOTH HALVES, because raising the whistle alone would not have fixed it. `volume` defaults to `1` on every
+   `Audio` element, so the whistle was ALREADY at the maximum the API allows -- "increase the SFX volume" has
+   no room to move on its own, and the only reason the report reads as if it should is that the two sources
+   are mastered differently. A file recorded quiet cannot be amplified past 1.0 by this element.
+
+   SO THE MUSIC COMES DOWN, which is the report's own parenthetical and the half that actually has headroom.
+   0.45 rather than a token trim: the stream is a bed the whistle has to cut through, and a notification that
+   merely matches the music is a notification a player stops hearing.
+
+   THE WHISTLE IS PINNED AT 1 EXPLICITLY rather than left to the default. It is the same value the browser
+   would supply, and writing it down is what stops the next person balancing the mix from moving the music
+   and wondering why the two numbers are not in the same place. */
+export const SFX_VOLUME = 1;
+export const RADIO_VOLUME = 0.45;
+
 /** Start playback and swallow every reason it might not.
  *
  *  Design note #1009: `play()` RETURNS A PROMISE ON MODERN ENGINES AND `undefined` ELSEWHERE -- including
@@ -66,6 +87,8 @@ export function useSoundEffect(src: string, enabled: boolean): () => void {
   useEffect(() => {
     const element = new Audio(src);
     element.preload = "auto";
+    // Design note #1013: written down rather than left to the default, so both sides of the mix live together.
+    element.volume = SFX_VOLUME;
     elementRef.current = element;
     return () => {
       element.pause();
@@ -116,6 +139,9 @@ export function useRadioStream(url: string): RadioStream {
     const element = new Audio();
     // Nothing is fetched until a `src` is attached, which is the autoplay-safe default stated as a property.
     element.preload = "none";
+    /* Design note #1013: the bed sits UNDER the whistle. Set on the element rather than at each `play()`, so a
+       stop-and-start does not quietly come back at full volume. */
+    element.volume = RADIO_VOLUME;
     elementRef.current = element;
     return () => {
       element.pause();

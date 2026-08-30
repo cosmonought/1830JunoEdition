@@ -175,8 +175,12 @@ describe("the shell sends one action (design note #968)", () => {
   const block = sliceBetween(APP, "const runnable = runnableDrafts(", "setLiveOrSubPhase(");
 
   it("dispatches the bulk message", () => {
+    /* Design note #1020: `turnRoutes` is now an array of `{ train, path }` rather than of bare paths, so the
+       message names which train ran which route. #968's ruling -- ONE action for the turn, carrying every
+       route -- is untouched and is what the two cases below still check. */
     expect(block).toContain('runGameplayAction("RunMultipleRoutes"');
-    expect(block).toContain("routes: turnRoutes,");
+    expect(block).toContain("routes: turnRoutes.map((entry) => entry.path),");
+    expect(block).toContain("trains: turnRoutes.map((entry) => entry.train),");
   });
 
   it("no longer loops a dispatch per draft", () => {
@@ -195,13 +199,25 @@ describe("the shell sends one action (design note #968)", () => {
     /* #808: whether a hex must be crossed on a bow is a fact about each route's own path, and the reducer
        prices what it is given. Gathering the DISPATCH does not gather the pricing. */
     expect(block).toContain("withForcedBypass(");
-    expect(block).toContain("routePointsToWaypoints(points)");
+    /* Design note #1020: the points are named `entry.points` now that each route travels beside its train.
+       The RULE is unchanged -- every route is bypass-marked individually before it is converted -- and this
+       asserts the conversion still happens per route rather than once over a flattened list. */
+    expect(block).toContain("routePointsToWaypoints(entry.points)");
+  });
+
+  it("builds the payload from the draft STATE, not from the mirror of it", () => {
+    /* Design note #1020, and the reason this batch exists: `runnable` is derived from `trainDrafts` -- a memo
+       over `routeDrafts` -- while the points came from `routeDraftsRef.current`, written by an effect one
+       commit later. A train the memo could see and the ref could not resolved to `[]` and was dropped by the
+       two-point guard below, so a two-train turn banked one train's revenue. */
+    expect(block).toContain("routeDrafts[draft.trainIndex] ?? []");
+    expect(block).not.toContain("routeDraftsRef.current[draft.trainIndex]");
   });
 
   it("still drops a draft that resolves to fewer than two points", () => {
     /* The guard the loop had, kept: sending it would have the reducer price an empty path at zero and count
        a route that did not run. */
-    expect(block).toContain("points.length >= 2");
+    expect(block).toContain("entry.points.length >= 2");
   });
 
   it("sends nothing when nothing survives the marking", () => {

@@ -100,9 +100,12 @@ describe("feedItemText", () => {
       chatAuthor: "Alice",
       chatText: "taking the D&H",
     } as FeedItem;
-    // Design note #477: a chat line takes the same gutter, so the log rows
-    // and the chat rows it interleaves with line up on one left edge.
-    expect(feedItemText(chat)).toBe('[12:00] Alice: "taking the D&H"');
+    /* Design note #477: a chat line takes the same gutter, so the log rows
+       and the chat rows it interleaves with line up on one left edge.
+       Design note #1011: AND NO QUOTATION MARKS. This pinned them, so it failed when they were removed --
+       correctly, which is what a harness is for. The gutter is the claim this case was written to make and it
+       is unchanged; the delimiter was never carrying information the colon does not. */
+    expect(feedItemText(chat)).toBe("[12:00] Alice: taking the D&H");
   });
 
   it("emits no emoji for any status, round or detail combination", () => {

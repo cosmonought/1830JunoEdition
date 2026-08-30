@@ -156,34 +156,68 @@ export function describeGameplayAction(
      THE DIE IS NOT MENTIONED HERE, for #941's reason: the modifier is a fact about the TURN and is stated
      once, by `turnRevenueSentence`, from the shell. This line is the record of which track was run. */
   if ("RunMultipleRoutes" in msg) {
-    const { protocol_id, routes } = msg.RunMultipleRoutes;
+    const { protocol_id, routes, trains } = msg.RunMultipleRoutes;
     const company = gameState?.public_companies.find(
       (entry) => entry.company_id === protocol_id,
     );
-    const train = (company?.owned_trains ?? []).slice().sort().pop();
-    const total = routes.reduce(
-      (sum, path) => sum + sandboxRouteBreakdown(mapGrid, path, era).revenue,
-      0,
-    );
-    const legs = routes.map((path) => {
+    /* ==================================================================
+        DESIGN NOTE 1020: THE TRAIN THAT RAN, NOT THE BIGGEST ONE OWNED
+       ==================================================================
+       REPORTED: a $200 run "incorrectly labeled ... as the D-train's run", when the 5-train had run it.
+
+       THIS WAS A GUESS AND READ AS A FACT. The line was
+         `const train = (company?.owned_trains ?? []).slice().sort().pop();`
+       -- the corporation's largest owned train, attached to whatever ran. With a 5-train and a D-train in the
+       fleet the sentence could only ever say "D", however many trains ran and whichever of them did. It also
+       could not name more than one, so a two-train turn had to hedge as "trains up to a D".
+
+       THE MESSAGE CARRIES THE ANSWER NOW (#1020 on `RunMultipleRoutes.trains`), so the narration reads it
+       instead of inferring it. Each leg is priced and named individually, which is what the report asked for:
+       the whole array preserved, each train against its own figure.
+
+       THE OLD GUESS SURVIVES ONLY AS THE FALLBACK, for actions logged before the field existed -- #232's
+       rule, and this log is replayed from history. It is marked as an inference in that case by saying "up
+       to", which is the one honest thing that sentence was doing. */
+    const legs = routes.map((path, at) => {
       const stops = path
         .map((stop) => stop.hex)
         .filter((hex, index, all) => all.indexOf(hex) === index);
-      return stops.join(" -> ");
+      return {
+        train: trains?.[at] ?? null,
+        value: sandboxRouteBreakdown(mapGrid, path, era).revenue,
+        stops: stops.join(" -> "),
+      };
     });
+    const total = legs.reduce((sum, leg) => sum + leg.value, 0);
+    /** The pre-#1020 inference, used only when the log did not record the trains. */
+    const largestOwned = (company?.owned_trains ?? []).slice().sort().pop();
+
     /* ONE ROUTE READS AS ONE ROUTE. A corporation with a single train is the common case for most of a game,
        and "ran 1 route" would be a worse sentence than the one this replaces. */
-    if (routes.length === 1) {
+    if (legs.length === 1) {
+      const only = legs[0];
+      const named = only.train ?? largestOwned;
       return (
-        `${corp(gameState, protocol_id)} ran a $${total} route` +
-        (train ? ` with a ${train}-train` : "") +
-        ` through ${legs[0]}.`
+        `${corp(gameState, protocol_id)} ran a $${only.value} route` +
+        (named ? ` with ${only.train ? "its" : "a"} ${named}-train` : "") +
+        ` through ${only.stops}.`
+      );
+    }
+    /* EVERY TRAIN AND EVERY FIGURE, which is the report's own request: "$200 for the 5-train, $440 for the
+       D-train" is the sentence a player can reconcile against their chips, and one aggregate never was. */
+    if (legs.every((leg) => leg.train !== null)) {
+      return (
+        `${corp(gameState, protocol_id)} ran ${legs.length} routes for $${total}: ` +
+        legs
+          .map((leg) => `${leg.train}-train $${leg.value} (${leg.stops})`)
+          .join("; ") +
+        "."
       );
     }
     return (
-      `${corp(gameState, protocol_id)} ran ${routes.length} routes for $${total}` +
-      (train ? ` with trains up to a ${train}` : "") +
-      `: ${legs.join("; ")}.`
+      `${corp(gameState, protocol_id)} ran ${legs.length} routes for $${total}` +
+      (largestOwned ? ` with trains up to a ${largestOwned}` : "") +
+      `: ${legs.map((leg) => leg.stops).join("; ")}.`
     );
   }
 

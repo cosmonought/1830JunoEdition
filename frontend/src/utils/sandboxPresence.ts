@@ -86,10 +86,24 @@ function toPresence(id: string, data: DocumentData | undefined): PresenceState |
       if (hexes.length > 0) drafts[index] = hexes;
     }
   }
+  /* Design note #1021: the drafter's own figure for each route. Read defensively -- a document written by an
+     older build carries no `routeValues`, and a key that is not a finite number is dropped rather than coerced
+     to zero, because "$0" is a claim and "absent" is not. */
+  const values: Record<number, number> = {};
+  const rawValues = data.routeValues;
+  if (rawValues && typeof rawValues === "object") {
+    for (const [key, value] of Object.entries(rawValues as Record<string, unknown>)) {
+      const index = Number(key);
+      const revenue = Number(value);
+      if (!Number.isFinite(index) || !Number.isFinite(revenue)) continue;
+      values[index] = revenue;
+    }
+  }
   return {
     playerId: id,
     at: Number.isFinite(at) ? at : 0,
     routeDrafts: drafts,
+    routeValues: values,
     actingCompanyId:
       typeof data.actingCompanyId === "number" ? data.actingCompanyId : null,
   };
@@ -122,6 +136,8 @@ export async function publishPresence(
       {
         at: state.at,
         routeDrafts: drafts,
+        // Design note #1021: what the DRAFTER priced them at, so no watcher has to guess.
+        routeValues: state.routeValues ?? {},
         actingCompanyId: state.actingCompanyId ?? null,
       },
       { merge: true },

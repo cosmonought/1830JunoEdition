@@ -74,7 +74,8 @@ import {
 import { logoSrcFor } from "./CorporateLogo";
 import { reservationsByHex } from "../utils/privateReservations";
 // Design note #888: the camera pose that puts a set of hexes on screen, as a function that can be called.
-import { canvasTouchAction, isTapGesture } from "../utils/mapGesture";
+// Design note #1014: one locked value now, not a function of a mode that no longer exists.
+import { MAP_TOUCH_ACTION, isTapGesture } from "../utils/mapGesture";
 // Design note #723: the one place that decides whether ground is still unpaid.
 import { terrainFeeDue } from "../utils/terrainFee";
 // Design note #727: the palette a private power's hex is marked with.
@@ -369,13 +370,11 @@ const DEFAULT_HEX_SIZE = 42;
 const DEFAULT_WIDTH = 900;
 const DEFAULT_HEIGHT = 640;
 
-/** MAX_ZOOM is a MULTIPLIER on minZoom, not an absolute cap: the old constant could clamp the baseline fit down on a wide viewport, and could invert outright.
- *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #36 */
-const MAX_ZOOM_MULTIPLIER = 3;
-
-/** How far BELOW the fit a player may zoom. minZoom was also the hard floor, so "Fit to Screen" WAS the floor and "-" became a no-op there.
- *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #43 */
-const MIN_ZOOM_MULTIPLIER = 0.4;
+/* Design note #1014: `MAX_ZOOM_MULTIPLIER` and `MIN_ZOOM_MULTIPLIER` are GONE with the zoom they bounded --
+   they were the ceiling and floor of a control the player no longer has. Their note claimed they had been
+   deleted one edit before they actually were, which ESLint caught as two unused constants; that is this
+   codebase's signature failure and it is worth recording that the harness for this batch did not catch it and
+   the linter did. */
 /** Absolute safety floor under the dynamically-computed board-fit minimum
  *  zoom (design note #8) -- guards only against a degenerate near-zero
  *  viewport/`hexSize` combination; in normal use the computed `minZoom`
@@ -445,45 +444,15 @@ interface BoardContentBounds {
   maxY: number;
 }
 
-/** One reflected min/max formula covers both cases without branching -- the two candidate bounds swap ordering exactly where the scaled board crosses the viewport size, so sorting always yields the right pair.
- *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #8 */
-function panClampRange(
-  boundMin: number,
-  boundMax: number,
-  zoom: number,
-  viewportSize: number,
-): { lo: number; hi: number } {
-  const a = viewportSize - boundMax * zoom;
-  const b = -boundMin * zoom;
-  return { lo: Math.min(a, b), hi: Math.max(a, b) };
-}
+/* Design note #1014: `panClampRange` and `clampPanToBoard` are BOTH gone. They kept a drag from pulling the
+   board's edge past the viewport, which is a rule about a pan, and there is no pan. `panClampRange` had one
+   caller and it was `clampPanToBoard`, so removing the second without the first would have left a helper for
+   a feature that no longer exists -- #772's rule, and the reason this note names two functions. */
 
-/** Clamps a candidate `(panX, panY)` into the range `panClampRange`
- *  computes for each axis -- see design note #8. */
-function clampPanToBoard(
-  panX: number,
-  panY: number,
-  zoom: number,
-  bounds: BoardContentBounds,
-  viewportWidth: number,
-  viewportHeight: number,
-): { panX: number; panY: number } {
-  const xRange = panClampRange(bounds.minX, bounds.maxX, zoom, viewportWidth);
-  const yRange = panClampRange(bounds.minY, bounds.maxY, zoom, viewportHeight);
-  return {
-    panX: Math.min(xRange.hi, Math.max(xRange.lo, panX)),
-    panY: Math.min(yRange.hi, Math.max(yRange.lo, panY)),
-  };
-}
-
-/* Design note #927: the camera the player last left, outliving one mounting of this component. See the
-   `useState` initialisers for why it is module scope rather than a prop or a ref.
-   MUTABLE ON PURPOSE and deliberately not exported: nothing else may write a camera pose, and a second writer
-   is how the board would start disagreeing with itself about where it is looking. */
-const rememberedCamera: { view: ViewTransform | null; detailedView: boolean } = {
-  view: null,
-  detailedView: false,
-};
+/* Design note #1014: `rememberedCamera` is GONE. #927 introduced it to carry the player's own camera pose
+   across a remount -- "so a round change does not throw away their zoom" -- and there is no pose to carry any
+   more: every mount recomputes the same `fitView` from the same board bounds. A module variable that can only
+   ever hold the value already on screen is not memory, it is a second copy waiting to disagree. */
 
 /** One shared module-level empty array: a fresh [] in the destructuring default would be a new reference every render and rebuild draw's useCallback.
  *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #36 */
@@ -575,7 +544,6 @@ export function HexGridRenderer({
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const rafHandleRef = useRef<number | null>(null);
   /** Live-measured size of the wrapping `<div>` -- see design note #19.
    *  Only consulted when `widthProp`/`heightProp` are omitted; seeded with
    *  the old fixed defaults purely as a sane first-paint fallback before
@@ -656,14 +624,36 @@ export function HexGridRenderer({
      mounting of it.
      NOT PERSISTENCE. This is a module variable, so it dies with the tab -- a reload opens on the default pose,
      which is correct: a new session has no camera to preserve. */
-  const [view, setView] = useState<ViewTransform>(
-    () =>
-      rememberedCamera.view ?? {
-        panX: width / 2,
-        panY: height / 2,
-        zoom: 1,
-      },
-  );
+  /* ==================================================================
+      DESIGN NOTE 1014: THE CAMERA IS LOCKED, SO THERE IS NO CAMERA STATE LEFT
+     ==================================================================
+     RULED: "Remove ALL zoom features and controls from the map and UI entirely. Ensure the viewport is locked
+     and strictly prevents user scaling." Confirmed in review that panning goes with it.
+
+     `detailedView` WAS THE UNLOCK AND IT GATED BOTH. It is gone, and with it the `+`/`-` buttons, Fit to
+     Screen, the drag-to-pan branch, the pointer capture, the grab cursor and `clampPanToBoard`. Deleted
+     rather than gated off, per #67's own rule for wheel-zoom -- "removed entirely, not merely gated, so no
+     dead path can be re-enabled".
+
+     `view` SURVIVES AND IS NOT A ZOOM CONTROL. It is the transform the board is DRAWN under, and a board
+     still has to be scaled to fit its canvas; `fitView` computes exactly that and `view` now only ever holds
+     it. Every hit test, tooltip anchor and in-situ ring reads `view`, so removing it would mean removing the
+     board.
+
+     `rememberedCamera` GOES TOO, which #927 introduced to carry the player's own pose across a remount. There
+     is no player pose any more -- every mount computes the same `fitView` from the same bounds -- so the
+     module variable would restore a value indistinguishable from the one already there. #772's rule: state
+     that can only ever hold one value is not state.
+
+     WHAT IS NOT REMOVED: `ABSOLUTE_MIN_ZOOM_FLOOR`, which guards a degenerate near-zero viewport rather than
+     offering a zoom, and `handleWheel`'s `preventDefault`. #773 questioned that one -- "it now blocks a
+     gesture while using nothing" -- and this batch settles it the other way: blocking ctrl+wheel is part of
+     "strictly prevents user scaling", so the line finally has the reason it was missing. */
+  const [view, setView] = useState<ViewTransform>({
+    panX: width / 2,
+    panY: height / 2,
+    zoom: 1,
+  });
   const dragStateRef = useRef<{
     startX: number;
     startY: number;
@@ -695,12 +685,8 @@ export function HexGridRenderer({
     };
   }, [boardContentBounds, minZoom, width, height]);
 
-  /** false locks the camera at fitView and ignores pan/zoom input; true unlocks both.
-   *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #13 */
-  /* Design note #927: restored with the pose it belongs to. Splitting them -- remembering the view and not
-     whether the camera was unlocked -- would restore a pan and then have the sync effect below overwrite it
-     with `fitView` on the very next commit, which is the bug wearing a hat. */
-  const [detailedView, setDetailedView] = useState(() => rememberedCamera.detailedView);
+  /* Design note #1014: `detailedView` is GONE. It was the camera's unlock, and #927's argument for
+     remembering it went with the thing it remembered. */
 
   /** City Nameplate Visibility toggle gates every NAME pass only -- station tokens, value badges and track splines are separate unconditional passes.
    *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #42 */
@@ -1981,43 +1967,27 @@ export function HexGridRenderer({
     cursorMode,
   ]);
 
-  /** Coalesces pan/zoom-driven redraws to at most one per animation
-   *  frame -- see design note #4. */
-  const scheduleDraw = useCallback(() => {
-    if (rafHandleRef.current !== null) return;
-    rafHandleRef.current = requestAnimationFrame(() => {
-      rafHandleRef.current = null;
-      draw();
-    });
-  }, [draw]);
+  /* Design note #1014: `scheduleDraw` and `rafHandleRef` are GONE. #4 built the coalescer because a drag
+     fires pointer events far faster than the board can repaint, and every one of its callers was a pan or a
+     zoom. Nothing moves the camera now, so the prop-driven redraw below -- which runs when the DATA changes
+     rather than when the view does -- is the only repaint there is.
+     FOUND BY THE LINTER, NOT BY THIS BATCH'S HARNESS, like the three zoom constants above it. A source scan
+     asserting "the zoom handlers are gone" says nothing about what they used to call. */
 
   // Prop-driven redraw (new map data, resize, or hex size change).
   useEffect(() => {
     draw();
   }, [draw]);
 
-  // Cancel any in-flight coalesced redraw on unmount.
-  useEffect(() => {
-    return () => {
-      if (rafHandleRef.current !== null) {
-        cancelAnimationFrame(rafHandleRef.current);
-      }
-    };
-  }, []);
-
   // Re-runs on every fitView change rather than once. The one-shot version fired on the first render after each remount, capturing a fitView from the DEFAULT_WIDTH fallback before the ResizeObserver reported -- and never ran again.
   // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #13
+  /* Design note #1014: unconditional now. This was `if (detailedView) return;` -- the lock that kept the
+     camera at the fit while the player had not unlocked it. With no unlock, the guard could only ever be
+     false, and #788's rule is that an arm which cannot be taken comes out rather than standing as a comment
+     about a feature that no longer exists. */
   useEffect(() => {
-    if (detailedView) return;
     setView(fitView);
-  }, [fitView, detailedView]);
-
-  /* Design note #927: written on every change, so whatever the player last looked at is what a remount
-     restores. A ref would not do: the point is to outlive the component instance entirely. */
-  useEffect(() => {
-    rememberedCamera.view = view;
-    rememberedCamera.detailedView = detailedView;
-  }, [view, detailedView]);
+  }, [fitView]);
 
   /* Design note #866: the board answers the host's standing question about one hex's free-station slot.
      KEYED ON `view` AS WELL AS THE REQUEST, so a pan or a zoom re-reports and the confirmation ring follows
@@ -2063,16 +2033,12 @@ export function HexGridRenderer({
       /* Design note #773: capture only where the drag is live. Following a pointer outside the element is
          what capture is FOR, and at the baseline there is no pan to follow -- an unnecessary capture on a
          touch pointer is one more thing standing between a swipe and the browser's scroller. */
-      if (detailedView) {
-        try {
-          event.currentTarget.setPointerCapture(event.pointerId);
-        } catch {
-          /* A pointer that ended between the event and this line. Nothing to capture and nothing to do:
-             the drag state above is still correct, and pointercancel will clear it. */
-        }
-      }
+      /* Design note #1014: the pointer capture is GONE with the pan. Capture is for following a pointer
+         OUTSIDE the element, which is what a drag needs and a tap does not -- and #773's argument against
+         capturing at the locked baseline ("one more thing standing between a swipe and the browser's
+         scroller") is now the only case there is. */
     },
-    [view.panX, view.panY, detailedView],
+    [view.panX, view.panY],
   );
 
   /** The browser took the gesture over -- a swipe that became a page scroll, or a palm. Not a click and not
@@ -2178,34 +2144,15 @@ export function HexGridRenderer({
         setHoveredCoordLabel((prev) => (prev === null ? prev : null));
       }
 
-      const drag = dragStateRef.current;
-      if (!drag) return;
-      // Pan is only live in detailed view; movement is still tracked at baseline so the click-vs-drag check keeps working.
-      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #13
-      if (!detailedView) return;
-      const dx = event.clientX - drag.startX;
-      const dy = event.clientY - drag.startY;
-      // Rigid boundary clamping on drag: stop the pan the instant it would pull the board's edge past the viewport, rather than letting the map drift into empty space.
-      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #8
-      setView((prev) => {
-        const clamped = clampPanToBoard(
-          drag.originPanX + dx,
-          drag.originPanY + dy,
-          prev.zoom,
-          boardContentBounds,
-          width,
-          height,
-        );
-        return { ...prev, panX: clamped.panX, panY: clamped.panY };
-      });
-      scheduleDraw();
+      /* Design note #1014: THE PAN IS GONE AND THE DRAG STATE IS NOT. Everything from here down used to move
+         the camera; with the camera locked there is nothing to move. What survives is `dragStateRef`, which
+         has always had a second job the pan was merely the first of -- it is the click-vs-drag test the
+         selection path relies on (`isTapGesture`), and deleting it with the pan would turn every small
+         wobble during a press into a selection the player did not make. */
     },
     [
-      detailedView,
-      scheduleDraw,
-      boardContentBounds,
-      width,
-      height,
+      /* Design note #1014: `scheduleDraw` LEAVES the list with the pan that called it. A move that changes
+         nothing has nothing to repaint. */
       /* The WHOLE view, not its three fields. `hitTestRoutes` takes the
          object, so the three narrower entries no longer cover every read
          and the lint rule is right to say so (design note #381). */
@@ -2598,49 +2545,10 @@ export function HexGridRenderer({
     event.preventDefault();
   }, []);
 
-  /** Zooms around the canvas's own centre, since a button has no cursor to anchor on. Flips detailedView on itself so the first press is not a no-op.
-   *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #17 */
-  const handleZoomStep = useCallback(
-    (factor: number) => {
-      setDetailedView(true);
-      setView((prev) => {
-        const baseView = detailedView ? prev : fitView;
-        // Design note #43: the floor is now `minZoom * MIN_ZOOM_MULTIPLIER`,
-        // not `minZoom` itself, so "-" keeps working past Fit to Screen.
-        const zoomFloor = Math.max(ABSOLUTE_MIN_ZOOM_FLOOR, minZoom * MIN_ZOOM_MULTIPLIER);
-        const nextZoom = Math.min(
-          minZoom * MAX_ZOOM_MULTIPLIER,
-          Math.max(zoomFloor, baseView.zoom * factor),
-        );
-        // Keep the point currently at the canvas's own screen-space center
-        // fixed in world space while zooming, so repeated +/- presses zoom
-        // in/out around the middle of the view rather than drifting.
-        const centerWorldX = (width / 2 - baseView.panX) / baseView.zoom;
-        const centerWorldY = (height / 2 - baseView.panY) / baseView.zoom;
-        const clamped = clampPanToBoard(
-          width / 2 - centerWorldX * nextZoom,
-          height / 2 - centerWorldY * nextZoom,
-          nextZoom,
-          boardContentBounds,
-          width,
-          height,
-        );
-        return { zoom: nextZoom, panX: clamped.panX, panY: clamped.panY };
-      });
-      scheduleDraw();
-    },
-    [detailedView, fitView, minZoom, boardContentBounds, width, height, scheduleDraw],
-  );
-  const handleZoomIn = useCallback(() => handleZoomStep(1.25), [handleZoomStep]);
-  const handleZoomOut = useCallback(() => handleZoomStep(1 / 1.25), [handleZoomStep]);
-
-  /** An idempotent, always-available snap back to exactly fitView, re-locking the camera.
-   *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #17 */
-  const handleFitToScreen = useCallback(() => {
-    setDetailedView(false);
-    setView(fitView);
-    scheduleDraw();
-  }, [fitView, scheduleDraw]);
+  /* Design note #1014: `handleZoomStep`, `handleZoomIn`, `handleZoomOut` and `handleFitToScreen` are GONE,
+     with `clampPanToBoard`, `MIN_ZOOM_MULTIPLIER` and `MAX_ZOOM_MULTIPLIER`. Fit to Screen went with them and
+     not reluctantly: it existed to UNDO a zoom, so with nothing able to move the camera it was a button whose
+     only effect was to reassert the pose already on screen. */
 
   /* ==================================================================
       DESIGN NOTE 987: THE FRAMING EFFECT IS GONE, AND WITH IT THE ONLY AUTOMATIC CAMERA MOVE
@@ -2713,15 +2621,18 @@ export function HexGridRenderer({
              locked baseline `handlePointerMove` returns without panning, so `none` there was a promise to
              the browser that the map had no intention of keeping -- and on an iPad the board is most of the
              screen, so there was nowhere left to swipe the page. `manipulation` keeps taps arriving. */
-          touchAction: canvasTouchAction(detailedView),
+          /* Design note #1014: `pan-x pan-y`, chosen over #773's `manipulation`. Both let a finger scroll the
+             page -- which is the whole of what #773 was reporting -- but `manipulation` still permits PINCH,
+             and "strictly prevents user scaling" is this batch's instruction. This value keeps the page
+             scrollable, keeps taps arriving, and refuses the one gesture that would scale a board that no
+             longer has a zoom to scale to. */
+          touchAction: MAP_TOUCH_ACTION,
           // The cursor is the PIECE: a composed PNG rather than the .webp direct, because cursor:url() has no error path and a broken herald would silently become a crosshair -- the feature would look unbuilt rather than broken. Hotspot 16 16, because a token is placed AT a point.
           // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #496
+          /* Design note #1014: the `grab` cursor is gone with the drag it advertised. A grab hand over a
+             board that cannot be moved is a promise the canvas can no longer keep. */
           cursor:
-            cursorMode === "token"
-              ? `url("${stationCursor}") 16 16, crosshair`
-              : detailedView
-                ? "grab"
-                : "default",
+            cursorMode === "token" ? `url("${stationCursor}") 16 16, crosshair` : "default",
         }}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
@@ -2772,20 +2683,9 @@ export function HexGridRenderer({
         >
           {showCityNames ? "Hide City Names" : "Show City Names"}
         </button>
-        <button type="button" onClick={handleZoomOut} style={CAMERA_CONTROL_BUTTON_STYLE} aria-label="Zoom out">
-          -
-        </button>
-        <button type="button" onClick={handleZoomIn} style={CAMERA_CONTROL_BUTTON_STYLE} aria-label="Zoom in">
-          +
-        </button>
-        <button
-          type="button"
-          onClick={handleFitToScreen}
-          style={CAMERA_CONTROL_BUTTON_STYLE}
-          aria-label="Fit to screen"
-        >
-          Fit to Screen
-        </button>
+        {/* Design note #1014: the `-`, `+` and Fit to Screen buttons are GONE. What is left in this cluster is
+            the one control that was never a camera control -- city names are a LAYER toggle, and it kept its
+            place rather than being tidied away with the neighbours it happened to sit beside. */}
       </div>
     </div>
   );

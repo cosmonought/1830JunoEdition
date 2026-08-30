@@ -18,11 +18,11 @@
 // `handleFitToScreen` is on screen and idempotent; if that control were ever removed, this change would
 // strand a player inside a pose with no way out, and nothing else in the suite would notice.
 
-import { readSource, sliceBetween, stripComments } from "../utils/sourceScan";
+import { readSource, stripComments } from "../utils/sourceScan";
 
-const BAR = stripComments(readSource("panels/ContextualActionBar.tsx"));
-const APP = stripComments(readSource("App.tsx"));
-const BOARD = stripComments(readSource("components/HexGridRenderer.tsx"));
+/* Design note #1014: `BAR`, `APP`, `BOARD` and `sliceBetween` are GONE. They were left behind by an earlier
+   pass that deleted the cases reading them -- unused before this batch and flagged only when the linter was
+   pointed at this file again. The one describe here builds its own `RENDERER`. */
 
 /* ==================================================================
     DESIGN NOTE 987: EVERYTHING ABOUT THE FRAMING IS GONE FROM THIS FILE
@@ -42,46 +42,52 @@ const BOARD = stripComments(readSource("components/HexGridRenderer.tsx"));
    initiates nothing. It is the one piece of camera state this batch deliberately keeps, and separating it
    from the framing is the reason this file was not simply deleted. */
 
-describe("the camera survives the round change (design note #927)", () => {
+describe("the camera survives the round change (design note #1014, superseding #927)", () => {
   /* ==================================================================
-      REPORTED THREE TIMES, AND THE FIRST TWO HUNTS LOOKED FOR THE WRONG THING
+      #927's BUG IS GONE BECAUSE ITS SUBJECT IS GONE
      ==================================================================
-     "The start of OR 3.1 triggered an extreme zoom-out ... find the unguarded `fitBounds` or zoom trigger in
-     the round transition logic and strip it."
-     THERE IS NO SUCH TRIGGER. `HexGridRenderer` is rendered conditionally on `activeMainTab === "map"`, and
-     #213 switches the tab on every round transition -- to the Stock Market for a Stock Round and back for an
-     Operating Round. So the board is UNMOUNTED and REMOUNTED across SR -> OR, and a remount restores
-     `useState`'s initial values: `detailedView` to `false`, which locks the camera to `fitView`. The zoom-out
-     is the default pose reasserting itself, not a call anybody made -- which is exactly why grepping for a
-     zoom call found nothing, twice.
-     SO THE ASSERTIONS ARE ABOUT THE SEEDS. A remembered pose that the initialisers do not read, or an
-     initialiser that reads a constant, is the bug returning. */
+     REPORTED THREE TIMES: "the start of OR 3.1 triggered an extreme zoom-out ... find the unguarded
+     `fitBounds` or zoom trigger in the round transition logic and strip it."
+
+     THERE WAS NO SUCH TRIGGER, and that diagnosis still stands and is still worth keeping. `HexGridRenderer`
+     is rendered conditionally on `activeMainTab === "map"` and #213 switches the tab on every round
+     transition, so the board is UNMOUNTED and REMOUNTED across SR -> OR. A remount restores `useState`'s
+     initial values, `detailedView` went back to `false`, and the camera snapped to the fit. The zoom-out was
+     the default pose reasserting itself rather than a call anybody made -- which is exactly why grepping for
+     a zoom call found nothing, twice.
+
+     #927 ANSWERED IT BY REMEMBERING THE POSE. #1014 answers it by removing the pose: with the camera locked
+     there is only one, every mount computes the same `fitView` from the same bounds, and a remount is
+     therefore invisible. The reported symptom cannot recur because there is nothing left for it to snap away
+     FROM.
+
+     SO THESE CASES NOW ASSERT THE ABSENCE, not the store. Kept rather than deleted because the report is
+     three deep and the next reader deserves to find out here that the mechanism was retired deliberately --
+     a suite that simply vanished would leave "does the board keep its zoom across a round change" answerable
+     only by reading the renderer. */
   const RENDERER = stripComments(readSource("components/HexGridRenderer.tsx"));
 
-  it("keeps the pose somewhere that outlives one mounting", () => {
-    /* Module scope, not a ref: a ref dies with the component instance, which is the thing being unmounted. */
-    expect(RENDERER).toContain("const rememberedCamera");
+  it("no longer remembers a pose, because there is only one", () => {
+    expect(RENDERER).not.toContain("rememberedCamera");
   });
 
-  it("seeds both the view and the lock from it", () => {
-    /* BOTH, or the restore is worse than useless: remembering the pan while `detailedView` resets to `false`
-       would restore a pan and then have the fit-sync effect overwrite it on the very next commit. */
-    expect(RENDERER).toContain("rememberedCamera.view ??");
-    expect(RENDERER).toContain("useState(() => rememberedCamera.detailedView)");
+  it("has no lock left to restore", () => {
+    expect(RENDERER).not.toContain("detailedView");
   });
 
-  it("writes the pose back on every change", () => {
-    /* A store nothing writes to is a store that always reads its initial value -- which would leave this
-       whole mechanism looking present and doing nothing. */
-    expect(RENDERER).toContain("rememberedCamera.view = view;");
-    expect(RENDERER).toContain("rememberedCamera.detailedView = detailedView;");
-  });
-
-  it("still lets the locked camera follow the fit", () => {
-    /* THE CONTROL. A restore that also pinned `detailedView` true would strand a player who had never zoomed
-       at a stale pan; the sync effect must survive, so a locked camera still tracks `fitView` on a resize. */
-    expect(RENDERER).toContain("if (detailedView) return;");
+  it("computes the same fit on every mount", () => {
+    /* THE PROPERTY THAT REPLACES THE STORE. `fitView` is derived from the board bounds and the canvas size,
+       both of which survive a remount -- so the pose after one is the pose before it, with nothing to carry. */
+    expect(RENDERER).toContain("const fitView");
     expect(RENDERER).toContain("setView(fitView);");
+  });
+
+  it("syncs unconditionally, so a resize still reaches the camera", () => {
+    /* #927's CONTROL, INVERTED. It asserted the sync was GUARDED so an unlocked camera kept the player's pan;
+       there is no unlocked camera, so the guard would now be an arm that can never be taken (#788). What the
+       control was protecting -- a locked camera still tracking `fitView` on a resize -- is what an
+       unconditional sync gives unconditionally. */
+    expect(RENDERER).not.toContain("if (detailedView) return;");
   });
 });
 

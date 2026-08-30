@@ -169,16 +169,37 @@ describe("the shell raises it once per TURN (design notes #940 -> #941)", () => 
      #940 RAISED THE FLASH INSIDE `runGameplayAction`, which fires once per dispatched route. REPORTED: "a
      4-train corporation forces the player to sit through 8 seconds of consecutive UI flashes (+10%, -20%,
      etc.), with no clear idea of which modifier applies to which train."
-     SO IT MOVED TO `handleRunTrains`, after the dispatch loop -- the only place that can see the end of a
-     turn's running. These cases assert it is there and, just as importantly, that it is no longer in the
-     per-dispatch path. */
-  const APP = readStripped("App.tsx");
-  const runBlock = sliceBetween(APP, "const runnable = runnableDrafts(", "setLiveOrSubPhase(");
+     ==================================================================
+      DESIGN NOTE 1017: AND THEN IT MOVED AGAIN, FOR A REASON #940 AND #941 BOTH MISSED
+     ==================================================================
+     #941 MOVED IT TO `handleRunTrains`, after the dispatch loop, on the grounds that it was "the only place
+     that can see the end of a turn's running". True of the LOOP, and the wrong unit: `handleRunTrains` is a
+     click handler, and only the acting president's browser ever runs one. `logInfo` appends to a LOCAL feed,
+     so the sentence existed in exactly one player's Activity Log and the flash on exactly one screen.
 
-  it("fires from the run-trains callback, not from each dispatch", () => {
-    expect(runBlock).toContain("setRevenueFlash(");
+     REPORTED, once as a symptom and once as a diagnosis: "the game modified a corporation's revenue but
+     failed to print the flavor text in the Activity Log", and then "I think the variant texts may only be
+     printing in the Activity Log for the local player who's the president."
+
+     `DeclareDividends` IS THE SHARED MARKER. It is dispatched once, after running, and every client replays
+     it -- so the "end of a turn's running" is observable from the wire after all, and `before` still carries
+     the final `printed_route_revenue` at that point.
+
+     EVERY RULING IN THIS SUITE SURVIVES AND IS STILL ASSERTED BELOW: one roll per turn, on the turn's total;
+     no train ordinal in the seed; `revenueOutcome` rather than a percentage comparison; the variant gate on
+     the whole block; and exactly one call site each, which is what kept #940's eight consecutive flashes from
+     coming back. Only the block they are asserted against has moved. */
+  const APP = readStripped("App.tsx");
+  const runBlock = sliceBetween(
+    APP,
+    'if (before && "DeclareDividends" in msg',
+    'if (after && "DeclareDividends" in msg',
+  );
+
+  it("fires from the shared dispatch path, not from the click handler", () => {
+    expect(runBlock).toContain("setRevenueFlash({");
     /* AND NOWHERE ELSE. One occurrence in the whole shell -- a second would be a second flash per turn, which
-       is the reported bug however few trains it took to produce it. */
+       is #940's reported bug however few trains it took to produce it. */
     expect(APP.match(/setRevenueFlash\(/g)?.length ?? 0).toBe(1);
   });
 
@@ -188,28 +209,30 @@ describe("the shell raises it once per TURN (design notes #940 -> #941)", () => 
     expect(APP.match(/turnRevenueSentence\(/g)?.length ?? 0).toBe(1);
   });
 
-  it("rolls once, on the aggregated printed total", () => {
-    /* ==================================================================
-        THE SOURCE OF THE TOTAL CHANGED; THE "ONCE" DID NOT
-       ==================================================================
-       THIS ASSERTED the sum came from `runnable` -- the drafts the shell was about to dispatch -- and #941's
-       reason was #934's race: reading state right after a dispatch loop can catch a room mid-snapshot.
-       REPORTED SINCE: "B&O ran multiple routes totaling a modified $170. However, the Dividends phase
-       calculated the payout at $6/share." Two figures on one screen, because the sentence summed the drafts
-       while the dividend read the reducer's field. #963 makes both read the reducer, so they can no longer
-       name different numbers -- and the drafts sum stays as the fallback for a state that reports nothing.
-       WHAT IS STILL ASSERTED IS THE RULING: one roll, on a turn total rather than a per-train figure. */
+  it("rolls once, on the turn's banked printed total", () => {
+    /* #963'S RULING, UNCHANGED: the sentence and the dividend read ONE figure, the reducer's. What #1017
+       removes is the drafts fallback -- a replaying client has no drafts, and a fallback that only the acting
+       browser could ever populate was a second source for a fact now read from state. */
     expect(runBlock).toContain("rollTurnRevenue(");
-    expect(runBlock).toContain("banked?.printed_route_revenue");
-    expect(runBlock).toContain("printedFromDrafts");
+    expect(runBlock).toContain("printed_route_revenue");
     expect(runBlock.match(/rollTurnRevenue\(/g)?.length ?? 0).toBe(1);
   });
 
   it("seeds the roll on the turn, with no train ordinal", () => {
-    /* THE SEED IS THE TURN NOW. A `trainOrdinal` reappearing here would silently re-split the roll while
-       every other surface still believed there was one. */
+    /* THE SEED IS THE TURN. A `trainOrdinal` reappearing here would silently re-split the roll while every
+       other surface still believed there was one. */
     expect(runBlock).not.toContain("trainOrdinal");
-    expect(runBlock).toContain("companyId: actingProtocolId");
+    expect(runBlock).toContain("companyId,");
+  });
+
+  it("seeds it from the replayed state rather than from render state", () => {
+    /* NEW WITH #1017 AND THE MOST IMPORTANT OF THESE. A replaying client's `gameState` is whatever the board
+       looks like NOW, not when the action it is replaying happened -- so a seed taken from it would produce a
+       different die face, and a different sentence, on every browser. That is a worse bug than the missing
+       line, and it is invisible without this assertion. */
+    expect(runBlock).toContain("before.macro_round_number");
+    expect(runBlock).toContain("before.sub_round_index");
+    expect(runBlock).not.toContain("gameState?.macro_round_number");
   });
 
   it("asks the shared predicate, not the percentage", () => {
@@ -224,6 +247,12 @@ describe("the shell raises it once per TURN (design notes #940 -> #941)", () => 
     expect(runBlock).toContain("delta: revenueDeltaPercent(roll)");
   });
 
+  it("keeps the variant gate on the whole block", () => {
+    /* A standard game must raise no flash and log no modifier sentence. Read off `before`, like everything
+       else here -- the variants are on the state being replayed. */
+    expect(runBlock).toContain("resolveVariants(before.variants).unpredictableRevenue");
+  });
+
   it("stamps a fresh token per turn", () => {
     expect(APP).toContain("token: nextRevenueFlashToken()");
     expect(APP).toContain("let revenueFlashToken = 0;");
@@ -234,10 +263,10 @@ describe("the shell raises it once per TURN (design notes #940 -> #941)", () => 
     expect(APP).toContain("<RevenueModifierFlash signal={revenueFlash} />");
   });
 
-  it("keeps the variant gate on the whole block", () => {
-    /* A standard game must raise no flash and log no modifier sentence. */
-    expect(runBlock).toContain("resolveVariants(gameState?.variants).unpredictableRevenue");
-  });
+  /* Design note #1017: the duplicate of this case is above, reading `before.variants`. This copy survived the
+     rewrite because the old `describe` body was replaced from its top down to the token case and this sat
+     below it -- a stale assertion left standing by a partial edit, which is exactly the failure mode a
+     harness is meant to catch and did. */
 });
 
 describe("the run button names a projection, not a promise (design note #942)", () => {

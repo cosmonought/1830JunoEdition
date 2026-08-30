@@ -175,11 +175,30 @@ export const VARIANT_COPY: Readonly<Record<VariantCopyKey, { label: string; blur
      short of generating the copy.
      THE SUPPLIED WORDING IS KEPT VERBATIM apart from the figures being interpolated. "Markets are volatile"
      is the feel a table is choosing (#961's rule for these blurbs: this is not a specification), and the two
-     thresholds are the one mechanical fact a player cannot infer from the name. */
+     thresholds are the one mechanical fact a player cannot infer from the name.
+
+     ==================================================================
+      DESIGN NOTE 1010: "DOUBLE MOVE", NOT "DOUBLE JUMP" -- THE LAST SITE
+     ==================================================================
+     RULED: "Update the Dynamic Stock Market variant text to say 'double move' instead of 'double jump'."
+
+     #998 ALREADY SETTLED THIS WORD, one surface over. The Market Move line in the action bar reads "(double
+     move)" because "drop" implied a vertical movement the market token does not always make -- and "jump" has
+     the same problem in the other direction. What #998 did not do was come back for the lobby, which had been
+     given the supplied sentence three notes earlier and kept it verbatim.
+
+     SO THE PLAYER MET TWO WORDS FOR ONE RULE: the lobby promised a "double jump" and the bar reported a
+     "double move". #891's shape in its mildest form -- two surfaces answering one question two ways, where
+     the only cost is a player wondering whether they are the same thing.
+
+     THE CONSTANT KEEPS ITS NAME. `PAY_DOUBLE_JUMP_MULTIPLE` is referenced by the reducer, the harness and
+     three notes; renaming it in a copy fix would make one word change indistinguishable from a refactor in
+     review. The identifier is internal, the sentence is what a player reads, and only one of them was
+     reported. */
   dynamicStockMarket: {
     label: "Dynamic stock market",
     blurb:
-      `Markets are volatile. Paying out ${PAY_DOUBLE_JUMP_MULTIPLE}x the share price triggers a double jump increase, but withholding ${WITHHOLD_DOUBLE_DROP_MULTIPLE}x the share price will cause a double jump decrease.`,
+      `Markets are volatile. Paying out ${PAY_DOUBLE_JUMP_MULTIPLE}x the share price triggers a double move increase, but withholding ${WITHHOLD_DOUBLE_DROP_MULTIPLE}x the share price will cause a double move decrease.`,
   },
   /* Design note #961a: the difficulty qualifiers moved to the LABELS above. A table choosing variants wants
      to know which way each one pushes as it reads the name, not three lines into the description. */

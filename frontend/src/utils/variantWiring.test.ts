@@ -263,9 +263,14 @@ describe("the dividend pays what was banked (design notes #917 -> #934)", () => 
        WHICH IS WHY A TEST PINNING A MECHANISM IS DIFFERENT FROM ONE PINNING A RULE. The rule this was written
        to protect -- every runnable draft must reach the reducer -- is unchanged and is what is asserted now.
        The `for` loop was one way to satisfy it, and the case had quietly made that way mandatory. */
+    /* Design note #1020: the shapes moved again and the RULE has not. `turnRoutes` carries `{ train, path }`
+       per route so the log can name which train ran which, and the payload spreads that into two parallel
+       arrays. What this case has always been about -- every runnable draft reaches the reducer, in ONE action
+       -- is asserted below without pinning the expression that achieves it, which is the mistake the note
+       above records this case making once already. */
     const runBlock = sliceBetween(APP, "const runnable = runnableDrafts(", "setLiveOrSubPhase(");
     expect(runBlock).toContain("runnable\n      .map((draft)");
-    expect(runBlock).toContain("routes: turnRoutes,");
+    expect(runBlock).toContain("routes: turnRoutes.map((entry) => entry.path),");
     /* AND IN ONE ACTION, which is the half the old case could not have expressed. */
     expect(runBlock.match(/await runGameplayAction\(/g)?.length ?? 0).toBe(1);
   });

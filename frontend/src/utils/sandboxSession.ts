@@ -47,6 +47,8 @@ import { metFloatThreshold, FULL_CAPITALISATION_MULTIPLE } from "./floatThreshol
 // Design note #763: a float is not finished until its home token is on the board.
 import { homeTokenBlock } from "./homeTokenGate";
 import { dividendRefusal } from "./dividendGate";
+// Design note #1019: the purchase gate the reducer never had.
+import { trainPurchaseRefusal } from "./trainPurchaseGate";
 import { dividendSplit } from "./dividendSplit";
 import { layEndsTrackStep } from "./bonusLay";
 import { stationTokenPrice } from "./stationTokens";
@@ -246,6 +248,33 @@ export function operatingRoundsForPhase(phase: GamePhase | null): number {
 
 /** Exported because two callers need it; a second hand-written copy is how the queue came to be built by neither of them.
  *  See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #411 */
+/** Open an Operating Round: build its order AND pay the private income that opening one owes.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 1015: ONE OPENING, ONE PAYOUT, TWO CALLERS
+ *  ==================================================================
+ *
+ *  `beginOperatingRound` BUILDS A ROUND AND IS CALLED THREE TIMES: twice to open one, and once by
+ *  `advanceCorporation` to repair an operating order that came out empty. Only the first two are openings, and
+ *  #685 wired the payout to just one of them -- so a set's second and third rounds began without paying.
+ *
+ *  THE SPLIT IS THE FIX. `beginOperatingRound` keeps its single job and the repair path keeps calling it; the
+ *  two real openings call this instead. Naming them apart is what stops the next caller reaching for whichever
+ *  is nearer -- `trackReach.ts` #893's argument for `reachableCities` beside `reachableNetwork`, and the same
+ *  hazard: the two differ by whether money moves, which is not visible at a call site.
+ *
+ *  PURE AND REPLAYABLE, per #685: it derives the payment from the state it is handed and nothing else, so
+ *  every client replaying the same log opens the round with the same treasuries. */
+export function openOperatingRound(
+  state: GameStateResponse,
+  priceFor?: (companyId: number) => number | null,
+  markFor?: (companyId: number) => { x: number; y: number; enteredAt?: number } | null | undefined,
+  continuingSequence = false,
+): GameStateResponse {
+  const opened = beginOperatingRound(state, priceFor, markFor, continuingSequence);
+  return applyPrivateRevenue(opened)?.state ?? opened;
+}
+
 export function beginOperatingRound(
   state: GameStateResponse,
   priceFor?: (companyId: number) => number | null,
@@ -310,11 +339,36 @@ function advanceCorporation(
      See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #511 */
   const sequenceLength = operatingRoundSequenceLength(state);
   if (state.sub_round_index < sequenceLength) {
+    /* ==================================================================
+       DESIGN NOTE 1015: THE PRIVATES PAY EVERY OPERATING ROUND, NOT EVERY SET
+       ==================================================================
+       REPORTED, of the toast that follows the payout: "the private company payout toast only fired during the
+       very first Operating Round and never appeared again in subsequent rounds ... Audit the state flag or
+       trigger that tracks whether private companies have paid out."
+
+       AND THE TOAST WAS TELLING THE TRUTH. It fires when the money moves, so its absence was not a display
+       fault -- the money was not moving. `applyPrivateRevenue` was called from exactly one place, the
+       `stock_round_just_ended` branch of `settleRoundTransitions`, which is the boundary that opens the FIRST
+       Operating Round of a set. This line opens the second and the third, and it did not pay.
+
+       SO THE RULE WAS WRONG, NOT JUST THE NOTIFICATION. 1830 pays private income at the start of every
+       Operating Round; from Phase 3 a set has two and from Phase 5 it has three, so a table was losing one or
+       two rounds of private income per set and had no way to see it -- the only surface that would have said
+       so is the toast that was also missing.
+
+       #685 PUT THE PAYOUT IN THE REDUCER AND THAT IS UNTOUCHED. Its argument stands exactly: "one place, on
+       the one transition that opens an Operating Round, replayed identically by every client." What it had
+       wrong was the count of such transitions -- there are two, and it knew about one. `openOperatingRound`
+       below is now the one place, and both openings go through it.
+
+       THE RECOVERY PATH DELIBERATELY DOES NOT. `advanceCorporation`'s empty-queue repair above rebuilds an
+       order for a round that is ALREADY OPEN; paying there would hand out a second round of income for a
+       round the table has been playing. An opening and a repair look alike and are not. */
     return syncSeatToActingCorporation({
       /* `true`: this is the SECOND round of an existing cycle, so it keeps
          the cycle's locked count rather than re-deriving from a phase that
          may have moved. */
-      ...beginOperatingRound(state, priceFor, markFor, true),
+      ...openOperatingRound(state, priceFor, markFor, true),
       sub_round_index: state.sub_round_index + 1,
     });
   }
@@ -1127,13 +1181,46 @@ function namedTrains(models: readonly string[]): string {
   return `its ${named.slice(0, -1).join(", ")} and ${named[named.length - 1]}`;
 }
 
-function buyDepotTrain(state: GameStateResponse, companyId: number): GameStateResponse {
+/* ==================================================================
+    DESIGN NOTE 1019: ALL OR NOTHING, AND IN THE AUTHORITY
+   ==================================================================
+   This function had no gate of any kind: it charged, banked, delivered and turned the phase whatever the
+   board said. `adjustTreasury` floors at zero, so an unaffordable purchase took every dollar there was, gave
+   the train anyway, and -- because #778's refusal detector works by identity and this mutated -- reported
+   success. See `trainPurchaseGate.ts` for the log that shows all three consequences in three lines.
+
+   THE GATE LIVES HERE, INSIDE THE SHARED FUNCTION, rather than in the two message arms that call it. Both
+   `BuyHardwareFromPool` and `EmergencyBuyHardware` end up here, and an option threaded through two call
+   sites is an option one of them eventually forgets -- which is #1006's bug from two batches ago, where a
+   correct predicate was passed by three callers and omitted by the one that decided anything.
+
+   `requireFunds` IS PASSED, NOT INFERRED, and it is the only thing the emergency path changes. */
+function buyDepotTrain(
+  state: GameStateResponse,
+  companyId: number,
+  /** Design note #1019: `false` only for the emergency purchase, which has already funded the treasury. */
+  requireFunds = true,
+): GameStateResponse {
   const tier = depotInventory(state).find(
     (row) => row.remaining === null || row.remaining > 0,
   );
   // An empty depot is not an error to throw at a sandbox tester; it is a
   // purchase with nothing to buy, so nothing moves.
   if (!tier) return state;
+
+  /* REFUSES BY RETURNING THE STATE IT WAS HANDED, which is what every gate in this reducer does and what
+     `actionWasRefused` detects by reference (#778). That identity is the whole of the "throw an error to the
+     UI" half of the report -- the drain already renders a refusal line and #784 already names the rule. */
+  if (
+    trainPurchaseRefusal(state, companyId, {
+      cost: tier.cost,
+      trainLimit: tier.trainLimit,
+      requireFunds,
+    }) !== null
+  ) {
+    return state;
+  }
+
   const charged = adjustTreasury(state, companyId, -tier.cost);
   const banked = adjustBank(charged, tier.cost);
   const before = derivePhase(state)?.tier ?? null;
@@ -1764,6 +1851,49 @@ export function applySandboxAction(
     if (dividendRefusal(state, msg.DeclareDividends.protocol_id) !== null) return state;
   }
 
+  /* ==================================================================
+     DESIGN NOTE 1019: AND THE PURCHASE IS GATED HERE, FOR #757'S REASON
+     ==================================================================
+     THE FIRST DRAFT OF THIS FIX PUT THE GATE INSIDE `buyDepotTrain` AND IT WAS NOT ENOUGH. That function is
+     reached from `applyOneAction`, which is only the first of five stages -- `settleRoundTransitions`,
+     `settleEra`, `settleBaoPrivate` and `settleOperatingCursor` all run afterwards on whatever it returns. So
+     a purchase refused down there left the treasury and the fleet correctly untouched and STILL ADVANCED THE
+     CURSOR, because the shell had no way to know the arm had declined.
+
+     #757 SAYS THIS IN ADVANCE, four paragraphs up, about the tile lay: "Refusing in the arm alone would have
+     charged the fee and advanced the step for a tile that was never placed." The same sentence with two nouns
+     changed, and the harness for this batch caught it by asserting object IDENTITY rather than the two fields
+     everybody thinks to check.
+
+     WHICH IS ALSO THE MISSING HALF OF THE REPORT. The log shows OR 9.1 becoming OR 9.2 immediately after the
+     bogus purchase: that is `settleOperatingCursor` ending a turn on the strength of an action that never
+     happened, and it is what left the cursor pointing away from NNH when the player's withhold arrived. The
+     dividend refusal was a symptom of this line being absent, not a bug of its own.
+
+     THE FUNDS CHECK IS WAIVED FOR THE EMERGENCY MESSAGE, and only that check: `EmergencyBuyHardware` reads a
+     shortfall from a treasury it has not funded yet, so asking about funds here -- before its own arm tops
+     the treasury up -- would refuse the one flow built for exactly this situation. */
+  const depotPurchase =
+    "BuyHardwareFromPool" in msg
+      ? { companyId: msg.BuyHardwareFromPool.protocol_id, requireFunds: true }
+      : "EmergencyBuyHardware" in msg
+        ? { companyId: msg.EmergencyBuyHardware.protocol_id, requireFunds: false }
+        : null;
+  if (depotPurchase) {
+    const tier = depotInventory(state).find(
+      (row) => row.remaining === null || row.remaining > 0,
+    );
+    if (
+      trainPurchaseRefusal(state, depotPurchase.companyId, {
+        cost: tier?.cost ?? null,
+        trainLimit: tier?.trainLimit ?? null,
+        requireFunds: depotPurchase.requireFunds,
+      }) !== null
+    ) {
+      return state;
+    }
+  }
+
   /* Design note #763: NOTHING HAPPENS WHILE A HOME TOKEN IS OWED. Floating a corporation and placing its
      home token are one event in 1830; #416 split them into a prompt so the player would witness the
      placement, and that opened a window the physical game does not have. Everything downstream reads the
@@ -2076,7 +2206,7 @@ function settleRoundTransitions(
     /* The queue is built here; leaving it to the caller is what produced an OR with an empty order that advanceCorporation then "recovered" back to 1.1.
        See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #411 */
     const opened = {
-      ...beginOperatingRound(
+      ...openOperatingRound(
         state,
         (companyId) => risenPrice.get(companyId) ?? ctx?.marketPriceFor?.(companyId) ?? null,
         (companyId) => risenMark.get(companyId) ?? ctx?.marketMarkFor?.(companyId) ?? null,
@@ -2105,7 +2235,9 @@ function settleRoundTransitions(
 
        HERE IT IS DETERMINISTIC BY CONSTRUCTION: one place, on the one transition that opens an Operating Round,
        replayed identically by every client. No ref to go stale, no effect to miss a batch. */
-    return applyPrivateRevenue(opened)?.state ?? opened;
+    /* Design note #1015: the payout moved INTO `openOperatingRound`, which `opened` already went through.
+       Left here it would pay twice on this branch and not at all on the other. */
+    return opened;
   }
 
   if (state.operating_round_just_ended) {
@@ -2602,7 +2734,9 @@ function applyOneAction(
     const treasury = Number(company?.treasury) || 0;
     const shortfall = Math.max(0, tier.cost - treasury);
 
-    if (shortfall === 0 || !company?.president) return buyDepotTrain(state, companyId);
+    /* Design note #1019: the funds check is waived on this path and every other rule still applies -- the
+       president may cover a shortfall, not buy out of turn or out of phase. */
+    if (shortfall === 0 || !company?.president) return buyDepotTrain(state, companyId, false);
 
     // The president's contribution passes THROUGH the treasury, which is
     // what makes `buyDepotTrain`'s single `adjustTreasury(-cost)` correct
@@ -2612,7 +2746,7 @@ function applyOneAction(
       companyId,
       shortfall,
     );
-    return buyDepotTrain(funded, companyId);
+    return buyDepotTrain(funded, companyId, false);
   }
 
   if ("BuyTrainFromCorporation" in msg) {

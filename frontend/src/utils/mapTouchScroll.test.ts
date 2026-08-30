@@ -23,7 +23,7 @@
 // declaration in the course of explaining it.
 
 import {
-  canvasTouchAction,
+  MAP_TOUCH_ACTION,
   isTapGesture,
   tapSlopPx,
   MOUSE_TAP_SLOP_PX,
@@ -40,23 +40,39 @@ const RENDERER = (() => {
  *  old literal. */
 const CODE = RENDERER.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 
-describe("the canvas claims a gesture only where it uses one", () => {
-  it("hands the gesture back at the locked baseline", () => {
-    /* THE REPORT. `detailedView` false is where `handlePointerMove` returns without panning, so the browser
-       must be free to scroll the page. */
-    expect(canvasTouchAction(false)).toBe("manipulation");
+/* ==================================================================
+   DESIGN NOTE 1014 (harness): #773's RULE OUTLIVED ITS FUNCTION
+   ==================================================================
+   `canvasTouchAction(detailedView)` is gone -- the camera is locked, so there is no second mode for it to
+   answer about. Every case below that took an argument now asserts the single constant, and the RULE they
+   were written to protect is unchanged and still asserted: the page must stay scrollable under a finger, and
+   a tap must not sit behind a double-tap-zoom delay. What is new is the third property, which this batch
+   asked for: a pinch must not scale anything. */
+describe("the canvas hands back every gesture it does not use", () => {
+  it("leaves the page scrollable under a finger", () => {
+    // THE #773 REPORT, and the property that must survive the camera lock: an iPad player can still scroll.
+    expect(MAP_TOUCH_ACTION).toContain("pan-x");
+    expect(MAP_TOUCH_ACTION).toContain("pan-y");
   });
 
-  it("keeps taps working while it does", () => {
-    /* `manipulation` rather than `auto`: both scroll, but `auto` leaves the double-tap-zoom delay sitting in
-       front of every hex selection. Stated as an assertion because "auto" is the obvious thing for a later
-       reader to simplify this to. */
-    expect(canvasTouchAction(false)).not.toBe("auto");
+  it("never claims the gesture outright", () => {
+    /* `none` was the original bug: one word in a style object that disabled the page's scroller on every
+       touch device. There is no mode left that would justify it. */
+    expect(MAP_TOUCH_ACTION).not.toBe("none");
   });
 
-  it("claims the gesture once drag-to-pan is live", () => {
-    // The one mode where the promise is kept: the finger is panning the board, not the page.
-    expect(canvasTouchAction(true)).toBe("none");
+  it("keeps taps working", () => {
+    /* `auto` would reinstate the double-tap-zoom delay in front of every hex selection -- #773's reason for
+       preferring `manipulation`, and the reason this value is not simply `auto` now that panning is gone. */
+    expect(MAP_TOUCH_ACTION).not.toBe("auto");
+  });
+
+  it("refuses the pinch, which is this batch's instruction", () => {
+    /* THE ONE PROPERTY `manipulation` DID NOT HAVE. "Ensure the viewport is locked and strictly prevents user
+       scaling" -- and `manipulation` permits pinch-zoom. Asserted as an absence because the tempting
+       simplification back to `manipulation` reads as equivalent and is not. */
+    expect(MAP_TOUCH_ACTION).not.toBe("manipulation");
+    expect(MAP_TOUCH_ACTION).not.toContain("pinch-zoom");
   });
 });
 
@@ -96,7 +112,7 @@ describe("the finger gets a dead zone a finger can hit", () => {
 
 describe("the renderer is wired to the rule rather than to a literal", () => {
   it("asks the rule for its touch-action", () => {
-    expect(CODE).toContain("touchAction: canvasTouchAction(detailedView)");
+    expect(CODE).toContain("touchAction: MAP_TOUCH_ACTION");
   });
 
   it("has no hardcoded none left on the canvas", () => {
@@ -144,19 +160,21 @@ describe("a gesture the browser takes over is cleaned up", () => {
     expect(CODE).toContain("hasPointerCapture(event.pointerId)");
   });
 
-  it("captures only where the pan is live", () => {
-    // Following a pointer outside the element is what capture is for, and the baseline has nothing to follow.
+  it("no longer captures the pointer at all", () => {
+    /* Design note #1014: capture is for following a pointer OUTSIDE the element, which is what a drag needs
+       and a tap does not. With the pan gone there is nothing to follow -- and #773's objection to capturing
+       at the locked baseline ("one more thing standing between a swipe and the browser's scroller") is now
+       the only case there is. */
     const down = CODE.slice(
       CODE.indexOf("const handlePointerDown"),
       CODE.indexOf("const handlePointerCancel"),
     );
-    expect(down).toContain("if (detailedView) {");
-    expect(down).toContain("setPointerCapture(event.pointerId)");
+    expect(down).not.toContain("setPointerCapture");
   });
 });
 
 describe("what this pass deliberately did not touch", () => {
-  it("leaves the wheel handler containing scroll", () => {
+  it("keeps the wheel handler containing scroll -- now for a reason", () => {
     /* RECORDED AS A DECISION, NOT AN OVERSIGHT. By #773's own rule `handleWheel` should stop calling
        `preventDefault` -- #67 removed wheel-zoom, so it now blocks a gesture while using nothing, and a
        desktop player cannot scroll the page with the cursor over the map. It stays because that containment

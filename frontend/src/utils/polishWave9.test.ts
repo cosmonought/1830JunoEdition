@@ -46,9 +46,19 @@ describe("the private-revenue toast is short and stacked (design notes #983/#984
        (#967's distinction, a table rather than a sentence), and it is still far shorter than the 5,550 that
        started the complaint. The number is checked against the entrance it has to outlast rather than
        asserted bare. */
-    expect(PRIVATE_REVENUE_TOAST_MS).toBe(2000);
-    expect(PRIVATE_REVENUE_TOAST_MS).toBeLessThan(STANDARD_TOAST_MS);
-    expect(TOAST).toContain("export const PRIVATE_REVENUE_TOAST_MS = 2000;");
+    /* ==================================================================
+        AND 2000 WAS STILL A GLANCE (design note #1016)
+       ==================================================================
+       REPORTED: "The private company payout toast disappears too quickly." #1000 sized the window off the
+       MIDDLE of a one-to-three-row table; the three-row case is the common one, and 2000ms left 1.8s at rest
+       against a ~1.4s read -- 1.3x, where this project's own rule of thumb is 1.5x.
+       THE BARE LITERAL GOES WITH IT. This constant has now moved three times and the assertion has had to be
+       edited three times; that is a test pinned to a figure rather than to the property the figure serves.
+       What it is FOR is that the window outlasts the entrance by enough to be read, and that it is still far
+       shorter than the 5,550 that started the complaint -- both of which are stated below as relationships
+       and neither of which needs re-editing when the number is tuned again. */
+    expect(PRIVATE_REVENUE_TOAST_MS).toBeLessThan(STANDARD_TOAST_MS * 2);
+    expect(TOAST).toContain("export const PRIVATE_REVENUE_TOAST_MS = ");
     expect(TOAST).not.toContain("STANDARD_TOAST_MS * 1.5");
     /* THE ENTRANCE IS THE FLOOR. A window shorter than the slide-up plus a beat is a toast nobody sees, which
        is the whole of this report -- so the constant is compared with the animation it must outlast. */
@@ -60,8 +70,11 @@ describe("the private-revenue toast is short and stacked (design notes #983/#984
   it("still names the window once, rather than inlining it at the call site", () => {
     /* THE HALF OF #967 WORTH KEEPING. One place to change and a test that reads the constant instead of a
        copy of it -- which is the only reason the case above can assert a number at all. */
-    expect(APP).toContain("PRIVATE_REVENUE_TOAST_MS, mine.rows)");
-    expect(APP).not.toContain("2000);");
+    /* Design note #1016: the call site gained an `anchor` argument, so the two are no longer adjacent -- the
+       claim is that the constant is NAMED at the call site rather than inlined, which is what makes the case
+       above able to read it instead of a copy of it. */
+    expect(APP).toContain("PRIVATE_REVENUE_TOAST_MS,");
+    expect(APP).not.toContain("showDividendToast(mine.text, mine.detail, null, 3200");
   });
 
   it("hands the toast rows rather than a joined sentence", () => {
@@ -203,13 +216,26 @@ describe("the auto-camera is dead (design note #987)", () => {
        "Strip out the auto-zoom" is about moves the game makes on its own. The zoom buttons, the drag and Fit
        to Screen are moves the PLAYER makes, and deleting any of them would answer the report by removing the
        ability to zoom at all.
-       `rememberedCamera` IS THE SUBTLE ONE and is deliberately kept. It carries the player's own pose across
-       a remount so a round change does not throw their zoom away (#927); it initiates nothing. It is the
-       piece most likely to be mistaken for auto-camera in a later sweep, which is why it is named here. */
-    expect(BOARD).toContain("const handleFitToScreen");
-    expect(BOARD).toContain("const handleZoomIn");
-    expect(BOARD).toContain("const handleZoomOut");
-    expect(BOARD).toContain("rememberedCamera");
+       ==================================================================
+        SUPERSEDED BY #1014 -- BY INSTRUCTION, NOT BY DRIFT
+       ==================================================================
+       RULED SINCE: "Remove ALL zoom features and controls from the map and UI entirely. Ensure the viewport is
+       locked and strictly prevents user scaling", with panning confirmed to go with it in review.
+
+       SO THE DISTINCTION THIS CASE PROTECTED NO LONGER HAS TWO SIDES. #987's line was between moves the GAME
+       makes and moves the PLAYER makes, and it was the right line then: deleting the player's controls would
+       have answered an auto-camera report by removing the ability to zoom at all. The player's controls have
+       now been removed deliberately and on their own instruction, which is a different act with a different
+       reason.
+
+       WHAT THIS CASE STILL GUARDS is the half of #987 that never changed: the AUTOMATIC camera stays dead. A
+       later batch restoring a zoom control would be a decision; a later batch restoring a `fitBounds` call on
+       a round transition would be #987's bug returning, and that is what the assertions above this one are
+       for. Inverted rather than deleted so the supersession is visible in the run. */
+    expect(BOARD).not.toContain("const handleFitToScreen");
+    expect(BOARD).not.toContain("const handleZoomIn");
+    expect(BOARD).not.toContain("const handleZoomOut");
+    expect(BOARD).not.toContain("rememberedCamera");
   });
 
   it("leaves the Lay Track button a tab switch and nothing more", () => {

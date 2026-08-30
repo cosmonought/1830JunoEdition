@@ -318,6 +318,13 @@ export type GameplayExecuteMsg =
         game_id: number;
         protocol_id: number;
         routes: RouteWaypointDto[][];
+        /** Design note #1020: which train ran `routes[i]`, for the narration.
+         *
+         *  OPTIONAL AND PARALLEL, not folded into the route element. Every action already in a saved log
+         *  carries `routes` as an array of paths and this game is rebuilt by replaying that log, so changing
+         *  the element type would make historical entries unreadable. Absent means "this log does not say",
+         *  which is #232's rule and the case the narration falls back for. */
+        trains?: readonly string[];
         payout_strategy: PayoutStrategyDto;
       };
     }

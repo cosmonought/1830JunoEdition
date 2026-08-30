@@ -69,10 +69,25 @@ export interface TopTickerProps {
    gutter rather than as one badge among several. */
 export function feedItemText(item: FeedItem): string {
   if (item.kind === "chat") {
-    // Design note #477: the same gutter. The log and the chat interleave in
-    // one feed, so a line that skipped the prefix would break the column
-    // the whole format exists to create.
-    return `${clockPrefix(item)}${item.chatAuthor}: "${item.chatText}"`;
+    /* Design note #477: the same gutter. The log and the chat interleave in
+       one feed, so a line that skipped the prefix would break the column
+       the whole format exists to create.
+
+       ==================================================================
+        DESIGN NOTE 1011: THE QUOTATION MARKS GO
+       ==================================================================
+       RULED: "Remove the quotation marks around player chat messages. The format should simply be:
+       `[3:27 PM] P1: Hello`."
+
+       THEY WERE DOING A JOB THAT `Author:` ALREADY DOES. The quotes marked where the player's own words began
+       -- but the colon after the author marks that too, and it is the convention every chat client uses. What
+       the quotes added on top was a second delimiter around text a player did not write with delimiters, so
+       anything containing an apostrophe or a nested quote came out looking mis-punctuated.
+
+       AND THEY WERE WORST ON THE SHORT LINES. A ticker clipped to one line spends its width on the message;
+       two characters of it went to punctuation on every single chat entry, in the surface where width is
+       scarcest. */
+    return `${clockPrefix(item)}${item.chatAuthor}: ${item.chatText}`;
   }
   const round = item.logRound ? `[${item.logRound}] ` : "";
   /* Design note #425: the FULL detail, not a 40-character preview. The truncation existed because this string
@@ -179,7 +194,25 @@ export function TopTicker({
           {/* Design note #600: the hole the Chat button sits in. See the styles
               block -- this is the half that keeps the two controls apart. */}
           {onToggleChat && <span style={styles.chatToggleSlot} aria-hidden="true" />}
-          <span style={styles.expandHint}>{isExpanded ? "▲ Collapse" : "▼ Expand"}</span>
+          {/* ==================================================================
+               DESIGN NOTE 1012: THE PANEL OPENS UPWARD AND THE ARROWS DID NOT KNOW
+              ==================================================================
+              REPORTED: "The expand/collapse arrows are backwards. Reverse their rendering logic."
+
+              THEY WERE WRITTEN FOR A PANEL THAT DROPS DOWN, which is what almost every disclosure does and
+              what this one did when the arrows were chosen. `App.tsx` #614 then anchored this dock to the
+              bottom edge of the viewport -- its own note says it plainly: "the box is anchored at the bottom
+              rather than sized -- so the expanded history grows UPWARD instead of off the screen."
+
+              THE ARROW NAMES A DIRECTION OF TRAVEL, not a state, because it is paired with a verb. "Expand"
+              with a down arrow promised the history would appear below the line; it appears above it. So
+              collapsed offers UP (press to open upward) and expanded offers DOWN (press to close downward).
+
+              WHICH IS ALSO WHY THIS IS NOT THE DISCLOSURE-TRIANGLE CONVENTION the roster carets use
+              (`PlayerCards` and `TrainPurchasePanel`: right when shut, down when open). Those report a STATE
+              and have no verb beside them; this one is an instruction, and an instruction that pointed the
+              wrong way was worse than no arrow at all. */}
+          <span style={styles.expandHint}>{isExpanded ? "▼ Collapse" : "▲ Expand"}</span>
         </button>
         {/* Design note #598: OUTSIDE the header button, not inside it -- a
             button nested in a button is invalid markup and the click would
@@ -320,7 +353,8 @@ function LogEntry({ item }: { item: FeedItem }) {
 // ellipsised UNDER the Chat button rather than before it.
 const ROW_PAD_X_PX = 14;
 const ROW_GAP_PX = 10;
-/** Sized to "▲ Collapse", the longer of the two labels, at 13px/600. */
+/** Sized to "▼ Collapse", the longer of the two labels, at 13px/600. Design note #1012 swapped the
+ *  glyphs; the measurement is unchanged, since the two triangles have the same advance. */
 const EXPAND_HINT_WIDTH_PX = 78;
 const CHAT_TOGGLE_WIDTH_PX = 54;
 

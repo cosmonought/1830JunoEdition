@@ -124,27 +124,44 @@ describe("the dividend spends the whole turn (design note #963)", () => {
 });
 
 describe("the turn's summary line reads the reducer (design note #963)", () => {
+  /* ==================================================================
+      #1017 MOVED THE BLOCK; EVERY RULING IN IT STILL HOLDS
+     ==================================================================
+     This sliced the run-trains click handler, which is where #941 raised the sentence. It is raised from the
+     shared dispatch path now -- REPORTED: "the variant texts may only be printing in the Activity Log for the
+     local player who's the president", and a click handler runs on exactly one browser.
+     WHAT #963 RULED IS UNCHANGED AND IS STILL WHAT THESE CASES CHECK: the sentence and the dividend read ONE
+     figure, the reducer's, so they can never name different numbers; and the line is stamped with the step it
+     DESCRIBES rather than the step the cursor has moved on to.
+     THE DRAFTS FALLBACK IS GONE, and that is the one ruling that genuinely changed. #963 kept `printedFromDrafts`
+     for "a state that does not report the fields at all" -- but a replaying client has no drafts to fall back
+     ON, so the fallback could only ever have been populated on the acting browser. A fallback that works on one
+     seat and silently yields zero on the others is worse than not having one: it would give the president a
+     sentence and everybody else nothing, which is the bug this batch is fixing wearing a smaller hat. */
   const APP = readStripped("App.tsx");
-  const block = sliceBetween(APP, "const runnable = runnableDrafts(", "setLiveOrSubPhase(");
+  const block = sliceBetween(
+    APP,
+    'if (before && "DeclareDividends" in msg',
+    'if (after && "DeclareDividends" in msg',
+  );
 
   it("takes its figures from the banked state, not from the drafts", () => {
-    /* THE DIVERGENCE #941 INTRODUCED AND THIS REMOVES. The sentence summed `runnable`; the dividend read
+    /* THE DIVERGENCE #941 INTRODUCED AND #963 REMOVED. The sentence summed `runnable`; the dividend read
        `last_route_revenue`. Two sources, one screen, and the player was shown a figure nobody would pay. */
-    expect(block).toContain("sandboxStateRef.current?.public_companies.find");
-    expect(block).toContain("banked?.printed_route_revenue");
+    expect(block).toContain("printed_route_revenue");
+    expect(block).not.toContain("runnable");
   });
 
-  it("keeps the drafts sum only as a fallback", () => {
-    /* #232: a state that does not report the field cannot say, and a printed sum is better than silence --
-       but it must be the FALLBACK arm, or the divergence is back. */
-    expect(block).toContain("printedFromDrafts");
-    expect(block.indexOf("banked?.printed_route_revenue")).toBeLessThan(
-      block.indexOf(": printedFromDrafts"),
-    );
+  it("has no drafts sum left to diverge from", () => {
+    /* #232 SAID A STATE THAT CANNOT REPORT SHOULD NOT BE GUESSED AT, and this is that rule pointing the other
+       way: the guess was only available to one seat, so declining to make it is what keeps every seat equal. */
+    expect(block).not.toContain("printedFromDrafts");
+    expect(block).toContain("if (printedTurnTotal > 0) {");
   });
 
   it("stamps itself with Run Routes rather than reading the cursor", () => {
-    /* The cursor has already moved by the time this fires -- proved by the reducer case above. */
+    /* The cursor has already moved by the time this fires -- proved by the reducer case above, and more so
+       now: it fires on the dividend declaration, a step later still. */
     expect(block).toContain('operating_sub_phase: "Routes"');
     expect(block).toContain("runRoutesStamp");
   });
@@ -152,8 +169,8 @@ describe("the turn's summary line reads the reducer (design note #963)", () => {
   it("drops the old label prefix", () => {
     /* `feedItemText` renders `label — detail`, which is where "Run Routes — " came from. The sentence is the
        label now, with no detail, so nothing is prefixed. */
-    expect(block).not.toContain('logInfo(\n        "Run Routes"');
-    expect(block).toContain('logInfo(\n        turnRevenueSentence(');
+    expect(block).toContain("turnRevenueSentence(");
+    expect(block).not.toContain('"Run Routes"');
   });
 });
 
@@ -274,7 +291,11 @@ describe("the consolidated private revenue toast (design note #967)", () => {
        default. `polishWave9` owns the figure; this owns the separation. */
     const TOAST = readStripped("components/ActionToast.tsx");
     expect(TOAST).toContain("export const STANDARD_TOAST_MS = 3700;");
-    expect(TOAST).toContain("export const PRIVATE_REVENUE_TOAST_MS = 2000;");
+    /* Design note #1016: the FIGURE moved again (2000 -> 3200) and this case is not about the figure. Pinned
+       as a separation rather than a number, which is what the note above already says this case is for --
+       `polishWave9` owns the figure, this owns the fact that there IS one of its own. Asserting the literal
+       here was the half that kept failing for somebody else's reasons. */
+    expect(TOAST).toContain("export const PRIVATE_REVENUE_TOAST_MS = ");
     expect(TOAST).not.toContain("STANDARD_TOAST_MS * 1.5");
     expect(TOAST).toContain("durationMs = STANDARD_TOAST_MS");
   });

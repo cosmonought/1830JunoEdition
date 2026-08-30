@@ -213,15 +213,26 @@ describe("the reported loop: a phase change mid-turn", () => {
     const atHardware = replay(opened, [skip, skip, skip, skip]);
     expect(atHardware.operating_sub_phase).toBe("Hardware");
 
+    /* ==================================================================
+       DESIGN NOTE 1019: THE BUYER IS READ FROM THE CURSOR, NOT ASSUMED
+       ==================================================================
+       This hard-coded `protocol_id: 4`, and it worked because the reducer let any corporation buy at any
+       time. `BeginOperatingRound` rebuilds the queue from every floated corporation -- this fixture adds two
+       more to clear the 2-train row -- so which company sits at index 0 is the QUEUE's answer, not the
+       fixture's. With the acting-corporation rule enforced, a purchase for whoever is not operating is now
+       correctly refused, and the test was buying for the wrong one.
+       READING THE CURSOR IS ALSO WHAT THE TEST MEANS. Its subject is that the cursor HOLDS through a phase
+       change; naming the buyer by id was incidental to that and is what made the fixture fragile. */
+    const buyer = atHardware.active_operating_order[atHardware.active_corporation_index];
     const afterPurchase = applySandboxAction(atHardware, {
-      BuyHardwareFromPool: { game_id: 1, protocol_id: 4, model_type: "3" },
+      BuyHardwareFromPool: { game_id: 1, protocol_id: buyer, model_type: "3" },
     } as Msg);
 
     // The purchase really did move the phase -- without this the test would
     // pass for the reason the first draft did, having changed nothing.
-    expect(afterPurchase.public_companies.find((c) => c.company_id === 4)?.owned_trains).toContain(
-      "3",
-    );
+    expect(
+      afterPurchase.public_companies.find((c) => c.company_id === buyer)?.owned_trains,
+    ).toContain("3");
     expect(afterPurchase.operating_sub_phase).toBe("Hardware");
     expect(afterPurchase.active_corporation_index).toBe(0);
   });

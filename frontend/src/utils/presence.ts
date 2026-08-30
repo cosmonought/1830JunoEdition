@@ -44,6 +44,28 @@ export interface PresenceState {
   at: number;
   /** Design note #740: routes being drafted, by train index. Absent when the player is not drafting. */
   routeDrafts?: Readonly<Record<number, ReadonlyArray<readonly [number, number]>>>;
+  /** ==================================================================
+   *   DESIGN NOTE 1021: THE VALUE TRAVELS WITH THE ROUTE
+   *  ==================================================================
+   *
+   * REPORTED: "The active player's client calculated the D-train's optimal route at $440 (total $640). An
+   * inactive observing player's client calculated the exact same route at $450 (total $650)."
+   *
+   * THE CHANNEL CARRIED HEXES AND NOTHING ELSE, so every watcher re-priced the drafts locally --
+   * `watcherTrainDrafts` takes a `priceRoute` callback and runs `sandboxRouteBreakdown` again on its own
+   * board. That is one implementation of the rule and two executions of it, which is only as deterministic as
+   * the INPUTS: the era comes from each client's `derivePhase`, and the bypass marks come from each client's
+   * own `blocksThrough`, bound to whichever corporation that client thinks is acting. Neither is guaranteed
+   * identical mid-turn, and a $10 gap is one small town counted on one side and skipped on the other.
+   *
+   * SO THE DRAFTER'S OWN FIGURE IS PUBLISHED WITH THE DRAFT. The observer renders what the acting player
+   * sees, which is the whole of what a spectator view is for -- #750's rule, that a second implementation of
+   * a number is a second answer waiting to be different.
+   *
+   * KEYED THE SAME WAY `routeDrafts` IS, so `routeValues[i]` describes `routeDrafts[i]` and a reader that has
+   * one has the other. OPTIONAL, because a client on an older build publishes without it and #232's rule
+   * applies: a presence document that does not carry a value has not said the value is zero. */
+  routeValues?: Readonly<Record<number, number>>;
   /** The corporation those drafts belong to, so a reader never attributes them to the wrong livery. */
   actingCompanyId?: number | null;
 }

@@ -37,12 +37,22 @@
 // had to unlock the view to move the map would then find the map unresponsive to taps. Not part of the
 // report; fixed here because it is the same surface, the same input and the same next bug report.
 
-/** What the map canvas should declare for `touch-action`, given whether drag-to-pan is live.
- *  `"none"`: the canvas owns the gesture and pans with it.
- *  `"manipulation"`: the browser may scroll and pinch; taps still reach the canvas. */
-export function canvasTouchAction(detailedView: boolean): "none" | "manipulation" {
-  return detailedView ? "none" : "manipulation";
-}
+/* ==================================================================
+    DESIGN NOTE 1014: THERE IS ONLY ONE MODE NOW, SO THERE IS ONLY ONE ANSWER
+   ==================================================================
+   `canvasTouchAction(detailedView)` is GONE. #773's rule survives it exactly -- "the canvas claims the gesture
+   in the mode where it uses the gesture, and hands it back in the mode where it does not" -- and this batch
+   removed the mode that used one. A function whose parameter can only ever take one value is not a decision.
+
+   `pan-x pan-y` RATHER THAN #773's `manipulation`, and the difference is the whole of this batch's second
+   instruction. Both permit a finger to scroll the page, which is what #773 was reporting from an iPad. But
+   `manipulation` also permits PINCH, and the map no longer has a zoom for a pinch to reach -- so the gesture
+   would either do nothing or scale the page under a board that is meant to be locked. This value refuses the
+   pinch and keeps everything #773 won.
+
+   TAPS STILL ARRIVE, which is the property that made `manipulation` right over `auto`: neither of these
+   values reinstates the double-tap-zoom delay in front of every hex selection. */
+export const MAP_TOUCH_ACTION = "pan-x pan-y";
 
 /** A mouse is precise and its dead zone should stay tight, or a genuine drag of a few pixels registers as a
  *  click. A finger is not, and 10px is roughly the slop the platform's own controls allow. */

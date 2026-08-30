@@ -85,8 +85,25 @@ export function watcherTrainDrafts(input: {
    *  cannot price the individual stops -- the chip then lists the path without figures rather than
    *  inventing them, which is the same rule `value: null` follows one line down. */
   stopsFor?: (labels: readonly string[]) => ReadonlyArray<{ hex: string; value: number }>;
+  /** ==================================================================
+   *   DESIGN NOTE 1021: THE DRAFTER'S OWN FIGURE, WHEN THE CHANNEL CARRIES IT
+   *  ==================================================================
+   *
+   * REPORTED: "The active player's client calculated the D-train's optimal route at $440. An inactive
+   * observing player's client calculated the exact same route at $450."
+   *
+   * `priceRoute` IS THE DESYNC. There is only one pricer in this app -- `sandboxRouteBreakdown` -- so the two
+   * clients were not running different code; they were running the same code on inputs that differ mid-turn.
+   * The era each client derives, and the bypass marks each client computes from its own idea of who is
+   * acting, are both local. One small town counted on one side and skipped on the other is a $10 gap.
+   *
+   * SO A PUBLISHED VALUE WINS OUTRIGHT. `presence.routeValues[i]` is what the acting player is looking at,
+   * and a spectator view exists to show that. `priceRoute` survives ONLY as the fallback for a presence
+   * document written by a client that does not publish figures -- #232's rule, and the reason this is
+   * `?? priceRoute(...)` rather than a replacement. */
+  valueFor?: (trainIndex: number) => number | null | undefined;
 }): WatcherChip[] {
-  const { roster, actorDrafts, labelForHex, priceRoute, stopsFor } = input;
+  const { roster, actorDrafts, labelForHex, priceRoute, stopsFor, valueFor } = input;
   return roster.map((train) => {
     const hexes = actorDrafts?.[train.trainIndex] ?? [];
     const labels = hexes
@@ -112,7 +129,11 @@ export function watcherTrainDrafts(input: {
          are NOT the acting corporation's. */
       trainIndex: train.trainIndex,
       model: train.model,
-      value: labels.length >= 2 ? priceRoute(labels) : null,
+      /* THE PUBLISHED FIGURE FIRST, and only for a route that IS a route: a one-stop draft has no value on
+         either side of the channel, and #498's em dash is the honest rendering of that. `?? priceRoute` keeps
+         every pre-#1021 presence document rendering exactly as it did. */
+      value:
+        labels.length >= 2 ? (valueFor?.(train.trainIndex) ?? priceRoute(labels)) : null,
       hexLabels: labels,
       stops: labels.length >= 2 && stopsFor ? stopsFor(labels) : [],
     };

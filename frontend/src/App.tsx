@@ -150,7 +150,7 @@ import ContextualSubPanel from "./components/ContextualSubPanel";
 import FinancialLedger from "./components/FinancialLedger";
 import RulesReference from "./components/RulesReference";
 // Design note #697: the receipt for an action you just took.
-import ActionToast, { PRIVATE_REVENUE_TOAST_MS } from "./components/ActionToast";
+import ActionToast, { PRIVATE_REVENUE_TOAST_MS, type ToastAnchor } from "./components/ActionToast";
 // Design note #718: which dispatches earn a toast -- a named few, not everything that passes through.
 import { deservesActionReceipt } from "./utils/actionReceipt";
 // Design note #677: the Tiles tab.
@@ -304,6 +304,8 @@ import {
 import { useDocumentTitleFlash, useTurnGlowActive } from "./utils/turnAlert";
 // Design note #1009: the whistle takes the same `isMyTurn` the other two turn alerts do.
 import { RADIO_STREAM_URL, useRadioStream, useTurnWhistle } from "./utils/audio";
+// Design note #1018: the auto-skip acts on a definite refusal, never on an unsettled one.
+import { earnableRevenueVerdict, skipReasonFor } from "./utils/earnableRevenue";
 import {
   placeParMark,
   // Design note #688: the invariant that replaced the par-mark edge detector.
@@ -3001,8 +3003,26 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           points.map((point) => [point.q, point.r] as [number, number]),
         ]),
       ),
+      /* ==================================================================
+          DESIGN NOTE 1021: PUBLISH THE FIGURE, NOT JUST THE PATH
+         ==================================================================
+         REPORTED: the acting player's client priced a route at $440 and a watching client priced the same
+         route at $450.
+
+         `trainDrafts` IS THE ACTING PLAYER'S OWN ANSWER -- the exact value on the chips they are looking at,
+         priced against their board, their era and their bypass marks. Publishing it means a watcher renders
+         what the drafter sees rather than a second opinion assembled from inputs that only mostly agree.
+
+         READ FROM `trainDrafts` RATHER THAN RE-PRICED HERE, which would have been the same mistake one file
+         over: two calls to one pricer is still two answers. */
+      routeValues: Object.fromEntries(
+        trainDrafts
+          .filter((draft) => draft.value !== null)
+          .map((draft) => [draft.trainIndex, draft.value as number]),
+      ),
     });
-  }, [sandboxRoomCode, viewerAddress, isMyTurn, orSubPhase, routeDrafts, actingProtocolId]);
+    // Design note #1021: `trainDrafts` joins the deps because the published figures come from it.
+  }, [sandboxRoomCode, viewerAddress, isMyTurn, orSubPhase, routeDrafts, trainDrafts, actingProtocolId]);
 
   /** Design note #740: somebody else's live drafts, fresh and worth drawing. */
   const rivalPresence = useMemo(
@@ -3074,6 +3094,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
          from a second pricing pass is how the figure and its itemisation come to disagree. */
       stopsFor: (labels) =>
         sandboxRouteBreakdown(mapGrid, labels.map((hex) => ({ hex })), era).stops,
+      /* Design note #1021: the acting player's own figure, straight off the presence channel. `undefined`
+         when they publish none, which falls through to `priceRoute` above. */
+      valueFor: (trainIndex) => actor?.routeValues?.[trainIndex],
     }).map((chip) => ({
       ...chip,
       /* Design note #740: the rest of the shape, filled with the honest empties. A watcher's row shows a chip
@@ -3250,6 +3273,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     durationMs?: number;
     /** Design note #984: the private-revenue table's rows, kept as rows so the toast can align them. */
     detailRows?: readonly { label: string; value: string }[] | null;
+    /** Design note #1016: where it sits. Optional, so only the ambient toast names it. */
+    anchor?: ToastAnchor;
   } | null>(null);
   const actionToastTokenRef = useRef(0);
   /* Design note #738: the same toast with a second line. Kept as a separate entry point rather than an extra
@@ -3266,6 +3291,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
          table; every other toast in this app has one thing to say (#697) and should not have to say `null`
          to a slot it does not use. */
       detailRows: readonly { label: string; value: string }[] | null = null,
+      /* Design note #1016: LAST AND OPTIONAL for #984's reason -- four callers want the centred position and
+         should not have to name it. */
+      anchor: ToastAnchor = "center",
     ) => {
       // Design note #825: nothing has just happened during a rebuild -- see the flag's own note.
       if (replayingHistory) return;
@@ -3275,6 +3303,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         detail,
         // Design note #984: the structured rows, for the one toast that is a table rather than a sentence.
         detailRows,
+        // Design note #1016: where it sits, carried with it rather than inferred downstream from `detailRows`.
+        anchor,
         eraTransition,
         durationMs,
         token: actionToastTokenRef.current,
@@ -4821,6 +4851,46 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
            * sentence from the same arithmetic the reducer uses, and the before/after cash is read off the two
            * states this dispatch already holds -- so the figure quoted and the figure that moved cannot come
            * apart the way #723's preview and debit did. */
+          /* Design note #1017: the variant's narration, derived from the diff so EVERY client produces it.
+             Deliberately not gated on `options?.derived`, unlike the receipt below: that flag means "the game
+             dispatched this on the player's behalf", which is true of the forced withhold -- and a forced
+             withhold happens only when nothing ran, so `printed_route_revenue` is zero and the guard below
+             declines on the facts rather than on the flag. */
+          if (before && "DeclareDividends" in msg && resolveVariants(before.variants).unpredictableRevenue) {
+            const companyId = msg.DeclareDividends.protocol_id;
+            const ran = before.public_companies.find((entry) => entry.company_id === companyId);
+            const printedTurnTotal = Math.max(0, Number(ran?.printed_route_revenue ?? 0) || 0);
+            if (printedTurnTotal > 0) {
+              /* THE SEED IS READ OFF `before`, not off render state. #963 read `gameState` because the handler
+                 had it; a replaying client has no render state that matches the action it is replaying, and a
+                 seed taken from the wrong turn produces a different face and a different sentence on every
+                 browser -- which is worse than the missing line this note is fixing. */
+              const seed = {
+                macroRound: before.macro_round_number ?? 0,
+                subRound: before.sub_round_index ?? 0,
+                companyId,
+              };
+              const roll = rollTurnRevenue(printedTurnTotal, seed);
+              /* Design note #963: stamped with the step it DESCRIBES. The cursor is on Dividends by now --
+                 that is what makes this the right moment to read the total -- so the step is stated. */
+              const runRoutesStamp = roundStampFor({
+                ...before,
+                operating_sub_phase: "Routes",
+              } as typeof before);
+              logInfo(
+                turnRevenueSentence(ran?.ticker ?? `Corporation #${companyId}`, roll, seed),
+                "",
+                runRoutesStamp,
+              );
+              /* #938'S PREDICATE, not `percent !== 100`: a 90% roll on a $50 turn pays $45, which rounds back
+                 to $50, and flashing "-10%" over a turn that lost nothing is the confusion this exists to
+                 prevent. */
+              if (revenueOutcome(roll) !== "normal") {
+                setRevenueFlash({ delta: revenueDeltaPercent(roll), token: nextRevenueFlashToken() });
+              }
+            }
+          }
+
           if (after && "DeclareDividends" in msg && options?.derived !== true) {
             const viewer = viewerAddressRef.current;
             const declared = msg.DeclareDividends;
@@ -5059,7 +5129,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                which after a reconnect is somebody else's income. */
             const mine = summarisePrivateRevenueForPlayer(openingPayouts, viewerAddressRef.current);
             if (mine) {
-              showDividendToast(mine.text, mine.detail, null, PRIVATE_REVENUE_TOAST_MS, mine.rows);
+              showDividendToast(
+                mine.text,
+                mine.detail,
+                null,
+                PRIVATE_REVENUE_TOAST_MS,
+                mine.rows,
+                // Design note #1016: ambient, unbidden, and the longest-lived toast in the app.
+                "bottom-right",
+              );
             }
           }
 
@@ -6069,25 +6147,63 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
        was.
        THE POINTS ARE STILL MARKED PER ROUTE (#808), because that is a fact about each route's own path and
        the reducer prices what it is given. Gathering the dispatch does not gather the pricing. */
+    /* ==================================================================
+        DESIGN NOTE 1020: THE PAYLOAD READ A REF THAT LAGGED THE DRAFTS IT WAS BUILT FROM
+       ==================================================================
+       REPORTED: "A corporation ran a 5-train (for $200) and a D-train (for $440). The Dividends phase and
+       Activity Log only processed a single $200 run."
+
+       TWO SOURCES FOR ONE ANSWER, WHICH IS THIS PROJECT'S OLDEST BUG SHAPE. `runnable` is derived from
+       `trainDrafts`, a `useMemo` over the `routeDrafts` STATE, so it is current at the instant of the click.
+       The points beneath it came from `routeDraftsRef.current`, a mirror written by a `useEffect` -- one
+       commit behind. A train whose route the memo can see and the ref cannot resolves to `[]`, is dropped by
+       the two-point filter one line down, and never reaches the message at all. The board then pays for the
+       routes that survived, which is a silent partial execution of exactly the kind #1019 has just finished
+       removing from the train purchase.
+
+       #275 GAVE THAT REF A REASON AND IT IS NOT THIS ONE. Its note: "read by the canvas click handler, which
+       must see the CURRENT draft without being rebuilt on every click." That argument is about a callback the
+       canvas holds across renders. `handleRunTrains` already lists `trainDrafts` in its dependencies, so it
+       is rebuilt whenever a draft changes -- it can read the state directly and has no reason to consult a
+       mirror of it. The ref stays for the handler it was built for.
+
+       AND THE FILTER STAYS, because it is a different rule: a draft that passed `runnableDrafts` but resolves
+       to fewer than two points is not a route, and the reducer would price an empty path at zero. What
+       changes is that it can no longer be fed an empty path by a stale read. */
     const turnRoutes = runnable
-      .map((draft) =>
-        withForcedBypass(
-          routeDraftsRef.current[draft.trainIndex] ?? [],
+      .map((draft) => ({
+        train: draft.model,
+        points: withForcedBypass(
+          routeDrafts[draft.trainIndex] ?? [],
           mapGrid,
           blocksThroughCityRef.current,
         ),
-      )
-      /* The same guard the loop had, kept: a draft that passed `runnableDrafts` but resolves to fewer than
-         two points is not a route, and sending it would have the reducer price an empty path at zero. */
-      .filter((points) => points.length >= 2)
-      .map((points) => routePointsToWaypoints(points));
+      }))
+      .filter((entry) => entry.points.length >= 2)
+      .map((entry) => ({ train: entry.train, path: routePointsToWaypoints(entry.points) }));
 
     if (turnRoutes.length > 0) {
       await runGameplayAction("RunMultipleRoutes", {
         RunMultipleRoutes: {
           game_id: gameId,
           protocol_id: actingProtocolId,
-          routes: turnRoutes,
+          routes: turnRoutes.map((entry) => entry.path),
+          /* ==================================================================
+             DESIGN NOTE 1020: WHICH TRAIN RAN WHICH ROUTE, ON THE WIRE
+             ==================================================================
+             REPORTED, the other half: the log "incorrectly labeled it as the D-train's run".
+
+             IT WAS NOT A MISLABEL SO MUCH AS A GUESS. `actionLog` had no way to know which train ran a given
+             route, so it named the corporation's LARGEST OWNED train and attached that -- see its own note.
+             With one route and a 5-train and a D-train in the fleet, the sentence necessarily said "with a
+             D-train" whichever train had actually run.
+
+             A PARALLEL ARRAY RATHER THAN A NEW ROUTE SHAPE, deliberately. Every action already in a saved log
+             carries `routes` as an array of paths, and this game is rebuilt by replaying that log -- changing
+             the element type would make every historical entry unreadable. `trains[i]` describes `routes[i]`,
+             is optional, and #232's rule covers its absence: a log that does not say which train ran is a log
+             that does not say, and the narration falls back to what it did before. */
+          trains: turnRoutes.map((entry) => entry.train),
           // Withhold at Routes; the pay-or-withhold decision belongs to the very next step.
           // See docs/ai_architecture/routing_pathfinding.md - App.tsx #373
           payout_strategy: "Withhold",
@@ -6162,75 +6278,38 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
        AND IT MOVES NO MONEY, which is what keeps this inside #917's rule. The reducer banks; this reacts. If
        the two ever disagreed the log would be wrong and the treasury right, which is the correct way round
        for a narration bug to fail. */
-    if (resolveVariants(gameState?.variants).unpredictableRevenue) {
-      /* ==================================================================
-          DESIGN NOTE 963: THE SENTENCE AND THE DIVIDEND READ ONE FIGURE
-         ==================================================================
-         REPORTED: "B&O ran multiple routes totaling a modified $170. However, the Dividends phase calculated
-         the payout at $6/share (using only the $60 from a single route)."
-         TWO NUMBERS ON SCREEN, FROM TWO SOURCES, AND I BUILT THE SECOND ONE. #941 computed this sentence from
-         `runnable` -- the shell's own sum of the drafts it was about to dispatch -- while the dividend reads
-         `last_route_revenue`, the reducer's banked total. When those disagree the player is shown a figure
-         nobody is going to pay them, which is exactly #775's fault in a new currency and exactly what I have
-         spent four batches removing from this feature.
-         SO THE REDUCER IS THE SOURCE FOR BOTH. This reads the same two fields the Dividends step reads, and
-         the sentence now states what a player will actually receive -- if the banked total is wrong, the log
-         says so too, and the two figures can no longer point at different bugs.
-         THE DRAFTS SUM SURVIVES AS A FALLBACK ONLY, for a state that does not report the fields at all
-         (#232). It cannot cap anything: this is a log line, not money, and the money is read at the moment it
-         is spent (#934). */
-      const banked = sandboxStateRef.current?.public_companies.find(
-        (entry) => entry.company_id === actingProtocolId,
-      );
-      const printedFromDrafts = runnable.reduce((sum, draft) => sum + (draft.value ?? 0), 0);
-      const printedTurnTotal = Number(banked?.printed_route_revenue ?? NaN);
-      const seed = {
-        macroRound: gameState?.macro_round_number ?? 0,
-        subRound: gameState?.sub_round_index ?? 0,
-        companyId: actingProtocolId,
-      };
-      const roll = rollTurnRevenue(
-        Number.isFinite(printedTurnTotal) && printedTurnTotal > 0
-          ? printedTurnTotal
-          : printedFromDrafts,
-        seed,
-      );
-      /* ==================================================================
-          DESIGN NOTE 963: STAMPED WITH THE STEP IT DESCRIBES, NOT THE ONE THE CURSOR REACHED
-         ==================================================================
-         REPORTED: "the variant log line incorrectly logged under the `[Dividends]` subphase header before the
-         dividend decision was made, and included old formatting ('Run Routes —')."
-         AND THE CURSOR HAS ALREADY MOVED BY THE TIME THIS RUNS, which I confirmed by driving the reducer: the
-         FIRST `RunManualRoute` advances `operating_sub_phase` from Routes to Dividends, so all the later
-         routes and this line are dispatched against a state that already says Dividends. #958's stamp reads
-         that field, so it was telling the truth about the cursor and lying about the entry.
-         THE STEP IS STATED RATHER THAN READ, therefore. This line is about the Run Routes step by
-         construction -- it is raised by the run-trains handler, once, after running -- so it names that step
-         instead of asking a cursor that has moved on.
-         AND THE SENTENCE IS THE LABEL, not a detail. `feedItemText` renders `label — detail`, which is where
-         "Run Routes — " came from; with the step in the tag the prefix was saying it a third time. */
-      const runRoutesStamp = roundStampFor(
-        gameState ? ({ ...gameState, operating_sub_phase: "Routes" } as typeof gameState) : null,
-      );
-      logInfo(
-        turnRevenueSentence(
-          banked?.ticker ??
-            gameState?.public_companies.find((entry) => entry.company_id === actingProtocolId)
-              ?.ticker ??
-            `Corporation #${actingProtocolId}`,
-          roll,
-          seed,
-        ),
-        "",
-        runRoutesStamp,
-      );
-      /* #938'S PREDICATE, not `percent !== 100`: a 90% roll on a $50 turn pays $45, which rounds back to $50,
-         and flashing "-10%" over a turn that lost nothing is the confusion this overlay exists to prevent. */
-      if (revenueOutcome(roll) !== "normal") {
-        setRevenueFlash({ delta: revenueDeltaPercent(roll), token: nextRevenueFlashToken() });
-      }
-    }
+    /* ==================================================================
+        DESIGN NOTE 1017: THE NARRATION MOVED OUT OF THE HANDLER, BECAUSE ONLY ONE BROWSER RUNS A HANDLER
+       ==================================================================
+       REPORTED: "Under the Unpredictable Revenue variant, the game modified a corporation's revenue but
+       failed to print the flavor text in the Activity Log." And, diagnosing it mid-batch: "I think the
+       variant texts may only be printing in the Activity Log for the local player who's the president."
 
+       EXACTLY THAT, AND IT WAS NOT INTERMITTENT. `logInfo` appends to a LOCAL `actionLog` -- there is no
+       shared feed to write to -- so a line is seen by whichever browser executed the code that raised it.
+       Every other derived line in this app is raised inside `runGameplayAction`, which every seated client
+       runs as it replays the action log; this one was raised HERE, in the Run Trains click handler, which
+       only the acting president ever invokes. So the sentence existed in exactly one feed, and the report is
+       what that looks like from any other seat.
+
+       #941 PUT IT HERE FOR A GOOD REASON THAT HAS A BETTER ANSWER. Its argument was that "the loop above is
+       the only code that knows a TURN of running has finished" -- true of the loop, and not true of the
+       state. `DeclareDividends` is dispatched once, after running, by the same player, and it is on the wire:
+       every client replays it, and at that moment `before` still carries the turn's final
+       `printed_route_revenue` (it is cleared on the turn change, #941's own sibling reset). So the shared log
+       has a marker for "this corporation has finished running" after all -- it is just a message rather than
+       a loop.
+
+       THE ROLL IS UNCHANGED AND CANNOT DRIFT. It is a pure function of `(macroRound, subRound, companyId)`
+       and the banked printed total (#903's replay stability), so every client computes the same face from the
+       same state. That is the property that makes deriving this legal at all -- a narration that had to be
+       broadcast would be a second source for a fact already on the wire.
+
+       THE FLASH GOES WITH IT, and #941's title is the reason: "ONE ROLL, ONE FLASH, ONE SENTENCE". Leaving
+       the overlay in the handler would have fixed the log and split the pair -- the acting player seeing a
+       flash at run time and reading the sentence a moment later at declare time, and everyone else seeing
+       neither. It also lands where it is most useful: immediately before the dividend decision the modifier
+       is about, rather than a step earlier. */
     // Design note #278: this corporation HAS run, so any revenue on it is
     // this turn's and the dividend choice is binding.
     setRoutesRunThisTurn({ protocolId: actingProtocolId, ran: true });
@@ -6241,8 +6320,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     // Design note #808: `mapGrid` joins the deps because `withForcedBypass` reads the board -- whether a hex
     // offers a way round its centre is a fact about the tiles, and a stale grid here would dispatch a route
     // priced against a board that has since changed.
-    // Design note #941: `gameState` and `logInfo` join the deps -- the turn's seed and its sentence read them.
-  }, [runGameplayAction, gameId, trainDrafts, actingProtocolId, ownsAnyTrain, mapGrid, gameState, logInfo]);
+    /* Design note #1017: `gameState` and `logInfo` LEAVE the deps. #941 added them because the turn's seed and
+       its sentence were read here; both moved to the dispatch path, so keeping them would rebuild this
+       callback on every poll for a read it no longer makes. */
+    /* Design note #1020: `routeDrafts` joins the deps because the payload reads it directly now. It is the
+       state `trainDrafts` is already derived from, so this adds no rebuild the callback was not doing. */
+  }, [runGameplayAction, gameId, trainDrafts, routeDrafts, actingProtocolId, ownsAnyTrain, mapGrid]);
 
   // revenue_amount reads the same field the panel renders, so the figure on screen and the figure in the message cannot differ. Read inside the callback for declaration order.
   // See docs/ai_architecture/routing_pathfinding.md - App.tsx #198
@@ -6984,13 +7067,31 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
    *  this turn. Owning no train and owning a stranded one are different
    *  facts with the same consequence, so they are answered together and the
    *  reason string keeps them distinguishable to the player. */
-  const noEarnableRevenue = useMemo<string | null>(() => {
-    if (!ownsAnyTrain) return "it owns no trains, so there is no route to run";
-    if (maxRouteRevenue === 0) {
-      return "its trains cannot reach a route that earns anything";
-    }
-    return null;
-  }, [ownsAnyTrain, maxRouteRevenue]);
+  /* Design note #1018: THREE STATES, and the shell only acts on one of them. This was
+     `!ownsAnyTrain || maxRouteRevenue === 0`, which read a zero that could mean "the board has not loaded"
+     as a zero that means "there is nothing to run" -- and the auto-skip's per-turn guard then made that
+     answer permanent. See `earnableRevenue.ts` for the reported symptom and the arithmetic. */
+  const earnableVerdict = useMemo(() => {
+    const company = gameState?.public_companies.find(
+      (entry) => entry.company_id === actingProtocolId,
+    );
+    return earnableRevenueVerdict({
+      ownedTrains: company?.owned_trains,
+      stationTokenCount: company?.station_token_hexes?.length,
+      mapGrid,
+      /* Lazy: three of the guards inside settle the question without a pathfinder run, and this one is the
+         expensive part of every render on the Routes step. */
+      searchRevenue: () => maxRouteRevenue,
+    });
+  }, [gameState, actingProtocolId, mapGrid, maxRouteRevenue]);
+
+  /** The reason this corporation cannot earn, or `null` -- where `null` now covers BOTH "it can" and "we
+   *  cannot yet say". Every consumer of this value dispatches something, so the two collapse safely here and
+   *  are kept apart in `earnableVerdict` for anything that needs to tell them apart. */
+  const noEarnableRevenue = useMemo<string | null>(
+    () => skipReasonFor(earnableVerdict),
+    [earnableVerdict],
+  );
 
   /* Blocking conditions in the order a player would discover them; the topological check reuses placeableStationHexes so it cannot disagree with the veil.
      See docs/ai_architecture/state_machine.md - App.tsx #438 */
@@ -9777,6 +9878,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         eraTransition={actionToast?.eraTransition ?? null}
         /* Design note #967: the toast that is a list gets a longer window; everything else takes the default. */
         durationMs={actionToast?.durationMs}
+        // Design note #1016: the ambient toast sits in the corner; every receipt stays on the reader's axis.
+        anchor={actionToast?.anchor ?? "center"}
         token={actionToast?.token ?? 0}
         onDismiss={() => setActionToast(null)}
       />

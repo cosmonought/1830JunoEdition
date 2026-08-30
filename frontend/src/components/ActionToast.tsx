@@ -104,7 +104,29 @@ export const STANDARD_TOAST_MS = 3700;
  * AND IT IS STILL THE ONE TOAST WITH ITS OWN WINDOW. Everything else takes `STANDARD_TOAST_MS`; this is a
  * table rather than a sentence, which is the distinction #967 drew and the reason a separate constant exists
  * at all -- only the direction it points has changed twice. */
-export const PRIVATE_REVENUE_TOAST_MS = 2000;
+/* ==================================================================
+ *  DESIGN NOTE 1016: 2000ms WAS STILL A GLANCE, AND THE TABLE NEEDS A READ
+ * ==================================================================
+ *
+ * REPORTED: "The private company payout toast disappears too quickly and is positioned incorrectly."
+ *
+ * #1000 DID THE ARITHMETIC AND THEN ROUNDED THE WRONG WAY. It sized the window off "the middle" of a one-to-
+ * three-row table -- about a 1.4s read at three rows -- and set 2000ms, which leaves 1.8s at rest after the
+ * 180ms entrance. That is 1.3x a three-row read, not the 1.5x the note's own rule of thumb asks for, and the
+ * three-row case is the common one: most tables have several privates in play at once.
+ *
+ * 3200ms IS 1.5x THE LONG CASE rather than the middle one, plus the entrance. The asymmetry is deliberate --
+ * a player who finishes reading early loses a second of screen furniture, and a player who does not finish
+ * loses the figures entirely. Those are not the same cost.
+ *
+ * AND IT IS STILL WELL UNDER #967's 5,550, so the original "stays up far too long" report is still answered.
+ * This constant has now moved three times; what has changed each time is which of the two failures it was
+ * being tuned away from. */
+export const PRIVATE_REVENUE_TOAST_MS = 3200;
+
+/** Where a toast sits. `"center"` is every toast in the app but one -- see design note #1016 on `toastCorner`
+ *  for why the private payout is the exception. */
+export type ToastAnchor = "center" | "bottom-right";
 
 export interface ActionToastProps {
   /** The sentence, or `null` for nothing pending. */
@@ -138,6 +160,21 @@ export interface ActionToastProps {
    * the figures right-aligned in tabular figures, not a flex column of pre-joined strings. Comparing $25 with
    * $5 by eye needs the digits in one column, which is the thing a `\n`-joined string cannot do either. */
   detailRows?: readonly { label: string; value: string }[] | null;
+  /** ==================================================================
+   *   DESIGN NOTE 1016: AN EXPLICIT ANCHOR, NOT `detailRows` STANDING IN FOR ONE
+   *  ==================================================================
+   *
+   * REPORTED: "anchor it to the bottom-right (instead of bottom-center)."
+   *
+   * THE TEMPTING SHORTCUT WAS TO KEY OFF `detailRows`, since exactly one caller passes them and exactly one
+   * caller wants the corner -- and that is this codebase's fifth recurring bug shape: a proxy that stands for
+   * its subject until the day a second caller has rows and no wish to move, or wants the corner without a
+   * table. Position is its own decision, so it gets its own prop.
+   *
+   * DEFAULTED TO `"center"`, so the four existing call sites are untouched and #697's argument for the
+   * centred position -- "a receipt for a deliberate action should be on the axis the reader is already on" --
+   * still governs every toast it was written about. This one is not a receipt for anything the reader did. */
+  anchor?: ToastAnchor;
   /** Changes on every dispatch, including two identical ones in a row --
    *  which is why it exists rather than keying the timer on `message`. Buying
    *  a second 2-train produces the same string, and a toast that did not
@@ -199,6 +236,7 @@ export function ActionToast({
   onDismiss,
   durationMs = STANDARD_TOAST_MS,
   eraTransition = null,
+  anchor = "center",
 }: ActionToastProps) {
   useEffect(() => {
     if (message === null) return undefined;
@@ -224,8 +262,10 @@ export function ActionToast({
            repeated action. Without it a second identical purchase would update nothing in the DOM and the
            player would see a toast that never moved. */
         key={token}
-        style={styles.toast}
-        className="app-action-toast"
+        /* Design note #1016: the corner variant OVERRIDES `left`/`transform`, so it must come second -- a
+           spread that merely added `right` would leave `left: 50%` in place and put the toast off-screen. */
+        style={{ ...styles.toast, ...(anchor === "bottom-right" ? styles.toastCorner : {}) }}
+        className={anchor === "bottom-right" ? "app-action-toast-corner" : "app-action-toast"}
       >
         <span style={styles.check} aria-hidden="true">
           ✓
@@ -297,11 +337,25 @@ const ACTION_TOAST_CSS = `
   from { opacity: 0; transform: translate(-50%, 10px); }
   to   { opacity: 1; transform: translate(-50%, 0); }
 }
+/* Design note #1016: the corner variant needs its OWN keyframe. The centred one bakes translate(-50%) into
+   both ends -- that is the centring, not the animation -- so reusing it on a right-anchored toast would drag
+   it half its own width off the edge for the whole slide and leave it there. Same 10px rise, no offset.
+   NO BACKTICKS IN THIS BLOCK. It lives inside a template literal, which is animations.ts #755's trap and the
+   third time I have walked into it -- the string terminates at the first one and tsc reports it somewhere
+   else entirely. */
+@keyframes app-action-toast-in-corner {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
 .app-action-toast {
   animation: app-action-toast-in 180ms cubic-bezier(0.2, 0.8, 0.3, 1);
 }
+.app-action-toast-corner {
+  animation: app-action-toast-in-corner 180ms cubic-bezier(0.2, 0.8, 0.3, 1);
+}
 @media (prefers-reduced-motion: reduce) {
   .app-action-toast { animation: none; }
+  .app-action-toast-corner { animation: none; }
 }
 `;
 
@@ -349,6 +403,26 @@ const styles: Record<string, React.CSSProperties> = {
      not be. Not a corner either: a receipt for a deliberate action should be on the axis the reader is
      already on, and centred is the only position that is the same distance from every button.
      `position: fixed` and a high `zIndex`, because it has to clear the sticky bar and the board canvas both. */
+  /* ==================================================================
+      DESIGN NOTE 1016: THE ONE TOAST THAT IS NOT ABOUT SOMETHING YOU DID
+     ==================================================================
+     RULED: "anchor it to the bottom-right (instead of bottom-center)."
+
+     AND #697's ARGUMENT FOR THE CENTRE DOES NOT COVER THIS ONE. That note put toasts on the reader's own axis
+     because they are receipts -- "a receipt for a deliberate action should be on the axis the reader is
+     already on, and centred is the only position that is the same distance from every button." The private
+     payout is not a receipt for anything the reader pressed: it arrives when a round opens, unbidden, and it
+     is the longest-lived toast in the app. On the centre axis it sits directly over the sticky action bar's
+     midline for three seconds at the exact moment a new Operating Round hands the player their controls.
+
+     THE CORNER IS WHERE AMBIENT NOTIFICATIONS GO, and this is the app's only ambient one. Same `bottom`, so
+     it still clears the bar; `right` replaces `left`, and `transform` is cleared because a right-anchored
+     element does not need centring and the centred keyframe's `-50%` would push it off the edge. */
+  toastCorner: {
+    left: "auto",
+    right: "24px",
+    transform: "none",
+  },
   toast: {
     position: "fixed",
     left: "50%",

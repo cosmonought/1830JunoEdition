@@ -3,7 +3,15 @@
   <head>
     <meta charset="utf-8" />
     <link rel="icon" href="%PUBLIC_URL%/favicon.ico" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Design note #1014: the viewport is LOCKED. "Ensure the viewport is locked and strictly prevents user
+         scaling" -- so the page may not be pinched or double-tap-zoomed either, not just the board. The canvas
+         carries the matching `touch-action: pan-x pan-y`; this is the page-level half of the same instruction.
+         `maximum-scale` AND `user-scalable` TOGETHER, deliberately: iOS Safari has ignored `user-scalable=no`
+         since iOS 10, and honours `maximum-scale`. Neither alone covers both engines. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+    />
     <meta name="theme-color" content="#000000" />
     <meta
       name="description"

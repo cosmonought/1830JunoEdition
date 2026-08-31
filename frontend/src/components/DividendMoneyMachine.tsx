@@ -68,14 +68,78 @@ import { CorporateLogo } from "./CorporateLogo";
  *  that a filename must be checked against the filesystem, not that it must live in one particular array. */
 export const MONEY_MACHINE_SFX = "money-machine.mp3";
 
-/** The 900ms the merge takes, as specified. Exported so the shell's audio cue and this component's own
- *  impact frame cannot drift -- one number, two consumers (#1062). */
-export const MONEY_MACHINE_FALL_MS = 900;
-/** How long the merged total sits before it leaves. "The panel lingers for ~2 seconds so players can read
- *  the total." */
-export const MONEY_MACHINE_LINGER_MS = 2000;
-/** The slide, in and out. "Smoothly slides in from the right edge" and "smoothly slides back off-screen." */
-export const MONEY_MACHINE_SLIDE_MS = 420;
+/* ==================================================================
+    DESIGN NOTE 1082: FIVE PHASES, AND THE MARKS ARE DERIVED FROM THEM
+   ==================================================================
+
+   REPORTED: "The current animation merges the numbers too quickly after sliding in, making it impossible for
+   players to read the payout amount before it disappears." Ruled as an exact schedule:
+
+     0.0 - 0.5  slide in          0.5 - 1.5  BOTH FIGURES HOLD STILL
+     1.5 - 2.0  the merge         2.0 - 3.0  linger on the summed total
+     3.0 - 3.5  slide out
+
+   THE MISSING PHASE WAS THE PAUSE, and it is the whole complaint. #1061 started the fall at MOUNT, so the top
+   line was already dropping while the panel was still sliding in: the two numbers a player has to read never
+   stood still together for a single frame. Lengthening the fall would not have fixed that -- it would have
+   made a longer smear. What was needed was a beat where nothing moves.
+
+   THE MARKS ARE COMPUTED FROM THE DURATIONS, not typed alongside them. The spec states both -- five spans and
+   six timestamps -- and writing down both invites the pair that #1042's two alphas were: two statements of one
+   fact, agreeing until somebody edits one. The durations are the source; every mark is a running sum.
+
+   THE CUE MOVED, AND NOT BY A DESIGN PREFERENCE. `money-machine.mp3` is 2.23s long and still audible at
+   1.86s. Fired at the ruled 2.0s mark it would have been ringing 0.36s after the panel had slid off -- the
+   same "delayed or laggy" complaint that had just been raised about `coins-clinking.mp3` outlasting the
+   revenue flash. RULED, once measured: "have it fire once the slide-in is complete." At 0.5s the clip ends at
+   2.36s, comfortably inside, and its loudest moment lands at ~1.54s, on the merge. */
+
+/** 0.0-0.5s in, 3.0-3.5s out. */
+export const MONEY_MACHINE_SLIDE_MS = 500;
+/** 0.5-1.5s. The beat this batch exists to add: both figures perfectly still, so they can be read. */
+export const MONEY_MACHINE_HOLD_MS = 1000;
+/** 1.5-2.0s. The top line drops and fades; the bottom becomes the sum at the end of it. */
+export const MONEY_MACHINE_FALL_MS = 500;
+/** 2.0-3.0s, on the final total. */
+export const MONEY_MACHINE_LINGER_MS = 1000;
+
+/** When the top line starts to drop. */
+export const MONEY_MACHINE_FALL_AT_MS = MONEY_MACHINE_SLIDE_MS + MONEY_MACHINE_HOLD_MS;
+/** When it has landed and the sum updates. */
+export const MONEY_MACHINE_MERGE_AT_MS = MONEY_MACHINE_FALL_AT_MS + MONEY_MACHINE_FALL_MS;
+/** When the panel starts to leave. */
+export const MONEY_MACHINE_LEAVE_AT_MS = MONEY_MACHINE_MERGE_AT_MS + MONEY_MACHINE_LINGER_MS;
+/** Total lifetime, animated or not (#1082). */
+export const MONEY_MACHINE_TOTAL_MS = MONEY_MACHINE_LEAVE_AT_MS + MONEY_MACHINE_SLIDE_MS;
+
+/** ==================================================================
+ *   DESIGN NOTE 1082: WHERE THE BELL IS INSIDE THE CLIP
+ *  ==================================================================
+ *
+ * RULED, after the clip's length was measured: "have it fire once the slide-in is complete." Then, with more
+ * of the file described: "money-machine ends with a cash register 'ding' sound, so the ideal animation is for
+ * the merge/sum to conclude in the neighborhood of that."
+ *
+ * THE SECOND STATEMENT IS A GOAL AND THE FIRST WAS A MEANS, so the goal wins and the means is recomputed.
+ * Decoding the file at 8kHz and taking a 50ms envelope gives its shape: a crank/rattle from 0.15s peaking at
+ * 0.60s, then a fresh attack at 0.85s reaching 0.86 of peak and ringing down to inaudible by ~1.9s. A sharp
+ * strike with a long metallic decay IS the bell; everything before it is the drawer.
+ *
+ * SO THE DING IS AT 0.85s, NOT AT THE END. Firing at the slide-in's completion would have rung it at 1.35s --
+ * in the middle of the pause, with nothing moving. Working backwards from the merge instead puts the crank
+ * under the falling line and the bell on the frame the sum lands.
+ *
+ * DERIVED, SO THE ALIGNMENT SURVIVES AN EDIT. If the schedule moves, or the clip is replaced and this figure
+ * is re-measured, the cue follows without anyone remembering to move it. A hand-typed `1150` would be correct
+ * today and silently wrong the first time either changes.
+ *
+ * MEASURED, NOT SPECIFIED, which is why it lives here with its method rather than in a table of design
+ * decisions: it is a property of a file on disk, and `batch56` re-derives it from that file rather than
+ * trusting this constant. */
+export const MONEY_MACHINE_DING_AT_MS = 850;
+
+/** When the register starts, so that its bell lands on the merge. */
+export const MONEY_MACHINE_CUE_AT_MS = MONEY_MACHINE_MERGE_AT_MS - MONEY_MACHINE_DING_AT_MS;
 
 /** Whether this viewer has asked for less movement.
  *
@@ -119,24 +183,38 @@ export interface DividendPayoutEvent {
 export interface DividendMoneyMachineProps {
   /** `null` renders nothing. */
   event: DividendPayoutEvent | null;
-  /** Fired at the impact frame, for the cue that has to land on the merge rather than on the mount. */
-  onImpact: () => void;
-  /** Fired when the fade completes, so the shell can clear its state. */
+  /** ==================================================================
+   *   DESIGN NOTE 1082: `onImpact` BECAME `onCue`, BECAUSE IT NO LONGER MEANS IMPACT
+   *  ==================================================================
+   *
+   * IT FIRED AT THE MERGE and the name said so. The clip now starts when the panel finishes arriving, half a
+   * second before anything merges, so keeping the old name would leave a prop whose one job is to say WHEN
+   * and which says the wrong when. That is the proxy-stopped-standing-for-its-subject shape, in a name.
+   * RENAMED RATHER THAN RE-DOCUMENTED: a comment correcting a name is read by whoever opens this file, and
+   * the name is read by whoever greps for it. */
+  onCue: () => void;
+  /** Fired when the panel has finished leaving, so the shell can clear its state. */
   onDone: () => void;
 }
 
-export function DividendMoneyMachine({ event, onImpact, onDone }: DividendMoneyMachineProps) {
+export function DividendMoneyMachine({ event, onCue, onDone }: DividendMoneyMachineProps) {
   /* ==================================================================
       DESIGN NOTE 1061: THREE STATES, NOT A CSS ANIMATION LEFT TO FINISH ALONE
      ==================================================================
-     THE TOTAL HAS TO CHANGE ON IMPACT -- "updating the sum immediately upon impact" -- and a number is not
+     THE TOTAL HAS TO CHANGE ON IMPACT -- "the bottom line updates to the new sum" -- and a number is not
      something CSS can swap halfway through a keyframe. So the phase is React state and the movement is CSS:
      `falling` runs the transform, `merged` is the frame the figure lands and the sum updates, `leaving` is
      the fade. The keyframes never have to know what the number is and the number never has to know how far
      the line has travelled.
-     KEYED ON THE TOKEN, so a second payout in the same round restarts at `falling` rather than inheriting a
-     finished animation -- the same reason `ActionToast` #697 keys its entrance on a token. */
-  const [phase, setPhase] = useState<"falling" | "merged" | "leaving">("falling");
+     KEYED ON THE TOKEN, so a second payout in the same round restarts at the beginning rather than inheriting
+     a finished animation -- the same reason `ActionToast` #697 keys its entrance on a token.
+
+     Design note #1082: `holding` IS THE NEW FIRST PHASE and it is the point of this batch. It covers the
+     slide-in AND the pause after it, because nothing about the two lines differs between them -- the slide is
+     the panel moving, not the figures -- and a phase that changes nothing a reader can see is a phase that
+     exists only to be got wrong. The one thing that happens at the seam between them is the cue, which is a
+     timer rather than a render. */
+  const [phase, setPhase] = useState<"holding" | "falling" | "merged" | "leaving">("holding");
   /* Design note #1064: THE PREFERENCE IS READ ONCE PER PAYOUT AND NEVER STORED. A first draft kept it in
      state, on the reasoning that one payout should run on one schedule; it was never read at render, because
      the media block below already handles every visual difference and the effect below handles every timing
@@ -145,43 +223,53 @@ export function DividendMoneyMachine({ event, onImpact, onDone }: DividendMoneyM
   useEffect(() => {
     if (!event) return undefined;
     const quiet = prefersReducedMotion();
-    setPhase(quiet ? "merged" : "falling");
+    setPhase(quiet ? "merged" : "holding");
 
     const timers: number[] = [];
     if (quiet) {
       /* "TRIGGER THE LOCAL AUDIO AT 0ms." There is no merge to wait for -- the panel arrives merged, so the
          cue marks its arrival. */
-      onImpact();
+      onCue();
     } else {
-      /* THE IMPACT IS A TIMER, NOT AN `animationend`. A tab in the background throttles animation events and
-         can drop them entirely; a payout that never merged would leave the old total on screen and never fire
-         the cue. `setTimeout` in a throttled tab runs late, which is recoverable, rather than not at all. */
-      timers.push(
-        window.setTimeout(() => {
-          setPhase("merged");
-          onImpact();
-        }, MONEY_MACHINE_FALL_MS),
-      );
+      /* ==================================================================
+          DESIGN NOTE 1082: FOUR TIMERS FOR FOUR MOMENTS, EACH AT ITS OWN MARK
+         ==================================================================
+         EVERY ONE IS AN ABSOLUTE OFFSET FROM THE MOUNT, not a chain of relative waits. #1061 nested its two
+         (`settled + LINGER`), which was readable at two and would be four running sums here -- and a running
+         sum is where a phase silently absorbs its neighbour's slip. Each timer states the mark the spec names.
+         TIMERS, NOT `animationend`. A tab in the background throttles animation events and can drop them
+         entirely; a payout that never merged would leave the old total on screen and never ring. A
+         `setTimeout` in a throttled tab runs LATE, which is recoverable, rather than not at all. */
+      timers.push(window.setTimeout(onCue, MONEY_MACHINE_CUE_AT_MS));
+      timers.push(window.setTimeout(() => setPhase("falling"), MONEY_MACHINE_FALL_AT_MS));
+      timers.push(window.setTimeout(() => setPhase("merged"), MONEY_MACHINE_MERGE_AT_MS));
+      timers.push(window.setTimeout(() => setPhase("leaving"), MONEY_MACHINE_LEAVE_AT_MS));
     }
 
-    const settled = quiet ? 0 : MONEY_MACHINE_FALL_MS;
-    timers.push(window.setTimeout(() => setPhase("leaving"), settled + MONEY_MACHINE_LINGER_MS));
-    /* "INSTANTLY DISAPPEAR WITHOUT SLIDING" is the zero here: with motion reduced the leaving phase has no
-       duration to wait out, so the panel is unmounted in the same tick it is marked leaving. */
-    timers.push(
-      window.setTimeout(
-        onDone,
-        settled + MONEY_MACHINE_LINGER_MS + (quiet ? 0 : MONEY_MACHINE_SLIDE_MS),
-      ),
-    );
+    /* ==================================================================
+        DESIGN NOTE 1082: THE QUIET PATH NOW LASTS AS LONG AS THE OTHER ONE
+       ==================================================================
+       #1064 CLAIMED "SAME LIFETIME, SAME SOUND AT THE SAME MOMENT" AND WAS WRONG ABOUT THE FIRST. Its
+       animated path ran 900 + 2000 + 420 = 3320ms and its quiet path 2000ms -- a note describing an intention
+       as an accomplishment, which is a shape this project keeps producing.
+       MADE TRUE RATHER THAN THE CLAIM WITHDRAWN, because the claim is the right one: a reader who has asked
+       for less movement has not asked for less time, and the animated path spends 1.5s of its length on the
+       final sum. One `MONEY_MACHINE_TOTAL_MS` for both is the shortest way to say that and the only way to
+       keep it true after the next edit to the schedule. */
+    timers.push(window.setTimeout(onDone, MONEY_MACHINE_TOTAL_MS));
     return () => timers.forEach((id) => window.clearTimeout(id));
-  }, [event, onImpact, onDone]);
+  }, [event, onCue, onDone]);
 
   if (!event) return null;
 
   /* Design note #1061: the sum updates AT the merge, which is what makes the figure look absorbed rather than
-     replaced. Before impact the bottom line still reads what the player had. */
-  const shown = phase === "falling" ? event.cashBefore : event.cashAfter;
+     replaced. Before then the bottom line still reads what the player had.
+     Design note #1082: WRITTEN AS THE PHASES THAT SHOW THE OLD FIGURE, not as the ones that show the new. It
+     read `phase === "falling" ? before : after`, and adding `holding` in front of `falling` would have made
+     the panel arrive already showing the sum -- the pause is meant to hold BOTH numbers, which is the entire
+     point of adding it. Naming the "before" side means a future phase inserted ahead of the merge has to
+     declare itself rather than defaulting to the wrong answer. */
+  const shown = phase === "holding" || phase === "falling" ? event.cashBefore : event.cashAfter;
 
   return (
     <>
@@ -202,7 +290,16 @@ export function DividendMoneyMachine({ event, onImpact, onDone }: DividendMoneyM
         {/* ---- Top line: the payer, falling ---- */}
         <div
           style={styles.payerRow}
-          className={phase === "falling" ? "app-money-machine-fall" : "app-money-machine-landed"}
+          /* Design note #1082: THREE STATES, NOT TWO. `holding` is the new one and it must be neither -- not
+             `fall` (the drop has not started) and not `landed` (which is `opacity: 0`, and would have made
+             the payout invisible for the whole pause that exists to let it be read). */
+          className={
+            phase === "holding"
+              ? "app-money-machine-waiting"
+              : phase === "falling"
+                ? "app-money-machine-fall"
+                : "app-money-machine-landed"
+          }
         >
           <span style={styles.payer}>
             <CorporateLogo
@@ -261,6 +358,12 @@ const MONEY_MACHINE_CSS = `
   from { transform: translateY(0); opacity: 1; }
   to   { transform: translateY(26px); opacity: 0; }
 }
+/* Design note #1082: this duration IS the 0.0-0.5s slide-in phase. It shares MONEY_MACHINE_SLIDE_MS with the
+   exit and with every mark derived from it, so the CSS and the timers cannot disagree about when the panel
+   has finished arriving -- which is what the cue's offset is measured from.
+   NO BACKTICKS -- see #1061 at the head of this block. Walked into a fourth time, by me, four lines from the
+   warning that says so. The warning is not the problem; reaching for a backtick to quote an identifier is a
+   reflex, and a reflex is not stopped by a comment. */
 .app-money-machine {
   animation: app-money-machine-in ${MONEY_MACHINE_SLIDE_MS}ms cubic-bezier(0.2, 0.8, 0.3, 1);
 }
@@ -268,6 +371,13 @@ const MONEY_MACHINE_CSS = `
   transform: translateX(100%);
   opacity: 0;
   transition: transform ${MONEY_MACHINE_SLIDE_MS}ms cubic-bezier(0.5, 0, 0.75, 0), opacity ${MONEY_MACHINE_SLIDE_MS}ms ease;
+}
+/* Design note #1082: the pause, stated rather than left to the absence of a class. The top line is fully
+   visible and perfectly still for a full second -- which is the whole of what this batch adds, so it gets a
+   name a reader can grep for rather than being the gap between two other rules. */
+.app-money-machine-waiting {
+  opacity: 1;
+  transform: none;
 }
 .app-money-machine-fall {
   animation: app-money-machine-drop ${MONEY_MACHINE_FALL_MS}ms cubic-bezier(0.55, 0, 0.9, 0.55) forwards;

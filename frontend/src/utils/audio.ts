@@ -54,6 +54,48 @@ export const RADIO_STREAM_URL = "https://s3.radio.co/s39c195d74/listen";
 export const SFX_VOLUME = 1;
 export const RADIO_VOLUME = 0.45;
 
+/* ==================================================================
+    DESIGN NOTE 1074: THE TWO FIGURES ARE DEFAULTS NOW, NOT THE MIX
+   ==================================================================
+
+   ASKED FOR: "volume controls on both Radio and SFX ... players get a volume slider and an Off toggle when
+   they click them, and if they click the Off/X/whatever the button dims."
+
+   THE CONSTANTS ABOVE STAY, AND THEIR NOTE STAYS TRUE. #1013 balanced the mix and its reasoning is the
+   STARTING point a player begins from; what changes is that they can now move off it. Renaming them to
+   `DEFAULT_*` was the tempting edit and would have broken every test that reads the balance, for no gain --
+   the values are the defaults, and the mutable pair below says so by taking them as its initial state.
+
+   MODULE STATE RATHER THAN A CONTEXT, matching `playerLabels.ts` #535b's reasoning one file over: the audio
+   engine is reached from `playVariantCue`, from the whistle hook and from the radio element, none of which
+   are React components, and threading a provider to them would put a value three non-components need behind
+   a hook. `App.tsx` owns the SLIDER and mirrors it here; this owns what the elements actually play at. */
+let sfxVolume = SFX_VOLUME;
+let radioVolume = RADIO_VOLUME;
+
+export function currentSfxVolume(): number {
+  return sfxVolume;
+}
+export function currentRadioVolume(): number {
+  return radioVolume;
+}
+export function setSfxVolume(value: number): void {
+  sfxVolume = clampVolume(value);
+}
+/** The radio's level, applied to the live element as well as to the next one.
+ *
+ *  Design note #1074: THE STREAM IS ALREADY PLAYING when the slider moves, so setting a variable would leave
+ *  the player dragging a control that does nothing until the next track. `duckTarget` is the same handle the
+ *  ducking uses, which is why this reaches through it rather than holding an element of its own. */
+export function setRadioVolume(value: number): void {
+  radioVolume = clampVolume(value);
+  if (duckDepth === 0) duckTarget?.setVolume(radioVolume);
+}
+function clampVolume(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(1, Math.max(0, value));
+}
+
 /** Start playback and swallow every reason it might not.
  *
  *  Design note #1009: `play()` RETURNS A PROMISE ON MODERN ENGINES AND `undefined` ELSEWHERE -- including
@@ -99,7 +141,26 @@ export function playQuietly(element: HTMLAudioElement): void {
  * music returning. */
 
 /** How far the bed drops while anything else is playing -- the ruled "~20%". */
-export const DUCKED_RADIO_VOLUME = RADIO_VOLUME * 0.2;
+/* ==================================================================
+    DESIGN NOTE 1073: TWO DEPTHS, BECAUSE THE CLIPS ARE TWO KINDS OF THING
+   ==================================================================
+   REPORTED, after the effects were normalised: "The volume normalization of the sound effects has made the
+   audio ducking perhaps unnecessary: they are considerably louder than the radio now." And, when asked:
+   "I'd only duck 80% since the sound effects really are much louder than the radio stream without it. EXCEPT
+   ... on the yellow sign and carcosa videos, where indeed the 20% duck for the extended play makes sense."
+   AND THAT IS THE DISTINCTION THE ONE CONSTANT WAS PAPERING OVER. A coin clink is half a second: at the new
+   levels it carries over the bed on its own, and dropping the radio to a fifth for it is a hole a listener
+   hears open and close. The Yellow Sign's video runs ten seconds with its own dialogue -- there the bed is a
+   competitor, not a backdrop, and the deep duck is what #1045 added it for.
+   NAMED FOR THE CLIP, NOT FOR THE NUMBER. `DUCK_FOR_CUE` and `DUCK_FOR_VIDEO` say which situation each is
+   for; `DUCKED_RADIO_VOLUME` said only that something was ducked, which is why one value ended up serving
+   two cases that wanted different ones. */
+/* Design note #1074: FRACTIONS, NOT LEVELS. These were `RADIO_VOLUME * 0.8` and `* 0.2`, computed once at
+   module load -- which was right while the bed had one fixed level and silently wrong the moment a slider
+   could move it: a player who turned the radio down to 0.1 would have had it DUCKED UP to 0.36. A duck is a
+   proportion of whatever the bed is currently at. */
+export const DUCK_FOR_CUE = 0.8;
+export const DUCK_FOR_VIDEO = 0.2;
 /** Total time the bed takes to come back, and the step between adjustments. */
 export const DUCK_FADE_MS = 900;
 const DUCK_FADE_STEP_MS = 60;
@@ -108,6 +169,8 @@ type DuckTarget = { setVolume: (value: number) => void };
 
 let duckTarget: DuckTarget | null = null;
 let duckDepth = 0;
+/** Design note #1073: the level currently being held, so overlapping clips of different depths compose. */
+let activeDuck = 1;
 let fadeTimer: ReturnType<typeof setInterval> | null = null;
 
 /** The radio calls this once; anything that plays a sound never has to know it happened. */
@@ -129,10 +192,14 @@ function stopFade(): void {
 }
 
 /** Duck now; the returned function releases this hold. Safe to call when nothing is registered. */
-export function duckRadio(): () => void {
+export function duckRadio(depth: number = DUCK_FOR_CUE): () => void {
   duckDepth += 1;
   stopFade();
-  duckTarget?.setVolume(DUCKED_RADIO_VOLUME);
+  /* Design note #1073: THE DEEPEST DUCK IN FLIGHT WINS. Two overlapping clips -- a coin clink during the
+     Carcosa video -- must not have the shallow one raise the bed back over the video's dialogue, so the
+     level is the minimum of what has been asked for rather than the most recent request. */
+  activeDuck = Math.min(activeDuck, depth);
+  duckTarget?.setVolume(radioVolume * activeDuck);
 
   let released = false;
   return () => {
@@ -143,8 +210,10 @@ export function duckRadio(): () => void {
     duckDepth = Math.max(0, duckDepth - 1);
     if (duckDepth > 0) return;
 
-    const from = DUCKED_RADIO_VOLUME;
-    const distance = RADIO_VOLUME - from;
+    const from = radioVolume * activeDuck;
+    const distance = radioVolume - from;
+    // Design note #1073: the floor resets once nothing is ducking, so the next clip starts from its own depth.
+    activeDuck = 1;
     const steps = Math.max(1, Math.round(DUCK_FADE_MS / DUCK_FADE_STEP_MS));
     let step = 0;
     stopFade();
@@ -157,7 +226,7 @@ export function duckRadio(): () => void {
         stopFade();
         return;
       }
-      const next = step >= steps ? RADIO_VOLUME : from + (distance * step) / steps;
+      const next = step >= steps ? radioVolume : from + (distance * step) / steps;
       duckTarget?.setVolume(next);
       if (step >= steps) stopFade();
     }, DUCK_FADE_STEP_MS);
@@ -191,7 +260,7 @@ export function playVariantCue(file: string, enabled: boolean): void {
     /* jsdom and any engine without a media stack. Nothing to play and nothing to duck. */
     return;
   }
-  element.volume = SFX_VOLUME;
+  element.volume = sfxVolume;
 
   liveSfx += 1;
   const release = duckRadio();
@@ -221,7 +290,7 @@ export function useSoundEffect(src: string, enabled: boolean): () => void {
     const element = new Audio(src);
     element.preload = "auto";
     // Design note #1013: written down rather than left to the default, so both sides of the mix live together.
-    element.volume = SFX_VOLUME;
+    element.volume = sfxVolume;
     elementRef.current = element;
     return () => {
       element.pause();
@@ -281,7 +350,8 @@ export function useRadioStream(url: string): RadioStream {
     element.preload = "none";
     /* Design note #1013: the bed sits UNDER the whistle. Set on the element rather than at each `play()`, so a
        stop-and-start does not quietly come back at full volume. */
-    element.volume = RADIO_VOLUME;
+    // Design note #1074: the current level, not the default -- a reconnect must not undo the slider.
+    element.volume = radioVolume;
     elementRef.current = element;
     /* Design note #1041: the bed announces itself as duckable. Nothing that plays a sound has to know the
        radio exists, and the radio does not have to know what is playing. */

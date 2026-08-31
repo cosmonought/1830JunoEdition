@@ -21,25 +21,21 @@ export interface SandboxRoomBarProps {
   /** False when Firestore is not configured; the strip explains and offers
    *  nothing. */
   available: boolean;
-  /** How many actions have been replayed, for the connected readout. */
-  appliedCount: number;
-  /** A live error from the room, or `null`. */
+  /** A live error from the room, or `null`. Reported here only while JOINING -- once in a room the title
+   *  strip carries it, beside `chatError` (#1083). */
   error: string | null;
   busy: boolean;
   onHost: () => void;
   onJoin: (code: string) => void;
-  onLeave: () => void;
 }
 
 export function SandboxRoomBar({
   roomCode,
   available,
-  appliedCount,
   error,
   busy,
   onHost,
   onJoin,
-  onLeave,
 }: SandboxRoomBarProps) {
   const [joining, setJoining] = useState(false);
   const [codeText, setCodeText] = useState("");
@@ -55,24 +51,31 @@ export function SandboxRoomBar({
     );
   }
 
-  if (roomCode) {
-    return (
-      <div style={styles.bar}>
-        <span style={styles.label}>Room</span>
-        {/* The code is the one thing a player has to relay to somebody else,
-            so it is selectable text at a readable size rather than a chip
-            they would have to retype from a screenshot. */}
-        <code style={styles.code}>{roomCode}</code>
-        <span style={styles.muted}>
-          {appliedCount} action{appliedCount === 1 ? "" : "s"} synced
-        </span>
-        {error && <span style={styles.error}>{error}</span>}
-        <button type="button" style={styles.button} onClick={onLeave}>
-          Leave room
-        </button>
-      </div>
-    );
-  }
+  /* ==================================================================
+      DESIGN NOTE 1083: THE IN-ROOM BAR IS GONE, AND EVERY PIECE OF IT WENT SOMEWHERE
+     ==================================================================
+     RULED: "Completely delete the '68 actions' text ... Completely delete the 'Leave Room' button. Players
+     will use the existing '<- Lobby' button in the title area to navigate away ... Move the remaining Room
+     Name information into the Title area."
+
+     THAT IS THREE REMOVALS AND ONE MOVE, and taken together they empty the branch. Worth stating as a whole
+     rather than as four edits, because what is left over decides whether the branch should exist:
+
+       "N actions synced"  DELETED. A replay counter is a fact about the transport, not about the game -- it
+                           told a player their client was keeping up, which is the sort of thing that belongs
+                           in a console when it is true and in an error when it is not.
+       "Leave room"        DELETED. The title area's back-arrow already leaves, and two exits mean a player
+                           has to work out whether they differ. They did not.
+       the room code       MOVED to the title, where the room's identity now lives beside the app's.
+       the error           MOVED to the title strip, beside `chatError` -- the two are the same KIND of fact
+                           (this room's connection is unhappy) and were being reported in two places.
+
+     SO THE BRANCH IS DELETED RATHER THAN EMPTIED. A `<div>` that renders an empty flex row is a gap in the
+     layout with no explanation, and this batch is about removing exactly that.
+
+     WHAT SURVIVES IS THE JOIN/HOST FORM BELOW, which is the bar's actual job: it is how a solo sandbox
+     BECOMES a room. Once you are in one it has nothing left to offer. */
+  if (roomCode) return null;
 
   return (
     <div style={styles.bar}>
@@ -142,14 +145,9 @@ const styles: Record<string, React.CSSProperties> = {
     textTransform: "uppercase",
     color: "#9aa0ac",
   },
-  code: {
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-    fontSize: FONT_SIZE.strong,
-    fontWeight: 800,
-    letterSpacing: "0.08em",
-    color: "#7ee0a1",
-    userSelect: "all",
-  },
+  /* Design note #1083: `code` is DELETED, not left unused. Its one caller was the in-room branch and the
+     room code now renders in the title strip, which carries its own copy of this treatment -- an orphaned
+     style for a thing this component no longer shows is an invitation to show it again. */
   muted: { color: "#8a90a0" },
   error: { color: "#e07a7a" },
   joinRow: { display: "flex", flexDirection: "row", alignItems: "center", gap: "6px" },

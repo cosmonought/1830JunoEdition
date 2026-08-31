@@ -76,6 +76,30 @@ export interface ActionLogEntry {
    * ABSENT ON EVERY OTHER LINE, so the log's ordinary entries are untouched -- this marks the variant's
    * flavour text and nothing else. */
   tone?: "bonus" | "malus";
+  /** ==================================================================
+   *   DESIGN NOTE 1079: WHERE THE MATH STOPS AND THE JOKE STARTS
+   *  ==================================================================
+   *
+   * RULED: "Apply italics strictly to the flavor text string at the end of the line, leaving the mechanical
+   * revenue math in the standard font."
+   *
+   * AN INDEX INTO `label`, STAMPED BY THE COMPOSER. #949 split these into two sentences for the reader --
+   * "It suffered a 10% malus." then the colour -- and the renderer cannot see that seam: it holds one string
+   * and has no idea which half is which.
+   *
+   * NOT A HEURISTIC IN THE RENDERER. "Italicise everything after the second full stop" would work today and
+   * would be a proxy that stops standing for its subject the moment a sentence gains a clause -- this
+   * codebase's fifth recurring bug shape, and one that fails SILENTLY into mis-styled text rather than loudly.
+   * The composer already holds the clause as its own string; the index is arithmetic on lengths, not parsing.
+   *
+   * PRESENT ON UNCHANGED ROLLS TOO, which is the one place this parts company with `tone`. `tone` answers
+   * "which way did the die go" and `unchanged` is deliberately toneless (#1042); this answers "which part of
+   * this line is atmosphere", and the answer on an unchanged line is the same as on any other. Two facts, two
+   * fields -- collapsing them would make a third of the variant's lines set their flavour upright for a
+   * reason no player could see.
+   *
+   * ABSENT EVERYWHERE ELSE. An ordinary action line is all mechanics and has no seam to mark. */
+  flavourFrom?: number;
 }
 
 export type FeedFilter = "all" | "chat" | "log";
@@ -105,6 +129,8 @@ export interface FeedItem {
   logDetail?: string;
   /** Design note #1042: the variant tint, carried through the merge. */
   logTone?: "bonus" | "malus";
+  /** Design note #1079: the index in `logLabel` where the flavour sentence begins. */
+  logFlavourFrom?: number;
 }
 
 /** Oldest-first, matching ordinary chat reading order, since the feed auto-scrolls to the bottom on new arrivals.
@@ -167,6 +193,7 @@ export function mergeFeedItems(
       logStatus: entry.status,
       logDetail: entry.detail,
       logTone: entry.tone,
+      logFlavourFrom: entry.flavourFrom,
     };
   });
 

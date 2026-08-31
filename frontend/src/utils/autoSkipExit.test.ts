@@ -88,7 +88,10 @@ describe("the shell wires it, and only for the train limit", () => {
        to disagree about where the turn ends -- the failure this codebase keeps finding. */
     expect(APP).toContain("autoSkipExit(orSubPhase, stepsFor(gameState))");
     expect(APP).toContain('if (exit === "end-turn") endTurnAutomatically();');
-    expect(APP).toContain("else skipSubPhaseAutomatically();");
+    /* Design note #1070: the call carries the shell's own reason now, so the one line the skip prints can
+       say WHY rather than just that. What this case is for is unchanged: the two exits are the automatic
+       entry points, so Undo rewinds past a turn the game ended on the player's behalf. */
+    expect(APP).toContain("else skipSubPhaseAutomatically(autoSkipReason);");
   });
 
   it("ends the turn through the automatic entry point", () => {

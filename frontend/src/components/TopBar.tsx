@@ -14,12 +14,8 @@ import { chainConfigError, formatNativeAmount, NATIVE_DENOM_DISPLAY } from "../c
 import { ConnectWalletButton } from "./ConnectWalletButton";
 import { truncateAddress } from "../utils/address";
 import { styles } from "../styles/appStyles";
-
-const NETA_CREDIT_CSS = `
-.neta-credit { transition: color 120ms ease, text-shadow 120ms ease; }
-.neta-credit:hover { color: #ffffff; text-shadow: 0 0 8px rgba(255,255,255,0.35); }
-.neta-credit:focus-visible { outline: 2px solid #94a3b8; outline-offset: 2px; color: #ffffff; }
-`;
+// Design note #1075: the volume, the off switch, and which effects play -- one panel, two buttons.
+import AudioControlPopover, { type AudioCategoryToggle } from "./AudioControlPopover";
 
 /* ------------------------------------------------------------------ */
 /* Main tabs -- see design note #9                                    */
@@ -94,12 +90,17 @@ function statusDotColor(
    says what round it is. */
 export default function TopBar({
   roomContext,
+  roomName = null,
   onLeaveGame,
   audio,
 }: {
   /** Room identity / sandbox controls, owned by `AppShell` -- see design
    *  note #34 for why this is a node rather than a pile of props. */
   roomContext?: React.ReactNode;
+  /** Design note #1083: the room's code, shown beside the app's name. `null` for a solo sandbox and for an
+   *  on-chain game, whose identity `roomContext` already names -- two labels for one room is what this
+   *  batch is removing, not something to reintroduce one line up. */
+  roomName?: string | null;
   onLeaveGame?: () => void;
   /** ==================================================================
    *   DESIGN NOTE 1009: STATE FROM THE SHELL, LAYOUT FROM THE HEADER
@@ -120,10 +121,20 @@ export default function TopBar({
     onToggleMusic: () => void;
     sfxEnabled: boolean;
     onToggleSfx: () => void;
+    /** Design note #1075: the popover's contents. Optional so a shell that wires only the two toggles still
+     *  renders -- the buttons then behave exactly as they did before this batch. */
+    radioVolume?: number;
+    onRadioVolume?: (volume: number) => void;
+    sfxVolume?: number;
+    onSfxVolume?: (volume: number) => void;
+    sfxCategories?: readonly AudioCategoryToggle[];
   };
 }) {
   const wallet = useWallet();
   const session = useGameSession();
+  /* Design note #1075: one open panel at a time, named rather than a pair of booleans -- two flags can
+     both be true and would render two overlapping popovers from the same corner. */
+  const [openPanel, setOpenPanel] = React.useState<"radio" | "sfx" | null>(null);
 
   // F-4 UI: why the wallet cannot connect, when that is a configuration problem
   // rather than a user one. `config.ts` deliberately no longer throws at import
@@ -153,26 +164,33 @@ export default function TopBar({
 
   return (
     <header style={styles.topBar}>
-      {/* Inline styles cannot express `:hover`; see design note #46. */}
-      <style>{NETA_CREDIT_CSS}</style>
       <span style={styles.topBarBrand}>Project 18XX</span>
 
-      {/* Design note #47: the Neta DAO credit sits with the BRAND, not the wallet
-         cluster -- an attribution belongs next to the thing attributed, and the
-         right-hand group is the one that wraps first when the bar gets tight (#34).
-         `flexShrink: 0` plus `nowrap` so it never breaks the row, and
-         `rel="noopener noreferrer"` because `target="_blank"` without it hands the new
-         tab a `window.opener` handle back into this app. */}
-      <a
-        href="https://netadao.org"
-        target="_blank"
-        rel="noopener noreferrer"
-        className="neta-credit"
-        style={styles.netaCredit}
-        title="Neta DAO — opens netadao.org in a new tab"
-      >
-        Powered by Neta DAO
-      </a>
+      {/* ==================================================================
+           DESIGN NOTE 1083: THE ROOM'S NAME SITS WITH THE APP'S
+          ==================================================================
+          RULED: "Move the 'Powered by Neta DAO' text out of the title area and anchor it in the global app
+          footer ... Move the remaining Room Name information into the Title area to replace the space
+          previously occupied by the Neta DAO text."
+
+          AND THE SWAP IS BETTER THAN EITHER HALF ALONE. #47 put the credit here on the argument that "an
+          attribution belongs next to the thing attributed" -- true, and it was competing for the most
+          valuable strip on screen with the two things a player actually needs to know: which app this is and
+          which room they are in. An attribution is read once; a room code is read every time somebody has to
+          relay it. The footer keeps #47's adjacency at a fraction of the cost.
+
+          SELECTABLE, MONOSPACED, AT SIZE, which is the treatment it had in the bar it came from: the code is
+          the one string a player has to read aloud or paste to someone else, so it must not be a chip they
+          would have to retype from a screenshot.
+
+          NOTHING WHEN THERE IS NO ROOM. A solo sandbox has no code, and a label with an empty value beside it
+          is worse than a shorter header. */}
+      {roomName && (
+        <span style={styles.topBarRoom}>
+          <span style={styles.topBarRoomLabel}>Room</span>
+          <code style={styles.topBarRoomCode}>{roomName}</code>
+        </span>
+      )}
 
       {roomContext}
 
@@ -191,20 +209,44 @@ export default function TopBar({
           TITLES SAY WHAT THE CLICK WILL DO, not what the state is. "Music: on" leaves a player working out
           whether pressing it turns it off; "Stop the radio stream" is the answer they were after. */}
       {audio && (
-        <span style={styles.topBarAudioGroup}>
+        /* Design note #1075: `position: relative` so the popover hangs from the group rather than from the
+           viewport -- the bar scrolls with the header on a narrow window, and a fixed panel would part
+           company with the button that opened it. */
+        <span style={{ ...styles.topBarAudioGroup, position: "relative" }}>
           <button
             type="button"
             style={{
               ...styles.topBarIconButton,
               ...(audio.musicPlaying ? styles.topBarIconButtonOn : {}),
             }}
-            onClick={audio.onToggleMusic}
-            aria-pressed={audio.musicPlaying}
-            aria-label={audio.musicPlaying ? "Stop the radio stream" : "Play the radio stream"}
+            /* Design note #1075: THE CLICK OPENS THE PANEL, it no longer toggles. Off lives inside, which is
+               what lets the dim mean one thing -- see the component's own note for why the two jobs could not
+               share a control. With no volume wiring the button falls back to being a plain toggle. */
+            onClick={() =>
+              audio.onRadioVolume
+                ? setOpenPanel((current) => (current === "radio" ? null : "radio"))
+                : audio.onToggleMusic()
+            }
+            aria-expanded={audio.onRadioVolume ? openPanel === "radio" : undefined}
+            aria-pressed={audio.onRadioVolume ? undefined : audio.musicPlaying}
+            /* ==================================================================
+                DESIGN NOTE 1078: THE DIM HAS TO BE READABLE BY SOMETHING OTHER THAN AN EYE
+               ==================================================================
+               #1074 FIXED THE DIM FOR EYES AND BROKE IT FOR EVERYONE ELSE, which is a fault of mine that a
+               test caught rather than a player: while these buttons were toggles, `aria-pressed` carried the
+               on/off state to assistive tech exactly as the colour carried it to the eye. #1075 turned them
+               into disclosure controls, so `aria-pressed` correctly became `aria-expanded` -- and the state
+               it used to announce went nowhere. The `title` is not a substitute; it is announced
+               inconsistently and not at all on touch.
+               SO THE LABEL CARRIES IT. `aria-label` is announced on every platform, it is the one string
+               these buttons already own, and naming the state in it restores the parity #1074 was about.
+               THE OFF ROW INSIDE THE POPOVER KEEPS ITS `aria-pressed` -- that one IS a toggle -- so a reader
+               who opens the panel gets the state twice rather than not at all. */
+            aria-label={audio.musicPlaying ? "Radio settings" : "Radio settings — radio is off"}
             title={
               audio.musicPlaying
-                ? "Stop the radio stream"
-                : "Play the radio stream — background music from an external station"
+                ? "Radio — volume and off"
+                : "Radio is off — click for volume and to turn it back on"
             }
           >
             {/* A note, not a speaker: this one is about MUSIC, and the speaker beside it is about the game. */}
@@ -216,17 +258,73 @@ export default function TopBar({
               ...styles.topBarIconButton,
               ...(audio.sfxEnabled ? styles.topBarIconButtonOn : {}),
             }}
-            onClick={audio.onToggleSfx}
-            aria-pressed={audio.sfxEnabled}
-            aria-label={audio.sfxEnabled ? "Mute sound effects" : "Unmute sound effects"}
+            onClick={() =>
+              audio.onSfxVolume
+                ? setOpenPanel((current) => (current === "sfx" ? null : "sfx"))
+                : audio.onToggleSfx()
+            }
+            aria-expanded={audio.onSfxVolume ? openPanel === "sfx" : undefined}
+            aria-pressed={audio.onSfxVolume ? undefined : audio.sfxEnabled}
+            /* Design note #1078: the same state in the same place, for the same reason. */
+            aria-label={
+              audio.sfxEnabled
+                ? "Sound effect settings"
+                : "Sound effect settings — sound effects are off"
+            }
             title={
               audio.sfxEnabled
-                ? "Mute sound effects — the whistle that sounds when your turn begins"
-                : "Unmute sound effects — a whistle sounds when your turn begins"
+                ? "Sound effects — volume, off, and which effects play"
+                : "Sound effects are off — click for volume and to turn them back on"
             }
           >
-            &#128266;
+            {/* ==================================================================
+                 DESIGN NOTE 1074: AN EMOJI CANNOT BE DIMMED
+                ==================================================================
+                REPORTED: "when Radio is muted the button dims/grays out, when SFX is muted a barely
+                perceptible slash mark goes through the icon. The dimming behavior is preferable."
+                AND THE TWO BUTTONS ALREADY SHARED THEIR STYLES, which is what made this puzzling to read: the
+                same `topBarIconButtonOn` lights both and the same base greys both. The difference was the
+                GLYPH. `&#9835;` is a text character and takes the button's `color`, so it greys with it;
+                `&#128266;` is an emoji, painted by the emoji font in its own colours, and CSS `color` does
+                nothing to it. What the player read as a faint slash is the speaker's own artwork against a
+                dimmed border.
+                SO IT IS DRAWN RATHER THAN TYPED. An inline SVG on `currentColor` obeys the same rule the
+                music note already did, and the two buttons now dim identically because they are finally the
+                same kind of thing. */}
+            <svg
+              width="13"
+              height="13"
+              viewBox="0 0 16 16"
+              fill="currentColor"
+              aria-hidden="true"
+              focusable="false"
+            >
+              <path d="M7.2 2.4 4 5.2H1.8v5.6H4l3.2 2.8z" />
+              <path d="M10.1 5.1a3.6 3.6 0 0 1 0 5.8l-.9-1.1a2.2 2.2 0 0 0 0-3.6z" />
+              <path d="M12.3 2.6a7 7 0 0 1 0 10.8l-.9-1.1a5.6 5.6 0 0 0 0-8.6z" />
+            </svg>
           </button>
+          {audio.onRadioVolume && openPanel === "radio" && (
+            <AudioControlPopover
+              title="Radio"
+              volume={audio.radioVolume ?? 0}
+              onVolumeChange={audio.onRadioVolume}
+              enabled={audio.musicPlaying}
+              onEnabledChange={audio.onToggleMusic}
+              onClose={() => setOpenPanel(null)}
+            />
+          )}
+          {audio.onSfxVolume && openPanel === "sfx" && (
+            <AudioControlPopover
+              title="Sound effects"
+              volume={audio.sfxVolume ?? 0}
+              onVolumeChange={audio.onSfxVolume}
+              enabled={audio.sfxEnabled}
+              onEnabledChange={audio.onToggleSfx}
+              categories={audio.sfxCategories}
+              onClose={() => setOpenPanel(null)}
+            />
+          )}
         </span>
       )}
 

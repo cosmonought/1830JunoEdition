@@ -34,6 +34,27 @@ const HISTORY_LINE_COUNT = 5;
 // mid-glyph.
 const HISTORY_LINE_HEIGHT_PX = 46;
 
+/** Design note #1079: ONE alpha for both tints, named because the report's rule is that they SHARE it --
+ *  "the exact same opacity/transparency value". Two literals a hundredth apart is what #1042 left behind. */
+const TONE_TINT_ALPHA = 0.12;
+
+/* ==================================================================
+    DESIGN NOTE 1080, WITHDRAWN: THE BACKGROUND DID NOT NEED TOUCHING
+   ==================================================================
+   #1080 MOVED THE FILL ONTO THE ROW, converted it to a `backgroundImage` gradient so it would layer over the
+   row's own `#141c2c`, and dropped the padding and radius that then had nothing to sit on. Every one of
+   those was a consequence of the first move, and the first move was mine to begin with: #1079 described the
+   existing fill as sitting "on the sentence, not the whole row" and offered to widen it.
+
+   THAT DESCRIPTION WAS WRONG. `logLabelFull` is `flex: 1`, so the tint has filled the line from the gutter
+   to the right edge since #1042 -- the padding and radius shape its ends, they do not shrink-wrap it to the
+   words. The offer invented a problem, the answer accepted the invention, and three edits followed from it.
+
+   RECORDED RATHER THAN DELETED, because the lesson is one I have written down before in this file's
+   neighbours and evidently not learned: I described a layout from the style object without checking what
+   `flex: 1` did to it, and then acted on my own description. Reading the rendered geometry costs one
+   grep. */
+
 export interface TopTickerProps {
   latestItem: FeedItem | null;
   /** Already filtered by the active feed filter -- see design note #5. */
@@ -90,12 +111,96 @@ export function feedItemText(item: FeedItem): string {
     return `${clockPrefix(item)}${item.chatAuthor}: ${item.chatText}`;
   }
   const round = item.logRound ? `[${item.logRound}] ` : "";
+  /* Design note #1076: `feedItemText` STILL RETURNS ONE STRING, and it has to. It is the ticker's clipped
+     preview, the chat's line, and what a dozen suites assert against -- so the parts-based rendering below
+     is an ADDITION rather than a replacement, and `feedItemParts` is derived from the same fields so the two
+     cannot describe an entry differently. */
   /* Design note #425: the FULL detail, not a 40-character preview. The truncation existed because this string
      had to survive in a single-line ticker; the ticker clips with CSS `text-overflow` instead, which shortens
      the DISPLAY without shortening the sentence the expanded view then renders in full. */
   const detail = item.logDetail ? ` — ${item.logDetail}` : "";
   const failed = item.logStatus === "error" ? "Failed: " : "";
   return `${clockPrefix(item)}${round}${failed}${item.logLabel}${detail}`;
+}
+
+/** The same line, split where the eye needs a break.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 1076: THREE FIELDS THAT READ AS ONE LONG STRING
+ *  ==================================================================
+ *
+ *  REPORTED: "every element of the Activity Log is printed in the same font with the same weight and
+ *  emphasis: [time] [round] [information] all read as one long string. Let's make it easier on the eye to
+ *  scan and bold the [round] information."
+ *
+ *  AND THE SECOND HALF IS THE SAME COMPLAINT: "the timestamps are the first thing players see and communicate
+ *  almost nothing ... I click the log event and the timestamp appears where it currently is at the left."
+ *  Both are about the LEFT GUTTER -- one column, carrying the least useful field, in the same weight as the
+ *  sentence. So the gutter carries the round tag by default, in bold, and gives its place to the time only
+ *  when a reader asks for it.
+ *
+ *  NOT DELETED, and the reason is async play: somebody comes back to a room hours later, and the log is the
+ *  only record of when a round happened. A click is the whole cost of getting it back.
+ *
+ *  RETURNED AS DATA rather than as JSX, so this stays testable without a renderer and so the collapsed
+ *  preview and the expanded row compose from one answer -- #694's rule, which #1055 had to apply to the tint
+ *  for exactly the same reason. */
+export interface FeedItemParts {
+  /** The bold gutter: the round tag, or the time when the reader has asked for it. `""` when neither exists. */
+  gutter: string;
+  /** Everything after it, in the ordinary weight. */
+  body: string;
+  /** ==================================================================
+   *   DESIGN NOTE 1079: THE FLAVOUR IS ITS OWN PART, SO IT CAN BE ITS OWN FONT
+   *  ==================================================================
+   *
+   * RULED: "Apply italics strictly to the flavor text string at the end of the line, leaving the mechanical
+   * revenue math in the standard font." A renderer holding one string cannot do that, so the string arrives
+   * split -- at an index the composer stamped (`feed.ts` #1079), never at one guessed from punctuation here.
+   *
+   * `""` ON EVERY OTHER LINE, which is what lets both renderers write the same unconditional pair of spans
+   * instead of branching. An ordinary action line is all mechanics and has no seam to mark. */
+  flavour: string;
+}
+
+export function feedItemParts(item: FeedItem, showTime = false): FeedItemParts {
+  if (item.kind === "chat") {
+    /* A CHAT LINE'S GUTTER IS ITS CLOCK, always. It has no round tag, and #477's column is the whole reason
+       the two kinds interleave legibly -- an empty gutter on every chat row would break it. */
+    return {
+      gutter: clockPrefix(item).trim(),
+      body: `${item.chatAuthor}: ${item.chatText}`,
+      // A player's own words are not our flavour text, whatever they wrote.
+      flavour: "",
+    };
+  }
+  const time = clockPrefix(item).trim();
+  const round = item.logRound ? `[${item.logRound}]` : "";
+  const detail = item.logDetail ? ` — ${item.logDetail}` : "";
+  const failed = item.logStatus === "error" ? "Failed: " : "";
+  const label = item.logLabel ?? "";
+  /* ==================================================================
+      DESIGN NOTE 1079: THREE CONDITIONS, AND EACH ONE IS A REAL CASE
+     ==================================================================
+     `> 0` -- an index of 0 means a line that is ALL flavour, which no composer produces and which would
+        italicise the corporation's own name if one ever slipped through.
+     `< label.length` -- an index at or past the end yields an empty tail, so the split would be invisible
+        while still costing a span. Refusing it keeps "there is a flavour part" and "the flavour part has
+        text in it" the same statement.
+     `detail === ""` -- THE ORDERING TRAP. The detail is appended AFTER the label, so splitting a line that
+        has one would put the em-dash detail between the mechanics and the flavour and italicise neither
+        correctly. Nothing produces both today; this is what stops it rendering wrong the day something does,
+        rather than a comment hoping nobody tries. */
+  const at = item.logFlavourFrom;
+  const splitAt =
+    detail === "" && typeof at === "number" && at > 0 && at < label.length ? at : null;
+  return {
+    // The time REPLACES the tag rather than joining it: "the timestamp appears where it currently is at the
+    // left", which is the column the tag is occupying.
+    gutter: showTime ? time : round || time,
+    body: `${failed}${splitAt === null ? label : label.slice(0, splitAt)}${detail}`,
+    flavour: splitAt === null ? "" : label.slice(splitAt),
+  };
 }
 
 /* Design note #477: THE TIME LEADS. The expanded history is the whole game now (#476), so it is a column a
@@ -186,6 +291,17 @@ export function TopTicker({
               THE PRECEDENCE ORDER IS #1042's, UNCHANGED, and it has to be: chat after tone would let a
               flavour line borrow the chat colour, and error is a more urgent fact than which way a die
               rolled. Same sequence in both renderers, which is what stops the two drifting again. */}
+          {/* ==================================================================
+               DESIGN NOTE 1080: THE WRAPPER, WHICH IS THIS SURFACE'S WHOLE ENTRY
+              ==================================================================
+              RULED: "please tint the entire activity log entry for the Revenue Event." #1079 read the earlier
+              bullet about the `[time]` and `[round]` tags as "keep the fill off the gutter" and moved this
+              inward; the ruling is the other reading, and the tags' own ink was never at issue either way.
+              SO IT IS BACK ON THE WRAPPER -- and the wrapper is the right target here for the same reason the
+              row is in the expanded panel: it is the whole entry as this surface displays it, gutter
+              included, and it is what clips the line to one row.
+              #1042's PRECEDENCE RETURNS WITH IT. Chat after tone, or a flavour line could borrow the chat
+              weight in this surface and not the other -- which is the drift `batch51` exists to catch. */}
           <span
             style={{
               ...styles.previewText,
@@ -197,7 +313,26 @@ export function TopTicker({
               ...(latestItem?.kind === "chat" ? styles.previewTextChat : {}),
             }}
           >
-            {latestItem ? feedItemText(latestItem) : "No activity yet — click to expand the history."}
+            {/* Design note #1076: THE SAME PARTS, for #694's reason -- "the same feed saying two different
+                things about the same message depending on whether it happened to be open" is the failure this
+                dock has now had twice. The preview never shows the time: it is one line at the edge of a
+                board, and the click that would reveal it is spoken for by the expand toggle. */}
+            {latestItem ? (
+              <>
+                {feedItemParts(latestItem).gutter && (
+                  <span style={styles.previewGutter}>{feedItemParts(latestItem).gutter}</span>
+                )}
+                {/* Design note #1080: the inner tone span is GONE -- the wash moved out to the wrapper, so a
+                    span whose only job was to carry it would now carry nothing. What stays is #1079's split:
+                    the flavour in italic, the revenue math upright, exactly as in `LogEntry`. */}
+                {feedItemParts(latestItem).body}
+                {feedItemParts(latestItem).flavour && (
+                  <span style={styles.logFlavourText}>{feedItemParts(latestItem).flavour}</span>
+                )}
+              </>
+            ) : (
+              "No activity yet — click to expand the history."
+            )}
           </span>
           {/* Design note #616: unread CHAT, which is why the count can be
               trusted to stay small and why the title says "message". The
@@ -330,20 +465,44 @@ function ChatEntry({ item }: { item: FeedItem }) {
 }
 
 function LogEntry({ item }: { item: FeedItem }) {
+  /* Design note #1076: PER ROW, not per feed. A reader wanting the time of one entry does not want every
+     other tag replaced, and a feed-wide toggle would be a setting to find rather than a click to make. */
+  const [showTime, setShowTime] = React.useState(false);
+  const parts = feedItemParts(item, showTime);
   /* Design note #425: the SAME string the ticker shows, rendered whole. One span, because the sentence is one
      sentence -- the badge, the status glyph and the separately-styled round prefix are gone, and with them the
      four-column layout that made this row a different artefact from the line it was expanding.
      `whiteSpace: normal` is the actual "render the full text" half: the ticker clips because it has one line,
      and this wraps because it does not. */
   return (
-    <div style={styles.logEntry}>
+    /* Design note #1076: THE ROW IS THE TARGET. "I click the log event and the timestamp appears where it
+       currently is at the left" -- so the whole line takes the click rather than the gutter alone, which at
+       this type size is a target a few characters wide. `role="button"` and the key handler because a `div`
+       that responds to a click and not to Enter is a control only a mouse can reach. */
+    <div
+      style={styles.logEntry}
+      role="button"
+      tabIndex={0}
+      onClick={() => setShowTime((on) => !on)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          setShowTime((on) => !on);
+        }
+      }}
+      title={showTime ? "Click to show the round" : "Click to show the time"}
+    >
+      {parts.gutter && <span style={styles.logGutter}>{parts.gutter}</span>}
       <span
         style={{
           ...styles.logLabelFull,
           ...(item.logStatus === "error" ? styles.logLabelError : {}),
           /* Design note #1042: the variant's own lines, tinted by direction. AFTER the error style, because
              a failed action is a more urgent fact about a line than which way its die rolled -- and the two
-             cannot co-occur today, so the order is a statement of precedence rather than a live conflict. */
+             cannot co-occur today, so the order is a statement of precedence rather than a live conflict.
+             Design note #1080 (withdrawn): this spread was moved to the row `div` and is back. `flex: 1` on
+             `logLabelFull` is what makes it fill the line to the right edge; it was never a pill around the
+             words, and the move was correcting something that was not wrong. */
           ...(item.logTone === "bonus"
             ? styles.logToneBonus
             : item.logTone === "malus"
@@ -351,7 +510,11 @@ function LogEntry({ item }: { item: FeedItem }) {
               : {}),
         }}
       >
-        {feedItemText(item)}
+        {parts.body}
+        {/* Design note #1079: NESTED, not a sibling. The tint is a pill around the whole sentence and the
+            italic is a property of one part of it -- two sibling spans would break the fill into two pills
+            with a seam down the middle of a sentence. */}
+        {parts.flavour && <span style={styles.logFlavourText}>{parts.flavour}</span>}
       </span>
       {/* Design note #477: no trailing timestamp. It leads the string now,
           and printing it at both ends would be the same fact twice on every
@@ -586,6 +749,18 @@ const styles: Record<string, React.CSSProperties> = {
     marginTop: "1px",
   },
   // ---- Log entries -- ported from FeedOverlay.tsx design note #4. ----
+  /* Design note #1076: THE GUTTER IS THE ONE BOLD THING ON THE ROW. Reported: "[time] [round] [information]
+     all read as one long string." Weight rather than colour, because the row already spends colour on the
+     error state and on the variant's bonus/malus tint -- a third meaning in the same channel would collide
+     with both. */
+  logGutter: {
+    fontWeight: 800,
+    color: "#c8cdd8",
+    flex: "none",
+    marginRight: "8px",
+    fontVariantNumeric: "tabular-nums",
+  },
+  previewGutter: { fontWeight: 800, marginRight: "8px", fontVariantNumeric: "tabular-nums" },
   logEntry: {
     display: "flex",
     /* `flex-start`, not `center`: the label can now be several lines and a
@@ -663,20 +838,46 @@ const styles: Record<string, React.CSSProperties> = {
      emphasis at all. The italic is doing most of the work; the tint says which direction.
      PADDING AND A RADIUS COME WITH THE FILL, because a background flush against the text reads as a
      rendering artefact rather than a highlight. */
+  /* ==================================================================
+      DESIGN NOTE 1079: GREEN AND RED, ONE ALPHA, AND NOTHING ELSE
+     ==================================================================
+     RULED: "Bonus Events: Apply a soft green background ... using the exact same opacity/transparency value
+     currently utilized by the temporary amber background. Malus Events: Apply a soft red background [same].
+     Unchanged Events: Apply no background color ... Do not bold the event text or change the core font
+     colour. Apply italics strictly to the flavor text string at the end of the line."
+
+     THE AMBER'S 0.12 IS THE FIGURE, and the malus moves 0.11 -> 0.12 to match. That eleventh was never a
+     decision -- #1042 wrote two numbers by eye and they came out a hundredth apart, which is invisible on
+     screen and exactly the kind of near-agreement that reads as intent to the next person to open the file.
+     One alpha, named once, for both.
+
+     `#4ade80` IS THIS APP'S POSITIVE GREEN already (sixteen call sites) and `#f43f5e` its red. Reaching for
+     a fresh pair here would put a seventeenth green in the palette to say the thing the sixteenth says.
+
+     THE COLOUR AND THE ITALIC ARE GONE FROM BOTH, which is the substance of this change rather than the
+     hues. `color` overrode `logLabelFull`'s `#c7cbd4` on every flavour line, so the variant's lines read in
+     a different ink from the log around them -- two signals for one fact, and the report asked for the
+     background to carry it alone. The italic moved to `logFlavourText`, which is applied to the flavour
+     SENTENCE rather than to the whole line: the revenue math is now upright, as ruled.
+
+     UNCHANGED ROLLS NEED NO ENTRY HERE. They pass no tone (#1042), so they match neither branch and take no
+     fill -- "a neutral, transparent state" is the absence of a rule, not a third rule. */
+  /* Design note #1080 (withdrawn): the shape is #1042's, unchanged -- a plain `backgroundColor` on a
+     `flex: 1` span, with the padding and radius that finish its ends. ONLY THE HUE AND THE ALPHA MOVED. */
   logToneBonus: {
-    backgroundColor: "rgba(201, 169, 76, 0.12)",
-    color: "#e2d3a2",
-    fontStyle: "italic",
+    backgroundColor: `rgba(74, 222, 128, ${TONE_TINT_ALPHA})`,
     padding: "1px 6px",
     borderRadius: "4px",
   },
   logToneMalus: {
-    backgroundColor: "rgba(244, 63, 94, 0.11)",
-    color: "#efc0c6",
-    fontStyle: "italic",
+    backgroundColor: `rgba(244, 63, 94, ${TONE_TINT_ALPHA})`,
     padding: "1px 6px",
     borderRadius: "4px",
   },
+  /* Design note #1079: the ONLY emphasis on a flavour line. Not bold, not recoloured -- ruled as both, and
+     right on its own terms: the tint already says which direction the die went, and a second signal saying
+     the same thing is how the log came to be reading in stripes. */
+  logFlavourText: { fontStyle: "italic" },
   timestamp: {
     fontSize: FONT_SIZE.small,
     color: "#6f7480",

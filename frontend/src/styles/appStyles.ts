@@ -194,6 +194,45 @@ export const styles: Record<string, React.CSSProperties> = {
     flexShrink: 0,
     paddingLeft: "2px",
   },
+  /* ==================================================================
+      DESIGN NOTE 1083: THE PAGE ENDS HERE
+     ==================================================================
+     A row rather than a bar: no background, no border, nothing that would read as another strip of chrome in
+     a shell this batch is spending its whole length de-cluttering. What makes it a footer is its POSITION and
+     the space above it, not a rule across the page.
+     `marginTop: auto` IS LOAD-BEARING and is why `appRoot` is a column flex: it pushes this to the bottom on
+     a short page (a lobby, an error screen) instead of leaving it floating under half a viewport of nothing.
+     On a long page it simply follows the content.
+     CLEAR OF THE STATUS DOCK. `appRoot` already carries 96px of bottom padding for the fixed dock (#581);
+     this sits inside that padding's flow, above it, so the credit is never underneath the ticker. */
+  appFooter: {
+    marginTop: "auto",
+    display: "flex",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: "14px 16px 4px",
+    boxSizing: "border-box",
+    width: "100%",
+  },
+  /* Design note #1083: the room's code in the title strip, in the treatment it had in the bar it came from --
+     monospace, sized up, and `userSelect: "all"` so one click takes the whole code. It is the string a player
+     relays to somebody else, which is the entire reason it is not a chip. */
+  topBarRoom: { display: "inline-flex", alignItems: "center", gap: "6px", flexShrink: 0 },
+  topBarRoomLabel: {
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 700,
+    letterSpacing: "0.06em",
+    textTransform: "uppercase",
+    color: "#8a90a0",
+  },
+  topBarRoomCode: {
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+    fontSize: FONT_SIZE.strong,
+    fontWeight: 800,
+    letterSpacing: "0.08em",
+    color: "#7ee0a1",
+    userSelect: "all",
+  },
   topBarBrand: {
     fontWeight: 700,
     fontSize: FONT_SIZE.strong,
@@ -498,7 +537,28 @@ export const styles: Record<string, React.CSSProperties> = {
   // once the labels exceeded the bar nothing gave -- the row ran past its own padding and Tutorials, on the
   // far side of an `auto` margin, was the item that visibly left. `flexWrap` is the fix and `rowGap` is what
   // makes it survivable; bottom padding 0 -> 6px because the original assumed exactly one line.
+  /* ==================================================================
+      DESIGN NOTE 1084: THE SEPARATION IS A GAP, NOT A RULE
+     ==================================================================
+     ASKED, with the bar moving above the tabs: "should we add a subtle drop-shadow or a bottom border to it
+     so it visually separates from the navigation tabs directly beneath it?"
+
+     NEITHER, because both would be a second statement of something already said three ways. `actionBar` is
+     `#1b2130` with a full 1px `#2f3646` border and a 10px radius -- it is a CARD, outlined on all four sides
+     -- while this strip is `#0F172A` and the page behind both is `#12141a`. A bottom border would be a second
+     border on an edge that already has one; a drop shadow would say "floats above", which is wrong for two
+     things stacked in a column.
+
+     WHAT THEY LACKED WAS AIR. Flush, a bordered card and a flat strip read as one welded assembly. 10px of it
+     is enough to make them two objects, and it goes HERE rather than on the bar because #426's rule holds: a
+     sticky element's own bottom margin travels with it and offsets it from its pin.
+
+     AND THE PINNED FORM ALREADY HAS THE SHADOW. `actionBarCondensed` squares the top corners and adds
+     `0 2px 10px rgba(0,0,0,0.45)` when the bar is stuck to the viewport -- which is the one moment the bar is
+     genuinely floating over something. The separation the question asked for exists; it appears when it is
+     true rather than being drawn permanently. */
   mainTabBar: {
+    marginTop: "10px",
     display: "flex",
     flexWrap: "wrap",
     alignItems: "center",
@@ -641,7 +701,20 @@ export const styles: Record<string, React.CSSProperties> = {
     borderRadius: "10px",
     /* Design note #426: no `marginBottom`. See above -- a sticky element's
        own margin scrolls with it and offsets it from `top: 0`. The gap is
-       now the following content's `marginTop`, which stays put. */
+       now the following content's `marginTop`, which stays put.
+       ==================================================================
+        DESIGN NOTE 1084: THE INSET CAME WITH IT
+       ==================================================================
+       THE BAR USED TO SIT INSIDE `canvasPane`, whose `padding: 20px` gave it its margins from the window
+       edge. Hoisted to the root it would have gone full-bleed, which reads as a different KIND of element --
+       a banner rather than a card -- and would have put its rounded corners flush against the viewport.
+       HORIZONTAL ONLY, and #426's rule is unaffected: a VERTICAL margin offsets a sticky element from its
+       `top: 0` pin, which is the bug that note records. A horizontal one does nothing of the sort.
+       NOT A WRAPPER DIV, which was the first thing I reached for and would have re-created #600's bug
+       exactly: a sticky element travels only within its PARENT'S box, so wrapping it in a short container
+       pins it to a strip a few pixels tall. The inset has to be the bar's own. */
+    marginLeft: "20px",
+    marginRight: "20px",
   },
   /* Design note #720: the bar, given back to the page. Spread OVER `actionBar` when it has grown past half the
      viewport -- an embedded step panel, usually -- because a sticky box taller than its own pin space hides its
@@ -730,16 +803,8 @@ export const styles: Record<string, React.CSSProperties> = {
     gap: "6px",
     flexWrap: "wrap",
   },
-  /* Design note #426: the right rail. `justifySelf: end` rather than a spacer, so the badge pins right
-     without stealing width from the centred group.
-     Design note #427: the reason the return bar is on screen at all, stated beside the button rather than
-     left to the button's wording. */
-  returnBarNotice: {
-    fontSize: FONT_SIZE.small,
-    fontWeight: 700,
-    color: "#9fe5b5",
-    whiteSpace: "nowrap",
-  },
+  /* Design note #1085: `returnBarNotice` is DELETED with `ReturnToTurnBar`, its only caller. An orphaned
+     style for a component that no longer exists is an invitation to rebuild the component. */
   /* Design note #451: names the step Undo would rewind. Muted and small --
      it is a caption on the button beside it, not a control. */
   undoStepLabel: {

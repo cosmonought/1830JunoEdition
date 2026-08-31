@@ -163,7 +163,7 @@ import ContextualSubPanel from "./components/ContextualSubPanel";
 import FinancialLedger from "./components/FinancialLedger";
 import RulesReference from "./components/RulesReference";
 // Design note #697: the receipt for an action you just took.
-import ActionToast, { type ToastAnchor } from "./components/ActionToast";
+import ActionToast, { DEPOT_TOAST_MS, type ToastAnchor } from "./components/ActionToast";
 /* ==================================================================
     DESIGN NOTE 1049: THE PRIVATE PAYOUT LEFT THE TOAST LAYER ENTIRELY
    ==================================================================
@@ -345,7 +345,19 @@ import {
 // Design note #1008: the glow's condition travels beside `isMyTurn`, never folded into it.
 import { useDocumentTitleFlash, useTurnGlowActive } from "./utils/turnAlert";
 // Design note #1009: the whistle takes the same `isMyTurn` the other two turn alerts do.
-import { duckRadio, playVariantCue, RADIO_STREAM_URL, useRadioStream, useTurnWhistle } from "./utils/audio";
+import {
+  duckRadio,
+  // Design note #1073: the deep duck, for the one clip that competes with the bed rather than sitting over it.
+  DUCK_FOR_VIDEO,
+  playVariantCue,
+  RADIO_STREAM_URL,
+  RADIO_VOLUME,
+  setRadioVolume,
+  setSfxVolume,
+  SFX_VOLUME,
+  useRadioStream,
+  useTurnWhistle,
+} from "./utils/audio";
 // Design note #1040: which sound a flavour line earns, and whether it brings a video with it.
 import { isBonusBucket, variantCueFor } from "./utils/variantSfx";
 // Design note #1044: the two-stage Easter egg, derived from the replayed log rather than a hidden flag.
@@ -463,9 +475,9 @@ import {
   sandboxRouteBreakdown,
   SANDBOX_NOMINAL_TOKEN_COST,
 } from "./utils/sandboxSession";
+import AppFooter from "./components/AppFooter";
 import AuctionPromptModal from "./components/AuctionPromptModal";
 import HomeStationPrompt from "./components/HomeStationPrompt";
-import ReturnToTurnBar from "./panels/ReturnToTurnBar";
 
 // Step 4: Firebase Real-Time Integration -- see design notes #1 and #22.
 import Lobby from "./components/Lobby";
@@ -1677,7 +1689,45 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     [],
   );
   const radio = useRadioStream(RADIO_STREAM_URL);
-  useTurnWhistle(isMyTurn, sfxEnabled);
+
+  /* ==================================================================
+      DESIGN NOTE 1075: THE MIX IS THE PLAYER'S NOW, AND SO IS WHAT COUNTS AS AN EFFECT
+     ==================================================================
+     THREE CATEGORIES, RULED: turn notification, revenue events, payouts. Held here rather than in `audio.ts`
+     because they gate WHICH CALLS HAPPEN rather than how loud a call is -- the engine plays what it is asked
+     to play, and deciding whether to ask is the shell's job. That division is why `playVariantCue` still
+     takes a single `enabled` boolean: every caller passes its own category ANDed with the master.
+     MIRRORED INTO REFS for #967a's reason, the same one every other viewer read in this file has: the cue
+     sites live inside `runGameplayAction`, a long-lived `useCallback`, and a closure read there would answer
+     with whatever the settings were when the callback was built. */
+  const [sfxTurnEnabled, setSfxTurnEnabled] = useState(true);
+  const [sfxRevenueEnabled, setSfxRevenueEnabled] = useState(true);
+  const [sfxPayoutEnabled, setSfxPayoutEnabled] = useState(true);
+  const [sfxVolume, setSfxVolumeState] = useState(SFX_VOLUME);
+  const [radioVolume, setRadioVolumeState] = useState(RADIO_VOLUME);
+  const sfxRevenueRef = useRef(sfxRevenueEnabled);
+  sfxRevenueRef.current = sfxRevenueEnabled;
+  const sfxPayoutRef = useRef(sfxPayoutEnabled);
+  sfxPayoutRef.current = sfxPayoutEnabled;
+
+  /* Design note #1075: the master AND this cue's own category -- the same shape at all three cue sites.
+     BELOW THE STATE, deliberately: this used to sit beside `useRadioStream` and the category it now reads is
+     declared here, so the call moved rather than the declaration. Hook ORDER is unchanged relative to every
+     other hook in this component, which is the only thing React cares about. */
+  useTurnWhistle(isMyTurn, sfxEnabled && sfxTurnEnabled);
+
+  /* Design note #1075: the slider writes THROUGH to the engine as well as into React state. The engine holds
+     what the elements actually play at (`audio.ts` #1074) and React holds what the slider draws; a single
+     source would mean either the non-component callers reaching into a hook or the slider reading a module
+     variable it cannot re-render on. */
+  const handleSfxVolume = useCallback((value: number) => {
+    setSfxVolumeState(value);
+    setSfxVolume(value);
+  }, []);
+  const handleRadioVolume = useCallback((value: number) => {
+    setRadioVolumeState(value);
+    setRadioVolume(value);
+  }, []);
 
   const audioControls = useMemo(
     () => ({
@@ -1685,8 +1735,46 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       onToggleMusic: radio.toggle,
       sfxEnabled,
       onToggleSfx: () => setSfxEnabled((on) => !on),
+      radioVolume,
+      onRadioVolume: handleRadioVolume,
+      sfxVolume,
+      onSfxVolume: handleSfxVolume,
+      sfxCategories: [
+        {
+          key: "turn",
+          label: "Turn notification",
+          hint: "The whistle that sounds when your turn begins.",
+          enabled: sfxTurnEnabled,
+          onChange: setSfxTurnEnabled,
+        },
+        {
+          key: "revenue",
+          label: "Revenue events",
+          hint: "The Unpredictable Revenue variant's flavour cues, on every corporation's run.",
+          enabled: sfxRevenueEnabled,
+          onChange: setSfxRevenueEnabled,
+        },
+        {
+          key: "payouts",
+          label: "Payouts",
+          hint: "The cash register when a dividend reaches you.",
+          enabled: sfxPayoutEnabled,
+          onChange: setSfxPayoutEnabled,
+        },
+      ],
     }),
-    [radio.playing, radio.toggle, sfxEnabled],
+    [
+      radio.playing,
+      radio.toggle,
+      sfxEnabled,
+      radioVolume,
+      handleRadioVolume,
+      sfxVolume,
+      handleSfxVolume,
+      sfxTurnEnabled,
+      sfxRevenueEnabled,
+      sfxPayoutEnabled,
+    ],
   );
 
   /* Mirrored into a ref: a dependency would rebuild runGameplayAction and re-arm the two effects that dispatch (#439).
@@ -3612,20 +3700,25 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     if (replayingHistory) return;
     setDividendPayout(payout);
   }, []);
-  /* Design note #1062: THE CUE FIRES ON IMPACT, NOT ON MOUNT. "Trigger `money-machine.mp3` at the exact
-     moment the numbers merge" -- so the component owns the timing and this owns the playing, which keeps the
-     mute and the radio ducking in the one helper every other cue goes through (#1041). */
-  const handleMoneyMachineImpact = useCallback(() => {
-    playVariantCue(MONEY_MACHINE_SFX, sfxEnabledRef.current);
+  /* Design note #1062: THE COMPONENT OWNS THE TIMING AND THIS OWNS THE PLAYING, which keeps the mute and the
+     radio ducking in the one helper every other cue goes through (#1041).
+     Design note #1082: #1062's "fires on impact, not on mount" is superseded -- it now fires at 1.15s so the
+     clip's bell, which sits 0.85s in, lands on the 2.0s merge. That figure lives with the schedule in
+     `DividendMoneyMachine`; this side is unchanged and deliberately knows nothing about it. Which is the
+     point of the split: re-timing the animation did not touch the audio wiring. */
+  const handleMoneyMachineCue = useCallback(() => {
+    playVariantCue(MONEY_MACHINE_SFX, sfxEnabledRef.current && sfxPayoutRef.current);
   }, []);
   const handleMoneyMachineDone = useCallback(() => setDividendPayout(null), []);
 
-  const showActionToast = useCallback((text: string) => {
+  const showActionToast = useCallback((text: string, durationMs?: number) => {
     /* Design note #825: and #718's receipt likewise. "Did my button register" is a question about a click
        that just happened; replayed a minute later it answers about somebody's move from ten turns ago. */
     if (replayingHistory) return;
     actionToastTokenRef.current += 1;
-    setActionToast({ text, token: actionToastTokenRef.current });
+    /* Design note #1072: LAST AND OPTIONAL, so the refusal notice and every other receipt keep the standard
+       window and do not have to name one -- #984's and #1016's rule for the same shape one file over. */
+    setActionToast({ text, token: actionToastTokenRef.current, durationMs });
   }, []);
 
   /* ==================================================================
@@ -4144,6 +4237,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     detail: string,
     round?: string | null,
     tone?: "bonus" | "malus",
+    /** Design note #1079: the index in `label` where the flavour sentence begins. See `feed.ts` #1079 for
+     *  why this is stamped here rather than found by the renderer, and why it is not `tone` wearing a hat. */
+    flavourFrom?: number,
   ) => {
     const id = nextLogEntryId++;
     /* Design note #668: the replay clock, not `Date.now()`. Every derived line
@@ -4166,6 +4262,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         timestampMs,
         round: (round ?? roundLabelRef.current) ?? undefined,
         ...(tone ? { tone } : {}),
+        /* Design note #1079: `> 0` rather than truthiness -- an index of 0 would mean a line that is ALL
+           flavour, which no composer produces and which would italicise the corporation's own name. */
+        ...(flavourFrom !== undefined && flavourFrom > 0 ? { flavourFrom } : {}),
       },
       ...log,
     ]);
@@ -4211,6 +4310,22 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
          *  to take back. Folding the two together would make Undo step silently
          *  past a real move, which is the bug #475 was fixed to prevent. */
         derived?: boolean;
+        /** Design note #1070: why the shell skipped this step, for the sentence that reports it. `null` when
+         *  a player pressed Skip themselves -- there is no reason to give beyond the press. */
+        skipReason?: string | null;
+        /** ==================================================================
+         *   DESIGN NOTE 1077: THIS DISPATCH GETS NO LINE OF ITS OWN
+         *  ==================================================================
+         *
+         * SET ONLY BY THE MULTI-TRAIN BUY, where one button press is several messages and a caller writes ONE
+         * summary covering all of them. Without it the log shows the summary and every message it summarises.
+         *
+         * DELIBERATELY NOT `derived`. That flag means "the game dispatched this rather than the player"
+         * (#668), which is false here -- the player pressed Buy -- and it also governs Undo's reach, so
+         * borrowing it to quieten a line would make Undo step past a real purchase.
+         * THE TOAST IS UNAFFECTED, and that is the point of a separate flag: the depot count is a glance at a
+         * number going down, and a batch of two should still produce it. */
+        silentInLog?: boolean;
         /** Design note #701: an answer the game is WAITING FOR from a player who is not on turn.
          *
          *  The turn gate below asks "is it your turn", which is the right question for a move and the wrong
@@ -5400,6 +5515,25 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                   : resolved.stage === "carcosa"
                     ? `${flavourLine} ${ESCALATION_APPENDIX}`
                     : flavourLine;
+              /* ==================================================================
+                  DESIGN NOTE 1079: THE SEAM IS ARITHMETIC, NOT PARSING
+                 ==================================================================
+                 RULED: "Apply italics strictly to the flavor text string at the end of the line, leaving the
+                 mechanical revenue math in the standard font."
+                 THE TAIL IS BUILT FROM THE SAME PIECES THE SENTENCE WAS, three lines up, so the two cannot
+                 disagree about where the flavour starts. `turnRevenueSentence` puts the clause LAST in all
+                 three of its shapes (#944/#949) and the appendix appends to the clause (#1046) -- so the
+                 flavour is a suffix, and a suffix's start is a subtraction.
+                 NOT `indexOf(clause)`. A clause that happened to repeat a phrase from the mechanical half
+                 would match the wrong occurrence, and `indexOf` returning -1 on a miss is the exact vacuity
+                 `sourceScan.ts` #886 exists to stop us writing. Lengths cannot miss. */
+              const flavourTail =
+                resolved.stage === "mark"
+                  ? `${resolved.line} ${MARK_APPENDIX}`
+                  : resolved.stage === "carcosa"
+                    ? `${resolved.line} ${ESCALATION_APPENDIX}`
+                    : resolved.line;
+              const flavourFrom = flavourWithAppendix.length - flavourTail.length;
               const cue = variantCueFor({ line: flavourWithAppendix, bucket, stage: resolved.stage });
               logInfo(
                 flavourWithAppendix,
@@ -5408,6 +5542,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                 /* Design note #1042: `unchanged` earns no tint. It is the bucket that says nothing happened,
                    and a highlight on it would be the log emphasising the absence of news. */
                 bucket === "unchanged" ? undefined : isBonusBucket(bucket) ? "bonus" : "malus",
+                /* Design note #1079: PASSED ON EVERY BUCKET, INCLUDING `unchanged`, unlike the tint above.
+                   The italic marks which half of the line is atmosphere, and an unchanged roll's line has the
+                   same two halves as any other. Withholding it there would set a third of the variant's
+                   flavour upright for a reason no player could see. */
+                flavourFrom,
               );
               /* THE MECHANICS GO THROUGH THE LOG AS AN ACTION (#1046), not through a local mutation: they
                  delete a train and move money, and board state in this app is what the reducer writes while
@@ -5446,7 +5585,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                   });
                 }
               }
-              playVariantCue(cue.audio, sfxEnabledRef.current);
+              /* Design note #1081: `null` is the unchanged bucket's default -- "nothing happened" has nothing
+                 to sound like. Guarded HERE rather than inside `playVariantCue`, because that function's
+                 `enabled` argument means "the player muted this" and silence-by-design is a different fact:
+                 folding them together would make a muted cue and an intentionally silent one indistinguish-
+                 able at the one place either could be debugged from. */
+              if (cue.audio !== null) {
+                playVariantCue(cue.audio, sfxEnabledRef.current && sfxRevenueRef.current);
+              }
               if (cue.video) {
                 if (hauntingTimerRef.current !== null) {
                   window.clearTimeout(hauntingTimerRef.current);
@@ -5455,7 +5601,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                 /* Design note #1045: the video's own audio is outside `playVariantCue`'s ducking, so the bed
                    is held down for the clip's whole run and released with it. Without this the radio plays
                    at full volume under a ten-second haunting. */
-                const releaseHaunting = duckRadio();
+                /* Design note #1073: THE DEEP DUCK, ASKED FOR BY NAME. This is the one clip the shallow
+                   default is wrong for -- ten seconds with its own dialogue, which #1045 added ducking for in
+                   the first place. Every short cue takes the default and barely touches the bed. */
+                const releaseHaunting = duckRadio(DUCK_FOR_VIDEO);
                 hauntingTimerRef.current = window.setTimeout(() => {
                   setHauntingSrc(null);
                   hauntingTimerRef.current = null;
@@ -5749,16 +5898,38 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
               const named = closures
                 .map((entry) => `${entry.privateId}. ${entry.name}`)
                 .join(", ");
-              logInfo(
-                phaseTurned ? "Phase Change" : "Private Companies",
-                phaseTurned
-                  ? /* #736's SENTENCE, UNCHANGED, and still correct for the event it was written about: at
-                       Phase 5 every private closes together and every one of them stops paying. */
-                    `${named} ${closures.length === 1 ? "closes" : "close"} — private companies pay no further revenue and no longer count toward the certificate limit.`
-                  : /* A SINGLE PRIVATE ON ITS OWN TRIGGER. Nothing about the phase moved and the others keep
-                       paying every Operating Round, so the sentence claims neither. */
-                    `Private ${closures.length === 1 ? "company" : "companies"} ${named} ${closures.length === 1 ? "closes" : "close"}.`,
-              );
+              /* ==================================================================
+                  DESIGN NOTE 1068: THE STAMP, NOT THE CATEGORY -- #1058 DID HALF OF THIS
+                 ==================================================================
+                 REPORTED: "The tag for Private company 6. BO needs to be '[OR 1.1--Private Companies] 6.
+                 Baltimore & Ohio closes.' Anything involving private companies needs to be tagged [OR
+                 X.Y--Private Companies]".
+                 AND #1058 PUT THE WORDS IN THE WRONG SLOT. It changed the LABEL to "Private Companies", which
+                 renders as a `Category — sentence` prefix, so the line came out
+                 `[OR 1.1--Buy Trains] Private Companies — Private company 6. Baltimore & Ohio closes.` --
+                 the classification twice and the stamp still naming whichever step the cursor happened to be
+                 on. The payout lines got this right one batch earlier (#1059) and the closure did not.
+                 SO IT TAKES THE SAME STAMP THE PAYOUTS TAKE, and the whole sentence goes in the label with an
+                 empty detail, which is what removes the prefix. A phase-driven closure keeps `Phase Change`,
+                 because at Phase 5 the subject really is the phase and the privates are its consequence. */
+              const closureStamp = `${roundLabelFor(after)}--Private Companies`;
+              if (phaseTurned) {
+                logInfo(
+                  "Phase Change",
+                  /* #736's SENTENCE, UNCHANGED, and still correct for the event it was written about: at
+                     Phase 5 every private closes together and every one of them stops paying. */
+                  `${named} ${closures.length === 1 ? "closes" : "close"} — private companies pay no further revenue and no longer count toward the certificate limit.`,
+                );
+              } else {
+                /* A SINGLE PRIVATE ON ITS OWN TRIGGER. Nothing about the phase moved and the others keep
+                   paying every Operating Round, so the sentence claims neither -- and it no longer opens with
+                   "Private company", because the stamp above it already says so. */
+                logInfo(
+                  `${named} ${closures.length === 1 ? "closes" : "close"}.`,
+                  "",
+                  closureStamp,
+                );
+              }
             }
           }
 
@@ -5898,6 +6069,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             // Design note #1054: the atom's own move, so the dividend sentence carries it instead of a
             // second line repeating what the first one caused.
             marketMove: dividendMarketMove,
+            // Design note #1070: the shell's verdict on why this step was skipped, if it skipped one.
+            skipReason: options?.skipReason ?? null,
           }) ?? label;
 
         /* Design note #794: the receipt, from the sentence the Activity Log is about to show. One string, one
@@ -5937,7 +6110,20 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           /* Design note #1063: the short sentence when there is one, the log's own when there is not. Both
              come out of `actionLog.ts` and both are built from this dispatch's single snapshot, which is the
              property #794 actually protects. */
-          showActionToast(globallyBroadcast ?? label);
+          /* ==================================================================
+              DESIGN NOTE 1072: A SHORTER SENTENCE EARNS A SHORTER WINDOW
+             ==================================================================
+             REPORTED: "The toast notification for a corporation buying trains ... lasts for a very long time.
+             I would guess 5+ seconds ... with the lesser amount of information on the toast, we can reduce
+             the time it needs to stay up to 3 seconds."
+             #928 SET THE STANDARD WINDOW AT 3,700ms FOR A LONGER LINE -- "too short for players to read the
+             financial details", when the receipts carried a route total, a percentage and an amount. The
+             depot toast is now six words and a number, so it is sized by the project's own rule of thumb:
+             readable ~1.5x before it goes away. */
+          showActionToast(
+            globallyBroadcast ?? label,
+            globallyBroadcast !== null ? DEPOT_TOAST_MS : undefined,
+          );
         }
 
         /* Design note #784: computed ONCE, above the entry that reads it three times -- and once rather than
@@ -5982,6 +6168,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
          * RECORDED RATHER THAN DELETED because the lesson is mine: I added a feature that existed, in a file
          * I had already read, because I searched for the mechanism I expected instead of the one on screen. */
 
+        /* ==================================================================
+         *  DESIGN NOTE 1077: A SILENCED DISPATCH STILL SPEAKS WHEN IT WAS REFUSED
+         * ==================================================================
+         *
+         * `silentInLog` is a promise by the CALLER that it will write one line covering this dispatch and its
+         * siblings. That promise only holds for dispatches that WORKED: the multi-buy summary quotes a price,
+         * a treasury transition and a depot count, and every one of those numbers assumes the purchase landed.
+         * A refusal is not covered by that sentence, so suppressing it would take #778's whole point --
+         * "the log says whether it happened" -- and hand it back to the bug it was written against.
+         * HENCE THE `||`, not a plain skip. The quiet case is the success case only. */
+        if (!options?.silentInLog || refusalWasRefused) {
         setActionLog((log) => [
           {
             id,
@@ -6023,11 +6220,27 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                See docs/ai_architecture/state_machine.md - App.tsx #659 */
             /* Design note #958: stamped with the step the action was taken ON, from the same `before` state
                #659 chose for the round -- an action that advances the cursor must not be filed under the step
-               it moved to. */
-            round: roundStampFor(before) ?? undefined,
+               it moved to.
+               ==================================================================
+                DESIGN NOTE 1069: ENDING A TURN BELONGS TO NO STEP
+               ==================================================================
+               REPORTED: "At the end of a corporation's turn, it clicks End Turn but the Activity Log prints
+               '[OR 1.1--Buy Trains] B&O passed.' Let's instead have this say '[OR 1.1] B&O ended its turn.'
+               Note there's no action subphase attached with ending the turn."
+               AND THE STAMP WAS TELLING A SMALL LIE. `roundStampFor` reads the cursor, and the cursor is
+               wherever the corporation happened to stop -- so ending a turn from Buy Trains filed the event
+               under Buy Trains, an action the corporation explicitly did not take. #958's rule is that the
+               tag names the step the action was taken ON; a turn ending is not taken on a step at all.
+               `roundLabelFor` IS THE SAME FUNCTION WITHOUT THE SUFFIX, which is exactly the distinction
+               `roundLabel.ts` #958 drew when it split the two: the round-transition announcements use it for
+               the same reason, that "the announcement is about a round starting, at which point no
+               corporation is on any step." */
+            round:
+              ("PassTurn" in msg ? roundLabelFor(before) : roundStampFor(before)) ?? undefined,
           },
           ...log,
         ]);
+        }
           if (
             before !== null &&
             before.current_round_type !== after.current_round_type &&
@@ -7236,17 +7449,40 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     async (tier: string, quantity: number) => {
       const times = Math.max(1, Math.floor(quantity));
       const before = depotInventory(gameState).find((row) => row.tier === tier);
+      // Design note #1077: read BEFORE the loop, because by the summary the state has already moved.
+      const beforeTreasury = gameState?.public_companies.find(
+        (entry) => entry.company_id === actingProtocolId,
+      )?.treasury;
 
+      /* ==================================================================
+          DESIGN NOTE 1077: ONE BUTTON PRESS, ONE LINE
+         ==================================================================
+         REPORTED: "In this example B&O used the selector to buy two trains at once. The Activity Log printed
+         this one at a time. This is unnecessary ... So, if a player buys three trains one at a time, there
+         should be three prints, but if they buy three trains at once, one print."
+         AND THE THREE LINES CAME FROM A REAL CONSTRAINT PLUS ONE CHOICE. `BuyHardwareFromPool` carries no
+         quantity (`TrainPurchasePanel` #1: "the quantity field is a convenience, not a batch"), so buying two
+         genuinely IS two messages and the log wrote one line for each. #262 then added an aggregate summary
+         ON TOP, which is the third line and the "Trains Bought —" prefix the report could not place.
+         THE MESSAGES STAY TWO AND THE LINES BECOME ONE. Collapsing the dispatch would be a contract change
+         for a display problem; suppressing the per-message entries and keeping the summary is the same board
+         with a readable record. A SINGLE purchase is untouched -- it has no aggregate, so it keeps its own
+         line, which is exactly the split the report asks for. */
       for (let i = 0; i < times; i += 1) {
         await runGameplayAction(
           times > 1
             ? `BuyHardwareFromPool: ${tier}-train (${i + 1} of ${times})`
             : `BuyHardwareFromPool: ${tier}-train`,
           { BuyHardwareFromPool: { game_id: gameId, protocol_id: actingProtocolId } },
+          /* Design note #1077: silent only when there is a summary coming. The toast is NOT suppressed --
+             it is one glance at a depot count and a batch of two should still produce it. */
+          times > 1 ? { silentInLog: true } : undefined,
         );
       }
 
-      /* One aggregate summary above the per-message lines, and only when there is an aggregate to state.
+      /* #262 wrote this as a summary sitting ABOVE the per-message lines; #1077 suppressed those, so it is now
+         the only line the buy produces. Still gated on `times > 1`: a single purchase has no aggregate and
+         keeps its own entry.
          See docs/ai_architecture/state_machine.md - App.tsx #262 */
       if (times > 1 && before) {
         const ticker =
@@ -7256,10 +7492,22 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           before.remaining === null
             ? "unlimited"
             : `${Math.max(0, before.remaining - times)}/${before.total}`;
+        /* Design note #1077: THE SUMMARY IS THE LINE NOW, so it says what the suppressed ones did -- the
+           per-train price the report asked for ("for $80 each"), and the treasury transition every other
+           action line carries since #1053. The `Trains Bought` category goes with them: with one line there
+           is nothing to distinguish it from, and the stamp already files it under Buy Trains. */
+        const treasuryBefore = beforeTreasury;
+        const treasuryAfter = sandboxStateRef.current?.public_companies.find(
+          (entry) => entry.company_id === actingProtocolId,
+        )?.treasury;
+        const movement =
+          treasuryBefore !== undefined && treasuryAfter !== undefined && treasuryBefore !== treasuryAfter
+            ? ` Treasury $${treasuryBefore} → $${treasuryAfter}.`
+            : "";
         logInfo(
-          "Trains Bought",
-          `${ticker} bought ${countPhrase(times, `${tier}-train`)} for $${before.cost * times}. ` +
-            `Remaining depot supply: ${remaining}.`,
+          `${ticker} bought ${countPhrase(times, `${tier}-train`)} for $${before.cost} each.` +
+            `${movement} Remaining depot supply: ${remaining}.`,
+          "",
         );
       }
     },
@@ -7383,18 +7631,20 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
 
   // A real mode toggle now, not a hint: turning it on disarms the tile picker and points the next board click at handleTokenHexClick.
   // See docs/ai_architecture/canvas_rendering.md - App.tsx #159
+  /* ==================================================================
+      DESIGN NOTE 1067: A CURSOR MODE IS NOT A GAME EVENT
+     ==================================================================
+     REPORTED: "The 'targeting mode' is not important and should not print on player-facing information, it's
+     just clutter."
+     AND IT WAS IN THE WRONG RECORD ENTIRELY. The Activity Log is the table's history of what HAPPENED --
+     replayed identically on every client, scrolled back through to work out why a round closed when it did.
+     "Targeting mode ON" is a fact about one player's cursor on one browser: it is not replayed, it did not
+     change the board, and every other client saw it appear for no reason they could act on.
+     THE HINT ITSELF IS NOT LOST. The button's own label and the map's targeting affordance both say the mode
+     is armed, which is where a fact about the cursor belongs -- beside the cursor. */
   const handlePlaceStationTokenHint = useCallback(() => {
-    setTokenTargetMode((current) => {
-      const next = !current;
-      logInfo(
-        "Place Station Token",
-        next
-          ? "Targeting mode ON — click a city hex on the Rail Map to place the token. Click the button again to cancel."
-          : "Targeting mode cancelled.",
-      );
-      return next;
-    });
-  }, [logInfo]);
+    setTokenTargetMode((current) => !current);
+  }, []);
 
   /** A board click while token targeting is on. Takes the same
    *  `{ q, r, hexLabel, clientX, clientY }` info object `onHexClick` hands
@@ -7612,7 +7862,19 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
 
   // One real AdvanceOperatingSubPhase replaces three client-only skips; the chain owns the cursor. #179: in sandbox the reducer moves it. #439: two named callbacks so a MouseEvent cannot mark a manual skip automatic.
   // See docs/ai_architecture/state_machine.md - App.tsx #144
-  const skipSubPhase = useCallback((automatic: boolean) => {
+  /* ==================================================================
+      DESIGN NOTE 1070: A SKIPPED STEP SAYS WHY IT WAS SKIPPED
+     ==================================================================
+     REPORTED of a trainless corporation: "'[OR 1.1--Run Routes] PRR passed.' This is maybe technically
+     accurate, but for player-facing information it would be useful to state why."
+     AND THE REASON WAS ALREADY COMPUTED, one screen away. `autoSkipReason` is what decides the step gets
+     skipped at all -- "it owns no trains, so there is no route to run" -- and #1057 deleted the line that
+     used to print it, on the rule that a step where nothing happened earns no line. That rule still holds:
+     this is not a second line, it is the one line saying more.
+     PASSED AT THE DISPATCH RATHER THAN READ FROM STATE, because the reason is a fact about the SHELL's
+     verdict, not about the board -- a replaying client has no `autoSkipReason` of its own, so deriving it
+     downstream would give the acting browser a sentence and everybody else a shorter one. */
+  const skipSubPhase = useCallback((automatic: boolean, reason?: string | null) => {
     /* Design note #278: skipping Routes is the observation that makes a
        stale `last_route_revenue` harmless -- whatever the field says, this
        corporation did not run this turn, so there is nothing to allocate
@@ -7632,7 +7894,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
          two questions have the same answer -- #439's split entry points mean
          this flag is true only when the auto-skip effect called it. The Skip
          button passes `false` and stays undoable. */
-      { automatic, derived: automatic },
+      // Design note #1070: the shell's own verdict, carried so every client prints the same sentence.
+      { automatic, derived: automatic, skipReason: reason ?? null },
     );
     if (!sandbox) return;
     setLiveOrSubPhase((current) => {
@@ -7656,7 +7919,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
    *  arguments, so an event object cannot be mistaken for a flag. */
   const handleSkipSubPhase = useCallback(() => skipSubPhase(false), [skipSubPhase]);
   /** The auto-skip effect's entry point -- design note #439. */
-  const skipSubPhaseAutomatically = useCallback(() => skipSubPhase(true), [skipSubPhase]);
+  const skipSubPhaseAutomatically = useCallback(
+    (reason?: string | null) => skipSubPhase(true, reason),
+    [skipSubPhase],
+  );
 
   /* Design note #876: the automatic twin of End Turn, and the same `{ automatic, derived }` pair the skip
      above carries -- #439's split entry points, so Undo rewinds past a turn the game ended on the player's
@@ -8233,7 +8499,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
        THE `Auto-Withhold` LINE BELOW IS DELIBERATELY UNTOUCHED -- see it for the price move that earns it. */
     // Design note #439: the AUTOMATIC entry points, so Undo rewinds past either.
     if (exit === "end-turn") endTurnAutomatically();
-    else skipSubPhaseAutomatically();
+    else skipSubPhaseAutomatically(autoSkipReason);
   }, [
     autoSkipReason,
     isMyTurn,
@@ -9483,12 +9749,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           <SandboxRoomBar
             roomCode={sandboxRoomCode}
             available={isFirebaseConfigured()}
-            appliedCount={sandboxAppliedCount}
             error={sandboxRoomError}
             busy={sandboxRoomBusy}
             onHost={handleHostSandboxRoom}
             onJoin={handleJoinSandboxRoom}
-            onLeave={handleLeaveSandboxRoom}
           />
           <button type="button" style={styles.sandboxGateQuiet} onClick={onLeaveGame}>
             Back to the lobby
@@ -9815,10 +10079,424 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           </>
         )}
             {chatError && <span style={styles.roomStripError}>{chatError}</span>}
+            {/* Design note #1083: the room's own error moved here with the room's name. It reports the same
+               KIND of fact `chatError` does -- this room's connection is unhappy -- and the bar that used to
+               carry it is gone. Only while IN a room: the join form still reports its own failures inline,
+               where the player is looking when a code is refused. */}
+            {sandboxRoomCode && sandboxRoomError && (
+              <span style={styles.roomStripError}>{sandboxRoomError}</span>
+            )}
           </>
         }
+        /* Design note #1083: the sandbox room's code, in the slot the Neta DAO credit vacated. `null` for a
+           solo sandbox and for an on-chain game, whose identity the strip above already names. */
+        roomName={sandboxRoomCode}
       />
 
+      {/* ==================================================================
+       DESIGN NOTE 1084: THE BAR IS ABOVE THE TABS, AND ABOVE THE TAB BRANCH
+      ==================================================================
+      RULED: "Reorder the Layout Flow ... global controls sit above local navigation ... 1. Title Header.
+      2. Action Bar (Global turn controls). 3. Tabs -- these must sit directly on top of the viewport.
+      4. Current Tab Viewport. 5. Global Footer."
+
+      IT MOVED OUT OF `isWorkspaceTab`, WHICH IS THE PART THAT IS NOT JUST A REORDER. #31 called this "THE
+      one action bar" and it was one bar for four tabs; on `ledger`, `rules` and `tiles` it did not render
+      at all, and #427 built a SECOND component to give those tabs a way back. Hoisted here it renders on
+      every tab, which is what "global turn controls" means and what makes that second component
+      redundant (see the deletion below).
+
+      THE REFERENCE TABS ARE STILL SAFE, and by the mechanism that already existed rather than by not
+      rendering: `misplacedSurfaceTab` returns non-null for any tab that is not the round's own surface,
+      and #390/#404 REPLACE the entire bar with a single "Return to X" button in that case. So a player
+      reading the rulebook gets one control that cannot spend a turn -- ruled explicitly: "when you're on
+      a non-actionable tab like Rules Reference ... the Action Button still clicks to take you back to the
+      working tab. That's the behavior we currently have."
+
+      IT STAYS STICKY, AND IT TRAVELS OVER THE TABS. Ruled, with the trade named: "I don't think I want
+      the tabs to become sticky: those eat an incredible amount of vertical space when most players don't
+      use them unless they're intentionally trying to see something, and by that point they're already
+      looking for them." So the tabs scroll away under the pinned bar and the turn controls are what stays.
+      `actionBarCondensed` already supplies the pinned form -- squared top corners and a drop shadow --
+      which answers the question asked with this batch: the separation is already built, and it appears at
+      the moment it is needed rather than being drawn permanently. */}
+      {/* Design note #31, kept: ONE bar. Two existed once, and on the phase tab during a Stock Round BOTH
+         rendered, with two Undo buttons. That remains the rule this hoist must not break. */}
+      {/* Item 5: the contextual gameplay action bar -- design notes #8/#10, with OR sub-phase guidance in
+         #10/item 2.
+         Design note #23: hidden entirely for spectators. This is the COURTESY half of read-only mode -- the
+         guarantee is `runGameplayAction`'s gate, which holds whether or not this renders. Hidden rather than
+         disabled because twenty greyed buttons offer a spectator nothing; the room strip's badge explains why. */}
+      {/* ==================================================================
+           DESIGN NOTE 1083: THE SHELL'S ROOM BAR WAS ALREADY UNREACHABLE
+          ==================================================================
+          #521 RENDERED IT HERE and the note above it argued, correctly for its time, that a spectator should
+          still see the room strip. What has happened since is #533: `if (sandbox && !sandboxRoomCode)` returns
+          the gate screen well above this point, so by the time the shell renders, `sandbox` IMPLIES a room
+          code. With this batch's in-room branch gone the component returns `null` for exactly that case --
+          so this instance could render nothing, ever.
+          FOUND BY FOLLOWING THE DELETION rather than by a test: emptying the in-room branch made me ask what
+          the remaining branch showed here, and the answer was "nothing, since #533". It had been dead for
+          some time and cost nothing visible, which is why nobody found it.
+          THE TWO LIVE INSTANCES ARE UNTOUCHED -- the sandbox gate (host or join, before any room exists) and
+          the lobby's own panel. Both are surfaces where there is genuinely no room yet, which is the only
+          state this component has anything to say in. */}
+      {spectator ? (
+        <div style={styles.spectatorNotice}>
+          👁 Watching game #{gameId}. Board, ledger and market are live; every action
+          control is hidden. Join a room from the lobby to play.
+        </div>
+      ) : (
+      <ContextualActionBar
+      /* Design note #899: any player may close a finished room; the reducer takes the first.
+         PASSED EVEN WHEN CLOSED, because the bar disables it rather than dropping it -- the first
+         draft here passed `undefined` once closed, which made the button vanish and contradicted
+         the note in `ContextualActionBar` saying it stays. The handler is inert then anyway: the
+         reducer refuses a second `CloseRoom`. */
+      onCloseRoom={() => closeRoom("manual")}
+      roomClosed={roomClosed}
+        /* Design note #500: `latestFeedItem`/`onOpenActivityLog`
+           are gone. The bar no longer echoes the activity log --
+           `TopTicker` above carries it, from this same
+           `latestFeedItem`. */
+        roundType={gameState?.current_round_type ?? null}
+        /* Design note #517: the board's own round numbering, from
+           the same two fields `ContextualSubPanel` prints as
+           "OR n.m". `null` before the first poll. */
+        /* ==================================================================
+            DESIGN NOTE 889: THE OPERATING ORDER, SORTED WHERE IT IS ALREADY SORTED
+           ==================================================================
+           `sortForOperatingOrder` is the authority (#285: reproducing the sort is what let the
+           roster table re-sort mid-round while the frozen queue did not budge), so the bar is
+           handed the result rather than the ingredients.
+           `done` IS AN INDEX COMPARISON against `active_corporation_index`, which is the same
+           cursor `actionLog.ts` and `dividendGate.ts` read -- not a second reading of who has
+           acted. */
+        operatingOrder={
+          gameState && gameState.current_round_type === "OperatingRound"
+            ? gameState.active_operating_order.map((companyId, index) => ({
+                companyId,
+                ticker:
+                  gameState.public_companies.find(
+                    (entry) => entry.company_id === companyId,
+                  )?.ticker ?? `#${companyId}`,
+                color: stationTickerColor(companyId),
+                done: index < gameState.active_corporation_index,
+              }))
+            : []
+        }
+        /* Design note #890: the depot, unconditionally. The buy PANEL is Hardware-only; the
+           rust and limit countdowns are not, and reading them off `trainPurchase` is what made the
+           limit badge vanish when the step turned rather than when the threshold cleared. */
+        depot={depot}
+        // Design note #1033: the rust countdown's wording, and whether that badge pulses.
+        gentleRust={resolveVariants(gameState?.variants).gentleRust}
+        orSequence={
+          gameState
+            ? {
+                cycle: gameState.macro_round_number,
+                index: gameState.sub_round_index,
+              }
+            : null
+        }
+        // Design note #390: the bar compares these two and
+        // replaces itself with a Return button when the player is
+        // on another round's playing surface.
+        activeTab={activeMainTab}
+        onSelectTab={setActiveMainTab}
+        orSubPhase={orSubPhase}
+        // Controls go dead off-turn so a player is not invited to click what the dispatch gate will refuse.
+        // See docs/ai_architecture/session_keys_wallet.md - App.tsx #536
+        sessionReady={controlsEnabled && isMyTurn}
+        // WaterfallPass and PassTurn are different contract messages, not one action with two names.
+        // See docs/ai_architecture/contract_economy.md - App.tsx #31
+        onPassTurn={isWaterfallPhase ? handleWaterfallPass : handlePassTurn}
+        /* Design note #717: offered only where a standing pass means something.
+           Design note #728: but never WITHDRAWN while one is standing. `isWaterfallPhase` used to
+           return `null` here, deleting the control outright -- and an arm can survive into the
+           auction, so the one place a player could not reach the off switch included a phase where
+           it was still notionally live. The bar decides what to show from `armed`. */
+        autoPass={
+          isWaterfallPhase && autoPassArm === null
+            ? null
+            : {
+                armed: autoPassArm !== null,
+                /* Design note #1036: `controlsEnabled` ALONE, deliberately not the `sessionReady`
+                   below it. That one is `controlsEnabled && isMyTurn`, which is right for Pass and
+                   wrong for a standing instruction: arming writes local state and the dispatch it
+                   causes happens on this player's own turn, which the acting effect tests for
+                   itself. Gating it on the turn made the control dead for the whole round except
+                   the one turn a player least needs it. */
+                canArm: controlsEnabled,
+                onOpenSettings: () => setAutoPassOpen(true),
+                onDisarm: handleDisarmAutoPass,
+              }
+        }
+        /* Passing is always legal: an all-pass round is what marks the cheapest private down $5. A live mini-auction is still blocked - it has its own cursor and message.
+           See docs/ai_architecture/contract_economy.md - App.tsx #311 */
+        /* Design note #751: the mandatory purchase is enforced HERE, on Pass, rather than by an
+           unskippable modal. The obligation is to acquire a train; buying from a rival discharges
+           it just as well as the Depot does, and #3's undismissable modal made that unreachable. */
+        passDisabledReason={
+          /* Design note #763: FIRST, because it outranks every other reason -- while a home token
+             is owed nothing may happen at all, and a player told about some later rule would fix
+             that one and still find the button dead. */
+          homeTokenBlock({
+            state: gameState ?? ({ public_companies: [] } as never),
+            homeHexToAxial,
+            labelForAddress: (address) =>
+              sandboxPlayerLabel(address) ?? truncateAddress(address),
+          }) ??
+          (isWaterfallPhase && waterfallState?.mini_auction
+            ? "A mini-auction is running — use Drop out on the highlighted company card to leave it."
+            : /* Design note #759, rule (iii): a player who owes a sell-down may not pass either.
+                 Ahead of the train obligation because the two cannot both apply -- one is a Stock
+                 Round debt and the other an Operating Round one -- and reading the seat's debt
+                 first keeps the Stock Round's refusal from depending on an unrelated check. */
+              divestmentRefusal(
+                divestmentDebt({
+                  state: gameState ?? ({ current_round_type: null } as never),
+                  player: viewerAddress ?? "",
+                  marketPrices: sandboxMarketPrices,
+                  zoneForPrice: marketZoneForPrice,
+                }),
+              ) ??
+              trainPurchaseRefusal({
+                atHardwareStep:
+                  gameState?.current_round_type === "OperatingRound" &&
+                  orSubPhase === "Hardware",
+                trainless: trainlessAndReported,
+                couldRunARoute: couldRunARouteIfItHadATrain,
+                ticker: activeCorporationContext?.ticker ?? "This corporation",
+              }))
+        }
+        /* Design note #745: read off the replayed state, not off a React flag. The bar is a
+           narrator (#400/#685) -- the reducer decides whether the turn has an action in it, and
+           an Undo that rewinds past the sale must take the "End Turn" label back with it. */
+        turnActionTaken={gameState?.turn_action_taken === true}
+        onPlaceStationTokenHint={handlePlaceStationTokenHint}
+        stationTokenCost={stationTokenCost}
+        /* Design note #707: the same probe the Routes panel's Auto Route runs, so the button and
+           the search cannot disagree about whether a run exists. */
+        maxRouteRevenue={maxRouteRevenue}
+        activeCorporation={activeCorporationContext}
+        /* Design note #673: the previewed lay, as the card's provisional
+           treasury. `after` is non-null here because `pendingLayCost` only
+           survives with a positive fee, which needs a known balance. */
+        pendingTreasury={
+          pendingLayCost && pendingLayCost.after !== null
+            ? { fee: pendingLayCost.fee, after: pendingLayCost.after }
+            : null
+        }
+        onSkipSubPhase={handleSkipSubPhase}
+        /* Design note #715: the sheet renders in the bar now. */
+        privatePurchase={
+          gameState
+            ? {
+                buyerTicker:
+                  gameState.public_companies.find(
+                    (c) => c.company_id === actingProtocolId,
+                  )?.ticker ?? "This corporation",
+                privates: gameState.private_companies ?? [],
+                treasury: Number(
+                  gameState.public_companies.find(
+                    (c) => c.company_id === actingProtocolId,
+                  )?.treasury ?? 0,
+                ),
+                labelForAddress: (address: string) =>
+                  sandboxPlayerLabel(address) ?? truncateAddress(address),
+                /* Design note #779: `seatColor` wants the roster INDEX and the panel is given a
+                   lookup by address, so the resolution happens here where both exist. `null` for
+                   an address off the roster rather than a fallback colour -- on a table where
+                   colour identifies a person, a wrong colour is worse than none. */
+                colorForAddress: (address: string) => {
+                  const seat = gameState.player_addresses.indexOf(address);
+                  return seat === -1 ? null : seatColor(address, seat);
+                },
+                onPropose: handleProposePrivatePurchase,
+              }
+            : null
+        }
+        onOpenPrivateTrade={() => undefined}
+        /* Design note #833: the Lay Track step's destination -- the board pane itself, and ONLY
+           while the Rail Map tab is the one showing. `boardEl` is the Stock Market's chart on that
+           tab (both render `boardPane`), and jumping a player to the market chart because they
+           asked for the map is #831's mistake in a smaller size. `null` elsewhere, which is what
+           `onShowMap` exists to resolve. */
+        mapEl={activeMainTab === "map" ? boardEl : null}
+        onShowMap={handleShowMap}
+        /* Design note #987: `onFrameNetwork`/`canFrameNetwork` are GONE. The Lay Track button now
+           switches to the Rail Map tab and does nothing else -- no camera move, no page scroll. */
+        /* Design note #846: the same offers the board rings, so the chip and the hue ring cannot
+           disagree about whether a power is available. Empty outside Lay Track by construction --
+           `dhPower`/`cslPower` report the lay unavailable once it is spent or forfeited. */
+        /* Design note #871: the hex powers in an Operating Round, the M&H in a Stock Round. The two
+           lists are disjoint by round, so this concatenation never shows both. */
+        powerOffers={[...privatePowerOfferList, ...stockRoundPowerOffers]}
+        onUsePowerOffer={handleChipPowerOffer}
+        /* Design note #817: the named exit from an armed private power. `errandCancelLabel`
+           returns `null` for the compulsory home station, which collapses the whole control. */
+        armedErrand={
+          errandCancelLabel(homeStationPlacement)
+            ? {
+                label: errandCancelLabel(homeStationPlacement) as string,
+                onCancel: () => setHomeStationPlacement(null),
+              }
+            : null
+        }
+        ownsAnyTrain={ownsAnyTrain}
+        mustBuyTrain={mustBuyTrain}
+        /* Design note #570: the acting seat's colour, so the bar
+           is as findable in a Stock Round as an Operating Round
+           bar already is. `null` in an OR, which has the
+           corporation's livery instead. */
+        actingSeatColor={
+          gameState &&
+          (gameState.current_round_type === "StockRound" ||
+            gameState.current_round_type === "WaterfallAuction")
+            ? (() => {
+                const acting = actingAddress(gameState, waterfallState);
+                if (!acting) return null;
+                const seat = gameState.player_addresses.indexOf(acting);
+                return seat === -1 ? null : seatColor(acting, seat);
+              })()
+            : null
+        }
+        activePlayerName={activeSeatLabel}
+        activePlayerCash={activeSeatCash}
+        activePlayerEscrow={activeSeatEscrow}
+        privateCompanies={gameState?.private_companies ?? []}
+        /* ==================================================================
+             DESIGN NOTE 885: SIX PROPS LEAVE WITH THE POWERS PANEL
+           ==================================================================
+           `privatePowerViewer`, `sandboxMode`, `usedPrivateAbilities`, `privateActionBlocks`,
+           `onUsePrivateAbility` and `privateAbilityError` existed for one child, and the bar was a
+           CONDUIT for all six -- it read none of them. #508's note names that arrangement where it
+           is right ("the bar is a conduit for these, not a reader of them"), and the test of
+           whether it is still right is whether the child is still there.
+           `privateCompanies` STAYS because the bar genuinely reads it, in the rust/limit warnings
+           memo. That is the difference between a prop that was passing through and one that
+           arrived. */
+        onRunTrains={handleRunTrains}
+        onPayDividends={handlePayDividends}
+        onWithholdRevenue={handleWithholdRevenue}
+        /* Design note #508: the Buy Trains panels are rendered BY
+           the bar now, so they inherit its stickiness and travel
+           with it. Passed as one object -- the bar is a conduit for
+           these, not a reader of them. */
+        trainPurchase={
+          gameState && orSubPhase === "Hardware"
+            ? {
+                depot,
+                buyer:
+                  gameState.public_companies.find(
+                    (company) => company.company_id === actingProtocolId,
+                  ) ?? null,
+                companies: gameState.public_companies,
+                canAct:
+                  sandbox ||
+                  (viewerAddress !== null &&
+                    gameState.public_companies.find(
+                      (company) => company.company_id === actingProtocolId,
+                    )?.president === viewerAddress),
+                blockedReason: trainOffers.some(
+                  (offer) => offer.buyer_protocol_id === actingProtocolId,
+                )
+                  ? "One offer at a time — answer or rescind the outstanding one first."
+                  : null,
+                onBuyFromBank: handleBuyTrainsFromBank,
+                /* Design note #751c: the button that replaces #3's unskippable modal. It is
+                   offered exactly when a plan exists, which is the same condition the modal
+                   itself used -- so nothing changed about WHEN the emergency applies, only about
+                   who opens it. */
+                onEmergencyPurchase: () => setEmergencyModalOpen(true),
+                emergencyAvailable: emergencyPurchasePlan !== null,
+                onProposeTrade: handleProposeTrainTrade,
+                labelForAddress: (address: string) =>
+                  sandboxPlayerLabel(address) ?? truncateAddress(address),
+                /* Design note #914: the SAME resolution #779 already does for the private-purchase
+                   panel -- `seatColor` wants a roster index and the panel asks by address, so it
+                   happens here where both exist. `null` off the roster rather than a fallback: a
+                   wrong colour on a table where colour identifies a person is worse than none. */
+                colorForAddress: (address: string) => {
+                  const seat = gameState?.player_addresses.indexOf(address) ?? -1;
+                  return seat === -1 ? null : seatColor(address, seat);
+                },
+              }
+            : null
+        }
+        dividendRevenue={dividendRevenue}
+        dividendRevenueIsThisTurn={dividendRevenueIsThisTurn}
+        dividendPerShare={dividendPerShare}
+        dividendPayouts={dividendPayouts}
+        rustOutlookForBar={currentRustOutlook}
+        dividendPrice={dividendPrice}
+        payProjection={payProjection}
+        withholdProjection={withholdProjection}
+        dividendMoveSteps={dividendMoveSteps}
+        selectedHardwareModel={selectedHardwareModel}
+        onEndOperatingTurn={handleEndOperatingTurn}
+        onUndoLastAction={handleUndoLastAction}
+        /* Design note #592c/#592d: one reason string, and it does
+           NOT include "it is not your turn" -- see the prop. */
+        undoBlockedReason={undoBlockedReason}
+        /* Design note #595: seats take turns in the auction and the
+           Stock Round; an Operating Round's queue names
+           corporations and has its own step trail. */
+        seatOrderTrail={
+          gameState &&
+          (gameState.current_round_type === "StockRound" ||
+            gameState.current_round_type === "WaterfallAuction") ? (
+            <SeatOrderTrail
+              /* Design note #690: figures for EVERY seat. #639 had the trail
+                 suppress them on the lit segment, back when it sat directly above
+                 the seat card; #630 moved it under the round label and the
+                 adjacency that justified the hole went with it. The caller always
+                 passed all of them -- the suppression was, and is, the
+                 component's own decision. */
+              seats={gameState.player_addresses.map((address, index) => ({
+                address,
+                label: sandboxPlayerLabel(address) ?? truncateAddress(address),
+                color: seatColor(address, index),
+                available: seatFunds.get(address)?.available,
+                escrowed: seatFunds.get(address)?.escrowed,
+                // Design note #610: derived from the pass counter,
+                // so it clears itself the moment anybody trades.
+                passed: passedSeats.has(index),
+              }))}
+              activeAddress={actingAddress(gameState, waterfallState)}
+              priorityAddress={
+                gameState.player_addresses[gameState.priority_deal_index] ?? null
+              }
+              viewerAddress={viewerAddress ?? null}
+            />
+          ) : null
+        }
+        phase={currentPhase}
+        // Design note #493: an action, not a mode.
+        onAutoRoute={handleAutoRouteAgain}
+        onSelectRouteTrain={handleSelectRouteTrain}
+        highlightedRouteIndex={highlightedTrainIndex}
+        onHighlightRoute={setHighlightedTrainIndex}
+        /* Design note #740: the acting president reads their OWN drafts; everybody else reads the
+           presence channel. One prop, two sources, because the bar renders the same row either way --
+           which is what #739 meant by building it so live drafts would be a data swap. */
+        trainDrafts={isMyTurn ? trainDrafts : rivalTrainDrafts}
+        activeTrainIndex={activeTrainIndex}
+        routeFeedback={routeFeedback}
+        onClearRoute={handleClearRoute}
+        // Design note #1024: the granular edit the report asked for.
+        onRemoveRouteStop={handleRemoveRouteStop}
+        stopsRemovedByRemoval={stopsRemovedByRemoval}
+        currentGlobalEra={gameState?.current_global_era ?? null}
+        isMyTurn={isMyTurn}
+        // Design note #1008: the ATTENTION flag, separate from the rules flag beside it.
+        turnGlowActive={turnGlowActive}
+      />
+      )}
+
+      {/* Design note #1084: the tabs sit DIRECTLY on top of the viewport, which is the third item of the
+         ruled order and the reason nothing else may be inserted below this point. */}
       <MainTabBar
         activeTab={activeMainTab}
         onSelect={setActiveMainTab}
@@ -9875,385 +10553,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           {/* Design note #18/item 1: the old fixed-width left sidebar
               (ActivityFeed) is removed entirely -- `canvasPane` now renders
               directly, claiming the panel's full available width. */}
-          {/* Design note #833: this is NOT the jump destination, and #831 made it one by mistake -- the bar
-              renders inside here. See `boardEl`, which is the board pane the bar now observes. */}
+          {/* Design note #833: this is NOT the jump destination, and #831 made it one by mistake. See
+              `boardEl`, which is the board pane the bar observes.
+              Design note #1084: the clause "-- the bar renders inside here" is GONE, because it no longer
+              does. That clause was the whole of #833's reasoning, and leaving it would have left a note
+              explaining a layout that had moved out from under it. */}
           <main style={styles.canvasPane}>
-            {/* Design note #31: THE one action bar, hoisted above the phase branch so it renders on every active tab.
-               It used to live inside the non-auction branch only, which is why the auction grew its own Pass and the
-               phase tab ended up with two bars. */}
-                {/* Item 5: the contextual gameplay action bar -- design notes #8/#10, with OR sub-phase guidance in
-                   #10/item 2.
-                   Design note #23: hidden entirely for spectators. This is the COURTESY half of read-only mode -- the
-                   guarantee is `runGameplayAction`'s gate, which holds whether or not this renders. Hidden rather than
-                   disabled because twenty greyed buttons offer a spectator nothing; the room strip's badge explains why. */}
-                {/* Design note #521: sandbox multiplayer, offered rather than demanded. Outside the spectator branch on
-                   purpose -- a spectator has no action bar (#23) and the room strip is not an action, so hiding it with
-                   the controls would take away the one thing a watcher might legitimately want. */}
-                {sandbox && (
-                  <SandboxRoomBar
-                    roomCode={sandboxRoomCode}
-                    available={isFirebaseConfigured()}
-                    appliedCount={sandboxAppliedCount}
-                    error={sandboxRoomError}
-                    busy={sandboxRoomBusy}
-                    onHost={handleHostSandboxRoom}
-                    onJoin={handleJoinSandboxRoom}
-                    onLeave={handleLeaveSandboxRoom}
-                  />
-                )}
-                {spectator ? (
-                  <div style={styles.spectatorNotice}>
-                    👁 Watching game #{gameId}. Board, ledger and market are live; every action
-                    control is hidden. Join a room from the lobby to play.
-                  </div>
-                ) : (
-                <ContextualActionBar
-                /* Design note #899: any player may close a finished room; the reducer takes the first.
-                   PASSED EVEN WHEN CLOSED, because the bar disables it rather than dropping it -- the first
-                   draft here passed `undefined` once closed, which made the button vanish and contradicted
-                   the note in `ContextualActionBar` saying it stays. The handler is inert then anyway: the
-                   reducer refuses a second `CloseRoom`. */
-                onCloseRoom={() => closeRoom("manual")}
-                roomClosed={roomClosed}
-                  /* Design note #500: `latestFeedItem`/`onOpenActivityLog`
-                     are gone. The bar no longer echoes the activity log --
-                     `TopTicker` above carries it, from this same
-                     `latestFeedItem`. */
-                  roundType={gameState?.current_round_type ?? null}
-                  /* Design note #517: the board's own round numbering, from
-                     the same two fields `ContextualSubPanel` prints as
-                     "OR n.m". `null` before the first poll. */
-                  /* ==================================================================
-                      DESIGN NOTE 889: THE OPERATING ORDER, SORTED WHERE IT IS ALREADY SORTED
-                     ==================================================================
-                     `sortForOperatingOrder` is the authority (#285: reproducing the sort is what let the
-                     roster table re-sort mid-round while the frozen queue did not budge), so the bar is
-                     handed the result rather than the ingredients.
-                     `done` IS AN INDEX COMPARISON against `active_corporation_index`, which is the same
-                     cursor `actionLog.ts` and `dividendGate.ts` read -- not a second reading of who has
-                     acted. */
-                  operatingOrder={
-                    gameState && gameState.current_round_type === "OperatingRound"
-                      ? gameState.active_operating_order.map((companyId, index) => ({
-                          companyId,
-                          ticker:
-                            gameState.public_companies.find(
-                              (entry) => entry.company_id === companyId,
-                            )?.ticker ?? `#${companyId}`,
-                          color: stationTickerColor(companyId),
-                          done: index < gameState.active_corporation_index,
-                        }))
-                      : []
-                  }
-                  /* Design note #890: the depot, unconditionally. The buy PANEL is Hardware-only; the
-                     rust and limit countdowns are not, and reading them off `trainPurchase` is what made the
-                     limit badge vanish when the step turned rather than when the threshold cleared. */
-                  depot={depot}
-                  // Design note #1033: the rust countdown's wording, and whether that badge pulses.
-                  gentleRust={resolveVariants(gameState?.variants).gentleRust}
-                  orSequence={
-                    gameState
-                      ? {
-                          cycle: gameState.macro_round_number,
-                          index: gameState.sub_round_index,
-                        }
-                      : null
-                  }
-                  // Design note #390: the bar compares these two and
-                  // replaces itself with a Return button when the player is
-                  // on another round's playing surface.
-                  activeTab={activeMainTab}
-                  onSelectTab={setActiveMainTab}
-                  orSubPhase={orSubPhase}
-                  // Controls go dead off-turn so a player is not invited to click what the dispatch gate will refuse.
-                  // See docs/ai_architecture/session_keys_wallet.md - App.tsx #536
-                  sessionReady={controlsEnabled && isMyTurn}
-                  // WaterfallPass and PassTurn are different contract messages, not one action with two names.
-                  // See docs/ai_architecture/contract_economy.md - App.tsx #31
-                  onPassTurn={isWaterfallPhase ? handleWaterfallPass : handlePassTurn}
-                  /* Design note #717: offered only where a standing pass means something.
-                     Design note #728: but never WITHDRAWN while one is standing. `isWaterfallPhase` used to
-                     return `null` here, deleting the control outright -- and an arm can survive into the
-                     auction, so the one place a player could not reach the off switch included a phase where
-                     it was still notionally live. The bar decides what to show from `armed`. */
-                  autoPass={
-                    isWaterfallPhase && autoPassArm === null
-                      ? null
-                      : {
-                          armed: autoPassArm !== null,
-                          /* Design note #1036: `controlsEnabled` ALONE, deliberately not the `sessionReady`
-                             below it. That one is `controlsEnabled && isMyTurn`, which is right for Pass and
-                             wrong for a standing instruction: arming writes local state and the dispatch it
-                             causes happens on this player's own turn, which the acting effect tests for
-                             itself. Gating it on the turn made the control dead for the whole round except
-                             the one turn a player least needs it. */
-                          canArm: controlsEnabled,
-                          onOpenSettings: () => setAutoPassOpen(true),
-                          onDisarm: handleDisarmAutoPass,
-                        }
-                  }
-                  /* Passing is always legal: an all-pass round is what marks the cheapest private down $5. A live mini-auction is still blocked - it has its own cursor and message.
-                     See docs/ai_architecture/contract_economy.md - App.tsx #311 */
-                  /* Design note #751: the mandatory purchase is enforced HERE, on Pass, rather than by an
-                     unskippable modal. The obligation is to acquire a train; buying from a rival discharges
-                     it just as well as the Depot does, and #3's undismissable modal made that unreachable. */
-                  passDisabledReason={
-                    /* Design note #763: FIRST, because it outranks every other reason -- while a home token
-                       is owed nothing may happen at all, and a player told about some later rule would fix
-                       that one and still find the button dead. */
-                    homeTokenBlock({
-                      state: gameState ?? ({ public_companies: [] } as never),
-                      homeHexToAxial,
-                      labelForAddress: (address) =>
-                        sandboxPlayerLabel(address) ?? truncateAddress(address),
-                    }) ??
-                    (isWaterfallPhase && waterfallState?.mini_auction
-                      ? "A mini-auction is running — use Drop out on the highlighted company card to leave it."
-                      : /* Design note #759, rule (iii): a player who owes a sell-down may not pass either.
-                           Ahead of the train obligation because the two cannot both apply -- one is a Stock
-                           Round debt and the other an Operating Round one -- and reading the seat's debt
-                           first keeps the Stock Round's refusal from depending on an unrelated check. */
-                        divestmentRefusal(
-                          divestmentDebt({
-                            state: gameState ?? ({ current_round_type: null } as never),
-                            player: viewerAddress ?? "",
-                            marketPrices: sandboxMarketPrices,
-                            zoneForPrice: marketZoneForPrice,
-                          }),
-                        ) ??
-                        trainPurchaseRefusal({
-                          atHardwareStep:
-                            gameState?.current_round_type === "OperatingRound" &&
-                            orSubPhase === "Hardware",
-                          trainless: trainlessAndReported,
-                          couldRunARoute: couldRunARouteIfItHadATrain,
-                          ticker: activeCorporationContext?.ticker ?? "This corporation",
-                        }))
-                  }
-                  /* Design note #745: read off the replayed state, not off a React flag. The bar is a
-                     narrator (#400/#685) -- the reducer decides whether the turn has an action in it, and
-                     an Undo that rewinds past the sale must take the "End Turn" label back with it. */
-                  turnActionTaken={gameState?.turn_action_taken === true}
-                  onPlaceStationTokenHint={handlePlaceStationTokenHint}
-                  stationTokenCost={stationTokenCost}
-                  /* Design note #707: the same probe the Routes panel's Auto Route runs, so the button and
-                     the search cannot disagree about whether a run exists. */
-                  maxRouteRevenue={maxRouteRevenue}
-                  activeCorporation={activeCorporationContext}
-                  /* Design note #673: the previewed lay, as the card's provisional
-                     treasury. `after` is non-null here because `pendingLayCost` only
-                     survives with a positive fee, which needs a known balance. */
-                  pendingTreasury={
-                    pendingLayCost && pendingLayCost.after !== null
-                      ? { fee: pendingLayCost.fee, after: pendingLayCost.after }
-                      : null
-                  }
-                  onSkipSubPhase={handleSkipSubPhase}
-                  /* Design note #715: the sheet renders in the bar now. */
-                  privatePurchase={
-                    gameState
-                      ? {
-                          buyerTicker:
-                            gameState.public_companies.find(
-                              (c) => c.company_id === actingProtocolId,
-                            )?.ticker ?? "This corporation",
-                          privates: gameState.private_companies ?? [],
-                          treasury: Number(
-                            gameState.public_companies.find(
-                              (c) => c.company_id === actingProtocolId,
-                            )?.treasury ?? 0,
-                          ),
-                          labelForAddress: (address: string) =>
-                            sandboxPlayerLabel(address) ?? truncateAddress(address),
-                          /* Design note #779: `seatColor` wants the roster INDEX and the panel is given a
-                             lookup by address, so the resolution happens here where both exist. `null` for
-                             an address off the roster rather than a fallback colour -- on a table where
-                             colour identifies a person, a wrong colour is worse than none. */
-                          colorForAddress: (address: string) => {
-                            const seat = gameState.player_addresses.indexOf(address);
-                            return seat === -1 ? null : seatColor(address, seat);
-                          },
-                          onPropose: handleProposePrivatePurchase,
-                        }
-                      : null
-                  }
-                  onOpenPrivateTrade={() => undefined}
-                  /* Design note #833: the Lay Track step's destination -- the board pane itself, and ONLY
-                     while the Rail Map tab is the one showing. `boardEl` is the Stock Market's chart on that
-                     tab (both render `boardPane`), and jumping a player to the market chart because they
-                     asked for the map is #831's mistake in a smaller size. `null` elsewhere, which is what
-                     `onShowMap` exists to resolve. */
-                  mapEl={activeMainTab === "map" ? boardEl : null}
-                  onShowMap={handleShowMap}
-                  /* Design note #987: `onFrameNetwork`/`canFrameNetwork` are GONE. The Lay Track button now
-                     switches to the Rail Map tab and does nothing else -- no camera move, no page scroll. */
-                  /* Design note #846: the same offers the board rings, so the chip and the hue ring cannot
-                     disagree about whether a power is available. Empty outside Lay Track by construction --
-                     `dhPower`/`cslPower` report the lay unavailable once it is spent or forfeited. */
-                  /* Design note #871: the hex powers in an Operating Round, the M&H in a Stock Round. The two
-                     lists are disjoint by round, so this concatenation never shows both. */
-                  powerOffers={[...privatePowerOfferList, ...stockRoundPowerOffers]}
-                  onUsePowerOffer={handleChipPowerOffer}
-                  /* Design note #817: the named exit from an armed private power. `errandCancelLabel`
-                     returns `null` for the compulsory home station, which collapses the whole control. */
-                  armedErrand={
-                    errandCancelLabel(homeStationPlacement)
-                      ? {
-                          label: errandCancelLabel(homeStationPlacement) as string,
-                          onCancel: () => setHomeStationPlacement(null),
-                        }
-                      : null
-                  }
-                  ownsAnyTrain={ownsAnyTrain}
-                  mustBuyTrain={mustBuyTrain}
-                  /* Design note #570: the acting seat's colour, so the bar
-                     is as findable in a Stock Round as an Operating Round
-                     bar already is. `null` in an OR, which has the
-                     corporation's livery instead. */
-                  actingSeatColor={
-                    gameState &&
-                    (gameState.current_round_type === "StockRound" ||
-                      gameState.current_round_type === "WaterfallAuction")
-                      ? (() => {
-                          const acting = actingAddress(gameState, waterfallState);
-                          if (!acting) return null;
-                          const seat = gameState.player_addresses.indexOf(acting);
-                          return seat === -1 ? null : seatColor(acting, seat);
-                        })()
-                      : null
-                  }
-                  activePlayerName={activeSeatLabel}
-                  activePlayerCash={activeSeatCash}
-                  activePlayerEscrow={activeSeatEscrow}
-                  privateCompanies={gameState?.private_companies ?? []}
-                  /* ==================================================================
-                       DESIGN NOTE 885: SIX PROPS LEAVE WITH THE POWERS PANEL
-                     ==================================================================
-                     `privatePowerViewer`, `sandboxMode`, `usedPrivateAbilities`, `privateActionBlocks`,
-                     `onUsePrivateAbility` and `privateAbilityError` existed for one child, and the bar was a
-                     CONDUIT for all six -- it read none of them. #508's note names that arrangement where it
-                     is right ("the bar is a conduit for these, not a reader of them"), and the test of
-                     whether it is still right is whether the child is still there.
-                     `privateCompanies` STAYS because the bar genuinely reads it, in the rust/limit warnings
-                     memo. That is the difference between a prop that was passing through and one that
-                     arrived. */
-                  onRunTrains={handleRunTrains}
-                  onPayDividends={handlePayDividends}
-                  onWithholdRevenue={handleWithholdRevenue}
-                  /* Design note #508: the Buy Trains panels are rendered BY
-                     the bar now, so they inherit its stickiness and travel
-                     with it. Passed as one object -- the bar is a conduit for
-                     these, not a reader of them. */
-                  trainPurchase={
-                    gameState && orSubPhase === "Hardware"
-                      ? {
-                          depot,
-                          buyer:
-                            gameState.public_companies.find(
-                              (company) => company.company_id === actingProtocolId,
-                            ) ?? null,
-                          companies: gameState.public_companies,
-                          canAct:
-                            sandbox ||
-                            (viewerAddress !== null &&
-                              gameState.public_companies.find(
-                                (company) => company.company_id === actingProtocolId,
-                              )?.president === viewerAddress),
-                          blockedReason: trainOffers.some(
-                            (offer) => offer.buyer_protocol_id === actingProtocolId,
-                          )
-                            ? "One offer at a time — answer or rescind the outstanding one first."
-                            : null,
-                          onBuyFromBank: handleBuyTrainsFromBank,
-                          /* Design note #751c: the button that replaces #3's unskippable modal. It is
-                             offered exactly when a plan exists, which is the same condition the modal
-                             itself used -- so nothing changed about WHEN the emergency applies, only about
-                             who opens it. */
-                          onEmergencyPurchase: () => setEmergencyModalOpen(true),
-                          emergencyAvailable: emergencyPurchasePlan !== null,
-                          onProposeTrade: handleProposeTrainTrade,
-                          labelForAddress: (address: string) =>
-                            sandboxPlayerLabel(address) ?? truncateAddress(address),
-                          /* Design note #914: the SAME resolution #779 already does for the private-purchase
-                             panel -- `seatColor` wants a roster index and the panel asks by address, so it
-                             happens here where both exist. `null` off the roster rather than a fallback: a
-                             wrong colour on a table where colour identifies a person is worse than none. */
-                          colorForAddress: (address: string) => {
-                            const seat = gameState?.player_addresses.indexOf(address) ?? -1;
-                            return seat === -1 ? null : seatColor(address, seat);
-                          },
-                        }
-                      : null
-                  }
-                  dividendRevenue={dividendRevenue}
-                  dividendRevenueIsThisTurn={dividendRevenueIsThisTurn}
-                  dividendPerShare={dividendPerShare}
-                  dividendPayouts={dividendPayouts}
-                  rustOutlookForBar={currentRustOutlook}
-                  dividendPrice={dividendPrice}
-                  payProjection={payProjection}
-                  withholdProjection={withholdProjection}
-                  dividendMoveSteps={dividendMoveSteps}
-                  selectedHardwareModel={selectedHardwareModel}
-                  onEndOperatingTurn={handleEndOperatingTurn}
-                  onUndoLastAction={handleUndoLastAction}
-                  /* Design note #592c/#592d: one reason string, and it does
-                     NOT include "it is not your turn" -- see the prop. */
-                  undoBlockedReason={undoBlockedReason}
-                  /* Design note #595: seats take turns in the auction and the
-                     Stock Round; an Operating Round's queue names
-                     corporations and has its own step trail. */
-                  seatOrderTrail={
-                    gameState &&
-                    (gameState.current_round_type === "StockRound" ||
-                      gameState.current_round_type === "WaterfallAuction") ? (
-                      <SeatOrderTrail
-                        /* Design note #690: figures for EVERY seat. #639 had the trail
-                           suppress them on the lit segment, back when it sat directly above
-                           the seat card; #630 moved it under the round label and the
-                           adjacency that justified the hole went with it. The caller always
-                           passed all of them -- the suppression was, and is, the
-                           component's own decision. */
-                        seats={gameState.player_addresses.map((address, index) => ({
-                          address,
-                          label: sandboxPlayerLabel(address) ?? truncateAddress(address),
-                          color: seatColor(address, index),
-                          available: seatFunds.get(address)?.available,
-                          escrowed: seatFunds.get(address)?.escrowed,
-                          // Design note #610: derived from the pass counter,
-                          // so it clears itself the moment anybody trades.
-                          passed: passedSeats.has(index),
-                        }))}
-                        activeAddress={actingAddress(gameState, waterfallState)}
-                        priorityAddress={
-                          gameState.player_addresses[gameState.priority_deal_index] ?? null
-                        }
-                        viewerAddress={viewerAddress ?? null}
-                      />
-                    ) : null
-                  }
-                  phase={currentPhase}
-                  // Design note #493: an action, not a mode.
-                  onAutoRoute={handleAutoRouteAgain}
-                  onSelectRouteTrain={handleSelectRouteTrain}
-                  highlightedRouteIndex={highlightedTrainIndex}
-                  onHighlightRoute={setHighlightedTrainIndex}
-                  /* Design note #740: the acting president reads their OWN drafts; everybody else reads the
-                     presence channel. One prop, two sources, because the bar renders the same row either way --
-                     which is what #739 meant by building it so live drafts would be a data swap. */
-                  trainDrafts={isMyTurn ? trainDrafts : rivalTrainDrafts}
-                  activeTrainIndex={activeTrainIndex}
-                  routeFeedback={routeFeedback}
-                  onClearRoute={handleClearRoute}
-                  // Design note #1024: the granular edit the report asked for.
-                  onRemoveRouteStop={handleRemoveRouteStop}
-                  stopsRemovedByRemoval={stopsRemovedByRemoval}
-                  currentGlobalEra={gameState?.current_global_era ?? null}
-                  isMyTurn={isMyTurn}
-                  // Design note #1008: the ATTENTION flag, separate from the rules flag beside it.
-                  turnGlowActive={turnGlowActive}
-                />
-                )}
 
             {isWaterfallPhase && activeMainTab === "phase" ? (
               /* && activeMainTab === "stock" is the fix: this branch sits inside isWorkspaceTab, so the auction replaced the workspace on the Rail Map tab too.
@@ -10667,21 +10972,26 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         </>
       )}
 
-      {/* Design note #427: the reference tabs get a way back. Only while
-          the viewer is on turn -- see that file for why a permanent banner
-          would be worse than none. */}
-      {/* Design note #677: `tiles` joins the list. #427's whole point is that a
-         reference tab has no way back to the turn, and the new tab is exactly as
-         easy to get lost on as the two that prompted it -- more so, since a
-         player opens it mid-lay to check what a hex becomes. */}
-      {(activeMainTab === "ledger" || activeMainTab === "rules" || activeMainTab === "tiles") && (
-        <ReturnToTurnBar
-          isMyTurn={isMyTurn}
-          roundType={gameState?.current_round_type ?? null}
-          onReturn={setActiveMainTab}
-        />
-      )}
+      {/* ==================================================================
+           DESIGN NOTE 1085: `ReturnToTurnBar` IS DELETED, BECAUSE THE BAR CAME TO IT
+          ==================================================================
+          #427 EXISTED FOR ONE REASON, stated in its first line: "The Ledger and the Rules carry no controls,
+          so `ContextualActionBar` simply vanished there -- and with it the only persistent thing on screen
+          saying a turn was in progress." #1084 made that false. The bar renders on every tab now, and on a
+          reference tab #390/#404 replace it with exactly one control: "Return to <the round's surface>".
 
+          SO THESE TABS WOULD HAVE HAD TWO WAYS BACK, stacked, in two different bars -- #891's shape, which
+          this codebase produces more often than any other: two surfaces answering one question two ways.
+
+          DELETED RATHER THAN LEFT UNRENDERED. A component whose entire job is now done elsewhere is a second
+          implementation waiting for a caller, and this project's own rule (#685, #425) is that those go.
+
+          ONE BEHAVIOUR CHANGES AND IT IS WORTH NAMING. #427 rendered only while `isMyTurn`, on the argument
+          that "a permanent banner ... would mean nothing". The redirect is not gated on the turn, so the
+          button is there whether or not you are on. That was already true on the four workspace tabs and
+          nobody minded, and the objection does not carry over: #427's was a banner that appeared from
+          nowhere, whereas this is the action bar's own content in a slot that is now always present. A slot
+          that emptied itself on the reference tabs would make the tab strip jump as you switched. */}
       {activeMainTab === "ledger" && (
         <FinancialLedger
           gameState={gameState}
@@ -10858,7 +11168,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           the shell is showing rather than needing a turn in a queue. */}
       <DividendMoneyMachine
         event={dividendPayout}
-        onImpact={handleMoneyMachineImpact}
+        onCue={handleMoneyMachineCue}
         onDone={handleMoneyMachineDone}
       />
       {/* Design note #1049: the phase before any corporation acts, so it is mounted before the modal about the
@@ -11083,6 +11393,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           onDismiss={handleDismissRadial}
         />
       )}
+
+      {/* Design note #1083: the fifth and last item of the ruled order. `marginTop: auto` on its own style
+         pins it to the bottom of the root's column on a short page and lets it follow the content on a long
+         one -- see `appStyles` #1083 for why it is in the flow rather than fixed like the status dock. */}
+      <AppFooter />
     </div>
   );
 }

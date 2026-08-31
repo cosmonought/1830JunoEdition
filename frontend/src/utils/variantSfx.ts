@@ -73,11 +73,29 @@ export const YELLOW_SIGN_AGAIN = {
 /** Ruled: "a slow, lingering 10-second haunting over the UI". */
 export const YELLOW_SIGN_DURATION_MS = 10000;
 
-/** Bucket defaults, for the 454 lines no keyword claims. */
-export const BUCKET_FALLBACK: Readonly<Record<FlavorBucket, string>> = {
+/** Bucket defaults, for the 454 lines no keyword claims.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 1081: NOTHING HAPPENED, SO NOTHING SOUNDS
+ *  ==================================================================
+ *
+ *  RULED: "Completely remove the audio trigger from the Unpredictable Revenue variant's Unchanged (0%) state
+ *  ... Rolling a 0% modifier should only trigger the visual white flash and the `+0%` text indicator."
+ *  And, narrowing it: "ONLY remove coins-clinking from the Unchanged revenue events. Some of the Unchanged
+ *  events have more 'unique' flavor text with sound effects that can still play."
+ *
+ *  SO IT IS THE FALLBACK THAT GOES, NOT THE BUCKET. `variantCueFor` tries the keyword table BEFORE reaching
+ *  here, so an unchanged line about a cow still gets its cow -- what is silenced is the 454-line default, the
+ *  case where the only thing the game has to say is "nothing happened". #1042 already ruled that bucket earns
+ *  no tint for the same reason; this is the same argument about the same third of the die.
+ *
+ *  `null` RATHER THAN A SILENT FILE. A `silence.mp3` would satisfy every existing signature and would leave
+ *  a caller ducking the radio, holding a concurrency slot and waiting fifteen seconds for an `ended` that a
+ *  zero-length clip may never fire. Absence has to be representable, so it is. */
+export const BUCKET_FALLBACK: Readonly<Record<FlavorBucket, string | null>> = {
   criticalMalus: "sad-trombone.mp3",
   minorMalus: "sad-trombone.mp3",
-  unchanged: "coins-clinking.mp3",
+  unchanged: null,
   minorBonus: "cha-ching.mp3",
   criticalBonus: "cha-ching.mp3",
 };
@@ -153,8 +171,8 @@ export const SFX_KEYWORDS: ReadonlyArray<{ pattern: RegExp; file: string }> = [
 export const YELLOW_SIGN_PATTERN = /yellow sign/i;
 
 export interface VariantCue {
-  /** The clip to play, relative to `SFX_DIR`. */
-  audio: string;
+  /** The clip to play, relative to `SFX_DIR` -- or `null` when this line is meant to be silent (#1081). */
+  audio: string | null;
   /** The clip to overlay, or `null` for every ordinary line. */
   video: string | null;
   /** How long the overlay stays up. `0` when there is none. */
@@ -236,7 +254,7 @@ export function variantCueFor(input: {
   return plain(BUCKET_FALLBACK[bucket]);
 }
 
-function plain(audio: string): VariantCue {
+function plain(audio: string | null): VariantCue {
   return { audio, video: null, videoMs: 0, suppressStandardVisuals: false };
 }
 
@@ -250,7 +268,12 @@ export function everySfxFile(): readonly string[] {
   for (const animal of ["cow-happy.mp3", "cow-sad.mp3", "horse-happy.mp3", "horse-sad.mp3"]) {
     files.add(animal);
   }
-  for (const fallback of Object.values(BUCKET_FALLBACK)) files.add(fallback);
+  /* Design note #1081: the unchanged bucket's default is `null` now, and a `null` in this set would be
+     handed to the case that checks every name exists on disk. Skipped rather than filtered downstream, so
+     the set stays "files this module can ask for" and silence is not one. */
+  for (const fallback of Object.values(BUCKET_FALLBACK)) {
+    if (fallback !== null) files.add(fallback);
+  }
   files.add(YELLOW_SIGN_FIRST.audio);
   files.add(YELLOW_SIGN_FIRST.video);
   files.add(YELLOW_SIGN_AGAIN.audio);

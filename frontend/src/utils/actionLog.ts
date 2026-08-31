@@ -67,6 +67,8 @@ export interface ActionLogContext {
    * OPTIONAL, AND ABSENT MEANS NO MOVE. A clamped token at the edge of the chart moves nothing and gets no
    * clause -- which is exactly what #775 recorded as the accepted cost of deleting the old one. */
   marketMove?: { from: number; to: number; reason: "payout" | "withhold" | "sale" } | null;
+  /** Design note #1070: why the shell skipped a step, when it skipped one on the player's behalf. */
+  skipReason?: string | null;
 }
 
 const NUMBER_WORDS = ["no", "one", "two", "three", "four", "five", "six"] as const;
@@ -149,13 +151,41 @@ export function actingActor(context: ActionLogContext): string {
  *  so the suffix is empty rather than half-printed -- #562's rule that a missing figure and a real one are
  *  different facts, applied to a pair. */
 function treasurySuffix(context: ActionLogContext, companyId: number): string {
-  const find = (state: ActionLogContext["afterState"]) =>
-    state?.public_companies.find((entry) => entry.company_id === companyId)?.treasury;
-  const before = find(context.gameState);
-  const after = find(context.afterState);
+  const before = treasuryIn(context.gameState, companyId);
+  const after = treasuryIn(context.afterState, companyId);
   if (after === undefined) return "";
   if (before === undefined || before === after) return ` Treasury now $${after}.`;
   return ` Treasury $${before} → $${after}.`;
+}
+
+function treasuryIn(
+  state: ActionLogContext["afterState"],
+  companyId: number,
+): string | undefined {
+  return state?.public_companies.find((entry) => entry.company_id === companyId)?.treasury;
+}
+
+/** Whether this action actually charged the corporation anything.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 1066: THE FIGURE MOVED, AND THE SENTENCE DID NOT SAY WHY
+ *  ==================================================================
+ *
+ *  REPORTED of a tile lay: "It should say WHY the treasury was affected: B&O laid Tile #57 on J14 and paid
+ *  the terrain cost."
+ *
+ *  AND #1053 IS WHAT MADE THE QUESTION ASKABLE. Before it the line said "Treasury now $920" -- a balance,
+ *  which invites no question. A TRANSITION invites one immediately: money left, and the sentence named a tile
+ *  lay, which is free on most hexes.
+ *
+ *  ASKED OF THE DIFF, NOT OF THE FEE TABLE. `terrainFeeDue` would need the board's own `terrainBuildFeeAt`
+ *  threaded onto this context, and it would be a SECOND opinion about what was charged -- exactly what #750
+ *  refuses to trust ("an arm that reports its own arithmetic will happily report a bug"). Nothing else moves
+ *  a treasury on a `LayTile`, so a movement IS the fee, and the amount is already in the transition. */
+function chargedSomething(context: ActionLogContext, companyId: number): boolean {
+  const before = treasuryIn(context.gameState, companyId);
+  const after = treasuryIn(context.afterState, companyId);
+  return before !== undefined && after !== undefined && before !== after;
 }
 
 /** The train purchase, as short as a corner toast wants it.
@@ -202,7 +232,18 @@ export function trainPurchaseToastLine(
   /* `unlimited` FOR THE DIESELS, matching the long line. "Depot: null remaining" is the failure #232 keeps
      naming, and the D-train genuinely has no count to give. */
   const remaining = left === null ? "unlimited" : `${left}`;
-  return `${corp(context.gameState, protocolId)} bought a ${tier.tier}-train. Depot: ${remaining} remaining.`;
+  /* ==================================================================
+      DESIGN NOTE 1072: THE TOAST IS ABOUT THE DEPOT, NOT ABOUT THE BUYER
+     ==================================================================
+     REPORTED: "the toast notification should just be for the Depot Supply, so it doesn't need to say which
+     corporation bought a train (players will already know whose turn it is)."
+     AND THAT IS THE ARGUMENT FOR WIDENING IT IN THE FIRST PLACE. #1063 broadcast this to every seat because
+     a depot train leaving is the phase clock -- everybody is counting them. The corporation's name is the
+     part of the sentence that belongs to the TURN, which is already on screen in the action bar and the
+     operating queue; the count is the part that belongs to the table.
+     THE ACTIVITY LOG STILL NAMES THE BUYER, and that is the division: the log is the record you scroll back
+     through, where "who" is the first thing you need; the toast is a glance at a number going down. */
+  return `${tier.tier}-train bought. Depot: ${remaining} remaining.`;
 }
 
 /** Whether this message's own sentence already states the corporation's treasury movement.
@@ -237,6 +278,36 @@ export function sentenceStatesTreasury(msg: GameplayExecuteMsg): boolean {
   );
 }
 
+/** A skip reason with its pronoun removed, so a ticker can take the subject position.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 1070: ONE SET OF REASONS, TWO SENTENCE SHAPES
+ *  ==================================================================
+ *
+ *  `earnableRevenue.ts` PHRASES ITS VERDICTS TO FOLLOW A DASH -- "it owns no trains, so there is no route to
+ *  run" was written for "Skipped Run Routes — it owns no trains...", and the auto-skip caption in the panel
+ *  still reads them that way. Dropped straight into "PRR ..." they produce "PRR it owns no trains", which is
+ *  the shape a naive interpolation always produces.
+ *
+ *  THE PRONOUN IS TRANSFORMED RATHER THAN THE REASONS BEING DUPLICATED. A second copy of the three sentences
+ *  phrased for this sentence would be #891's shape in copy: two wordings of one verdict, free to drift, and
+ *  the panel and the log would eventually disagree about why a corporation could not run.
+ *
+ *  BOTH FORMS, because the verdicts use both: "it owns no trains" is nominative and "its trains cannot reach"
+ *  is possessive, so the ticker takes an apostrophe in the second case and not in the first. Anything that
+ *  does not start with either is passed through untouched -- a reason written in some third shape says what
+ *  it says, and mangling it to fit would be worse than leaving it.
+ *
+ *  IT BUILDS THE WHOLE SENTENCE rather than returning a fragment to interpolate. A first draft returned the
+ *  reason with its pronoun stripped and left the caller to write `${ticker} ${fragment}` -- which gives
+ *  "PRR 's trains cannot reach" for the possessive form, because the apostrophe has to touch the ticker and a
+ *  template literal cannot know that. Owning both halves is the only way the join can be right for both. */
+function subjectSentence(ticker: string, reason: string): string {
+  if (reason.startsWith("its ")) return `${ticker}'s ${reason.slice(4)}.`;
+  if (reason.startsWith("it ")) return `${ticker} ${reason.slice(3)}.`;
+  return `${ticker} ${reason}.`;
+}
+
 function hexName(mapGrid: MapGridResponse, q: number, r: number): string {
   void mapGrid;
   return boardHexLabel(q, r) ?? `(${q}, ${r})`;
@@ -255,7 +326,10 @@ export function describeGameplayAction(
   if ("LayTile" in msg) {
     const { protocol_id, tile_id, q, r } = msg.LayTile;
     return (
-      `${corp(gameState, protocol_id)} laid Tile #${tile_id} on ${hexName(mapGrid, q, r)}.` +
+      `${corp(gameState, protocol_id)} laid Tile #${tile_id} on ${hexName(mapGrid, q, r)}` +
+      /* Design note #1066: named only when something was actually charged. Most hexes are free, and a
+         sentence that mentioned a terrain cost on every lay would be wrong far more often than right. */
+      (chargedSomething(context, protocol_id) ? " and paid the terrain cost." : ".") +
       treasurySuffix(context, protocol_id)
     );
   }
@@ -558,6 +632,18 @@ export function describeGameplayAction(
        RECORDING THE CORRECTION rather than quietly swapping the sentence, because a note that argues for a
        branch on a reason that does not hold is worse than no note -- the next reader would delete the branch
        AND the real reason with it. */
+    /* ==================================================================
+        DESIGN NOTE 1070: THE SKIP EXPLAINS ITSELF
+       ==================================================================
+       REPORTED: "'[OR 1.1--Run Routes] PRR passed.' This is maybe technically accurate, but for player-facing
+       information it would be useful to state why they (auto-passed), so either: '[Corp] has no trains to
+       run' or '[Corp] has no routes to run,' depending on circumstance."
+       BOTH SENTENCES ALREADY EXISTED, in `earnableRevenue.ts`, as the reason the shell skips the step at all
+       -- and #1057 removed the line that used to print them, on the rule that a step where nothing happened
+       earns no line. That rule is untouched: this is the same single line, saying more.
+       `skipReason` IS ABSENT WHEN A PLAYER PRESSED SKIP, and the shorter sentence is right there: they chose
+       to, and the log has no reason to offer beyond the press. */
+    if (context.skipReason) return subjectSentence(ticker, context.skipReason);
     return context.orSubPhase ? `${ticker} passed.` : `${ticker} skipped a step.`;
   }
 
@@ -646,12 +732,19 @@ export function describeGameplayAction(
     /* In an OR, Pass ends the CORPORATION's turn from a step; outside one it really is a seated player passing and the original wording is right.
        See docs/ai_architecture/ui_shell_layout.md - actionLog.ts #478 */
     if (gameState?.current_round_type === "OperatingRound") {
-      /* Design note #958: the step is in the tag now. "passed its turn" stays as the fallback for a state
-         with no cursor on it -- the two sentences said different things and only the first was duplicating
-         the stamp. */
-      return context.orSubPhase
-        ? `${actingActor(context)} passed.`
-        : `${actingActor(context)} passed its turn.`;
+      /* ==================================================================
+          DESIGN NOTE 1069: A CORPORATION ENDS ITS TURN; IT DOES NOT PASS A STEP
+         ==================================================================
+         REPORTED: "At the end of a corporation's turn, it clicks End Turn but the Activity Log prints '[OR
+         1.1--Buy Trains] B&O passed.' Let's instead have this say '[OR 1.1] B&O ended its turn.'"
+         #958 SPLIT THIS SENTENCE ON THE CURSOR and the split has stopped meaning anything. With a step known
+         it said "passed", which reads as "declined this step" -- and `AdvanceOperatingSubPhase` is the
+         message that actually means that. `PassTurn` in an Operating Round is the corporation saying it is
+         finished, whatever step it happened to be standing on.
+         ONE SENTENCE NOW, because the two branches were describing one event two ways. The stamp drops its
+         step alongside (`App.tsx` #1069), so the tag no longer files the ending under an action the
+         corporation declined to take. */
+      return `${actingActor(context)} ended its turn.`;
     }
     /* Design note #745: a turn the player already acted in is ENDED, not passed, and the log must say so --
        it is the record players scroll back through to work out why a round closed when it did. The state

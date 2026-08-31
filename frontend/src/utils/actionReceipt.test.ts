@@ -253,7 +253,10 @@ describe("every toast is mounted behind a rule", () => {
        which is what the ordering is about -- pinning the argument list again would break on the next caller
        that passes something else, which is the mistake this file has now recorded twice. */
     const rebuilt = APP.indexOf("describeGameplayAction(msg, {");
-    const raised = APP.indexOf("showActionToast(globallyBroadcast");
+    /* Design note #1072: the call went multi-line when the depot toast gained its own duration, so the
+       argument is no longer adjacent to the name. Anchored on the CALL, which is what the ordering is
+       about -- and which no reformat can move. */
+    const raised = APP.indexOf("showActionToast(");
     expect(rebuilt).toBeGreaterThan(-1);
     expect(raised).toBeGreaterThan(rebuilt);
   });

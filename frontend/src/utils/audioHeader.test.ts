@@ -18,6 +18,7 @@ const { readSource, readStripped, sliceBetween } =
 
 const APP = readStripped("App.tsx");
 const BAR = readStripped("components/TopBar.tsx");
+const POPOVER = readStripped("components/AudioControlPopover.tsx");
 const AUDIO_RAW = readSource("utils/audio.ts");
 
 describe("the shell owns the audio state", () => {
@@ -27,7 +28,14 @@ describe("the shell owns the audio state", () => {
        codebase produces more often than any other. */
     expect(APP).toContain("useDocumentTitleFlash(isMyTurn);");
     expect(APP).toContain("useTurnGlowActive(isMyTurn)");
-    expect(APP).toContain("useTurnWhistle(isMyTurn, sfxEnabled);");
+    /* Design note #1075 ADDED A SECOND CONDITION, not a second source of truth. The whistle is now gated on
+       the master switch AND the "Turn notification" category -- so the `enabled` argument grew while
+       `isMyTurn` stayed the one answer all three notifications read. THAT is what this case is about, and
+       pinning the complete argument list would have broken on a change that left the claim intact.
+       The `isMyTurn,` fragment carries it: the whistle asks the same question the flash and the glow ask. */
+    expect(APP).toContain("useTurnWhistle(isMyTurn,");
+    // And the mute still reaches it, whatever else has been ANDed alongside.
+    expect(APP).toContain("sfxEnabled && sfxTurnEnabled");
   });
 
   it("keeps the two channels on separate state", () => {
@@ -52,17 +60,48 @@ describe("the header renders two independent toggles", () => {
 
   it("gives each its own handler and its own lit state", () => {
     /* THE INDEPENDENCE, asserted as four distinct references rather than as "there are two buttons". A pair
-       wired to one handler renders identically and fails only in a player's hands. */
-    expect(GROUP).toContain("onClick={audio.onToggleMusic}");
-    expect(GROUP).toContain("onClick={audio.onToggleSfx}");
+       wired to one handler renders identically and fails only in a player's hands.
+
+       Design note #1075 MOVED THE HANDLERS BEHIND A TERNARY -- the click now opens a panel when one is wired
+       and falls back to the toggle when it is not -- so `onClick={audio.onToggleMusic}` is gone as a literal.
+       THE CLAIM IS UNCHANGED and is what is asserted here: four distinct references, two per button, so the
+       pair cannot be wired to one handler or one flag. The panel each opens is named separately for the same
+       reason: `"radio"` and `"sfx"` are what stop the two buttons opening each other's popover. */
+    expect(GROUP).toContain("audio.onToggleMusic()");
+    expect(GROUP).toContain("audio.onToggleSfx()");
+    expect(GROUP).toContain('current === "radio" ? null : "radio"');
+    expect(GROUP).toContain('current === "sfx" ? null : "sfx"');
     expect(GROUP).toContain("audio.musicPlaying ? styles.topBarIconButtonOn");
     expect(GROUP).toContain("audio.sfxEnabled ? styles.topBarIconButtonOn");
   });
 
   it("says which state it is in to something other than the eye", () => {
-    // The lit treatment is a colour; `aria-pressed` is the same fact for anybody not reading it.
-    expect(GROUP).toContain("aria-pressed={audio.musicPlaying}");
-    expect(GROUP).toContain("aria-pressed={audio.sfxEnabled}");
+    /* ==================================================================
+        DESIGN NOTE 1078: THIS CASE FOUND A REAL REGRESSION, NOT A STALE ANCHOR
+       ==================================================================
+       IT READ `aria-pressed={audio.musicPlaying}`, and that WAS the whole disclosure while the buttons were
+       toggles. #1075 made them disclosure controls, so `aria-pressed` gave way to `aria-expanded` -- which
+       announces whether the PANEL is open, a different fact -- and the on/off state stopped being announced
+       at all. #1074 had just finished making the dim legible to eyes; nobody else got it.
+       THE ASSERTION IS THEREFORE ABOUT THE FACT, NOT THE ATTRIBUTE, which is what it should always have
+       been: whatever a screen reader is handed for these buttons has to distinguish on from off. */
+    expect(GROUP).toContain("audio.musicPlaying ? \"Radio settings\" : \"Radio settings");
+    expect(GROUP).toContain("audio.sfxEnabled\n                ? \"Sound effect settings\"");
+    // Both states named, so the label is a readout rather than a constant that happens to mention audio.
+    expect(GROUP).toContain("radio is off");
+    expect(GROUP).toContain("sound effects are off");
+    // And the disclosure state is still announced, since the click does open something.
+    expect(GROUP).toContain("aria-expanded={audio.onRadioVolume ?");
+    expect(GROUP).toContain("aria-expanded={audio.onSfxVolume ?");
+  });
+
+  it("keeps aria-pressed on the control that is still a toggle", () => {
+    /* THE OFF ROW INSIDE THE POPOVER, which genuinely is pressed-or-not. Asserted in the popover rather than
+       in the bar so the two never both claim to be the toggle -- #891's shape, which this codebase produces
+       more often than any other. */
+    expect(POPOVER).toContain("aria-pressed={!enabled}");
+    // Inverted deliberately: the row LIT means the channel is OFF, matching the button that dims.
+    expect(POPOVER).toContain("...(enabled ? {} : styles.offRowActive)");
   });
 
   it("disappears rather than drawing dead buttons when no audio is wired", () => {

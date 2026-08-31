@@ -252,7 +252,11 @@ describe("a step with no consequence earns no line", () => {
        like a UI bug rather than a missing message. */
     expect(APP).toContain("withholdRevenueAutomatically();");
     expect(APP).toContain("endTurnAutomatically();");
-    expect(APP).toContain("skipSubPhaseAutomatically();");
+    /* Design note #1070: THE CALL TAKES AN ARGUMENT NOW -- the shell's own reason for skipping, so the one
+       remaining line can say why rather than just that. What this case guards is unchanged and is the half
+       that matters: deleting a log line must not delete the DISPATCH, or a corporation stalls the round and
+       it looks like a UI bug. */
+    expect(APP).toContain("skipSubPhaseAutomatically(autoSkipReason);");
   });
 });
 
@@ -288,10 +292,16 @@ describe("a private closing is not always a phase change", () => {
        BOTH SENTENCES EXIST NOW, and the phase is what chooses between them -- asked of the two states rather
        than inferred from how many closed, because a Phase 5 arrival with five already-closed privates closes
        exactly one and counting would call that a solo closure. */
+    /* Design note #1068: THE BRANCH IS TWO `logInfo` CALLS NOW, NOT ONE WITH TERNARIES. This pinned
+       `phaseTurned ? "Phase Change" : "Private Companies"` -- a label ternary -- and the solo closure needed
+       its own STAMP rather than a category, which a single call could not give it. What this case is for is
+       unchanged: the phase decides which of two sentences is printed. */
     expect(APP).toContain("derivePhase(before)?.tier !== derivePhase(after)?.tier");
-    expect(APP).toContain('phaseTurned ? "Phase Change" : "Private Companies"');
+    expect(APP).toContain("if (phaseTurned) {");
     expect(APP).toContain("pay no further revenue and no longer count toward the certificate limit");
-    expect(APP).toContain("Private ${closures.length === 1 ? \"company\" : \"companies\"}");
+    // Design note #1068: the solo closure takes the Private Companies stamp, like the payout lines (#1059).
+    expect(APP).toContain("--Private Companies");
+    expect(APP).toContain("closureStamp");
   });
 });
 
@@ -320,7 +330,18 @@ describe("the private payments are stamped as the phase they are", () => {
   it("stamps both payout sites the same way", () => {
     // Two call sites printing one kind of event two ways is #891's shape; the auction's all-passed payout
     // pays the same privates as the Operating Round's opening.
-    expect(APP.split("--Private Companies").length - 1).toBe(2);
+    /* ==================================================================
+        DESIGN NOTE 1068: A THIRD SITE, AND THE COUNT WAS THE WRONG INSTRUMENT
+       ==================================================================
+       THIS COUNTED THE STAMP AT TWO, which was right when only the two payout sites used it. #1068 gave the
+       solo private closure the same stamp -- correctly, since "anything involving private companies needs to
+       be tagged [OR X.Y--Private Companies]" -- and a hardcoded 2 made a correct change fail.
+       NAMED RATHER THAN COUNTED. The property is that every private-company event carries the stamp, not that
+       there are exactly N of them; a fourth such event would want one too, and should not have to edit a
+       harness to get it. */
+    expect(APP).toContain("const payoutStamp =");
+    expect(APP).toContain("const auctionPayoutStamp =");
+    expect(APP).toContain("const closureStamp =");
   });
 });
 
@@ -358,16 +379,40 @@ describe("the flavour tint reaches the line players actually watch", () => {
        #694 IS FOUR LINES ABOVE THE PREVIEW ARGUING THIS EXACT RULE about a different property: "applying it
        there alone would leave the same feed saying two different things about the same message depending on
        whether it happened to be open." #1042 added the tone and did not follow it. */
-    expect(TICKER).toContain("latestItem?.logTone === \"bonus\"");
-    expect(TICKER).toContain("item.logTone === \"bonus\"");
+    /* THE OPTIONAL CHAIN CAME AND WENT AND CAME BACK, which is worth recording because the churn is mine:
+       #1079 moved the preview's tone inside the `latestItem ? ... : ...` guard (no chain needed), and #1080
+       moved it back out to the wrapper, which renders whether or not there is an item. The CLAIM never
+       moved -- both renderers read the same field to reach the same decision -- so the fragment stops before
+       the accessor rather than pinning which one is in use today. */
+    expect(TICKER).toContain("logTone === \"bonus\"");
+    expect(TICKER.split('logTone === "bonus"').length - 1).toBe(2);
   });
 
-  it("keeps one precedence order in both renderers", () => {
-    /* THE HALF THAT WOULD DRIFT. Chat colour must come after the tone in both, or a flavour line borrows the
-       chat style in one surface and not the other -- which is the same "two things about one message" this
-       case exists to prevent, one layer down. */
-    const preview = sliceBetween(TICKER, "...styles.previewText,", "}}");
-    expect(preview.indexOf("logTone")).toBeLessThan(preview.indexOf("previewTextChat"));
+  it("keeps the tone and the chat style from ever composing", () => {
+    /* ==================================================================
+        DESIGN NOTE 1079: A SEPARATION REPLACED THE ORDERING
+       ==================================================================
+       IT ASSERTED THAT `logTone` CAME BEFORE `previewTextChat` in the preview's spread -- the right guard
+       while both rode one span, because a flavour line could otherwise borrow the chat colour in one surface
+       and not the other.
+       THEY ARE ON DIFFERENT ELEMENTS NOW. #1079 moved the tone off the wrapper because the wrapper contains
+       the gutter, and the ruling was "do not alter or colorize the [time] or the [round] tags" -- so the
+       tint sits on an inner span around the sentence while the chat style stays on the wrapper that clips
+       the line. Two styles that cannot reach the same element cannot need an order.
+       WHICH MAKES THIS A STRONGER ASSERTION, not a weaker one: an ordering can be got wrong by a later edit
+       and a separation cannot, so the case now pins the separation. */
+    /* THE HALF THAT WOULD DRIFT. Chat colour must come after the tone in the preview, and the tone after the
+       error colour in the row, or a flavour line is styled differently in the surface a player watches from
+       the one they open -- the same "two things about one message" this case exists to prevent.
+       #1080 briefly moved the row's tone onto the `div` and was WITHDRAWN: `logLabelFull` is `flex: 1`, so
+       the fill already reached the right edge and the move was correcting something that was not wrong.
+       Both orders are therefore live again, and both are asserted. */
+    const wrapper = sliceBetween(TICKER, "...styles.previewText,", "}}");
+    expect(wrapper.indexOf("logTone")).toBeLessThan(wrapper.indexOf("previewTextChat"));
+    expect(wrapper.length).toBeLessThan(700);
+    const label = sliceBetween(TICKER, "...styles.logLabelFull,", "}}");
+    expect(label.indexOf("logLabelError")).toBeLessThan(label.indexOf("logTone"));
+    expect(label.length).toBeLessThan(900);
   });
 
   it("has a tone style to apply", () => {

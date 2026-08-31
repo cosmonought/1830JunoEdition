@@ -64,5 +64,16 @@ export function roundStampFor(state: GameStateResponse | null | undefined): stri
   const step = state.operating_sub_phase;
   if (!step) return round;
   const label = OPERATING_SUB_PHASE_LABELS[step];
-  return label ? `${round}--${label.stepLabel}` : round;
+  /* ==================================================================
+      DESIGN NOTE 1071: AN EM DASH, REPLACING THE DOUBLE HYPHEN
+     ==================================================================
+     REPORTED: "we currently have, e.g., OR 1.1--Dividends. Please replace '--' with an em dash, or maybe a
+     colon?"
+     #958 CHOSE `--` AND GAVE TWO REASONS, and only one of them has survived. The first was "as specified",
+     which this supersedes. The second was typographic: "the tag is a scanning target rather than prose, and a
+     double hyphen is unambiguous at a glance in a monospaced column where an en dash and a hyphen are one
+     pixel apart." That argument was about an EN dash. An em dash is twice the width of a hyphen and half
+     again the width of an en, so it is not the character that argument was about -- it reads as a separator
+     at a glance, which is what the tag needs. */
+  return label ? `${round}\u2014${label.stepLabel}` : round;
 }

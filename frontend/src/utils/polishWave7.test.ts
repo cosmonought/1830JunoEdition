@@ -35,18 +35,25 @@ const operating = (subPhase?: string): GameStateResponse =>
   }) as unknown as GameStateResponse;
 
 describe("the log stamp carries the step (design note #958)", () => {
-  it("writes round and step, joined as specified", () => {
-    /* REPORTED: "`[3:06 PM] [OR 2.1--Buy Trains] NNH passed.`" -- the separator is `--`, verbatim. */
-    expect(roundStampFor(operating("Hardware"))).toBe("OR 2.1--Buy Trains");
+  /* ==================================================================
+      DESIGN NOTE 1071: THE SEPARATOR IS AN EM DASH NOW
+     ==================================================================
+     #958 CHOSE `--` "as specified" and defended it typographically: "an en dash and a hyphen are one pixel
+     apart" in a monospaced column. RULED SINCE: "Please replace '--' with an em dash." And the typographic
+     half does not carry over -- an em dash is twice a hyphen's width, so it is not the character that
+     argument was about; it reads as a separator at a glance, which is what a scanning target needs.
+     THE TABLE RULE IS UNTOUCHED and is what the second case below is actually for. */
+  it("writes round and step, joined by an em dash", () => {
+    expect(roundStampFor(operating("Hardware"))).toBe("OR 2.1\u2014Buy Trains");
   });
 
   it("uses the stepper's own labels", () => {
     /* #478'S RULE SURVIVES THE MOVE: one table, so the log and the strip cannot describe a step two ways.
        "Hardware" is the state's word and "Buy Trains" is the player's; a stamp inventing its own vocabulary
        would put a third name on one step. */
-    expect(roundStampFor(operating("Track"))).toBe("OR 2.1--Lay Track");
-    expect(roundStampFor(operating("Routes"))).toBe("OR 2.1--Run Routes");
-    expect(roundStampFor(operating("BuyPrivate"))).toBe("OR 2.1--Buy Private");
+    expect(roundStampFor(operating("Track"))).toBe("OR 2.1\u2014Lay Track");
+    expect(roundStampFor(operating("Routes"))).toBe("OR 2.1\u2014Run Routes");
+    expect(roundStampFor(operating("BuyPrivate"))).toBe("OR 2.1\u2014Buy Private");
   });
 
   it("adds no suffix outside an Operating Round, even on a stale cursor", () => {
@@ -112,7 +119,10 @@ describe("the pass line stopped repeating the step (design note #958)", () => {
   it("says only that the corporation passed", () => {
     /* THE DUPLICATION THIS PREVENTS: "[OR 2.1--Buy Trains] NNH passed Buy Trains." The tag is the copy that
        lands in one column down the feed, so the sentence gives it up. */
-    expect(line({ PassTurn: {} }, "Hardware")).toBe("NNH passed.");
+    /* Design note #1069: the two messages no longer read alike, and that is the correction rather than a
+       regression -- `PassTurn` ends the turn and `AdvanceOperatingSubPhase` declines a step. What this case
+       forbids is unchanged: neither names the step, because the tag does. */
+    expect(line({ PassTurn: {} }, "Hardware")).toBe("NNH ended its turn.");
     expect(line({ AdvanceOperatingSubPhase: { protocol_id: 4 } }, "Hardware")).toBe("NNH passed.");
   });
 
@@ -130,10 +140,11 @@ describe("the pass line stopped repeating the step (design note #958)", () => {
     }
   });
 
-  it("still distinguishes a pass with no cursor on it", () => {
-    /* "passed its turn" and "passed <step>" said different things, and only the second was duplicating the
-       stamp. The fallback is the one that survives. */
-    expect(line({ PassTurn: {} }, null)).toBe("NNH passed its turn.");
+  it("reads the same with no cursor on it", () => {
+    /* Design note #1069: THE DISTINCTION IS GONE BECAUSE ITS SUBJECT IS. The two sentences differed on
+       whether a step was known, which mattered while the sentence was about a step. A turn ending is not,
+       so the cursor has nothing left to change. */
+    expect(line({ PassTurn: {} }, null)).toBe("NNH ended its turn.");
   });
 
   it("keeps a Stock Round pass unchanged", () => {

@@ -136,9 +136,16 @@ describe("the whistle sits above the radio in the mix", () => {
   });
 
   it("sets both on the elements, not at each play", () => {
+    /* Design note #1074 MOVED WHERE THE FIGURE COMES FROM, not whether it is set on the element. The two
+       constants are now the INITIAL value of a mutable pair a slider writes, so the elements read the live
+       `sfxVolume` / `radioVolume`; reading the constants here would have pinned the elements to the defaults
+       forever, which is the bug the slider would then have appeared not to fix.
+       #1013's actual claim -- set once on the element rather than at each `play()` -- is what is asserted. */
     const audio = readStripped("utils/audio.ts");
-    expect(audio).toContain("element.volume = SFX_VOLUME;");
-    expect(audio).toContain("element.volume = RADIO_VOLUME;");
+    expect(audio).toContain("element.volume = sfxVolume;");
+    expect(audio).toContain("element.volume = radioVolume;");
+    expect(audio).toContain("let sfxVolume = SFX_VOLUME;");
+    expect(audio).toContain("let radioVolume = RADIO_VOLUME;");
   });
 });
 

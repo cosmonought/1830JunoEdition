@@ -643,15 +643,16 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
             and no contract. Host a room and read the code out, or join one somebody gives you.
           </span>
         </div>
+        {/* Design note #1083: `appliedCount={0}` and `onLeave={() => undefined}` are GONE with the props
+            they fed. Both were placeholders this surface had no use for -- the lobby is never in a room --
+            and a required prop satisfied by a stub is a prop the component did not need. */}
         <SandboxRoomBar
           roomCode={null}
           available={isFirebaseConfigured()}
-          appliedCount={0}
           error={sandboxRoomError}
           busy={sandboxRoomBusy}
           onHost={handleHostSandboxRoom}
           onJoin={handleJoinSandboxRoom}
-          onLeave={() => undefined}
         />
       </section>
 

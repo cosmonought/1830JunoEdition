@@ -123,8 +123,20 @@ describe("passing in an Operating Round", () => {
      THE THIRD RULE MOVED WITH IT rather than being lost: "the stepper's own verb-led label, so the log and the
      strip cannot name one step two ways" is now `roundStampFor`'s job, and `polishWave7.test.ts` asserts it
      there against the same table. */
+  /* ==================================================================
+      DESIGN NOTE 1069: `PassTurn` IN AN OPERATING ROUND IS AN ENDING, NOT A DECLINE
+     ==================================================================
+     THESE PINNED "PRR passed." REPORTED: "At the end of a corporation's turn, it clicks End Turn but the
+     Activity Log prints '[OR 1.1--Buy Trains] B&O passed.' Let's instead have this say '[OR 1.1] B&O ended
+     its turn.'"
+     AND #958'S SPLIT ON THE CURSOR HAD STOPPED MEANING ANYTHING. With a step known the sentence said
+     "passed", which reads as declining THAT step -- and `AdvanceOperatingSubPhase`, asserted further down
+     this file, is the message that actually means that. Two messages produced one sentence for two events.
+     EVERY OTHER RULE IN THIS FILE SURVIVES AND IS STILL ASSERTED: the line names the CORPORATION rather than
+     its president, and it follows the operating queue rather than the seat pointer. Those are what #478 was
+     built for; only the verb has changed. */
   it("reads exactly as the requirement's worked example", () => {
-    expect(describeGameplayAction(PASS, context())).toBe("PRR passed.");
+    expect(describeGameplayAction(PASS, context())).toBe("PRR ended its turn.");
   });
 
   it("names the corporation and NOT its president", () => {
@@ -143,7 +155,7 @@ describe("passing in an Operating Round", () => {
       PASS,
       context({ gameState: state({ active_corporation_index: 1 }) }),
     );
-    expect(line).toBe("B&O passed.");
+    expect(line).toBe("B&O ended its turn.");
   });
 
   it("reads the same whichever step the cursor is on", () => {
@@ -159,17 +171,17 @@ describe("passing in an Operating Round", () => {
     for (const step of steps) {
       expect([step, describeGameplayAction(PASS, context({ orSubPhase: step }))]).toEqual([
         step,
-        "PRR passed.",
+        "PRR ended its turn.",
       ]);
     }
   });
 
-  it("falls back to a shorter sentence when no step is known", () => {
-    // A caller with no cursor gets less, not a guessed step. Still the
-    // corporation, because that half is derivable from state alone.
-    expect(describeGameplayAction(PASS, context({ orSubPhase: null }))).toBe(
-      "PRR passed its turn.",
-    );
+  it("reads the same with no cursor at all", () => {
+    /* Design note #1069: THE FALLBACK IS GONE, and its disappearance is the point rather than a casualty. It
+       existed because the sentence used to depend on the step -- with one it said "passed", without one
+       "passed its turn". A turn ending does not depend on a step, so there is nothing left for a cursor to
+       change and the two branches collapsed into the one true sentence. */
+    expect(describeGameplayAction(PASS, context({ orSubPhase: null }))).toBe("PRR ended its turn.");
   });
 });
 

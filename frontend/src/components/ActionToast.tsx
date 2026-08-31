@@ -130,6 +130,14 @@ export const STANDARD_TOAST_MS = 3700;
  * being tuned away from. */
 export const PRIVATE_REVENUE_TOAST_MS = 3200;
 
+/** The depot count, which is six words and a number.
+ *
+ *  Design note #1072: RULED at 3 seconds, and the arithmetic agrees for once rather than being argued down to
+ *  it. "2-train bought. Depot: 5 remaining." is about a 900ms read; 1.5x of that plus the 180ms entrance is
+ *  comfortably under three, so the figure is generous rather than tight -- which is the direction this
+ *  project's toast constants have had to be corrected in three times (#983, #1000, #1016). */
+export const DEPOT_TOAST_MS = 3000;
+
 /** Where a toast sits. `"center"` is every toast in the app but one -- see design note #1016 on `toastCorner`
  *  for why the private payout is the exception. */
 export type ToastAnchor = "center" | "bottom-right";

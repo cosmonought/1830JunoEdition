@@ -26,6 +26,8 @@ const {
   MONEY_MACHINE_FALL_MS,
   MONEY_MACHINE_LINGER_MS,
   MONEY_MACHINE_SLIDE_MS,
+  MONEY_MACHINE_HOLD_MS,
+  MONEY_MACHINE_MERGE_AT_MS,
 } = require("../components/DividendMoneyMachine") as typeof import("../components/DividendMoneyMachine");
 const { readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
 import type { GameStateResponse } from "./gameState";
@@ -118,9 +120,16 @@ describe("a train leaving the depot is news for everybody", () => {
 
 describe("the toast says the short form and the log says the long one", () => {
   it("renders the specified sentence", () => {
-    // "[Corporation] bought a [Tier]-train. Depot: [X] remaining."
+    /* ==================================================================
+        DESIGN NOTE 1072: THE CORPORATION CAME OUT OF THIS SENTENCE
+       ==================================================================
+       #1063 BUILT IT AS "[Corporation] bought a [Tier]-train. Depot: [X] remaining." REPORTED one batch
+       later: "it doesn't need to say which corporation bought a train (players will already know whose turn
+       it is)." The name belongs to the TURN, which is on screen in the action bar; the count belongs to the
+       table, which is why this toast was widened to every seat in the first place. */
     const line = trainPurchaseToastLine(buy, context(board([]), board(["2"])) as never);
-    expect(line).toMatch(/^C&O bought a \d-train\. Depot: \d+ remaining\.$/);
+    expect(line).toMatch(/^\d-train bought\. Depot: \d+ remaining\.$/);
+    expect(line).not.toContain("C&O");
   });
 
   it("drops the price and the treasury the log keeps", () => {
@@ -141,7 +150,7 @@ describe("the toast says the short form and the log says the long one", () => {
     const ctx = context(board([]), board(["2"])) as never;
     const short = trainPurchaseToastLine(buy, ctx) ?? "";
     const long = describeGameplayAction(buy, ctx) ?? "";
-    const tier = short.match(/bought a (\S+)-train/)?.[1];
+    const tier = short.match(/^(\S+)-train bought/)?.[1];
     const left = short.match(/Depot: (\S+) remaining/)?.[1];
     expect(tier).toBeTruthy();
     expect(left).toBeTruthy();
@@ -217,21 +226,43 @@ describe("the merge is animated, and the figures do not depend on it", () => {
     /* SPECIFIED: "The `+$[Payout]` physically merges into the `$[Current Total]`, updating the sum
        immediately upon impact." A number cannot be swapped by a keyframe, so the phase is React state and
        only the travel is CSS. */
-    expect(MACHINE).toContain('const shown = phase === "falling" ? event.cashBefore : event.cashAfter;');
+    /* Design note #1082 ADDED A PHASE IN FRONT OF `falling`, so the expression flipped to name the phases
+       that show the OLD figure. Pinning the old string would have been satisfied only by the version that
+       makes the panel arrive already showing the sum -- which defeats the pause this batch added. */
+    expect(MACHINE).toContain(
+      'const shown = phase === "holding" || phase === "falling" ? event.cashBefore : event.cashAfter;',
+    );
   });
 
   it("times the impact rather than waiting for an animation event", () => {
     /* A BACKGROUND TAB THROTTLES `animationend` AND CAN DROP IT. A payout that never merged would leave the
        old total on screen and never fire the cue; a late timer is recoverable, a missing event is not. */
-    expect(MACHINE).toContain("window.setTimeout(() => {");
+    /* Design note #1082: four timers now, and none of them needs a block body -- so the claim is asserted as
+       "timers, and no animation events" rather than by pinning one call's punctuation. */
+    expect(MACHINE.split("window.setTimeout(").length - 1).toBeGreaterThanOrEqual(4);
     expect(MACHINE).not.toContain("animationend");
   });
 
-  it("adds up to the specified 900ms fall", () => {
-    expect(MONEY_MACHINE_FALL_MS).toBe(900);
-    // And the lifetime is fall + linger + fade, in that order, with nothing negative.
-    expect(MONEY_MACHINE_LINGER_MS).toBeGreaterThan(0);
+  it("holds both figures still before merging them", () => {
+    /* ==================================================================
+        DESIGN NOTE 1082: THE 900ms FALL WAS THE BUG, NOT THE SPEC
+       ==================================================================
+       IT READ `expect(MONEY_MACHINE_FALL_MS).toBe(900)`, from #1061's ruling. REPORTED since: "The current
+       animation merges the numbers too quickly after sliding in, making it impossible for players to read the
+       payout amount before it disappears."
+       AND THE FALL'S LENGTH WAS NEVER THE PROBLEM. #1061 started it at MOUNT, so the top line was already
+       dropping while the panel slid in and the two figures never stood still together for a frame. The fall
+       is SHORTER now (500ms) and the animation is far more readable, because a full second of stillness was
+       inserted in front of it. Lengthening the fall would have made a longer smear.
+       SO THE CASE ASSERTS THE PAUSE, which is the thing that was missing and the thing that must not be
+       optimised away again. */
+    expect(MONEY_MACHINE_HOLD_MS).toBeGreaterThanOrEqual(1000);
     expect(MONEY_MACHINE_SLIDE_MS).toBeGreaterThan(0);
+    expect(MONEY_MACHINE_LINGER_MS).toBeGreaterThan(0);
+    // And the pause genuinely sits between the arrival and the drop, rather than being a name for nothing.
+    expect(MONEY_MACHINE_MERGE_AT_MS).toBe(
+      MONEY_MACHINE_SLIDE_MS + MONEY_MACHINE_HOLD_MS + MONEY_MACHINE_FALL_MS,
+    );
   });
 
   it("survives reduced motion with every figure intact", () => {
@@ -289,10 +320,11 @@ describe("the till slides in and out", () => {
     expect(leave).toContain("translateX(100%)");
   });
 
-  it("lingers about two seconds on the merged total", () => {
-    // "The panel lingers for ~2 seconds so players can read the total."
-    expect(MONEY_MACHINE_LINGER_MS).toBeGreaterThanOrEqual(1800);
-    expect(MONEY_MACHINE_LINGER_MS).toBeLessThanOrEqual(2400);
+  it("lingers a full second on the merged total", () => {
+    /* #1061's "~2 seconds" IS SUPERSEDED by #1082's explicit schedule -- "2.0s - 3.0s (The Linger): The panel
+       holds on the final summed total for 1 full second." The time it bought has not been lost, it has moved
+       to where the report said it was needed: in front of the merge, where two figures have to be read. */
+    expect(MONEY_MACHINE_LINGER_MS).toBe(1000);
   });
 });
 
@@ -311,17 +343,30 @@ describe("reduced motion is a different schedule, not just a stilled one", () =>
   });
 
   it("starts merged and sounds at 0ms", () => {
-    expect(MACHINE).toContain('setPhase(quiet ? "merged" : "falling");');
+    expect(MACHINE).toContain('setPhase(quiet ? "merged" : "holding");');
     const branch = sliceBetween(MACHINE, "if (quiet) {", "} else {");
-    expect(branch).toContain("onImpact();");
+    expect(branch).toContain("onCue();");
   });
 
-  it("takes the fall and the slide out of the clock", () => {
-    /* THE TIMINGS ARE ARITHMETIC ON `quiet`, so the linger is the same either way and the two removals are
-       the fall before it and the slide after -- which is exactly what "skip the slide-in entirely" and
-       "instantly disappear" ask for, expressed as zeroes rather than as a second code path. */
-    expect(MACHINE).toContain("const settled = quiet ? 0 : MONEY_MACHINE_FALL_MS;");
-    expect(MACHINE).toContain("(quiet ? 0 : MONEY_MACHINE_SLIDE_MS)");
+  it("skips every moving phase and keeps the lifetime", () => {
+    /* ==================================================================
+        DESIGN NOTE 1082: #1064's "SAME LIFETIME" CLAIM IS TRUE NOW
+       ==================================================================
+       IT WAS NOT. #1064's note said "same lifetime, same sound at the same moment", and its arithmetic gave
+       the animated path 900 + 2000 + 420 = 3320ms against the quiet path's 2000 -- a note describing an
+       intention as an accomplishment, which is a shape this project keeps producing.
+       MADE TRUE RATHER THAN WITHDRAWN. A reader who asked for less movement did not ask for less time, and
+       the animated path spends its last 1.5s on the final sum. One total for both is the shortest way to say
+       that, and the only way it stays true after the next edit to the schedule.
+       THE FOUR PHASE TIMERS ARE THE THING SKIPPED, which is what "bypassing the slide/merge and displaying
+       the final static sum instantly" asks for -- so they live inside the `else` and the lifetime does not. */
+    const quiet = sliceBetween(MACHINE, "if (quiet) {", "return () => timers");
+    expect(quiet).toContain("MONEY_MACHINE_CUE_AT_MS");
+    expect(quiet).toContain("MONEY_MACHINE_TOTAL_MS");
+    expect(MACHINE).toContain("timers.push(window.setTimeout(onDone, MONEY_MACHINE_TOTAL_MS));");
+    // The lifetime line is OUTSIDE the branch: no `quiet ?` may reach it.
+    const lifetime = sliceBetween(MACHINE, "timers.push(window.setTimeout(onDone,", ");");
+    expect(lifetime).not.toContain("quiet");
   });
 
   it("keeps the payout figure on screen when there is no merge to absorb it", () => {
@@ -380,23 +425,45 @@ describe("an unchanged roll confirms itself", () => {
     expect(FLASH).not.toContain('{bonus ? "+" : "-"}');
   });
 
-  it("keeps the sound the neutral bucket already had", () => {
-    /* ASKED whether the neutral state should be silent now that it flashes; ruled to keep it. It was never
-       silent -- `BUCKET_FALLBACK.unchanged` has been `coins-clinking.mp3` since #1040 -- so "make it silent"
-       would have been a removal rather than a decision not to add. */
+  it("silences the neutral bucket's default, and only its default", () => {
+    /* ==================================================================
+        DESIGN NOTE 1081 REVERSED THIS CASE, ON A SECOND LOOK AT THE SAME QUESTION
+       ==================================================================
+       IT READ: "ASKED whether the neutral state should be silent now that it flashes; ruled to keep it."
+       RULED SINCE, having heard it in play: "Completely remove the audio trigger from the Unpredictable
+       Revenue variant's Unchanged (0%) state ... It must be completely silent." Then narrowed: "ONLY remove
+       coins-clinking from the Unchanged revenue events. Some of the Unchanged events have more 'unique'
+       flavor text with sound effects that can still play."
+       THE NARROWING IS THE SUBSTANCE, so both halves are asserted. Pinning only the silence would be
+       satisfied by muting the bucket outright, which is the change that was explicitly NOT wanted. */
     const sfx = readStripped("utils/variantSfx.ts");
-    expect(sfx).toContain('unchanged: "coins-clinking.mp3"');
+    expect(sfx).toContain("unchanged: null,");
+    expect(sfx).not.toContain('"coins-clinking.mp3"');
   });
 });
 
-describe("the cue lands on the merge", () => {
-  it("fires from the impact callback, not from the mount", () => {
-    /* SPECIFIED: "Trigger `money-machine.mp3` at the exact moment the numbers merge." The component owns the
-       timing and the shell owns the playing, so the mute and the radio ducking stay in the one helper every
-       other cue goes through (#1041). */
-    expect(MACHINE).toContain("onImpact();");
-    const handler = sliceBetween(APP, "const handleMoneyMachineImpact = useCallback(", "}, []);");
-    expect(handler).toContain("playVariantCue(MONEY_MACHINE_SFX, sfxEnabledRef.current)");
+describe("the cue is the component's decision and the shell's to play", () => {
+  it("fires from a callback, not from the mount", () => {
+    /* ==================================================================
+        DESIGN NOTE 1082: THE TITLE WAS THE CLAIM, AND THE CLAIM MOVED
+       ==================================================================
+       THIS BLOCK WAS CALLED "the cue lands on the merge" and its case "fires from the impact callback",
+       quoting #1062's spec: "Trigger money-machine.mp3 at the exact moment the numbers merge."
+       IT NO LONGER DOES, AND THAT IS DELIBERATE. The clip's bell sits 0.85s inside it, so firing at the merge
+       rang the register most of a second late; the cue now starts at 1.15s so the BELL lands on the merge.
+       Renamed rather than left -- a case title that states a retired claim is a lie a reader trusts, and this
+       project has produced that exact failure before (`revenueFlashWiring`, "flashes the die's nominal
+       swing", after the claim reversed).
+       WHAT SURVIVES UNCHANGED is the division of labour, which is what this case was always really pinning:
+       the component owns WHEN, the shell owns the playing, and the mute and the radio ducking stay in the one
+       helper every other cue goes through (#1041). The alignment itself is asserted in `batch56`, against the
+       audio file rather than against a constant. */
+    expect(MACHINE).toContain("onCue();");
+    const handler = sliceBetween(APP, "const handleMoneyMachineCue = useCallback(", "}, []);");
+    /* Design note #1075: the second argument gained the "Payouts" category (`&& sfxPayoutRef.current`), so
+       the fragment stops before whatever else has been ANDed on. The claim is unchanged -- the cue goes
+       through the one helper that owns the mute and the ducking, carrying the master switch. */
+    expect(handler).toContain("playVariantCue(MONEY_MACHINE_SFX, sfxEnabledRef.current");
   });
 
   it("names a file that is actually on disk", () => {

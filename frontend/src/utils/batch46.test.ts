@@ -149,7 +149,11 @@ describe("the table measured against the payload it scans", () => {
     /* A FILE NO LINE CAN TRIGGER is a file nobody will ever hear, and the likeliest cause is another pattern
        above it swallowing its lines -- which is exactly what `/ice/` was doing to the violin. */
     const heard = new Set<string>();
-    for (const bucket of BUCKETS) for (const file of audioFor(bucket)) heard.add(file);
+    /* Design note #1081: a bucket's cue can be `null` now -- the unchanged default is silence -- and a
+       `null` in this set would compare against no filename and quietly widen "unreachable". */
+    for (const bucket of BUCKETS) {
+      for (const file of audioFor(bucket)) if (file !== null) heard.add(file);
+    }
     const unreachable = everySfxFile().filter(
       (file) => !file.endsWith(".mp4") && !heard.has(file) && !/yellow_sign|carcosa/.test(file),
     );
@@ -159,7 +163,18 @@ describe("the table measured against the payload it scans", () => {
   it("falls back per bucket when nothing matches", () => {
     expect(cue("The books balanced beautifully, provided nobody actually looked at them.", "criticalMalus").audio)
       .toBe("sad-trombone.mp3");
-    expect(cue("The day passed without financial incident.", "unchanged").audio).toBe("coins-clinking.mp3");
+    /* ==================================================================
+        DESIGN NOTE 1081: THE UNCHANGED BUCKET'S DEFAULT IS SILENCE
+       ==================================================================
+       RULED: "Completely remove the audio trigger from the ... Unchanged (0%) state ... It must be completely
+       silent" -- narrowed to "ONLY remove coins-clinking from the Unchanged revenue events. Some of the
+       Unchanged events have more 'unique' flavor text with sound effects that can still play."
+       BOTH HALVES ARE ASSERTED, because the narrowing is the whole substance: a line no keyword claims is
+       silent, and a line a keyword claims still sounds. Pinning only the first would be satisfied by
+       silencing the bucket outright, which is the change that was explicitly NOT wanted. */
+    expect(cue("The day passed without financial incident.", "unchanged").audio).toBeNull();
+    expect(cue("A child counted the wheels as the locomotive passed.", "unchanged").audio)
+      .toBe("metal_clunk.mp3");
     expect(cue("Business was brisk, and nobody has yet asked why.", "criticalBonus").audio).toBe("cha-ching.mp3");
   });
 });
@@ -225,9 +240,37 @@ describe("an ordinary line never brings a video", () => {
 /* ------------------------------------------------------------------ */
 
 describe("the bed gets out of the way", () => {
-  it("ducks to about a fifth and fades back", () => {
-    expect(AUDIO).toContain("export const DUCKED_RADIO_VOLUME = RADIO_VOLUME * 0.2;");
+  it("ducks two different depths and fades back", () => {
+    /* ==================================================================
+        DESIGN NOTE 1073: ONE DEPTH WAS SERVING TWO SITUATIONS
+       ==================================================================
+       THIS PINNED A SINGLE `DUCKED_RADIO_VOLUME` AT A FIFTH, which was right when every cue was a short clip
+       at the old levels. REPORTED after the effects were normalised: "they are considerably louder than the
+       radio now ... I'd only duck 80% ... EXCEPT ... on the yellow sign and carcosa videos, where indeed the
+       20% duck for the extended play makes sense."
+       SO THE FIFTH SURVIVES WHERE IT WAS EARNED. A ten-second clip with its own dialogue competes with the
+       bed; a half-second coin clink sits over it, and dropping the radio to a fifth for that is a hole the
+       listener hears open and close. Both are asserted, because the pair is the point -- a single constant at
+       either value would be wrong for the other case. */
+    /* Design note #1074 SUPERSEDED THE FORM, NOT THE RULE. These read `RADIO_VOLUME * 0.8` and `* 0.2` --
+       a level computed once at module load, which stopped being the bed's level the moment a slider could
+       move it. The depths are now FRACTIONS applied at duck time. The two figures the report argued for are
+       unchanged, so the case still asserts the pair; only the multiplicand is gone. */
+    expect(AUDIO).toContain("export const DUCK_FOR_CUE = 0.8;");
+    expect(AUDIO).toContain("export const DUCK_FOR_VIDEO = 0.2;");
+    // The fraction has to REACH the element, or two named depths would be two unused constants.
+    expect(AUDIO).toContain("duckTarget?.setVolume(radioVolume * activeDuck);");
     expect(AUDIO).toContain("export const DUCK_FADE_MS = 900;");
+  });
+
+  it("holds the deepest duck while clips overlap", () => {
+    /* THE CASE THE SECOND DEPTH CREATES. A coin clink during the Carcosa video must not raise the bed back
+       over the video's dialogue for its half second -- so the level held is the MINIMUM asked for, not the
+       most recent request, and it resets only once nothing is ducking at all. */
+    expect(AUDIO).toContain("activeDuck = Math.min(activeDuck, depth);");
+    /* Design note #1074: the resting floor is 1 -- "no duck" -- rather than the bed's level, for the same
+       reason the depths became fractions: `activeDuck` is now a MULTIPLIER, and a multiplier at rest is 1. */
+    expect(AUDIO).toContain("activeDuck = 1;");
   });
 
   it("reference-counts the hold", () => {
@@ -258,7 +301,10 @@ describe("the bed gets out of the way", () => {
 
   it("honours the SFX mute at the one place every caller goes through", () => {
     expect(AUDIO).toContain("export function playVariantCue(file: string, enabled: boolean): void {\n  if (!enabled) return;");
-    expect(APP).toContain("playVariantCue(cue.audio, sfxEnabledRef.current);");
+    /* Design note #1075: the second argument gained the per-category switch (`&& sfxRevenueRef.current`).
+       The claim here is that the MASTER mute is still asked at the call site -- the engine takes one boolean
+       and every caller composes it -- so the fragment stops before whatever else has been ANDed on. */
+    expect(APP).toContain("playVariantCue(cue.audio, sfxEnabledRef.current");
   });
 
   it("survives an engine with no media stack", () => {
@@ -311,10 +357,22 @@ describe("the haunting plays over a board you can still use", () => {
 });
 
 describe("the log says which way the die went", () => {
-  it("tints bonuses gold and maluses red, in italic", () => {
+  it("tints bonuses one way and maluses the other", () => {
+    /* ==================================================================
+        DESIGN NOTE 1079 SUPERSEDED THE COLOURS AND THE SCOPE OF THE ITALIC
+       ==================================================================
+       IT READ "tints bonuses gold ... in italic" and counted TWO `fontStyle: "italic"` -- one per tone
+       style. RULED since: green and red rather than gold and red, and "italics strictly to the flavor text
+       string at the end of the line, leaving the mechanical revenue math in the standard font."
+       SO THERE IS ONE ITALIC NOW, and it is not on either tone: it lives in `logFlavourText` and is applied
+       to the flavour SENTENCE. Counting italics per tone style asserted the old shape rather than the claim,
+       which is that the two directions are distinguishable and neither is the other.
+       THE CLAIM IS ASSERTED WHERE IT CANNOT BE SATISFIED BY A COINCIDENCE: two styles exist, they carry
+       different fills, and the italic exists somewhere other than inside them. */
     expect(TICKER).toContain("logToneBonus");
     expect(TICKER).toContain("logToneMalus");
-    expect(TICKER.split('fontStyle: "italic"').length - 1).toBe(2);
+    expect(TICKER).toContain("logFlavourText: { fontStyle: \"italic\" }");
+    expect(TICKER.split('fontStyle: "italic"').length - 1).toBe(1);
   });
 
   it("leaves an ordinary day untinted", () => {
@@ -331,13 +389,35 @@ describe("the log says which way the die went", () => {
   });
 
   it("agrees with the sound about which direction a bucket is", () => {
-    // One predicate, two consumers -- the tint and the cow.
+    /* ==================================================================
+        DESIGN NOTE 1081: THE TABLE WAS PINNED WHOLE, WHICH IS THE WRONG SHAPE
+       ==================================================================
+       IT ASSERTED ALL FIVE ENTRIES BY NAME, so silencing one broke a case about a different claim entirely.
+       That is my own recurring failure written into a test: pinning a COMPLETE mapping means any change to
+       any part of it fails, whether or not the change touches what the case is about.
+       THE CLAIM IS AN AGREEMENT, not a table. `isBonusBucket` and `BUCKET_FALLBACK` are two consumers of one
+       idea -- which direction a bucket points -- and what must not drift is that a bonus bucket sounds like
+       good news and a malus bucket like bad. Asserted as "the two bonus buckets share a clip, the two malus
+       buckets share a different one, and the two sets do not overlap", which is that claim exactly and says
+       nothing about which files they are.
+       `unchanged` IS NEITHER, AND NOW HAS NO SOUND (#1081). It is excluded here rather than given a third
+       arm, because a bucket with no direction has no direction to agree about; its silence is asserted in
+       `batch56`, where the change lives. */
+    const bonusClips = new Set<string>();
+    const malusClips = new Set<string>();
     for (const bucket of BUCKETS) {
-      const bonus = isBonusBucket(bucket);
-      expect(BUCKET_FALLBACK[bucket]).toBe(
-        bucket === "unchanged" ? "coins-clinking.mp3" : bonus ? "cha-ching.mp3" : "sad-trombone.mp3",
-      );
+      if (bucket === "unchanged") continue;
+      const clip = BUCKET_FALLBACK[bucket];
+      expect(clip).not.toBeNull();
+      (isBonusBucket(bucket) ? bonusClips : malusClips).add(clip as string);
     }
+    // One clip per direction, and the directions do not share it.
+    expect(bonusClips.size).toBe(1);
+    expect(malusClips.size).toBe(1);
+    expect(Array.from(bonusClips)[0]).not.toBe(Array.from(malusClips)[0]);
+    /* THE VACUITY GUARD. A `BUCKETS` list that had lost its malus entries would give two empty sets and
+       every assertion above would be about nothing. */
+    expect(BUCKETS.filter((bucket) => bucket !== "unchanged").length).toBe(4);
   });
 });
 

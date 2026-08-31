@@ -415,7 +415,9 @@ describe("the haunting owns the moment", () => {
   it("ducks the radio for the clip's whole run", () => {
     /* THE OTHER CONSEQUENCE. The video element is outside `playVariantCue` entirely, so without this the bed
        plays at full volume under ten seconds of haunting -- which is what #1043 was avoiding by muting it. */
-    expect(APP).toContain("const releaseHaunting = duckRadio();");
+    /* Design note #1073: the call names its DEPTH now -- short cues barely touch the bed and this ten-second
+       clip still needs the deep duck. What this case is for is that the video ducks at all. */
+    expect(APP).toContain("duckRadio(DUCK_FOR_VIDEO)");
     expect(APP).toContain("releaseHaunting();");
   });
 });

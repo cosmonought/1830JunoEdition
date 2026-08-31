@@ -135,8 +135,20 @@ export const MONEY_MACHINE_TOTAL_MS = MONEY_MACHINE_LEAVE_AT_MS + MONEY_MACHINE_
  *
  * MEASURED, NOT SPECIFIED, which is why it lives here with its method rather than in a table of design
  * decisions: it is a property of a file on disk, and `batch56` re-derives it from that file rather than
- * trusting this constant. */
-export const MONEY_MACHINE_DING_AT_MS = 850;
+ * trusting this constant.
+ *
+ * ==================================================================
+ *  DESIGN NOTE 1086: 850 BECAME 700 WHEN THE CLIP LOST ITS DEAD AIR
+ * ==================================================================
+ *
+ * THE AUDIO PASS TRIMMED 0.11s FROM THE HEAD of this file and 0.21s from its tail, along with 13.5s of the
+ * same across the pack. The bell did not move inside the sound; the sound moved forward inside the file.
+ *
+ * AND THIS IS EXACTLY WHY `batch56` DECODES THE MP3 rather than checking one constant against another. A
+ * tautological assertion would have stayed green through a change that silently pushed the register 150ms
+ * past the merge -- the fault this alignment was built to avoid, reintroduced by an unrelated batch. The
+ * case failed, which is the whole of what it is for. */
+export const MONEY_MACHINE_DING_AT_MS = 700;
 
 /** When the register starts, so that its bell lands on the merge. */
 export const MONEY_MACHINE_CUE_AT_MS = MONEY_MACHINE_MERGE_AT_MS - MONEY_MACHINE_DING_AT_MS;

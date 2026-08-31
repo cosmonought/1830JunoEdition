@@ -250,12 +250,32 @@ describe("the register's bell lands on the merge", () => {
   });
 
   it("finishes the clip before the panel leaves", () => {
-    /* THE FAULT THIS BATCH WAS CHECKED FOR. The ruled 2.0s trigger would have left the register ringing
-       0.36s after the panel had slid off -- the same complaint that had just been raised about
-       `coins-clinking.mp3` outlasting the revenue flash. `money-machine.mp3` runs 2.23s.
-       ROUNDED UP TO 2300ms so a re-encode that lengthens the file slightly does not fail the suite for a
-       difference nobody can hear. */
-    const clipMs = 2300;
+    /* ==================================================================
+        THE FAULT THIS BATCH WAS CHECKED FOR, AND THE ONE THIS CASE ITSELF NEARLY HAD
+       ==================================================================
+       The ruled 2.0s trigger would have left the register ringing 0.36s after the panel had slid off -- the
+       same complaint that had just been raised about `coins-clinking.mp3` outlasting the revenue flash.
+       THIS READ `const clipMs = 2300`, A HAND-TYPED LENGTH, and #1086's audio pass then trimmed the file to
+       1.91s. The assertion did not fail -- a shorter clip fits more easily -- but it had stopped measuring
+       the file and started measuring a memory of it, which is one edit away from being wrong in the
+       direction that matters.
+       SO THE DURATION IS DECODED, like the bell above it. `ffprobe` rather than a full decode: the length is
+       in the container and there is no need to read the samples for it.
+       SKIPPED WHERE `ffprobe` IS ABSENT, for the reason the bell case gives -- a missing decoder is a fact
+       about the machine, not about the code. */
+    let clipMs = 0;
+    try {
+      const { execFileSync } = require("child_process") as typeof import("child_process");
+      const path = require("path") as typeof import("path");
+      const out = execFileSync("ffprobe", [
+        "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0",
+        path.join(__dirname, "..", "..", "public", "audio", MONEY_MACHINE_SFX),
+      ]);
+      clipMs = Math.round(parseFloat(String(out)) * 1000);
+    } catch {
+      return;
+    }
+    expect(clipMs).toBeGreaterThan(500);
     expect(MONEY_MACHINE_CUE_AT_MS + clipMs).toBeLessThanOrEqual(MONEY_MACHINE_TOTAL_MS);
     // And it does not start before the panel has arrived, which would ring it at nothing.
     expect(MONEY_MACHINE_CUE_AT_MS).toBeGreaterThanOrEqual(MONEY_MACHINE_SLIDE_MS);

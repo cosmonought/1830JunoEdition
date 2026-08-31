@@ -106,7 +106,19 @@ describe("the private-revenue toast is short and stacked (design notes #983/#984
       ] as never,
       "p1",
     );
-    expect(summary?.rows).toEqual([
+    /* ==================================================================
+        DESIGN NOTE 1052: PINNED AS THE PAIR IT IS ABOUT, NOT AS THE WHOLE ROW
+       ==================================================================
+       THIS WAS `toEqual([{ label, value }, ...])`, which asserts the row has EXACTLY those two fields -- so
+       #1052 adding `privateId` for the payout modal's enumeration broke a case that has nothing to do with
+       enumeration. That is my most frequent failure in this project and this is its cleanest example: the
+       case's subject is that the STRUCTURE travels instead of a joined sentence, and it was written in a form
+       that also silently forbade the structure ever growing.
+       THE SUBJECT IS UNCHANGED AND IS NOW WHAT IS ASSERTED: two rows, in order, each carrying its name and
+       its figure as separate fields. A regression to a joined string still fails this; a third field does
+       not. `toMatchObject` is the shape-with-room-to-grow form of the same claim. */
+    expect(summary?.rows).toHaveLength(2);
+    expect(summary?.rows).toMatchObject([
       { label: "Schuylkill Valley", value: "$5" },
       { label: "Baltimore & Ohio", value: "$30" },
     ]);
@@ -121,7 +133,8 @@ describe("the private-revenue toast is short and stacked (design notes #983/#984
       "p1",
     );
     expect(summary?.detail).toBe("Delaware & Hudson $20");
-    expect(summary?.rows).toEqual([{ label: "Delaware & Hudson", value: "$20" }]);
+    // Design note #1052: `toMatchObject`, for the reason the case above records.
+    expect(summary?.rows).toMatchObject([{ label: "Delaware & Hudson", value: "$20" }]);
   });
 
   it("does not split the joined string back apart", () => {

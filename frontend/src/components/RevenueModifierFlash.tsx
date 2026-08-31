@@ -261,6 +261,19 @@ const ARROW_GLYPH_RATIO = 0.7;
 
 const BONUS_COLOR = "#4ade80";
 const MALUS_COLOR = "#f87171";
+/* ==================================================================
+    DESIGN NOTE 1065: THE THIRD OUTCOME GETS A COLOUR THAT CLAIMS NOTHING
+   ==================================================================
+   REPORTED: "When the variant rolls an unchanged revenue state (0% modifier), cleanly flash the screen white
+   and briefly display a `+0%` or `Unchanged` indicator to confirm the roll was executed."
+   AND THE COMPLAINT BEHIND IT IS THAT SILENCE LOOKS LIKE FAILURE. A player who sees nothing cannot tell an
+   unchanged roll from a variant that did not fire, and a third of the die's faces are unchanged -- so the
+   commonest single outcome was the one with no confirmation.
+   WHITE BECAUSE IT IS NOT A DIRECTION. Green rises and red falls (#973); a third hue on that axis would
+   invite the reader to ask which way it points. White is the absence of the claim, which is exactly what an
+   unchanged roll is. */
+const NEUTRAL_COLOR = "#f4f6fb";
+const NEUTRAL_EDGE = "rgba(244, 246, 251, 0.42)";
 
 /* ==================================================================
     DESIGN NOTE 973: THE GLOW LEFT THE TEXT AND WENT TO THE EDGE
@@ -342,6 +355,24 @@ export function RevenueModifierFlash({ signal }: RevenueModifierFlashProps): JSX
 
   const bonus = shown.delta > 0;
   /* ==================================================================
+      DESIGN NOTE 1065: `bonus` WAS A BOOLEAN OVER A THREE-WAY OUTCOME
+     ==================================================================
+     `delta > 0` MADE ZERO A MALUS. Every branch below reads `bonus ? green : red`, so a neutral roll arriving
+     here before this batch would have flashed red with six falling arrows and printed `-0%` -- which is why
+     the caller suppressed it entirely rather than letting it through. That suppression was the reported gap.
+     THE ARROWS GO, AND ONLY FOR THIS OUTCOME. #953 put them there to say direction ("up-arrows floating
+     upward" for a bonus, down for a malus); an unchanged roll has no direction, and six drifting triangles
+     that mean nothing are worse than none. The figure and the rim carry the confirmation.
+     THE FIGURE READS `+0%`, ON INSTRUCTION AND OVER MY OWN SUGGESTION. I proposed "Unchanged", because
+     `revenueOutcome` returns `"normal"` both for a die that rolled 100% and for a 90% roll the rounding
+     swallowed, and "+0%" is literally true only of the first. RULED: "Players don't know the difference
+     between roll3/roll4 and a 10% malus that rounded back up: for them the end result is +0%, so it's okay
+     to print that." Which is right, and is the better reading of #938 rather than a departure from it: that
+     note forbids the flash claiming a modifier the corporation did not FEEL, and `+0%` claims the opposite of
+     one. The nominal swing is the thing that must never appear here, and it does not -- the caller passes a
+     hard zero for this branch (`App.tsx` #1065) rather than `percent - 100`. */
+  const neutral = shown.delta === 0;
+  /* ==================================================================
       DESIGN NOTE 957: BIGGER ARROWS FOR THE BIGGER SWING
      ==================================================================
      RULED: "larger arrows for critical bonus/malus animations and smaller arrows for minor bonus/malus
@@ -404,7 +435,7 @@ export function RevenueModifierFlash({ signal }: RevenueModifierFlashProps): JSX
         aria-hidden="true"
         className="app-revenue-edge"
         style={{
-          color: bonus ? BONUS_EDGE : MALUS_EDGE,
+          color: neutral ? NEUTRAL_EDGE : bonus ? BONUS_EDGE : MALUS_EDGE,
           animationDuration: `${REVENUE_FLASH_MS}ms`,
         }}
       />
@@ -449,7 +480,7 @@ export function RevenueModifierFlash({ signal }: RevenueModifierFlashProps): JSX
             background: `radial-gradient(ellipse closest-side, ${BACKDROP_INK} 0%, ${BACKDROP_FADE} 100%)`,
           }}
         />
-        {ARROW_POSITIONS.map((offset, index) => (
+        {(neutral ? [] : ARROW_POSITIONS).map((offset, index) => (
           <span
             key={index}
             aria-hidden="true"
@@ -494,7 +525,7 @@ export function RevenueModifierFlash({ signal }: RevenueModifierFlashProps): JSX
           fontSize: "clamp(40px, 10vw, 104px)",
           fontWeight: 800,
           letterSpacing: "-0.02em",
-          color: bonus ? BONUS_COLOR : MALUS_COLOR,
+          color: neutral ? NEUTRAL_COLOR : bonus ? BONUS_COLOR : MALUS_COLOR,
           /* THE HALO AGAIN, for the reason #364 gives on the hex badge: this text floats over a board that is
              yellow, green, grey and red by turns, and a plate is exactly what was ruled out. A shadow costs no
              footprint and keeps it legible over all of them. */
@@ -503,7 +534,9 @@ export function RevenueModifierFlash({ signal }: RevenueModifierFlashProps): JSX
           userSelect: "none",
         }}
       >
-        {bonus ? "+" : "-"}
+        {/* Design note #1065: `+` for a neutral roll as well as for a bonus -- ruled, and true of the
+            outcome rather than of the die. A bare `0%` reads as a missing sign. */}
+        {bonus || neutral ? "+" : "-"}
         {Math.abs(shown.delta)}%
       </span>
       </span>

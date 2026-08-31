@@ -27,6 +27,7 @@ const { readStripped, sliceBetween } = require("./sourceScan") as typeof import(
 
 const APP = readStripped("App.tsx");
 const MODAL = readStripped("components/PrivateRevenueModal.tsx");
+const SUMMARY = readStripped("utils/sandboxSession.ts");
 
 type Payout = Parameters<typeof summarisePrivateRevenueRound>[0][number];
 
@@ -149,7 +150,12 @@ describe("the phase is raised once, when the viewer collected", () => {
   it("still writes the log's line per private beside it", () => {
     /* #967's DECISION, WHICH HAS NOW OUTLIVED THREE RENDERINGS OF THE PANEL. The feed is a record and a
        record wants each payment findable; the panel is what consolidates. Both, not one. */
-    expect(opening).toContain('logInfo("Private Revenue"');
+    /* Design note #1059: the payout lines carry the whole sentence in the label with their own stamp now --
+       `[OR 1.1--Private Companies]` rather than a `Private Revenue — ` prefix under whichever step the cursor
+       happened to be on. What this case is for is the PAIRING, that the per-private lines and the consolidated
+       summary are raised together from one place, and that is what it now asserts. */
+    expect(opening).toContain("describePrivatePayout(payout, labelForAddress, labelForCompany)");
+    expect(opening).toContain("--Private Companies");
   });
 
   it("interrupts nobody who collected nothing", () => {
@@ -323,11 +329,82 @@ describe("the seat colour goes where it can be seen", () => {
     expect(MODAL).toContain("before any corporation acts");
   });
 
-  it("can be dismissed, unlike the fleet-loss modal", () => {
-    /* #896 REMOVED ESCAPE DELIBERATELY and this restores it deliberately, which is a distinction a later
-       "consistency" pass would flatten. Dismissing a fleet loss costs a turn; the money here is already paid
-       and every figure is also on the player cards and in the Activity Log. */
-    expect(MODAL).toContain('event.key === "Escape"');
+  it("has exactly one way out, and it is the button", () => {
+    /* ==================================================================
+        DESIGN NOTE 1052: THIS CASE ASSERTED THE OPPOSITE AND #1049 WAS WRONG
+       ==================================================================
+       IT PINNED THE ESCAPE LISTENER, on #1049's argument that #896's reason for removing every casual exit
+       from `FleetLossModal` does not apply here -- "nothing is lost by dismissing this one ... ceremony a
+       player wants to skip should be skippable."
+       REPORTED FROM PLAYTEST: "clicking anywhere on the screen dismisses the modal: I think it's better to
+       make players click the Begin Operations button since an accidental click elsewhere immediately dismisses
+       it."
+       THE ARGUMENT PRICED THE WRONG COST. It asked what a player LOSES by dismissing -- nothing, correctly --
+       and never asked how easily they dismiss it BY ACCIDENT. This modal opens under the cursor at the start
+       of every Operating Round, so a backdrop click eats a press aimed at the board underneath and the
+       ceremony the panel exists to restore is gone before it is read. The failure is not lost information, it
+       is the feature not happening.
+       ASSERTED AS THE ABSENCES, because that is what a later "consistency" pass would undo: every other modal
+       in this app closes on a backdrop click, so restoring one here would look like tidying. */
+    expect(MODAL).not.toContain('event.key === "Escape"');
+    /* ONE HANDLER IN THE WHOLE FILE, which is the property rather than a proxy for it. A first draft of this
+       pinned the backdrop's opening tag by its exact whitespace -- an assertion that would break on a
+       reformat and pass on a re-added handler two lines lower, which is precisely backwards. */
+    expect(MODAL.split("onClick=").length - 1).toBe(1);
+    /* AND THE CLICK-EATER WITH IT. `stopPropagation` existed only to stop the backdrop's handler firing when
+       the player clicked inside the card; with no backdrop handler it is a guard against nothing, and leaving
+       it would imply one still exists. */
+    expect(MODAL).not.toContain("stopPropagation");
+    // The one exit, and the focus that makes it reachable without a mouse.
+    expect(MODAL).toContain("Begin operations");
+    expect(MODAL).toContain("autoFocus");
+  });
+
+  it("numbers a private the way every other surface numbers it", () => {
+    /* REPORTED: "the private companies lack their enumerations, e.g. '1. Schuykill Valley'".
+       AND WHICH NUMBER IS DECIDED BY PRECEDENT, not by taste. Five surfaces already render
+       `${private_id}. ${name}`; numbering these rows by their position in one player's holdings would give
+       the same six companies a second numbering, so a player holding the C&A and the B&O would read "5." and
+       "6." everywhere and "1." and "2." here. That is #891's shape.
+       THE ID TRAVELS ON THE ROW, so the panel composes the pair at its own render site exactly as
+       `PlayerCards` does, rather than the summary baking a prefix into a name. */
+    expect(MODAL).toContain("{line.privateId}.");
+    expect(SUMMARY).toContain("privateId: payout.privateId,");
+  });
+
+  it("colours the sum like the figures it sums", () => {
+    /* REPORTED: "the revenue numbers are in green, but the sum is in black." The dark total came from the
+       toast, where #1030 had darkened every figure against a cream ground and there were no green rows to be
+       inconsistent with. #670's rule decides it: green means money, or a thing arriving, and a green column
+       under a black sum says the sum is a different kind of quantity. */
+    const total = sliceBetween(MODAL, "totalValue: {", "},");
+    expect(total).toContain("color: CARD_INK_POSITIVE");
+  });
+
+  it("reports where the money left the reader", () => {
+    /* ASKED: "on payouts, we usually include $before > $after somewhere." It is the house form -- #670 for
+       the dividend report, #682 for the Stock Round's projection: money moving is two facts.
+       READ, NOT DERIVED. `after = before + total` is arithmetic the shell could do, and #685's rule is that
+       the reducer settles and the shell narrates -- a computed balance would be right until something else
+       touched cash in the same transition. */
+    expect(MODAL).toContain("round.cashBefore !== null && round.cashAfter !== null");
+    expect(APP).toContain("cashBefore: cashIn(before, viewer)");
+    expect(APP).toContain("cashAfter: cashIn(after, viewer)");
+  });
+
+  it("gives the other seats their standing, not a second before-and-after", () => {
+    /* ASKED whether the others should show "$before + $payout > $new". Three figures on each of up to five
+       rows of information the reader is not acting on is a table rather than a glance, and the `before` is
+       the one of the three that is a subtraction away. What arrived, and what it arrived at. */
+    expect(MODAL).toContain("+${other.total}");
+    expect(MODAL).toContain("other.cashAfter !== null");
+  });
+
+  it("leaves the stripe carrying identity alone", () => {
+    /* REPORTED: "the sum does not need to be listed in the player color stripe since it's printed a few lines
+       below that." #1049 defended the copy as two registers; four lines apart is one number twice. And the
+       player card's own header -- the thing #1050 borrowed -- carries no figure either. */
+    expect(MODAL).not.toContain("stripeTotal");
   });
 });
 

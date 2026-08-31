@@ -47,6 +47,26 @@ export interface ActionLogContext {
   /* An OR is corporation-driven, so the line names the CORPORATION and the step it declined. The step is not on GameStateResponse, so it is passed in and stays optional.
      See docs/ai_architecture/ui_shell_layout.md - actionLog.ts #478 */
   orSubPhase?: OperatingSubPhase | null;
+  /** ==================================================================
+   *   DESIGN NOTE 1054: THE MOVE THE MARKET ATOM ACTUALLY MADE
+   *  ==================================================================
+   *
+   * REPORTED: "the two Dividends entries can be combined into: 'B&O paid dividends on $X:.... B&O's share
+   * price rose from $90 to $100.'"
+   *
+   * AND #775 IS THE REASON THIS IS A PARAMETER RATHER THAN A CALCULATION. That note deleted a price clause
+   * from this very sentence because it "quoted the destination of a SECOND move that never happened" -- the
+   * branch read the current price and projected a step from it, after the atom had already stepped. Its
+   * conclusion was that `Market Move` should own the answer, "the authority's report of what it did, not a
+   * second opinion about what it should do."
+   *
+   * SO THE AUTHORITY'S REPORT IS HANDED IN. `applySandboxMarketAction` returns `moved`, the shell has it
+   * before this sentence is composed, and passing it here folds two lines into one WITHOUT reintroducing the
+   * projection #775 removed. The figures are the atom's own; this branch only puts them in a clause.
+   *
+   * OPTIONAL, AND ABSENT MEANS NO MOVE. A clamped token at the edge of the chart moves nothing and gets no
+   * clause -- which is exactly what #775 recorded as the accepted cost of deleting the old one. */
+  marketMove?: { from: number; to: number; reason: "payout" | "withhold" | "sale" } | null;
 }
 
 const NUMBER_WORDS = ["no", "one", "two", "three", "four", "five", "six"] as const;
@@ -101,13 +121,120 @@ export function actingActor(context: ActionLogContext): string {
    itself, so #478's actual rule -- one table, so the log and the strip cannot disagree -- survives the move
    intact; what changed is which file does the reading. */
 
-/** " Treasury now $X." for a corporation that just spent, or "" when the
- *  resolved state is not available (a live chain -- design note #2). */
+/** " Treasury $A → $B." for a corporation that just spent, or "" when the resolved state is not available
+ *  (a live chain -- design note #2).
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 1053: THE MOVEMENT, NOT THE DESTINATION
+ *  ==================================================================
+ *
+ *  REPORTED, of a station placement: two lines where one would do --
+ *      "B&O placed a station on J14 for $40. Treasury now $880."
+ *      "Treasury — B&O spent $40 — treasury $920 → $880."
+ *  -- "can be condensed into one log: 'B&O placed a station on J14 for $40. Treasury $920 → $880.'"
+ *
+ *  AND THE SECOND LINE IS NOT A DUPLICATE OF THE FIRST BY ACCIDENT. #750 prints it by reading the treasury
+ *  DIFF rather than trusting any arm to declare what it charged, on the stated grounds that "an arm that
+ *  reports its own arithmetic will happily report a bug". That is a real safeguard and it stays -- see
+ *  `App.tsx` #1053 for how it now stays silent when the action line has already said the same thing, and
+ *  stays loud when it has not.
+ *
+ *  WHAT THIS SUFFIX GIVES UP IS NOTHING. "Treasury now $880" is the destination; the diff line was carrying
+ *  the origin. Printing both figures here is what makes the second line redundant rather than merely noisy --
+ *  and it is the same before/after form #670 settled for the dividend report and #682 for the Stock Round's
+ *  projection. One shape for money moving, everywhere.
+ *
+ *  BOTH STATES OR NEITHER. `gameState` is the BEFORE state on this context (the station price is read off it
+ *  one branch below) and `afterState` is the settled one. With either missing there is no movement to state,
+ *  so the suffix is empty rather than half-printed -- #562's rule that a missing figure and a real one are
+ *  different facts, applied to a pair. */
 function treasurySuffix(context: ActionLogContext, companyId: number): string {
-  const treasury = context.afterState?.public_companies.find(
-    (entry) => entry.company_id === companyId,
-  )?.treasury;
-  return treasury === undefined ? "" : ` Treasury now $${treasury}.`;
+  const find = (state: ActionLogContext["afterState"]) =>
+    state?.public_companies.find((entry) => entry.company_id === companyId)?.treasury;
+  const before = find(context.gameState);
+  const after = find(context.afterState);
+  if (after === undefined) return "";
+  if (before === undefined || before === after) return ` Treasury now $${after}.`;
+  return ` Treasury $${before} → $${after}.`;
+}
+
+/** The train purchase, as short as a corner toast wants it.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 1063: A SECOND RENDERING, NOT A SECOND SOURCE
+ *  ==================================================================
+ *
+ *  SPECIFIED: "The toast should simply read: `[Corporation] bought a [Tier]-train. Depot: [X] remaining.`"
+ *  The Activity Log's line is longer -- it carries the price and the treasury movement -- so the toast can no
+ *  longer be the log's string, which is what it has been since #794.
+ *
+ *  AND #794's RULE IS ABOUT SNAPSHOTS, NOT ABOUT LENGTH, which is what makes this safe. Its report was a
+ *  toast that said "$5 per share" beside a log that said the right figure, and its diagnosis was two
+ *  SNAPSHOTS: "the toast used to fire from the label derived at DISPATCH time; the Activity Log's line is
+ *  rebuilt in the drain from the state the action actually applied to." Its fix was to raise the toast from
+ *  the rebuilt label. Two sentences of different lengths built in one function from one `context` cannot
+ *  reproduce that, because there is only one snapshot in the room.
+ *
+ *  SO IT LIVES HERE, BESIDE THE SENTENCE IT SHORTENS, rather than in the shell. A caller composing its own
+ *  short version would be a second place that decides how a depot count is worded, which is #891's shape --
+ *  and `batch52` asserts the two agree about the tier and the remaining count.
+ *
+ *  `null` FOR ANYTHING ELSE, so the caller falls back to the full label rather than showing an empty toast. */
+export function trainPurchaseToastLine(
+  msg: GameplayExecuteMsg,
+  context: ActionLogContext,
+): string | null {
+  if (!("BuyHardwareFromPool" in msg) && !("EmergencyBuyHardware" in msg)) return null;
+  const protocolId =
+    "BuyHardwareFromPool" in msg
+      ? msg.BuyHardwareFromPool.protocol_id
+      : msg.EmergencyBuyHardware.protocol_id;
+  // The same `find` the long sentence makes: the depot sells cheapest-first, so the tier bought is the first
+  // row with stock BEFORE the purchase.
+  const tier = context.gameState
+    ? depotInventory(context.gameState).find((row) => row.remaining === null || row.remaining > 0)
+    : undefined;
+  if (!tier) return null;
+  const settled = context.afterState
+    ? depotInventory(context.afterState).find((row) => row.tier === tier.tier)
+    : undefined;
+  const left = settled ? settled.remaining : Math.max(0, (tier.remaining ?? 1) - 1);
+  /* `unlimited` FOR THE DIESELS, matching the long line. "Depot: null remaining" is the failure #232 keeps
+     naming, and the D-train genuinely has no count to give. */
+  const remaining = left === null ? "unlimited" : `${left}`;
+  return `${corp(context.gameState, protocolId)} bought a ${tier.tier}-train. Depot: ${remaining} remaining.`;
+}
+
+/** Whether this message's own sentence already states the corporation's treasury movement.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 1053: WHO GETS TO SAY THE TREASURY MOVED
+ *  ==================================================================
+ *
+ *  #750 PRINTS A SEPARATE LINE FOR EVERY TREASURY MOVEMENT and the reason is a good one: it reads the DIFF
+ *  rather than trusting any arm to declare what it charged, because "an arm that reports its own arithmetic
+ *  will happily report a bug". Reported against it, three times in one log: for a tile lay, a station
+ *  placement and a train purchase, the line said exactly what the sentence above it had just said.
+ *
+ *  SO THE DIAGNOSTIC KEEPS ITS JOB AND LOSES ITS ECHO. The line is suppressed only where the sentence has
+ *  already carried the figures -- and the UNEXPLAINED variant is never suppressed, because a movement on a
+ *  message with no business moving a treasury is the line #750 exists for and no sentence will mention it.
+ *
+ *  NOT EVERY TREASURY MOVER STATES ITS OWN. `TREASURY_MOVERS` in `treasuryProvenance.ts` also lists
+ *  `DeclareDividends`, `BuyStock`, `PassTurn` and `OpenStockRound` -- a float capitalising a corporation and
+ *  an Operating Round opening pay treasuries through sentences that say nothing about a balance. Those keep
+ *  the #750 line, which is their only record.
+ *
+ *  THIS LIST MUST MATCH `treasurySuffix`'s CALLERS, which is #891's shape waiting to happen: two places
+ *  deciding one thing. It is asserted rather than remembered -- `batch51.test.ts` counts the call sites in
+ *  this file and compares them with the arms below, so adding a suffix without adding an arm goes red. */
+export function sentenceStatesTreasury(msg: GameplayExecuteMsg): boolean {
+  return (
+    "LayTile" in msg ||
+    "PlaceStationToken" in msg ||
+    "BuyHardwareFromPool" in msg ||
+    "EmergencyBuyHardware" in msg
+  );
 }
 
 function hexName(mapGrid: MapGridResponse, q: number, r: number): string {
@@ -285,8 +412,36 @@ export function describeGameplayAction(
     const settlement = dividendSplit(gameState, protocol_id, revenue_amount, distribute);
     const revenue = settlement?.revenue ?? 0;
 
+    /* ==================================================================
+     *  DESIGN NOTE 1054: THE PRICE MOVE JOINS THE SENTENCE THAT CAUSED IT
+     * ==================================================================
+     * The atom's own figures, handed in rather than derived -- see `marketMove` on the context for why that
+     * distinction is the whole of #775. Silent when nothing moved, and silent for a share sale, which is a
+     * different action with a line of its own. */
+    const move =
+      context.marketMove && context.marketMove.reason !== "sale"
+        ? ` Its share price ${context.marketMove.reason === "payout" ? "rose" : "fell"} from ` +
+          `$${context.marketMove.from} to $${context.marketMove.to}.`
+        : "";
+
     if (!distribute) {
-      return `${ticker} withheld $${revenue} into its treasury.`;
+      /* ==================================================================
+       *  DESIGN NOTE 1054: "WITHHELD $0" DESCRIBES A CHOICE NOBODY MADE
+       * ==================================================================
+       * REPORTED: "the Dividends log needs to be one line: 'B&O did not run any routes. Its share price fell
+       * from $100 to $90.' This version is player-facing, and players do not select 'Withhold $0,' so saying
+       * that their corporation did is potentially confusing, even if that's how the reducer and backend will
+       * need to process it."
+       * AND THE DISTINCTION IS EXACTLY THE ONE #292 DREW FROM THE OTHER SIDE: "a trainless corporation
+       * DECLARES $0 withheld rather than skipping; 1830 has no third option". That is a statement about the
+       * MESSAGE, and it is still true -- the declaration is what steps the marker left, and removing it would
+       * break the round. What was wrong is that the log repeated the reducer's vocabulary to a player who
+       * never saw a Withhold button, and then said the price moved in a separate line as if by coincidence.
+       * ZERO IS THE DISCRIMINATOR, and it is exact rather than convenient: a corporation that ran anything at
+       * all withheld a real figure, and one that ran nothing is the only way to reach $0 here. */
+      return revenue === 0
+        ? `${ticker} did not run any routes.${move}`
+        : `${ticker} withheld $${revenue} into its treasury.${move}`;
     }
 
     /* Sorted for READING only -- largest holding first. The amounts are the reducer's own, so the order
@@ -296,7 +451,8 @@ export function describeGameplayAction(
       .map((share) => `$${share.amount} to ${context.labelForAddress(share.player)}`);
     return (
       `${ticker} paid dividends on $${revenue}` +
-      (split.length > 0 ? `: ${split.join(", ")}.` : " — no shareholders on record.")
+      (split.length > 0 ? `: ${split.join(", ")}.` : " — no shareholders on record.") +
+      move
     );
   }
 
@@ -319,13 +475,22 @@ export function describeGameplayAction(
       : undefined;
     const left = settled ? settled.remaining : Math.max(0, (tier.remaining ?? 1) - 1);
     const remaining = left === null ? "unlimited" : `${left}/${tier.total}`;
-    const treasury = context.afterState?.public_companies.find(
-      (entry) => entry.company_id === protocolId,
-    )?.treasury;
+    /* ==================================================================
+        DESIGN NOTE 1053: THIS BRANCH HAD ITS OWN COPY OF THE SUFFIX
+       ==================================================================
+       IT READ `afterState` AND BUILT `Treasury now $X` INLINE -- the same four lines `treasurySuffix` is,
+       written out again. So when that helper became a TRANSITION the train purchase silently kept printing a
+       destination, and the reported duplicate (`B&O bought a 2-train ... Treasury now $800` beside
+       `Treasury — B&O spent $80 — treasury $880 → $800`) would have survived the fix that removed it
+       everywhere else.
+       FOUND BY THE ANTI-DRIFT CASE rather than by reading: `batch51` counts `sentenceStatesTreasury`'s arms
+       against this file's `treasurySuffix` call sites, and the two disagreed 4 to 2. That case was written to
+       catch a future divergence and caught a present one on its first run, which is the argument for pinning
+       relationships rather than values. */
     return (
       `${corp(gameState, protocolId)} bought a ${tier.tier}-train for $${tier.cost}. ` +
       `Remaining depot supply: ${remaining}.` +
-      (treasury !== undefined ? ` Treasury now $${treasury}.` : "")
+      treasurySuffix(context, protocolId)
     );
   }
 

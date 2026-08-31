@@ -103,7 +103,12 @@ describe("the overlay is floating text, not a window (design note #940)", () => 
        and nothing else objects. This project's recurring fault, in a stylesheet. */
     const ANIM = readStripped("styles/animations.ts");
     expect(FLASH).toContain('className="app-revenue-edge"');
-    expect(FLASH).toContain("color: bonus ? BONUS_EDGE : MALUS_EDGE,");
+    /* Design note #1065: THE TERNARY GREW A THIRD ARM. A neutral roll now flashes, so every colour choice in
+       this component is `neutral ? white : bonus ? green : red`. What each of these cases is for -- that the
+       hue is decided beside the constant rather than written into CSS, and that direction reads green up /
+       red down -- is untouched; only the expression is longer. Anchored on the pair that carries the meaning
+       rather than on the whole conditional, which is what broke here. */
+    expect(FLASH).toContain("BONUS_EDGE : MALUS_EDGE,");
     const edge = sliceBetween(ANIM, ".app-revenue-edge {", "}");
     /* INSET, or it draws a halo OUTSIDE a viewport-sized box, where nothing can see it. */
     expect(edge).toContain("box-shadow: inset");
@@ -145,13 +150,16 @@ describe("the overlay is floating text, not a window (design note #940)", () => 
   it("is green up and red down", () => {
     expect(FLASH).toContain("const BONUS_COLOR");
     expect(FLASH).toContain("const MALUS_COLOR");
-    expect(FLASH).toContain("bonus ? BONUS_COLOR : MALUS_COLOR");
+    // Design note #1065: same three-way, same anchoring rule as the rim above.
+    expect(FLASH).toContain("BONUS_COLOR : MALUS_COLOR");
   });
 
   it("signs the figure it prints", () => {
     /* "+20%" or "-10%" -- the sign is the whole message at a glance, and an unsigned "20%" beside a red
        colour asks the player to decode two channels to learn one fact. */
-    expect(FLASH).toContain('{bonus ? "+" : "-"}');
+    /* Design note #1065: `+` for a neutral roll as well, on instruction -- "for them the end result is
+       +0%". The sign is still derived rather than typed, which is what this case is about. */
+    expect(FLASH).toContain('{bonus || neutral ? "+" : "-"}');
     expect(FLASH).toContain("{Math.abs(shown.delta)}%");
   });
 
@@ -189,10 +197,23 @@ describe("the shell raises it once per TURN (design notes #940 -> #941)", () => 
      no train ordinal in the seed; `revenueOutcome` rather than a percentage comparison; the variant gate on
      the whole block; and exactly one call site each, which is what kept #940's eight consecutive flashes from
      coming back. Only the block they are asserted against has moved. */
+  /* ==================================================================
+      DESIGN NOTE 1056: `DeclareDividends` WAS THE SHARED MARKER AND IS NO LONGER THE RIGHT ONE
+     ==================================================================
+     THE NOTE ABOVE CHOSE IT FOR A GOOD REASON THAT HAS EXPIRED. It needed a message every client replays,
+     dispatched once at the end of a turn's running, with the final `printed_route_revenue` still on `before`
+     -- and when #1017 was written the running arrived as one `RunManualRoute` per train, so no single run
+     message could see the end of the turn. #968 made the whole turn one `RunMultipleRoutes`.
+     REPORTED: "B&O ran but the log did not print the variant/flavor text and did not trigger any sound. This
+     instead occurred a subphase later when clicking the 'Pay Dividends' button, which is too late for a
+     player to make an informed decision." The marker was a sub-phase past the event it marked.
+     EVERY RULING IN THIS SUITE STILL HOLDS AND IS STILL ASSERTED: one roll per turn on the turn's total, no
+     ordinal in the seed, `revenueOutcome` rather than a percentage comparison, the variant gate on the whole
+     block, and one call site each. Only the block they are asserted against has moved -- again. */
   const APP = readStripped("App.tsx");
   const runBlock = sliceBetween(
     APP,
-    'if (before && "DeclareDividends" in msg',
+    '"RunMultipleRoutes" in msg &&',
     'if (after && "DeclareDividends" in msg',
   );
 
@@ -247,7 +268,12 @@ describe("the shell raises it once per TURN (design notes #940 -> #941)", () => 
        could get wrong; the `not.toContain` pair below is what actually forbids the percentage comparison, and
        neither needed touching. A trailing paren in an assertion is a claim that nothing will ever be added to
        the condition, which is a promise no harness should make. */
-    expect(runBlock).toContain('revenueOutcome(roll) !== "normal"');
+    /* Design note #1065: THE COMPARISON MOVED FROM THE GATE TO THE FIGURE. `revenueOutcome` no longer
+       decides whether the overlay appears -- a neutral roll flashes `+0%` now -- it decides what the overlay
+       SAYS, which is the same rule doing the same job one step later. #938's actual requirement is the pair
+       below, and it is untouched: the flash is never driven by a percentage comparison, so a modifier the
+       rounding swallowed can never be announced as one that landed. */
+    expect(runBlock).toContain("revenueOutcome(roll)");
     expect(runBlock).not.toContain("percent !== 100");
     expect(runBlock).not.toContain("percent === 100");
   });
@@ -260,8 +286,21 @@ describe("the shell raises it once per TURN (design notes #940 -> #941)", () => 
     expect(runBlock).toContain("!cue.suppressStandardVisuals");
   });
 
-  it("flashes the die's nominal swing", () => {
-    expect(runBlock).toContain("delta: revenueDeltaPercent(roll)");
+  it("flashes the swing the corporation felt, not the one the die rolled", () => {
+    /* ==================================================================
+        DESIGN NOTE 1065: THIS CASE'S TITLE WAS THE CLAIM, AND THE CLAIM HAS BEEN REVERSED
+       ==================================================================
+       IT WAS "flashes the die's nominal swing", asserting `delta: revenueDeltaPercent(roll)` -- and that was
+       safe only because the caller refused to raise the overlay at all unless the payout had moved. The
+       nominal swing and the felt swing were the same number in every case that reached the screen.
+       A NEUTRAL ROLL NOW FLASHES, so they are no longer the same number. `revenueDeltaPercent` is
+       `percent - 100`, so a 90% roll whose rounding handed the corporation back its printed figure would
+       announce `-10%` over a turn that lost nothing -- the exact lie #938 wrote `revenueOutcome` to prevent,
+       reintroduced by the gate coming off.
+       SO THE ASSERTION IS THE TERNARY, both arms. The nominal figure is still what a real modifier shows,
+       which is the half this case always defended; the zero is what stops the swallowed roll speaking. Pinned
+       together because either alone is satisfied by an implementation that gets the other wrong. */
+    expect(runBlock).toContain('revenueOutcome(roll) === "normal" ? 0 : revenueDeltaPercent(roll)');
   });
 
   it("keeps the variant gate on the whole block", () => {

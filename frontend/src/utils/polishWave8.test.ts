@@ -121,7 +121,8 @@ describe("the glow moved to the screen's rim (design note #973)", () => {
        red for malus)." The hue is decided beside `BONUS_COLOR`/`MALUS_COLOR` and handed to the stylesheet as
        `color`, so this feature has one place that knows what green means. */
     expect(FLASH).toContain('className="app-revenue-edge"');
-    expect(FLASH).toContain("color: bonus ? BONUS_EDGE : MALUS_EDGE,");
+    // Design note #1065: the rim gained a neutral arm; the green/red pair this case names is unchanged.
+    expect(FLASH).toContain("BONUS_EDGE : MALUS_EDGE,");
     expect(FLASH).toContain("const BONUS_EDGE");
     expect(FLASH).toContain("const MALUS_EDGE");
   });

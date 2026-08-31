@@ -149,7 +149,10 @@ describe("the closure is said out loud", () => {
     /* Income stopping, a certificate leaving the limit and a board power vanishing are three consequences a
        player will notice at different moments and misattribute. One line at the moment of the phase change is
        what connects them. */
-    const names = describePrivateClosures(board(), afterFive());
+    /* Design note #1058: the shape carries the private's NUMBER now, so the caller can tell a phase-driven
+       closure from a single private closing on its own trigger -- they were sharing one (wrong) sentence.
+       The names are what this case is about; mapping to them keeps it about that rather than about the shape. */
+    const names = describePrivateClosures(board(), afterFive()).map((entry) => entry.name);
     expect(names).toContain("Schuylkill Valley");
     expect(names).toContain("Delaware & Hudson");
   });

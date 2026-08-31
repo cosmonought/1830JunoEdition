@@ -281,7 +281,19 @@ describe("the escalation gifts the phase's own tier", () => {
 
 describe("the haunting still plays alone", () => {
   it("suppresses the standard flash for both stages", () => {
-    expect(APP).toContain('revenueOutcome(roll) !== "normal" && !cue.suppressStandardVisuals');
+    /* ==================================================================
+        DESIGN NOTE 1065: THE GUARD LOST ITS FIRST CLAUSE AND KEPT ITS SUBJECT
+       ==================================================================
+       THIS PINNED `revenueOutcome(roll) !== "normal" && !cue.suppressStandardVisuals`. The first clause is
+       gone: a neutral roll now flashes `+0%` instead of nothing, because silence on a third of the die's
+       faces looked exactly like a variant that had failed to fire. The OUTCOME still decides the figure --
+       `App.tsx` #1065 passes a hard zero for `"normal"` so the swallowed 90% never flashes `-10%` -- it just
+       decides a figure rather than deciding whether to appear at all.
+       WHAT THIS CASE IS FOR IS THE SECOND CLAUSE, which is untouched: the haunting suppresses the standard
+       visuals, and it is asserted alone rather than as part of an expression it does not own. Pinning a
+       neighbour's clause is how this file broke the last time the condition grew. */
+    expect(APP).toContain("!cue.suppressStandardVisuals");
+    expect(APP).toContain("setRevenueFlash({");
   });
 
   it("sends the mechanics through the log rather than mutating locally", () => {

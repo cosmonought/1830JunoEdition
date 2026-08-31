@@ -140,9 +140,20 @@ describe("the turn's summary line reads the reducer (design note #963)", () => {
      seat and silently yields zero on the others is worse than not having one: it would give the president a
      sentence and everybody else nothing, which is the bug this batch is fixing wearing a smaller hat. */
   const APP = readStripped("App.tsx");
+  /* ==================================================================
+      DESIGN NOTE 1056: THE BLOCK MOVED TO THE RUN, SO THE ANCHOR DID
+     ==================================================================
+     REPORTED: "B&O ran but the log did not print the variant/flavor text and did not trigger any sound. This
+     instead occurred a subphase later when clicking the 'Pay Dividends' button, which is too late for a player
+     to make an informed decision."
+     #963 PUT IT ON `DeclareDividends` FOR A REASON THAT EXPIRED. The turn's printed total used to accumulate
+     across one message per train, so Dividends was the first moment it was complete; #968 made the whole turn
+     one `RunMultipleRoutes` and it has been complete at the end of the run ever since.
+     EVERY CASE BELOW STILL ASKS WHAT IT ASKED -- the figures come from the banked state, the flash travels
+     with the sentence, one call site on the shared dispatch path. Only where that block lives has changed. */
   const block = sliceBetween(
     APP,
-    'if (before && "DeclareDividends" in msg',
+    '"RunMultipleRoutes" in msg &&',
     'if (after && "DeclareDividends" in msg',
   );
 
@@ -285,7 +296,12 @@ describe("the consolidated private revenue toast (design note #967)", () => {
        constant itself, where it reads `ActionToast.tsx` directly. */
     const APP = readStripped("App.tsx");
     const opening = sliceBetween(APP, "const openingPayouts =", "sandboxStateRef.current = after;");
-    expect(opening).toContain('logInfo("Private Revenue"');
+    /* Design note #1059: the payout lines carry the whole sentence in the label with their own stamp now --
+       `[OR 1.1--Private Companies]` rather than a `Private Revenue — ` prefix under whichever step the cursor
+       happened to be on. What this case is for is the PAIRING, that the per-private lines and the consolidated
+       summary are raised together from one place, and that is what it now asserts. */
+    expect(opening).toContain("describePrivatePayout(payout, labelForAddress, labelForCompany)");
+    expect(opening).toContain("--Private Companies");
     expect(opening).toContain("summarisePrivateRevenueRound(openingPayouts");
   });
 

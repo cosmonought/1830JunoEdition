@@ -43,7 +43,14 @@ import {
 // Design note #888: which hexes the Lay Track jump frames, and the camera pose that frames them.
 import { dividendDeclaration } from "./utils/dividendStep";
 // Design note #591f: `actingActor` went with the snapshot stack it stamped.
-import { countPhrase, describeGameplayAction } from "./utils/actionLog";
+import {
+  countPhrase,
+  describeGameplayAction,
+  sentenceStatesTreasury,
+  /* Design note #1063: the short form of the train-purchase sentence, for the one toast the whole table
+     sees. Built beside the long one so a depot count is worded in exactly one place. */
+  trainPurchaseToastLine,
+} from "./utils/actionLog";
 import { STATIC_BOARD_HEXES } from "./components/hexBoardData";
 import {
   bestContrastTextColor,
@@ -165,11 +172,23 @@ import ActionToast, { type ToastAnchor } from "./components/ActionToast";
    #1047's argument against one was withdrawn). Both constants survive where they are declared: the duration is
    the record of three attempts at a number that does not exist for content of variable length, and the accent
    is still the auction private cards' own.
-   #1048's OTHER HALF IS UNTOUCHED. "All other player-focused toasts in the player-color" was asked for and
-   delivered on the dividend receipt, which still passes the viewer's seat colour through `showDividendToast`. */
+   #1048's OTHER HALF HAS NOW MOVED TOO, and the sentence that stood here has stopped being true rather than
+   being deleted. It read: "'All other player-focused toasts in the player-color' was asked for and delivered
+   on the dividend receipt, which still passes the viewer's seat colour through `showDividendToast`." That
+   receipt is an overlay now (#1060) and raises no toast at all. THE REQUEST IS STILL HONOURED -- the seat
+   colour goes to the money machine, as the dot beside the player's name -- so what changed is the surface
+   and not the rule. `showDividendToast` survives for the era announcement, which is a fact about the table
+   and passes no colour, exactly as #1048 said it should. */
 import PrivateRevenueModal, {
   type PrivateRevenueOther,
 } from "./components/PrivateRevenueModal";
+/* Design note #1060: the dividend payout, shown as money arriving rather than as a sentence about it. The
+   toast it replaces is gone from this file entirely -- see the receipt site for what moved and what was
+   deliberately left behind. */
+import DividendMoneyMachine, {
+  MONEY_MACHINE_SFX,
+  type DividendPayoutEvent,
+} from "./components/DividendMoneyMachine";
 // Design note #718: which dispatches earn a toast -- a named few, not everything that passes through.
 import { deservesActionReceipt } from "./utils/actionReceipt";
 // Design note #677: the Tiles tab.
@@ -315,7 +334,9 @@ import {
 } from "./utils/previewRotation";
 import type { LegalTilePlacement } from "./components/hexContractTypes";
 import {
-  OPERATING_SUB_PHASE_LABELS,
+  /* Design note #1057: no longer used here -- the Auto-Skip line that named the step it was skipping is
+     gone, because a step where nothing happened earns no line. The table itself is still the one source
+     (`roundStampFor` reads it), which is #478's rule and is untouched. */
   OPERATING_SUB_PHASE_ORDER,
   initialOrSubPhase,
   visibleSubPhases,
@@ -3574,6 +3595,31 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     [],
   );
 
+  /* ==================================================================
+      DESIGN NOTE 1060: THE PAYOUT OVERLAY, RAISED LIKE EVERY OTHER NOTIFICATION
+     ==================================================================
+     GUARDED ON `replayingHistory` FOR #825's REASON, which matters more here than for a toast: joining a room
+     replays every dividend the table has ever declared, and an unguarded overlay would run a 900ms animation
+     and a sound for each of them, in sequence, while the board rebuilt. "A badge marks a move, not a
+     catch-up" (#670), and this is the loudest thing in the app to get that wrong with.
+     A TOKEN RATHER THAN THE OBJECT'S IDENTITY, because two dividends in one round can pay the same viewer the
+     same amount from the same corporation -- #697's argument for the toast's token, and the same fix: the
+     component keys its animation on the number, so an identical second payout restarts rather than sitting
+     finished. */
+  const moneyMachineTokenRef = useRef(0);
+  const [dividendPayout, setDividendPayout] = useState<DividendPayoutEvent | null>(null);
+  const showDividendPayout = useCallback((payout: DividendPayoutEvent) => {
+    if (replayingHistory) return;
+    setDividendPayout(payout);
+  }, []);
+  /* Design note #1062: THE CUE FIRES ON IMPACT, NOT ON MOUNT. "Trigger `money-machine.mp3` at the exact
+     moment the numbers merge" -- so the component owns the timing and this owns the playing, which keeps the
+     mute and the radio ducking in the one helper every other cue goes through (#1041). */
+  const handleMoneyMachineImpact = useCallback(() => {
+    playVariantCue(MONEY_MACHINE_SFX, sfxEnabledRef.current);
+  }, []);
+  const handleMoneyMachineDone = useCallback(() => setDividendPayout(null), []);
+
   const showActionToast = useCallback((text: string) => {
     /* Design note #825: and #718's receipt likewise. "Did my button register" is a question about a click
        that just happened; replayed a minute later it answers about somebody's move from ten turns ago. */
@@ -3595,8 +3641,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   const [privatePayoutPhase, setPrivatePayoutPhase] = useState<{
     viewerName: string;
     viewerSeatColor: string | null;
-    lines: readonly { label: string; value: string }[];
+    // Design note #1052: `privateId` rides along so the panel numbers a private the way every other one does.
+    lines: readonly { privateId: number; label: string; value: string }[];
     total: number;
+    // Design note #1052: the movement, read off the two states rather than derived from the total.
+    cashBefore: number | null;
+    cashAfter: number | null;
     others: readonly PrivateRevenueOther[];
     roundLabel: string | null;
   } | null>(null);
@@ -4957,12 +5007,29 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
               const tickerFor = (companyId: number) =>
                 after?.public_companies.find((entry) => entry.company_id === companyId)?.ticker ??
                 `company #${companyId}`;
+              /* Design note #1059: THE SAME STAMP AS THE OTHER PAYOUT SITE. Two call sites printing one kind
+                 of event two ways is #891's shape, and this is the one that pays the privates out of an
+                 all-passed auction rather than an opening Operating Round -- same payment, same phase name. */
+              const auctionPayoutStamp = `${roundLabelFor(after)}--Private Companies`;
               for (const payout of revenue.payouts) {
-                logInfo("Private Revenue", describePrivatePayout(payout, labelFor, tickerFor));
+                logInfo(
+                  describePrivatePayout(payout, labelFor, tickerFor),
+                  "",
+                  auctionPayoutStamp,
+                );
               }
             }
           }
         }
+
+        /* Design note #1054: the dividend's price move, held from the market atom until `label` is composed
+           a few hundred lines below. `let` because it is written by the block that reads the atom's result
+           and read by the one that builds the sentence -- the two are far apart precisely BECAUSE the atom
+           has to move before the state settles (#272/#273), which is what makes the clause a report of a
+           completed move rather than #775's projection of one. */
+        let dividendMarketMove:
+          | { from: number; to: number; reason: "payout" | "withhold" }
+          | null = null;
 
         /* Design note #272/#273: the market atom, advanced BEFORE the game
            state because the game state needs the price it reports. Same
@@ -5032,7 +5099,24 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
               : reason === "withhold"
                 ? (["fell", "on the withheld dividend"] as const)
                 : (["fell", "on the share sale"] as const);
-          logInfo("Market Move", `${ticker} ${verb} from $${from} to $${to} ${cause}.`);
+          /* ==================================================================
+              DESIGN NOTE 1054: A DIVIDEND'S PRICE MOVE IS PART OF THE DIVIDEND'S SENTENCE
+             ==================================================================
+             REPORTED: "the two Dividends entries can be combined into: 'B&O paid dividends on $X:.... B&O's
+             share price rose from $90 to $100.'"
+             SO THE FIGURES TRAVEL RATHER THAN GETTING THEIR OWN LINE. `dividendMarketMove` is read by
+             `describeGameplayAction` a few hundred lines below, where `label` is composed -- the atom has
+             already moved by then, which is what lets the clause quote a destination the token really
+             reached. #775 deleted a version of this clause that PROJECTED one; the difference is the whole
+             note, and it is why this is a stash rather than a second calculation.
+             A SHARE SALE KEEPS ITS OWN LINE. It is a different action with a different sentence, and nobody
+             asked for those to merge -- so the suppression is scoped to the two dividend causes rather than
+             applied to every move the atom makes. */
+          if (reason === "payout" || reason === "withhold") {
+            dividendMarketMove = { from, to, reason };
+          } else {
+            logInfo("Market Move", `${ticker} ${verb} from $${from} to $${to} ${cause}.`);
+          }
         }
 
         /* Design note #941: THE FLASH AND THE TURN'S SENTENCE LEFT THIS FUNCTION. #940 raised them here,
@@ -5101,8 +5185,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
            *
            * A movement on a message with no business moving a treasury is printed as UNEXPLAINED, which is
            * the line worth having: the ordinary ones are bookkeeping and the surprising one is the bug. */
+          /* Design note #1053: THE DIAGNOSTIC KEEPS ITS JOB AND LOSES ITS ECHO. An explained movement whose
+             own sentence already carries `Treasury $A → $B` needs no second line; everything else -- and
+             every UNEXPLAINED movement, which is the case this block was built for -- still gets one. See
+             `sentenceStatesTreasury` for why the predicate lives beside the sentences rather than here. */
           if (after) {
+            const statedInLine = sentenceStatesTreasury(msg);
             for (const move of describeTreasuryMoves(msg, before, after)) {
+              if (!move.unexplained && statedInLine) continue;
               logInfo(
                 move.unexplained ? "Treasury (unexplained)" : "Treasury",
                 treasuryMoveLine(move, fallbackLabel),
@@ -5172,10 +5262,44 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
              dispatched this on the player's behalf", which is true of the forced withhold -- and a forced
              withhold happens only when nothing ran, so `printed_route_revenue` is zero and the guard below
              declines on the facts rather than on the flag. */
-          if (before && "DeclareDividends" in msg && resolveVariants(before.variants).unpredictableRevenue) {
-            const companyId = msg.DeclareDividends.protocol_id;
+          /* ==================================================================
+              DESIGN NOTE 1056: THE DIE IS REPORTED WHERE IT WAS ROLLED
+             ==================================================================
+
+             REPORTED: "in the Unpredictable Revenue variant, B&O ran but the log did not print the
+             variant/flavor text and did not trigger any sound. This instead occurred a subphase later when
+             clicking the 'Pay Dividends' button, which is too late for a player to make an informed
+             decision."
+
+             AND IT IS A DECISION-QUALITY BUG, not a cosmetic one. Pay-or-withhold is the choice the whole
+             step exists for, and the modifier changes the number it is made against -- a 20% malus can be the
+             difference between paying out and holding. The player was choosing blind and then being told.
+
+             THIS BRANCH ASKED FOR `DeclareDividends` AND THE REASON EXPIRED. #963 put the narration here
+             because the turn's printed total accumulated across one message per train, so Dividends was the
+             first moment the TURN's figure was complete -- its own note says "the cursor is on Dividends by
+             now, that is what makes this the right moment to read the total". #968 then made the whole turn a
+             single `RunMultipleRoutes`, and the total has been complete at the end of the run ever since.
+             The premise went and the code stayed, which is this codebase's third recurring shape.
+
+             THE SEED COMES OFF THE MESSAGE NOW, which is the other thing that got simpler. #1051 records the
+             roll on the run's own payload, so the sentence that describes the roll reads it from the action
+             that made it -- no log scan, no re-derivation, and no chance of the narration and the reducer
+             pricing the same turn from two different numbers.
+
+             THE TOTAL IS READ OFF `after`, deliberately: the run has just banked it, and `before` holds the
+             figure from the previous message of the same turn. The FLEET is read off `before`, because the
+             Yellow Sign takes a train and the mark must judge the fleet as it ran. */
+          if (
+            before &&
+            after &&
+            "RunMultipleRoutes" in msg &&
+            resolveVariants(before.variants).unpredictableRevenue
+          ) {
+            const companyId = msg.RunMultipleRoutes.protocol_id;
             const ran = before.public_companies.find((entry) => entry.company_id === companyId);
-            const printedTurnTotal = Math.max(0, Number(ran?.printed_route_revenue ?? 0) || 0);
+            const banked = after.public_companies.find((entry) => entry.company_id === companyId);
+            const printedTurnTotal = Math.max(0, Number(banked?.printed_route_revenue ?? 0) || 0);
             if (printedTurnTotal > 0) {
               /* THE SEED IS READ OFF `before`, not off render state. #963 read `gameState` because the handler
                  had it; a replaying client has no render state that matches the action it is replaying, and a
@@ -5199,15 +5323,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                 macroRound: before.macro_round_number ?? 0,
                 subRound: before.sub_round_index ?? 0,
                 companyId,
+                /* Design note #1056: OFF THE MESSAGE, which is the simplification that came with moving this
+                   block to the run. The dispatch that rolled the die is the dispatch being narrated, so the
+                   sentence and the reducer read one number rather than two clients' worth of lookup. The
+                   fallback is #1051's, for a run logged before the roll was recorded. */
                 turnSeed:
-                  seedAlreadyRolled(
-                    sandboxLogRef.current,
-                    turnSeedKey(
-                      before.macro_round_number ?? 0,
-                      before.sub_round_index ?? 0,
-                      companyId,
-                    ),
-                  ) ??
+                  msg.RunMultipleRoutes.revenue_seed ??
                   legacyTurnSeed(
                     before.macro_round_number ?? 0,
                     before.sub_round_index ?? 0,
@@ -5349,8 +5470,31 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                  player should only see the 10000ms video overlay and the updated Activity Log styling."
                  ASKED OF THE CUE'S OWN FIELD rather than of `cue.video !== null`, so the rule is read where
                  it is written -- see the note on `suppressStandardVisuals`. */
-              if (revenueOutcome(roll) !== "normal" && !cue.suppressStandardVisuals) {
-                setRevenueFlash({ delta: revenueDeltaPercent(roll), token: nextRevenueFlashToken() });
+              /* ==================================================================
+                  DESIGN NOTE 1065: THE NEUTRAL ROLL NOW CONFIRMS ITSELF
+                 ==================================================================
+                 REPORTED: "When the variant rolls an unchanged revenue state (0% modifier), cleanly flash the
+                 screen white and briefly display a `+0%` or `Unchanged` indicator to confirm the roll was
+                 executed."
+                 THE GUARD WAS `revenueOutcome(roll) !== "normal"` AND IT WAS RIGHT ABOUT THE WRONG THING.
+                 #938's rule, quoted above, is that the flash must never claim a modifier the corporation did
+                 not FEEL -- a 90% roll on a $50 turn pays $45, rounds back to $50, and "-10%" would be a lie.
+                 Suppressing the whole overlay was one way to honour that; it also meant the commonest single
+                 outcome of the die, a third of its faces, produced no feedback at all and looked exactly like
+                 a variant that had failed to fire.
+                 SO THE OUTCOME STILL DECIDES THE FIGURE -- it is just a figure now instead of silence. A
+                 hard `0` for every `"normal"` roll, never `revenueDeltaPercent`, so the swallowed 90% flashes
+                 `+0%` rather than the `-10%` #938 forbids. The nominal swing cannot reach this surface.
+                 `+0%` RATHER THAN "Unchanged", ON INSTRUCTION. I argued for the word, because "normal" covers
+                 both a true 100% and a rounded-away modifier; ruled otherwise, and rightly: "players don't
+                 know the difference between roll3/roll4 and a 10% malus that rounded back up: for them the
+                 end result is +0%." The figure describes the player's outcome, which is what every other
+                 figure on this overlay describes. */
+              if (!cue.suppressStandardVisuals) {
+                setRevenueFlash({
+                  delta: revenueOutcome(roll) === "normal" ? 0 : revenueDeltaPercent(roll),
+                  token: nextRevenueFlashToken(),
+                });
               }
             }
           }
@@ -5415,18 +5559,41 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                  toasts in the player-color", and today that set has exactly one member -- this receipt, which
                  is about the viewer's own cash. The era toast is a fact about the table and stays unmarked. */
               const seatAt = gameState?.player_addresses.indexOf(viewerAddressRef.current ?? "") ?? -1;
-              showDividendToast(
-                receipt.headline,
-                beforeCash !== null && settled !== null
-                  ? `$${beforeCash} → $${settled}`
-                  : receipt.transition,
-                null,
-                undefined,
-                null,
-                "center",
-                false,
-                seatAt >= 0 ? seatColor(viewerAddressRef.current ?? "", seatAt) : null,
-              );
+              /* ==================================================================
+                  DESIGN NOTE 1060: THE RECEIPT STOPS BEING A SENTENCE
+                 ==================================================================
+                 SPECIFIED: "Completely disable the default fast-fading toast notification for dividend
+                 payouts", replaced by the money-machine overlay.
+                 EVERY FIGURE IT SHOWED SURVIVES THE MOVE, which is the part worth checking rather than
+                 assuming: the amount is still `receipt.amount` -- #795's rule that the number a player is
+                 told they received is the reducer's, not this module's opinion -- and the balances are still
+                 read off the two states rather than added here, so #670's before/after is intact.
+                 WHAT IS LOST IS `receipt.headline`, and it is a real loss stated plainly: "PRR ran for $170.
+                 Your 60% share paid $102" carried the ROUTE TOTAL and the HOLDING, and the overlay carries
+                 neither. #923 chose those two deliberately, because a percentage and a total are facts a
+                 player can check where "per share" no longer reconciles under the variant die. They are both
+                 still in the Activity Log's dividend line, which is where a figure you want to verify
+                 belongs; the overlay is for the money arriving.
+                 BOTH BALANCES OR NEITHER. With either end unknown there is no movement to animate and no
+                 total to count up to, so the overlay is skipped rather than shown with a guess -- #562's rule
+                 about a missing figure, applied to the pair it takes to make one. */
+              if (beforeCash !== null && settled !== null) {
+                moneyMachineTokenRef.current += 1;
+                showDividendPayout({
+                  ticker: company?.ticker ?? "The corporation",
+                  amount: receipt.amount,
+                  /* Design note #559: the one shared resolver, not a local copy -- the whole reason that note
+                     exists is that `App.tsx` once kept its own and two panels showed raw ids. */
+                  playerName:
+                    sandboxPlayerLabel(viewerAddressRef.current ?? "") ??
+                    truncateAddress(viewerAddressRef.current ?? ""),
+                  seatColor:
+                    seatAt >= 0 ? seatColor(viewerAddressRef.current ?? "", seatAt) : null,
+                  cashBefore: beforeCash,
+                  cashAfter: settled,
+                  token: moneyMachineTokenRef.current,
+                });
+              }
             }
           }
 
@@ -5567,11 +5734,30 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                it -- the reducer settled it, this says so. Worth a line of its own because the consequences
                are spread out and easy to misattribute: income stops, a certificate leaves the limit, and any
                special power on the board goes with it. */
+            /* ==================================================================
+                DESIGN NOTE 1058: WHICH CLOSURE THIS IS DECIDES WHAT IT MEANS
+               ==================================================================
+               REPORTED: "the 'Phase Change' line is written improperly: it is true BO closes as soon as B&O
+               buys a train, but this is not a phase change and private companies DO continue paying out
+               revenue."
+               THE PHASE IS THE DISCRIMINATOR, asked of the two states this transition already holds rather
+               than inferred from how many privates closed at once -- a Phase 5 arrival with five already-
+               closed privates closes exactly one, and counting would call that a solo closure. */
             const closures = describePrivateClosures(before, after);
             if (closures.length > 0) {
+              const phaseTurned = derivePhase(before)?.tier !== derivePhase(after)?.tier;
+              const named = closures
+                .map((entry) => `${entry.privateId}. ${entry.name}`)
+                .join(", ");
               logInfo(
-                "Phase Change",
-                `${closures.join(", ")} ${closures.length === 1 ? "closes" : "close"} — private companies pay no further revenue and no longer count toward the certificate limit.`,
+                phaseTurned ? "Phase Change" : "Private Companies",
+                phaseTurned
+                  ? /* #736's SENTENCE, UNCHANGED, and still correct for the event it was written about: at
+                       Phase 5 every private closes together and every one of them stops paying. */
+                    `${named} ${closures.length === 1 ? "closes" : "close"} — private companies pay no further revenue and no longer count toward the certificate limit.`
+                  : /* A SINGLE PRIVATE ON ITS OWN TRIGGER. Nothing about the phase moved and the others keep
+                       paying every Operating Round, so the sentence claims neither. */
+                    `Private ${closures.length === 1 ? "company" : "companies"} ${named} ${closures.length === 1 ? "closes" : "close"}.`,
               );
             }
           }
@@ -5598,8 +5784,26 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             const openingPayouts = applyPrivateRevenue(before)?.payouts ?? [];
             /* THE LOG KEEPS ITS LINE PER PRIVATE (#967): the feed is a record, and a record wants each
                payment findable. The toast is the surface that consolidates. */
+            /* ==================================================================
+                DESIGN NOTE 1059: THE PAYOUT PHASE STAMPS ITSELF
+               ==================================================================
+               REPORTED: "for the private company payouts, let's have the print be '[OR X.Y -- Private
+               Companies] 1. Schuylkill Valley Pays $5 to Player' and remove 'Private Revenue --'."
+               AND THE OLD STAMP WAS ACTIVELY WRONG. These lines took the default, which reads the cursor --
+               so six payments made before any corporation acted were all filed under `Buy Trains`, a step
+               none of them belong to and the one that happened to be current. The payout is its own phase
+               (#1049); the stamp says so, exactly as the Yellow Sign's does (#1046).
+               THE CATEGORY GOES WITH IT. `Private Revenue — ` was a prefix on a sentence that already names
+               the private company in its first two words, and the stamp now carries the classification. The
+               whole sentence goes in the label with an empty detail, which is the same shape the variant's
+               flavour lines use. */
+            const payoutStamp = `${roundLabelFor(after)}--Private Companies`;
             for (const payout of openingPayouts) {
-              logInfo("Private Revenue", describePrivatePayout(payout, labelForAddress, labelForCompany));
+              logInfo(
+                describePrivatePayout(payout, labelForAddress, labelForCompany),
+                "",
+                payoutStamp,
+              );
             }
             /* ==================================================================
                 DESIGN NOTE 1049: THE TOAST BECOMES THE PHASE'S MODAL
@@ -5631,6 +5835,25 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
               const seatIndexOf = (address: string) =>
                 settled.player_addresses.indexOf(address);
               const viewerSeat = seatIndexOf(viewerAddressRef.current ?? "");
+              /* ==================================================================
+                  DESIGN NOTE 1052: THE BALANCES, FROM THE TWO STATES THE TRANSITION ALREADY HAS
+                 ==================================================================
+                 ASKED: "on payouts, we usually include $before > $after somewhere", and for the other seats
+                 "their $before + $payout > $new cash holdings."
+                 READ OFF `before` AND `after` RATHER THAN COMPUTED. The payout total is already in hand and
+                 `after = before + payout` is arithmetic anybody could do here -- and #685's rule is that the
+                 reducer settles and the shell narrates, so a figure the reducer has banked must be READ. A
+                 derived balance would be right until the day something else touches cash in the same
+                 transition, and then it would be confidently wrong on a panel whose whole subject is money.
+                 `null` FOR A SEAT THE STATE DID NOT REPORT, which the modal renders as no movement rather than
+                 as a zero (#232, #562). */
+              const cashIn = (state: GameStateResponse | null, address: string) => {
+                const raw = Number(
+                  state?.player_cash.find((row) => row.player === address)?.cash_vgp ?? NaN,
+                );
+                return Number.isFinite(raw) ? raw : null;
+              };
+              const viewer = viewerAddressRef.current ?? "";
               /* Design note #1049: THE SHELL RESOLVES THE IDENTITIES. Names come from the room's nickname
                  registry and colours from the seating index, neither of which a presentation component should
                  have to reach for -- see the modal's `PrivateRevenueOther` for the argument. */
@@ -5641,14 +5864,19 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                   // `null` rather than a guessed hue for an address the roster cannot place (#232).
                   seatColor: seat >= 0 ? seatColor(entry.address, seat) : null,
                   total: entry.total,
+                  // Design note #1052: what they now hold, not what they held -- the row states the arrival
+                  // and the standing, and the `before` is the subtraction between them.
+                  cashAfter: cashIn(after, entry.address),
                 };
               });
               showPrivatePayoutPhase({
-                viewerName: labelForAddress(viewerAddressRef.current ?? ""),
+                viewerName: labelForAddress(viewer),
                 viewerSeatColor:
-                  viewerSeat >= 0 ? seatColor(viewerAddressRef.current ?? "", viewerSeat) : null,
+                  viewerSeat >= 0 ? seatColor(viewer, viewerSeat) : null,
                 lines: round.mine.rows,
                 total: round.mine.total,
+                cashBefore: cashIn(before, viewer),
+                cashAfter: cashIn(after, viewer),
                 others,
                 // The round it belongs to, stamped now rather than read later from a board that has moved on.
                 roundLabel: roundLabelFor(settled),
@@ -5664,16 +5892,52 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           /* settleRoundTransitions performs the transition; the shell only logs it. Detected by comparing state, silent on a replay, and no tab navigation here (#213 owns that).
              See docs/ai_architecture/state_machine.md - App.tsx #642 */
         label =
-          describeGameplayAction(msg, { ...describeContext, afterState: after }) ?? label;
+          describeGameplayAction(msg, {
+            ...describeContext,
+            afterState: after,
+            // Design note #1054: the atom's own move, so the dividend sentence carries it instead of a
+            // second line repeating what the first one caused.
+            marketMove: dividendMarketMove,
+          }) ?? label;
 
         /* Design note #794: the receipt, from the sentence the Activity Log is about to show. One string, one
            snapshot, so the two cannot disagree about a figure. */
+        /* ==================================================================
+            DESIGN NOTE 1063: THE TRAIN PURCHASE IS NEWS FOR THE WHOLE TABLE
+           ==================================================================
+           REPORTED: "The train purchase notification is currently only firing locally for the active player.
+           Update the websocket/event emission logic to broadcast this toast globally to all connected
+           players."
+           THE DIAGNOSIS IS RIGHT AND THE MECHANISM IS NOT WHAT IT SOUNDS LIKE. Nothing needed broadcasting:
+           every client already runs this function for every action, which is #738's whole point ("the
+           notification has to be raised on the path every client runs ... `runGameplayAction` handles a
+           remote action with `isRemoteReplay: true` exactly as it handles a local one"). The toast was
+           SUPPRESSED on arrival by the actor comparison below. The fix is a deleted condition, not a
+           transport change -- worth stating, because looking for an emission to widen would have been a long
+           search for something that does not exist.
+           AND IT REVERSES #718's SCOPE FOR ONE MESSAGE, DELIBERATELY. That note scoped receipts to "your own
+           dispatches" because "'Did it go through' is a question about a button you pressed; a toast for
+           somebody else's action would be a notification feed, which is what the log already is." That
+           reasoning still holds for the rest of the set. A depot train leaving is different in kind: it is
+           the phase clock, every player is counting it, and a rival buying the last 4-train changes what
+           everybody else should do next. It is the one action where somebody else's click is your business.
+           THE REPLAY GUARD IS WHAT MAKES THIS SAFE. `showActionToast` returns early during a rebuild (#825),
+           so joining a room does not carpet the screen with every train the table has ever bought -- which is
+           exactly what widening the audience would otherwise have done. */
+        const globallyBroadcast = trainPurchaseToastLine(msg, {
+          ...describeContext,
+          afterState: after,
+        });
         if (
           options?.derived !== true &&
           deservesActionReceipt(msg) &&
-          (options?.actor ?? viewerAddressRef.current) === viewerAddressRef.current
+          (globallyBroadcast !== null ||
+            (options?.actor ?? viewerAddressRef.current) === viewerAddressRef.current)
         ) {
-          showActionToast(label);
+          /* Design note #1063: the short sentence when there is one, the log's own when there is not. Both
+             come out of `actionLog.ts` and both are built from this dispatch's single snapshot, which is the
+             property #794 actually protects. */
+          showActionToast(globallyBroadcast ?? label);
         }
 
         /* Design note #784: computed ONCE, above the entry that reads it three times -- and once rather than
@@ -7899,16 +8163,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     const key = turnGuardKey(turnIdentity, actingProtocolId, "withhold");
     if (forcedWithholdRef.current.has(key)) return;
     forcedWithholdRef.current.add(key);
-    logInfo(
-      "Auto-Withhold",
-      `${
-        skippedRoutesThisTurn
-          ? "No routes were run"
-          : ownsAnyTrain
-            ? "No route earned anything"
-            : "No trains ran"
-      }, so there is nothing to pay out — $0 withheld and the share price steps left.`,
-    );
+    /* ==================================================================
+        DESIGN NOTE 1057: THE DECLARATION'S OWN SENTENCE SAYS ALL OF THIS NOW
+       ==================================================================
+       THIS PRINTED "$0 withheld and the share price steps left" beside a `DeclareDividends` line that then
+       said "B&O withheld $0 into its treasury", beside a `Market Move` line that said the price fell. Three
+       lines, one event, and the middle one used a word for a choice the player never made.
+       #1054 FOLDED ALL THREE INTO ONE: "B&O did not run any routes. Its share price fell from $100 to $90."
+       The consequence is stated, which is what earns this event a line at all under #1057's rule -- so the
+       line stays and the COMMENTARY goes. What is lost is the distinction between "no trains ran" and "no
+       route earned anything", which was never visible to a player anyway: both produce a corporation that
+       ran nothing, and the fleet is on the corporation card for anybody asking why. */
     withholdRevenueAutomatically();
   }, [
     gameState,
@@ -7953,12 +8218,19 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     const exit = gameState
       ? autoSkipExit(orSubPhase, stepsFor(gameState))
       : ("advance" as const);
-    logInfo(
-      "Auto-Skip",
-      exit === "end-turn"
-        ? `Ended the turn — ${autoSkipReason}.`
-        : `Skipped ${OPERATING_SUB_PHASE_LABELS[orSubPhase].stepLabel} — ${autoSkipReason}.`,
-    );
+    /* ==================================================================
+        DESIGN NOTE 1057: A STEP WHERE NOTHING HAPPENED EARNS NO LINE
+       ==================================================================
+       ASKED: "for player-facing activity log, does it make sense to print [Corporation] passed on actions
+       they skip? Or should the log only print when a corporation does something?"
+       RULED: print when something CHANGED, which is not the same as the automatic/manual split the question
+       offered -- and the reason is in the report's own item (v). An auto-skipped Run Routes changes nothing;
+       an auto-withheld dividend MOVES THE SHARE PRICE, so it still prints. The dividing line is the
+       consequence, not who pressed the button.
+       AND A MANUAL SKIP IS SILENT TOO. "So they know their button press worked" is a real need and #718
+       already meets it: the action toast is the receipt for a click, raised on the clicker's own screen. The
+       log is the table's record, and a record of nothing having happened is what makes a feed unreadable.
+       THE `Auto-Withhold` LINE BELOW IS DELIBERATELY UNTOUCHED -- see it for the price move that earns it. */
     // Design note #439: the AUTOMATIC entry points, so Undo rewinds past either.
     if (exit === "end-turn") endTurnAutomatically();
     else skipSubPhaseAutomatically();
@@ -10581,6 +10853,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           onCancel={handlePowerFlowCancel}
         />
       )}
+      {/* Design note #1060: the payout overlay. Not a modal and deliberately not in this stack's ordering
+          argument -- it is `pointerEvents: "none"` over the board's corner, so it can coexist with anything
+          the shell is showing rather than needing a turn in a queue. */}
+      <DividendMoneyMachine
+        event={dividendPayout}
+        onImpact={handleMoneyMachineImpact}
+        onDone={handleMoneyMachineDone}
+      />
       {/* Design note #1049: the phase before any corporation acts, so it is mounted before the modal about the
           corporation that acts first. The ordering is enforced in `dueFleetNotice` (#1049a) rather than by
           this position or by z-index; source order here simply agrees with it, so a reader is not looking at

@@ -71,7 +71,8 @@
 //
 // See docs/ai_architecture/ui_shell_layout.md, PrivateRevenueModal.tsx #1049.
 
-import React, { useEffect } from "react";
+// Design note #1052: `useEffect` left with the Escape listener -- one exit, and no hook to hold it open.
+import React from "react";
 
 import { FONT_SIZE } from "../styles/typography";
 import {
@@ -86,8 +87,10 @@ import {
 // Design note #1050: the same per-seat ink choice the player card's own stripe makes.
 import { bestContrastTextColor } from "../styles/corporationLivery";
 
-/** One of the viewer's privates, already formatted. The display shape #984 established, unchanged. */
+/** One of the viewer's privates, already formatted. The display shape #984 established, plus #1052's number. */
 export interface PrivateRevenueLine {
+  /** Design note #1052: the catalog's own number, so this panel numbers a private the way every other one does. */
+  privateId: number;
   label: string;
   value: string;
 }
@@ -103,6 +106,20 @@ export interface PrivateRevenueOther {
   /** `null` for an address the roster cannot place, which is #232's answer rather than a guessed colour. */
   seatColor: string | null;
   total: number;
+  /** ==================================================================
+   *   DESIGN NOTE 1052: WHERE THIS SEAT NOW STANDS
+   *  ==================================================================
+   *
+   * ASKED: "it might also be useful for the other players' information to show their $before + $payout > $new
+   * cash holdings."
+   *
+   * THE PAYOUT AND THE STANDING, NOT THE FULL MOVEMENT. Three figures on every row, for up to five rows of
+   * information the reader is not acting on, is a table rather than a glance -- and the `before` is the one
+   * of the three that is a subtraction away. What a player actually tracks across a game is what a rival
+   * HOLDS, so the row says what arrived and what it arrived at.
+   * `null` WHEN THE STATE DID NOT REPORT IT, and the row then shows the payout alone rather than inventing a
+   * balance (#232, and #562's rule that a missing figure and a zero are different facts). */
+  cashAfter: number | null;
 }
 
 export interface PrivateRevenueModalProps {
@@ -112,6 +129,22 @@ export interface PrivateRevenueModalProps {
     viewerSeatColor: string | null;
     lines: readonly PrivateRevenueLine[];
     total: number;
+    /** ==================================================================
+     *   DESIGN NOTE 1052: THE MOVEMENT, WHICH IS HOW THIS APP REPORTS MONEY
+     *  ==================================================================
+     *
+     * ASKED: "on payouts, we usually include $before > $after somewhere."
+     *
+     * AND IT IS THE HOUSE FORM, not a nicety -- #670 settled it for the dividend report and #682 rebuilt the
+     * Stock Round's projection around it: money moving is TWO facts, what arrived and where it left you, and
+     * they read as a before and an after rather than as one figure. This panel reported only the first.
+     *
+     * BOTH `null` WHEN THE STATE DID NOT SAY, and the line is then omitted entirely rather than printed with
+     * an em dash on one side. A movement is a claim about two numbers; with one of them missing there is no
+     * movement to state, and #562's dash is for a missing figure in a column of figures, not for half a
+     * sentence. */
+    cashBefore: number | null;
+    cashAfter: number | null;
     others: readonly PrivateRevenueOther[];
   } | null;
   /** Which Operating Round this is, so the modal names the moment rather than floating free of it. */
@@ -121,24 +154,24 @@ export interface PrivateRevenueModalProps {
 
 export function PrivateRevenueModal({ round, roundLabel, onAcknowledge }: PrivateRevenueModalProps) {
   /* ==================================================================
-      DESIGN NOTE 1049: ESCAPE WORKS HERE, AND DELIBERATELY DOES NOT ON `FleetLossModal`
+      DESIGN NOTE 1052: ONE EXIT, AND #1049 ARGUED THE OPPOSITE
      ==================================================================
-     #896 removed Escape, the backdrop click and the X from the fleet-loss modal, and named the reason: a rust
-     or a limit drop "changes what a corporation can do with its whole turn", so an accidental dismissal costs
-     the player a turn they cannot get back.
-     NOTHING IS LOST BY DISMISSING THIS ONE. The money is already paid -- the reducer settled it before this
-     rendered (#685) -- and every figure on this panel is also on the player cards and in the Activity Log.
-     What the modal supplies is the CEREMONY, and ceremony a player wants to skip should be skippable.
-     SAID OUT LOUD so a later pass does not remove Escape "for consistency with the other modal", which is the
-     precise edit #896's own note warns against in the opposite direction. */
-  useEffect(() => {
-    if (!round) return undefined;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onAcknowledge();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [round, onAcknowledge]);
+     #1049 GAVE THIS MODAL ESCAPE AND A BACKDROP CLICK, on the argument that #896's reason for removing both
+     from `FleetLossModal` does not apply: "nothing is lost by dismissing this one. The money is already paid
+     ... what the modal supplies is the CEREMONY, and ceremony a player wants to skip should be skippable."
+     REPORTED FROM PLAYTEST: "clicking anywhere on the screen dismisses the modal: I think it's better to make
+     players click the Begin Operations button since an accidental click elsewhere immediately dismisses it."
+     AND THE ARGUMENT WAS ABOUT THE WRONG COST. It priced what a player LOSES by dismissing -- correctly,
+     nothing -- and never priced how easily they dismiss it BY ACCIDENT. A modal that opens under the cursor
+     at the start of every Operating Round will eat a click the player had aimed at the board underneath, and
+     the ceremony this panel exists to restore is gone before it has been read. The cost of a mis-click is not
+     lost information, it is the whole feature not happening.
+     SO IT IS ONE EXIT, the same shape #896 chose for the same practical reason and not for its stated one.
+     Escape goes with the backdrop click: it is the less likely accident of the two, but two exits is exactly
+     what the report asks to remove, and the footer button carries `autoFocus` so a keyboard player presses
+     Enter rather than hunting for it.
+     THE EFFECT IS GONE, NOT NEUTERED. A listener that captured Escape and did nothing would leave a reader
+     wondering which of the two was intended. */
 
   if (!round) return null;
 
@@ -146,16 +179,11 @@ export function PrivateRevenueModal({ round, roundLabel, onAcknowledge }: Privat
   const stripeInk = stripe ? bestContrastTextColor(stripe) : CARD_INK;
 
   return (
-    <div
-      style={styles.backdrop}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Private company payouts"
-      onClick={onAcknowledge}
-    >
-      {/* The card stops the backdrop's click, so dismissing is a deliberate move OFF the panel rather than
-          anywhere on screen -- a player reading the table must be able to click within it. */}
-      <div style={styles.card} onClick={(event) => event.stopPropagation()}>
+    /* Design note #1052: NO `onClick` ON THE BACKDROP, and the absence is deliberate enough to be worth the
+       same comment `FleetLossModal` carries -- every other modal in this app closes on a backdrop click, so a
+       later tidy-up would otherwise "restore" it for consistency and reintroduce the mis-click. */
+    <div style={styles.backdrop} role="dialog" aria-modal="true" aria-label="Private company payouts">
+      <div style={styles.card}>
         {/* ---- The phase, named ---- */}
         <div style={styles.phaseRow}>
           <span style={styles.phaseName}>Private Company Payouts</span>
@@ -176,8 +204,18 @@ export function PrivateRevenueModal({ round, roundLabel, onAcknowledge }: Privat
               ...(stripe ? { backgroundColor: stripe, color: stripeInk } : styles.stripeUnknown),
             }}
           >
+            {/* ==================================================================
+                 DESIGN NOTE 1052: THE STRIPE IS IDENTITY AND NOTHING ELSE
+                ==================================================================
+                IT CARRIED THE TOTAL, and #1049 defended that: "the stripe answers 'how much did I get' at a
+                glance and the column closes underneath." REPORTED: "the sum does not need to be listed in the
+                player color stripe since it's printed a few lines below that." Which is right, and the
+                defence was thin -- four lines apart is not two registers, it is the same number twice.
+                AND IT PUTS THE BAND BACK TO WHAT #1050 ARGUED IT WAS FOR. That note's case for the stripe was
+                that a reader who has looked at their player card already knows what a coloured band with a
+                name means; the player card's header carries no figure either. The figure was my addition to a
+                borrowed component, and it is the part that did not belong. */}
             <span style={styles.stripeName}>{round.viewerName}</span>
-            <span style={styles.stripeTotal}>${round.total}</span>
           </header>
 
           {/* Design note #984's two-column grid, unchanged in substance: names flush left, figures right in
@@ -187,19 +225,38 @@ export function PrivateRevenueModal({ round, roundLabel, onAcknowledge }: Privat
               /* The label is the key: a player cannot hold the same private twice, so it is unique by the
                  rules rather than by construction. */
               <React.Fragment key={line.label}>
-                <span style={styles.lineLabel}>{line.label}</span>
+                {/* Design note #1052: `${private_id}. ${name}`, the form the Ledger, the player cards, the
+                    trade panel, the auction dashboard and the action bar all already use. */}
+                <span style={styles.lineLabel}>
+                  <span style={styles.lineNumber}>{line.privateId}.</span> {line.label}
+                </span>
                 <span style={styles.lineValue}>{line.value}</span>
               </React.Fragment>
             ))}
             {round.lines.length > 1 && (
               /* Design note #1047: ONLY WHEN THERE IS SOMETHING TO ADD UP. One private is its own total, and a
                  "Total" row under a single line restates it -- #697's argument against the padded receipt.
-                 THE TOTAL IS ALSO IN THE STRIPE ABOVE, which is not a duplication: the stripe answers "how
-                 much did I get" at a glance and this closes the column the reader has just added up. They are
-                 the same figure by construction, because both are `round.total`. */
+                 Design note #1052: THE PARAGRAPH THAT STOOD HERE DEFENDED THE STRIPE'S COPY OF THIS FIGURE and
+                 is gone with it -- the total appears once now, at the foot of the column it totals. */
               <>
                 <span style={styles.totalLabel}>Total</span>
                 <span style={styles.totalValue}>${round.total}</span>
+              </>
+            )}
+            {round.cashBefore !== null && round.cashAfter !== null && (
+              /* ==================================================================
+                  DESIGN NOTE 1052: WHERE THE MONEY LEFT YOU
+                 ==================================================================
+                 ASKED: "on payouts, we usually include $before > $after somewhere." It is #670's rule and
+                 #682's block: money moving is two facts, and this panel was reporting only the arrival.
+                 INSIDE THE SAME GRID as the rows above, so the arrow column lines up with the figures rather
+                 than sitting in a block of its own with its own spacing -- which is precisely the drift #951
+                 fixed when the Stock Round's price move was built beside the cash row instead of inside it. */
+              <>
+                <span style={styles.cashLabel}>Cash</span>
+                <span style={styles.cashValue}>
+                  ${round.cashBefore} → ${round.cashAfter}
+                </span>
               </>
             )}
           </div>
@@ -228,7 +285,13 @@ export function PrivateRevenueModal({ round, roundLabel, onAcknowledge }: Privat
                     }}
                   />
                   <span style={styles.otherName}>{other.name}</span>
-                  <span style={styles.otherTotal}>${other.total}</span>
+                  {/* Design note #1052: what arrived, then what it arrived AT. The `+` is on the payout so the
+                      two figures cannot be read as one before/after pair -- without it, "$20 → $455" claims a
+                      seat went from twenty dollars to four hundred. */}
+                  <span style={styles.otherPaid}>+${other.total}</span>
+                  {other.cashAfter !== null && (
+                    <span style={styles.otherHeld}>→ ${other.cashAfter}</span>
+                  )}
                 </div>
               ))}
             </div>
@@ -327,7 +390,9 @@ const styles: Record<string, React.CSSProperties> = {
     whiteSpace: "nowrap",
     minWidth: 0,
   },
-  stripeTotal: { fontSize: FONT_SIZE.strong, fontWeight: 800, flex: "none" },
+  // Design note #1052: `stripeTotal` is deleted, not emptied -- the stripe carries identity only now, and an
+  // unused style is an invitation to put a figure back in the band #1050 cleared for a name.
+  lineNumber: { color: CARD_INK_FAINT, fontVariantNumeric: "tabular-nums" },
   lines: {
     display: "grid",
     gridTemplateColumns: "1fr auto",
@@ -350,14 +415,37 @@ const styles: Record<string, React.CSSProperties> = {
     paddingTop: "4px",
     marginTop: "3px",
   },
+  /* ==================================================================
+      DESIGN NOTE 1052: THE SUM IS MONEY ARRIVING, SO IT IS GREEN
+     ==================================================================
+     REPORTED: "the revenue numbers are in green, but the sum is in black."
+     AND THE INCONSISTENCY WAS INHERITED RATHER THAN CHOSEN. The dark total came from the toast, where #1030
+     had darkened every figure against a cream ground and the rows had no green to be consistent WITH. Carried
+     onto a panel whose rows are `CARD_INK_POSITIVE`, it made the one figure that sums the others the only one
+     that did not look like income.
+     #670's RULE IS THE WHOLE ARGUMENT: green means money, or a thing arriving. A column of green figures with
+     a black sum says the sum is a different kind of quantity, which is exactly what it is not. */
   totalValue: {
-    color: CARD_INK,
+    color: CARD_INK_POSITIVE,
     textAlign: "right",
     fontWeight: 800,
     fontVariantNumeric: "tabular-nums",
     borderTop: `1px solid ${CARD_DIVIDER}`,
     paddingTop: "4px",
     marginTop: "3px",
+  },
+  /* Design note #1052: the movement, quieter than the sum above it. The sum is what the phase paid and is the
+     figure being checked against the column; this is where it landed, which is context rather than the claim.
+     MONOSPACED FOR THE ARROW, matching #738's treatment of the same before/after on the dividend receipt --
+     "a pair of figures rather than a sentence" -- so two panels reporting one kind of fact look alike. */
+  cashLabel: { color: CARD_INK_MUTED, textAlign: "left", paddingTop: "2px" },
+  cashValue: {
+    color: CARD_INK_POSITIVE,
+    textAlign: "right",
+    fontWeight: 700,
+    paddingTop: "2px",
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+    fontVariantNumeric: "tabular-nums",
   },
   others: { display: "flex", flexDirection: "column", gap: "5px", marginTop: "2px" },
   othersLabel: {
@@ -378,10 +466,20 @@ const styles: Record<string, React.CSSProperties> = {
     flex: "1 1 auto",
     minWidth: 0,
   },
-  otherTotal: {
-    color: CARD_INK_MUTED,
+  /* Design note #1052: what arrived, in the income green the viewer's own rows use -- it is the same kind of
+     fact about a different seat, and using a second colour for it would say otherwise. */
+  otherPaid: {
+    color: CARD_INK_POSITIVE,
     fontWeight: 700,
     fontVariantNumeric: "tabular-nums",
+    flex: "none",
+  },
+  /* And where it landed, quieter: a rival's standing is context. Monospaced with the arrow, matching the
+     viewer's own cash line so the two read as one kind of statement at two levels of detail. */
+  otherHeld: {
+    color: CARD_INK_MUTED,
+    fontVariantNumeric: "tabular-nums",
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     flex: "none",
   },
   footer: { display: "flex", justifyContent: "flex-end", marginTop: "4px" },

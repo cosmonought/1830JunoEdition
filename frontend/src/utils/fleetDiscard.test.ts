@@ -152,7 +152,10 @@ describe("a partial state is survived, not filled in (design note #897)", () => 
     } as unknown as GameStateResponse;
     const after = applyPhaseChange(before, "5");
     expect(after.private_companies.map((priv) => priv.closed)).toEqual([true, true]);
-    expect(describePrivateClosures(before, after)).toEqual(["Schuylkill Valley"]);
+    // Design note #1058: the number rides along now; this case is about WHICH private closed.
+    expect(describePrivateClosures(before, after).map((entry) => entry.name)).toEqual([
+      "Schuylkill Valley",
+    ]);
   });
 
   it("narrates nothing rather than throwing when the lists are absent", () => {

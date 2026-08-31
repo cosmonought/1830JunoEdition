@@ -171,9 +171,29 @@ export function TopTicker({
               shape #691 and #681 both cost a report to find.
               IT MATTERS MORE HERE, if anything: this one line is what a player sees while they are looking at
               the board, and "did somebody say something to me" is exactly the question a glance at it asks. */}
+          {/* ==================================================================
+               DESIGN NOTE 1055: THE TINT REACHES THE COLLAPSED LINE TOO
+              ==================================================================
+              REPORTED: "when the activity log is expanded, the flavor text lines carry some formatting.
+              However, they do not carry any formatting when the log is collapsed, which is how most players
+              see it."
+              AND #694 IS FOUR LINES ABOVE THIS, ARGUING THE SAME THING ABOUT A DIFFERENT PROPERTY: "the rule
+              reaches the COLLAPSED line too ... applying it there alone would leave the same feed saying two
+              different things about the same message depending on whether it happened to be open." #1042
+              added the bonus/malus tone to `LogEntry` and did not follow that rule, so the variant's own
+              lines were styled in the panel a player opens on purpose and plain in the one they actually
+              watch.
+              THE PRECEDENCE ORDER IS #1042's, UNCHANGED, and it has to be: chat after tone would let a
+              flavour line borrow the chat colour, and error is a more urgent fact than which way a die
+              rolled. Same sequence in both renderers, which is what stops the two drifting again. */}
           <span
             style={{
               ...styles.previewText,
+              ...(latestItem?.logTone === "bonus"
+                ? styles.logToneBonus
+                : latestItem?.logTone === "malus"
+                  ? styles.logToneMalus
+                  : {}),
               ...(latestItem?.kind === "chat" ? styles.previewTextChat : {}),
             }}
           >

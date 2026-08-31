@@ -317,7 +317,11 @@ describe("the variant sentence reaches every seat", () => {
     /* THE REPORTED BUG, AND THE USER'S OWN DIAGNOSIS: "the variant texts may only be printing in the Activity
        Log for the local player who's the president." `logInfo` appends to a LOCAL feed, and only one browser
        runs a click handler; every client replays `runGameplayAction`. */
-    expect(APP).toContain('if (before && "DeclareDividends" in msg && resolveVariants(before.variants).unpredictableRevenue)');
+    /* Design note #1056: the guard moved to the RUN -- see `batch51.test.ts` for why. What this case asserts
+       is unchanged and is the half that matters: the block is on the shared dispatch path (`before`, `after`
+       and `msg`, which every client has when replaying) rather than in a click handler only one browser runs. */
+    expect(APP).toContain('"RunMultipleRoutes" in msg &&');
+    expect(APP).toContain("resolveVariants(before.variants).unpredictableRevenue");
   });
 
   it("no longer narrates from the run-trains handler", () => {
@@ -342,7 +346,8 @@ describe("the variant sentence reaches every seat", () => {
     // #941's own title: one roll, one flash, one sentence. Splitting them was never on offer.
     const block = sliceBetween(
       APP,
-      'if (before && "DeclareDividends" in msg',
+      // Design note #1056: the flavour block lives on the run now, not on the dividend.
+      '"RunMultipleRoutes" in msg &&',
       'if (after && "DeclareDividends" in msg',
     );
     expect(block).toContain("turnRevenueSentence(");

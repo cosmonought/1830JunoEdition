@@ -92,9 +92,32 @@ describe("the sentence no longer predicts a price", () => {
   it("says nothing about the price on a withhold", () => {
     /* THE REPORT. The old line read the CURRENT price -- already stepped by the market atom -- and projected
        the step again, so it named a cell the token never reached. */
+    /* ==================================================================
+        DESIGN NOTE 1054: THE SENTENCE CHANGED; WHAT THIS CASE FORBIDS DID NOT
+       ==================================================================
+       THIS PINNED "C&O withheld $0 into its treasury." Two things moved it. Reported: "players do not select
+       'Withhold $0,' so saying that their corporation did is potentially confusing" -- so a $0 withhold now
+       says what actually happened, that no routes were run. And the price move now JOINS this sentence
+       instead of getting a line of its own, because the atom's figures are handed in.
+       WHAT THIS CASE IS FOR IS UNCHANGED AND IS THE SECOND ASSERTION: the sentence must not PROJECT a price.
+       #775's bug was a branch that read the current price and stepped it again, naming a cell the token never
+       reached. A clause built from `context.marketMove` is the opposite of that -- it is the atom's report --
+       and with no move handed in there is no clause at all, which is what this fixture exercises. */
     const line = describeGameplayAction(declare("0", false), context(board()) as never);
-    expect(line).toBe("C&O withheld $0 into its treasury.");
+    expect(line).toBe("C&O did not run any routes.");
     expect(line).not.toMatch(/Share price/);
+  });
+
+  it("carries the atom's move when it is handed one, and never computes its own", () => {
+    /* THE OTHER HALF OF #775, ASSERTED RATHER THAN ASSUMED. The clause is allowed to exist now, so the case
+       that it uses the AUTHORITY's figures has to exist too -- otherwise "no projection" is satisfied by a
+       branch that quietly started projecting again with different words. Handed 100 -> 90, it must say 100
+       and 90 and nothing else. */
+    const withMove = describeGameplayAction(declare("0", false), {
+      ...(context(board()) as unknown as Record<string, unknown>),
+      marketMove: { from: 100, to: 90, reason: "withhold" },
+    } as never);
+    expect(withMove).toBe("C&O did not run any routes. Its share price fell from $100 to $90.");
   });
 
   it("says nothing about the price on a payout", () => {

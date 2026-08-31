@@ -241,8 +241,14 @@ describe("the die is thrown once, in the shell", () => {
        narration cannot read its own message. Before #1051 that was harmless -- the face was a pure function
        of the turn and any caller could re-derive it. A second DRAW here would put a percentage in the
        Activity Log that the board never paid. */
-    const block = sliceBetween(APP, 'if (before && "DeclareDividends" in msg', "const roll = rollTurnRevenue");
-    expect(block).toContain("seedAlreadyRolled(");
+    /* Design note #1056: THE NARRATION MOVED TO THE RUN AND THE LOOKUP WENT WITH IT. This asserted that the
+       dividend-side block found the roll through `seedAlreadyRolled` rather than drawing a fresh one. The
+       sentence is raised on `RunMultipleRoutes` now -- the same dispatch that carries the seed -- so it reads
+       `msg.RunMultipleRoutes.revenue_seed` directly and there is nothing left to look up.
+       WHAT THE CASE FORBIDS IS UNCHANGED AND IS THE POINT: the narration must never DRAW. A second draw here
+       would put a percentage in the Activity Log that the board never paid. */
+    const block = sliceBetween(APP, '"RunMultipleRoutes" in msg &&', "const roll = rollTurnRevenue");
+    expect(block).toContain("msg.RunMultipleRoutes.revenue_seed ??");
     expect(block).not.toContain("randomTurnSeed");
   });
 });

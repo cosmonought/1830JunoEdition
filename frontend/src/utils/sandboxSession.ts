@@ -1012,24 +1012,43 @@ export function applyPhaseChange(
  *  bug -- and this one takes a certificate off their limit too, which they will notice three turns later and
  *  misattribute. Named separately from the closure so `applyPhaseChange` stays a pure state function and the
  *  shell does the narrating, per #400/#685. */
+/** Which privates closed in this transition, with the number every other surface prints.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 1058: A CLOSURE IS NOT ALWAYS A PHASE CHANGE
+ *  ==================================================================
+ *
+ *  REPORTED, of the B&O private closing when the B&O corporation bought its first train: "the 'Phase Change'
+ *  line is written improperly: it is true BO closes as soon as B&O buys a train, but this is not a phase
+ *  change and private companies DO continue paying out revenue."
+ *
+ *  TWO EVENTS WERE SHARING ONE SENTENCE, and the sentence is correct for exactly one of them. When Phase 5
+ *  arrives EVERY private closes and every one of them stops paying -- #736's line says so and is right. When
+ *  a single private closes on its own trigger, nothing about the phase has moved and the other five keep
+ *  paying every Operating Round. The shared sentence told a player that their remaining income had stopped.
+ *
+ *  THIS FUNCTION STILL ONLY OBSERVES. It reports what closed; deciding WHY belongs to the caller, which is
+ *  the only place that can see whether the phase tier moved in the same transition. Returning the id along
+ *  with the name is what lets that caller print "6. Baltimore & Ohio" in the form the Ledger, the player
+ *  cards, the auction dashboard and the action bar already use (#1052). */
 export function describePrivateClosures(
   before: GameStateResponse,
   after: GameStateResponse,
-): string[] {
+): { privateId: number; name: string }[] {
   /* Design note #897: THE SAME GUARD, AND IT IS NOT DEFENSIVE PADDING. `App.tsx` calls this in the same block
      as `describeFleetLosses`, immediately after the reducer that just stopped throwing -- so a state that
      reaches `applyPhaseChange` without a privates list reaches this too, and this would have been the very
      next crash. Naming NO closures for a list nobody reported is the honest answer: a closure that cannot be
      observed must not be announced. */
-  const names: string[] = [];
+  const closed: { privateId: number; name: string }[] = [];
   for (const priv of after.private_companies ?? []) {
     if (!priv.closed) continue;
     const was = (before.private_companies ?? []).find(
       (entry) => entry.private_id === priv.private_id,
     );
-    if (was && !was.closed) names.push(priv.name);
+    if (was && !was.closed) closed.push({ privateId: priv.private_id, name: priv.name });
   }
-  return names;
+  return closed;
 }
 
 /** What one corporation lost when the phase turned. */
@@ -3685,7 +3704,10 @@ export function describePrivatePayout(
   const recipient = payout.toPlayer
     ? labelForAddress(payout.toPlayer)
     : labelForCompany(payout.toCompanyId as number);
-  return `${payout.privateName} pays $${payout.amount} to ${recipient}.`;
+  /* Design note #1059: NUMBERED, in the form five other surfaces already use (#1052). A player reading the
+     feed and a player reading the Ledger are looking at the same six companies, and until now only one of
+     them was told which. */
+  return `${payout.privateId}. ${payout.privateName} pays $${payout.amount} to ${recipient}.`;
 }
 
 /** One toast for a whole round of private income, from the viewer's side of it.
@@ -3728,7 +3750,20 @@ export interface PrivateRevenueSummary {
      THE STRUCTURE TRAVELS INSTEAD OF BEING RE-DERIVED. The alternative is for the toast to split `detail` on
      its separator, which makes a middle dot into load-bearing punctuation -- one private company with a dot
      in its name and the table is silently wrong. */
-  rows: readonly { label: string; value: string }[];
+  /* ==================================================================
+      DESIGN NOTE 1052: THE ROW CARRIES THE PRIVATE'S NUMBER, NOT A POSITION
+     ==================================================================
+     REPORTED of the payout modal: "the private companies lack their enumerations, e.g. '1. Schuykill Valley'".
+     AND THE NUMBER IS ALREADY ESTABLISHED, which is what decides WHICH number it is. Five surfaces render
+     `${private_id}. ${name}` -- the Ledger, the player cards, the trade panel, the auction dashboard and the
+     action bar -- so a private has a number a player has already learned. Numbering these rows 1..n by their
+     position in one player's holdings would put a SECOND numbering on the same objects, which is #891's shape:
+     two surfaces answering one question two ways. A player holding the C&A and the B&O sees "5." and "6."
+     everywhere else, and would see "1." and "2." here.
+     THE ID TRAVELS, THE LABEL STAYS THE NAME. Baking "5. " into `label` would make the presentation decision
+     here, where the caller can no longer undo it -- and `PlayerCards` composes the same pair at its own render
+     site for the same reason. */
+  rows: readonly { privateId: number; label: string; value: string }[];
 }
 
 export function summarisePrivateRevenueForPlayer(
@@ -3751,6 +3786,8 @@ export function summarisePrivateRevenueForPlayer(
        of its own -- a currency mark is part of the number a player compares, and splitting it would put two
        right-aligned columns where the request asks for one. */
     rows: mine.map((payout) => ({
+      // Design note #1052: the catalog's number, the same one every other surface prints.
+      privateId: payout.privateId,
       label: payout.privateName,
       value: `$${payout.amount}`,
     })),

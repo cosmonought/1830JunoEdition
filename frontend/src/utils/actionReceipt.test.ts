@@ -25,6 +25,8 @@ import {
   deservesActionReceipt,
 } from "./actionReceipt";
 import { GAMEPLAY_MESSAGE_KEYS } from "./sessionKey";
+// Design note #886: a slice that THROWS on a missing anchor, so a case cannot empty itself silently.
+import { sliceBetween } from "./sourceScan";
 
 /** A dispatch of one message key, shaped as `runGameplayAction` sees it. */
 function msg(key: string): Record<string, unknown> {
@@ -233,8 +235,25 @@ describe("every toast is mounted behind a rule", () => {
      * SO THE ORDER MATTERS AND IS ASSERTED: the toast must sit AFTER the label is rebuilt with `afterState`,
      * not before. Raising it a few lines earlier would silently restore the bug with the code in the right
      * file. */
-    const rebuilt = APP.indexOf("afterState: after }) ?? label;");
-    const raised = APP.indexOf("showActionToast(label)");
+    /* ==================================================================
+        DESIGN NOTE 1054: ANCHORED ON THE CALL, NOT ON ITS FORMATTING
+       ==================================================================
+       THIS PINNED `afterState: after }) ?? label;` -- the rebuild written as one line. #1054 added
+       `marketMove` to that context so the dividend sentence could carry the atom's price move, which broke
+       the object across lines and left the anchor at -1.
+       AND -1 IS WHY THIS CASE HAS ITS GUARD. `indexOf` returning -1 would have made the ORDERING comparison
+       below vacuous rather than red: -1 is less than every real index, so `rebuilt < raised` would have
+       passed with nothing under it. That guard is `sourceScan` #886's whole argument, written inline here
+       before the helper existed, and it did exactly its job.
+       RE-ANCHORED ON THE CALL ITSELF, which is the thing that must come first. A reformat moves the braces;
+       it does not move `describeGameplayAction`. */
+    /* Design note #1063: THE ARGUMENT CHANGED AND THE ORDER DID NOT. This anchored on
+       `showActionToast(label)`; the receipt now takes the train purchase's own short sentence when there is
+       one (`showActionToast(globallyBroadcast ?? label)`), so the literal moved. Re-anchored on the CALL,
+       which is what the ordering is about -- pinning the argument list again would break on the next caller
+       that passes something else, which is the mistake this file has now recorded twice. */
+    const rebuilt = APP.indexOf("describeGameplayAction(msg, {");
+    const raised = APP.indexOf("showActionToast(globallyBroadcast");
     expect(rebuilt).toBeGreaterThan(-1);
     expect(raised).toBeGreaterThan(rebuilt);
   });
@@ -242,10 +261,31 @@ describe("every toast is mounted behind a rule", () => {
   it("no longer fires from the append branch", () => {
     /* #697 put it there to be immediate, and immediacy bought a figure that could be wrong. A receipt whose
        whole job is to be trusted must not quote a number the player did not receive. */
-    const appendBranch = APP.slice(
-      APP.indexOf("const ok = await appendSandboxAction"),
-      APP.indexOf("Setup is handled first and returns"),
+    /* ==================================================================
+        THIS CASE HAD BEEN VACUOUS, AND #886 NAMES EXACTLY HOW
+       ==================================================================
+       IT SLICED BETWEEN `const ok = await appendSandboxAction` AND `Setup is handled first and returns`.
+       Neither string exists anywhere in the tree -- the first became `const allocated = await
+       appendSandboxAction(` when #1026 changed the return from a boolean to the allocated index, and the
+       second was a comment that has since been rewritten. `indexOf` returned -1 for both, `slice(-1, -1)` is
+       the empty string, and `expect("").not.toContain(...)` passes for any source at all.
+       SO IT HAS BEEN GREEN WITHOUT CHECKING ANYTHING for however long, which is `sourceScan` #886's whole
+       subject: "the recurring vacuity in these tests is not a wrong assertion, it is an assertion with
+       nothing under it." FOUND BY SWEEPING every App anchor in every suite for resolution, not by reading.
+       RE-ANCHORED ON `sliceBetween`, which THROWS on a missing anchor and names it. A case that cannot
+       silently empty itself is the fix; re-pointing the strings alone would leave the same trap armed. */
+    const appendBranch = sliceBetween(
+      APP,
+      "const appendAt = appliedIndexRef.current;",
+      "appliedIndexRef.current = appendAt + 1;",
     );
+    /* BOUNDED BY THE BRANCH, NOT BY A LATER LANDMARK. A first re-anchoring ended this at
+       `refreshGameState();` and produced a 42,000-character slice that swallowed the toast site itself -- an
+       assertion that would have failed for the opposite of the right reason. `sliceBetween` searches the end
+       anchor FORWARD FROM THE START (#886), so the trap is a loose end anchor rather than a missing one, and
+       the guard against it is asserting the slice is the size of a branch rather than merely non-empty. */
+    expect(appendBranch.length).toBeGreaterThan(0);
+    expect(appendBranch.length).toBeLessThan(2000);
     expect(appendBranch).not.toContain("showActionToast(");
   });
 

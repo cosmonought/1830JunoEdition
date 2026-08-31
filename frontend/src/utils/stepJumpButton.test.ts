@@ -2,7 +2,7 @@
 
 // No runtime imports: this file reads source text. `export {}` makes it a module for `--isolatedModules`.
 export {};
-import { readSource, stripComments } from "./sourceScan";
+import { anchorIndex, readSource, readStripped, stripComments } from "./sourceScan";
 
 //
 // The sticky bar offers the step before it offers the exit.
@@ -49,19 +49,19 @@ import { readSource, stripComments } from "./sourceScan";
 // a tier and a price while this one carries neither, plus a `title` that says it scrolls. Prose can hedge a
 // direction; an arrowhead cannot.
 
-const BAR = (() => {
-  const fs = require("fs") as typeof import("fs");
-  const path = require("path") as typeof import("path");
-  return fs.readFileSync(
-    path.join(__dirname, "..", "panels", "ContextualActionBar.tsx"),
-    "utf8",
-  );
-})();
-
-/** #490a: three notes quote the removed button while explaining its removal and its return. */
-const CODE = BAR.replace(/\/\*[\s\S]*?\*\//g, "")
-  .replace(/^\s*\/\/.*$/gm, "")
-  .replace(/\{\/\*[\s\S]*?\*\/\}/g, "");
+/* ==================================================================
+    DESIGN NOTE 1097: SIXTY-NINE ASSERTIONS THE SWEEP HAD NEVER SEEN
+   ==================================================================
+   THIS FILE READ ITS SOURCE WITH `readFileSync` AND STRIPPED COMMENTS BY HAND -- which is `readStripped`,
+   rewritten. `sourceScanSweep.js` finds assertions by locating `const X = readStripped("...")`, so every
+   `toContain` here was outside its accounting: not flagged as unchecked, simply absent. The largest such
+   file in the suite, and the sweep has been reporting "every one holds" over the whole of it.
+   THE PRICE OF THAT WAS PAID IN `phaseEraToast`, which had the same shape: four cases went stale when a
+   toast moved out of its render effect, and the runner found them after a clean sweep.
+   #490a's REASON FOR STRIPPING IS INTACT and is why `readStripped` rather than `readSource`: three notes in
+   the bar QUOTE the removed button while explaining its removal and its return, so a scan of raw text would
+   find the retired control in its own epitaph. */
+const CODE = readStripped("panels/ContextualActionBar.tsx");
 
 const hardwareCase = CODE.slice(CODE.indexOf('case "Hardware":'), CODE.indexOf('case "Hardware":') + 1400);
 const privateCase = CODE.slice(CODE.indexOf('case "BuyPrivate":'), CODE.indexOf('case "Tokens":'));
@@ -278,17 +278,19 @@ describe("a jump is not an action", () => {
   });
 
   it("keeps the rotation rule somewhere", () => {
-    const fs = require("fs") as typeof import("fs");
-    const path = require("path") as typeof import("path");
-    const tutorial = fs.readFileSync(
-      path.join(__dirname, "..", "components", "TutorialModal.tsx"),
-      "utf8",
-    );
-    // #490a in reverse: the bar's note QUOTES the sentence while explaining its removal, so `CODE` above is
-    // comment-stripped and this reads the file that is supposed to have it for real.
+    /* #490a in reverse: the bar's note QUOTES the sentence while explaining its removal, so `CODE` above is
+       comment-stripped and this reads the file that is supposed to have it for real.
+       Design note #1097: `readStripped` rather than a hand-rolled raw read. BOTH LITERALS SURVIVE STRIPPING
+       in `TutorialModal` -- checked before converting -- so this asserts the same thing and now asserts it
+       somewhere the sweep can see. Stripping is the stronger form anyway: it is the version in which the
+       sentence being present means the tutorial SAYS it rather than merely mentioning it in a note. */
+    const tutorial = readStripped("components/TutorialModal.tsx");
     expect(tutorial).toContain("click the laid preview again to ROTATE it");
-    expect(tutorial.indexOf("click the laid preview again to ROTATE it")).toBeGreaterThan(
-      tutorial.indexOf("OPERATING_ROUND_TUTORIAL"),
+    /* `anchorIndex` RATHER THAN `indexOf` (#1090): a rotted anchor throws and names itself, where `indexOf`
+       answers -1 and -1 is less than every real index -- so the comparison would pass for a sentence that is
+       not there, or fail with "expected > -1" and tell you nothing about which end went missing. */
+    expect(anchorIndex(tutorial, "click the laid preview again to ROTATE it")).toBeGreaterThan(
+      anchorIndex(tutorial, "OPERATING_ROUND_TUTORIAL"),
     );
   });
 
@@ -476,17 +478,11 @@ describe("the greying is retired, and deliberately (design notes #797 / #915 / #
 });
 
 describe("the purchase button says what it does (design note #796)", () => {
-  const PANEL = (() => {
-    const fs = require("fs") as typeof import("fs");
-    const path = require("path") as typeof import("path");
-    return fs.readFileSync(
-      path.join(__dirname, "..", "components", "TrainPurchasePanel.tsx"),
-      "utf8",
-    );
-  })();
-  const PANEL_CODE = PANEL.replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/^\s*\/\/.*$/gm, "")
-    .replace(/\{\/\*[\s\S]*?\*\/\}/g, "");
+  /* Design note #1097: ONE STRIPPED READ, not a raw one and a stripped copy of it. `PANEL` was read raw and
+     asserted on once -- checked, and its one literal survives stripping, so the two were never saying
+     different things. Collapsing them removes a distinction that was not carrying anything. */
+  const PANEL = readStripped("components/TrainPurchasePanel.tsx");
+  const PANEL_CODE = PANEL;
 
   it("carries a verb, not only a figure", () => {
     /* REPORTED: "the clickable button only lists the price that will be paid. It needs to clearly say 'Buy
@@ -494,7 +490,20 @@ describe("the purchase button says what it does (design note #796)", () => {
        on already says 'Buy 1/2/3/4 x-train(s)'." */
     const dollar = String.fromCharCode(36);
     // Same dodge as #779's and #783's harnesses: the string IS source text, so the `$` is assembled.
-    expect(PANEL_CODE).toContain("Pay " + dollar + dollar + "{bankTotal || nextTier.cost}");
+    /* ==================================================================
+        DESIGN NOTE 1104: THE PRICE EXPRESSION MOVED SCOPE, SO IT GAINED A GUARD
+       ==================================================================
+       IT READ `{bankTotal || nextTier.cost}`. The label is a named const now (see the case below for why),
+       which hoists it ABOVE the `nextTier &&` guard the JSX had already applied -- so `nextTier` is nullable
+       there and `tsc` required `nextTier?.cost ?? 0`.
+       NOTHING THE PLAYER SEES CHANGED: `bankTotal` is `nextTier && quantityValid ? nextTier.cost * quantity :
+       0`, so the fallback is only ever consulted when `nextTier` exists, and the button is not rendered at all
+       when it does not.
+       THE CLAIM THIS CASE MAKES IS THE PRICE, not the expression that computes it -- so it is asserted as the
+       two facts that matter: the label says "Pay $", and the figure is the multi-buy total with the unit price
+       behind it. */
+    expect(PANEL_CODE).toContain("Pay " + dollar + dollar + "{bankTotal || ");
+    expect(PANEL_CODE).toContain("nextTier?.cost");
   });
 
   it("does not repeat the verb from the line above", () => {
@@ -506,7 +515,11 @@ describe("the purchase button says what it does (design note #796)", () => {
 
   it("keeps the train-limit wording, which is not a price", () => {
     // The one state where a figure is the wrong thing to show: the button is dead and the reason beats a number.
-    expect(PANEL_CODE).toContain('atTrainLimit ? "Train Limit Reached"');
+    /* Design note #1104: anchored on the named label rather than the inline ternary's shape -- see
+       `quantityOptions` for why that anchor was the wrong instrument. The claim is the same one: at the limit
+       the button shows a REASON, not a figure. */
+    expect(PANEL_CODE).toContain("const payButtonLabel = atTrainLimit");
+    expect(PANEL_CODE).toContain('? "Train Limit Reached"');
   });
 
   it("keeps the spelled-out accessible name", () => {

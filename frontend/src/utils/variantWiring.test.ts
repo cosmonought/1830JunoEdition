@@ -332,8 +332,11 @@ describe("the polish wave's smaller fixes (design notes #928 / #929 / #931 / #93
     /* A descriptor, not a node -- the toast's state stays plain data and this component keeps sole ownership
        of what a Green hex looks like. */
     expect(toast).toContain("eraTransition");
-    expect(toast).toContain("ERA_HEX_FILL");
-    expect(toast).toContain("function EraHex");
+    /* Design note #1094: `EraHex` AND ITS FILLS LIVE IN `components/EraHex.tsx` NOW. The Bank Depot table
+       draws them too, and a second hand-rolled copy of "what colour is Green" is #891's shape. The toast
+       still draws the transition -- which is what this case is about -- it just no longer owns the palette. */
+    expect(toast).toContain("<EraHex");
+    expect(toast).toContain('from "./EraHex"');
   });
 
   it("keeps the trade prompt in the corner and makes it an alert", () => {

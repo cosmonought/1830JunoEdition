@@ -135,6 +135,10 @@ export default function TopBar({
   /* Design note #1075: one open panel at a time, named rather than a pair of booleans -- two flags can
      both be true and would render two overlapping popovers from the same corner. */
   const [openPanel, setOpenPanel] = React.useState<"radio" | "sfx" | null>(null);
+  /** Design note #1094: the disclosure's outer bound -- both trigger buttons and whichever panel is open.
+   *  The popover's outside-click listener asks this rather than its own panel, so pressing a trigger is
+   *  inside the disclosure and the trigger's toggle is allowed to run. See `AudioControlPopover` #1094. */
+  const audioGroup = React.useRef<HTMLSpanElement | null>(null);
 
   // F-4 UI: why the wallet cannot connect, when that is a configuration problem
   // rather than a user one. `config.ts` deliberately no longer throws at import
@@ -212,7 +216,7 @@ export default function TopBar({
         /* Design note #1075: `position: relative` so the popover hangs from the group rather than from the
            viewport -- the bar scrolls with the header on a narrow window, and a fixed panel would part
            company with the button that opened it. */
-        <span style={{ ...styles.topBarAudioGroup, position: "relative" }}>
+        <span ref={audioGroup} style={{ ...styles.topBarAudioGroup, position: "relative" }}>
           <button
             type="button"
             style={{
@@ -312,6 +316,7 @@ export default function TopBar({
               enabled={audio.musicPlaying}
               onEnabledChange={audio.onToggleMusic}
               onClose={() => setOpenPanel(null)}
+              owner={audioGroup}
             />
           )}
           {audio.onSfxVolume && openPanel === "sfx" && (
@@ -323,6 +328,7 @@ export default function TopBar({
               onEnabledChange={audio.onToggleSfx}
               categories={audio.sfxCategories}
               onClose={() => setOpenPanel(null)}
+              owner={audioGroup}
             />
           )}
         </span>

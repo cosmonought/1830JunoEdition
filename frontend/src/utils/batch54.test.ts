@@ -239,7 +239,11 @@ describe("the popover closes easily, unlike the modals", () => {
   it("lights the Off row when the channel is off", () => {
     /* THE INVERSION HAS TO MATCH THE BUTTON. The bar's button DIMS when off; the row inside LIGHTS when
        off, because it is the control that turned it off. Two surfaces, one state, no disagreement. */
-    expect(POPOVER).toContain("...(enabled ? {} : styles.offRowActive)");
+    /* Design note #1094: the on-state is a NAMED STYLE now rather than an empty object -- ruled that the
+       toggle show a green "On — click to turn off" state instead of an unstyled row. THE INVERSION THIS CASE
+       IS ABOUT IS UNTOUCHED: `offRowActive` is still the OFF appearance, still the opposite of the bar
+       button's dim, and the two still cannot disagree about which state is which. */
+    expect(POPOVER).toContain("...(enabled ? styles.offRowOn : styles.offRowActive)");
     expect(POPOVER).toContain("aria-pressed={!enabled}");
   });
 });

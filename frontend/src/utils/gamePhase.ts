@@ -147,6 +147,53 @@ export function tierEra(tier: TrainTier): string {
   return TIER_PRESENTATION[tier].era;
 }
 
+/** ==================================================================
+ *   DESIGN NOTE 1094: WHICH TILE COLOURS ARE LEGAL IN A PHASE
+ *  ==================================================================
+ *
+ * RULED, from the question it answers: "to answer 'When can I lay Green track?', add small, blank colored
+ * hexes (Yellow, Green, Brown) ... to clearly indicate tile availability."
+ *
+ * CUMULATIVE, NOT THE NEWLY UNLOCKED ONE, and that was the decision worth making. Phase 5 unlocks Brown and
+ * Yellow and Green stay perfectly legal, so a row showing one hex would answer "what does this phase unlock"
+ * while looking like it answers "what can I lay". The second is the question a player has mid-turn, and the
+ * first is still answered by the row a colour first appears in.
+ *
+ * DERIVED FROM `tierEra`, NOT WRITTEN OUT PER TIER. The era already IS the highest colour a phase permits --
+ * that is what the phase badge and the era toast both mean by it -- so a second table keyed on tier would be
+ * a second answer to a question `TIER_PRESENTATION` already answers, one train tier away from disagreeing
+ * with the badge. What is added here is only the "and everything below it" part.
+ *
+ * THE ORDER IS THE PROGRESSION, so a caller can render the list straight out and get Yellow, Green, Brown
+ * left to right without sorting it. */
+export const TILE_ERA_ORDER: readonly string[] = ["Yellow", "Green", "Brown"];
+
+/** Every colour legal once `era` is the highest one reached.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 1094: SPLIT IN TWO SO THE GUARD CAN BE TESTED
+ *  ==================================================================
+ *
+ * THE FIRST DRAFT WAS ONE FUNCTION TAKING A TIER, and its note claimed that an era this list has never heard
+ * of yields nothing rather than everything -- a real and deliberate choice about which way to fail. THE TEST
+ * FOR IT PASSED AN UNKNOWN TIER, which is a different thing entirely: `tierEra` reads
+ * `TIER_PRESENTATION[tier].era` and throws on the line before the guard. So the note described an intention
+ * as an accomplishment, and the case written to prove it proved something else. Found by running it.
+ *
+ * TAKING THE ERA MAKES THE CHOICE REACHABLE. The failure this guards is a future Grey era added to
+ * `TIER_PRESENTATION` and forgotten here -- at which point `tierEra` answers "Grey" perfectly well and THIS
+ * is the function that has to decide what to do about it. Showing a player no hexes is an absence they will
+ * report; showing a confident three that quietly omits the new colour is a wrong answer they will believe. */
+export function tileErasUpTo(era: string): readonly string[] {
+  const highest = TILE_ERA_ORDER.indexOf(era);
+  return highest < 0 ? [] : TILE_ERA_ORDER.slice(0, highest + 1);
+}
+
+/** Every tile colour legal in the phase `tier` opens. */
+export function tileErasAt(tier: TrainTier): readonly string[] {
+  return tileErasUpTo(tierEra(tier));
+}
+
 /* Design note #5: ONE COUNTDOWN, NOT TWO. The phase badge and the train chips disagreed and the badge was
    wrong: in Phase 3 with one 3-train left it read "Next buy (4-Train) triggers Phase 4" while the chip read
    "rusts after 2 more purchases". The chip had it right -- the next depot purchase is the LAST 3-TRAIN.

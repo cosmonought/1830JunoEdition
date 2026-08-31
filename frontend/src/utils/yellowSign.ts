@@ -233,11 +233,57 @@ export const MARK_APPENDIX =
   "One train mysteriously disappeared, but a bag of strangely marked gold was found in some abandoned luggage.";
 export const ESCALATION_APPENDIX = "The train that disappeared has returned with decadent gold trim.";
 
+/** The third stage's clause, ruled verbatim. */
+export const CARCOSA_FOG_LINE = "The gold-trimmed train disappeared back into the fog.";
+
+/** Whether this corporation's doom clock has run out.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 1092: A DUE DATE, NOT AN EXPIRY
+ *  ==================================================================
+ *
+ * #1089 REMOVED THE TRAIN AT THE BOUNDARY. It cannot now, because the fog has to be NARRATED on a run and
+ * there is no run at a Stock Round transition -- so the clock names a set, and the debt falls due once that
+ * set has finished.
+ *
+ * `>` RATHER THAN `>=`, and the difference is the whole of the ruling "survive until the exact conclusion of
+ * the next full set of Operating Rounds". `macro_round_number` is incremented as the Stock Round opens, so
+ * once it has passed the deadline the named set is genuinely over and the train has had every run it was
+ * promised. Its next run is the one the fog takes it on -- one last run, then nothing, which is the shape
+ * Gentle Rust already uses for a doomed train.
+ *
+ * AND IT MUST STILL HOLD THE TRAIN. A corporation that sold it paid the Blood Price and owes nothing. */
+export function fogIsDue(
+  company: { carcosan_trains?: readonly string[]; carcosan_doom_after_macro_round?: number } | null | undefined,
+  macroRound: number,
+): boolean {
+  if (!company) return false;
+  if ((company.carcosan_trains?.length ?? 0) === 0) return false;
+  const doom = company.carcosan_doom_after_macro_round;
+  return doom !== undefined && macroRound > doom;
+}
+
 export interface FlavourResolution {
   /** The line to print, after the Easter egg has had its say. */
   line: string;
-  /** Which stage fired, or `null` for an ordinary turn. */
-  stage: "mark" | "carcosa" | null;
+  /** Which stage fired, or `null` for an ordinary turn.
+   *
+   *  ==================================================================
+   *   DESIGN NOTE 1092: "fog" IS THE THIRD STAGE, AND IT BELONGS HERE
+   *  ==================================================================
+   *
+   * RULED: the corporation "receives the gold-trimmed train disappears into the fog variant text (the third
+   * step of the Yellow Sign revenue sequence)", with its own sound.
+   *
+   * WHICH MOVES THE FOG OUT OF THE ROUND BOUNDARY AND INTO A RUN. #1089 built it as an event at the Stock
+   * Round transition with a log line of its own -- correct for a rust, wrong for a NARRATED stage, because
+   * the first two stages are clauses inside `turnRevenueSentence` and a third that printed its own sentence
+   * somewhere else would be a different kind of thing wearing the same name.
+   *
+   * SO ALL THREE STAGES NOW LOOK ALIKE: a clause that replaces the drawn flavour, a `YellowSignEvent`
+   * dispatch that moves the board, and a cue. The doom clock stops being an expiry and becomes a DUE DATE --
+   * see `fogIsDue`. */
+  stage: "mark" | "carcosa" | "fog" | null;
 }
 
 /** The final flavour line for a turn, with the Yellow Sign's rules applied.
@@ -272,8 +318,30 @@ export function resolveFlavourLine(input: {
   phaseTier: string;
   /** Design note #1046: the acting corporation's fleet, because the Mark needs a train to take. */
   owned?: readonly string[] | null;
+  /** ==================================================================
+   *   DESIGN NOTE 1092: THE FOG IS OWED, AND THIS RUN IS WHERE IT COLLECTS
+   *  ==================================================================
+   *
+   * ASKED IN, NOT DERIVED, for the same reason `state` is (#1040): whether the doom clock has run out is a
+   * fact about `macro_round_number` and one corporation's stored deadline, and this module reads lines
+   * rather than boards. The caller answers it with `fogIsDue`. */
+  fogDue?: boolean;
 }): FlavourResolution {
-  const { naturalLine, bucket, ticker, parts, state, phaseTier, owned } = input;
+  const { naturalLine, bucket, ticker, parts, state, phaseTier, owned, fogDue } = input;
+
+  /* ==================================================================
+      DESIGN NOTE 1092: THE FOG OUTRANKS EVERY OTHER LINE, INCLUDING THE ESCALATION
+     ==================================================================
+     FIRST, AND UNCONDITIONALLY ON THE BUCKET. The other two stages are lottery tickets -- the Mark needs its
+     own line to be drawn, the escalation needs a critical bonus and a 1-in-5 roll -- and either could be
+     asked on the same turn the fog is due. A debt that has come due does not wait for a better draw.
+     THE ROLL ITSELF IS UNTOUCHED, ruled explicitly: "you can actually give them whatever bonus/malus they
+     roll -- it doesn't have to be 0%." So this replaces the CLAUSE and nothing else; the swing, the tint and
+     the flash are whatever the die said. The train's last run is an ordinary run that happens to be its
+     last, which is a better beat than a forced zero and one fewer special case in `turnRevenueSentence`. */
+  if (fogDue === true) {
+    return { line: CARCOSA_FOG_LINE, stage: "fog" };
+  }
 
   // (3) The escalation, which REPLACES whatever the hash drew.
   if (

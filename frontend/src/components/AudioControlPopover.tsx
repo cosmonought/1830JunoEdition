@@ -52,6 +52,17 @@ export interface AudioControlPopoverProps {
   /** Empty for the radio; the three effect categories for SFX. */
   categories?: readonly AudioCategoryToggle[];
   onClose: () => void;
+  /** ==================================================================
+   *   DESIGN NOTE 1094: WHAT "OUTSIDE" MEANS
+   *  ==================================================================
+   *
+   * The element wrapping BOTH the trigger button and this panel. The outside-click listener asks this rather
+   * than the panel, so a press on the trigger is inside the disclosure and does not close it out from under
+   * its own toggle -- see the listener for the two-event race that made the second click do nothing.
+   *
+   * OPTIONAL, FALLING BACK TO THE PANEL. A caller that renders this without a trigger of its own keeps the
+   * old behaviour rather than losing outside-close entirely, which is the harmless direction. */
+  owner?: React.RefObject<HTMLElement | null>;
 }
 
 export function AudioControlPopover({
@@ -62,6 +73,7 @@ export function AudioControlPopover({
   onEnabledChange,
   categories = [],
   onClose,
+  owner,
 }: AudioControlPopoverProps) {
   const panel = useRef<HTMLDivElement | null>(null);
 
@@ -79,9 +91,26 @@ export function AudioControlPopover({
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
     };
+    /* ==================================================================
+        DESIGN NOTE 1094: THE TRIGGER WAS OUTSIDE, SO ITS CLICK CLOSED AND REOPENED
+       ==================================================================
+       REPORTED: "one click opens the menu, and a second click on the same icon closes it."
+       THE TOGGLE WAS ALREADY WRITTEN CORRECTLY. `TopBar` does
+       `setOpenPanel((current) => (current === "sfx" ? null : "sfx"))`, which is exactly the ruled behaviour.
+       WHAT BEAT IT WAS THE ORDER OF TWO EVENTS. This listener is on `mousedown`; the toggle is on `click`,
+       which fires after. So a second press on the icon ran: mousedown -> the icon is not inside the PANEL ->
+       `onClose()` -> `openPanel` is now null; then click -> `current === "sfx"` is false -> reopen. The panel
+       shut and reopened between two frames, which on screen is a control that does nothing.
+       THE FIX IS TO ASK ABOUT THE RIGHT ELEMENT. "Outside" means outside the whole disclosure -- the trigger
+       and its panel together -- not outside the panel alone. `owner` is the element wrapping both, so the
+       trigger's press is now correctly inside, this listener ignores it, and the toggle that was always right
+       gets to run.
+       `mousedown` RATHER THAN `click` IS UNCHANGED and still deliberate: a drag that starts on the slider and
+       ends outside must not close the panel mid-gesture, which is exactly how a volume slider gets used. */
     const onDown = (event: MouseEvent) => {
-      if (!panel.current) return;
-      if (!panel.current.contains(event.target as Node)) onClose();
+      const bounds = owner?.current ?? panel.current;
+      if (!bounds) return;
+      if (!bounds.contains(event.target as Node)) onClose();
     };
     window.addEventListener("keydown", onKey);
     window.addEventListener("mousedown", onDown);
@@ -89,7 +118,7 @@ export function AudioControlPopover({
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("mousedown", onDown);
     };
-  }, [onClose]);
+  }, [onClose, owner]);
 
   return (
     <div ref={panel} style={styles.panel} role="dialog" aria-label={`${title} settings`}>
@@ -102,29 +131,59 @@ export function AudioControlPopover({
           max={100}
           step={5}
           value={Math.round(volume * 100)}
-          /* Design note #1075: DISABLED WHEN OFF rather than hidden. A slider that vanishes makes the panel
-             change height under the cursor, and the level a player set is worth showing them even while the
-             channel is silent -- turning it back on should return to where they left it, not to a default. */
-          disabled={!enabled}
-          onChange={(event) => onVolumeChange(Number(event.target.value) / 100)}
-          style={styles.slider}
-          aria-label={`${title} volume`}
+          /* ==================================================================
+              DESIGN NOTE 1094: NOT DISABLED ANY MORE, WHICH REVERSES HALF OF #1075
+             ==================================================================
+             RULED: "if a player interacts with the volume slider while the master toggle is 'Off',
+             automatically switch the state to 'On'."
+             WHICH REQUIRES THE SLIDER TO BE REACHABLE. A `disabled` input fires no events at all -- no
+             change, no click, no keyboard -- so there is no interaction to notice, and the rule could not be
+             implemented without taking the attribute off. Named here rather than quietly dropped: #1075
+             disabled it deliberately.
+             #1075'S ACTUAL REASON IS UNHARMED. It argued against HIDING the slider -- "a slider that vanishes
+             makes the panel change height under the cursor, and the level a player set is worth showing them
+             even while the channel is silent". The slider still shows, still holds the level, and still looks
+             inert while the channel is off; it is styled down rather than switched off.
+             AND THE NEW BEHAVIOUR IS BETTER THAN THE OLD ONE ON #1075'S OWN TERMS. Reaching for the volume of
+             a silent channel is an unambiguous request to hear it. Refusing the drag taught the player only
+             that the control was dead; obeying it does what they asked in one gesture instead of two. */
+          onChange={(event) => {
+            onVolumeChange(Number(event.target.value) / 100);
+            if (!enabled) onEnabledChange(true);
+          }}
+          style={{ ...styles.slider, ...(enabled ? {} : styles.sliderQuiet) }}
+          aria-label={
+            enabled ? `${title} volume` : `${title} volume — adjusting this turns ${title.toLowerCase()} on`
+          }
         />
         <span style={styles.percent}>{Math.round(volume * 100)}%</span>
       </label>
 
-      {/* ---- Off ---- */}
+      {/* ==================================================================
+           DESIGN NOTE 1094: THE TOGGLE NAMES BOTH STATES NOW
+          ==================================================================
+          RULED: "clicking the red 'Off - click to restore' button must change it to a green 'On - click to
+          turn off' state."
+          IT ONLY EVER NAMED ONE. The off state said "Off — click to restore", which is a state and its
+          action; the on state said "Off", which is neither -- it was a LABEL FOR THE BUTTON'S PURPOSE
+          ("this is the off switch") sitting where the other state puts a description of the world. A control
+          that reads "Off" while the sound is on is ambiguous in the worst available way, and the colour was
+          carrying the whole distinction.
+          SO BOTH HALVES SAY THE SAME TWO THINGS: what is true, then what a click does. Symmetric text, and
+          the red/green pair is now confirming the sentence rather than substituting for it.
+          `aria-pressed` STILL MEANS "off", unchanged from #1075 -- it is the same toggle with the same
+          meaning, and a screen reader now gets the state from the label as well. */}
       <button
         type="button"
-        style={{ ...styles.offRow, ...(enabled ? {} : styles.offRowActive) }}
+        style={{ ...styles.offRow, ...(enabled ? styles.offRowOn : styles.offRowActive) }}
         onClick={() => onEnabledChange(!enabled)}
         aria-pressed={!enabled}
         title={enabled ? `Turn ${title.toLowerCase()} off` : `Turn ${title.toLowerCase()} back on`}
       >
         <span style={styles.offGlyph} aria-hidden="true">
-          ✕
+          {enabled ? "♪" : "✕"}
         </span>
-        <span>{enabled ? "Off" : "Off — click to restore"}</span>
+        <span>{enabled ? "On — click to turn off" : "Off — click to restore"}</span>
       </button>
 
       {categories.length > 0 && (
@@ -208,6 +267,12 @@ const styles: Record<string, React.CSSProperties> = {
   /* Design note #1075: the Off row LIT means the channel is off -- the same inversion the button in the bar
      shows by dimming, so the two never disagree about which state is which. */
   offRowActive: { borderColor: "#8a4a4a", backgroundColor: "#3a1e1e", color: "#f0b8b8" },
+  /** Design note #1094: the green half of the pair, built as the red one's mirror -- same three properties,
+   *  same relationship to the panel ink, so neither state reads as the styled one. */
+  offRowOn: { borderColor: "#3f7a4f", backgroundColor: "#1b3324", color: "#a8ddb8" },
+  /** Design note #1094: what `disabled` used to say, said with opacity instead. The control is live -- that
+   *  is the point -- but a silent channel should not look like a loud one. */
+  sliderQuiet: { opacity: 0.55 },
   offGlyph: { fontWeight: 800, flex: "none" },
   categories: {
     display: "flex",

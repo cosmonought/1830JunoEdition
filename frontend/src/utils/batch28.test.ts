@@ -73,8 +73,27 @@ const declareDividends = (state: GameStateResponse) =>
     DeclareDividends: { protocol_id: 1, distribute: false, revenue_amount: "0" },
   } as never);
 
-describe("the reprieve ends before Buy Trains, not after it (design note #1001)", () => {
-  it("destroys the marked train as the cursor enters Buy Trains", () => {
+/** ==================================================================
+ *   DESIGN NOTE 1102: THE TRANSITION THIS SUITE IS ABOUT HAS MOVED ONE STEP EARLIER
+ *  ==================================================================
+ *
+ * REPORTED: "the Rust modal is firing after a player finishes the Dividends phase ... really it should happen
+ * at the beginning of the Dividends subphase / end of Run Routes" -- and the variant's own rule agrees, since
+ * the reprieve buys ONE MORE RUN and is spent the moment that run is over.
+ *
+ * SO THE CASES BELOW DRIVE `Routes -> Dividends`, not `Dividends -> Hardware`. Their CLAIMS are unchanged and
+ * #1001's is strengthened: the slot the reprieved train occupied is now free a step sooner, which is even
+ * further ahead of the Buy Trains auto-skip that #1001 exists to get in front of.
+ * STILL DRIVEN THROUGH A REAL MESSAGE, per #1001's own note -- "the whole claim is about WHICH dispatch the
+ * state changes on, and a test that called a helper directly would prove the helper works and nothing about
+ * the timing." */
+const intoDividends = (state: GameStateResponse) =>
+  applySandboxAction(state, {
+    AdvanceOperatingSubPhase: { game_id: 1, protocol_id: 1 },
+  } as never);
+
+describe("the reprieve ends when the run does (design notes #1001, #1102)", () => {
+  it("destroys the marked train as the cursor enters Dividends", () => {
     /* REPORTED: "the engine incorrectly auto-skips the Buy Trains phase for corporations at the train limit,
        preventing them from replacing the trains that just rusted."
        AND IT IS #979 COLLIDING WITH #906a. #979 made a reprieved train count against the limit -- correctly,
@@ -83,10 +102,15 @@ describe("the reprieve ends before Buy Trains, not after it (design note #1001)"
        over.
        DRIVEN THROUGH THE REAL MESSAGE, because the whole claim is about WHICH dispatch the state changes on.
        A test that called a helper directly would prove the helper works and nothing about the timing. */
-    const after = declareDividends(operating("Dividends"));
-    expect(after.operating_sub_phase).toBe("Hardware");
+    const after = intoDividends(operating("Routes"));
+    expect(after.operating_sub_phase).toBe("Dividends");
     expect(after.public_companies[0].owned_trains).toEqual(["5"]);
     expect(after.public_companies[0].pending_rust_trains).toEqual([]);
+    /* AND NOT A SECOND TIME on the way to Buy Trains -- the marks are gone, so the later transition finds
+       nothing to expire. Two triggers for one event is the fault this codebase keeps finding; here the
+       second is idempotent, and this is the assertion that says so. */
+    const later = declareDividends(after);
+    expect(later.public_companies[0].owned_trains).toEqual(["5"]);
   });
 
   it("frees the slot in time for the auto-skip to see it", () => {
@@ -94,21 +118,21 @@ describe("the reprieve ends before Buy Trains, not after it (design note #1001)"
        and the auto-skip fires when it answers true. With a limit of 2 the corporation is locked before the
        expiry and free after -- so the step it was skipped past is now open, which is the whole fix stated in
        one comparison. */
-    const before = operating("Dividends");
+    const before = operating("Routes");
     expect(isTrainLocked(before.public_companies[0].owned_trains?.length ?? 0, 2)).toBe(true);
-    const after = declareDividends(before);
+    const after = intoDividends(before);
     expect(isTrainLocked(after.public_companies[0].owned_trains?.length ?? 0, 2)).toBe(false);
   });
 
   it("leaves a corporation with no marks untouched", () => {
     /* THE CONTROL. Every corporation in a standard game passes through this transition on every turn, so an
        expiry that fired unconditionally would quietly delete a train per turn, for everybody. */
-    const plain = operating("Dividends", {
+    const plain = operating("Routes", {
       public_companies: [
         { company_id: 1, ticker: "PRR", owned_trains: ["3", "5"], last_route_revenue: "0", is_floated: true },
       ] as never,
     });
-    const after = declareDividends(plain);
+    const after = intoDividends(plain);
     expect(after.public_companies[0].owned_trains).toEqual(["3", "5"]);
   });
 
@@ -119,7 +143,7 @@ describe("the reprieve ends before Buy Trains, not after it (design note #1001)"
        turn ended last round.
        ASSERTED WITH TWO CORPORATIONS MARKED, so a rule that expired the wrong one produces a visibly wrong
        fleet rather than coincidentally the right answer. */
-    const two = operating("Dividends", {
+    const two = operating("Routes", {
       active_operating_order: [1, 2] as never,
       active_corporation_index: 0,
       public_companies: [
@@ -141,7 +165,7 @@ describe("the reprieve ends before Buy Trains, not after it (design note #1001)"
         },
       ] as never,
     });
-    const after = declareDividends(two);
+    const after = intoDividends(two);
     expect(after.public_companies[0].owned_trains).toEqual(["5"]);
     expect(after.public_companies[1].owned_trains).toEqual(["3", "5"]);
     expect(after.public_companies[1].pending_rust_trains).toEqual(["3"]);
@@ -149,8 +173,8 @@ describe("the reprieve ends before Buy Trains, not after it (design note #1001)"
 
   it("keeps the turn-change expiry as a backstop", () => {
     /* TWO TRIGGERS FOR ONE EVENT IS NORMALLY THE FAULT THIS CODEBASE KEEPS FINDING, and this is the case
-       where it is not: a turn can end without reaching Buy Trains -- an Operating Round set ending, or any
-       path that skips the step -- and a reprieve surviving that hands the train a second run, which is
+       where it is not: a turn can end without reaching Dividends at all -- an Operating Round set ending, or
+       any path that skips the step -- and a reprieve surviving that hands the train a second run, which is
        #906a's own bug in reverse.
        THEY ARE THE SAME EXPRESSION ON THE SAME HELPER, and the second is idempotent because the first leaves
        nothing to expire. Asserted as the two SUBJECTS rather than as a call count: the whole risk in having
@@ -159,11 +183,20 @@ describe("the reprieve ends before Buy Trains, not after it (design note #1001)"
     expect(REDUCER).toContain("expireReprieveFor(after, actingCorporation)");
   });
 
-  it("keys on the arrival at Buy Trains rather than on the message", () => {
+  it("keys on the arrival at the step after the run, not on the message", () => {
     /* `DeclareDividends` IS ONE WAY IN AND `AdvanceOperatingSubPhase` IS THE OTHER -- the Skip button and
        #439's auto-skip both arrive as the latter. A rule written per message would have to name both and
-       would miss the third. */
-    expect(REDUCER).toContain('const enteringHardware = next === "Hardware" && current !== "Hardware";');
+       would miss the third.
+       ==================================================================
+        DESIGN NOTE 1102: WHICH STEP, CORRECTED
+       ==================================================================
+       IT PINNED `enteringHardware`, two steps past the run. REPORTED: "the Rust modal is firing after a
+       player finishes the Dividends phase ... really it should happen at the beginning of the Dividends
+       subphase / end of Run Routes" -- and the variant's own rule agrees, since the reprieve buys ONE MORE
+       RUN and is spent when that run is over.
+       WHAT THIS CASE IS ABOUT IS UNCHANGED: the trigger is a cursor ARRIVAL, one comparison, rather than a
+       list of the messages that can cause it. Only the step named has moved. */
+    expect(REDUCER).toContain('const enteringDividends = next === "Dividends" && current !== "Dividends";');
   });
 });
 
@@ -171,8 +204,8 @@ describe("the modal waits for the train to actually die (design note #1002)", ()
   it("reports an expiry as a rust loss", () => {
     /* THE SHELL NARRATES BY DIFFING (#704), and the expiry happens inside the reducer where no caller can see
        it. What is observable afterwards is that the marks emptied and the fleet lost exactly those models. */
-    const before = operating("Dividends");
-    const after = declareDividends(before);
+    const before = operating("Routes");
+    const after = intoDividends(before);
     const [loss] = describeReprieveExpiries(before, after);
     expect(loss.rusted).toEqual(["3"]);
     expect(loss.discarded).toEqual([]);
@@ -199,7 +232,7 @@ describe("the modal waits for the train to actually die (design note #1002)", ()
     /* A DISPATCH THAT EXPIRED A REPRIEVE AND LOST A TRAIN TO SOMETHING ELSE would otherwise report the second
        as rust. Intersecting the departures with the MARKS keeps this function about the one event it names --
        and the two causes have different modals, different toggles and different remedies (#896). */
-    const before = operating("Dividends", {
+    const before = operating("Routes", {
       public_companies: [
         {
           company_id: 1,
@@ -211,7 +244,7 @@ describe("the modal waits for the train to actually die (design note #1002)", ()
         },
       ] as never,
     });
-    const [loss] = describeReprieveExpiries(before, declareDividends(before));
+    const [loss] = describeReprieveExpiries(before, intoDividends(before));
     expect(loss.rusted).toEqual(["3"]);
     expect(loss.rusted).not.toContain("5");
   });
@@ -265,7 +298,10 @@ describe("the copy is the standard sentence again (design note #1003)", () => {
       "6",
       2,
     );
-    expect(noticeBody(rust)).toBe("1 of your 3-trains has rusted.");
+    /* Design note #1100: numerals name the TIER, words count the trains -- ruled, "write out the number
+       of trains and reserve numerals for the train tiers", because every train in 1830 is named by a numeral
+       and a sentence that also counts in numerals puts two unrelated numbers side by side. */
+    expect(noticeBody(rust)).toBe("One of your 3-trains has rusted.");
   });
 
   it("has no variant branch left in the notice or the modal", () => {

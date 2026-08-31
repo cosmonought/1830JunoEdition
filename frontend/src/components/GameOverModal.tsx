@@ -12,6 +12,7 @@ import React from "react";
 
 import { FONT_SIZE } from "../styles/typography";
 import type { PlayerStanding } from "../utils/endgame";
+import CarcosaMark from "./CarcosaMark";
 
 export type GameEndReason = "bankruptcy" | "bank-broken";
 
@@ -20,6 +21,23 @@ export interface GameOverModalProps {
    *  hidden, so nothing renders behind the rest of the UI. */
   reason: GameEndReason | null;
   standings: readonly PlayerStanding[];
+  /** ==================================================================
+   *   DESIGN NOTE 1091: THE FOG'S OWN COLUMN OF THE SCOREBOARD
+   *  ==================================================================
+   *
+   * RULED: "If the game ends and a corporation still possesses a train with the active Carcosa flag, DO NOT
+   * ALTER ANY FINAL SCORES. On the final post-game scoreboard, append the Yellow Sign icon next to the name
+   * of the player who is President of that corporation. Display this exact flavor text beneath the final
+   * standings."
+   *
+   * A SEPARATE PROP RATHER THAN A FIELD ON `PlayerStanding`, and the ruling's first sentence is the reason.
+   * `PlayerStanding` is what `rankPlayers` computes and every number on this modal comes from it; putting the
+   * curse inside it would put a piece of flavour in the structure that decides who won, one careless sort
+   * away from mattering. Beside it, it cannot touch a score.
+   *
+   * ONE ENTRY PER CURSED CORPORATION, not per player: a president of two cursed corporations gets two
+   * epitaphs, which is the honest reading and also funnier. */
+  carcosa?: readonly { presidentAddress: string; epitaph: string }[];
   /** Who the viewer is, for the "You Won!" / "You Went Bankrupt!" line.
    *  `null` for a spectator, who gets the standings without a verdict. */
   viewerAddress: string | null;
@@ -51,6 +69,7 @@ export interface GameOverModalProps {
 export function GameOverModal({
   reason,
   standings,
+  carcosa,
   viewerAddress,
   totalAnte,
   bankruptLabel,
@@ -146,6 +165,12 @@ export function GameOverModal({
               <span style={styles.cellRank}>{row.rank}</span>
               <span style={styles.cellName}>
                 {row.label}
+                {/* Design note #1091: the sign rides the NAME, beside the tags rather than in the numbers --
+                    "do not alter any final scores" is the ruling, and a mark in a figure column would read
+                    as one. */}
+                {(carcosa ?? []).some((entry) => entry.presidentAddress === row.address) && (
+                  <CarcosaMark meaning="president" size={13} />
+                )}
                 {isViewer && <span style={styles.tagYou}>YOU</span>}
                 {row.isWinner && <span style={styles.tagWinner}>WINNER</span>}
                 {row.isBankrupt && <span style={styles.tagBankrupt}>BANKRUPT</span>}
@@ -174,6 +199,15 @@ export function GameOverModal({
             <strong>{winner.label}</strong> wins with ${winner.netWorth}.
           </p>
         )}
+
+        {/* Design note #1091: "beneath the final standings", and after the winner -- the game's result is the
+            headline and this is the epilogue. Each line is built by `carcosaEpitaph` rather than assembled
+            here, so the two substitutions are testable without a renderer. */}
+        {(carcosa ?? []).map((entry) => (
+          <p key={`${entry.presidentAddress}-${entry.epitaph}`} style={styles.carcosaEpitaph}>
+            {entry.epitaph}
+          </p>
+        ))}
 
         {/* Design note #899: the closure controls, and the countdown stated as a fact rather than as a
             threat. Every client runs its own timer and any player may press the button, so this is not "you
@@ -344,6 +378,16 @@ const styles: Record<string, React.CSSProperties> = {
   },
   payoutNote: { margin: 0, fontSize: FONT_SIZE.micro, color: "#7f8798", lineHeight: 1.45 },
   winnerLine: { margin: 0, fontSize: FONT_SIZE.body, color: "#e6e8ef" },
+  /* Design note #1091: the Yellow Sign's amber, italic, quieter than the winner's line above it. It is the
+     last thing on a scoreboard and it is not a result -- a player who never saw the sign should be able to
+     read past it, and one who did should recognise the colour from the Activity Log lines that led here. */
+  carcosaEpitaph: {
+    margin: "2px 0 0",
+    fontSize: FONT_SIZE.small,
+    fontStyle: "italic",
+    lineHeight: 1.5,
+    color: "#e2d3a2",
+  },
 };
 
 export default GameOverModal;

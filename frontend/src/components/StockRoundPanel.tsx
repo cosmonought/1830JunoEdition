@@ -78,6 +78,8 @@ import {
   CARD_SURFACE,
   CARD_SURFACE_MUTED,
 } from "../styles/palette";
+import { showsCurseBesideName } from "../utils/carcosaCurse";
+import CarcosaMark from "./CarcosaMark";
 import { BO_LOCKED_CARD_NOTE } from "../utils/gameVariants";
 
 export interface StockRoundPanelProps {
@@ -431,6 +433,8 @@ function CorporationRoster({
                        `CorporateLogo`'s text fallback would double the ticker when a file is missing -- only in the failure
                        case, and a doubled ticker is a better failure than a nameless card. */}
                       <span style={styles.rosterLiveryAcronym}>{company.ticker}</span>
+                      {/* Design note #1091: only once the train is gone -- while it is held, the chip's own sign says it. */}
+                      {showsCurseBesideName(company) && <CarcosaMark meaning="corporation" size={12} />}
                     </span>
                     {corporationFullName(company.ticker) && (
                       <span style={styles.rosterLiveryName}>
@@ -572,6 +576,8 @@ function CorporationRoster({
                         compact
                         outlook={outlook}
                         reprieved={company.pending_rust_trains}
+                        // Design note #1088: the Carcosa gift, so its chip shows the sign rather than a locomotive.
+                        ghosts={company.carcosan_trains}
                       />
                     ) : (
                       <span style={styles.assetEmpty}>none</span>

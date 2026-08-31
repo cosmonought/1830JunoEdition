@@ -153,7 +153,15 @@ describe("the panel reads the rule rather than re-deriving it", () => {
        BETTER THAN 'BUY FOR $600'... Reported: 'instead of'". The property is unchanged and is the reason this
        line exists at all: THE VISIBLE LABEL CARRIES A PRICE AND NOT THE OBJECT, which is precisely why the
        accessible name below has to spell out the quantity and the tier. */
-    expect(panel).toContain('atTrainLimit ? "Train Limit Reached" : `Pay $');
+    /* Design note #1104: THE LABEL IS A NAMED CONST NOW. #1101 gave it a third arm -- "and End Turn" when the
+       buy fills the train limit -- which will not fit on one line, and this assertion was anchored on the
+       inline ternary's exact shape. An anchor on a multi-token expression is hostage to the formatter: it
+       breaks on a rewrap that changes no behaviour, and would keep passing if an arm changed while the shape
+       held. THE PROPERTY IS UNCHANGED and is why this line exists: the visible label carries a PRICE and not
+       the object, which is why the accessible name below has to spell out the quantity and the tier. */
+    expect(panel).toContain("const payButtonLabel = atTrainLimit");
+    expect(panel).toContain('? "Train Limit Reached"');
+    expect(panel).toContain(": `Pay $");
     expect(panel).toMatch(/aria-label=\{\s*atTrainLimit/);
     expect(panel).toContain("from the Bank for $");
 

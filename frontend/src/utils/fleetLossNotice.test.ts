@@ -88,8 +88,12 @@ describe("the copy tells a president what happened and what it costs", () => {
   it("names the corporation and the count in the headline", () => {
     // A player may be running several corporations; a headline that says "your trains rusted" names none.
     expect(noticeHeadline(rust)).toContain("PRR");
-    expect(noticeHeadline(rust)).toContain("2 trains");
-    expect(noticeHeadline(limit)).toContain("1 train");
+    /* Design note #1100: numerals name the TIER, words count the trains -- ruled, "write out the number
+       of trains and reserve numerals for the train tiers", because every train in 1830 is named by a numeral
+       and a sentence that also counts in numerals puts two unrelated numbers side by side. */
+    expect(noticeHeadline(rust)).toContain("two trains");
+    // Design note #1100: the singular takes the same rule -- "one train", not "1 train".
+    expect(noticeHeadline(limit)).toContain("one train");
   });
 
   it("says what rusted and how many, and nothing else", () => {
@@ -104,7 +108,12 @@ describe("the copy tells a president what happened and what it costs", () => {
        app for a fact the player did not ask for.
        ASSERTED AS A CEILING TOO. "Drastically" is the instruction, and a case that only checks the new
        sentence is present would pass against a build that appended the old paragraph after it. */
-    expect(noticeBody(rust)).toBe("2 of your 2-trains have rusted.");
+    /* Design note #1100: numerals name the TIER, words count the trains -- ruled, "write out the number
+       of trains and reserve numerals for the train tiers", because every train in 1830 is named by a numeral
+       and a sentence that also counts in numerals puts two unrelated numbers side by side.
+       THE TIER KEEPS ITS NUMERAL, which is why this line is the clearest example of the rule: "Two of your
+       2-trains" has exactly one digit in it and it names the train. */
+    expect(noticeBody(rust)).toBe("Two of your 2-trains have rusted.");
     expect(noticeBody(rust).length).toBeLessThan(70);
   });
 
@@ -112,7 +121,7 @@ describe("the copy tells a president what happened and what it costs", () => {
     /* THE ONE DEVIATION FROM THE RULED STRING, and it is grammar rather than judgement: the template was
        written for the plural and "1 ... have rusted" is simply wrong. */
     const [one] = fleetLossNotices(loss({ rusted: ["4"], discarded: [] }), "6", 2);
-    expect(noticeBody(one)).toBe("1 of your 4-trains has rusted.");
+    expect(noticeBody(one)).toBe("One of your 4-trains has rusted.");
   });
 
   it("names the limit AND the cheapest-first rule in the limit body", () => {
@@ -160,7 +169,7 @@ describe("the copy tells a president what happened and what it costs", () => {
        WHAT IS ASSERTED NOW IS THE COLLAPSE: one body, one cause, no variant branch anywhere in the copy. A
        `gentleRust` field surviving on the notice would be the branch waiting to come back. */
     const [gentle] = fleetLossNotices(loss({ rusted: ["2"], discarded: [] }), "4", 3);
-    expect(noticeBody(gentle)).toBe("1 of your 2-trains have rusted.".replace("have", "has"));
+    expect(noticeBody(gentle)).toBe("One of your 2-trains have rusted.".replace("have", "has"));
     const NOTICE = readStripped("utils/fleetLossNotice.ts");
     expect(NOTICE).not.toContain("noticeGentleRustLine");
     expect(NOTICE).not.toContain("Gentle rust:");

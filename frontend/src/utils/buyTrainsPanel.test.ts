@@ -24,7 +24,7 @@
 // THE CUT IS `restingHeight` -- the bar with every collapsible body subtracted. "Can this be a sticky bar at
 // all" is properly a question about the resting form, and that number does not move when the fold moves.
 
-import { readSource, stripComments } from "./sourceScan";
+import { readSource, readStripped, stripComments } from "./sourceScan";
 
 import {
   restingHeight,
@@ -398,11 +398,10 @@ describe("the panel gets the bar's width to divide (design note #859)", () => {
        sized to its own content, sharing a line with the corporation card. #838's grid was dividing a
        fragment. `flexBasis: 100%` is how a wrapping flex container is told "this child gets a line". */
     expect(BAR).toContain("<div ref={stepPanelRef} style={styles.stepPanelRow}>");
-    const styles = (() => {
-      const fs = require("fs") as typeof import("fs");
-      const path = require("path") as typeof import("path");
-      return fs.readFileSync(path.join(__dirname, "..", "styles", "appStyles.ts"), "utf8");
-    })();
+    /* Design note #1097: `readStripped` rather than a local `readFileSync`. A hand-rolled reader puts the
+       assertion below outside `sourceScanSweep.js` entirely -- not merely unchecked but uncounted, which is
+       how four stale cases in `phaseEraToast` survived a clean sweep. Same file, same content, visible. */
+    const styles = readStripped("styles/appStyles.ts");
     expect(styles).toContain('stepPanelRow: { flexBasis: "100%", width: "100%", minWidth: 0 }');
   });
 

@@ -100,8 +100,11 @@ describe("the header renders two independent toggles", () => {
        in the bar so the two never both claim to be the toggle -- #891's shape, which this codebase produces
        more often than any other. */
     expect(POPOVER).toContain("aria-pressed={!enabled}");
-    // Inverted deliberately: the row LIT means the channel is OFF, matching the button that dims.
-    expect(POPOVER).toContain("...(enabled ? {} : styles.offRowActive)");
+    /* Inverted deliberately: the row LIT means the channel is OFF, matching the button that dims.
+       Design note #1094: the on-state is a named style now rather than an empty object, because the toggle
+       was ruled to show a green "On — click to turn off" state. THE INVERSION IS UNCHANGED -- `offRowActive`
+       is still the OFF appearance, and it is still the opposite of the bar button's dim. */
+    expect(POPOVER).toContain("...(enabled ? styles.offRowOn : styles.offRowActive)");
   });
 
   it("disappears rather than drawing dead buttons when no audio is wired", () => {

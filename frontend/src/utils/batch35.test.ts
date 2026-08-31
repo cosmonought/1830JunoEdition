@@ -219,12 +219,20 @@ describe("the Game Ledger is three collapsed panels", () => {
     expect(LEDGER).not.toContain("<section ");
   });
 
-  it("defaults to collapsed", () => {
-    /* RULED: "Set them to default to a collapsed state to save screen real estate."
-       ASSERTED AS THE ABSENCE OF `open`, which is what `<details>` means by collapsed -- there is no state to
-       initialise and therefore none to get wrong on a remount. A control that hard-coded `open` would satisfy
-       every other case in this describe. */
-    expect(LEDGER).not.toContain("<details open");
+  it("defaults to OPEN, which reverses this case", () => {
+    /* ==================================================================
+        DESIGN NOTE 1094: THE RULING CHANGED, AND SO DOES THIS ASSERTION
+       ==================================================================
+       IT READ `expect(LEDGER).not.toContain("<details open")`, on the original ruling: "set them to default
+       to a collapsed state to save screen real estate."
+       RULED SINCE, in the opposite direction: "default the three main panels in the Game Ledger to be fully
+       open on load." The report that produced the original was about being FORCED to scroll a long list, and
+       folding solved that by making the panels foldable -- defaulting them shut then charged three clicks to
+       everybody who opened the tab to read a number.
+       INVERTED RATHER THAN DELETED. What this case is really about is that the default is DELIBERATE and
+       expressed in the element, not in state; that claim outlives the direction it points, and a deleted case
+       would let the next accidental change go unnoticed. Everything else in this describe is untouched. */
+    expect(LEDGER).toContain("<details open");
     expect(LEDGER).not.toContain("open={");
   });
 

@@ -101,6 +101,7 @@ import {
   describeDividendRow,
   type DividendPayoutProjection,
 } from "../utils/dividendProjection";
+import CarcosaMark from "../components/CarcosaMark";
 import { PrivatePowerStar } from "../components/privatePowerStar";
 
 /* ------------------------------------------------------------------ */
@@ -763,6 +764,10 @@ export default function ContextualActionBar({
     reprievedTrains: readonly string[];
     /** Design note #1046: the Yellow Sign's gift, exempt from the limit until the round ends. */
     ghostTrains: readonly string[];
+    /** Design note #1089: the gold-trimmed train, which outlives `ghostTrains` by an OR set. */
+    carcosanTrains: readonly string[];
+    /** Design note #1089: the permanent curse, which outlives the train itself. */
+    isCarcosan: boolean;
   } | null;
   /** Design note #673: the tile lay currently being previewed, or `null` when
    *  none is or when it is free.
@@ -938,6 +943,9 @@ export default function ContextualActionBar({
     canAct: boolean;
     blockedReason: string | null;
     onBuyFromBank: (tier: string, quantity: number) => void;
+    /** Design note #1101: whether filling the train limit also ends the turn. Resolved by the shell from
+     *  `autoSkipExit` and the live step list; this bar only forwards it. */
+    endsTurnAtLimit: boolean;
     /** Design note #751c: opens the emergency modal, and whether the corporation is short enough to need it.
      *  Passed straight through -- the bar is a conduit, not a decider. */
     onEmergencyPurchase?: () => void;
@@ -2448,6 +2456,10 @@ export default function ContextualActionBar({
                       style={{ ...styles.orContextAcronym, color: corporationBarInk.ink }}
                     >
                       {activeCorporation.ticker}
+                      {/* Design note #1091: only once the train is gone -- while it is held, the chip's own sign says it. */}
+                      {activeCorporation.isCarcosan && activeCorporation.carcosanTrains.length === 0 && (
+                        <CarcosaMark meaning="corporation" size={12} />
+                      )}
                     </span>
                   </>
                 ) : (
@@ -2660,6 +2672,8 @@ export default function ContextualActionBar({
                     <TrainChips
                       trains={activeCorporation.trains}
                       reprieved={activeCorporation.reprievedTrains}
+                      // Design note #1088: already on the bar's corporation since #1046 -- it gates the limit.
+                      ghosts={activeCorporation.carcosanTrains}
                       phase={phase ?? null}
                       surface="dark"
                       // Design note #259: the rust countdown, matching the Round Detail table below the board. Without
@@ -3945,6 +3959,10 @@ export default function ContextualActionBar({
           canAct={trainPurchase.canAct}
           blockedReason={trainPurchase.blockedReason}
           onBuyFromBank={trainPurchase.onBuyFromBank}
+          /* Design note #1101: resolved by the shell, which owns the step list -- see the panel's prop.
+             A `{...}` comment is JSX CHILDREN syntax and is a parse error inside an attribute list; the
+             plain block form is what the neighbouring props already use. */
+          endsTurnAtLimit={trainPurchase.endsTurnAtLimit}
           onEmergencyPurchase={trainPurchase.onEmergencyPurchase}
           emergencyAvailable={trainPurchase.emergencyAvailable}
           onProposeTrade={trainPurchase.onProposeTrade}

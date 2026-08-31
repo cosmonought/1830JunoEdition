@@ -58,6 +58,22 @@ export interface TrainBadgeCommonProps {
 /* Train chips                                                        */
 /* ------------------------------------------------------------------ */
 
+/** The Yellow Sign, served from `public/` by absolute path.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 1088: NAMED HERE, AND ASSERTED AGAINST THE FILESYSTEM
+ *  ==================================================================
+ *
+ *  NOT IMPORTED, which is `audio.ts` #1009's rule for the same reason: a bundled asset gets a content hash in
+ *  its filename, and the path is the contract. `public/images/` rather than `public/audio/` -- the two Yellow
+ *  Sign videos live in `audio/` and that is a wart, not a precedent for putting a PNG there.
+ *
+ *  #1040'S LESSON APPLIES TO PICTURES TOO. A missing media file is the quietest failure in this codebase: an
+ *  `<img>` whose `src` 404s renders as nothing or as a broken-image glyph depending on the browser, and
+ *  neither throws. `batch59` asserts this exact name exists on disk, which is the only thing that turns a
+ *  typo into a red test rather than a chip that lost its icon in one game state nobody plays often. */
+export const YELLOW_SIGN_IMAGE = "/images/yellow-sign.png";
+
 export interface TrainChipsProps extends TrainBadgeCommonProps {
   /** `undefined`/`null` means UNKNOWN -- a contract predating the field -- and
    *  renders "?", never "none". See `PublicCompanyState.owned_trains`. `readonly`
@@ -76,6 +92,32 @@ export interface TrainChipsProps extends TrainBadgeCommonProps {
    *  call sites have no reprieve to report, and absent means "none marked" rather than "unknown", which is
    *  the safe direction -- a missing mark under-warns, an invented one pulses a train that is fine. */
   reprieved?: readonly string[] | null;
+  /** ==================================================================
+   *   DESIGN NOTE 1088: THE GHOSTS, FOR THE SAME REASON THE REPRIEVES TRAVEL
+   *  ==================================================================
+   *
+   * RULED: "Check the train's state for the Carcosa/Yellow Sign flag. If true, render the provided Yellow
+   * Sign image instead of the default train icon ... Make sure this applies everywhere train chips are
+   * displayed."
+   *
+   * Design note #1089 REPOINTED THIS AT `carcosan_trains`. It was `ghost_trains`, which is the TRAIN-LIMIT
+   * exemption and empties at the end of the Operating Round -- so the sign would have fallen off the chip one
+   * round after the gift while the train was still gold-trimmed, and the doom clock would have had nothing to
+   * point at. The prop keeps its name because what it means to this component is unchanged: "these models are
+   * the Carcosa train".
+   *
+   * `carcosan_trains` VERBATIM, exactly as `reprieved` is `pending_rust_trains` verbatim. The gift joins
+   * `owned_trains` like any other train (#1046: "the roster stays the one place a fleet lives, and the
+   * exception is a mark beside it"), so a chip cannot tell on its own that it is looking at one -- the mark
+   * has to arrive with it.
+   *
+   * A SECOND LIST RATHER THAN A WIDER `reprieved`, which is the distinction `CapacityPill` #1046 already
+   * draws one interface down: the two marks expire on different clocks, and a chip that is BOTH is possible
+   * in principle even if today's rules never produce it.
+   *
+   * OPTIONAL, and absent means "none marked" rather than "unknown" -- the safe direction, since a missing
+   * mark shows an ordinary train where a standard game has no ghosts at all. */
+  ghosts?: readonly string[] | null;
   /* Design note #375: the index is the position in `trains`, the same key the
      Route Planner rows and map overlays use -- two 3-trains are two different
      trains, get two rows and highlight independently (`RoutePlannerPanel #5`).
@@ -161,6 +203,7 @@ export function TrainChips({
   compact,
   outlook,
   reprieved = null,
+  ghosts = null,
   highlightedTrainIndex = null,
   onHighlightTrain,
   selectedTrainIndex = null,
@@ -231,6 +274,11 @@ export function TrainChips({
      pulsing chip and one still one; a `.includes` would pulse both, which is the same off-by-one
      `trimToTrainLimit` records for the trim. */
   const reprievedPool = [...(reprieved ?? [])];
+  /* Design note #1088: A MULTISET, CONSUMED AS IT MATCHES, for exactly #1004's reason one line up. A
+     corporation that already owned a 5-train and is then gifted one by Carcosa holds two identical models
+     and must show one sign and one locomotive; `.includes` would mark both, which is the off-by-one
+     `trimToTrainLimit` records and the reprieve pool above was written to avoid. */
+  const ghostPool = [...(ghosts ?? [])];
 
   return (
     <span style={styles.chipRow}>
@@ -242,12 +290,20 @@ export function TrainChips({
         const reprievedAt = reprievedPool.indexOf(model);
         const isFinalRun = reprievedAt >= 0;
         if (isFinalRun) reprievedPool.splice(reprievedAt, 1);
+        const ghostAt = ghostPool.indexOf(model);
+        const isGhost = ghostAt >= 0;
+        if (isGhost) ghostPool.splice(ghostAt, 1);
         const inDangerWindow = isFinalRun
           ? "doomed"
           : doomed !== null && tier === doomed && severity !== null
             ? severity
             : null;
-        const warning = rustTooltip(tier, phase, outlook, inDangerWindow);
+        /* Design note #1088: the ghost's tooltip REPLACES the rust one rather than joining it. A ghost is
+           never in a rust window (see the glyph note below), so there is nothing to lose -- and "Yellow Sign
+           ghost train" is the fact a player hovering an unfamiliar icon is actually asking about. */
+        const warning = isGhost
+          ? "Yellow Sign ghost train — gifted by Carcosa. Occupies no train-limit slot until this Operating Round ends."
+          : rustTooltip(tier, phase, outlook, inDangerWindow);
         /* Design note #375: highlighted, faded, or neither. The muted state
            matters as much as the primary one -- with three chips in a row,
            "this one" is only legible if the others step back. */
@@ -340,14 +396,55 @@ export function TrainChips({
                 arbitrary livery (#702's measurement: 1.00 to 1.14:1 against all eight cards). The body is
                 still opaque, the ring still tints, and the glyph now agrees with the number instead of
                 arguing with it. */}
-            <TrainGlyph
-              tier={tier ?? model}
-              color={String(
-                (inDangerWindow ? ink[inDangerWindow].color : undefined) ?? ink.chip.color,
-              )}
-              carriages={false}
-              height={compact ? 9 : 10}
-            />
+            {/* ==================================================================
+                 DESIGN NOTE 1088: THE SIGN TAKES THE LOCOMOTIVE'S PLACE, AND ITS BOX
+                ==================================================================
+                RULED: "render the provided Yellow Sign image instead of the default train icon ... Ensure
+                the image is constrained to the exact dimensions of the standard train icon so it does not
+                break the chip's layout."
+
+                THE HEIGHT IS THE GLYPH'S OWN, not a new number: `TrainGlyph` is authored at 12 and scaled,
+                and both branches read the same `compact ? 9 : 10`. `objectFit: contain` with `width: auto`
+                lets the sign keep its 456x547 proportion inside that height -- about 8px wide against the
+                locomotive's 11, which is narrower and cannot overflow. `flex: "none"` and `display: "block"`
+                are copied from `TrainGlyph`'s own root so the chip's flex row treats the two identically.
+
+                IT CANNOT TINT, AND THAT IS FINE HERE -- but it is worth saying why, because #1074 spent a
+                batch on exactly this trap: an image ignores CSS `color`, so a ghost chip in a rust window
+                would show a yellow sign inside a red chip. A ghost train cannot BE in one: Carcosa gifts a
+                train matching the CURRENT phase tier, and the rusting tier is always an older one. The chip
+                body, ring and number still tint around it, so the danger state is not lost even if that
+                combination ever became reachable.
+
+                `alt` RATHER THAN `aria-hidden`, which is the opposite of what `TrainGlyph` does. The
+                locomotive is decoration -- the model number beside it says everything -- but the sign is the
+                ONLY thing on the chip that says this train is a ghost. A screen reader that skipped it would
+                hear an ordinary 5-train. */}
+            {isGhost ? (
+              <img
+                src={YELLOW_SIGN_IMAGE}
+                alt="Carcosa ghost train"
+                aria-label="Yellow Sign"
+                height={compact ? 9 : 10}
+                style={{
+                  height: compact ? 9 : 10,
+                  width: "auto",
+                  maxHeight: "100%",
+                  objectFit: "contain",
+                  flex: "none",
+                  display: "block",
+                }}
+              />
+            ) : (
+              <TrainGlyph
+                tier={tier ?? model}
+                color={String(
+                  (inDangerWindow ? ink[inDangerWindow].color : undefined) ?? ink.chip.color,
+                )}
+                carriages={false}
+                height={compact ? 9 : 10}
+              />
+            )}
             {model}
           </span>
         );

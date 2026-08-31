@@ -333,7 +333,9 @@ export type GameplayExecuteMsg =
       YellowSignEvent: {
         game_id: number;
         protocol_id: number;
-        stage: "mark" | "carcosa";
+        /* Design note #1092: THREE STAGES ON THE WIRE. "fog" takes the gifted train back, an OR set after its
+         clock started -- the third and last thing the Yellow Sign does to a corporation. */
+      stage: "mark" | "carcosa" | "fog";
         /** Stage 1: the model taken. Stage 2: the model gifted. */
         model: string;
         /** Stage 1 only: the treasury award, already halved and floored. */

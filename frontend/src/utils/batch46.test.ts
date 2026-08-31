@@ -142,7 +142,15 @@ describe("the table measured against the payload it scans", () => {
       const fallback = BUCKET_FALLBACK[bucket];
       matched += audioFor(bucket).filter((file) => file !== fallback).length;
     }
-    expect(matched).toBe(139);
+    /* Design note #1087: 139 -> 195. Four new scenes (ledger, shovel, trestle, pickaxe) and four widened
+       patterns claimed 56 lines that had nothing but their bucket's fallback, plus five that moved off a
+       clip matching a metaphor rather than an event. The tripwire is re-based rather than loosened: it is
+       still an exact count, so a widened pattern still shows up here before it shows up in a playtest.
+       `batch58` holds the reasoning and pins every one of the five that moved. */
+    // Design note #1103: 195 -> 197, the two weather lines `blizzard.mp3` claims. `batch58` holds the
+    // reasoning and the dry run; this stays an exact count for the same reason it always was.
+    // Design note #1105: 197 -> 199, the two rain lines that were on a fallback. `batch58` holds the dry run.
+    expect(matched).toBe(199);
   });
 
   it("leaves no sound unreachable", () => {
@@ -161,8 +169,19 @@ describe("the table measured against the payload it scans", () => {
   });
 
   it("falls back per bucket when nothing matches", () => {
-    expect(cue("The books balanced beautifully, provided nobody actually looked at them.", "criticalMalus").audio)
+    /* ==================================================================
+        DESIGN NOTE 1087: THIS EXAMPLE STOPPED BEING AN EXAMPLE
+       ==================================================================
+       IT USED "The books balanced beautifully, provided nobody actually looked at them." as a line NOTHING
+       matches -- and #1087 gave the bookkeeping scene its own clip, so `the books` now claims it. The case
+       is about the FALLBACK, not about that sentence, so the sentence is swapped rather than the claim.
+       REPLACED WITH A LINE THAT MATCHES NO PATTERN AT ALL, chosen by asking the live table which
+       `criticalMalus` lines still fall through rather than by reading the sentence and guessing. */
+    expect(cue("Management blamed the weather, and the weather declined to comment.", "criticalMalus").audio)
       .toBe("sad-trombone.mp3");
+    // And the retired example is now claimed, which is the change that broke this case.
+    expect(cue("The books balanced beautifully, provided nobody actually looked at them.", "criticalMalus").audio)
+      .toBe("ledger.mp3");
     /* ==================================================================
         DESIGN NOTE 1081: THE UNCHANGED BUCKET'S DEFAULT IS SILENCE
        ==================================================================
@@ -371,7 +390,10 @@ describe("the log says which way the die went", () => {
        different fills, and the italic exists somewhere other than inside them. */
     expect(TICKER).toContain("logToneBonus");
     expect(TICKER).toContain("logToneMalus");
-    expect(TICKER).toContain("logFlavourText: { fontStyle: \"italic\" }");
+    /* Design note #1095: the flavour style gained `fontWeight: 700` -- ruled, for legibility at small sizes.
+       WHAT THIS CASE IS ABOUT IS UNCHANGED: the emphasis lives OUTSIDE the two tone styles, so a tint and an
+       italic remain two separable things. Asserted as the property rather than the whole declaration. */
+    expect(TICKER).toContain('logFlavourText: { fontStyle: "italic"');
     expect(TICKER.split('fontStyle: "italic"').length - 1).toBe(1);
   });
 

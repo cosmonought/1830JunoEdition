@@ -136,6 +136,9 @@ import StockMarketRenderer, {
   projectRiseMove,
   projectShareSaleMove,
   type MarketGridResponse,
+  /* Design note #1090: the fifth market movement, composed from the withhold step and the sale step so the
+     Blood Price inherits every edge case those two already handle. */
+  projectBloodPriceMove,
 } from "./components/StockMarketRenderer";
 import { describeSoldOutRise, soldOutRises } from "./utils/soldOutRise";
 // Design note #750: the instrument for the phantom $1500 -- a diff, not an annotation.
@@ -163,7 +166,11 @@ import ContextualSubPanel from "./components/ContextualSubPanel";
 import FinancialLedger from "./components/FinancialLedger";
 import RulesReference from "./components/RulesReference";
 // Design note #697: the receipt for an action you just took.
-import ActionToast, { DEPOT_TOAST_MS, type ToastAnchor } from "./components/ActionToast";
+import ActionToast, {
+  DEPOT_TOAST_MS,
+  PHASE_CHANGE_TOAST_MS,
+  type ToastAnchor,
+} from "./components/ActionToast";
 /* ==================================================================
     DESIGN NOTE 1049: THE PRIVATE PAYOUT LEFT THE TOAST LAYER ENTIRELY
    ==================================================================
@@ -368,9 +375,12 @@ import {
   markPayout,
   MARK_APPENDIX,
   resolveFlavourLine,
+  // Design note #1092: the doom clock, asked at the run rather than at the boundary.
+  fogIsDue,
   yellowSignStateFrom,
 } from "./utils/yellowSign";
 import YellowSignOverlay from "./components/YellowSignOverlay";
+import type { HauntingComposite } from "./components/YellowSignOverlay";
 // Design note #1018: the auto-skip acts on a definite refusal, never on an unsettled one.
 import { earnableRevenueVerdict, skipReasonFor } from "./utils/earnableRevenue";
 import {
@@ -473,8 +483,13 @@ import {
   openingStockRoundReset,
   grantBOPresidency,
   sandboxRouteBreakdown,
+  // Design note #1090: asked BEFORE the settle clears the seller's mark.
+  isCarcosanTransfer,
   SANDBOX_NOMINAL_TOKEN_COST,
 } from "./utils/sandboxSession";
+/* Design note #1091: the curse's vocabulary, shared by the log, the three name surfaces and the
+   scoreboard so none of them can word it differently. */
+import { CARCOSA_STAMP_STEP, carcosaEpitaph, cursedCompanies } from "./utils/carcosaCurse";
 import AppFooter from "./components/AppFooter";
 import AuctionPromptModal from "./components/AuctionPromptModal";
 import HomeStationPrompt from "./components/HomeStationPrompt";
@@ -1183,6 +1198,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       reprievedTrains: company.pending_rust_trains ?? [],
       // Design note #1046: exempt from the limit until the Operating Round ends.
       ghostTrains: company.ghost_trains ?? [],
+      /* Design note #1089: the two Carcosa facts, which expire on two clocks neither of which is the one
+         above. The train keeps its gold trim for an OR set past the exemption; the corporation keeps the
+         curse for the rest of the game unless it sells the train. */
+      carcosanTrains: company.carcosan_trains ?? [],
+      isCarcosan: company.is_carcosan === true,
     };
   }, [gameState, actingProtocolId]);
 
@@ -1675,8 +1695,23 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      defaults OFF, which is the autoplay rule stated as an initial value rather than enforced by a try/catch. */
   const [sfxEnabled, setSfxEnabled] = useState(true);
   /** Design note #1043: the clip currently haunting the board, or `null`. Held in the shell because the
-   *  event that raises it is a dispatch, and cleared by its own timer rather than by the next render. */
-  const [hauntingSrc, setHauntingSrc] = useState<string | null>(null);
+   *  event that raises it is a dispatch, and cleared by its own timer rather than by the next render.
+   *
+   *  ==================================================================
+   *   DESIGN NOTE 1093: ONE OBJECT, BECAUSE THE THREE FACTS ARRIVE TOGETHER
+   *  ==================================================================
+   *
+   * WAS `hauntingSrc: string | null`, which was the whole of it while every clip was composited the same way.
+   * The fog clip needs a different treatment and a different window (`variantSfx.ts` #1093), and the obvious
+   * change -- a second and third `useState` beside this one -- is #891's shape exactly: three pieces of state
+   * that must agree, set from one place and read from another, with nothing making them agree.
+   * SO THEY ARE ONE VALUE. A clip, how to composite it, and how long it stays are a single fact about a
+   * single event, and they are set and cleared together. */
+  const [haunting, setHaunting] = useState<{
+    src: string;
+    composite: HauntingComposite;
+    ms: number;
+  } | null>(null);
   /* Design note #1040: read inside a dispatch handler long after the commit that set it, so refs rather than
      the state -- the same reason `useSoundEffect` holds its mute in one (#1009). */
   const sfxEnabledRef = useRef(sfxEnabled);
@@ -2883,6 +2918,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      here -- the two seconds belong to the thing displaying them, and a parent that also owned a timeout would
      be a second answer to "how long". */
   const [revenueFlash, setRevenueFlash] = useState<RevenueFlashSignal | null>(null);
+  /** Design note #1095: the flash's way home. Stable, because it is an effect dependency in the component
+   *  that calls it and an inline arrow would retrigger that effect on every render of this shell. */
+  const clearRevenueFlash = useCallback(() => setRevenueFlash(null), []);
   /* ==================================================================
       DESIGN NOTE 934: #492'S CACHE IS GONE, AND SO IS THE RACE INSIDE IT
      ==================================================================
@@ -3776,31 +3814,33 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      on a client joining mid-game the ref starts empty and the era is simply whatever it is; toasting there
      would announce "Green Tiles are now available" to somebody who has been laying green tiles for an hour.
      `replayingHistory` is handled inside `showDividendToast` already (#825). */
-  const eraNow = currentPhase ? tierEra(currentPhase.tier) : null;
-  const lastEraRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (eraNow === null) return;
-    const previous = lastEraRef.current;
-    lastEraRef.current = eraNow;
-    if (previous === null || previous === eraNow) return;
-    /* ==================================================================
-        DESIGN NOTE 966: THE ERA TOAST SAYS ONE THING
-       ==================================================================
-       REPORTED: "The current era change toast has too much text. Change the copy to simply read:
-       'Corporations can now upgrade yellow tiles to green.'"
-       AND #868'S REASON FOR THE TOAST SURVIVES THE TRIM -- "the Era change expands their repertoires" -- it
-       is the second line that was doing nothing the first did not. The headline named the era and the detail
-       explained what an era is, to a table that has been laying tiles all game.
-       DERIVED FROM THE TRANSITION, not written per era, so the Brown and Grey crossings read the same way
-       without a table of four sentences. `previous` is non-null under the guard above (#929). */
-    showDividendToast(
-      `Corporations can now upgrade ${previous.toLowerCase()} tiles to ${eraNow.toLowerCase()}.`,
-      null,
-      /* Design note #929: the two eras the graphic draws. `previous` is non-null here by the guard above, so
-         the arrow always has both ends -- a transition with one hex would be a statement about nothing. */
-      { from: previous, to: eraNow },
-    );
-  }, [eraNow, showDividendToast]);
+  /* ==================================================================
+      DESIGN NOTE 1094: THIS EFFECT IS GONE, AND ITS GUARD COULD NEVER HAVE WORKED
+     ==================================================================
+     IT RAISED THE ERA TOAST FROM A `useEffect` watching the derived phase, holding the previous era in a ref
+     -- and its own note said the load case was handled, because "the ref starts empty and the era is simply
+     whatever it is". That is true of the FIRST observation and false of every one after it during a rebuild.
+     A refresh replays the whole action log, the phase crosses 2->3->5 as it goes, React commits between the
+     awaited dispatches, and the effect sees each crossing as a live change. The player who reloaded gets told
+     green tiles are available, then brown, for a game that has been brown for an hour. Reported exactly that
+     way, and an undo does the same thing for the same reason.
+
+     `showDividendToast` ALREADY GUARDS ON `replayingHistory` AND THE GUARD IS BLIND HERE. That flag is set
+     and cleared SYNCHRONOUSLY around each dispatch (#825's `finally`); a `useEffect` runs after React
+     commits, which is after the `finally`. So the flag is false every time this effect reads it -- not
+     sometimes, always. It was the only ephemeral raiser called from an effect; the other four are called
+     from inside dispatches, where the flag is exactly what it claims to be.
+
+     SO THE TRANSITION IS DERIVED IN THE DISPATCH, from `before` and `after`, which is #1057's shape for
+     every derived line in this shell: the reducer settles, the shell narrates the diff. #868's reasoning is
+     untouched -- it still fires once when the threshold is crossed, it still goes to every player, and it is
+     still derived rather than dispatched, because a state comparison is not a message. What changes is only
+     WHERE the comparison happens, and therefore whether the replay guard can see it. See the era block beside
+     the round transitions below.
+
+     A SECOND FLAG WOULD HAVE BEEN THE WRONG FIX. Publishing "is a rebuild in flight" as React state so this
+     effect could read it means two answers to one question kept in step by hand, which is #891, and it would
+     still be racing the commit it was added to describe. */
 
   const [cashDeltas, setCashDeltas] = useState<CashDelta[]>([]);
   const noteCashChanges = useCallback(
@@ -5152,6 +5192,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
            reaching into wallets, so one number is charged and logged. */
         const marketResult = applySandboxMarketAction(sandboxMarketRef.current, msg, {
           projectSale: (from, blocks) => projectShareSaleMove(from, blocks),
+          /* Design note #1090: the Blood Price's geometry and its legality, injected as a pair for the same
+             reason the sale's are -- `utils/` may not import `components/` (#273), and the chart must not
+             move for a train sale the mark does not cover (#748a/#774, twice learned). `before` is the state
+             the trade was proposed against, which still carries the seller's flag; the reducer clears it. */
+          projectBloodPrice: (from) => projectBloodPriceMove(from),
+          isCarcosanSale: (sellerId, modelType) =>
+            before ? isCarcosanTransfer(before, sellerId, modelType) : false,
           /* Design note #291: the dividend decision moves the marker too.
              Design note #908: BY AS MANY CELLS AS THE PAYOUT EARNED. The step count is computed from the
              corporation's own revenue and its CURRENT price, read off `before` -- the board the payout was
@@ -5213,7 +5260,31 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
               ? (["rose", "on the dividend payout"] as const)
               : reason === "withhold"
                 ? (["fell", "on the withheld dividend"] as const)
-                : (["fell", "on the share sale"] as const);
+                : reason === "bloodPrice"
+                  ? (["fell", "as the Blood Price"] as const)
+                  : (["fell", "on the share sale"] as const);
+          /* ==================================================================
+              DESIGN NOTE 1090: THE TRANSFER'S OWN SENTENCE, STAMPED YELLOW SIGN
+             ==================================================================
+             RULED: "The gold-trimmed train was transferred. A Blood Price was paid: [Selling Corp]'s stock
+             dropped from $X to $Y."
+             ITS OWN LINE, NOT A CLAUSE ON THE SALE, which is the opposite of #1054's decision for the
+             dividend and right for the opposite reason. A dividend's price move is a CONSEQUENCE OF THE
+             DECLARATION and belongs in its sentence; this is a second event with its own cause, its own
+             flavour and its own round stamp -- the fog collecting, not the trade completing. The ordinary
+             trade line still prints beside it, saying who bought what for how much.
+             THE FIGURES ARE THE ATOM'S, not a projection. #775 deleted a clause that predicted a move; these
+             are `from` and `to` off the token that actually travelled. */
+          if (reason === "bloodPrice") {
+            logInfo(
+              `The gold-trimmed train was transferred. A Blood Price was paid: ${ticker}'s stock dropped from $${from} to $${to}.`,
+              "",
+              roundStampFor({
+                ...(before as GameStateResponse),
+                operating_sub_phase: CARCOSA_STAMP_STEP as never,
+              }),
+            );
+          }
           /* ==================================================================
               DESIGN NOTE 1054: A DIVIDEND'S PRICE MOVE IS PART OF THE DIVIDEND'S SENTENCE
              ==================================================================
@@ -5494,6 +5565,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                    already turned. */
                 phaseTier: derivePhase(before)?.tier ?? "2",
                 owned: ran?.owned_trains,
+                /* Design note #1092: the debt, asked of the board rather than of the line. `before` is the
+                   state this run was dispatched against, so the clock is read where every other fact about
+                   this turn is read. */
+                fogDue: fogIsDue(ran, before?.macro_round_number ?? 0),
               });
               /* THE SENTENCE IS REBUILT ONLY WHEN THE EGG CHANGED THE CLAUSE, so an ordinary turn goes
                  through exactly the path it always did and the opening/tense rules (#944, #950) are not
@@ -5571,6 +5646,28 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                     },
                   });
                 }
+              } else if (resolved.stage === "fog") {
+                /* ==================================================================
+                    DESIGN NOTE 1092: THE THIRD STAGE MOVES THE BOARD LIKE THE OTHER TWO
+                   ==================================================================
+                   THE SENTENCE IS ALREADY WRITTEN by the clause above; this is the half that takes the train.
+                   Dispatched rather than mutated, for #1046's reason verbatim: "board state in this app is
+                   what the reducer writes while replaying", and a train removed locally would come back on
+                   the next rebuild.
+                   THE MODEL IS NAMED ON THE MESSAGE, like the Mark's is (#902): by the time an old log
+                   replays to here the fleet has moved on, and re-deriving "the marked train" against a later
+                   roster could take a different one than the game took. */
+                const taken = (ran?.carcosan_trains ?? [])[0] ?? null;
+                if (taken) {
+                  void runGameplayAction("YellowSignEvent", {
+                    YellowSignEvent: {
+                      game_id: gameId,
+                      protocol_id: companyId,
+                      stage: "fog",
+                      model: taken,
+                    },
+                  });
+                }
               } else if (resolved.stage === "carcosa") {
                 const gifted = escalationTier(derivePhase(before)?.tier ?? "2");
                 if (gifted) {
@@ -5585,30 +5682,76 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                   });
                 }
               }
+              /* ==================================================================
+                  DESIGN NOTE 1094: THE EPHEMERAL HALF DOES NOT REPLAY
+                 ==================================================================
+                 REPORTED, as critical: "On page refresh, or when using Undo to return to the Dividends
+                 subphase, the app erroneously replays the last visual animation (Unpredictable Revenue
+                 flashes) or toast notification."
+
+                 AND THIS BLOCK IS EXACTLY HALF RIGHT, WHICH IS WHY IT SURVIVED THIS LONG. Everything above
+                 this line REBUILDS something -- the flavour clause, the Activity Log entry, the Yellow Sign
+                 dispatch -- and every one of those MUST run on a replay, because a rebuilt client with no
+                 Activity Log is a client that has lost the game's history. Everything below it HAPPENS: a
+                 sound, a video, a flash. Those are events, and an event that already happened does not
+                 happen again because somebody pressed F5.
+
+                 THE FLAG WAS ALREADY THERE AND THIS BLOCK NEVER ASKED IT. `replayingHistory` is set around
+                 every dispatch the drain makes (#825) and correctly true for both reported paths -- a refresh
+                 replays the whole log, so `pending` is not 1; an undo sets `rewound`. Four other ephemeral
+                 raisers ask it. This one was written as one block because the sentence and its sound were
+                 decided together (#1040), and the guard belongs to only half of it.
+
+                 GATED ON ONE FLAG AT ONE LINE rather than on each of the three, which is #748a's rule: a call
+                 site that has to remember is a call site that will forget, and the fog video added a fourth
+                 ephemeral effect here one batch ago without anybody noticing the first three were unguarded.
+
+                 WHAT IS DELIBERATELY NOT GUARDED is the `YellowSignEvent` dispatch above. It moves the board,
+                 the reducer refuses a duplicate on its own (#1092), and skipping it on a replay would rebuild
+                 a game in which the fog never took the train. */
+              const ephemeral = !replayingHistory;
               /* Design note #1081: `null` is the unchanged bucket's default -- "nothing happened" has nothing
                  to sound like. Guarded HERE rather than inside `playVariantCue`, because that function's
                  `enabled` argument means "the player muted this" and silence-by-design is a different fact:
                  folding them together would make a muted cue and an intentionally silent one indistinguish-
                  able at the one place either could be debugged from. */
-              if (cue.audio !== null) {
+              if (ephemeral && cue.audio !== null) {
                 playVariantCue(cue.audio, sfxEnabledRef.current && sfxRevenueRef.current);
               }
-              if (cue.video) {
+              if (ephemeral && cue.video) {
                 if (hauntingTimerRef.current !== null) {
                   window.clearTimeout(hauntingTimerRef.current);
                 }
-                setHauntingSrc(`/audio/${cue.video}`);
+                setHaunting({
+                  src: `/audio/${cue.video}`,
+                  /* Design note #1093: `?? "screen"` is unreachable -- every branch that sets `video` sets
+                     this too -- and it is here because the type is nullable for the cues that have no video
+                     at all, not because a video without a composite is a state this shell can handle. */
+                  composite: cue.videoComposite ?? "screen",
+                  ms: cue.videoMs,
+                });
                 /* Design note #1045: the video's own audio is outside `playVariantCue`'s ducking, so the bed
                    is held down for the clip's whole run and released with it. Without this the radio plays
                    at full volume under a ten-second haunting. */
                 /* Design note #1073: THE DEEP DUCK, ASKED FOR BY NAME. This is the one clip the shallow
                    default is wrong for -- ten seconds with its own dialogue, which #1045 added ducking for in
                    the first place. Every short cue takes the default and barely touches the bed. */
-                const releaseHaunting = duckRadio(DUCK_FOR_VIDEO);
+                /* ==================================================================
+                    DESIGN NOTE 1093: AND THE SILENT CLIP TAKES NO DUCK AT ALL
+                   ==================================================================
+                   THE DUCK EXISTS FOR A SPECIFIC THING: audio inside the `<video>` element, which never
+                   passes through `playVariantCue` and so is never ducked or concurrency-limited by it. The
+                   fog clip has no audio stream -- its sound is the MP3 dispatched two lines above, which
+                   ducks itself for its own 2.6 seconds. Holding the bed down at 20% for six more seconds
+                   would silence the music to protect a silent film.
+                   ASKED OF `videoHasOwnAudio`, not of the clip's name or its duration. */
+                const releaseHaunting = cue.videoHasOwnAudio
+                  ? duckRadio(DUCK_FOR_VIDEO)
+                  : null;
                 hauntingTimerRef.current = window.setTimeout(() => {
-                  setHauntingSrc(null);
+                  setHaunting(null);
                   hauntingTimerRef.current = null;
-                  releaseHaunting();
+                  releaseHaunting?.();
                 }, cue.videoMs);
               }
               /* #938'S PREDICATE, not `percent !== 100`: a 90% roll on a $50 turn pays $45, which rounds back
@@ -5639,7 +5782,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                  know the difference between roll3/roll4 and a 10% malus that rounded back up: for them the
                  end result is +0%." The figure describes the player's outcome, which is what every other
                  figure on this overlay describes. */
-              if (!cue.suppressStandardVisuals) {
+              if (ephemeral && !cue.suppressStandardVisuals) {
                 setRevenueFlash({
                   delta: revenueOutcome(roll) === "normal" ? 0 : revenueDeltaPercent(roll),
                   token: nextRevenueFlashToken(),
@@ -6241,6 +6384,50 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           ...log,
         ]);
         }
+          /* ==================================================================
+              DESIGN NOTE 1094: THE ERA CROSSING, WHERE THE GUARD CAN SEE IT
+             ==================================================================
+             #868'S TOAST, MOVED HERE FROM THE RENDER EFFECT -- see the note where that effect used to be for
+             why it could not be fixed in place. The rule is unchanged: announce the crossing once, to
+             everybody, derived from state rather than from a message on the wire.
+
+             GUARDED ON `replayingHistory`, NOT ON `options?.isRemoteReplay`, and the difference is the whole
+             point of putting it here. The round-transition block below suppresses itself on every remote
+             client, because that line is a receipt for a transition the local client drove. This one is the
+             opposite: #868 ruled it goes "to every player when the threshold is crossed", and a live action
+             arriving from another player's browser is a crossing that genuinely just happened. `isRemoteReplay`
+             cannot tell those apart -- it is true for both -- and `replayingHistory` is precisely the
+             distinction, since the drain sets it from `isOrdinaryPlay` (#825).
+
+             READ OFF THE PHASE, NOT OFF A STORED PREVIOUS. There is no ref to go stale and nothing to
+             re-baseline after a rebuild: two states, one comparison, and a rebuild simply never asks. */
+          if (before !== null && !replayingHistory) {
+            const eraBefore = derivePhase(before)?.tier;
+            const eraAfter = derivePhase(after)?.tier;
+            const from = eraBefore ? tierEra(eraBefore) : null;
+            const to = eraAfter ? tierEra(eraAfter) : null;
+            if (from !== null && to !== null && from !== to) {
+              /* ==================================================================
+                  DESIGN NOTE 966: THE ERA TOAST SAYS ONE THING
+                 ==================================================================
+                 REPORTED: "The current era change toast has too much text. Change the copy to simply read:
+                 'Corporations can now upgrade yellow tiles to green.'"
+                 AND #868'S REASON FOR THE TOAST SURVIVES THE TRIM -- "the Era change expands their
+                 repertoires" -- it is the second line that was doing nothing the first did not.
+                 DERIVED FROM THE TRANSITION, not written per era, so the Brown crossing reads the same way
+                 without a table of sentences. */
+              showDividendToast(
+                `Corporations can now upgrade ${from.toLowerCase()} tiles to ${to.toLowerCase()}.`,
+                null,
+                /* Design note #929: the two eras the graphic draws -- a transition with one hex would be a
+                   statement about nothing. */
+                { from, to },
+                /* Design note #1094: and its own window, 30% shorter than the standard one. */
+                PHASE_CHANGE_TOAST_MS,
+              );
+            }
+          }
+
           if (
             before !== null &&
             before.current_round_type !== after.current_round_type &&
@@ -6260,6 +6447,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                 announcing,
               );
             } else if (after.current_round_type === "StockRound") {
+              /* ==================================================================
+                  DESIGN NOTE 1092: #1089's BOUNDARY RECEIPT IS GONE
+                 ==================================================================
+                 IT PRINTED "The gold-trimmed train disappeared back into the fog." HERE, at the Stock Round
+                 transition, derived from the diff. RULED SINCE that the fog is "the third step of the Yellow
+                 Sign revenue sequence" -- a clause on a RUN, with its own cue -- and there is no run at a
+                 round boundary. The line, the removal and the sound now all happen together at
+                 `resolved.stage === "fog"`, where the other two stages already live.
+                 DELETED RATHER THAN LEFT: two sentences for one event is the flood #718 removed, and this one
+                 would have printed a round before the clause that says the same thing. */
               /* Name the Priority Deal on BOTH transitions - it was announced a round before it mattered and withheld when it decided who acts first.
                  See docs/ai_architecture/state_machine.md - App.tsx #659 */
               logInfo(
@@ -8514,6 +8711,44 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     logInfo,
   ]);
 
+  /* ==================================================================
+      DESIGN NOTE 1094: THE BAR STOPS FLICKERING THROUGH SKIPPED STEPS
+     ==================================================================
+     REPORTED: "The Action Bar is currently flashing through skipped subphases quickly enough to be
+     distracting but too fast to read. Batch these state updates so auto-skipped subphases resolve
+     instantaneously without rendering intermediate UI states."
+
+     WHY IT FLICKERS, WHICH DECIDES WHAT THE FIX CAN BE. The effect above dispatches ONE advance and then
+     waits to be re-run, because the next step's verdict is not knowable until the board has moved: the
+     reason is `autoSkipReason`, a `useMemo` over render state that reads `noEarnableRevenue` and
+     `stationPlacementBlock`, both themselves derived at render. Each advance is an awaited dispatch, so each
+     lands in its own commit, and the bar paints every step on the way past. A trainless corporation walks
+     Routes, Dividends and Tokens in three frames.
+
+     SO THIS CANNOT BE FIXED BY BATCHING THE DISPATCHES. Doing that honestly means making the verdict a pure
+     function of `GameStateResponse` so the whole run could be computed before any of it is applied -- a real
+     refactor of three memos and their inputs, and much wider than this report. What is fixed instead is what
+     the report actually describes: the bar no longer PAINTS the steps it is walking through.
+
+     HELD AT THE STEP THE RUN STARTED FROM, then released onto the step it settles on. Two states instead of
+     five, which is the difference between a transition and a flicker.
+
+     THE CONDITION IS THE EFFECT'S OWN, RE-ASKED -- reason present, my turn, and this key not already spent.
+     That last clause is the one that matters and it is why this is not a stored latch: `autoSkippedRef`
+     holding the key means the effect will NOT dispatch, and a freeze that did not ask would hold the bar
+     frozen for the rest of the turn. Derived from the same three facts the dispatch is, it cannot outlive it.
+
+     THE REF IS WRITTEN DURING RENDER, deliberately and idempotently: for a given render it stores the value
+     that render already computed, so a double invocation under StrictMode writes the same thing twice. */
+  const autoSkipPending =
+    autoSkipReason !== null &&
+    isMyTurn &&
+    !autoSkippedRef.current.has(turnGuardKey(turnIdentity, actingProtocolId, orSubPhase));
+  const settledSubPhaseRef = useRef(orSubPhase);
+  if (!autoSkipPending) settledSubPhaseRef.current = orSubPhase;
+  /** The step the Action Bar should draw: the live one, or the last settled one while a skip run resolves. */
+  const displayedSubPhase = autoSkipPending ? settledSubPhaseRef.current : orSubPhase;
+
   // End Turn dispatches the same PassTurn the Stock Round uses. #44: the first-OR market lesson interrupts, guarded three ways; #412 gates only the NAVIGATION on tutorialMode.
   // See docs/ai_architecture/state_machine.md - App.tsx #44
   const handleEndOperatingTurn = useCallback(() => {
@@ -9991,6 +10226,26 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
            so a dismissed modal renders nothing at all rather than a hidden layer over the board. */
         reason={gameOverDismissed ? null : gameEndReason}
         standings={finalStandings}
+        /* ==================================================================
+            DESIGN NOTE 1091: THE EPITAPHS, BUILT WHERE THE ROSTER IS
+           ==================================================================
+           THE MODAL HAS PLAYERS AND THE CURSE IS ON CORPORATIONS, so somebody has to join the two -- and the
+           shell is the only place holding both `gameState` and the seat labels. Passed as finished sentences
+           rather than as raw flags for the same reason `roomContext` is a node: the modal renders what it is
+           given and does not learn what a president is.
+           BOTH STANDINGS COUNT, holding and haunted alike. `cursedCompanies` says why: the fog took an
+           interest in this president whether or not the train survived to the final bell -- which is exactly
+           the edge case the corporation-level flag was added for. */
+        carcosa={cursedCompanies(gameState)
+          .map((company) => {
+            const president = company.president ?? null;
+            const epitaph = carcosaEpitaph(
+              company.ticker,
+              president ? (sandboxPlayerLabel(president) ?? truncateAddress(president)) : null,
+            );
+            return epitaph && president ? { presidentAddress: president, epitaph } : null;
+          })
+          .filter((entry): entry is { presidentAddress: string; epitaph: string } => entry !== null)}
         viewerAddress={viewerAddress}
         totalAnte={PLACEHOLDER_TOTAL_ANTE}
         bankruptLabel={bankruptLabel}
@@ -10204,7 +10459,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         // on another round's playing surface.
         activeTab={activeMainTab}
         onSelectTab={setActiveMainTab}
-        orSubPhase={orSubPhase}
+        /* Design note #1094: the DISPLAYED step, which is the live one except while a run of automatic skips
+           is resolving -- see `displayedSubPhase`. Everything else in this shell still reads `orSubPhase`;
+           this is a rendering decision and not a second cursor. */
+        orSubPhase={displayedSubPhase}
         // Controls go dead off-turn so a player is not invited to click what the dispatch gate will refuse.
         // See docs/ai_architecture/session_keys_wallet.md - App.tsx #536
         sessionReady={controlsEnabled && isMyTurn}
@@ -10405,6 +10663,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                   ? "One offer at a time — answer or rescind the outstanding one first."
                   : null,
                 onBuyFromBank: handleBuyTrainsFromBank,
+                /* ==================================================================
+                    DESIGN NOTE 1101: THE SAME AUTHORITY THE AUTO-SKIP ASKS
+                   ==================================================================
+                   RULED: the Pay button should say "and End Turn" when the buy fills the train limit, "so
+                   they know why they finished."
+                   WHETHER IT DOES is #876's question and belongs to the step list, not to the panel:
+                   `autoSkipExit` answers "end-turn" only when the step being skipped is the LAST one, and
+                   `stepsFor` varies -- it drops `BuyPrivate` once the last private is bought. Asked here,
+                   where `gameState` is, so the button and the auto-skip cannot disagree about whether the
+                   turn is over. */
+                endsTurnAtLimit: autoSkipExit("Hardware", stepsFor(gameState)) === "end-turn",
                 /* Design note #751c: the button that replaces #3's unskippable modal. It is
                    offered exactly when a plan exists, which is the same condition the modal
                    itself used -- so nothing changed about WHEN the emergency applies, only about
@@ -11095,7 +11364,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       {/* Design note #940: dead centre, `pointer-events: none`, two seconds. Rendered beside the toast and
           deliberately NOT through it -- see the component's own note for why sharing that machinery would
           have contradicted "floating text ONLY". */}
-      <RevenueModifierFlash signal={revenueFlash} />
+      {/* Design note #1095: CLEARED WHEN IT FINISHES, which is the half #1094 did not cover. The guard there
+          stops a rebuild re-FIRING this signal; this stops a stale one being re-CONSUMED by a fresh mount --
+          the flash was the only ephemeral signal in this shell with no way home, so the last one of the game
+          sat here for the rest of the session waiting for something to remount. */}
+      <RevenueModifierFlash signal={revenueFlash} onDone={clearRevenueFlash} />
       <ActionToast
         message={actionToast?.text ?? null}
         // Design note #738: the treasury transition, when there is one.
@@ -11241,7 +11514,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       />
       {/* Design note #1043: the ten-second haunting. Inert to the pointer and screen-blended, so the player
           keeps their turn and the board shows through -- both ruled, both in the component. */}
-      <YellowSignOverlay src={hauntingSrc} sfxEnabled={sfxEnabled} />
+      <YellowSignOverlay
+        src={haunting?.src ?? null}
+        composite={haunting?.composite ?? "screen"}
+        ms={haunting?.ms ?? 0}
+        sfxEnabled={sfxEnabled}
+      />
       {/* Design note #201: the station token's confirm ring -- the same
           component the tile selector renders through (design note #200), so
           the red X and green check are identical by construction rather

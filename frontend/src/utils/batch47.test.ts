@@ -418,6 +418,11 @@ describe("the haunting owns the moment", () => {
     /* Design note #1073: the call names its DEPTH now -- short cues barely touch the bed and this ten-second
        clip still needs the deep duck. What this case is for is that the video ducks at all. */
     expect(APP).toContain("duckRadio(DUCK_FOR_VIDEO)");
-    expect(APP).toContain("releaseHaunting();");
+    /* Design note #1093: `releaseHaunting?.()`, WITH THE OPTIONAL CALL. It read `releaseHaunting();` and the
+       sweep caught it the moment the third clip arrived. THE DUCK IS NOW CONDITIONAL -- `carcosan-train.mp4`
+       has no audio stream, and holding the bed down for six seconds to protect a silent film would silence
+       the music for nothing -- so the release is `null` on exactly the runs that never ducked.
+       WHAT THIS CASE IS STILL FOR IS UNCHANGED: a clip with its own audio ducks, and gives the bed back. */
+    expect(APP).toContain("releaseHaunting?.();");
   });
 });

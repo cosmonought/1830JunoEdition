@@ -169,6 +169,27 @@ export interface RevenueFlashSignal {
 
 export interface RevenueModifierFlashProps {
   signal: RevenueFlashSignal | null;
+  /** ==================================================================
+   *   DESIGN NOTE 1095: TELL THE CALLER WHEN IT IS SAFE TO FORGET
+   *  ==================================================================
+   *
+   * REPORTED: "the app erroneously replays the last visual animation ... ensure the React state cleanup
+   * applies globally across all subphase mounts."
+   *
+   * `revenueFlash` WAS THE ONE EPHEMERAL SIGNAL IN THE SHELL THAT WAS NEVER CLEARED. Every other one has a
+   * way home -- the toast has `onDismiss`, the money machine `onMoneyMachineDone`, the private payout
+   * `onAcknowledge`, the haunting its own timer -- and this one was set and left set for the rest of the
+   * session. So the LAST flash of the game sat in `App` state permanently, and anything that remounted this
+   * component found a non-null `signal` waiting and played it again. That is a different mechanism from the
+   * replay guard #1094 added: the guard stops a REBUILD from re-firing the signal, and this stops a stale
+   * signal from being re-consumed by a fresh mount. Both had to be true, which is why fixing one left a
+   * report open.
+   *
+   * THE COMPONENT OWNS THE TIMING, so the component says when it is done -- fired at the same moment it
+   * clears its own `shown`, not on a second timer in the caller that would have to agree with these two
+   * (#891). A caller that clears earlier would truncate the fade; one that clears later leaves the window
+   * this note exists to close. */
+  onDone?: () => void;
 }
 
 /** Green up, red down. The two colours are the board's own, not new ones -- a bonus reads like a rising share
@@ -311,7 +332,10 @@ const MALUS_EDGE = "rgba(248, 113, 113, 0.45)";
 const BACKDROP_INK = "rgba(255, 250, 240, 0.7)";
 const BACKDROP_FADE = "rgba(255, 250, 240, 0)";
 
-export function RevenueModifierFlash({ signal }: RevenueModifierFlashProps): JSX.Element | null {
+export function RevenueModifierFlash({
+  signal,
+  onDone,
+}: RevenueModifierFlashProps): JSX.Element | null {
   const [visible, setVisible] = useState(false);
   const [shown, setShown] = useState<RevenueFlashSignal | null>(null);
 
@@ -339,17 +363,20 @@ export function RevenueModifierFlash({ signal }: RevenueModifierFlashProps): JSX
        CLEARED AFTER THE FADE, NOT AT THE WINDOW. `setVisible(false)` starts a `REVENUE_FLASH_FADE_MS`
        opacity transition, and unmounting at `REVENUE_FLASH_MS` would cut it off -- the overlay would blink
        out rather than fade, which is the one visible way this fix could go wrong. */
-    const clear = window.setTimeout(
-      () => setShown(null),
-      REVENUE_FLASH_MS + REVENUE_FLASH_FADE_MS,
-    );
+    const clear = window.setTimeout(() => {
+      setShown(null);
+      /* Design note #1095: AFTER `setShown`, deliberately. The caller answers this by clearing the signal,
+         which re-runs this effect and tears down these timers -- harmless once they have all fired, and a
+         frozen overlay if it happened while one was still pending. */
+      onDone?.();
+    }, REVENUE_FLASH_MS + REVENUE_FLASH_FADE_MS);
     return () => {
       window.cancelAnimationFrame(rise);
       window.clearTimeout(timer);
       window.clearTimeout(clear);
     };
     // Design note #940: the TOKEN is the dependency, not the delta -- see `RevenueFlashSignal`.
-  }, [signal?.token, signal]);
+  }, [signal?.token, signal, onDone]);
 
   if (!shown) return null;
 

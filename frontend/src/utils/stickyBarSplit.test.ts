@@ -29,36 +29,25 @@
 // rather than children of it. Whether the bar now travels is a playtest question and nothing else.
 
 import { canPinWithoutTrapping, STICKY_MAX_VIEWPORT_SHARE } from "./stickyCollapse";
-import { readSource, sliceBetween, stripComments } from "./sourceScan";
+import { anchorIndex, readSource, readStripped, sliceBetween, stripComments } from "./sourceScan";
 
 // (This file DOES import, so it is a module without an `export {}` -- unlike #779's and #783's harnesses,
 // where the empty export was the only thing making them one. Putting one here anyway is what tripped
 // `import/first`.)
 
-const read = (relative: string) => {
-  const fs = require("fs") as typeof import("fs");
-  const path = require("path") as typeof import("path");
-  return fs.readFileSync(path.join(__dirname, "..", relative), "utf8");
-};
-const strip = (raw: string) =>
-  raw
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/^\s*\/\/.*$/gm, "")
-    .replace(/\{\/\*[\s\S]*?\*\/\}/g, "");
-
-const BAR = (() => {
-  const fs = require("fs") as typeof import("fs");
-  const path = require("path") as typeof import("path");
-  return fs.readFileSync(
-    path.join(__dirname, "..", "panels", "ContextualActionBar.tsx"),
-    "utf8",
-  );
-})();
-
-/** #490a: the note above the lifted panels quotes the old arrangement while explaining it. */
-const CODE = BAR.replace(/\/\*[\s\S]*?\*\//g, "")
-  .replace(/^\s*\/\/.*$/gm, "")
-  .replace(/\{\/\*[\s\S]*?\*\/\}/g, "");
+/* ==================================================================
+    DESIGN NOTE 1097: THE HAND-ROLLED READER PUT THIS FILE OUTSIDE THE FENCE
+   ==================================================================
+   IT DEFINED `read` AND `strip` -- which together are `readStripped`, rewritten. That is not a style
+   quibble: `sourceScanSweep.js` finds assertions by locating `const X = readStripped("...")` declarations, so
+   eighteen `toContain`s in this file were invisible to it. Not merely unchecked -- UNCOUNTED, so the sweep
+   reported a clean run over a suite it had never looked at here.
+   THE COST WAS PAID IN `phaseEraToast`, which had the same shape: four cases went stale when a toast moved
+   out of its render effect, the sweep said "every one holds", and the runner found them. Converted before
+   this file gets its turn.
+   #490a's POINT SURVIVES, and is why the stripped form is the right one: several notes in the bar QUOTE the
+   old arrangement while explaining it, so a scan of raw text would find the retired code in its own epitaph. */
+const CODE = readStripped("panels/ContextualActionBar.tsx");
 
 /** Where the sticky element ends.
  *
@@ -157,16 +146,36 @@ describe("the panels are back inside the bar, on a measurement (design note #828
        facts had all found other homes. A fold is not needed for a section that is half a column tall.
        THE PROPERTY #828 CARED ABOUT SURVIVES and is asserted in `buyTrainsPanel.test.ts`: the only bodies
        still marked `STICKY_OPTIONAL` are the two a player can actually collapse. */
-    const panel = read("components/TrainPurchasePanel.tsx");
+    const panel = readStripped("components/TrainPurchasePanel.tsx");
     expect(panel).not.toContain("setBankOpen");
   });
 
   it("never folds the buy row", () => {
-    /* A caret that can hide the only control on a step can leave a player looking at a step with nothing on
-       it. The row sits outside the disclosure. */
-    const depot = strip(read("components/TrainPurchasePanel.tsx"));
-    const body = depot.slice(depot.indexOf("{bankOpen && ("), depot.indexOf("{nextTier ? ("));
-    expect(body).not.toContain("styles.buyRow");
+    /* ==================================================================
+        DESIGN NOTE 1097: THIS CASE HAD BEEN PASSING OVER AN EMPTY STRING
+       ==================================================================
+       IT SLICED FROM `{bankOpen && (` TO `{nextTier ? (` and asserted the region held no `styles.buyRow`.
+       #860 DELETED THE BANK DISCLOSURE -- the case directly above this one says so in its own title -- so
+       `indexOf` answered -1, `slice(-1, 7586)` returned the empty string, and `not.toContain` has been true
+       of nothing ever since. #886's exact shape, and #1090's: a negative assertion on a region that stopped
+       existing is not a weaker test, it is no test.
+       IT SURVIVED BECAUSE THIS FILE READ ITS SOURCE BY HAND, so `sourceScanSweep.js` could not see the
+       anchor. Found the moment the file came inside the fence -- which is the argument for the fence.
+       THE PROPERTY IS UNCHANGED and is worth keeping: a caret that can hide the only control on a step leaves
+       a player looking at a step with nothing on it. What changed is that the collapsible bodies are now the
+       two marked `STICKY_OPTIONAL` (#828's survivors), so the claim is that the buy row is not inside one --
+       asserted as a position, because the row sits well before either of them.
+       `anchorIndex` THROWS IF EITHER END ROTS, so the next deletion fails loudly instead of quietly. */
+    const depot = readStripped("components/TrainPurchasePanel.tsx");
+    const buyRow = anchorIndex(depot, "styles.buyRow");
+    const firstCollapsible = anchorIndex(depot, "{...STICKY_OPTIONAL}");
+    expect(buyRow).toBeLessThan(firstCollapsible);
+    /* AND THE ROW IS INSIDE THE TIER BRANCH THAT ALWAYS RENDERS, which is the other half of "outside the
+       disclosure" -- a row before the first collapsible body but inside some other conditional would satisfy
+       the ordering alone. */
+    const tierBranch = depot.slice(anchorIndex(depot, "{nextTier ? ("), firstCollapsible);
+    expect(tierBranch).toContain("styles.buyRow");
+    expect(tierBranch).not.toContain("STICKY_OPTIONAL");
   });
 
   it("keeps the panels rendering at all", () => {

@@ -218,6 +218,48 @@ export interface PublicCompanyState {
    * OPTIONAL, AND #232'S RULE APPLIES: `undefined` is "this build does not report it", never "there are
    * none" -- and a standard game never has one. */
   ghost_trains?: readonly string[];
+  /** ==================================================================
+   *   DESIGN NOTE 1089: THE IDENTITY OUTLIVES THE EXEMPTION
+   *  ==================================================================
+   *
+   * A THIRD LIST BESIDE `pending_rust_trains` AND `ghost_trains`, and the reason is the one #1046 already gave
+   * for splitting the first two: THEY EXPIRE ON DIFFERENT CLOCKS.
+   *
+   *   `ghost_trains`     "occupies no train-limit slot", emptied at the END OF THE OPERATING ROUND.
+   *   `carcosan_trains`  "this is the gold-trimmed train", emptied when the DOOM CLOCK fires -- a full OR set
+   *                      later, and often several rounds after the exemption has gone.
+   *
+   * REUSING `ghost_trains` FOR BOTH WAS THE FIRST DRAFT AND IT IS WRONG BY A ROUND. The chip icon (#1088) is
+   * drawn from this mark, so a train that had merely stopped being limit-exempt would have lost its Yellow
+   * Sign while still being the cursed train -- and the doom clock would have had nothing left to point at.
+   * The bug is invisible in the OR the gift arrives and appears in the next one, which is the worst shape.
+   *
+   * A MULTISET, like both of its neighbours: a corporation that already owned a 5 and is gifted one holds two
+   * identical models and exactly one of them is gold-trimmed. */
+  carcosan_trains?: readonly string[];
+  /** ==================================================================
+   *   DESIGN NOTE 1089: THE CURSE IS ON THE COMPANY, NOT ONLY ON THE TRAIN
+   *  ==================================================================
+   *
+   * RULED: "Apply an `isCarcosan` boolean flag to the Corporation state, rather than just the Train state ...
+   * The only way a corporation loses the flag is by successfully transferring the Carcosa train to another
+   * company ... If the Carcosa train rusts while owned, the corporation remains permanently cursed."
+   *
+   * AND THE REASON IS AN EDGE CASE THAT WOULD HAVE KILLED THE END-GAME EGG: the train rusts, `carcosan_trains`
+   * empties, and a scoreboard keyed on holding the train would find nobody to name. The curse has to be a
+   * fact about the corporation that survives the object that caused it.
+   *
+   * SET WITH THE GIFT AND CLEARED ONLY BY A TRANSFER, which makes it a one-way door for everybody except the
+   * corporation willing to pay the Blood Price -- the whole of what makes that trade a decision. */
+  is_carcosan?: boolean;
+  /** The OR set at whose conclusion this corporation's Carcosan train disappears.
+   *
+   *  Design note #1089: A STORED NUMBER RATHER THAN A LOG SCAN, unlike the Yellow Sign's own state (#1044).
+   *  That one is read from the log because it is a fact about what the GAME has seen and every client must
+   *  agree; this is a fact about one corporation that the reducer writes deterministically while replaying,
+   *  so every client computes it identically without parsing sentences for a date.
+   *  `undefined` MEANS THE CLOCK HAS NOT STARTED -- a gifted 5 or 6 waits for the first D-train. */
+  carcosan_doom_after_macro_round?: number;
 }
 
 export interface PrivateCompanyState {

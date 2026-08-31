@@ -334,8 +334,13 @@ describe("the era toast says one thing (design note #966)", () => {
   const APP = readStripped("App.tsx");
 
   it("uses the ruled sentence", () => {
+    /* Design note #1094: THE SENTENCE IS THE SAME AND ITS TWO VARIABLES ARE NOT. It was composed in a render
+       effect holding the previous era in a ref; the effect's replay guard could never fire, because
+       `replayingHistory` is cleared before any effect runs, so a refresh re-announced every era crossing the
+       rebuild walked through. It is derived from the dispatch's `before`/`after` now -- hence `from` and `to`
+       where `previous` and `eraNow` used to be. #966's copy ruling is untouched. */
     expect(APP).toContain(
-      "`Corporations can now upgrade ${previous.toLowerCase()} tiles to ${eraNow.toLowerCase()}.`",
+      "`Corporations can now upgrade ${from.toLowerCase()} tiles to ${to.toLowerCase()}.`",
     );
   });
 
@@ -348,6 +353,7 @@ describe("the era toast says one thing (design note #966)", () => {
   it("keeps the era graphic #929 built", () => {
     /* The two hexes are the part that survives the trim -- they say the same thing faster than the sentence
        that was removed. */
-    expect(APP).toContain("{ from: previous, to: eraNow }");
+    // Design note #1094: the same descriptor, off the diff -- see the case above for why the source moved.
+    expect(APP).toContain("{ from, to }");
   });
 });

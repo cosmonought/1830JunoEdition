@@ -416,7 +416,10 @@ describe("the overlay fades in as well as out (design note #999)", () => {
     /* #490a: ANCHORED ON CODE, NOT ON A COMMENT. My first version ended the slice at
        "// Design note #940: the TOKEN" -- which `readStripped` removes, so `sliceBetween` threw rather than
        passing vacuously. The same mistake #955's harness records, caught by the thrower this time. */
-    const effect = sliceBetween(FLASH, "if (!signal) return undefined;", "}, [signal?.token, signal]);");
+    /* Design note #1095: the dependency array gained `onDone`, so the anchor is the array's opening rather
+       than its whole contents -- a list pinned complete breaks every time anything is added to it, which is
+       the mistake this suite has made more often than any other. */
+    const effect = sliceBetween(FLASH, "if (!signal) return undefined;", "}, [signal?.token, signal");
     expect(effect).toContain("setVisible(false);");
     expect(effect).toContain("window.requestAnimationFrame(() => setVisible(true))");
     expect(effect).not.toContain("setVisible(true);\n    const timer");

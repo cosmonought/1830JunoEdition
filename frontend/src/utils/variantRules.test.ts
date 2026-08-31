@@ -541,7 +541,9 @@ describe("gentle rust reprieves a train for one turn (design note #906)", () => 
        one, and there is nothing left for a variant branch to select. What this case asserts is that the copy
        is now IDENTICAL on both tables, which is the property the deletion produced. */
     const [rust] = fleetLossNotices({ companyId: 1, ticker: "PRR", rusted: ["2"], discarded: [] }, "4", 3);
-    expect(noticeBody(rust)).toBe("1 of your 2-trains has rusted.");
+    /* Design note #1100: numerals name the TIER, words count the trains. WHAT THIS CASE ASSERTS IS UNCHANGED
+       -- that the copy is IDENTICAL on both tables, with no variant branch left to select a second wording. */
+    expect(noticeBody(rust)).toBe("One of your 2-trains has rusted.");
     const NOTICE = readStripped("utils/fleetLossNotice.ts");
     expect(NOTICE).not.toContain("before they retire");
     expect(NOTICE).not.toContain("gentleRust");

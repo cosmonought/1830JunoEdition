@@ -55,6 +55,9 @@ export interface TrainPurchaseCompany {
   /** Design note #1046: the Yellow Sign's gift, exempt from the limit until the Operating Round ends. Same
    *  optional-and-absent-means-none convention as the reprieve above. */
   ghost_trains?: readonly string[];
+  /** Design note #1090: the gold-trimmed train, so the offer form can warn about the Blood Price before
+   *  anybody commits. Distinct from `ghost_trains` above -- see `gameState.ts` #1089 for the two clocks. */
+  carcosan_trains?: readonly string[];
   /** Models currently held, e.g. `["2", "2", "4"]` -- duplicates are meaningful and drive the badge counts.
    *  `null`/`undefined` means UNKNOWN (a chain predating `owned_trains`), NOT "owns nothing": the corporate
    *  section says so rather than rendering an empty roster that looks like a board where nobody has bought. */
@@ -108,6 +111,20 @@ export interface TrainPurchasePanelProps {
   blockedReason: string | null;
   /** `quantity` sequential `BuyHardwareFromPool` messages -- design note #1. */
   onBuyFromBank: (tier: string, quantity: number) => void;
+  /** ==================================================================
+   *   DESIGN NOTE 1101: WHETHER FILLING THE LIMIT ALSO ENDS THE TURN
+   *  ==================================================================
+   *
+   * RULED: "when corporations are buying up to their train limit, the Pay button needs to say 'Pay $x and End
+   * Turn' so they know why they finished."
+   *
+   * ASKED OF THE SHELL, NOT DERIVED HERE, because the answer is #876's and it is a fact about the STEP LIST:
+   * skipping the last step ends the turn, and `stepsFor` varies -- it drops `BuyPrivate` once the last private
+   * is bought. `autoSkipExit` is the authority the auto-skip itself consults, so this panel asks the same one
+   * rather than hardcoding "Hardware is last" and going quietly wrong the day it is not.
+   * DEFAULTS FALSE, so a caller that has not thought about it promises nothing -- a button that said "and End
+   * Turn" and then did not would be worse than one that stayed silent. */
+  endsTurnAtLimit?: boolean;
   /** Design note #751c: opens the emergency modal. Absent where there is no such flow to open. */
   onEmergencyPurchase?: () => void;
   /** Whether the corporation is actually short -- computed by the caller, which is the only place that
@@ -153,6 +170,7 @@ export function TrainPurchasePanel({
   canAct,
   blockedReason,
   onBuyFromBank,
+  endsTurnAtLimit = false,
   onEmergencyPurchase,
   emergencyAvailable,
   onProposeTrade,
@@ -403,6 +421,29 @@ export function TrainPurchasePanel({
     Number.isInteger(quantity) && quantity >= 1 && quantity <= Math.max(1, supplyCap);
   const treasury = Number(buyer?.treasury ?? 0) || 0;
   const bankTotal = nextTier && quantityValid ? nextTier.cost * quantity : 0;
+  /** Design note #1101: whether THIS purchase takes the fleet to its ceiling. `limitHeadroom` is the
+   *  phase-aware walk (#296), so this and the quantity selector measure the same limit -- and `>=` rather
+   *  than `===` because a headroom of zero is already there and a quantity capped above it still fills it. */
+  const fillsTrainLimit = quantityValid && limitHeadroom > 0 && quantity >= limitHeadroom;
+  /** ==================================================================
+   *   DESIGN NOTE 1104: THE LABEL IS A NAMED VALUE, NOT AN EXPRESSION IN THE MARKUP
+   *  ==================================================================
+   *
+   * IT WAS A TERNARY INLINE IN THE JSX, kept deliberately on one line -- #814's note read "ON ONE LINE, per
+   * #814 and because two suites anchor on this exact ternary." #1101 added a third arm, which cannot fit on
+   * one line at this indentation, and both suites broke. The note said exactly what would happen and I
+   * replaced the block without acting on it.
+   *
+   * THE REAL LESSON IS NOT "KEEP IT ON ONE LINE". An assertion anchored on a multi-token expression is
+   * hostage to the formatter: it breaks on a rewrap that changes nothing about behaviour, which is a false
+   * alarm, and it would keep passing if somebody changed an arm while preserving the shape, which is a missed
+   * one. A NAMED CONST gives both suites one stable anchor and gives the reader a name for what the button
+   * says. */
+  const payButtonLabel = atTrainLimit
+    ? "Train Limit Reached"
+    : `Pay $${bankTotal || (nextTier?.cost ?? 0)}${
+        fillsTrainLimit && endsTurnAtLimit ? " and End Turn" : ""
+      }`;
   const bankProblem: string | null =
     nextTier === null
       ? "The Bank Depot is empty — every printed train has been bought."
@@ -854,8 +895,22 @@ export function TrainPurchasePanel({
                    THE PROJECTION FORMAT IS THE HOUSE ONE, `$before > $after`, which #509a's withhold column
                    and #705's payout column already use. A third spelling of the same idea here would make
                    the arrow mean something different in one place. */}
-                {/* ON ONE LINE, per #814 and because two suites anchor on this exact ternary. */}
-                {atTrainLimit ? "Train Limit Reached" : `Pay $${bankTotal || nextTier.cost}`}
+                {/* ==================================================================
+                     DESIGN NOTE 1101: THE BUTTON SAYS WHY THE TURN IS ABOUT TO FINISH
+                    ==================================================================
+                    RULED: "when corporations are buying up to their train limit, the Pay button needs to say
+                    'Pay $x and End Turn' so they know why they finished."
+                    AND THE TURN REALLY DOES END -- #876 auto-skips the Hardware step when a corporation is at
+                    its limit, and skipping the LAST step is `autoSkipExit`'s "end-turn". Before this the
+                    consequence arrived without warning: the player pressed a button labelled with a price and
+                    the turn was over, which is the report in one sentence.
+                    `fillsTrainLimit` USES `limitHeadroom`, not a subtraction. That figure is the phase-aware
+                    walk `buyableNow` performs (#296), so the button and the quantity selector measure the same
+                    ceiling -- a subtraction here would overcount across a phase change and promise the ending
+                    on a purchase that does not reach the limit.
+                    BOTH CONDITIONS, because either alone lies: a buy that fills the limit on a step that is
+                    not last ends nothing, and a last step reached without filling the limit is not this. */}
+                {payButtonLabel}
               </button>
               {/* Design note #913: outside the button, and hidden at the train limit -- there is no purchase
                   to project when the control refuses one, and a projection beside a refusal reads as a
@@ -1105,6 +1160,31 @@ export function TrainPurchasePanel({
                   {buyer?.ticker ?? "This corporation"} offers for {selectedSeller.ticker}&apos;s{" "}
                   {selection.model}-train
                 </span>
+                {/* ==================================================================
+                     DESIGN NOTE 1090: THE TOLL IS NAMED BEFORE THE PRICE IS TYPED
+                    ==================================================================
+                    RULED: "When selecting this specific train in the Buy Trains from Corporation proposal
+                    form, conditionally render this warning for BOTH the proposer and the recipient."
+
+                    ONE WARNING, ONE PLACE, BOTH AUDIENCES. This form is what a proposer composes an offer
+                    in, and the same panel is what a recipient reads the pending offer from -- so a single
+                    block above the price serves both, and there is no second copy to fall out of step with
+                    this one (#891, which this codebase produces more than any other shape).
+
+                    ABOVE THE PRICE INPUT, deliberately. A cost disclosed after the number is typed is a cost
+                    disclosed after the decision; the share-price hit is an input to what the train is worth,
+                    not a footnote about it.
+
+                    IT NAMES THE MOVEMENT rather than the outcome, because the outcome depends on where the
+                    token sits and this panel does not know the chart. "One cell left, one cell down" is
+                    checkable against the board in front of them; a predicted price would be a second
+                    opinion about a move `projectBloodPriceMove` owns. */}
+                {(selectedSeller.carcosan_trains ?? []).includes(selection.model) && (
+                  <span style={styles.bloodPriceWarning} role="note">
+                    ⚠ WARNING: Transferring the Carcosa Train incurs a Blood Price. The selling
+                    corporation&apos;s share price will immediately drop (1 cell Left, 1 cell Down).
+                  </span>
+                )}
                 <div style={styles.offerRow}>
                   <label style={styles.quantityLabel} htmlFor="trade-price">
                     Offer price
@@ -1819,6 +1899,19 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: "#141a26",
   },
   offerHeading: { fontSize: FONT_SIZE.strong, fontWeight: 700, color: "#e2e6ee" },
+  /* Design note #1090: the Yellow Sign's own amber against a warning ground, not the app's malus red. This
+     is not a rules violation or a refusal -- the trade is entirely legal and often correct -- it is a PRICE,
+     and dressing it in the colour reserved for "you cannot do that" would misreport what it is. */
+  bloodPriceWarning: {
+    fontSize: FONT_SIZE.small,
+    fontWeight: 600,
+    lineHeight: 1.45,
+    color: "#f0d68a",
+    backgroundColor: "rgba(201, 169, 76, 0.12)",
+    border: "1px solid rgba(201, 169, 76, 0.4)",
+    borderRadius: "6px",
+    padding: "7px 9px",
+  },
   offerRow: { display: "flex", flexWrap: "wrap", gap: "8px", alignItems: "center" },
 
   /* ---- Shared ---- */

@@ -404,14 +404,22 @@ describe("the flavour tint reaches the line players actually watch", () => {
     /* THE HALF THAT WOULD DRIFT. Chat colour must come after the tone in the preview, and the tone after the
        error colour in the row, or a flavour line is styled differently in the surface a player watches from
        the one they open -- the same "two things about one message" this case exists to prevent.
-       #1080 briefly moved the row's tone onto the `div` and was WITHDRAWN: `logLabelFull` is `flex: 1`, so
-       the fill already reached the right edge and the move was correcting something that was not wrong.
-       Both orders are therefore live again, and both are asserted. */
+       ==================================================================
+        DESIGN NOTE 1095: ONE OF THE TWO ORDERS NO LONGER EXISTS TO GET WRONG
+       ==================================================================
+       #1080 MOVED THE ROW'S TONE ONTO THE `div` AND WAS WITHDRAWN, and this note recorded that as settled --
+       "both orders are therefore live again". RULED SINCE that the fill belongs on the row after all, this
+       time as the only thing that moves, so the row's tone and its error colour are on DIFFERENT ELEMENTS.
+       TWO STYLES THAT CANNOT REACH THE SAME ELEMENT CANNOT NEED AN ORDER, which is this case's own argument
+       from a few lines above, now applying to the half it was not applying to.
+       SO THE ROW'S HALF BECOMES A SEPARATION and the preview's stays an ordering -- that surface still
+       spreads tone and chat onto one wrapper, so its precedence is still live and still asserted. */
     const wrapper = sliceBetween(TICKER, "...styles.previewText,", "}}");
     expect(wrapper.indexOf("logTone")).toBeLessThan(wrapper.indexOf("previewTextChat"));
     expect(wrapper.length).toBeLessThan(700);
     const label = sliceBetween(TICKER, "...styles.logLabelFull,", "}}");
-    expect(label.indexOf("logLabelError")).toBeLessThan(label.indexOf("logTone"));
+    expect(label).toContain("logLabelError");
+    expect(label).not.toContain("logTone");
     expect(label.length).toBeLessThan(900);
   });
 

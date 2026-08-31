@@ -300,13 +300,28 @@ describe("the merge is animated, and the figures do not depend on it", () => {
     expect(MACHINE).toContain('pointerEvents: "none"');
   });
 
-  it("puts dark ground under light ink, which is the stated requirement", () => {
-    /* "A distinct background (e.g. semi-transparent dark gray or frosted glass) so the text is fully legible
-       against the game board and colored heralds." The blur is additive -- an engine that ignores
-       `backdrop-filter` still gets the solid layer, which is where the legibility comes from. */
+  it("puts a distinct ground under its ink, which is the stated requirement", () => {
+    /* ==================================================================
+        DESIGN NOTE 1098: THE REQUIREMENT SURVIVES; THE MATERIAL THAT MET IT DOES NOT
+       ==================================================================
+       RULED, and still ruling: "a distinct background (e.g. semi-transparent dark gray or frosted glass) so
+       the text is fully legible against the game board and colored heralds."
+       THIS CASE PINNED THE EXAMPLE RATHER THAN THE REQUIREMENT -- the parenthetical "e.g." was a suggestion
+       and the assertion treated it as the spec. The panel is the player card's paper now (#1098), which meets
+       the same requirement more strongly: fully opaque rather than 90%, and the lightest thing on a dark
+       board rather than a slightly darker dark.
+       THE BLUR WENT WITH THE TRANSLUCENCY IT SOFTENED. A `backdrop-filter` behind an opaque layer is work no
+       engine can show, so asserting it would be asserting a no-op.
+       WHAT IS ASSERTED NOW IS THE PROPERTY: the ground is opaque, and its ink clears the contrast floor
+       against it. `batch63` owns the palette arithmetic. */
     const panel = sliceBetween(MACHINE, "panel: {", "},");
-    expect(panel).toContain("backgroundColor: \"rgba(18, 21, 29, 0.9)\"");
-    expect(panel).toContain("backdropFilter");
+    expect(panel).toContain("backgroundColor: CARD_SURFACE");
+    /* NOT `not.toContain("rgba(")`, which was my first draft and was wrong for the reason this suite keeps
+       relearning: it pins more than the claim. The panel's DROP SHADOW is legitimately `rgba(0,0,0,0.55)`,
+       so that negative failed on a property the case is not about. The claim is that the GROUND is opaque and
+       needs no blur behind it. */
+    expect(panel).not.toContain("backdropFilter");
+    expect(panel).not.toContain("backgroundColor: \"rgba");
   });
 });
 
@@ -390,7 +405,11 @@ describe("an unchanged roll confirms itself", () => {
        white and briefly display a `+0%` ... to confirm the roll was executed."
        AND SILENCE ON A THIRD OF THE FACES LOOKED LIKE FAILURE. `revenueOutcome(roll) !== "normal"` was the
        gate; it is gone, and only the haunting's suppression remains. */
-    expect(APP).toContain("if (!cue.suppressStandardVisuals) {");
+    /* Design note #1094: the gate gained `ephemeral &&` -- a rebuild must not re-flash a run from an hour
+       ago. WHAT THIS CASE IS ABOUT IS UNCHANGED: `revenueOutcome(roll) !== "normal"` is still gone, so a
+       normal roll still flashes `+0%`. Asserted as a substring of the live condition rather than as the whole
+       of it, so the next clause added here does not break a case about a clause that was removed. */
+    expect(APP).toContain("!cue.suppressStandardVisuals) {");
     expect(APP).not.toContain('revenueOutcome(roll) !== "normal" &&');
   });
 

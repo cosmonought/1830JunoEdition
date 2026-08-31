@@ -424,6 +424,37 @@ export function projectRiseMove(from: {
   return above ? { price: above.price, x: above.x, y: above.y } : start;
 }
 
+/** Where the token lands when a corporation pays the Blood Price -- one LEFT, then one DOWN.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 1090: THE FIFTH MOVEMENT, AND THE ONLY DIAGONAL ONE
+ *  ==================================================================
+ *
+ *  RULED: "Upon successful transfer, execute the Left 1, Down 1 market movement for the selling corporation."
+ *
+ *  BUILT FROM THE TWO MOVES THAT ALREADY EXIST rather than as a new walk. The left step IS a withhold step,
+ *  ledge rule and all, and the down step IS a share-sale step -- so this composes `projectDividendCellMove`
+ *  with `projectShareSaleMove` and inherits every edge case both of them already got right. A hand-rolled
+ *  `cellAt(x - 1, y - 1)` would be a third opinion about a grid that has had two bugs in it already.
+ *
+ *  THE LEDGE IS HONOURED, WHICH MAKES THE LEFT EDGE HURT MORE. From the leftmost cell of a row a withhold
+ *  step already falls DOWN (#908's rule, stated in `dividendStepFrom`), so at the left edge the Blood Price
+ *  lands two rows down instead of one across and one down. FLAGGED RATHER THAN SPECIAL-CASED: a corporation
+ *  pinned at the left edge is already in trouble, and the market having nowhere left to put it reads as the
+ *  price the fog exacts rather than as an off-by-one. Softening it would make the toll cheapest for the
+ *  corporations least able to afford it.
+ *
+ *  `y - 1` IS DOWN on this inverted axis -- the mistake `projectShareSaleMove` records in its own comment
+ *  ("`y + 1` walked up and a sale RAISED the price"), avoided here by not writing the arithmetic twice. */
+export function projectBloodPriceMove(from: {
+  x: number;
+  y: number;
+}): { price: number; x: number; y: number } | null {
+  const left = projectDividendCellMove(from, "withhold");
+  if (!left) return null;
+  return projectShareSaleMove({ x: left.x, y: left.y }, 1);
+}
+
 /** Where the token lands on a dividend decision -- one column RIGHT on a pay, LEFT on a withhold.
  *  Takes a cell for the same reason the sale projection does. Ordinary move only; clamps at the edge. */
 export function projectDividendCellMove(

@@ -253,8 +253,12 @@ describe("green, red, and one alpha between them", () => {
   it("uses this app's own green and red", () => {
     /* NOT A FRESH PAIR. `#4ade80` is already the positive green at sixteen call sites and `#f43f5e` the red;
        a seventeenth green would say what the sixteenth says. */
-    expect(TICKER).toContain("rgba(74, 222, 128, ${TONE_TINT_ALPHA})");
-    expect(TICKER).toContain("rgba(244, 63, 94, ${TONE_TINT_ALPHA})");
+    /* Design note #1095: THE HUES ARE NAMED CONSTANTS NOW rather than written into two template literals.
+       The two feed surfaces need the same tint rendered two ways -- a flattened solid where the row paints its
+       own ground, a wash where the wrapper does not -- and deriving both from one pair is what keeps that from
+       becoming two answers to one question. THE PAIR ITSELF IS UNCHANGED, which is what this case is about. */
+    expect(TICKER).toContain("[74, 222, 128] as const");
+    expect(TICKER).toContain("[244, 63, 94] as const");
   });
 
   it("changes the hue and nothing else about the fill", () => {
@@ -269,7 +273,31 @@ describe("green, red, and one alpha between them", () => {
        had nothing to sit on -- three edits, each a consequence of the first, and the first came from #1079
        describing the fill as sitting "on the sentence, not the whole row". `logLabelFull` is `flex: 1`: it
        has filled the line to the right edge since #1042.
-       SO THIS CASE PINS THE SHAPE, which is the one thing about these styles that must NOT move again. */
+       ==================================================================
+        DESIGN NOTE 1095: THE FILL MOVED AFTER ALL, AND THIS CASE SAID IT MUST NOT
+       ==================================================================
+       IT READ "this case pins the shape, which is the one thing about these styles that must NOT move
+       again", and that was overconfident about the wrong thing. RULED SINCE, explicitly: "apply the tints to
+       the full parent row container, not just the text elements ... a solid, uniform block of color spanning
+       the entire width of the line."
+       WHICH IS WHERE #1080 WAS TRYING TO GO. Its destination was right; what got it withdrawn was arriving
+       there with three other edits in hand -- a gradient, and the padding and radius dropped. So the durable
+       lesson is not "the fill never moves", it is "the fill is the only thing that moves", and that is what
+       this case pins now.
+       THE GRADIENT PROHIBITION IS THE PART THAT SURVIVES INTACT, and it is now ruled twice: once by the
+       withdrawal and once by "do not use gradients or fades". */
+    // The row's fill: exactly one property, so nothing rides along with it this time.
+    for (const style of [
+      sliceBetween(TICKER, "logRowToneBonus: {", "}"),
+      sliceBetween(TICKER, "logRowToneMalus: {", "}"),
+    ]) {
+      expect(style).toContain("backgroundColor");
+      expect(style).not.toContain("padding");
+      expect(style).not.toContain("borderRadius");
+      expect(style).not.toContain("backgroundImage");
+      expect(style).not.toContain("linear-gradient");
+    }
+    // The collapsed ticker's wash keeps #1042's shape, because its surface never had the problem.
     for (const style of [
       sliceBetween(TICKER, "logToneBonus: {", "},"),
       sliceBetween(TICKER, "logToneMalus: {", "},"),
@@ -277,7 +305,6 @@ describe("green, red, and one alpha between them", () => {
       expect(style).toContain("backgroundColor");
       expect(style).toContain('padding: "1px 6px"');
       expect(style).toContain('borderRadius: "4px"');
-      expect(style).not.toContain("backgroundImage");
       expect(style).not.toContain("linear-gradient");
     }
     // And what makes it a full-width fill rather than a pill around the words.
@@ -288,7 +315,13 @@ describe("green, red, and one alpha between them", () => {
     /* RULED as "the exact same opacity/transparency value" for both. #1042 wrote 0.12 and 0.11 by eye --
        invisible on screen, and exactly the near-agreement that reads as intent to the next reader. One
        constant is what makes "the same" checkable instead of a coincidence to be maintained. */
-    expect(TICKER).toContain("const TONE_TINT_ALPHA = 0.12;");
+    /* Design note #1095: 0.12 -> 0.32, ruled -- "increase the opacity and saturation ... they need to stand
+       out clearly and pop". WHAT THIS CASE IS ABOUT IS THE SHARING, not the figure: one constant is what
+       makes "the exact same opacity value for both" checkable rather than a coincidence to maintain.
+       ASSERTED AS THE CONSTANT'S EXISTENCE AND ITS SINGLE USE-SITE PAIR rather than its value, which
+       `batch62` owns and checks against the contrast floor. */
+    expect(TICKER).toContain("const TONE_TINT_ALPHA = ");
+    expect(TICKER.split("TONE_TINT_ALPHA =").length - 1).toBe(1);
     expect(TICKER).not.toContain("0.11");
     expect(TICKER).not.toContain("rgba(201, 169, 76");
   });
@@ -323,7 +356,11 @@ describe("green, red, and one alpha between them", () => {
 
 describe("the italic reaches the flavour and nothing else", () => {
   it("exists once, on a style of its own", () => {
-    expect(TICKER).toContain('logFlavourText: { fontStyle: "italic" }');
+    /* Design note #1095: BOLD JOINED THE ITALIC -- ruled, "from standard italics to bold-italics to improve
+       legibility on small screens", because a slant is the first thing a small rasteriser loses. WHAT THIS
+       CASE IS ABOUT IS UNCHANGED: the emphasis exists ONCE, on a style of its own, applied to the flavour
+       clause and to nothing else. The cases below still hold the "and where it is not" half. */
+    expect(TICKER).toContain('logFlavourText: { fontStyle: "italic", fontWeight: 700 }');
     expect(TICKER.split('fontStyle: "italic"').length - 1).toBe(1);
   });
 
@@ -357,12 +394,19 @@ describe("the wash covers the whole entry, and the tags keep their own ink", () 
      colour and weight are untouched. Asserting only the first would let a later edit recolour the tag and
      still pass. */
 
-  it("fills the line from the gutter to the right edge, as it always has", () => {
-    /* THE FILL IS WHERE #1042 PUT IT: on the `flex: 1` label span, which reaches the right edge of the row.
-       Both facts together, because the spread alone is satisfied by a span that shrink-wraps the words. */
-    const label = sliceBetween(TICKER, "...styles.logLabelFull,", "}}");
-    expect(label).toContain("styles.logToneBonus");
-    expect(label).toContain("styles.logToneMalus");
+  it("fills the whole row now, gutter included", () => {
+    /* ==================================================================
+        DESIGN NOTE 1095: THE FILL MOVED, AND THIS CASE MOVES WITH IT
+       ==================================================================
+       IT ASSERTED THE FILL WAS ON `logLabelFull`, the `flex: 1` span -- which reached the right edge but
+       started AFTER the gutter, the gap and the row's left padding. RULED SINCE: "apply the tints to the full
+       parent row container, not just the text elements ... spanning the entire width of the line."
+       THE CLAIM THIS CASE MAKES IS THE SAME ONE, moved to the element that now carries it: the fill reaches
+       the whole entry. The gutter-ink half below is untouched and is what stops a later edit recolouring the
+       tag and still passing. */
+    const label = sliceBetween(TICKER, "...styles.logEntry,", 'role="button"');
+    expect(label).toContain("styles.logRowToneBonus");
+    expect(label).toContain("styles.logRowToneMalus");
     expect(sliceBetween(TICKER, "logLabelFull: {", "},")).toContain("flex: 1");
   });
 

@@ -35,8 +35,65 @@ const HISTORY_LINE_COUNT = 5;
 const HISTORY_LINE_HEIGHT_PX = 46;
 
 /** Design note #1079: ONE alpha for both tints, named because the report's rule is that they SHARE it --
- *  "the exact same opacity/transparency value". Two literals a hundredth apart is what #1042 left behind. */
-const TONE_TINT_ALPHA = 0.12;
+ *  "the exact same opacity/transparency value". Two literals a hundredth apart is what #1042 left behind.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 1095: 0.12 -> 0.32, AND WHY IT STOPS THERE
+ *  ==================================================================
+ *
+ * RULED: "increase the opacity and saturation of the red and green background tints. They need to stand out
+ * clearly and 'pop' against the dark background without looking washed out."
+ *
+ * 0.12 WAS #1042's FIGURE AND ITS REASONING HAS EXPIRED. It argued that "under the Unpredictable Revenue
+ * variant a flavour line lands on most operating turns, so a saturated fill would turn the Activity Log into
+ * stripes" -- with the italic "doing most of the work" and the tint only saying which direction. But #1079
+ * then removed the coloured ink, and this batch moves the fill to the whole row, so the tint is now the
+ * ONLY thing carrying direction. A signal doing the whole job cannot be the quietest thing on the row.
+ *
+ * 0.32 IS MEASURED, NOT PICKED BY EYE. Composited over the row's `#141c2c` and checked for WCAG contrast
+ * against the log's `#c7cbd4` ink, the green fill -- always the binding one, being the lighter tint -- reads:
+ *
+ *     0.12  8.23:1      0.26  5.78:1      0.32  4.91:1      0.36  4.41:1  FAILS AA
+ *
+ * So 0.32 is the largest round value with real headroom over the 4.5:1 floor, and it nearly doubles the
+ * row's separation from an untinted neighbour (1.27:1 -> 2.14:1). `batch62` asserts the floor, so the next
+ * person who wants more pop is told by a test where the ceiling is rather than finding it in play.
+ *
+ * SATURATION COMES WITH IT rather than from new hues. The blend's own saturation rises 0.35 -> 0.42 as the
+ * alpha does, and #1079's argument against a fresh pair of colours stands: `#4ade80` and `#f43f5e` are
+ * already this app's green and red at sixteen call sites, and a seventeenth would say what the sixteenth
+ * says. */
+const TONE_TINT_ALPHA = 0.32;
+
+/* ==================================================================
+    DESIGN NOTE 1095: ONE ALPHA, TWO SURFACES, TWO CORRECT RENDERINGS
+   ==================================================================
+   THE TWO FEED SURFACES SIT ON DIFFERENT GROUND. The expanded row paints its own `#141c2c`; the collapsed
+   ticker's wrapper paints nothing and sits on the header band's `#131a27`. So one shared `rgba` would be
+   right on the ticker and, on the row, would REPLACE the row's own background and composite against the
+   list behind it instead -- a different colour than intended, arrived at by accident of stacking.
+   SO THE ROW GETS A PRE-COMPOSITED SOLID and the ticker gets the wash, both derived from ONE alpha and ONE
+   pair of hues. That is the opposite of #891: not two answers to one question, but one answer rendered
+   correctly for two grounds -- and there is nothing to keep in step by hand, because both are computed.
+   RULED "SOLID ... DO NOT USE GRADIENTS OR FADES", which is also #1080's epitaph: that batch reached for a
+   `backgroundImage` gradient to layer a wash over the row's own fill. Compositing the two into one opaque
+   colour is the same intent without the layer. */
+const TONE_BONUS_RGB = [74, 222, 128] as const; // #4ade80
+const TONE_MALUS_RGB = [244, 63, 94] as const; // #f43f5e
+/** The expanded row's own ground, as numbers -- see `logEntry`, which paints it. */
+const LOG_ROW_RGB = [20, 28, 44] as const; // #141c2c
+
+/** The tint laid over the row's ground and flattened to one opaque colour. */
+function toneOverRow(tint: readonly [number, number, number]): string {
+  const mix = (i: number) =>
+    Math.round(LOG_ROW_RGB[i] + (tint[i] - LOG_ROW_RGB[i]) * TONE_TINT_ALPHA);
+  return `rgb(${mix(0)}, ${mix(1)}, ${mix(2)})`;
+}
+
+/** The same tint as a wash, for the surface that has no ground of its own to flatten against. */
+function toneWash(tint: readonly [number, number, number]): string {
+  return `rgba(${tint[0]}, ${tint[1]}, ${tint[2]}, ${TONE_TINT_ALPHA})`;
+}
 
 /* ==================================================================
     DESIGN NOTE 1080, WITHDRAWN: THE BACKGROUND DID NOT NEED TOUCHING
@@ -480,7 +537,25 @@ function LogEntry({ item }: { item: FeedItem }) {
        this type size is a target a few characters wide. `role="button"` and the key handler because a `div`
        that responds to a click and not to Enter is a control only a mouse can reach. */
     <div
-      style={styles.logEntry}
+      style={{
+        ...styles.logEntry,
+        /* ==================================================================
+            DESIGN NOTE 1095: THE ROW IS THE TARGET, WHICH #1080 GOT RIGHT AND EARLY
+           ==================================================================
+           RULED: "apply the green and red background tints to the full parent row container, not just the
+           text elements ... a solid, uniform block of color spanning the entire width of the line."
+           IT WAS ON `logLabelFull`, WHICH IS A SIBLING OF THE GUTTER. `flex: 1` made it fill from the gutter
+           to the right edge -- which is what #1080's withdrawal established, and it is true and was never
+           the whole line. The `[OR 2.1]` tag, the 10px gap beside it and the row's own left padding all sat
+           outside the fill, so the block started a couple of centimetres in.
+           AND THE COLLAPSED TICKER HAS TINTED ITS WHOLE ENTRY SINCE #1080. Two surfaces answering one
+           question two ways is #891, and this is the half that was wrong. */
+        ...(item.logTone === "bonus"
+          ? styles.logRowToneBonus
+          : item.logTone === "malus"
+            ? styles.logRowToneMalus
+            : {}),
+      }}
       role="button"
       tabIndex={0}
       onClick={() => setShowTime((on) => !on)}
@@ -497,17 +572,12 @@ function LogEntry({ item }: { item: FeedItem }) {
         style={{
           ...styles.logLabelFull,
           ...(item.logStatus === "error" ? styles.logLabelError : {}),
-          /* Design note #1042: the variant's own lines, tinted by direction. AFTER the error style, because
-             a failed action is a more urgent fact about a line than which way its die rolled -- and the two
-             cannot co-occur today, so the order is a statement of precedence rather than a live conflict.
-             Design note #1080 (withdrawn): this spread was moved to the row `div` and is back. `flex: 1` on
-             `logLabelFull` is what makes it fill the line to the right edge; it was never a pill around the
-             words, and the move was correcting something that was not wrong. */
-          ...(item.logTone === "bonus"
-            ? styles.logToneBonus
-            : item.logTone === "malus"
-              ? styles.logToneMalus
-              : {}),
+          /* Design note #1095: THE TONE SPREAD IS GONE FROM HERE, onto the row `div` above. #1042 put it on
+             this span and #1080 moved it to the row and was withdrawn for moving three other things with it;
+             ruled since that the row is the target, which it now is -- and this time nothing else moves.
+             THE ERROR STYLE STAYS, and with it #1042's precedence: a failed action is a more urgent fact
+             about a line than which way its die rolled. The two cannot co-occur today, so the order is a
+             statement of intent rather than a live conflict. */
         }}
       >
         {parts.body}
@@ -862,22 +932,48 @@ const styles: Record<string, React.CSSProperties> = {
 
      UNCHANGED ROLLS NEED NO ENTRY HERE. They pass no tone (#1042), so they match neither branch and take no
      fill -- "a neutral, transparent state" is the absence of a rule, not a third rule. */
-  /* Design note #1080 (withdrawn): the shape is #1042's, unchanged -- a plain `backgroundColor` on a
-     `flex: 1` span, with the padding and radius that finish its ends. ONLY THE HUE AND THE ALPHA MOVED. */
+  /* Design note #1095: THE COLLAPSED TICKER'S WASH. Its wrapper paints no background of its own, so an
+     `rgba` composites against the header band exactly as intended and stays uniform across the line. The
+     padding and radius finish its ends, which is #1042's shape and unchanged.
+     ONLY THE ALPHA MOVED HERE. This surface has tinted its whole entry, gutter included, since #1080 -- it
+     was already what the ruling asks for; the expanded row is the one that had to catch up. */
   logToneBonus: {
-    backgroundColor: `rgba(74, 222, 128, ${TONE_TINT_ALPHA})`,
+    backgroundColor: toneWash(TONE_BONUS_RGB),
     padding: "1px 6px",
     borderRadius: "4px",
   },
   logToneMalus: {
-    backgroundColor: `rgba(244, 63, 94, ${TONE_TINT_ALPHA})`,
+    backgroundColor: toneWash(TONE_MALUS_RGB),
     padding: "1px 6px",
     borderRadius: "4px",
   },
-  /* Design note #1079: the ONLY emphasis on a flavour line. Not bold, not recoloured -- ruled as both, and
-     right on its own terms: the tint already says which direction the die went, and a second signal saying
-     the same thing is how the log came to be reading in stripes. */
-  logFlavourText: { fontStyle: "italic" },
+  /* ==================================================================
+      DESIGN NOTE 1095: THE EXPANDED ROW'S FILL, FLATTENED
+     ==================================================================
+     ONE OPAQUE COLOUR, not a wash. `logEntry` paints `#141c2c`, and a `backgroundColor` set here REPLACES
+     that rather than layering over it -- so a wash would silently composite against the list behind the row
+     and land on a colour nobody chose. These are the same tint at the same alpha, arithmetic already done.
+     NO PADDING AND NO RADIUS OF THEIR OWN. The row brings both (`6px 12px`, `8px`), which is exactly why the
+     fill now reaches the line's ends -- and adding a second set here is the kind of consequential edit that
+     got #1080 withdrawn. The only thing these change is the colour of the row. */
+  logRowToneBonus: { backgroundColor: toneOverRow(TONE_BONUS_RGB) },
+  logRowToneMalus: { backgroundColor: toneOverRow(TONE_MALUS_RGB) },
+  /* Design note #1079: the ONLY emphasis on a flavour line. Not recoloured -- ruled, and right on its own
+     terms: the tint already says which direction the die went, and a second signal saying the same thing is
+     how the log came to be reading in stripes.
+     ==================================================================
+      DESIGN NOTE 1095: BOLD JOINS THE ITALIC, WHICH REVERSES HALF OF #1079
+     ==================================================================
+     RULED: "update the Unpredictable Revenue flavor text styling from standard italics to bold-italics to
+     improve legibility on small screens."
+     #1079 RULED "DO NOT BOLD" AND THIS IS NOT THAT RULING OVERTURNED. That one was about the EVENT TEXT --
+     "do not bold the event text or change the core font colour" -- and the event text is still upright and
+     unweighted. What gains weight is the flavour clause alone, and for a reason #1079 was not answering: an
+     italic at this size on a phone is the least legible thing on the row, because the slant is what a small
+     rasteriser loses first.
+     THE INK IS STILL UNCHANGED, which is the part of #1079 that matters most -- colour was the second signal
+     it removed, and weight is not colour. */
+  logFlavourText: { fontStyle: "italic", fontWeight: 700 },
   timestamp: {
     fontSize: FONT_SIZE.small,
     color: "#6f7480",

@@ -47,6 +47,17 @@
 import React, { useEffect, useState } from "react";
 
 import { FONT_SIZE } from "../styles/typography";
+/* Design note #1098: the card palette, and the per-seat ink picker the player card's own stripe uses. Both
+   are borrowed rather than matched by eye -- that borrowing IS the change. */
+import {
+  CARD_BORDER,
+  CARD_DIVIDER,
+  CARD_INK,
+  CARD_INK_MUTED,
+  CARD_INK_POSITIVE,
+  CARD_SURFACE,
+} from "../styles/palette";
+import { bestContrastTextColor } from "../styles/corporationLivery";
 import { CorporateLogo } from "./CorporateLogo";
 
 /** The cue, by its on-disk name.
@@ -299,6 +310,47 @@ export function DividendMoneyMachine({ event, onCue, onDone }: DividendMoneyMach
         role="status"
         aria-live="polite"
       >
+        {/* ==================================================================
+             DESIGN NOTE 1098: THE PLAYER CARD'S HEADER, BORROWED WHOLE
+            ==================================================================
+            REPORTED: "it needs to have the background color of the player cards, and perhaps the entire row
+            with the player name should be in the player color, repeating the stripe theme."
+
+            #1060 CHOSE A 9px DOT AND ITS REASONING DOES NOT COVER THIS. It rejected the seat colour as INK on
+            a dark panel -- "the seat colours were chosen against a light card" -- which is true and is a
+            different proposal. A stripe puts the colour on the GROUND and lets `bestContrastTextColor` pick
+            the ink per seat, which is what the player card has always done. Measured against that picker all
+            six seats clear 4.5:1 (5.04 to 6.37); #1050's "three of the six under threshold" was measured
+            against WHITE specifically, and the picker flips to black for Moss, Ochre and Teal.
+
+            #1052'S RULE IS OBEYED HERE: THE STRIPE IS IDENTITY AND NOTHING ELSE. My first draft put the new
+            total on it, which is the exact mistake that note records and corrects on the sibling surface --
+            "the same number twice, four lines apart" -- made again, one surface over. The total stays in the
+            body.
+
+            AND THAT IS WHAT KEEPS THE MERGE FALLING DOWNWARD. The payer row drops onto the total the way a
+            column sum is written, addend over sum; #1082's own phase names -- holding, falling, landed -- say
+            which way this is meant to go. A stripe carrying the total would have inverted it.
+
+            SO THE TWO PAYOUT SURFACES NOW SPEAK ONE LANGUAGE, which is #569's case for seat colour: "colour
+            in exactly one place is decoration; colour meaning the same thing in several places is a
+            language." `PrivateRevenueModal` #1049 got here first; this is the same header on the same paper.
+
+            THE COST IS HEIGHT: 64px to 90px, +41%, on a panel that appears every Operating Round. #1049
+            recorded a size objection to exactly this layout and called it "a toast objection". This is still
+            an overlay over the board, so the objection is live -- ruled anyway, and noted here so the retreat
+            is obvious if it plays heavy: drop the divider and the label back to ~78px, keeping the stripe. */}
+        <header
+          style={{
+            ...styles.stripe,
+            ...(event.seatColor
+              ? { backgroundColor: event.seatColor, color: bestContrastTextColor(event.seatColor) }
+              : styles.stripeUnknown),
+          }}
+        >
+          {event.playerName}
+        </header>
+
         {/* ---- Top line: the payer, falling ---- */}
         <div
           style={styles.payerRow}
@@ -325,22 +377,15 @@ export function DividendMoneyMachine({ event, onCue, onDone }: DividendMoneyMach
           <span style={styles.payerAmount}>+${event.amount}</span>
         </div>
 
-        {/* ---- Bottom line: the viewer, and the total that absorbs it ---- */}
+        {/* ==================================================================
+             DESIGN NOTE 1098: THE TOTAL, AND ITS LABEL
+            ==================================================================
+            THE NAME LEFT THIS ROW for the stripe, which left the total floating against an empty gutter and
+            broke the label/figure rhythm the payer row above it keeps. `your cash` restores it.
+            FLAGGED AS AN ADDITION rather than slipped in: no such caption existed before. It is here because
+            the layout asked for it, not because the report did. */}
         <div style={styles.holderRow}>
-          <span style={styles.holder}>
-            {/* Design note #1060: the seat's colour as a dot rather than as ink. The panel is dark by
-                requirement and the seat colours were chosen against a light card -- #1050 measured three of
-                the six under the body-text threshold, and that was against WHITE. A swatch carries the
-                identity with no contrast claim attached. */}
-            <span
-              aria-hidden="true"
-              style={{
-                ...styles.seatDot,
-                ...(event.seatColor ? { backgroundColor: event.seatColor } : styles.seatDotUnknown),
-              }}
-            />
-            <span style={styles.holderName}>{event.playerName}</span>
-          </span>
+          <span style={styles.holderLabel}>your cash</span>
           <span style={styles.holderTotal}>${shown}</span>
         </div>
       </div>
@@ -424,38 +469,75 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     gap: "2px",
     minWidth: "200px",
-    padding: "9px 13px",
+    /* Design note #1098: NO HORIZONTAL PADDING ON THE PANEL. The stripe has to reach both edges the way the
+       player card's does, and a padded parent would inset it into a floating band. The rows below carry their
+       own padding instead -- which is how `PlayerCards` arranges the same thing. */
+    padding: "0 0 9px",
     borderRadius: "10px",
-    border: "1px solid rgba(255,255,255,0.14)",
-    backgroundColor: "rgba(18, 21, 29, 0.9)",
-    backdropFilter: "blur(6px)",
+    /* Design note #1098: the card's own border, and `overflow: hidden` so the stripe's square top corners are
+       clipped to the panel's radius rather than poking out of it. */
+    border: `1px solid ${CARD_BORDER}`,
+    overflow: "hidden",
+    /* ==================================================================
+        DESIGN NOTE 1098: PAPER, AND #1060's REQUIREMENT IS BETTER MET BY IT
+       ==================================================================
+       #1060 RULED "a distinct background ... so the text is fully legible against the game board and colored
+       heralds", and satisfied it with a near-opaque dark wash plus a blur. The card surface satisfies the same
+       requirement more strongly: it is fully opaque and it is the lightest thing on a dark board, so it owns
+       its pixels outright.
+       `backdropFilter` IS GONE WITH THE TRANSLUCENCY it existed to soften. A blur behind an opaque layer is
+       work no one can see. */
+    backgroundColor: CARD_SURFACE,
     boxShadow: "0 10px 28px rgba(0,0,0,0.55)",
-    color: "#e8ecf4",
+    color: CARD_INK,
     fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif",
     /* It reports; it does not receive -- `ActionToast`'s standing rule, and this sits over the board where a
        swallowed click is a lost tile lay. */
     pointerEvents: "none",
   },
+  /** Design note #1098: the stripe, the player card's header at this panel's scale. Square-topped because the
+   *  panel's `overflow: hidden` rounds it; `CARD_INK` only as the unknown-seat fallback's ink. */
+  stripe: {
+    padding: "5px 13px",
+    fontSize: FONT_SIZE.small,
+    fontWeight: 800,
+    letterSpacing: "0.2px",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
+  /** Design note #232: a seat the roster cannot place gets the muted paper, never a guessed hue -- the same
+   *  answer `PrivateRevenueModal` #1050 gives for the same absence. */
+  stripeUnknown: { backgroundColor: CARD_DIVIDER, color: CARD_INK },
   payerRow: {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
     gap: "12px",
+    padding: "7px 13px 0",
   },
   payer: { display: "inline-flex", alignItems: "center", gap: "6px", minWidth: 0 },
   payerTicker: {
     fontSize: FONT_SIZE.small,
     fontWeight: 700,
-    color: "#aab3c4",
+    color: CARD_INK_MUTED,
     letterSpacing: "0.03em",
   },
-  heraldFallback: { fontSize: FONT_SIZE.micro, fontWeight: 700, color: "#aab3c4" },
+  heraldFallback: { fontSize: FONT_SIZE.micro, fontWeight: 700, color: CARD_INK_MUTED },
   /* The figure that travels. Green because it is money arriving -- #670's rule, and the one colour on this
-     panel that means something. */
+     panel that means something.
+     ==================================================================
+      DESIGN NOTE 1098: THE GREEN CHANGES TOKEN BECAUSE THE GROUND DID
+     ==================================================================
+     `#5fd39a` READS 9.8:1 ON THE OLD DARK PANEL AND 1.7:1 ON PAPER -- effectively invisible, and the one
+     figure on this panel that must not be. `CARD_INK_POSITIVE` is the palette's answer for money on the card
+     surface at 6.0:1, already used by `PrivateRevenueModal` for exactly this.
+     A SWAP, NOT A NEW COLOUR. The rule "#670: green means money arriving" is untouched; only the register it
+     is spoken in has changed, the same way ink does between a dark panel and a light one. */
   payerAmount: {
     fontSize: FONT_SIZE.strong,
     fontWeight: 800,
-    color: "#5fd39a",
+    color: CARD_INK_POSITIVE,
     fontVariantNumeric: "tabular-nums",
     flex: "none",
   },
@@ -464,17 +546,19 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     justifyContent: "space-between",
     gap: "12px",
+    padding: "5px 13px 0",
+    marginTop: "4px",
+    /* Design note #1098: the rule the payer falls ACROSS. It is what makes the drop read as a sum landing in
+       a total rather than two figures happening to be near each other -- the line under a column of addends,
+       which is the convention the whole animation is imitating. */
+    borderTop: `1px solid ${CARD_DIVIDER}`,
   },
-  holder: { display: "inline-flex", alignItems: "center", gap: "7px", minWidth: 0 },
-  seatDot: { width: "9px", height: "9px", borderRadius: "999px", flex: "none" },
-  seatDotUnknown: { backgroundColor: "#4a5164" },
-  holderName: {
-    fontSize: FONT_SIZE.small,
-    fontWeight: 700,
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap",
-  },
+  /** Design note #1098: see the render site -- an addition, made because the name's departure left the gutter
+   *  empty and the row without the label/figure rhythm the payer row keeps. */
+  holderLabel: { fontSize: FONT_SIZE.micro, color: CARD_INK_MUTED, fontWeight: 600 },
+  /* Design note #1098: `holderName` and `seatDot` are DELETED, not left unused. The name is the stripe's now,
+     and the dot was #1060's substitute for a colour it could not otherwise show -- an orphaned style for a
+     thing this panel has stopped doing is how the thing comes back. */
   holderTotal: {
     fontSize: FONT_SIZE.strong,
     fontWeight: 800,

@@ -13,6 +13,7 @@
 
 import type {
   GameStateResponse,
+  PublicCompanyState,
   RoundType,
   TileColor,
   WaterfallMiniAuctionStatus,
@@ -38,10 +39,12 @@ import { trimToTrainLimit } from "./trainLimit";
 // actingSeatIndex lives in gameState.ts, not here: it asks about CONTRACT state and the
 // live dashboard needs it too. See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #0
 import type { GameplayExecuteMsg } from "./sessionKey";
+// Design note #1100: numerals name tiers, words count trains.
+import { namedTrains as sayTrains } from "./trainPhrasing";
 import type { MapGridResponse, MapTileEntry } from "../components/hexContractTypes";
 import { TILE_CATALOG_BY_ID, type TileColorTier } from "../components/hexTileCatalog";
 import { archetypeForHex, hexValueForEra } from "../components/hexGeometry";
-import { depotInventory, derivePhase, TIER_ORDER, type GamePhase } from "./gamePhase";
+import { depotInventory, derivePhase, TIER_ORDER, trainTier, type GamePhase } from "./gamePhase";
 // Design note #712: the market-zone purchase rules, shared with the Stock Round panel.
 import { sharePurchaseBlock, type PriceZone } from "./sharePurchase";
 import { hasActedThisTurn } from "./turnAction";
@@ -764,6 +767,43 @@ export function openingStockRoundReset(
 }
 
 
+/** The first Diesel starts the doom clock for every Carcosan 5 and 6 still in play.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 1089: THE TRIGGER IS THE D, THE DEADLINE IS AN OR SET LATER
+ *  ==================================================================
+ *
+ *  RULED: "A Carcosan 5 or 6 begins this doom clock countdown the moment the first D-train is purchased ...
+ *  any Carcosan train will survive until the exact conclusion of the next full set of Operating Rounds after
+ *  its rust condition is triggered."
+ *
+ *  NOT `RUSTS_WHEN_NEXT_TIER_ARRIVES`, and that is the point of the whole rule. In this codebase's 1830 a 5,
+ *  a 6 and a Diesel are PERMANENT -- `gamePhase.ts` says so in as many words -- so an ordinary 5 outlives
+ *  every phase. The gift is a curse precisely because it does not.
+ *
+ *  IDEMPOTENT, because the clock must not restart. A second Diesel purchase re-enters this function, and a
+ *  corporation whose deadline is already set keeps the deadline it had -- otherwise every D bought would push
+ *  the fog back another OR set and the gift would become immortal by being popular. */
+function startCarcosanDoomClock(state: GameStateResponse): GameStateResponse {
+  const deadline = (state.macro_round_number ?? 0) + 1;
+  let touched = false;
+  const companies = (state.public_companies ?? []).map((company) => {
+    if ((company.carcosan_trains?.length ?? 0) === 0) return company;
+    if (company.carcosan_doom_after_macro_round !== undefined) return company;
+    touched = true;
+    return { ...company, carcosan_doom_after_macro_round: deadline };
+  });
+  return touched ? { ...state, public_companies: companies } : state;
+}
+
+/* Design note #1092: `expireCarcosanTrains` IS DELETED. It removed the train at the Stock Round boundary,
+   which was right while the fog was a rust and wrong once it became a narrated stage -- there is no run at a
+   boundary, so nothing there could carry the clause or the cue. Its two jobs moved: the DUE DATE is
+   `yellowSign.ts` #1092's `fogIsDue`, and the REMOVAL is the `stage === "fog"` arm of `YellowSignEvent`
+   above, beside the two stages that already worked that way.
+   DELETED RATHER THAN LEFT UNCALLED: an exported reducer helper with no caller is a second way to take the
+   train, waiting for somebody to find it. */
+
 /** Ghost trains become ordinary at the end of an Operating Round, and the fleet is trimmed if that puts a
  *  corporation over the limit -- design note #1046. */
 function expireGhostTrains(state: GameStateResponse): GameStateResponse {
@@ -797,6 +837,12 @@ export function applyPhaseChange(
   state: GameStateResponse,
   arrivingTier: string,
 ): GameStateResponse {
+  /* Design note #1089: THE DIESEL ALSO STARTS A CLOCK. A Carcosan 5 or 6 is not rusted by the D -- neither
+     tier appears in `RUSTS_WHEN_NEXT_TIER_ARRIVES`, and that is why the gift is a curse -- so it is marked
+     here and taken an OR set later by `expireCarcosanTrains`. Placed at the TOP because the sweep below
+     rebuilds `public_companies` and a mark written after it would be discarded. */
+  const state2 = arrivingTier === "D" ? startCarcosanDoomClock(state) : state;
+  state = state2;
   const doomed = new Set(tiersRustedBy(arrivingTier));
   const limit = limitForTier(state, arrivingTier);
 
@@ -1089,6 +1135,62 @@ export interface FleetLoss {
  *  `rusted`, NOT `discarded`, because that is what happened: the arriving tier killed these trains and the
  *  reprieve only postponed it. The train-limit trim is a different cause with a different remedy and is
  *  narrated where it happens (#896's split). */
+/** The marked trains a single dispatch actually destroyed, for one corporation.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 1099: EXTRACTED BECAUSE TWO FUNCTIONS NEEDED THE SAME ANSWER
+ *  ==================================================================
+ *
+ *  REPORTED, under Gentle Rust: three reprieved 2-trains finished their last run, and the player got the Rust
+ *  modal (correct) AND a Train Limit modal claiming the same three trains were "returned to the depot to meet
+ *  the new limit of 3" (not correct -- the limit had taken nothing).
+ *
+ *  BOTH NARRATORS RUN ON EVERY DISPATCH, back to back in `App.tsx`, and they disagreed about one event.
+ *  `describeReprieveExpiries` knew these trains had rusted; `describeFleetLosses` saw three models leave
+ *  `owned_trains` and, under this variant, attributed every departure to the trim. That attribution was
+ *  written for the PHASE CHANGE, where #979 makes rust take nothing, and its own note says so: "rust only
+ *  marks, so a doomed train that left the fleet in the same phase change left because the trim took it."
+ *  The premise is true there and false here, and the sentence outlived it -- this codebase's third recurring
+ *  shape, named in its own notes.
+ *
+ *  SO THE QUESTION HAS ONE OWNER NOW. Both callers ask this function instead of each deriving an answer, which
+ *  is the only fix that keeps them from disagreeing again -- #891, and the reason a shared helper is worth
+ *  more here than a condition bolted onto the second caller. */
+export function expiredReprieves(
+  was: PublicCompanyState | undefined,
+  now: PublicCompanyState,
+): readonly string[] {
+  const marked = was?.pending_rust_trains;
+  // #232: absent is "the chain did not say", and a build that never reports the field expires nothing.
+  if (marked == null || marked.length === 0) return [];
+  if ((now.pending_rust_trains?.length ?? 0) !== 0) return [];
+  const had = was?.owned_trains;
+  const has = now.owned_trains;
+  if (had == null || has == null) return [];
+
+  /* Multiset difference, for `describeFleetLosses`' own reason: two 3-trains are two trains, and a
+     corporation that loses one still holds the other. */
+  const remaining = [...has];
+  const gone: string[] = [];
+  for (const model of had) {
+    const at = remaining.indexOf(model);
+    if (at >= 0) remaining.splice(at, 1);
+    else gone.push(model);
+  }
+  /* ONLY THE MARKED MODELS. A dispatch that expired a reprieve AND lost a train to something else would
+     otherwise report the second as rust; intersecting with the marks keeps this about the one event. */
+  const marks = [...marked];
+  const destroyed: string[] = [];
+  for (const model of gone) {
+    const at = marks.indexOf(model);
+    if (at >= 0) {
+      marks.splice(at, 1);
+      destroyed.push(model);
+    }
+  }
+  return destroyed;
+}
+
 export function describeReprieveExpiries(
   before: GameStateResponse,
   after: GameStateResponse,
@@ -1098,35 +1200,8 @@ export function describeReprieveExpiries(
     const was = (before.public_companies ?? []).find(
       (entry) => entry.company_id === company.company_id,
     );
-    const marked = was?.pending_rust_trains;
-    // #232: absent is "the chain did not say", and a build that never reports the field expires nothing.
-    if (marked == null || marked.length === 0) continue;
-    if ((company.pending_rust_trains?.length ?? 0) !== 0) continue;
-    const had = was?.owned_trains;
-    const has = company.owned_trains;
-    if (had == null || has == null) continue;
-
-    /* Multiset difference, for `describeFleetLosses`' own reason: two 3-trains are two trains, and a
-       corporation that loses one still holds the other. */
-    const remaining = [...has];
-    const gone: string[] = [];
-    for (const model of had) {
-      const at = remaining.indexOf(model);
-      if (at >= 0) remaining.splice(at, 1);
-      else gone.push(model);
-    }
-    /* ONLY THE MARKED MODELS. A dispatch that expired a reprieve AND lost a train to something else would
-       otherwise report the second as rust; intersecting with the marks keeps this function about the one
-       event it names. */
-    const marks = [...marked];
-    const destroyed: string[] = [];
-    for (const model of gone) {
-      const at = marks.indexOf(model);
-      if (at >= 0) {
-        marks.splice(at, 1);
-        destroyed.push(model);
-      }
-    }
+    // Design note #1099: the shared answer, so this narrator and the limit's cannot disagree about one event.
+    const destroyed = expiredReprieves(was, company);
     if (destroyed.length === 0) continue;
     losses.push({
       companyId: company.company_id,
@@ -1210,6 +1285,24 @@ export function describeFleetLosses(
         if (at >= 0) already.splice(at, 1);
         else newlyReprieved.push(model);
       }
+      /* ==================================================================
+          DESIGN NOTE 1099: A REPRIEVE RUNNING OUT IS NOT THE LIMIT TAKING A TRAIN
+         ==================================================================
+         REPORTED: three reprieved 2-trains finished their last run and the player got the Rust modal AND a
+         Train Limit modal about the same three trains -- "returned to the depot to meet the new limit of 3",
+         when the limit had taken nothing.
+         THE PARAGRAPH ABOVE IS WHY, and it is worth reading as written: "under this variant every departure
+         is the limit's. Rust only marks, so a doomed train that left the fleet in the same phase change left
+         because the trim took it." TRUE AT A PHASE CHANGE, where #979 stops rust removing anything. FALSE AT
+         AN EXPIRY, which is the one moment under this variant when rust does empty `owned_trains` -- and
+         `describeReprieveExpiries` was already narrating it correctly two hundred lines down.
+         SO THE EXPIRED MODELS COME OUT OF `lost` BEFORE IT IS READ AS A DISCARD, asked of the same helper the
+         other narrator asks. Removed by multiset so a corporation that loses a marked 2-train to rust and a
+         second, unmarked one to the trim still gets both sentences. */
+      for (const model of expiredReprieves(was, company)) {
+        const at = lost.indexOf(model);
+        if (at >= 0) lost.splice(at, 1);
+      }
     }
     if (lost.length === 0 && newlyReprieved.length === 0) continue;
 
@@ -1250,11 +1343,11 @@ export function describeFleetLoss(loss: FleetLoss, trainLimit: number | null): s
 }
 
 /** "its 2-train", "its 3-train and 3-train" -- the tier spelled as players say it (#696). */
+/* Design note #1100: the phrasing moved to `trainPhrasing.ts`, shared with the modal so a rule change reaches
+   both. THE POSSESSIVE STAYS HERE, because it belongs to this sentence: the modal says "B&O's ..." where this
+   says "its ...", and a helper that assumed either would be worked around by the other. */
 function namedTrains(models: readonly string[]): string {
-  const named = models.map((model) => `${model}-train`);
-  if (named.length === 1) return `its ${named[0]}`;
-  if (named.length === 2) return `its ${named[0]} and ${named[1]}`;
-  return `its ${named.slice(0, -1).join(", ")} and ${named[named.length - 1]}`;
+  return `its ${sayTrains(models)}`;
 }
 
 /* ==================================================================
@@ -1332,7 +1425,69 @@ export function settleTrainSale(
   const added = withTrains(removed, buyerId, (trains) => [...trains, modelType]);
   // Corporation to corporation: the bank is not involved, so this is one
   // debit and one matching credit rather than a mint.
-  return adjustTreasury(adjustTreasury(added, buyerId, -amount), sellerId, amount);
+  const settled = adjustTreasury(adjustTreasury(added, buyerId, -amount), sellerId, amount);
+
+  /* ==================================================================
+      DESIGN NOTE 1090: THE BLOOD PRICE, AND WHAT ELSE MOVES WITH THE TRAIN
+     ==================================================================
+     RULED: "The train immediately loses its Carcosa/Yellow Sign flag and becomes a standard train for the
+     buying corporation ... The only way a corporation loses the [is_carcosan] flag is by successfully
+     transferring the Carcosa train to another company (paying the Blood Price)."
+
+     SO A CARCOSAN TRANSFER MOVES FOUR THINGS AND CLEARS A FIFTH, and it is worth listing them because a
+     partial version of this is the likeliest bug:
+       the train        moves, like any other train (above).
+       `carcosan_trains` LOSES the model at the seller, and the buyer does NOT gain it -- the gold trim is
+                        burned off by the sale. That is the ruled "becomes a standard train".
+       `is_carcosan`     CLEARS at the seller. The one eraser in the game.
+       the doom clock    clears with it: there is nothing left for the fog to come for.
+       the share price   is the caller's, not this function's -- see below.
+
+     THE BUYER IS NOT CURSED. Ruled explicitly ("becomes a standard train for the buying corporation"), and
+     it is what makes the trade a real decision rather than a hot potato: somebody has to want the train.
+
+     ONLY WHEN THE TRAIN WAS ACTUALLY CARCOSAN. An ordinary sale between two corporations must not move a
+     market token, so the seller's mark is the gate and `movedCarcosan` reports it to the caller.
+
+     THE MARKET MOVE IS NOT PERFORMED HERE, deliberately. This function is a reducer over `public_companies`;
+     the chart lives in `SandboxMarketPrices`, a separate structure the caller owns (`applySandboxMarketAction`
+     is the only thing that writes it). Reaching across would give the market two authors, which is the split
+     #891 keeps costing us. `carcosanTransfer` is returned instead and `App.tsx` moves the token. */
+  const marked = seller?.carcosan_trains ?? [];
+  const markedAt = marked.indexOf(modelType);
+  if (markedAt < 0) return settled;
+
+  const survivingMarks = [...marked];
+  survivingMarks.splice(markedAt, 1);
+  return {
+    ...settled,
+    public_companies: settled.public_companies.map((entry) =>
+      entry.company_id === sellerId
+        ? {
+            ...entry,
+            carcosan_trains: survivingMarks,
+            is_carcosan: false,
+            ...(survivingMarks.length === 0
+              ? { carcosan_doom_after_macro_round: undefined }
+              : {}),
+          }
+        : entry,
+    ),
+  };
+}
+
+/** Whether this sale is the Carcosa train changing hands -- asked BEFORE `settleTrainSale` clears the mark.
+ *
+ *  Design note #1090: a predicate rather than a return value on the settle, because the caller needs the
+ *  answer to decide whether to move the market and what to log, and it needs it while the seller still has
+ *  the flag. Asking after the fact would require the caller to diff two states for a boolean. */
+export function isCarcosanTransfer(
+  state: GameStateResponse,
+  sellerId: number,
+  modelType: string,
+): boolean {
+  const seller = (state.public_companies ?? []).find((entry) => entry.company_id === sellerId);
+  return (seller?.carcosan_trains ?? []).includes(modelType);
 }
 
 /* A reducer over the auction's own response shape, with the same charter: pointers, counters and lists, no rules. The cash side is RETURNED for the caller to apply -- one state change per atom.
@@ -1768,7 +1923,10 @@ export interface SandboxMarketResult {
     companyId: number;
     from: number;
     to: number;
-    reason: "sale" | "withhold" | "payout";
+    /* Design note #1090: `bloodPrice` is the fourth mover. #435's rule was "three movers, three words" and
+       the word matters -- the log line and the tint both branch on it, and folding this into `sale` would
+       make a Carcosa transfer report itself as somebody dumping shares. */
+    reason: "sale" | "withhold" | "payout" | "bloodPrice";
   } | null;
 }
 
@@ -1793,6 +1951,21 @@ export interface SandboxMarketContext {
    *  a declaration the reducer refuses would still walk the token left -- which IS the reported symptom, a
    *  price that moved further than anything on the board accounts for. One refusal, asked by both. */
   dividendRefused?: (companyId: number) => boolean;
+  /** ==================================================================
+   *   DESIGN NOTE 1090: THE BLOOD PRICE, INJECTED LIKE EVERY OTHER MOVE
+   *  ==================================================================
+   *
+   * TWO CALLBACKS, FOR THE SAME REASON THE SALE HAS TWO. `projectBloodPrice` is the geometry, injected
+   * because `utils/` must not import `components/` (#273); `isCarcosanSale` is the legality, injected because
+   * this atom advances BEFORE the game state (#272/#273) and would otherwise walk a token for an ordinary
+   * train sale that happened to name the right model.
+   *
+   * #748a AND #774 ARE THE SAME LESSON TWICE and this is the third: "the board and the chart would then
+   * disagree permanently, and the visible symptom is a price drop with no matching change in anybody's
+   * holdings -- which reads as a market bug rather than as a refused action." A Blood Price charged on a
+   * non-Carcosan sale would be exactly that, and charged on a trade the seller had no warning about. */
+  projectBloodPrice?: (from: SandboxMarketMark) => SandboxMarketMark | null;
+  isCarcosanSale?: (sellerId: number, modelType: string) => boolean;
 }
 
 export function applySandboxMarketAction(
@@ -1812,6 +1985,36 @@ export function applySandboxMarketAction(
     // the sold-out check do. So this prices the trade and leaves the chart
     // alone, which is a real rule rather than an omission.
     return { prices, tradePrice: priceOf(msg.BuyStock.protocol_id), moved: null };
+  }
+
+  /* ==================================================================
+      DESIGN NOTE 1090: THE ONLY MARKET MOVE A TRAIN CAN CAUSE
+     ==================================================================
+     RULED: "Upon successful transfer, execute the Left 1, Down 1 market movement for the selling
+     corporation."
+     GATED ON THE SELLER'S MARK, not on the model: two corporations may both hold a 5-train and only one of
+     them holds THE 5-train. `isCarcosanSale` asks the game state, which still carries the flag at this point
+     because this atom runs before the reducer clears it.
+     THE SELLER MOVES, NOT THE BUYER. The toll is for letting the thing go.
+     A MOVE THAT LANDS WHERE IT STARTED IS NOT A MOVE. At the chart's bottom-left corner both steps clamp,
+     and reporting `from === to` would print "its share price fell from $X to $X". */
+  if ("BuyTrainFromCorporation" in msg) {
+    const { seller_protocol_id, model_type } = msg.BuyTrainFromCorporation;
+    if (ctx?.isCarcosanSale?.(seller_protocol_id, model_type) !== true) return unchanged;
+    const mark = prices[seller_protocol_id] ?? null;
+    if (mark === null || !ctx?.projectBloodPrice) return unchanged;
+    const landed = ctx.projectBloodPrice(mark);
+    if (!landed || (landed.x === mark.x && landed.y === mark.y)) return unchanged;
+    return {
+      prices: { ...prices, [seller_protocol_id]: landed },
+      tradePrice: null,
+      moved: {
+        companyId: seller_protocol_id,
+        from: mark.price,
+        to: landed.price,
+        reason: "bloodPrice",
+      },
+    };
   }
 
   if ("SellStock" in msg) {
@@ -2119,6 +2322,19 @@ function settleOperatingCursor(
        rather than being singled out. It is usually the newest and most expensive train, so it usually
        survives, which is the generous reading of a gift. */
     const settled = expireGhostTrains(expired);
+    /* ==================================================================
+        DESIGN NOTE 1089: THE FOG COMES AT THE END OF THE OR SET, NOT THE OR
+       ==================================================================
+       TWO EXPIRIES, ONE TRANSITION, DIFFERENT PERIODS. `expireGhostTrains` runs every Operating Round -- the
+       limit exemption is an OR-long grace. The doom clock is measured in OR SETS, so `expireCarcosanTrains`
+       compares `macro_round_number` against the deadline and does nothing on the rounds in between.
+       WHICH MAKES THIS TRANSITION THE RIGHT HOME FOR BOTH. #898 established that the opening of a Stock
+       Round is exactly the moment an OR set has finished, and the counter has not been incremented yet at
+       this point, so it still names the set that just ended. */
+    /* Design note #1092: `expireCarcosanTrains` IS GONE FROM THIS TRANSITION. #1089 removed the train here;
+       the fog is now the third step of the revenue sequence and takes it on a RUN, where it can be narrated
+       and can ring. What survives at this boundary is `expireGhostTrains` -- the limit exemption, which is a
+       per-Operating-Round grace and has nothing to do with the doom clock. */
     if (settled.operating_sub_phase === undefined) return settled;
     return { ...settled, operating_sub_phase: undefined };
   }
@@ -2270,7 +2486,8 @@ function settleOperatingCursor(
    * KEYED ON THE ARRIVAL AT `Hardware`, not on the message. `DeclareDividends` is one way in and
    * `AdvanceOperatingSubPhase` is the other (the Skip button and #439's auto-skip both arrive as that), and a
    * rule written per message would have to name both and would miss the third. What matters is that the
-   * cursor is entering Buy Trains, which is one comparison.
+   * cursor is entering the step after the run, which is one comparison.
+   * DESIGN NOTE 1102 CORRECTED WHICH STEP THAT IS: it read "entering Buy Trains", two steps past the run.
    *
    * THE ACTING CORPORATION, NOT THE OUTGOING ONE. This fires mid-turn, so `before`'s cursor is the
    * corporation still acting -- the opposite of the turn-change path below it, where the outgoing one is the
@@ -2281,10 +2498,27 @@ function settleOperatingCursor(
    * hand the train a second run, which is #906a's own bug in reverse. Two triggers for one event is normally
    * the fault this codebase keeps finding; here they are the same expression called on the same helper, and
    * the second is idempotent because the first leaves nothing to expire. */
-  const enteringHardware = next === "Hardware" && current !== "Hardware";
+  /* ==================================================================
+      DESIGN NOTE 1102: THE REPRIEVE ENDS WHEN THE RUN DOES, NOT TWO STEPS LATER
+     ==================================================================
+     REPORTED: "on Gentle Rust, the Rust modal is firing after a player finishes the Dividends phase ... really
+     it should happen at the beginning of the Dividends subphase / end of Run Routes."
+     IT FIRED ON `enteringHardware`, WHICH IS THE STEP AFTER DIVIDENDS. The rule the variant states is "you
+     can run these trains one more time before they retire", so the reprieve is spent the moment the run is
+     over -- and the first moment after the run is the cursor entering Dividends. Hardware was simply the
+     first place anybody looked for "later"; it was never the rule.
+     THE CONSEQUENCE THAT MADE IT WORTH MOVING is the collision, not the accuracy: at Hardware the modal lands
+     on top of the dividend money machine and the revenue flash, so a blocking interruption arrives over an
+     animation the player is still reading.
+     NO PAYOUT CHANGES WITH IT, which is the thing to check before moving a reducer step: `DeclareDividends`
+     prices the turn from `revenue_amount` on the message (#752), never from the fleet, so a train removed on
+     the way INTO Dividends cannot alter what Dividends pays.
+     THE TURN-CHANGE BACKSTOP BELOW IS UNTOUCHED and still earns its place -- a turn can end without reaching
+     Dividends at all, and a reprieve that survived that would hand the train a second run. */
+  const enteringDividends = next === "Dividends" && current !== "Dividends";
   const actingCorporation =
     (after.active_operating_order ?? [])[after.active_corporation_index] ?? null;
-  const settled = enteringHardware ? expireReprieveFor(after, actingCorporation) : after;
+  const settled = enteringDividends ? expireReprieveFor(after, actingCorporation) : after;
   if (next === current) return settled;
   return { ...settled, operating_sub_phase: next };
 }
@@ -3114,6 +3348,47 @@ function applyOneAction(
     const company = state.public_companies.find((entry) => entry.company_id === protocol_id);
     if (!company) return state;
 
+    /* ==================================================================
+        DESIGN NOTE 1092: THE FOG COLLECTS, AND THE CURSE STAYS
+       ==================================================================
+       THE THIRD STAGE, dispatched from the run that narrated it. It takes the named train and clears the
+       clock, and deliberately does NOT clear `is_carcosan`: ruled that "if the Carcosa train rusts while
+       owned, the corporation remains permanently cursed", which is the edge case the corporation-level flag
+       was added for -- a scoreboard keyed on holding the train would find nobody here.
+       THE MODEL COMES OFF THE MESSAGE, like the Mark's does (#902): by the time an old log replays here the
+       fleet has moved on, and re-deriving "the marked train" against a later roster could take a different
+       one than the game took.
+       REFUSES BY RETURNING THE STATE IT WAS HANDED if the train is already gone -- a replayed duplicate must
+       not take a second train. */
+    if (stage === "fog") {
+      const owned = company.owned_trains;
+      const marks = company.carcosan_trains ?? [];
+      const markedAt = marks.indexOf(model ?? "");
+      if (markedAt < 0) return state;
+      const survivingMarks = [...marks];
+      survivingMarks.splice(markedAt, 1);
+      const survivors = owned == null ? null : [...owned];
+      if (survivors) {
+        const at = survivors.indexOf(model ?? "");
+        if (at >= 0) survivors.splice(at, 1);
+      }
+      return {
+        ...state,
+        public_companies: state.public_companies.map((entry) =>
+          entry.company_id === protocol_id
+            ? {
+                ...entry,
+                ...(survivors === null ? {} : { owned_trains: survivors }),
+                carcosan_trains: survivingMarks,
+                ...(survivingMarks.length === 0
+                  ? { carcosan_doom_after_macro_round: undefined }
+                  : {}),
+              }
+            : entry,
+        ),
+      };
+    }
+
     if (stage === "mark") {
       /* THE TRAIN GOES AND THE TURN EARNS NOTHING. Ruled: "loses its lowest value train. It receives no
          standard route revenue for this submission. Instead, award the corporation cash equal to 0.5x the
@@ -3159,6 +3434,28 @@ function applyOneAction(
               ...entry,
               owned_trains: [...(entry.owned_trains ?? []), model],
               ghost_trains: [...(entry.ghost_trains ?? []), model],
+              /* ==================================================================
+                  DESIGN NOTE 1089: THREE MARKS, THREE CLOCKS, ONE GIFT
+                 ==================================================================
+                 `ghost_trains` IS THE LIMIT EXEMPTION and empties at the end of this Operating Round (#1046).
+                 `carcosan_trains` IS THE IDENTITY -- the gold trim, the chip icon, the thing the doom clock
+                 comes for -- and outlives it by a full OR set. Written together here and separated
+                 everywhere after, because this is the one moment they are the same train for the same
+                 reason. */
+              carcosan_trains: [...(entry.carcosan_trains ?? []), model],
+              /* THE CURSE IS ON THE COMPANY. Ruled: "the only way a corporation loses the flag is by
+                 successfully transferring the Carcosa train". It survives the train's own destruction, which
+                 is the edge case the end-game egg needed -- a scoreboard keyed on holding the train would
+                 find nobody once it had rusted. */
+              is_carcosan: true,
+              /* THE DOOM CLOCK, STARTED HERE ONLY FOR A GIFTED DIESEL. Ruled: "A Carcosan D-train begins
+                 this countdown the moment it is gifted ... completes the OR set in which it is gifted, and
+                 then the next OR set before disappearing into the fog." A gifted 5 or 6 waits for the first
+                 D-train instead, which `startCarcosanDoomClock` handles at the phase change.
+                 `+ 1` IS THE WHOLE RULE: triggered during set N, gone at the conclusion of set N + 1. */
+              ...(trainTier(model) === "D"
+                ? { carcosan_doom_after_macro_round: (state.macro_round_number ?? 0) + 1 }
+                : {}),
               has_yellow_sign: false,
             }
           : entry,

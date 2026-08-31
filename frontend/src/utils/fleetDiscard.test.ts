@@ -230,7 +230,12 @@ describe("the sentence describes what was actually removed", () => {
     const before = stateWith({ 1: ["3", "3", "4", "5"] });
     const [loss] = describeFleetLosses(before, applyPhaseChange(before, "5"));
     expect(describeFleetLoss(loss, 2)).toBe(
-      "C1: its 3-train and 3-train were discarded to meet the new limit of 2.",
+      /* Design note #1100: numerals name the TIER, words count the trains -- ruled, "write out the number
+       of trains and reserve numerals for the train tiers", because every train in 1830 is named by a numeral
+       and a sentence that also counts in numerals puts two unrelated numbers side by side.
+         AND IDENTICAL MODELS COLLAPSE, which is the half this line shows: "3-train and 3-train" names one
+         thing twice where a player counts. A mixed fleet still gets the list. */
+      "C1: its two 3-trains were discarded to meet the new limit of 2.",
     );
   });
 

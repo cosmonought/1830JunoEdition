@@ -47,6 +47,8 @@
  * See docs/ai_architecture/state_machine.md, fleetLossNotice.ts #896. */
 
 import type { FleetLoss } from "./sandboxSession";
+// Design note #1100: numerals name tiers, words count trains -- one authority, two surfaces.
+import { capitalise, countedTrains, namedTrains, spellCount } from "./trainPhrasing";
 // Design note #1032: `turnGuardKey` is no longer imported. It is still the right tool for a guard that SHOULD
 // reset each turn -- `App.tsx` uses it for two of those -- and was the wrong one here, where the thing being
 // remembered is an event rather than a showing. Its absence is the fix.
@@ -71,17 +73,10 @@ export interface FleetLossNotice {
   trainLimit: number | null;
 }
 
-/** "its 2-train", "its 3-train and 3-train" -- the tier spelled as players say it (#696).
- *
- *  A SECOND COPY OF `sandboxSession`'s `namedTrains`, deliberately: that one is module-private and exporting it
- *  to share four lines would widen a reducer's surface for a phrasing helper. If a third caller ever wants it,
- *  that is the moment to lift it out -- not this one. */
-function namedTrains(models: readonly string[]): string {
-  const named = models.map((model) => `${model}-train`);
-  if (named.length === 1) return named[0];
-  if (named.length === 2) return `${named[0]} and ${named[1]}`;
-  return `${named.slice(0, -1).join(", ")} and ${named[named.length - 1]}`;
-}
+/* Design note #1100: THE LOCAL COPY IS GONE, into `trainPhrasing.ts`. Its own note said "if a third caller
+   ever wants it, that is the moment to lift it out" -- and the trigger turned out not to be a third caller
+   but a RULE CHANGE, which has to reach both copies at once or this modal and the Activity Log describe one
+   loss two ways. */
 
 /** One loss, split into the notices a player should be stopped for.
  *
@@ -106,11 +101,11 @@ export function fleetLossNotices(
 
 /** The modal's title. Short, and it names the corporation, because the player may be running several. */
 export function noticeHeadline(notice: FleetLossNotice): string {
-  const count = notice.trains.length;
-  const plural = count === 1 ? "train" : "trains";
+  // Design note #1100: "three trains", not "3 trains" -- the numeral is reserved for the tier.
+  const many = countedTrains(notice.trains.length);
   return notice.cause === "rust"
-    ? `${notice.ticker} lost ${count} ${plural} to rust`
-    : `${notice.ticker} gave up ${count} ${plural} to the train limit`;
+    ? `${notice.ticker} lost ${many} to rust`
+    : `${notice.ticker} gave up ${many} to the train limit`;
 }
 
 /** What happened, in the order a president needs it: the event, then the consequence, then the remedy.
@@ -143,7 +138,9 @@ export function noticeBody(notice: FleetLossNotice): string {
   const trains = namedTrains(notice.trains);
   if (notice.cause === "rust") {
     const verb = notice.trains.length === 1 ? "has" : "have";
-    return `${notice.trains.length} of your ${notice.trains[0]}-trains ${verb} rusted.`;
+    /* Design note #1100: "Three of your 2-trains", the ruled form. The count opens the sentence, so it is
+       capitalised here rather than by `spellCount` -- see that function's note. */
+    return `${capitalise(spellCount(notice.trains.length))} of your ${notice.trains[0]}-trains ${verb} rusted.`;
   }
   /* THE LIMIT IS NAMED AND SO IS THE RULE, for #704's reason: "discarded its 2-train" without them reads as a
      choice the president made. It is not a choice -- 1830 takes the train, and the only latitude is which one. */

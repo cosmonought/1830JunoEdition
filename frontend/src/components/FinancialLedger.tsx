@@ -41,7 +41,9 @@ import {
   CHIP_INERT_INK,
 } from "../styles/palette";
 import { corporationFullName, corporationTitle } from "../utils/corporationNames";
-import { depotInventory, derivePhase, rustOutlook } from "../utils/gamePhase";
+import { depotInventory, derivePhase, rustOutlook, tileErasAt } from "../utils/gamePhase";
+import type { TrainTier } from "../utils/gamePhase";
+import { EraHex } from "./EraHex";
 // Design note #1035: how close the privates are to closing, for the pills that show them.
 import { privateClosureAlert } from "../utils/purchaseWarnings";
 import { formatNativeAmountCompact, NATIVE_DENOM_DISPLAY } from "../config";
@@ -52,6 +54,8 @@ import { CapacityPill, LastRoutePayout, TrainChips } from "./TrainBadges";
 import { playerLiquidity } from "../utils/endgame";
 import { marketZoneForPrice, type MarketGridResponse } from "./StockMarketRenderer";
 import { DEPOT_SCHEDULE, rustLabel } from "../utils/depotSchedule";
+import { showsCurseBesideName } from "../utils/carcosaCurse";
+import CarcosaMark from "./CarcosaMark";
 import {
   certificateBreakdown,
   formatCertificateCount,
@@ -152,7 +156,7 @@ function BankTreasurySection({ gameState }: { gameState: GameStateResponse }) {
     Number.isFinite(start) && start > 0 ? Math.round(((start - current) / start) * 100) : null;
 
   return (
-    <details style={{ ...styles.section, ...styles.sectionBank }}>
+    <details open style={{ ...styles.section, ...styles.sectionBank }}>
       <summary style={{ ...styles.sectionTitle, ...styles.sectionTitleBank, ...styles.sectionSummary }}>
         Bank Treasury
       </summary>
@@ -267,6 +271,27 @@ function DepotInventoryTable({ gameState }: { gameState: GameStateResponse }) {
                   <td style={styles.tdNumB}>{row.trainLimit}</td>
                   <td style={styles.td}>
                     <span style={styles.depotPhase}>{DEPOT_SCHEDULE[row.tier]?.phase ?? "—"}</span>
+                    {/* ==================================================================
+                         DESIGN NOTE 1094: THE HEXES ANSWER "WHEN CAN I LAY GREEN?"
+                        ==================================================================
+                        RULED: "add small, blank colored hexes (Yellow, Green, Brown) to the Bank Depot Train
+                        Inventory next to their respective Phases ... to clearly indicate tile availability."
+                        BESIDE THE PHASE RATHER THAN IN A NINTH COLUMN, chosen between the two the ruling
+                        offered. This table already carries eight columns inside a horizontal scroller, and a
+                        ninth would push the rightmost facts further out of reach to say something that costs
+                        no width at all inline -- where the eye is already reading "Phase 3".
+                        CUMULATIVE, per `tileErasAt` #1094: the strip grows down the table and a colour
+                        APPEARING is the unlock, so both questions are answered by one row.
+                        LABELLED FOR A SCREEN READER, because three `role="presentation"` hexes are silence to
+                        one. The sentence says what the colours mean rather than naming them. */}
+                    <span style={styles.depotTiles}>
+                      {tileErasAt(row.tier as TrainTier).map((era) => (
+                        <EraHex key={era} tone={era} size={11} />
+                      ))}
+                      <span style={styles.srOnly}>
+                        {` Tiles available: ${tileErasAt(row.tier as TrainTier).join(", ")}.`}
+                      </span>
+                    </span>
                   </td>
                   <td style={styles.td}>
                     {/* Design note #735: a LIST, because Phase 5 genuinely does two things. Semicolon-joined
@@ -411,7 +436,7 @@ export function PlayerAssetsSection({
     "arithmetic, run here.";
 
   return (
-    <details style={{ ...styles.section, ...styles.sectionPlayers }}>
+    <details open style={{ ...styles.section, ...styles.sectionPlayers }}>
       <summary style={{ ...styles.sectionTitle, ...styles.sectionTitlePlayers, ...styles.sectionSummary }}>
         Player Assets
       </summary>
@@ -690,7 +715,7 @@ function CorporationAssetsSection({
   }
 
   return (
-    <details style={{ ...styles.section, ...styles.sectionCorps }}>
+    <details open style={{ ...styles.section, ...styles.sectionCorps }}>
       <summary style={{ ...styles.sectionTitle, ...styles.sectionTitleCorps, ...styles.sectionSummary }}>
         Corporation Assets
       </summary>
@@ -740,6 +765,8 @@ function CorporationAssetsSection({
                           aria-hidden="true"
                         />
                         <span style={styles.corpTicker}>{company.ticker}</span>
+                        {/* Design note #1091: only once the train is gone -- while it is held, the chip's own sign says it. */}
+                        {showsCurseBesideName(company) && <CarcosaMark meaning="corporation" size={12} />}
                         {corporationFullName(company.ticker) && (
                           <span style={styles.corpFullName}>
                             {corporationFullName(company.ticker)}
@@ -776,6 +803,8 @@ function CorporationAssetsSection({
                         compact
                         outlook={outlook}
                         reprieved={company.pending_rust_trains}
+                        // Design note #1088: the Carcosa gift, so its chip shows the sign rather than a locomotive.
+                        ghosts={company.carcosan_trains}
                       />
                     </td>
                     <td style={styles.tdCenterB}>
@@ -785,6 +814,13 @@ function CorporationAssetsSection({
                         surface="dark"
                         compact
                         reprieved={company.pending_rust_trains}
+                        // Design note #1088: the same omission as the chips beside it -- see the subpanel.
+                        /* Design note #1089: THE PILL TAKES THE EXEMPTION, NOT THE IDENTITY. `ghost_trains`
+                        is "occupies no limit slot" and expires at the end of the OR; `carcosan_trains` is the
+                        gold trim and lasts an OR set longer. The pill is counting slots, so it wants the
+                        first -- and this is the one place the two are easy to swap, which is why both call
+                        sites say which they mean. */
+                        ghosts={company.ghost_trains}
                       />
                     </td>
                     <td style={styles.tdNumB}>
@@ -948,6 +984,26 @@ const styles: Record<string, React.CSSProperties> = {
   /* Design note #735: the phase this tier opens. Slightly brighter than the trigger ink -- it is the column a
      player scans down to find where they are, not a consequence to read. */
   depotPhase: { fontSize: FONT_SIZE.small, color: "#c8cdd8", fontWeight: 700 },
+  /** Design note #1094: the hex strip, on the same line as the phase it belongs to. `inline-flex` rather
+   *  than three bare SVGs so the gap between them is a property of the strip, and `whiteSpace: nowrap` so a
+   *  narrow column cannot wrap Brown onto its own line and make it look like a different fact. */
+  depotTiles: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "2px",
+    marginLeft: "6px",
+    whiteSpace: "nowrap",
+    verticalAlign: "middle",
+  },
+  /** Off-screen but announced -- the standard clip rectangle, not `display: none`, which is skipped. */
+  srOnly: {
+    position: "absolute",
+    width: "1px",
+    height: "1px",
+    overflow: "hidden",
+    clip: "rect(0 0 0 0)",
+    whiteSpace: "nowrap",
+  },
   /* One line per effect, unbulleted: the marker would be a third glyph in a table already carrying chips and
      badges, and two items do not need enumerating to be read as two. */
   depotEffects: {
@@ -1025,8 +1081,18 @@ const styles: Record<string, React.CSSProperties> = {
    * `aria-expanded` a screen reader needs, and Ctrl-F opening a panel to reveal a match inside it, which is
    * exactly what a player hunting one corporation's cash wants and what no hand-rolled version gives free.
    *
-   * COLLAPSED BY DEFAULT FALLS OUT OF THE ELEMENT: `<details>` without `open` is shut, so there is no initial
-   * state to get wrong on a remount.
+   * ==================================================================
+   *  DESIGN NOTE 1094: OPEN BY DEFAULT, WHICH REVERSES #1033's DEFAULT
+   * ==================================================================
+   * RULED: "default the three main panels in the Game Ledger to be fully open (`isOpen = true`) on load."
+   * #1033 SET THEM COLLAPSED AND SAID SO AS A VIRTUE -- "collapsed by default falls out of the element" --
+   * which was true and was the wrong thing to optimise for. The report that started #1033 was about being
+   * FORCED to scroll a massive list; folding solved that by making the panels foldable, and defaulting them
+   * shut then charged three clicks to everybody who opened the tab to read a number. The fold is the feature;
+   * the initial state is not.
+   * STILL NO STATE, JUST THE ATTRIBUTE. `<details open>` is the same element with the same keyboard
+   * behaviour, the same `aria-expanded`, and the same Ctrl-F reveal -- there is still no initial state to get
+   * wrong on a remount, only a different starting value for the element's own.
    *
    * THE `<h3>` BECAME THE `<summary>` rather than sitting inside one. A heading nested in the summary would
    * put the title twice into the accessibility tree -- once as the disclosure's label and once as a heading --

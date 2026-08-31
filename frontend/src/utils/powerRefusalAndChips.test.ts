@@ -20,7 +20,7 @@
 //
 // Source scans plus one pure-function call, so this file takes the node environment.
 
-import { readSource, sliceBetween, stripComments } from "./sourceScan";
+import { readSource, readStripped, sliceBetween, stripComments } from "./sourceScan";
 
 import { PRIVATE_COMPANY_CATALOG, abilitySummary } from "./privateCatalog";
 import { GAMEPLAY_MESSAGE_KEYS } from "./sessionKey";
@@ -219,12 +219,13 @@ describe("the chips have their own group and their own mark (design note #884)",
        that draws it, would take the association with it and nothing asked for that. */
     expect(STYLES).not.toContain("PRIVATE_POWER_GLOW_STOPS");
     expect(STYLES).not.toContain("#ff4d4d");
-    const fs = require("fs") as typeof import("fs");
-    const path = require("path") as typeof import("path");
-    const read = (relative: string) =>
-      fs.readFileSync(path.join(__dirname, "..", relative), "utf8");
-    expect(read("utils/privatePowerGlow.ts")).toContain("#ff4d4d");
-    expect(read("components/HexGridRenderer.tsx")).toContain("PRIVATE_POWER_GLOW_STOPS");
+    /* Design note #1097: DECLARED, NOT READ THROUGH A LOCAL HELPER. `sourceScanSweep.js` resolves
+       `const X = readStripped("path")`; a call inside an `expect` -- or through a wrapper -- is invisible to
+       it, and an invisible assertion is the kind that quietly stops being true. Two consts, two anchors. */
+    const glow = readStripped("utils/privatePowerGlow.ts");
+    const hexes = readStripped("components/HexGridRenderer.tsx");
+    expect(glow).toContain("#ff4d4d");
+    expect(hexes).toContain("PRIVATE_POWER_GLOW_STOPS");
   });
 });
 

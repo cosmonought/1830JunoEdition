@@ -92,7 +92,10 @@ describe("the unchanged roll's default is silence", () => {
     /* `playVariantCue`'s `enabled` ARGUMENT MEANS "THE PLAYER MUTED THIS", and silence-by-design is a
        different fact. Folding them together would make a muted cue and an intentionally silent one
        indistinguishable at the one place either could be debugged from. */
-    expect(APP).toContain("if (cue.audio !== null) {");
+    /* Design note #1094: `ephemeral &&` joined the condition, because a replayed log must not replay its
+       sounds. THE NULL CHECK IS STILL AT THE CALL SITE, which is what this case is about, and still for the
+       same reason. Asserted as a substring so a third clause does not break it. */
+    expect(APP).toContain("cue.audio !== null) {");
     expect(SFX).toContain("audio: string | null;");
   });
 });

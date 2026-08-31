@@ -40,6 +40,8 @@ import { FONT_SIZE } from "../styles/typography";
 // for a real room id -- so presidents rendered as raw `p-` ids here
 // while every other surface showed names.
 import { sandboxPlayerLabel } from "../utils/playerLabels";
+import { showsCurseBesideName } from "../utils/carcosaCurse";
+import CarcosaMark from "./CarcosaMark";
 import { CHIP_INERT_BG, CHIP_INERT_BORDER, CHIP_INERT_INK } from "../styles/palette";
 
 /* Design note #170: SHOW THE PERSON, NOT THE HASH. The President column rendered a raw bech32 address clipped
@@ -321,6 +323,8 @@ function OperatingRoundCorporationPanel({
                       aria-hidden="true"
                     />
                     <span style={styles.corpTicker}>{company.ticker}</span>
+                    {/* Design note #1091: only once the train is gone -- while it is held, the chip's own sign says it. */}
+                    {showsCurseBesideName(company) && <CarcosaMark meaning="corporation" />}
                     {corporationFullName(company.ticker) && (
                       <span style={styles.corpFullName}>
                         {corporationFullName(company.ticker)}
@@ -406,6 +410,8 @@ function OperatingRoundCorporationPanel({
                     surface="dark"
                     outlook={outlook}
                     reprieved={company.pending_rust_trains}
+                    // Design note #1088: the Carcosa gift, so its chip shows the sign rather than a locomotive.
+                    ghosts={company.carcosan_trains}
                   />
                 </td>
 
@@ -416,6 +422,22 @@ function OperatingRoundCorporationPanel({
                     phase={phase}
                     surface="dark"
                     reprieved={company.pending_rust_trains}
+                    /* ==================================================================
+                     DESIGN NOTE 1088: THE PILL HAS BEEN COUNTING THE GHOST
+                    ==================================================================
+                    `CapacityPill` HAS TAKEN A `ghosts` PROP SINCE #1046 and neither of its two call sites
+                    passed it, so `countableTrainCount` counted the gift and the pill read one over. The
+                    purchase gate (`trainPurchaseGate.ts`) and `TrainPurchasePanel` both exempt it
+                    correctly -- so the pill said "3/2" while the Buy button said the purchase was legal.
+                    #891's SHAPE, FOUND BY FOLLOWING THIS BATCH'S WIRING rather than by a test: adding
+                    `ghosts` to the chips beside it made the omission on the pill visible. The prop, the
+                    helper and the note were all already right; only the two call sites were missing. */
+                    /* Design note #1089: THE PILL TAKES THE EXEMPTION, NOT THE IDENTITY. `ghost_trains`
+                    is "occupies no limit slot" and expires at the end of the OR; `carcosan_trains` is the
+                    gold trim and lasts an OR set longer. The pill is counting slots, so it wants the
+                    first -- and this is the one place the two are easy to swap, which is why both call
+                    sites say which they mean. */
+                    ghosts={company.ghost_trains}
                   />
                 </td>
               </tr>

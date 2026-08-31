@@ -219,9 +219,18 @@ describe("the shell raises it once per TURN (design notes #940 -> #941)", () => 
 
   it("fires from the shared dispatch path, not from the click handler", () => {
     expect(runBlock).toContain("setRevenueFlash({");
-    /* AND NOWHERE ELSE. One occurrence in the whole shell -- a second would be a second flash per turn, which
-       is #940's reported bug however few trains it took to produce it. */
-    expect(APP.match(/setRevenueFlash\(/g)?.length ?? 0).toBe(1);
+    /* ==================================================================
+        DESIGN NOTE 1096: COUNT THE RAISES, NOT THE MENTIONS
+       ==================================================================
+       IT COUNTED `setRevenueFlash(` AND #1095 MADE IT TWO. That batch added `setRevenueFlash(null)` -- the
+       flash's way home, which it had never had, so the last one of a game sat in state waiting for something
+       to remount and replay it. A clear is not a raise, and this case is about raises.
+       SO THE PATTERN IS THE RAISING FORM, `setRevenueFlash({`, which a clear cannot match. The claim is
+       unchanged and now says what it means: ONE PLACE FIRES THE FLASH. A second would be a second flash per
+       turn, which is #940's reported bug however few trains it took to produce it.
+       AND THE CLEAR IS ASSERTED POSITIVELY beside it, so this case cannot be satisfied by removing it. */
+    expect(APP.match(/setRevenueFlash\(\{/g)?.length ?? 0).toBe(1);
+    expect(APP).toContain("setRevenueFlash(null)");
   });
 
   it("logs one consolidated sentence for the turn", () => {
@@ -316,7 +325,12 @@ describe("the shell raises it once per TURN (design notes #940 -> #941)", () => 
 
   it("is rendered, not merely computed", () => {
     /* THE INTEGRATION GAP THIS PROJECT KEEPS FINDING -- a correct value that nothing displays. */
-    expect(APP).toContain("<RevenueModifierFlash signal={revenueFlash} />");
+    /* Design note #1095: THE ELEMENT GAINED `onDone`, so the signal it fired can be cleared. It was the one
+       ephemeral signal in the shell that was never unset, which meant any fresh mount found the last flash of
+       the game still sitting in state and played it again.
+       ASSERTED ON THE PROP, NOT THE WHOLE ELEMENT -- a complete-element anchor breaks every time a prop is
+       added, which is the mistake this suite makes more than any other. */
+    expect(APP).toContain("<RevenueModifierFlash signal={revenueFlash}");
   });
 
   /* Design note #1017: the duplicate of this case is above, reading `before.variants`. This copy survived the

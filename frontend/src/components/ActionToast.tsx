@@ -54,10 +54,32 @@ import { FONT_SIZE } from "../styles/typography";
    while this file was open for #1049, because an unused import is invisible to `tsc` under these settings and
    reads to the next person as a colour this component applies somewhere. */
 import { CARD_SURFACE } from "../styles/palette";
+import { EraHex } from "./EraHex";
 
 /** Design note #928's window, named so #967's longer one can be expressed as a multiple of it rather than as
  *  a second magic number that has to be kept in step by hand. */
 export const STANDARD_TOAST_MS = 3700;
+
+/** ==================================================================
+ *   DESIGN NOTE 1094: THE PHASE-CHANGE TOAST, 30% SHORTER
+ *  ==================================================================
+ *
+ * RULED: "reduce the on-screen duration of the 'Corporations can now upgrade yellow tiles to green' (and
+ * similar phase-change toasts) by exactly 30%."
+ *
+ * EXPRESSED AS A MULTIPLE, not typed as 2590, for #967's reason and #983's: the standard window has been
+ * retuned twice in this project's life, and a hand-copied figure would silently stop being 70% of it the next
+ * time. `Math.round` because 3700 * 0.7 is 2590 exactly today and will not be for every future standard.
+ *
+ * WHY THIS TOAST CAN AFFORD IT, by the project's own rule of thumb ("readable ~1.5x before it goes away"):
+ * it is one short sentence with a two-hex graphic, not the three-row table #1000 and #1016 had to keep
+ * lengthening. At 2590 it still clears its own 180ms entrance with about 2.4s at rest, which is roughly 1.9x
+ * a nine-word read -- comfortably inside the rule that #983 broke and #1000 had to repair.
+ *
+ * ITS OWN CONSTANT RATHER THAN A CHANGE TO `STANDARD_TOAST_MS`, which every other toast in the app takes.
+ * The ruling is about phase-change toasts; shortening the shared window would have quietly retimed the
+ * refusal messages and the depot receipt too, and those were tuned separately. */
+export const PHASE_CHANGE_TOAST_MS = Math.round(STANDARD_TOAST_MS * 0.7);
 
 /* ==================================================================
  *  DESIGN NOTE 983: 400ms, ON INSTRUCTION, AND I THINK THE NUMBER IS WRONG
@@ -296,32 +318,10 @@ export interface ActionToastProps {
   eraTransition?: { from: string; to: string } | null;
 }
 
-/** Design note #929: one flat-top hex in an era's own colour.
- *
- *  THE FILLS ARE THIS TOAST'S OWN and deliberately not `PRINTED_HEX_FILL` or the tile catalog's palette:
- *  those are the colours a hex is DRAWN on a dark board at map scale, and a 16px glyph inside a toast needs
- *  to read against the toast's background instead. Borrowing them would couple a notification's legibility to
- *  a rendering decision made about the canvas. */
-const ERA_HEX_FILL: Readonly<Record<string, string>> = {
-  Yellow: "#d9b64a",
-  Green: "#4e9d5f",
-  Brown: "#8a6242",
-};
-
-function EraHex({ tone }: { tone: string }) {
-  const fill = ERA_HEX_FILL[tone] ?? "#6d7382";
-  return (
-    <svg width="16" height="18" viewBox="0 0 16 18" role="presentation">
-      {/* A pointy-top hex, the orientation the board draws (#1's unit hex). */}
-      <path
-        d="M8 0.6 L15.2 4.8 V13.2 L8 17.4 L0.8 13.2 V4.8 Z"
-        fill={fill}
-        stroke="rgba(0,0,0,0.35)"
-        strokeWidth="1"
-      />
-    </svg>
-  );
-}
+/* Design note #1094: `EraHex` AND ITS FILLS MOVED TO `components/EraHex.tsx`. #929 wrote them here because
+   this toast was the only thing that drew a hex; the Bank Depot table draws them now too, and a second copy
+   of "what colour is Green" is #891's shape. #929's reason for not borrowing the BOARD's palette is intact
+   and restated there -- the canvas is a different surface at a different scale and keeps its own. */
 
 export function ActionToast({
   message,

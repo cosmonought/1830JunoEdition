@@ -60,8 +60,13 @@ describe("the flash replays on every trigger (design note #971)", () => {
        AFTER THE FADE, NOT AT THE WINDOW. Clearing at `REVENUE_FLASH_MS` would cut the opacity transition off
        mid-way and the overlay would blink out instead of fading, which is the one visible way this could go
        wrong -- so the sum is asserted rather than the constant. */
-    expect(FLASH).toContain("REVENUE_FLASH_MS + REVENUE_FLASH_FADE_MS,");
-    expect(FLASH).toContain("() => setShown(null),");
+    /* Design note #1095: THE TIMER GAINED A SECOND STATEMENT -- `onDone`, so the caller can clear the signal
+       it fired. `revenueFlash` was the one ephemeral signal in the shell that was never cleared, so a fresh
+       mount found the last flash of the game still sitting there and played it again.
+       WHAT THIS CASE IS ABOUT IS UNCHANGED and is the reason the sum is still asserted rather than the
+       constant: clearing at `REVENUE_FLASH_MS` would cut the opacity transition off mid-way. */
+    expect(FLASH).toContain("REVENUE_FLASH_MS + REVENUE_FLASH_FADE_MS)");
+    expect(FLASH).toContain("setShown(null);");
   });
 
   it("clears both timers when a new turn interrupts the old one", () => {

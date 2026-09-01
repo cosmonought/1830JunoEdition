@@ -76,7 +76,11 @@ describe("the panel sits above its surroundings, not below them", () => {
        reach -- when it is retoned, this line is where the ordering gets re-checked. */
     expect(strip(read("styles/appStyles.ts"))).toContain('backgroundColor: "#0f0f0f"');
     expect(strip(read("components/PrivateTradePanel.tsx"))).toContain('backgroundColor: "#141a26"');
-    expect(ROOT).toContain('backgroundColor: "#1e2331"');
+    /* #1092 retoned this panel and its neighbours, and THIS LINE IS WHY THE PANEL IS NOT `#161616`: the
+       re-theme's lightness bands mapped it there, which would have put it BELOW the private panel and
+       rebuilt the well #810 removed. The figures, so the next pass does not have to re-derive them --
+       panel L* 10.27, private panel L* 9.22, the bar's card L* 4.31. Still lighter than both. */
+    expect(ROOT).toContain('backgroundColor: "#1c1c1c"');
   });
 
   it("lifts rather than merely lightening", () => {
@@ -92,7 +96,7 @@ describe("the panel sits above its surroundings, not below them", () => {
 
   it("falls back to grey with no buyer rather than inventing a colour", () => {
     // A corporation the chain reported without a president is a real state, not a hue worth guessing at.
-    expect(PANEL).toContain(': "#3a3f4b"}`');
+    expect(PANEL).toContain(': "#3a3a3a"}`'); // #1092: the fallback grey, retoned with the rest of the ladder.
   });
 
   it("drops the whole treatment when pinned", () => {

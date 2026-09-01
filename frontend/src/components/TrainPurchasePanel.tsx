@@ -531,7 +531,7 @@ export function TrainPurchasePanel({
            already use -- so the edge says "this belongs to the corporation whose turn it is" in the one
            channel this app has already taught. Grey when there is no buyer, which is a real state (a
            corporation with no president reported) rather than a colour worth inventing. */
-        borderLeft: `4px solid ${buyer ? stationTickerColor(buyer.company_id) : "#3a3f4b"}`,
+        borderLeft: `4px solid ${buyer ? stationTickerColor(buyer.company_id) : "#3a3a3a"}`,
         ...(condensed ? styles.rootCondensed : {}),
       }}
     >
@@ -1384,7 +1384,7 @@ function DepotRow({ tier, isNext }: { tier: DepotTier; isNext: boolean }) {
             the same ink as the tier label beside it. */}
         <TrainGlyph
           tier={tier.tier}
-          color={tier.rusted ? "#5a6070" : ERA_INK[tierTint(tier.tier)]}
+          color={tier.rusted ? "#6e6c68" : ERA_INK[tierTint(tier.tier)]}
         />
         {/* Design note #695: "2-TRAIN", NOT "2".
             REPORTED: "the name of the train is listed as '2' and two entries right of that is '3 / 6 left' --
@@ -1542,8 +1542,21 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "start",
     gap: "14px 18px",
     padding: "14px 18px",
-    backgroundColor: "#1e2331",
-    border: "1px solid #454c5c",
+    /* ==================================================================
+        DESIGN NOTE 1092: THE ONE GROUND IN THIS SWEEP THAT IS NOT A BAND LOOKUP
+       ==================================================================
+       #810 does not care what colour this panel is, it cares that the panel is LIGHTER THAN THE TWO
+       SURFACES IT SITS BETWEEN -- "a surface that sinks below its own container reads as a well", which
+       was the reported bug and the reason the ground was lifted in the first place.
+       THE RE-THEME'S LIGHTNESS BANDS BROKE THAT, silently. `#1e2331` is L* 13.83 and its band maps to
+       `#161616` at L* 7.25 -- which puts this panel BELOW `PrivateTradePanel`'s `#141a26` at L* 9.22 and
+       re-creates the well the note was written to fill. A mapping that is right for forty chrome values
+       is wrong for the one whose whole job is a comparison.
+       SO IT IS PINNED A STEP HIGHER, at `#1c1c1c` / L* 10.27. That clears the private panel as it stands
+       today AND as it will stand once the sweep reaches it (`#141a26` -> `#0f0f0f`, L* 4.31), so the
+       ordering holds through the half-migrated state rather than only at the end of it. */
+    backgroundColor: "#1c1c1c",
+    border: "1px solid #4a4a4a",
     borderRadius: "10px",
     boxShadow: "0 6px 18px rgba(0, 0, 0, 0.45)",
   },
@@ -1563,7 +1576,7 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: "transparent",
     border: "none",
     borderLeft: "none",
-    borderTop: "1px solid #2b3242",
+    borderTop: "1px solid #2a2a2a",
     borderRadius: 0,
     boxShadow: "none",
   },
@@ -1593,13 +1606,13 @@ const styles: Record<string, React.CSSProperties> = {
   sectionTitle: {
     fontSize: FONT_SIZE.strong,
     fontWeight: 800,
-    color: "#e6e8ef",
+    color: "#f2f0eb",
     textTransform: "uppercase",
     letterSpacing: "0.04em",
   },
   sectionMeta: {
     fontSize: FONT_SIZE.small,
-    color: "#8a919e",
+    color: "#8a8a86",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
   },
 
@@ -1656,17 +1669,17 @@ const styles: Record<string, React.CSSProperties> = {
   depotTier: {
     fontSize: FONT_SIZE.body,
     fontWeight: 800,
-    color: "#e6e8ef",
+    color: "#f2f0eb",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     whiteSpace: "nowrap",
   },
   /* Design note #695: the unit is quieter than the numeral it qualifies. The tier is the thing being chosen;
      "-train" is there to stop it being read as a count, and a suffix at equal weight would just be a longer
      number. */
-  depotTierUnit: { fontWeight: 400, color: "#8a919e" },
+  depotTierUnit: { fontWeight: 400, color: "#8a8a86" },
   depotCost: {
     fontSize: FONT_SIZE.small,
-    color: "#c8cdd8",
+    color: "#c8c6c0",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     textAlign: "right",
   },
@@ -1675,7 +1688,7 @@ const styles: Record<string, React.CSSProperties> = {
      is genuinely secondary; the count opts back out below. */
   depotSupply: {
     fontSize: FONT_SIZE.small,
-    color: "#8a919e",
+    color: "#8a8a86",
     whiteSpace: "nowrap",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     fontVariantNumeric: "tabular-nums",
@@ -1683,7 +1696,7 @@ const styles: Record<string, React.CSSProperties> = {
   /* Design note #687: the remaining count, at the tier column's weight and ink. Tabular figures come from the
      parent, so "10 / 12" and "2 / 4" keep their slash on the same x down the six rows -- #618's whole argument
      for fixed columns, applied inside one of them. */
-  depotSupplyCount: { fontWeight: 800, color: "#e6e8ef" },
+  depotSupplyCount: { fontWeight: 800, color: "#f2f0eb" },
   /* Design note #618: the shared right-hand column the fate flags live in,
      so "rusted" / "For Sale" / "Rusts on Phase 5" / "Permanent" all start on
      the same x whatever the row above said. */
@@ -1710,7 +1723,7 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#8fb0d9",
     letterSpacing: "0.03em",
   },
-  depotFlag: { fontSize: FONT_SIZE.micro, color: "#9aa0ac", fontStyle: "italic" },
+  depotFlag: { fontSize: FONT_SIZE.micro, color: "#a8a6a0", fontStyle: "italic" },
   /* Design note #634: THE "FOR SALE" BADGE IS RETIRED. It was always a workaround for the layout rather than
      a fact worth stating: six near-identical rows needed one of them marked, and a single row standing above
      a caret labelled "Later trains" is marked by position, which is the stronger signal and costs no width.
@@ -1718,7 +1731,7 @@ const styles: Record<string, React.CSSProperties> = {
 
   /* ---- Buy row ---- */
   buyRow: { display: "flex", flexWrap: "wrap", gap: "10px", alignItems: "center" },
-  quantityLabel: { fontSize: FONT_SIZE.small, fontWeight: 700, color: "#c8cdd8" },
+  quantityLabel: { fontSize: FONT_SIZE.small, fontWeight: 700, color: "#c8c6c0" },
   /* Design note #696: `quantitySelect` is GONE with the dropdown it styled. The row below is the same shape
      `StockRoundPanel`'s sell-size and par selectors use -- one bordered group, options separated by slashes,
      the chosen one filled -- so a player meets one control three times rather than three controls once each.
@@ -1731,8 +1744,8 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "1px",
     padding: "4px 6px",
     borderRadius: "7px",
-    border: "1px solid #3a3f4b",
-    backgroundColor: "#1b1e27",
+    border: "1px solid #3a3a3a",
+    backgroundColor: "#0f0f0f",
   },
   quantityOption: {
     /* Design note #732: `backgroundColor`, not the `background` shorthand -- `quantityOptionActive` below
@@ -1747,13 +1760,13 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     fontVariantNumeric: "tabular-nums",
-    color: "#9aa0ac",
+    color: "#a8a6a0",
     cursor: "pointer",
   },
-  quantityOptionActive: { backgroundColor: "#2b3a4d", color: "#e6e8ef" },
+  quantityOptionActive: { backgroundColor: "#2a2a2a", color: "#f2f0eb" },
   quantityOptionDisabled: { opacity: 0.45, cursor: "not-allowed" },
   /* Non-interactive, `aria-hidden` at the call site -- it separates the options visually and says nothing. */
-  quantitySeparator: { color: "#3a3f4b", fontSize: FONT_SIZE.small },
+  quantitySeparator: { color: "#3a3a3a", fontSize: FONT_SIZE.small },
   /* Design note #248: the limit readout. Deliberately quiet -- it is
      context for the control beside it, not a control itself -- until the
      corporation is AT the limit, when it becomes the reason the panel is
@@ -1764,12 +1777,12 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     textTransform: "uppercase",
     letterSpacing: "0.06em",
-    color: "#8a919e",
+    color: "#8a8a86",
   },
   limitValue: {
     fontSize: FONT_SIZE.strong,
     fontWeight: 700,
-    color: "#e6e8ef",
+    color: "#f2f0eb",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     fontVariantNumeric: "tabular-nums",
   },
@@ -1780,15 +1793,15 @@ const styles: Record<string, React.CSSProperties> = {
   limitLabelFuture: { color: "#e0b062" },
   limitValueFuture: { color: "#e0b062" },
   /* `limitWas` is gone with design note #703's "now 4 · holds 3". */
-  ceilingNote: { fontSize: FONT_SIZE.small, color: "#8a919e" },
+  ceilingNote: { fontSize: FONT_SIZE.small, color: "#8a8a86" },
   /* `quantityInput` is gone with design note #247's number field. */
   priceInput: {
     width: "120px",
     padding: "7px 10px",
     borderRadius: "7px",
-    border: "1px solid #3a3f4b",
-    backgroundColor: "#1b1e27",
-    color: "#e6e8ef",
+    border: "1px solid #3a3a3a",
+    backgroundColor: "#0f0f0f",
+    color: "#f2f0eb",
     fontSize: FONT_SIZE.control,
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
   },
@@ -1802,13 +1815,13 @@ const styles: Record<string, React.CSSProperties> = {
     textAlign: "left",
     padding: "9px 12px",
     borderRadius: "8px",
-    border: "1px solid #3a3f4b",
-    backgroundColor: "#171a22",
-    color: "#e6e8ef",
+    border: "1px solid #3a3a3a",
+    backgroundColor: "#0f0f0f",
+    color: "#f2f0eb",
     fontFamily: "inherit",
     cursor: "pointer",
   },
-  accordionCaret: { fontSize: FONT_SIZE.micro, color: "#8a919e" },
+  accordionCaret: { fontSize: FONT_SIZE.micro, color: "#8a8a86" },
   /* Design note #633: quieter than `accordionHeader`. That one opens a
      section with controls in it; this opens a reference list, and a header
      as loud as the panel's own would make the collapsed state look like the
@@ -1821,16 +1834,16 @@ const styles: Record<string, React.CSSProperties> = {
     textAlign: "left",
     padding: "5px 8px",
     borderRadius: "6px",
-    border: "1px solid #2b2f3a",
+    border: "1px solid #2a2a2a",
     backgroundColor: "transparent",
-    color: "#c8cdd8",
+    color: "#c8c6c0",
     fontFamily: "inherit",
     cursor: "pointer",
   },
   laterTrainsTitle: {
     fontSize: FONT_SIZE.small,
     fontWeight: 700,
-    color: "#c8cdd8",
+    color: "#c8c6c0",
     flex: 1,
   },
   accordionBody: {
@@ -1849,8 +1862,8 @@ const styles: Record<string, React.CSSProperties> = {
     flexWrap: "wrap",
     padding: "7px 10px",
     borderRadius: "7px",
-    backgroundColor: "#171a22",
-    border: "1px solid #2b2f3a",
+    backgroundColor: "#0f0f0f",
+    border: "1px solid #2a2a2a",
   },
   rosterName: { display: "inline-flex", alignItems: "center", gap: "8px", flex: 1, minWidth: "220px" },
   tokenDot: {
@@ -1862,8 +1875,8 @@ const styles: Record<string, React.CSSProperties> = {
     borderStyle: "solid",
     borderColor: "rgba(255,255,255,0.35)",
   },
-  rosterTicker: { fontSize: FONT_SIZE.body, fontWeight: 700, color: "#e6e8ef" },
-  rosterPresident: { fontSize: FONT_SIZE.micro, color: "#8a919e", whiteSpace: "nowrap" },
+  rosterTicker: { fontSize: FONT_SIZE.body, fontWeight: 700, color: "#f2f0eb" },
+  rosterPresident: { fontSize: FONT_SIZE.micro, color: "#8a8a86", whiteSpace: "nowrap" },
   badgeRow: { display: "inline-flex", gap: "6px", flexWrap: "wrap", alignItems: "center" },
   badge: {
     display: "inline-flex",
@@ -1873,9 +1886,9 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: "center",
     padding: "5px 9px",
     borderRadius: "6px",
-    border: "1px solid #4a5163",
-    backgroundColor: "#242833",
-    color: "#e6e8ef",
+    border: "1px solid #4a4a4a",
+    backgroundColor: "#1c1c1c",
+    color: "#f2f0eb",
     fontSize: FONT_SIZE.body,
     fontWeight: 700,
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
@@ -1885,8 +1898,8 @@ const styles: Record<string, React.CSSProperties> = {
   // Inline styles cannot express `:disabled` (Lobby.tsx design note #3), so
   // the disabled look is computed.
   badgeDisabled: { opacity: 0.5, cursor: "not-allowed" },
-  badgeCount: { fontSize: FONT_SIZE.micro, color: "#9aa0ac", fontWeight: 400 },
-  badgeNone: { fontSize: FONT_SIZE.small, color: "#6f7684", fontStyle: "italic" },
+  badgeCount: { fontSize: FONT_SIZE.micro, color: "#a8a6a0", fontWeight: 400 },
+  badgeNone: { fontSize: FONT_SIZE.small, color: "#6e6c68", fontStyle: "italic" },
 
   /* ---- Offer ---- */
   offerBox: {
@@ -1896,9 +1909,9 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "12px 14px",
     borderRadius: "8px",
     border: "1px solid #3a5a8a",
-    backgroundColor: "#141a26",
+    backgroundColor: "#0f0f0f",
   },
-  offerHeading: { fontSize: FONT_SIZE.strong, fontWeight: 700, color: "#e2e6ee" },
+  offerHeading: { fontSize: FONT_SIZE.strong, fontWeight: 700, color: "#f2f0eb" },
   /* Design note #1090: the Yellow Sign's own amber against a warning ground, not the app's malus red. This
      is not a rules violation or a refusal -- the trade is entirely legal and often correct -- it is a PRICE,
      and dressing it in the colour reserved for "you cannot do that" would misreport what it is. */
@@ -1929,9 +1942,9 @@ const styles: Record<string, React.CSSProperties> = {
   secondaryButton: {
     padding: "8px 16px",
     borderRadius: "8px",
-    border: "1px solid #4a5163",
-    backgroundColor: "#232936",
-    color: "#c8cdd8",
+    border: "1px solid #4a4a4a",
+    backgroundColor: "#1c1c1c",
+    color: "#c8c6c0",
     fontSize: FONT_SIZE.control,
     fontFamily: "inherit",
     cursor: "pointer",
@@ -1939,9 +1952,9 @@ const styles: Record<string, React.CSSProperties> = {
   buttonDisabled: {
     opacity: 0.45,
     cursor: "not-allowed",
-    backgroundColor: "#1f2937",
-    borderColor: "#374151",
-    color: "#6b7280",
+    backgroundColor: "#1c1c1c",
+    borderColor: "#3a3a3a",
+    color: "#6e6c68",
   },
   /* Design note #751c: amber, not green and not the disabled grey. It is a live control, so it must not read
      as dead; it is a last resort that spends the president's own money, so it must not read as the ordinary
@@ -1963,12 +1976,12 @@ const styles: Record<string, React.CSSProperties> = {
      attached to a control -- the same treatment `AutoPassModal`'s captions and the dividend ledge use. */
   treasuryProjection: {
     fontSize: FONT_SIZE.micro,
-    color: "#8a90a0",
+    color: "#8a8a86",
     whiteSpace: "nowrap",
     alignSelf: "center",
   },
   problem: { margin: 0, fontSize: FONT_SIZE.small, color: "#fb7185", lineHeight: 1.45 },
-  note: { margin: 0, fontSize: FONT_SIZE.small, lineHeight: 1.5, color: "#8a919e" },
+  note: { margin: 0, fontSize: FONT_SIZE.small, lineHeight: 1.5, color: "#8a8a86" },
   empty: { margin: 0, fontSize: FONT_SIZE.small, color: "#c9b98a", lineHeight: 1.5 },
 
   /* ---- Prompt ---- */
@@ -1984,7 +1997,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "14px 16px",
     borderRadius: "12px",
     border: "1px solid #3a5a8a",
-    backgroundColor: "#141a26",
+    backgroundColor: "#0f0f0f",
     boxShadow: "0 10px 34px rgba(0,0,0,0.6)",
   },
   promptHeader: { display: "flex", flexDirection: "row", alignItems: "center", gap: "8px" },
@@ -2002,8 +2015,8 @@ const styles: Record<string, React.CSSProperties> = {
     textTransform: "uppercase",
     letterSpacing: "0.06em",
   },
-  promptBody: { margin: 0, fontSize: FONT_SIZE.body, color: "#e2e6ee", lineHeight: 1.5 },
-  promptWho: { margin: 0, fontSize: FONT_SIZE.small, color: "#9aa0ac" },
+  promptBody: { margin: 0, fontSize: FONT_SIZE.body, color: "#f2f0eb", lineHeight: 1.5 },
+  promptWho: { margin: 0, fontSize: FONT_SIZE.small, color: "#a8a6a0" },
   promptActions: {
     display: "flex",
     flexDirection: "row",

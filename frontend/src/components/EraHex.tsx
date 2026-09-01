@@ -40,7 +40,7 @@ export interface EraHexProps {
 }
 
 export function EraHex({ tone, size = 16 }: EraHexProps) {
-  const fill = ERA_HEX_FILL[tone] ?? "#6d7382";
+  const fill = ERA_HEX_FILL[tone] ?? "#6e6c68";
   return (
     <svg
       width={size}

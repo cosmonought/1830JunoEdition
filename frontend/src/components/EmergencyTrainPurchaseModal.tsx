@@ -17,6 +17,7 @@
 import React from "react";
 
 import { FONT_SIZE } from "../styles/typography";
+import { ACTION_GREEN, ACTION_GREEN_BORDER, ACTION_GREEN_INK } from "../styles/palette";
 import type { GameStateResponse, PublicCompanyState } from "../utils/gameState";
 import {
   resolveEmergencyFunding,
@@ -440,8 +441,8 @@ const styles: Record<string, React.CSSProperties> = {
     maxHeight: "86vh",
     overflowY: "auto",
     padding: "18px 20px",
-    backgroundColor: "#161922",
-    border: "1px solid #3a4055",
+    backgroundColor: "#0f0f0f",
+    border: "1px solid #3a3a3a",
     borderTop: "3px solid #c9a227",
     borderRadius: "10px",
     boxShadow: "0 18px 48px rgba(0,0,0,0.6)",
@@ -463,8 +464,8 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "999px",
     padding: "2px 9px",
   },
-  emptyHoldings: { margin: 0, fontSize: FONT_SIZE.small, color: "#8a919e" },
-  holdingHeld: { color: "#6f7480", fontWeight: 400 },
+  emptyHoldings: { margin: 0, fontSize: FONT_SIZE.small, color: "#8a8a86" },
+  holdingHeld: { color: "#6e6c68", fontWeight: 400 },
   /* Design note #6: amber, not red. Selling the presidency is legal and
      sometimes correct -- it is consequential, not wrong. */
   holdingPresidency: {
@@ -479,7 +480,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   restrictionNote: {
     fontSize: FONT_SIZE.micro,
-    color: "#7f8798",
+    color: "#8a8a86",
     lineHeight: 1.45,
   },
   title: {
@@ -488,39 +489,39 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#f0e2b8",
     flex: "1 1 auto",
   },
-  lede: { margin: 0, fontSize: FONT_SIZE.small, lineHeight: 1.45, color: "#c8cbd6" },
+  lede: { margin: 0, fontSize: FONT_SIZE.small, lineHeight: 1.45, color: "#c8c6c0" },
   section: { display: "flex", flexDirection: "column", gap: "6px" },
   sectionTitle: {
     fontSize: FONT_SIZE.micro,
     fontWeight: 800,
     letterSpacing: "0.06em",
     textTransform: "uppercase",
-    color: "#7f8798",
+    color: "#8a8a86",
   },
   ledger: {
     display: "flex",
     flexDirection: "column",
     gap: "4px",
     padding: "10px 12px",
-    backgroundColor: "#1b1f29",
-    border: "1px solid #2a2e3a",
+    backgroundColor: "#141414",
+    border: "1px solid #2a2a2a",
     borderRadius: "8px",
   },
-  ledgerRule: { height: "1px", backgroundColor: "#2f3543", margin: "3px 0" },
+  ledgerRule: { height: "1px", backgroundColor: "#2a2a2a", margin: "3px 0" },
   row: { display: "flex", alignItems: "baseline", gap: "10px" },
   rowLabel: {
     flex: "1 1 auto",
     display: "flex",
     flexDirection: "column",
     fontSize: FONT_SIZE.small,
-    color: "#c8cbd6",
+    color: "#c8c6c0",
   },
-  rowHint: { fontSize: FONT_SIZE.micro, color: "#7f8798" },
+  rowHint: { fontSize: FONT_SIZE.micro, color: "#8a8a86" },
   rowValue: {
     flexShrink: 0,
     fontSize: FONT_SIZE.body,
     fontVariantNumeric: "tabular-nums",
-    color: "#e6e8ef",
+    color: "#f2f0eb",
   },
   rowValueEmphasis: { fontWeight: 800, fontSize: FONT_SIZE.strong },
   rowValueDanger: { color: "#e8a0a0" },
@@ -529,8 +530,8 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     gap: "3px",
     padding: "8px 10px",
-    backgroundColor: "#1b1f29",
-    border: "1px solid #2a2e3a",
+    backgroundColor: "#141414",
+    border: "1px solid #2a2a2a",
     borderRadius: "8px",
   },
   holdingRow: { display: "flex", alignItems: "center", gap: "10px" },
@@ -538,13 +539,13 @@ const styles: Record<string, React.CSSProperties> = {
     flex: "0 0 56px",
     fontSize: FONT_SIZE.small,
     fontWeight: 700,
-    color: "#e6e8ef",
+    color: "#f2f0eb",
   },
   holdingPercent: {
     flex: "0 0 44px",
     fontSize: FONT_SIZE.small,
     fontVariantNumeric: "tabular-nums",
-    color: "#a8b0c0",
+    color: "#c8c6c0",
   },
   holdingValue: {
     flex: "1 1 auto",
@@ -571,17 +572,17 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#eafff2",
   },
   sellButtonDisabled: {
-    borderColor: "#343b48",
-    backgroundColor: "#20242e",
-    color: "#6f7480",
+    borderColor: "#3a3a3a",
+    backgroundColor: "#1c1c1c",
+    color: "#6e6c68",
     cursor: "not-allowed",
   },
   sellSelect: {
     padding: "4px 8px",
     borderRadius: "6px",
-    border: "1px solid #4a5163",
-    backgroundColor: "#1a1f2b",
-    color: "#e2e6ee",
+    border: "1px solid #4a4a4a",
+    backgroundColor: "#1c1c1c",
+    color: "#f2f0eb",
     fontSize: FONT_SIZE.small,
     fontFamily: "inherit",
     minWidth: "84px",
@@ -598,7 +599,7 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "8px",
     border: "1px solid #4ade80",
     backgroundColor: "#166534",
-    color: "#ffffff",
+    color: "#f2f0eb",
     fontSize: FONT_SIZE.control,
     fontWeight: 700,
     fontFamily: "inherit",
@@ -607,8 +608,8 @@ const styles: Record<string, React.CSSProperties> = {
   sellShort: { color: "#fbbf24" },
   /* Design note #751d: the same [before] -> [after] shape #682 gave the Stock Round, because this is the one
      moment a player spends personal money on a corporation and it should read like every other spend. */
-  cashProjection: { fontSize: FONT_SIZE.small, color: "#9aa1b4" },
-  cashAfter: { color: "#e2e6ee" },
+  cashProjection: { fontSize: FONT_SIZE.small, color: "#a8a6a0" },
+  cashAfter: { color: "#f2f0eb" },
   bankruptNotice: {
     margin: 0,
     padding: "10px 12px",
@@ -620,22 +621,35 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "8px",
   },
   footer: { display: "flex", flexDirection: "column", gap: "6px" },
-  footerReason: { fontSize: FONT_SIZE.micro, color: "#8a919e", lineHeight: 1.4 },
+  footerReason: { fontSize: FONT_SIZE.micro, color: "#8a8a86", lineHeight: 1.4 },
   confirmButton: {
     padding: "9px 14px",
     fontSize: FONT_SIZE.control,
     fontWeight: 700,
     fontFamily: "inherit",
-    color: "#0d1117",
-    backgroundColor: "#e0b062",
-    border: "1px solid #c9a227",
+    /* ==================================================================
+        DESIGN NOTE 1098 (TECH_DEBT TD-6): THE LAST GOLD CONFIRM BUTTON
+       ==================================================================
+       #1095 moved every other confirm and pay control in the app to `ACTION_GREEN`. This one stayed gold,
+       which stopped being a leftover and became an INCONSISTENCY: the same act, confirming, wearing two
+       different colours depending on which modal a player happened to be in.
+       IT COSTS CONTRAST AND THAT WAS ACCEPTED KNOWINGLY: 10.07:1 becomes 6.54:1. Still comfortably past AA,
+       and the same figure every other confirm button in the app now carries.
+       THE ARGUMENT AGAINST, recorded because it is a real one: this is the confirm that takes money from a
+       PLAYER personally rather than from a corporation's treasury, so a case exists for it feeling heavier
+       than an ordinary confirm. If playtesting says it should, that is an argument for a distinct
+       TREATMENT -- a wider rim, a confirmation step -- and not for returning to a colour nothing else in
+       the app uses. */
+    color: ACTION_GREEN_INK,
+    backgroundColor: ACTION_GREEN,
+    border: `1px solid ${ACTION_GREEN_BORDER}`,
     borderRadius: "8px",
     cursor: "pointer",
   },
   confirmButtonDisabled: {
-    borderColor: "#343b48",
-    backgroundColor: "#20242e",
-    color: "#6f7480",
+    borderColor: "#3a3a3a",
+    backgroundColor: "#1c1c1c",
+    color: "#6e6c68",
     cursor: "not-allowed",
   },
 };

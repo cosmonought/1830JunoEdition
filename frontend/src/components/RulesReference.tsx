@@ -775,7 +775,7 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     gap: "20px",
     padding: "24px",
-    color: "#e6e8ef",
+    color: "#f2f0eb",
     fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif",
     overflowY: "auto",
     flex: 1,
@@ -786,7 +786,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   sourceNote: {
     fontSize: FONT_SIZE.heading,
-    color: "#8a90a0",
+    color: "#8a8a86",
     margin: 0,
     maxWidth: "820px",
     lineHeight: 1.6,
@@ -836,7 +836,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.heading,
     textTransform: "uppercase",
     letterSpacing: "0.04em",
-    color: "#9aa0ac",
+    color: "#a8a6a0",
     margin: 0,
   },
   // ---- About This Game -- design note #9(3). Prose paragraphs, no lists. ----
@@ -848,7 +848,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   aboutParagraph: {
     fontSize: FONT_SIZE.heading,
-    color: "#c7cbd4",
+    color: "#c8c6c0",
     margin: 0,
     lineHeight: 1.75,
   },
@@ -860,7 +860,7 @@ const styles: Record<string, React.CSSProperties> = {
     margin: "0 0 10px",
     fontSize: FONT_SIZE.micro,
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-    color: "#6f7480",
+    color: "#6e6c68",
     cursor: "help",
   },
   tableScroll: {
@@ -875,21 +875,21 @@ const styles: Record<string, React.CSSProperties> = {
   th: {
     textAlign: "left",
     padding: "9px 14px",
-    color: "#8a90a0",
-    borderBottom: "1px solid #2a2e3a",
+    color: "#8a8a86",
+    borderBottom: "1px solid #2a2a2a",
     fontWeight: 600,
     whiteSpace: "nowrap",
   },
   td: {
     padding: "9px 14px",
-    borderBottom: "1px solid #1e2129",
+    borderBottom: "1px solid #161616",
   },
   /** Design note #31: marks a row whose `title` carries more detail. */
   /** Design note #31: numbers right-aligned. */
   tdNum: { textAlign: "right", fontVariantNumeric: "tabular-nums" },
   rowNote: {
     fontSize: FONT_SIZE.strong,
-    color: "#8a90a0",
+    color: "#8a8a86",
     marginTop: "4px",
     maxWidth: "540px",
     lineHeight: 1.6,
@@ -911,8 +911,8 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     gap: "6px",
     padding: "10px 14px",
-    background: "#181b22",
-    border: "1px solid #262a34",
+    background: "#1c1c1c",
+    border: "1px solid #2a2a2a",
     borderRadius: "6px",
   },
   flowItemHead: {
@@ -924,7 +924,7 @@ const styles: Record<string, React.CSSProperties> = {
   flowStep: {
     fontSize: FONT_SIZE.strong,
     fontWeight: 600,
-    color: "#c9cedb",
+    color: "#c8c6c0",
     flexShrink: 0,
   },
   flowQuick: {
@@ -934,7 +934,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   flowDetail: {
     fontSize: FONT_SIZE.heading,
-    color: "#a5abb8",
+    color: "#a8a6a0",
     lineHeight: 1.7,
   },
   // ---- Current Round's Rules Reference -- design note #10(1). No longer
@@ -945,8 +945,8 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     gap: "16px",
     padding: "16px 20px",
-    backgroundColor: "#12141b",
-    border: "1px solid #3a3f4b",
+    backgroundColor: "#080808",
+    border: "1px solid #3a3a3a",
     borderRadius: "10px",
   },
   currentRoundBlock: {
@@ -956,7 +956,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   currentRoundDivider: {
     height: "1px",
-    background: "#262a34",
+    background: "#2a2a2a",
     margin: "4px 0 0",
   },
   // Design note #141: the compact strip. Denser than everything else on the
@@ -966,15 +966,15 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     gap: "10px",
     padding: "14px 18px",
-    backgroundColor: "#12141b",
-    border: "1px solid #3a3f4b",
+    backgroundColor: "#080808",
+    border: "1px solid #3a3a3a",
     borderRadius: "10px",
   },
   quickStripTitle: {
     margin: 0,
     fontSize: FONT_SIZE.heading,
     fontWeight: 700,
-    color: "#e6e8ef",
+    color: "#f2f0eb",
   },
   quickStripColumns: {
     display: "flex",
@@ -991,7 +991,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     textTransform: "uppercase",
     letterSpacing: "0.05em",
-    color: "#9aa0ac",
+    color: "#a8a6a0",
   },
   quickStripList: {
     listStyle: "none",
@@ -1013,15 +1013,15 @@ const styles: Record<string, React.CSSProperties> = {
     minWidth: "18px",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     fontSize: FONT_SIZE.body,
-    color: "#6f7684",
+    color: "#6e6c68",
   },
   quickStripStep: {
     flex: "0 0 auto",
     fontWeight: 700,
-    color: "#e6e8ef",
+    color: "#f2f0eb",
   },
   quickStripQuick: {
-    color: "#b8bdc8",
+    color: "#c8c6c0",
   },
   // Design note #143: accordion header. A real <button> so it is keyboard
   // reachable and announces its expanded state; styled flat so it reads as a
@@ -1034,7 +1034,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "6px 0",
     background: "none",
     border: "none",
-    borderBottom: "1px solid #2b2f3a",
+    borderBottom: "1px solid #2a2a2a",
     cursor: "pointer",
     textAlign: "left",
   },
@@ -1044,12 +1044,12 @@ const styles: Record<string, React.CSSProperties> = {
   roundAccordionChevron: {
     flex: "0 0 auto",
     fontSize: FONT_SIZE.small,
-    color: "#8a919e",
+    color: "#8a8a86",
   },
   roundAccordionHint: {
     marginLeft: "auto",
     fontSize: FONT_SIZE.small,
-    color: "#6f7684",
+    color: "#6e6c68",
   },
   quickRefHeader: {
     display: "flex",
@@ -1069,11 +1069,11 @@ const styles: Record<string, React.CSSProperties> = {
   quickRefBadgeMuted: {
     fontSize: FONT_SIZE.body,
     fontStyle: "italic",
-    color: "#6f7480",
+    color: "#6e6c68",
   },
   quickRefCardTitle: {
     fontSize: FONT_SIZE.strong,
     margin: 0,
-    color: "#c9cedb",
+    color: "#c8c6c0",
   },
 };

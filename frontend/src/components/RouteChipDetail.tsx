@@ -215,7 +215,7 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "4px 10px",
     padding: "5px 12px 6px",
     fontSize: FONT_SIZE.small,
-    color: "#d7dce6",
+    color: "#f2f0eb",
   },
   /* Design note #869: the chip shell, matching `condensedTrainChip` in `appStyles.ts` -- same padding, same
      radius, same two-weight border, so the head and the chip that opened it read as one object. Declared
@@ -245,8 +245,8 @@ const styles: Record<string, React.CSSProperties> = {
   },
   path: { display: "flex", flexDirection: "row", flexWrap: "wrap", alignItems: "baseline", gap: "3px 6px", minWidth: 0 },
   stop: { display: "inline-flex", alignItems: "baseline", gap: "3px", whiteSpace: "nowrap" },
-  stopValue: { fontSize: FONT_SIZE.micro, color: "#8f98a8", fontVariantNumeric: "tabular-nums" },
-  arrow: { color: "#6c7484" },
+  stopValue: { fontSize: FONT_SIZE.micro, color: "#a8a6a0", fontVariantNumeric: "tabular-nums" },
+  arrow: { color: "#6e6c68" },
   total: {
     fontWeight: 800,
     color: "#7fd18c",
@@ -254,7 +254,7 @@ const styles: Record<string, React.CSSProperties> = {
     marginLeft: "auto",
     whiteSpace: "nowrap",
   },
-  empty: { color: "#8f98a8" },
+  empty: { color: "#a8a6a0" },
   problem: { color: "#e0a76a", flexBasis: "100%" },
   /* ==================================================================
       DESIGN NOTE 1024: A GLYPH BESIDE A FIGURE, NOT A BUTTON UNDER IT
@@ -273,7 +273,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "0 2px",
     border: "none",
     background: "none",
-    color: "#8a92a6",
+    color: "#8a8a86",
     fontFamily: "inherit",
     fontSize: FONT_SIZE.micro,
     lineHeight: 1,
@@ -282,9 +282,9 @@ const styles: Record<string, React.CSSProperties> = {
   clear: {
     padding: "2px 9px",
     borderRadius: "5px",
-    border: "1px solid #4a5162",
+    border: "1px solid #4a4a4a",
     backgroundColor: "transparent",
-    color: "#c8cedb",
+    color: "#c8c6c0",
     fontFamily: "inherit",
     fontSize: FONT_SIZE.micro,
     fontWeight: 700,
@@ -294,7 +294,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "0 6px",
     border: "none",
     backgroundColor: "transparent",
-    color: "#8f98a8",
+    color: "#a8a6a0",
     fontFamily: "inherit",
     fontSize: FONT_SIZE.strong,
     lineHeight: 1,

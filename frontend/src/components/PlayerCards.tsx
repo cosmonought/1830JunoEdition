@@ -429,9 +429,9 @@ export const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     flexDirection: "column",
     borderRadius: "9px",
-    border: "1px solid #2b3242",
+    border: "1px solid #2a2a2a",
     backgroundColor: "#f4f1e8",
-    color: "#23252b",
+    color: "#1c1c1c",
     overflow: "hidden",
   },
   /* Design note #606: LIFTED OUT OF THE ROW, IN THE SEAT'S OWN COLOUR. The green was inherited, not chosen --
@@ -521,7 +521,7 @@ export const styles: Record<string, React.CSSProperties> = {
     textAlign: "left",
     fontSize: FONT_SIZE.micro,
     fontWeight: 700,
-    color: "#5f636d",
+    color: "#6e6c68",
     whiteSpace: "nowrap",
   },
   figureValue: {
@@ -566,7 +566,7 @@ export const styles: Record<string, React.CSSProperties> = {
     textAlign: "left",
     fontSize: FONT_SIZE.micro,
     fontWeight: 700,
-    color: "#5f636d",
+    color: "#6e6c68",
   },
   holdingHeadNum: {
     ...TABLE_ROW_CELL,
@@ -574,7 +574,7 @@ export const styles: Record<string, React.CSSProperties> = {
     textAlign: "right",
     fontSize: FONT_SIZE.micro,
     fontWeight: 700,
-    color: "#5f636d",
+    color: "#6e6c68",
   },
   /* Design note #680: the body cells take the header's padding exactly. A header
      indented past its own column is the drift #658 was written to stop, in the
@@ -597,7 +597,7 @@ export const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.micro,
     fontWeight: 800,
   },
-  holdingEmpty: { fontSize: FONT_SIZE.micro, color: "#8a8f99", fontStyle: "italic" },
+  holdingEmpty: { fontSize: FONT_SIZE.micro, color: "#8a8a86", fontStyle: "italic" },
   privates: {
     borderCollapse: "collapse",
     width: "100%",
@@ -608,14 +608,14 @@ export const styles: Record<string, React.CSSProperties> = {
     textAlign: "left",
     fontSize: FONT_SIZE.micro,
     fontWeight: 700,
-    color: "#5f636d",
+    color: "#6e6c68",
     padding: "3px 10px",
   },
   privateHeadNum: {
     textAlign: "right",
     fontSize: FONT_SIZE.micro,
     fontWeight: 700,
-    color: "#5f636d",
+    color: "#6e6c68",
     padding: "3px 10px",
   },
   /* Design note #568: the name column takes what is left after the two
@@ -650,7 +650,7 @@ export const styles: Record<string, React.CSSProperties> = {
     padding: "2px 10px 7px 22px",
     fontSize: FONT_SIZE.micro,
     lineHeight: 1.45,
-    color: "#4d515a",
+    color: "#6e6c68",
   },
   privateNum: {
     textAlign: "right",

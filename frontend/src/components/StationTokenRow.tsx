@@ -40,7 +40,7 @@ export interface StationTokenRowProps {
 }
 
 /** Neutral grey for a token already on the board -- design note #1. */
-const PLACED_FILL = "#6b7280";
+const PLACED_FILL = "#6e6c68";
 
 export function StationTokenRow({
   slots,

@@ -452,7 +452,7 @@ const HOVER_TOOLTIP_STYLE: React.CSSProperties = {
   padding: "6px 8px",
   borderRadius: "6px",
   backgroundColor: "rgba(18, 20, 26, 0.94)",
-  border: "1px solid #6a7285",
+  border: "1px solid #6e6c68",
   color: "#f4ecd8",
   fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif",
   fontSize: FONT_SIZE.small,

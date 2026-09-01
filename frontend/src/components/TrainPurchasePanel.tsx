@@ -18,6 +18,7 @@
 // Design history: see `docs/ai_architecture/contract_economy.md`.
 
 import React, { useEffect, useMemo, useState } from "react";
+import { ACTION_GREEN, ACTION_GREEN_BORDER, ACTION_GREEN_INK } from "../styles/palette";
 
 
 import { FONT_SIZE } from "../styles/typography";
@@ -1931,9 +1932,9 @@ const styles: Record<string, React.CSSProperties> = {
   primaryButton: {
     padding: "8px 16px",
     borderRadius: "8px",
-    border: "1px solid #4ade80",
-    backgroundColor: "#16a34a",
-    color: "#ffffff",
+    border: `1px solid ${ACTION_GREEN_BORDER}`,
+    backgroundColor: ACTION_GREEN,
+    color: ACTION_GREEN_INK,
     fontSize: FONT_SIZE.control,
     fontWeight: 700,
     fontFamily: "inherit",
@@ -2033,6 +2034,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: "inherit",
     cursor: "pointer",
   },
-  promptAccept: { backgroundColor: "#16a34a", borderColor: "#4ade80", color: "#ffffff" },
+  promptAccept: { backgroundColor: ACTION_GREEN, borderColor: ACTION_GREEN_BORDER, color: ACTION_GREEN_INK },
   promptReject: { backgroundColor: "#3a1f22", borderColor: "#b91c1c", color: "#fda4af" },
 };

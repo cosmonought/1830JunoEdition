@@ -146,7 +146,7 @@ export function PrivateCompanyPills({
 
 const styles: Record<string, React.CSSProperties> = {
   root: { display: "flex", flexDirection: "column", gap: "4px", minWidth: 0 },
-  empty: { fontSize: FONT_SIZE.micro, color: "#5c626e" },
+  empty: { fontSize: FONT_SIZE.micro, color: "#6e6c68" },
   /* Horizontal and non-wrapping, which is what keeps the cell's height stable.
      `overflowX: auto` rather than `hidden`: a player holding more privates than
      fits must still be able to reach them, and a scrollbar in a 128px cell is a
@@ -172,12 +172,12 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: "pointer",
     whiteSpace: "nowrap",
   },
-  pillCard: { backgroundColor: "#2a3142", borderColor: "#3a4055", color: "#c8cbd6" },
-  pillTable: { backgroundColor: "#232a38", borderColor: "#39415280", color: "#c2c8d4" },
+  pillCard: { backgroundColor: "#2a2a2a", borderColor: "#3a3a3a", color: "#c8c6c0" },
+  pillTable: { backgroundColor: "#2a2a2a", borderColor: "#39415280", color: "#c8c6c0" },
   /* The open pill reads as a pressed control rather than merely a
      highlighted one -- it is the thing the panel below belongs to, and
      with several pills in a row that link has to be unambiguous. */
-  pillOpen: { backgroundColor: "#3a4661", borderColor: "#5b7099", color: "#ffffff" },
+  pillOpen: { backgroundColor: "#3a4661", borderColor: "#5b7099", color: "#f2f0eb" },
   /* Design note #1035: BORDER AND INK, NOT A FILL. #702 took the translucent alert BACKGROUNDS off the train
      chips because they let the corporation's livery through and made the chip look faulty; these pills sit on
      two different surfaces for the same reason, so they escalate the same way -- the two properties that read
@@ -191,11 +191,11 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "6px 8px",
     borderRadius: "6px",
     border: "1px solid #39415280",
-    backgroundColor: "#1a2029",
+    backgroundColor: "#1c1c1c",
     maxWidth: "340px",
   },
   panelHead: { display: "flex", alignItems: "baseline", gap: "8px" },
-  panelName: { fontSize: FONT_SIZE.micro, fontWeight: 800, color: "#e2e6ee" },
+  panelName: { fontSize: FONT_SIZE.micro, fontWeight: 800, color: "#f2f0eb" },
   panelRevenue: {
     marginLeft: "auto",
     fontSize: FONT_SIZE.micro,
@@ -206,7 +206,7 @@ const styles: Record<string, React.CSSProperties> = {
   panelAbility: {
     fontSize: FONT_SIZE.micro,
     lineHeight: 1.5,
-    color: "#9aa2b1",
+    color: "#a8a6a0",
     whiteSpace: "normal",
   },
 };

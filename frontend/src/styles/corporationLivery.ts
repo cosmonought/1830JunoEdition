@@ -115,8 +115,30 @@ export function bestContrastTextColor(backgroundHex: string): string {
  * a channel computed with floats would round differently between engines and this is trivially integer. */
 
 /** The neutral these chips sit at today -- `orTurnOrderChipUpcoming`'s ink. Exported so the blend target and
- *  the unblended default cannot drift apart. */
-export const TURN_ORDER_NEUTRAL_INK = "#8a90a0";
+ *  the unblended default cannot drift apart.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 1092: THE ONE VALUE THE RE-THEME TOOK OUT OF THIS FILE
+ *  ==================================================================
+ *  THIS FILE IS OTHERWISE LOCKED. #1092 excluded `corporationLivery.ts` outright, because the eight hues are
+ *  the physical board's and `bestContrastTextColor` returns literal white and black by contract. This
+ *  constant is the exception, and the reason it is one is that it is NOT LIVERY: it is a chrome grey that
+ *  happens to live here, and the doc comment above says so -- it is `orTurnOrderChipUpcoming`'s ink, exported
+ *  so the two cannot drift. That chip moved to `#8a8a86` with the rest of the ladder; leaving this behind
+ *  would have recreated the exact drift the export exists to prevent.
+ *
+ *  IT IS ALSO VISIBLE, which is what settled it rather than tidiness. At a 55% blend the residual cast is
+ *  not diluted away: every corporation's inactive ink shifts by more than a just-noticeable difference
+ *  (2.5 to 7.1 dE, NYC worst), so the strip really was the one place still reading blue-grey against
+ *  neutral chrome.
+ *
+ *  WHAT IT COSTS, recorded because #1092's standing rule elsewhere was "do not spend contrast that is
+ *  already thin": the worst inactive ink goes 2.72:1 to 2.58:1 against the chip fill. That is a real loss
+ *  and it is accepted here for two reasons the other cases did not have -- the chips are DELIBERATELY
+ *  recessive (the note above: "not enough to pull the eye off the one filled chip"), and pairwise separation
+ *  between the eight actually IMPROVES, 13.9 to 14.5 dE, which is the property this blend exists to protect.
+ *  Logged as TECH_DEBT TD-8 with the rest of the recessive family. */
+export const TURN_ORDER_NEUTRAL_INK = "#8a8a86";
 
 /** `hex` blended `percent` of the way toward `toward`, per channel, in integers.
  *

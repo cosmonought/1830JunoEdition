@@ -81,7 +81,7 @@ const TONE_TINT_ALPHA = 0.32;
 const TONE_BONUS_RGB = [74, 222, 128] as const; // #4ade80
 const TONE_MALUS_RGB = [244, 63, 94] as const; // #f43f5e
 /** The expanded row's own ground, as numbers -- see `logEntry`, which paints it. */
-const LOG_ROW_RGB = [20, 28, 44] as const; // #141c2c
+const LOG_ROW_RGB = [20, 28, 44] as const; // #0f0f0f
 
 /** The tint laid over the row's ground and flattened to one opaque colour. */
 function toneOverRow(tint: readonly [number, number, number]): string {
@@ -640,8 +640,8 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     flexDirection: "column",
     minHeight: 0,
-    backgroundColor: "#131a27",
-    borderTop: "1px solid #0b1119",
+    backgroundColor: "#1c1c1c",
+    borderTop: "1px solid #2a2a2a",
     borderLeft: "3px solid #2f6f6a",
     boxSizing: "border-box",
   },
@@ -669,7 +669,7 @@ const styles: Record<string, React.CSSProperties> = {
     // surface rather than reasserting the tab bar's.
     backgroundColor: "transparent",
     border: "none",
-    color: "#F8FAFC",
+    color: "#f2f0eb",
     fontFamily: FONT_FAMILY,
     fontSize: FONT_SIZE.strong,
     fontWeight: 500,
@@ -678,7 +678,7 @@ const styles: Record<string, React.CSSProperties> = {
     boxSizing: "border-box",
   },
   headerRowOpen: {
-    backgroundColor: "#243247",
+    backgroundColor: "#2a2a2a",
   },
   previewText: {
     flex: 1,
@@ -712,9 +712,9 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     padding: "3px 0",
     borderRadius: "6px",
-    border: "1px solid #2f3646",
-    backgroundColor: "#1b2130",
-    color: "#9aa0ac",
+    border: "1px solid #2a2a2a",
+    backgroundColor: "#141414",
+    color: "#a8a6a0",
     cursor: "pointer",
     textAlign: "center",
     zIndex: 1,
@@ -742,13 +742,13 @@ const styles: Record<string, React.CSSProperties> = {
     textAlign: "right",
     fontSize: FONT_SIZE.body,
     fontWeight: 600,
-    color: "#9aa0ac",
+    color: "#a8a6a0",
     flexShrink: 0,
   },
   // ---- In-place accordion body -- design note #5. ----
   body: {
-    backgroundColor: "#0F172A",
-    borderTop: "1px solid #2a3a52",
+    backgroundColor: "#0f0f0f",
+    borderTop: "1px solid #2a2a2a",
     display: "flex",
     flexDirection: "column",
     // Design note #614: the part that yields when the dock is capped.
@@ -774,7 +774,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   emptyHint: {
     fontSize: FONT_SIZE.control,
-    color: "#6f7480",
+    color: "#6e6c68",
     margin: 0,
   },
   // ---- Chat entries -- ported from FeedOverlay.tsx design note #3. ----
@@ -784,8 +784,8 @@ const styles: Record<string, React.CSSProperties> = {
     // mix React warns about.
     borderLeftWidth: "3px",
     borderLeftStyle: "solid",
-    borderLeftColor: "#3a3f4b",
-    backgroundColor: "#182236",
+    borderLeftColor: "#3a3a3a",
+    backgroundColor: "#1c1c1c",
     borderRadius: "0 10px 10px 10px",
     padding: "6px 12px",
   },
@@ -815,7 +815,7 @@ const styles: Record<string, React.CSSProperties> = {
   chatText: {
     fontSize: FONT_SIZE.body,
     fontWeight: 700,
-    color: "#c7cbd4",
+    color: "#c8c6c0",
     marginTop: "1px",
   },
   // ---- Log entries -- ported from FeedOverlay.tsx design note #4. ----
@@ -825,7 +825,7 @@ const styles: Record<string, React.CSSProperties> = {
      with both. */
   logGutter: {
     fontWeight: 800,
-    color: "#c8cdd8",
+    color: "#c8c6c0",
     flex: "none",
     marginRight: "8px",
     fontVariantNumeric: "tabular-nums",
@@ -839,8 +839,8 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "flex-start",
     gap: "10px",
     padding: "6px 12px",
-    backgroundColor: "#141c2c",
-    border: "1px solid #1e2937",
+    backgroundColor: "#0f0f0f",
+    border: "1px solid #1c1c1c",
     /* Design note #425: a rounded rectangle, not a 999px pill. The pill
        shape was built for a single clipped line; on wrapped text it bows
        the left and right edges away from the words. */
@@ -864,7 +864,7 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "6px",
     border: "1px solid transparent",
     backgroundColor: "transparent",
-    color: "#9aa2b1",
+    color: "#a8a6a0",
     font: "inherit",
     fontSize: FONT_SIZE.micro,
     textAlign: "left",
@@ -885,7 +885,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   logLabelFull: {
     flex: 1,
-    color: "#c7cbd4",
+    color: "#c8c6c0",
     /* THE POINT OF THE WHOLE CHANGE. The ticker's own line clips to one
        row; here the text wraps and the entry grows, so a long entry is
        readable in full rather than ending in an ellipsis the reader
@@ -976,7 +976,7 @@ const styles: Record<string, React.CSSProperties> = {
   logFlavourText: { fontStyle: "italic", fontWeight: 700 },
   timestamp: {
     fontSize: FONT_SIZE.small,
-    color: "#6f7480",
+    color: "#6e6c68",
     flexShrink: 0,
   },
 };

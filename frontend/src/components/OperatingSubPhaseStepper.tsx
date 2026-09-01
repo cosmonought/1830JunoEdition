@@ -250,7 +250,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: 0,
   },
   stepItem: { display: "inline-flex", alignItems: "center", gap: "2px" },
-  chevron: { color: "#4a5163", fontSize: FONT_SIZE.small, padding: "0 2px" },
+  chevron: { color: "#4a4a4a", fontSize: FONT_SIZE.small, padding: "0 2px" },
   step: {
     display: "inline-flex",
     alignItems: "center",
@@ -259,9 +259,9 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "6px",
     borderWidth: "1px",
     borderStyle: "solid",
-    borderColor: "#3a4150",
-    backgroundColor: "#1b2130",
-    color: "#9aa0ac",
+    borderColor: "#3a3a3a",
+    backgroundColor: "#141414",
+    color: "#a8a6a0",
     fontSize: FONT_SIZE.small,
     fontWeight: 600,
     whiteSpace: "nowrap",
@@ -272,7 +272,18 @@ const styles: Record<string, React.CSSProperties> = {
   // Done reads as settled rather than disabled: a completed step is not an
   // error state, and dimming it to near-invisible would break the "shape of
   // the turn" the strip exists to show.
-  stepDone: { color: "#6f7480", borderColor: "#2b3242", backgroundColor: "#161b27" },
+  /* ==================================================================
+      DESIGN NOTE 1096: A FINISHED STEP IS INFORMATION, NOT AN UNAVAILABLE CONTROL
+     ==================================================================
+     This was `#6e6c68` -- the same ink the app gives DISABLED BUTTONS -- at 3.66:1. The paragraph above
+     already had the right idea ("settled rather than disabled") and the colour quietly contradicted it.
+     WHY THE DISTINCTION MATTERS RATHER THAN BEING PEDANTRY: the accessibility floor exempts disabled
+     controls, on the reasoning that a control offering you nothing need not be read. A completed step is
+     the opposite -- it is the strip telling you where you are in the round, which is a thing a player
+     actively reads. Borrowing the disabled ink borrowed an exemption this element is not entitled to.
+     ONE NOTCH, NOT A PROMOTION: `#8a8a86` is 5.53:1 on this ground, still clearly quieter than
+     `stepCurrent`'s filled treatment, so the sequence still reads as done / here / to come. */
+  stepDone: { color: "#8a8a86", borderColor: "#2a2a2a", backgroundColor: "#0f0f0f" },
   stepCurrent: {
     color: "#eaf2ff",
     borderColor: "#4d8ee0",
@@ -288,9 +299,9 @@ const styles: Record<string, React.CSSProperties> = {
   advanceButton: {
     padding: "5px 12px",
     borderRadius: "6px",
-    border: "1px solid #4a5163",
-    backgroundColor: "#232936",
-    color: "#e2e6ee",
+    border: "1px solid #4a4a4a",
+    backgroundColor: "#1c1c1c",
+    color: "#f2f0eb",
     fontSize: FONT_SIZE.control,
     fontFamily: "inherit",
     cursor: "pointer",

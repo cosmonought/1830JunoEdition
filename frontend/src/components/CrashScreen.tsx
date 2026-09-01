@@ -1,4 +1,5 @@
 import React from "react";
+import { ACTION_GREEN, ACTION_GREEN_BORDER, ACTION_GREEN_INK } from "../styles/palette";
 
 /* ==================================================================
  *  DESIGN NOTE 761: A WHITE SCREEN IS A REPORT NOBODY CAN FILE
@@ -73,17 +74,17 @@ export class CrashScreen extends React.Component<
         style={{
           minHeight: "100vh",
           padding: "32px",
-          backgroundColor: "#0b0d12",
-          color: "#e6e8ef",
+          backgroundColor: "#0f0f0f",
+          color: ACTION_GREEN_INK,
           fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif",
           boxSizing: "border-box",
         }}
       >
         <h1 style={{ fontSize: "20px", margin: "0 0 8px" }}>Project 18XX hit a rendering error</h1>
-        <p style={{ margin: "0 0 4px", color: "#c8cdd8", lineHeight: 1.5 }}>
+        <p style={{ margin: "0 0 4px", color: "#c8c6c0", lineHeight: 1.5 }}>
           The game state is safe — it lives in the action log, not in this page. Reloading replays it.
         </p>
-        <p style={{ margin: "0 0 20px", color: "#9aa1b4", fontSize: "13px", lineHeight: 1.5 }}>
+        <p style={{ margin: "0 0 20px", color: "#a8a6a0", fontSize: "13px", lineHeight: 1.5 }}>
           Copying the details below and sending them is what makes this fixable.
         </p>
 
@@ -94,9 +95,9 @@ export class CrashScreen extends React.Component<
             style={{
               padding: "8px 16px",
               borderRadius: "8px",
-              border: "1px solid #4ade80",
-              backgroundColor: "#16a34a",
-              color: "#ffffff",
+              border: `1px solid ${ACTION_GREEN_BORDER}`,
+              backgroundColor: ACTION_GREEN,
+              color: "#f2f0eb",
               fontSize: "14px",
               fontWeight: 700,
               fontFamily: "inherit",
@@ -116,9 +117,9 @@ export class CrashScreen extends React.Component<
             style={{
               padding: "8px 16px",
               borderRadius: "8px",
-              border: "1px solid #4a5163",
-              backgroundColor: "#232936",
-              color: "#c8cdd8",
+              border: "1px solid #4a4a4a",
+              backgroundColor: "#1c1c1c",
+              color: "#c8c6c0",
               fontSize: "14px",
               fontFamily: "inherit",
               cursor: "pointer",
@@ -133,9 +134,9 @@ export class CrashScreen extends React.Component<
             margin: 0,
             padding: "14px",
             borderRadius: "10px",
-            border: "1px solid #2f3646",
-            backgroundColor: "#141a26",
-            color: "#c8cdd8",
+            border: "1px solid #2a2a2a",
+            backgroundColor: "#0f0f0f",
+            color: "#c8c6c0",
             fontSize: "12px",
             lineHeight: 1.5,
             whiteSpace: "pre-wrap",

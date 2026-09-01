@@ -133,10 +133,15 @@ describe("the seat stripe carries identity and only identity", () => {
   it("flips to black on the three that need it", () => {
     /* THE POSITIVE CONTROL for the case above: a picker that returned white for everything would still pass a
        floor test if the floor were low enough, and would be wrong about half the roster. */
-    expect(bestContrastTextColor("#a88a3f")).toBe("#000000"); // Ochre
-    expect(bestContrastTextColor("#4f8a5c")).toBe("#000000"); // Moss
-    expect(bestContrastTextColor("#3f8a94")).toBe("#000000"); // Teal
-    expect(bestContrastTextColor("#3f6fa8")).toBe("#FFFFFF"); // Slate blue
+    /* Design note #1097 re-cut three seat colours, and these three hexes are no longer among them. They are
+       KEPT AS INPUTS ANYWAY: what this case tests is the function's threshold behaviour on mid-lightness
+       colours, and these are still good examples of it. Relabelled rather than replaced, because the new
+       seat colours are all dark enough to take white and would turn a "flips to black" case into a
+       "returns white" one -- deleting the coverage instead of updating it. */
+    expect(bestContrastTextColor("#a88a3f")).toBe("#000000"); // mid gold
+    expect(bestContrastTextColor("#4f8a5c")).toBe("#000000"); // mid green
+    expect(bestContrastTextColor("#3f8a94")).toBe("#000000"); // mid teal
+    expect(bestContrastTextColor("#3f6fa8")).toBe("#FFFFFF"); // Slate blue, still a seat colour
   });
 
   it("gives an unplaceable seat the muted paper, never a guessed hue", () => {

@@ -202,6 +202,37 @@ export const CARD_BUY_GREEN_DARK = "#047857";
 export const CARD_BUY_GREEN_TINT = "#d6f5e8";
 export const CARD_BUY_GREEN_INK = "#04553c";
 
+/* ==================================================================
+    DESIGN NOTE 1095: THE CONFIRM BUTTON, AND WHY IT GOT BRIGHTER RATHER THAN DARKER
+   ==================================================================
+   REPORTED as TECH_DEBT TD-5: five controls put white on `#16a34a` at 3.30:1 -- under AA, on the buttons
+   that spend money. Pre-existing, not the re-theme's doing, but the re-theme is what measured it.
+
+   THE OBVIOUS FIX IS THE WRONG ONE. Darkening the fill until white passes lands on `#0f7a37`, which is
+   3.0 dE from the B&M's livery green -- the same colour, to a reader. A confirm button wearing a
+   corporation's identity, on a board where that identity is load-bearing, trades a contrast bug for a
+   meaning bug. The whole space was searched: every green dark enough for white text either collides with
+   the B&M or has desaturated into teal.
+
+   SO IT GOES THE OTHER WAY -- brighter fill, dark ink. `#052e16` on `#22c55e` is 6.54:1, and the fill sits
+   24.2 dE from the nearest livery, which is the widest margin any candidate reached. It reads as MORE
+   prominent than before, which is the right direction for a Pay button, and dark-on-vivid is not the
+   disabled look: disabled here is grey ink on a grey fill, a different construction entirely.
+
+   ONE PLACE ALREADY DID THIS. `PrivatePowerFlowModal` was drawing `#04140a` on the old fill at 5.74:1 --
+   the only one of the five that was legible, and by exactly this method. The token generalises what that
+   call site had already worked out alone.
+
+   THE RIM LOSES A LITTLE: `#4ade80` against the fill goes 1.89:1 to 1.31:1. It is kept because its job is
+   separating the button from the DARK CHROME behind it, not from its own centre, and against `#1c1c1c` it
+   is unchanged. */
+
+/** The confirm/pay action: fill, rim and ink as one set, so the pairing cannot be
+ *  half-copied into a sixth file the way it was into the first five. */
+export const ACTION_GREEN = "#22c55e";
+export const ACTION_GREEN_BORDER = "#4ade80";
+export const ACTION_GREEN_INK = "#052e16";
+
 /** The active-turn pulse. Paper rather than pure white -- so the pulse belongs
  *  to the palette rather than sitting outside it -- and light enough to survive
  *  being layered over any tab's background.

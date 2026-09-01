@@ -21,6 +21,7 @@
 // Design notes #2/#386/#660a/#661: see `docs/ai_architecture/contract_economy.md`.
 
 import React, { useMemo, useState } from "react";
+import { ACTION_GREEN, ACTION_GREEN_BORDER, ACTION_GREEN_INK } from "../styles/palette";
 
 import type { PrivateCompanyState } from "../utils/gameState";
 import { FONT_SIZE } from "../styles/typography";
@@ -736,20 +737,20 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "10px",
     padding: "18px 20px",
     borderRadius: "12px",
-    border: "1px solid #3a4150",
-    backgroundColor: "#141a26",
+    border: "1px solid #3a3a3a",
+    backgroundColor: "#0f0f0f",
     boxShadow: "0 12px 40px rgba(0,0,0,0.6)",
   },
   header: { display: "flex", flexDirection: "row", alignItems: "center", gap: "10px" },
-  heading: { fontSize: FONT_SIZE.heading, fontWeight: 800, color: "#e2e6ee" },
+  heading: { fontSize: FONT_SIZE.heading, fontWeight: 800, color: "#f2f0eb" },
   closeButton: {
     marginLeft: "auto",
     width: "30px",
     height: "30px",
     borderRadius: "999px",
-    border: "1px solid #4a5163",
-    backgroundColor: "#232936",
-    color: "#c8cdd8",
+    border: "1px solid #4a4a4a",
+    backgroundColor: "#1c1c1c",
+    color: "#c8c6c0",
     fontFamily: "inherit",
     cursor: "pointer",
   },
@@ -801,8 +802,8 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "8px",
     borderWidth: "1px",
     borderStyle: "solid",
-    borderColor: "#3a4150",
-    backgroundColor: "#1b2130",
+    borderColor: "#3a3a3a",
+    backgroundColor: "#141414",
     overflow: "hidden",
   },
   /* Design note #804: "selected" and "open" were the same card all along, so the key says the one thing it
@@ -815,7 +816,7 @@ const styles: Record<string, React.CSSProperties> = {
   rowGroupBlocked: {
     opacity: 0.62,
     borderStyle: "dashed",
-    backgroundColor: "#171c27",
+    backgroundColor: "#1c1c1c",
   },
   row: {
     display: "grid",
@@ -852,7 +853,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "7px 12px",
     border: "none",
     background: "none",
-    color: "#e2e6ee",
+    color: "#f2f0eb",
     fontFamily: "inherit",
     cursor: "pointer",
   },
@@ -907,14 +908,14 @@ const styles: Record<string, React.CSSProperties> = {
   },
   /* Design note #804: the caret moved off the deleted disclosure button and onto the row that now does its
      job. Small and grey: it is an affordance, not a fact. */
-  rowCaret: { fontSize: FONT_SIZE.micro, color: "#8f98a8" },
+  rowCaret: { fontSize: FONT_SIZE.micro, color: "#a8a6a0" },
   /* Design note #721: inline beside the name, so it no longer costs a grid row. `micro` because it is the
      one fact on the line that is not being compared across rows. */
   /* Design note #830: its own column, flush right beside the figures. `micro` because it is the one fact on
      the row nobody compares ACROSS rows -- you look up one private's owner, you do not rank them. */
   rowOwner: {
     fontSize: FONT_SIZE.micro,
-    color: "#8f98a8",
+    color: "#a8a6a0",
     whiteSpace: "nowrap",
     textAlign: "right",
   },
@@ -932,7 +933,7 @@ const styles: Record<string, React.CSSProperties> = {
      distinction that did not need carrying twice. */
   rowPower: {
     fontSize: FONT_SIZE.small,
-    color: "#e2e6ee",
+    color: "#f2f0eb",
     lineHeight: 1.4,
     textAlign: "left",
     minWidth: 0,
@@ -966,12 +967,12 @@ const styles: Record<string, React.CSSProperties> = {
     margin: "0 12px 10px",
     padding: "8px 10px",
     borderRadius: "6px",
-    backgroundColor: "#151a25",
+    backgroundColor: "#1c1c1c",
   },
   cardRule: {
     margin: 0,
     fontSize: FONT_SIZE.small,
-    color: "#c1c7d3",
+    color: "#c8c6c0",
     lineHeight: 1.5,
     minWidth: 0,
     overflowWrap: "anywhere",
@@ -1001,14 +1002,14 @@ const styles: Record<string, React.CSSProperties> = {
   /* Design note #842: plain panel ink, NOT the monospace green. That channel means "a figure being
      compared" (#804), and the band is a constraint on what may be typed rather than something to weigh --
      using it here is what made revenue, face value and the offer range look like the same kind of number. */
-  priceLabel: { fontSize: FONT_SIZE.small, fontWeight: 700, color: "#c8cdd8", whiteSpace: "nowrap" },
+  priceLabel: { fontSize: FONT_SIZE.small, fontWeight: 700, color: "#c8c6c0", whiteSpace: "nowrap" },
   priceInput: {
     width: "130px",
     padding: "8px 10px",
     borderRadius: "6px",
-    border: "1px solid #4a5163",
-    backgroundColor: "#0f1420",
-    color: "#e2e6ee",
+    border: "1px solid #4a4a4a",
+    backgroundColor: "#141414",
+    color: "#f2f0eb",
     fontSize: FONT_SIZE.control,
     fontFamily: "inherit",
   },
@@ -1020,9 +1021,9 @@ const styles: Record<string, React.CSSProperties> = {
   primaryButton: {
     padding: "9px 18px",
     borderRadius: "8px",
-    border: "1px solid #4ade80",
-    backgroundColor: "#16a34a",
-    color: "#ffffff",
+    border: `1px solid ${ACTION_GREEN_BORDER}`,
+    backgroundColor: ACTION_GREEN,
+    color: ACTION_GREEN_INK,
     fontSize: FONT_SIZE.control,
     fontWeight: 700,
     fontFamily: "inherit",
@@ -1033,9 +1034,9 @@ const styles: Record<string, React.CSSProperties> = {
   buttonDisabled: {
     opacity: 0.45,
     cursor: "not-allowed",
-    backgroundColor: "#1f2937",
-    borderColor: "#374151",
-    color: "#6b7280",
+    backgroundColor: "#1c1c1c",
+    borderColor: "#3a3a3a",
+    color: "#6e6c68",
   },
 
   /* ==================================================================
@@ -1116,6 +1117,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: "inherit",
     cursor: "pointer",
   },
-  promptAccept: { backgroundColor: "#16a34a", borderColor: "#4ade80", color: "#ffffff" },
+  promptAccept: { backgroundColor: ACTION_GREEN, borderColor: ACTION_GREEN_BORDER, color: ACTION_GREEN_INK },
   promptReject: { backgroundColor: "#3a1f22", borderColor: "#b91c1c", color: "#fda4af" },
 };

@@ -839,7 +839,7 @@ export function TileSelectionPopup({
                           minWidth: 34,
                           padding: "3px 9px",
                           borderRadius: 999,
-                          background: "#0d0f0c",
+                          background: "#0f0f0f",
                           border: "2px solid #e8c860",
                           color: "#ffd970",
                           fontSize: FONT_SIZE.control,
@@ -864,7 +864,7 @@ export function TileSelectionPopup({
                       fontSize: FONT_SIZE.micro,
                       letterSpacing: 0.6,
                       textTransform: "uppercase",
-                      color: group.tier ? TIER_LABEL_COLOR[group.tier] : "#8a8a8a",
+                      color: group.tier ? TIER_LABEL_COLOR[group.tier] : "#8a8a86",
                       lineHeight: 1,
                     }}
                   >

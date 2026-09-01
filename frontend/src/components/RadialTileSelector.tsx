@@ -19,6 +19,7 @@
 // Full design history: see `docs/ai_architecture/canvas_rendering.md`.
 
 import React, { useEffect, useRef, useState } from "react";
+import { ACTION_GREEN, ACTION_GREEN_BORDER, ACTION_GREEN_INK } from "../styles/palette";
 
 import { TilePreviewThumbnail, type StationPreviewMarker } from "./HexGridRenderer";
 import type { LegalTilePlacement } from "./hexContractTypes";
@@ -844,18 +845,18 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: "center",
     boxShadow: "0 3px 12px rgba(0,0,0,0.5)",
   },
-  fabConfirm: { backgroundColor: "#16a34a", borderColor: "#4ade80", color: "#ffffff" },
+  fabConfirm: { backgroundColor: ACTION_GREEN, borderColor: ACTION_GREEN_BORDER, color: ACTION_GREEN_INK },
   // Inline styles cannot express `:disabled` (Lobby.tsx design note #3), so
   // the disabled look is computed. Kept VISIBLE rather than hidden: in
   // planning mode the player should see that confirming is a thing that
   // exists and is currently unavailable, which is what the tooltip explains.
   fabConfirmDisabled: {
-    backgroundColor: "#1f2937",
-    borderColor: "#374151",
-    color: "#6b7280",
+    backgroundColor: "#1c1c1c",
+    borderColor: "#3a3a3a",
+    color: "#6e6c68",
     cursor: "not-allowed",
   },
-  fabCancel: { backgroundColor: "#b91c1c", borderColor: "#f87171", color: "#ffffff" },
+  fabCancel: { backgroundColor: "#b91c1c", borderColor: "#f87171", color: "#f2f0eb" },
   caption: {
     pointerEvents: "auto",
     position: "absolute",
@@ -869,16 +870,16 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "4px 12px",
     borderRadius: "999px",
     backgroundColor: "rgba(15, 20, 32, 0.92)",
-    border: "1px solid #3a4150",
+    border: "1px solid #3a3a3a",
     whiteSpace: "nowrap",
   },
   captionHex: {
     fontSize: FONT_SIZE.small,
     fontWeight: 800,
-    color: "#e2e6ee",
+    color: "#f2f0eb",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
   },
-  captionHint: { fontSize: FONT_SIZE.micro, color: "#9aa0ac" },
+  captionHint: { fontSize: FONT_SIZE.micro, color: "#a8a6a0" },
   /* Design note #290: brighter than the hint it sits under. The hint
      explains the CONTROL; this reports a consequence of using it, which is
      the more consequential of the two and was previously not said at all. */
@@ -903,7 +904,7 @@ const styles: Record<string, React.CSSProperties> = {
   captionCost: {
     fontSize: FONT_SIZE.small,
     fontWeight: 700,
-    color: "#f2f4f8",
+    color: "#f2f0eb",
     fontVariantNumeric: "tabular-nums",
     lineHeight: 1.35,
   },
@@ -933,7 +934,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: "block",
     fontSize: FONT_SIZE.micro,
     lineHeight: 1.2,
-    color: "#9aa0ac",
+    color: "#a8a6a0",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     textAlign: "center",
   },
@@ -956,7 +957,7 @@ const styles: Record<string, React.CSSProperties> = {
     lineHeight: 1.3,
     fontWeight: 700,
     letterSpacing: "0.02em",
-    color: "#8a919e",
+    color: "#8a8a86",
     textAlign: "center",
     whiteSpace: "nowrap",
   },

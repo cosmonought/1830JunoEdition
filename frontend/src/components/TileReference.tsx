@@ -79,7 +79,7 @@ function TileChip({ tileId, size = 30 }: { tileId: number; size?: number }) {
   return (
     <span style={{ ...styles.chip, ...(size > 40 ? styles.chipStacked : {}) }}>
       <TilePreviewThumbnail tileId={tileId} orientation={0} size={size} />
-      <span style={{ ...styles.chipId, color: entry ? TIER_INK[entry.color] : "#8a90a0" }}>
+      <span style={{ ...styles.chipId, color: entry ? TIER_INK[entry.color] : "#8a8a86" }}>
         #{tileId}
       </span>
     </span>
@@ -372,7 +372,7 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     gap: "18px",
     padding: "20px 24px 40px",
-    color: "#e6e8ef",
+    color: "#f2f0eb",
     fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif",
   },
   header: { display: "flex", flexDirection: "column", gap: "6px" },
@@ -382,16 +382,16 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     textTransform: "uppercase",
     letterSpacing: "0.04em",
-    color: "#c8cbd6",
+    color: "#c8c6c0",
   },
-  lede: { margin: 0, fontSize: FONT_SIZE.body, lineHeight: 1.5, color: "#9aa0ac", maxWidth: "68ch" },
+  lede: { margin: 0, fontSize: FONT_SIZE.body, lineHeight: 1.5, color: "#a8a6a0", maxWidth: "68ch" },
   printedBlock: {
     display: "flex",
     flexDirection: "column",
     gap: "8px",
     padding: "14px 16px",
-    backgroundColor: "#161922",
-    border: "1px solid #2a2e3a",
+    backgroundColor: "#0f0f0f",
+    border: "1px solid #2a2a2a",
     borderRadius: "10px",
   },
   sectionTitle: {
@@ -400,15 +400,15 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     textTransform: "uppercase",
     letterSpacing: "0.04em",
-    color: "#c8cbd6",
+    color: "#c8c6c0",
   },
-  sectionNote: { margin: 0, fontSize: FONT_SIZE.small, lineHeight: 1.5, color: "#8a90a0", maxWidth: "68ch" },
+  sectionNote: { margin: 0, fontSize: FONT_SIZE.small, lineHeight: 1.5, color: "#8a8a86", maxWidth: "68ch" },
   printedRows: { display: "flex", flexDirection: "column", gap: "6px", marginTop: "4px" },
   printedRow: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" },
   printedHexes: {
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     fontSize: FONT_SIZE.small,
-    color: "#c8cbd6",
+    color: "#c8c6c0",
   },
   /* Design note #692: THE TRAY IS THE OBJECT. A tinted panel with the tier's own colour on its edge, holding
      loose tiles -- the inversion the report identified, corrected. The border takes the tier ink at the call
@@ -418,11 +418,11 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     gap: "12px",
     padding: "14px 16px 16px",
-    backgroundColor: "#12151d",
+    backgroundColor: "#161616",
     border: "1px solid",
     /* Overridden per tier; a neutral here so a missing colour degrades to a
        visible tray rather than an invisible one. */
-    borderColor: "#2a2e3a",
+    borderColor: "#2a2a2a",
     borderRadius: "12px",
   },
   trayHead: {
@@ -439,7 +439,7 @@ const styles: Record<string, React.CSSProperties> = {
     letterSpacing: "0.06em",
   },
   /* The tier's own one-line note -- a count, or #692's single statement that brown ends every chain. */
-  trayNote: { fontSize: FONT_SIZE.small, color: "#8a90a0" },
+  trayNote: { fontSize: FONT_SIZE.small, color: "#8a8a86" },
   /* `auto-fill` at a width that fits the 64px artwork plus its figures. The tiles reflow; the tray does not
      scroll, because a tray you have to scroll inside is a list wearing a border. */
   trayContents: {
@@ -483,7 +483,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "12px 14px",
     backgroundColor: "rgba(255, 255, 255, 0.04)",
     border: "1px solid",
-    borderColor: "#2a2e3a",
+    borderColor: "#2a2a2a",
     borderRadius: "10px",
   },
   detailHead: { display: "flex", alignItems: "baseline", gap: "10px" },
@@ -492,11 +492,11 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.heading,
     fontWeight: 700,
   },
-  detailTerrain: { fontSize: FONT_SIZE.small, color: "#9aa0ac", flex: "1 1 auto" },
+  detailTerrain: { fontSize: FONT_SIZE.small, color: "#a8a6a0", flex: "1 1 auto" },
   detailClose: {
     background: "none",
     border: "none",
-    color: "#8a90a0",
+    color: "#8a8a86",
     fontSize: FONT_SIZE.body,
     cursor: "pointer",
     padding: "0 2px",
@@ -511,7 +511,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     textTransform: "uppercase",
     letterSpacing: "0.06em",
-    color: "#8a90a0",
+    color: "#8a8a86",
   },
   detailTiles: { display: "flex", flexWrap: "wrap", gap: "12px", alignItems: "flex-start" },
   detailEnd: { fontSize: FONT_SIZE.small, lineHeight: 1.5, color: "#e0c07a", maxWidth: "40ch" },
@@ -533,7 +533,7 @@ const styles: Record<string, React.CSSProperties> = {
   /* Design note #692: the "Upgrades to" caption is GONE -- 28 repetitions of a label for a relationship the
      arrow beside it states. What survives is the arrow and the tier-coloured ids, which is the same sentence
      in a third of the width. */
-  arrow: { color: "#8a90a0", fontSize: FONT_SIZE.body },
+  arrow: { color: "#8a8a86", fontSize: FONT_SIZE.body },
   /* Amber, matching the app's other "a rule constrains you here" marks rather
      than red -- a tile with no upgrade is a trade-off, not an error. */
   /* Design note #692: two words, not a sentence. The sentence ("this fixes the hex at yellow for the rest of

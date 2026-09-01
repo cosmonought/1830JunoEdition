@@ -79,7 +79,11 @@ describe("a badge in the margin wears no ring", () => {
     /* THE GUARD ON THE DELETION. The fill and the ticker are what say whose reservation this is; the ring was
        never carrying that. #733's contrast rule picks the text colour against the fill, so removing an
        outline cannot make the letters unreadable. */
-    expect(PRIMITIVES).toContain('const badgeFill = muted ? "#9CA3AF" : color;');
+    /* Design note #1092 neutralised the muted fill, `#9CA3AF` -> `#a8a6a0`. THE CLAIM IS UNAFFECTED: what
+       this line guards is that a muted badge still takes a FILL and the corporation's own colour still
+       reaches it through `color`, so the fill and the ticker keep saying whose reservation it is. Only the
+       grey standing in for an unfloated corporation changed, and it stayed a grey. */
+    expect(PRIMITIVES).toContain('const badgeFill = muted ? "#a8a6a0" : color;');
     expect(PRIMITIVES).toContain("bestContrastTextColor(badgeFill)");
   });
 

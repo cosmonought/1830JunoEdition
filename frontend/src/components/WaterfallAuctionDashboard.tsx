@@ -32,6 +32,7 @@ import {
   CARD_INK_MUTED,
   CARD_INK_POSITIVE,
   CARD_SURFACE,
+  CARD_SURFACE_MUTED,
 } from "../styles/palette";
 
 import type {
@@ -868,10 +869,10 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     gap: "14px",
     padding: "18px 20px",
-    backgroundColor: "#161922",
-    border: "1px solid #2a2e3a",
+    backgroundColor: "#0f0f0f",
+    border: "1px solid #2a2a2a",
     borderRadius: "10px",
-    color: "#e6e8ef",
+    color: "#f2f0eb",
     fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif",
     width: "100%",
     boxSizing: "border-box",
@@ -895,11 +896,11 @@ const styles: Record<string, React.CSSProperties> = {
   },
   headerSubtitle: {
     fontSize: FONT_SIZE.small,
-    color: "#8a90a0",
+    color: "#8a8a86",
   },
   headerHint: {
     fontSize: FONT_SIZE.control,
-    color: "#8a90a0",
+    color: "#8a8a86",
   },
   staleNote: {
     fontSize: FONT_SIZE.body,
@@ -907,7 +908,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   placeholderText: {
     fontSize: FONT_SIZE.strong,
-    color: "#6f7480",
+    color: "#6e6c68",
     margin: 0,
   },
   // Design note #11: STACKED, not side by side. Six cards squeezed beside a fixed 300px rail were too
@@ -988,7 +989,7 @@ const styles: Record<string, React.CSSProperties> = {
     borderStyle: "solid",
     borderColor: CARD_BORDER,
     borderLeftWidth: "5px",
-    borderLeftColor: "#8f8f8f",
+    borderLeftColor: "#8a8a86",
     borderRadius: "8px",
     minHeight: "260px",
     boxSizing: "border-box",
@@ -1006,7 +1007,10 @@ const styles: Record<string, React.CSSProperties> = {
     textAlign: "center",
     padding: "9px 10px",
     borderRadius: "8px",
-    backgroundColor: "#e4e1d8",
+    /* Design note #1092 cleanup: was `#e4e1d8`, a hand-written near-miss of `CARD_SURFACE_MUTED` sitting
+       beside `CARD_BORDER` from the same module. Exactly the drift `palette.ts` was created to stop -- an
+       inert surface written twice, once as a token and once as a literal a shade off it. */
+    backgroundColor: CARD_SURFACE_MUTED,
     borderWidth: "1px",
     borderStyle: "solid",
     borderColor: CARD_BORDER,
@@ -1089,7 +1093,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   privateCardFaceValue: {
     fontSize: FONT_SIZE.small,
-    color: "#8a90a0",
+    color: "#8a8a86",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
   },
   /* Design note #21: THE BID TABLE MUST NOT GROW THE CARD. Six bidders push the card past its siblings'
@@ -1282,7 +1286,9 @@ const styles: Record<string, React.CSSProperties> = {
     borderWidth: "1px",
     borderStyle: "solid",
     borderColor: CARD_DIVIDER,
-    backgroundColor: "#ffffff",
+    /* Design note #1092 cleanup: was a literal `#ffffff` between `CARD_DIVIDER` and `CARD_INK`. The sweep
+       moved it to paper's value; naming it is what stops it drifting back. */
+    backgroundColor: CARD_SURFACE,
     color: CARD_INK,
     fontVariantNumeric: "tabular-nums",
     boxSizing: "border-box",
@@ -1358,9 +1364,9 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "9px 14px",
     fontSize: FONT_SIZE.body,
     fontWeight: 600,
-    color: "#e6e8ef",
-    backgroundColor: "#2a2e3a",
-    border: "1px solid #3a3f4d",
+    color: "#f2f0eb",
+    backgroundColor: "#2a2a2a",
+    border: "1px solid #3a3a3a",
     borderRadius: "6px",
     cursor: "pointer",
   },
@@ -1368,9 +1374,9 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "9px 12px",
     fontSize: FONT_SIZE.body,
     fontWeight: 600,
-    color: "#c8cbd6",
+    color: "#c8c6c0",
     backgroundColor: "transparent",
-    border: "1px solid #3a3f4d",
+    border: "1px solid #3a3a3a",
     borderRadius: "6px",
     cursor: "pointer",
   },
@@ -1383,9 +1389,9 @@ const styles: Record<string, React.CSSProperties> = {
     minWidth: 0,
     padding: "8px",
     fontSize: FONT_SIZE.small,
-    backgroundColor: "#0f1115",
-    color: "#e6e8ef",
-    border: "1px solid #3a3f4d",
+    backgroundColor: "#0f0f0f",
+    color: "#f2f0eb",
+    border: "1px solid #3a3a3a",
     borderRadius: "6px",
   },
   numberInput: {
@@ -1393,14 +1399,14 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "8px",
     fontSize: FONT_SIZE.small,
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-    backgroundColor: "#0f1115",
-    color: "#e6e8ef",
-    border: "1px solid #3a3f4d",
+    backgroundColor: "#0f0f0f",
+    color: "#f2f0eb",
+    border: "1px solid #3a3a3a",
     borderRadius: "6px",
   },
   hintText: {
     fontSize: FONT_SIZE.micro,
-    color: "#8a90a0",
+    color: "#8a8a86",
   },
   /* Design note #422: prominent, and no longer shouting. `ON TURN` was tracked-out uppercase because it
      was a status tag at the end of a row; "Your turn" is a sentence fragment addressed to the reader. */
@@ -1461,7 +1467,7 @@ const styles: Record<string, React.CSSProperties> = {
     textShadow: "0 0 6px rgba(242, 193, 78, 0.55)",
     cursor: "help",
   },
-  privateCardNumber: { color: "#8a919e", fontWeight: 800 },
+  privateCardNumber: { color: "#8a8a86", fontWeight: 800 },
   leaderBadge: {
     fontSize: FONT_SIZE.micro,
     fontWeight: 700,

@@ -471,10 +471,10 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     gap: "10px",
     padding: "18px 20px",
-    backgroundColor: "#161922",
-    border: "1px solid #2a2e3a",
+    backgroundColor: "#0f0f0f",
+    border: "1px solid #2a2a2a",
     borderRadius: "10px",
-    color: "#e6e8ef",
+    color: "#f2f0eb",
     fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif",
   },
   header: {
@@ -487,16 +487,16 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     textTransform: "uppercase",
     letterSpacing: "0.04em",
-    color: "#c8cbd6",
+    color: "#c8c6c0",
   },
   headerHint: {
     fontSize: FONT_SIZE.strong,
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-    color: "#8a90a0",
+    color: "#8a8a86",
   },
   placeholderText: {
     fontSize: FONT_SIZE.strong,
-    color: "#6f7480",
+    color: "#6e6c68",
     margin: 0,
   },
   staleNote: {
@@ -517,8 +517,8 @@ const styles: Record<string, React.CSSProperties> = {
   th: {
     textAlign: "left",
     padding: "8px 12px",
-    color: "#8a90a0",
-    borderBottom: "1px solid #2a2e3a",
+    color: "#8a8a86",
+    borderBottom: "1px solid #2a2a2a",
     fontWeight: 700,
     textTransform: "uppercase",
     letterSpacing: "0.06em",
@@ -527,7 +527,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   td: {
     padding: "9px 12px",
-    borderBottom: "1px solid #1e2129",
+    borderBottom: "1px solid #161616",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
   },
   /* Design note #449: a corporation that cannot operate is context, not a
@@ -550,9 +550,9 @@ const styles: Record<string, React.CSSProperties> = {
   thB: {
     textAlign: "left",
     padding: "8px 12px",
-    color: "#8a90a0",
-    borderBottom: "1px solid #2a2e3a",
-    borderRight: "1px solid #262b36",
+    color: "#8a8a86",
+    borderBottom: "1px solid #2a2a2a",
+    borderRight: "1px solid #2a2a2a",
     fontWeight: 700,
     textTransform: "uppercase",
     letterSpacing: "0.06em",
@@ -562,9 +562,9 @@ const styles: Record<string, React.CSSProperties> = {
   thNumB: {
     textAlign: "right",
     padding: "8px 12px",
-    color: "#8a90a0",
-    borderBottom: "1px solid #2a2e3a",
-    borderRight: "1px solid #262b36",
+    color: "#8a8a86",
+    borderBottom: "1px solid #2a2a2a",
+    borderRight: "1px solid #2a2a2a",
     fontWeight: 700,
     textTransform: "uppercase",
     letterSpacing: "0.06em",
@@ -574,8 +574,8 @@ const styles: Record<string, React.CSSProperties> = {
   thCenter: {
     textAlign: "center",
     padding: "8px 12px",
-    color: "#8a90a0",
-    borderBottom: "1px solid #2a2e3a",
+    color: "#8a8a86",
+    borderBottom: "1px solid #2a2a2a",
     fontWeight: 700,
     textTransform: "uppercase",
     letterSpacing: "0.06em",
@@ -585,9 +585,9 @@ const styles: Record<string, React.CSSProperties> = {
   thCenterB: {
     textAlign: "center",
     padding: "8px 12px",
-    color: "#8a90a0",
-    borderBottom: "1px solid #2a2e3a",
-    borderRight: "1px solid #262b36",
+    color: "#8a8a86",
+    borderBottom: "1px solid #2a2a2a",
+    borderRight: "1px solid #2a2a2a",
     fontWeight: 700,
     textTransform: "uppercase",
     letterSpacing: "0.06em",
@@ -596,14 +596,14 @@ const styles: Record<string, React.CSSProperties> = {
   },
   tdB: {
     padding: "9px 12px",
-    borderBottom: "1px solid #1e2129",
-    borderRight: "1px solid #1e2129",
+    borderBottom: "1px solid #161616",
+    borderRight: "1px solid #161616",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
   },
   tdNumB: {
     padding: "9px 12px",
-    borderBottom: "1px solid #1e2129",
-    borderRight: "1px solid #1e2129",
+    borderBottom: "1px solid #161616",
+    borderRight: "1px solid #161616",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     textAlign: "right",
     fontVariantNumeric: "tabular-nums",
@@ -611,13 +611,13 @@ const styles: Record<string, React.CSSProperties> = {
   },
   tdCenter: {
     padding: "9px 12px",
-    borderBottom: "1px solid #1e2129",
+    borderBottom: "1px solid #161616",
     textAlign: "center",
   },
   tdCenterB: {
     padding: "9px 12px",
-    borderBottom: "1px solid #1e2129",
-    borderRight: "1px solid #1e2129",
+    borderBottom: "1px solid #161616",
+    borderRight: "1px solid #161616",
     textAlign: "center",
   },
 
@@ -643,7 +643,7 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "6px",
     color: "inherit",
   },
-  emptyCell: { color: "#5a5f6b" },
+  emptyCell: { color: "#6e6c68" },
   priceUp: { color: "#5fd38f", fontWeight: 700 },
   priceDown: { color: "#e08585", fontWeight: 700 },
 
@@ -659,7 +659,7 @@ const styles: Record<string, React.CSSProperties> = {
   corpFullName: {
     marginLeft: "7px",
     fontSize: FONT_SIZE.micro,
-    color: "#8a90a0",
+    color: "#8a8a86",
     whiteSpace: "nowrap",
   },
   /** The inline Priority Deal marker -- bare text, no container. It sits in the same cell as the boxed ACTIVE
@@ -706,7 +706,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   footnote: {
     fontSize: FONT_SIZE.body,
-    color: "#6f7480",
+    color: "#6e6c68",
     margin: 0,
     lineHeight: 1.4,
   },

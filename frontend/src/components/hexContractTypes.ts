@@ -201,6 +201,13 @@ export {
    allowed to reach, and is reached without a special case: charcoal-on-white separates at roughly 10:1
    whether or not it also contrasts with the fill inside it. Tinting it lighter would put a pale band back
    around white lettering, which is the exact bug being fixed. */
+/* Design note #1092 swept this to `#2a2a2a` and it is REVERTED, on scope rather than on taste. This is
+   BOARD ART -- `hexCanvasPrimitives` strokes it around every floated station token -- and the canvas is
+   deliberately outside the re-theme (TECH_DEBT TD-7). The note above also cites a measured figure that the
+   sweep would have falsified: "charcoal-on-white separates at roughly 10:1" is 10.35:1 at `#334155` and
+   14.35:1 at `#2a2a2a`, and the B&M edge case it records -- a ring that merges into its own fill, 1.94:1 --
+   becomes 2.68:1 and stops merging. When the canvas is retoned, this value moves WITH those two figures
+   re-measured and this paragraph rewritten, not ahead of them. */
 export const STATION_TOKEN_RING = "#334155";
 
 /* Design note #487: THE RING IS A FRACTION OF THE TOKEN, NOT OF THE HEX. The two tokens are drawn by the
@@ -225,6 +232,11 @@ export const STATION_TOKEN_RING_WIDTH_RATIO = 0.05 / 0.22;
 export function glowColorFor(color: string, minimumLuminance = 0.32): string {
   const parse = (index: number) => parseInt(color.slice(index, index + 2), 16) / 255;
   const channels = [1, 3, 5].map(parse);
+  /* Design note #1092 swept this to `#f2f0eb` and it is REVERTED. This is not a theme value: it is the
+     fallback of a function whose whole job is to return a maximum-contrast glow for an unparseable livery,
+     and the sibling `bestContrastTextColor` returns literal `#FFFFFF`/`#000000` for the same reason. Paper
+     is 16.8:1 where white is 21:1, and a re-theme does not get to shave the safety margin off the branch
+     that runs when the input was already wrong. */
   if (channels.some((value) => Number.isNaN(value))) return "#FFFFFF";
   const linear = channels.map((c) =>
     c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4,

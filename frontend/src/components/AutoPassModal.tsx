@@ -204,10 +204,10 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "10px",
     padding: "18px 20px",
     borderRadius: "12px",
-    border: "1px solid #3a4150",
-    backgroundColor: "#141a26",
+    border: "1px solid #3a3a3a",
+    backgroundColor: "#0f0f0f",
     boxShadow: "0 12px 40px rgba(0,0,0,0.6)",
-    color: "#e2e6ee",
+    color: "#f2f0eb",
     fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif",
   },
   header: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px" },
@@ -215,12 +215,12 @@ const styles: Record<string, React.CSSProperties> = {
   closeButton: {
     background: "none",
     border: "none",
-    color: "#8a90a0",
+    color: "#8a8a86",
     cursor: "pointer",
     fontSize: FONT_SIZE.body,
     lineHeight: 1,
   },
-  body: { fontSize: FONT_SIZE.small, color: "#c8cdd8", lineHeight: 1.45, margin: 0 },
+  body: { fontSize: FONT_SIZE.small, color: "#c8c6c0", lineHeight: 1.45, margin: 0 },
   list: { display: "flex", flexDirection: "column", gap: "10px", marginTop: "4px" },
   row: { display: "flex", flexDirection: "row", gap: "10px", cursor: "pointer" },
   checkbox: { marginTop: "3px", flex: "none" },
@@ -237,7 +237,7 @@ const styles: Record<string, React.CSSProperties> = {
   rowText: { display: "flex", flexDirection: "column", gap: "2px", minWidth: 0 },
   rowLabel: { fontSize: FONT_SIZE.small, fontWeight: 700 },
   /* The consequence, in the muted note ink the rest of the app uses for a reason attached to a control. */
-  rowCaption: { fontSize: FONT_SIZE.micro, color: "#8a90a0", lineHeight: 1.4 },
+  rowCaption: { fontSize: FONT_SIZE.micro, color: "#8a8a86", lineHeight: 1.4 },
   /* Amber, not red: an unconditional pass is a legal thing to ask for, and colouring it as an error would
      argue with a player who meant it. */
   warning: {
@@ -250,9 +250,9 @@ const styles: Record<string, React.CSSProperties> = {
   secondaryButton: {
     padding: "7px 14px",
     borderRadius: "8px",
-    border: "1px solid #3a4150",
+    border: "1px solid #3a3a3a",
     backgroundColor: "transparent",
-    color: "#c8cdd8",
+    color: "#c8c6c0",
     fontSize: FONT_SIZE.small,
     cursor: "pointer",
   },
@@ -267,9 +267,9 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: "pointer",
   },
   primaryButtonDisabled: {
-    borderColor: "#3a4150",
-    backgroundColor: "#1a1f2b",
-    color: "#6d7382",
+    borderColor: "#3a3a3a",
+    backgroundColor: "#1c1c1c",
+    color: "#6e6c68",
     cursor: "not-allowed",
   },
 };

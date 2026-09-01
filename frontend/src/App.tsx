@@ -10266,7 +10266,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           pendingHomeToken.president === viewerAddress
         }
         liveryColor={
-          pendingHomeToken ? stationTickerColor(pendingHomeToken.companyId) : "#171c28"
+          pendingHomeToken ? stationTickerColor(pendingHomeToken.companyId) : "#0f0f0f"
         }
         liveryInk={
           pendingHomeToken

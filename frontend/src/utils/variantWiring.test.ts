@@ -149,7 +149,10 @@ describe("the waiting room offers every variant the schema defines (design note 
     const note = sliceBetween(source, "variantNote: {", "},");
     expect(note).toContain("FONT_SIZE.small");
     expect(note).not.toContain("FONT_SIZE.micro");
-    expect(note).toContain("#c8cdd8");
+    /* Design note #1092 retoned this to `#c8c6c0`, the neutral ladder's secondary-text step. #924's claim is
+       about LEGIBILITY -- "too small and too gray" -- not about a particular grey, and the new value is
+       11.22:1 on the panel behind it, so the complaint this line guards against stays fixed. */
+    expect(note).toContain("#c8c6c0");
   });
 
   it("tells a table what the rounding rule does to their dividends (design notes #922 -> #961)", () => {

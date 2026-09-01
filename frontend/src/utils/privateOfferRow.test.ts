@@ -44,7 +44,10 @@ describe("no shorthand a sibling state overrides (design note #840)", () => {
   it("declares the row's border as longhands", () => {
     expect(PANEL).toContain('borderWidth: "1px"');
     expect(PANEL).toContain('borderStyle: "solid"');
-    expect(PANEL).toContain('borderColor: "#3a4150"');
+    /* Design note #1092 retoned this to `#3a3a3a`. #840's rule is about the DECLARATION FORM -- three
+       longhands, never a `border` shorthand a sibling state can half-override -- so the hue is incidental
+       and the two assertions above it are the ones carrying the claim. */
+    expect(PANEL).toContain('borderColor: "#3a3a3a"');
   });
 
   it("leaves no border shorthand on a key whose siblings override its parts", () => {

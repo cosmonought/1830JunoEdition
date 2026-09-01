@@ -1027,7 +1027,7 @@ export function drawBadgeShape(
   }
   ctx.fillStyle = "#FFFFFF";
   ctx.fill();
-  ctx.strokeStyle = "#1E293B";
+  ctx.strokeStyle = "#1c1c1c";
   ctx.lineWidth = 1.5;
   ctx.stroke();
 }
@@ -1794,7 +1794,7 @@ export function drawStationTokenMarker(
 
   // Reserved badges REVERSED from solid navy to neutral gray AND reduced alpha -- "grayed out or transparent" read as combine both, since gray alone can still look like a present token. The ring keeps previewing the brand colour, just faded with everything else.
   // See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #116
-  const badgeFill = muted ? "#9CA3AF" : color;
+  const badgeFill = muted ? "#a8a6a0" : color;
   const MUTED_ALPHA = 0.45;
 
   ctx.save();
@@ -2372,8 +2372,8 @@ export function drawOffboardTooltip(
   const cardY = preferBelow ? anchor.y + hexSize * 0.9 : anchor.y - hexSize * 0.9 - cardHeight;
 
   ctx.save();
-  ctx.fillStyle = "rgba(18, 20, 26, 0.94)";
-  ctx.strokeStyle = "#3a3f4b";
+  ctx.fillStyle = "rgba(20, 20, 20, 0.94)";
+  ctx.strokeStyle = "#3a3a3a";
   ctx.lineWidth = 1.5;
   const radius = 8;
   ctx.beginPath();
@@ -2404,7 +2404,7 @@ export function drawOffboardTooltip(
     // The bold/white treatment above already marks the active era on its
     // own; the separate green "ACTIVE" label used to repeat that same
     // information a second time, so it's been removed per feedback.
-    ctx.fillStyle = isActive ? "#ffffff" : "#b8bcc4";
+    ctx.fillStyle = isActive ? "#ffffff" : "#c8c6c0";
     ctx.font = isActive ? "bold 11px sans-serif" : rowFont;
     ctx.textAlign = "left";
     ctx.textBaseline = "middle";

@@ -120,9 +120,9 @@ export function surfaceTabFor(roundType: RoundType | null): MainTab {
 
 const MAIN_TAB_HOVER_CSS = `
 .nav-tab { transition: color 120ms ease, border-color 120ms ease, background-color 120ms ease; }
-.nav-tab:hover { color: #e2e8f0; border-color: #64748b; background-color: #1e2330; }
-.nav-tab:focus-visible { outline: 2px solid #94a3b8; outline-offset: -2px; color: #e2e8f0; }
-.nav-tab-active:hover { color: #ffffff; border-color: rgba(255,255,255,0.8); }
+.nav-tab:hover { color: #f2f0eb; border-color: #4a4a4a; background-color: #1c1c1c; }
+.nav-tab:focus-visible { outline: 2px solid #8a8a86; outline-offset: -2px; color: #f2f0eb; }
+.nav-tab-active:hover { color: #f2f0eb; border-color: rgba(255,255,255,0.8); }
 `;
 
 

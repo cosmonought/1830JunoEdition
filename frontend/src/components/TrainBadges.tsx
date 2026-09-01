@@ -561,7 +561,7 @@ export function LastRoutePayout({ revenue, surface, compact }: LastRoutePayoutPr
 /* ------------------------------------------------------------------ */
 
 const darkInk = {
-  chip: { borderColor: "#3a4150", backgroundColor: "#232936", color: "#e2e6ee" },
+  chip: { borderColor: "#3a3a3a", backgroundColor: "#1c1c1c", color: "#f2f0eb" },
   /* Design note #7 (`gamePhase.ts`): the SAME two constants the action bar's phase-shift badge uses, so chip
      and badge escalate together by construction. Amber became orange here because amber is already spent on
      "look here" and on the Yellow ERA.
@@ -596,8 +596,8 @@ const darkInk = {
     backgroundColor: "rgba(168, 85, 247, 0.18)",
     color: "#d8b4fe",
   },
-  empty: { color: "#5a5f6b" },
-  value: { color: "#e2e6ee" },
+  empty: { color: "#6e6c68" },
+  value: { color: "#f2f0eb" },
 } as const;
 
 // Same three meanings, re-mixed for paper: the tints are opaque pastels and

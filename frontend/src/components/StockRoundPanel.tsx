@@ -1943,7 +1943,7 @@ const styles: Record<string, React.CSSProperties> = {
     // Cards now hug their content.
     alignItems: "start",
   },
-  rosterEmpty: { fontSize: FONT_SIZE.small, color: "#6f7480" },
+  rosterEmpty: { fontSize: FONT_SIZE.small, color: "#6e6c68" },
   /** An unfloated corporation: nothing to trade yet, so dimmer paper. */
   rosterCardUnfloated: { backgroundColor: CARD_SURFACE_MUTED },
   /** The header block, which is the accordion toggle -- design note #23: `width: 100%` plus the card's own
@@ -2001,7 +2001,7 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "14px",
     flexWrap: "wrap",
   },
-  passHint: { fontSize: FONT_SIZE.small, color: "#6f7480" },
+  passHint: { fontSize: FONT_SIZE.small, color: "#6e6c68" },
   /* Design note #9: paper cards, matching the auction's private-company treatment (dashboard #15). A dark
      card on a dark panel is a rectangle you have to hunt for, and these eight are what the round is about.
      Every child colour is re-derived for dark-on-light; the president row needed a real rework. */
@@ -2517,8 +2517,8 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "12px",
     width: "100%",
     padding: "14px 20px",
-    backgroundColor: "#171b26",
-    border: "1px solid #2a2e3a",
+    backgroundColor: "#1c1c1c",
+    border: "1px solid #2a2a2a",
     borderRadius: "10px",
     boxSizing: "border-box",
   },
@@ -2530,7 +2530,7 @@ const styles: Record<string, React.CSSProperties> = {
   headerTitle: {
     fontSize: FONT_SIZE.strong,
     fontWeight: 700,
-    color: "#e6e8ef",
+    color: "#f2f0eb",
   },
   /* Design note #34: the active seat, stated positively. Green because it
      is an invitation to act, not a warning -- `headerHint` below is the
@@ -2541,7 +2541,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     textTransform: "uppercase",
     letterSpacing: "0.06em",
-    color: "#8a919e",
+    color: "#8a8a86",
   },
   headerActiveName: {
     fontSize: FONT_SIZE.strong,
@@ -2550,7 +2550,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   headerHint: {
     fontSize: FONT_SIZE.small,
-    color: "#9aa0ac",
+    color: "#a8a6a0",
   },
   section: {
     display: "flex",
@@ -2567,7 +2567,7 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "8px",
     fontSize: FONT_SIZE.small,
     fontWeight: 700,
-    color: "#9aa0ac",
+    color: "#a8a6a0",
     textTransform: "uppercase",
     letterSpacing: "0.03em",
   },
@@ -2597,15 +2597,15 @@ const styles: Record<string, React.CSSProperties> = {
   },
   emptyHint: {
     fontSize: FONT_SIZE.body,
-    color: "#6f7480",
+    color: "#6e6c68",
   },
   floatBadge: {
     fontSize: FONT_SIZE.micro,
     fontWeight: 700,
     padding: "2px 8px",
     borderRadius: "999px",
-    backgroundColor: "#2a2e3a",
-    color: "#9aa0ac",
+    backgroundColor: "#2a2a2a",
+    color: "#a8a6a0",
   },
   floatBadgeActive: {
     backgroundColor: "#1d4a34",
@@ -2627,15 +2627,15 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 600,
     padding: "6px 10px",
     borderRadius: "6px",
-    border: "1px solid #3a3f4b",
-    backgroundColor: "#1e2129",
-    color: "#c7cbd4",
+    border: "1px solid #3a3a3a",
+    backgroundColor: "#161616",
+    color: "#c8c6c0",
     cursor: "pointer",
   },
   parCellActive: {
-    backgroundColor: "#2a3a52",
+    backgroundColor: "#2a2a2a",
     borderColor: "#4a6a92",
-    color: "#e6e8ef",
+    color: "#f2f0eb",
   },
   /* Design note #346: Buy and its source on one row. The switch does not
      grow; the Buy button takes the rest, so the price stays readable at
@@ -2655,7 +2655,7 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "7px",
     borderWidth: "1px",
     borderStyle: "solid",
-    borderColor: "#3a3f4b",
+    borderColor: "#3a3a3a",
     overflow: "hidden",
   },
   sourceSwitchOption: {
@@ -2663,14 +2663,14 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     padding: "0 9px",
     border: "none",
-    backgroundColor: "#1e2129",
-    color: "#8a919e",
+    backgroundColor: "#161616",
+    color: "#8a8a86",
     fontFamily: "inherit",
     cursor: "pointer",
   },
   sourceSwitchOptionActive: {
-    backgroundColor: "#2a3a52",
-    color: "#e6e8ef",
+    backgroundColor: "#2a2a2a",
+    color: "#f2f0eb",
   },
   /* Struck through rather than merely faded: an empty pool is not "not
      chosen", it is "nothing here to buy", and the two look identical at
@@ -2691,9 +2691,9 @@ const styles: Record<string, React.CSSProperties> = {
   /* `cannotAffordNote` deleted by design note #466 -- it explained a Buy button that looked enabled, and
      the button is greyed now. An orphaned refusal style is an invitation to render a second one. */
   soldOutButton: {
-    backgroundColor: "#20242e",
-    borderColor: "#343b48",
-    color: "#7f8798",
+    backgroundColor: "#1c1c1c",
+    borderColor: "#3a3a3a",
+    color: "#8a8a86",
     cursor: "not-allowed",
   },
   /* Design note #19: the slashed sell row, superseding the five-chip stepper -- as a non-wrapping flex row
@@ -2746,9 +2746,9 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     padding: "9px 14px",
     borderRadius: "8px",
-    border: "1px solid #3a3f4b",
-    backgroundColor: "#242833",
-    color: "#e6e8ef",
+    border: "1px solid #3a3a3a",
+    backgroundColor: "#1c1c1c",
+    color: "#f2f0eb",
     cursor: "pointer",
   },
   passButton: {

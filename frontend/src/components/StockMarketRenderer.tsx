@@ -524,7 +524,10 @@ const ZONE_PRICE_TEXT_COLOR = "#f5f6fa";
 
 /** Design notes #18/#20: the uniform charcoal for EVERY `"Normal"`-tagged cell, including the six par
  *  cells. Value promoted from the former par-column neutral fill for contrast. */
-const NORMAL_CELL_BACKGROUND = "#343a45";
+/* Design note #1092: the chart is DOM/CSS grid, not canvas -- TD-2's own correction to the debt register
+   says so, and this file has no `getContext` call. These three were mis-filed as canvas work twice, once by
+   TD-2 and once by #1092's first pass; they are ordinary chrome and swept as such. */
+const NORMAL_CELL_BACKGROUND = "#3a3a3a";
 
 /** Design note #650: the six par cells. A flat, quiet tint -- dark enough
  *  that `styles.priceText`'s existing light ink stays legible without a
@@ -643,8 +646,8 @@ const PAR_TRAY_ROWS: readonly number[] = [100, 90, 82, 76, 71, 67];
  *  independent palette, NOT drawn from `PAR_VALUE_COLORS`/`PAR_VALUE_GRADIENTS`
  *  (the main grid's gold par-cell fills) or `ZONE_COLORS`/`ZONE_GRADIENTS`
  *  (the main grid's exception-zone fills) -- see design note #14. */
-const PAR_TRAY_ROW_BG = "#1d2028";
-const PAR_TRAY_ROW_BORDER = "#333947";
+const PAR_TRAY_ROW_BG = "#1c1c1c";
+const PAR_TRAY_ROW_BORDER = "#3a3a3a";
 
 /* ------------------------------------------------------------------ */
 /* Market Compass Rose -- see design note #746                         */
@@ -1468,9 +1471,9 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     gap: "10px",
     padding: "16px",
-    backgroundColor: "#0b0d12",
+    backgroundColor: "#0f0f0f",
     borderRadius: "8px",
-    color: "#e6e8ef",
+    color: "#f2f0eb",
     fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif",
     // Design note #21/item 3: `overflow: "auto"` and `height: "100%"` both removed -- the inner scrollbar
     // and a percentage height that only resolved against a `boardPane` which no longer imposes one
@@ -1491,7 +1494,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   headerHint: {
     fontSize: FONT_SIZE.small,
-    color: "#8a90a0",
+    color: "#8a8a86",
   },
   // The old horizontal legend row went with design note #19/item 2; these styles are shared with the
   // vertical `MarketRulesLegend` card and were upscaled again by #21/item 4.
@@ -1516,12 +1519,12 @@ const styles: Record<string, React.CSSProperties> = {
     flex: "none",
     alignSelf: "center",
   },
-  cellLegendLabel: { fontSize: FONT_SIZE.small, fontWeight: 800, color: "#e6e8ef" },
-  cellLegendRule: { fontSize: FONT_SIZE.micro, color: "#9aa0ac" },
+  cellLegendLabel: { fontSize: FONT_SIZE.small, fontWeight: 800, color: "#f2f0eb" },
+  cellLegendRule: { fontSize: FONT_SIZE.micro, color: "#a8a6a0" },
   legendText: {
     fontSize: FONT_SIZE.heading,
     fontWeight: 600,
-    color: "#c4c9d4",
+    color: "#c8c6c0",
     lineHeight: 1.45,
   },
   // Column layout (design note #23(3)(b)): the grid renders first, at the
@@ -1578,8 +1581,8 @@ const styles: Record<string, React.CSSProperties> = {
     flex: "0 0 auto",
     width: "100%",
     boxSizing: "border-box",
-    backgroundColor: "#161922",
-    border: "1.5px solid #2a2e3a",
+    backgroundColor: "#0f0f0f",
+    border: "1.5px solid #2a2a2a",
     borderRadius: "10px",
   },
   // ---- Market Compass Rose -- see design note #747. ----
@@ -1592,8 +1595,8 @@ const styles: Record<string, React.CSSProperties> = {
     flex: "0 0 auto",
     width: "100%",
     boxSizing: "border-box",
-    backgroundColor: "#161922",
-    border: "1.5px solid #2a2e3a",
+    backgroundColor: "#0f0f0f",
+    border: "1.5px solid #2a2a2a",
     borderRadius: "10px",
     textAlign: "center",
   },
@@ -1602,7 +1605,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     textTransform: "uppercase",
     letterSpacing: "0.03em",
-    color: "#9aa1b4",
+    color: "#a8a6a0",
     marginBottom: "6px",
   },
   compassRow: {
@@ -1619,7 +1622,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   compassHub: {
     fontSize: "7px",
-    color: "#5a6072",
+    color: "#6e6c68",
     margin: "0 2px",
   },
   compassTip: {
@@ -1639,7 +1642,7 @@ const styles: Record<string, React.CSSProperties> = {
     marginTop: "8px",
     fontSize: "10px",
     lineHeight: 1.35,
-    color: "#6f7688",
+    color: "#6e6c68",
   },
   // ---- Market Rules Legend -- see design note #19/item 2. ----
   legendColumn: {
@@ -1652,8 +1655,8 @@ const styles: Record<string, React.CSSProperties> = {
     // Width flex basis now (design note #23(3)(b)) -- see `parTray` above.
     flex: "1 1 340px",
     minWidth: "300px",
-    backgroundColor: "#161922",
-    border: "1.5px solid #2a2e3a",
+    backgroundColor: "#0f0f0f",
+    border: "1.5px solid #2a2a2a",
     borderRadius: "10px",
   },
   parTrayHeader: {
@@ -1667,11 +1670,11 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     textTransform: "uppercase",
     letterSpacing: "0.03em",
-    color: "#c8cbd6",
+    color: "#c8c6c0",
   },
   parTrayHint: {
     fontSize: FONT_SIZE.micro,
-    color: "#6f7480",
+    color: "#6e6c68",
     lineHeight: 1.35,
   },
   parTrayRow: {
@@ -1697,7 +1700,7 @@ const styles: Record<string, React.CSSProperties> = {
     // Per-row color is overridden inline from `PAR_VALUE_COLORS` so the six
     // standard prices stay visually distinguishable against the now-neutral
     // row background; this is just the fallback.
-    color: "#c8cbd6",
+    color: "#c8c6c0",
   },
   parTrayMarkers: {
     display: "flex",
@@ -1709,14 +1712,14 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.strong,
     // Muted steel-gray to match the tray's now-neutral background (was
     // tuned for the old gold row fill -- see design note #14).
-    color: "#5a6072",
+    color: "#6e6c68",
   },
   parTrayMarkerBadge: {
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     // Upsized alongside `parTrayPrice` -- see design note #17.
     fontSize: FONT_SIZE.strong,
     fontWeight: 700,
-    /* Design note #430: `color: "#ffffff"` REMOVED. The ink is computed per
+    /* Design note #430: `color: "#f2f0eb"` REMOVED. The ink is computed per
        livery at the call site now -- five of the eight need white and three
        need black, so a hardcoded value was wrong for three corporations. */
     display: "flex",
@@ -1750,10 +1753,10 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     alignItems: "flex-start",
     justifyContent: "flex-start",
-    backgroundColor: "#161922",
+    backgroundColor: "#0f0f0f",
     // See design note #7 -- bright enough that adjacent cells' shared edges
     // read as a clear boundary/movement-path grid.
-    border: "1px solid #3a4152",
+    border: "1px solid #3a3a3a",
     borderRadius: "3px",
     // `hidden`, not `visible` (design note #17): a gradient must never bleed past its cell into the grid
     // gap. Safe because live tokens are independent sibling grid items (#5), so a deep stack still spills.
@@ -1782,7 +1785,7 @@ const styles: Record<string, React.CSSProperties> = {
   priceText: {
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     fontSize: "9px",
-    color: "#c8ccd6",
+    color: "#c8c6c0",
     padding: "2px 3px",
   },
   parBadge: {

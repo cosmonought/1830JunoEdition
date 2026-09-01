@@ -75,7 +75,11 @@ describe("the panel sits above its surroundings, not below them", () => {
        panel's `#141a26` is untouched because it lives in a component the re-theme's first pass did not
        reach -- when it is retoned, this line is where the ordering gets re-checked. */
     expect(strip(read("styles/appStyles.ts"))).toContain('backgroundColor: "#0f0f0f"');
-    expect(strip(read("components/PrivateTradePanel.tsx"))).toContain('backgroundColor: "#141a26"');
+    /* #1092 reached the private panel in its fifth group, which is the moment this line was left waiting for.
+       RE-CHECKED RATHER THAN ASSUMED, as the note below insists: panel L* 10.27, private panel L* 4.31, the
+       bar's card L* 4.31. The panel still clears both, and the margin is wider than it was before the
+       re-theme -- the two neighbours converged on one ground while the panel stayed a step above them. */
+    expect(strip(read("components/PrivateTradePanel.tsx"))).toContain('backgroundColor: "#0f0f0f"');
     /* #1092 retoned this panel and its neighbours, and THIS LINE IS WHY THE PANEL IS NOT `#161616`: the
        re-theme's lightness bands mapped it there, which would have put it BELOW the private panel and
        rebuilt the well #810 removed. The figures, so the next pass does not have to re-derive them --

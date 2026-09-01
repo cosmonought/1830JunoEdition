@@ -1321,7 +1321,7 @@ export default function ContextualActionBar({
      Design note #631: the same secondary-ink rule, factored out because the seat card needs it too. */
   const seatInkMuted = React.useCallback(
     (background: string) =>
-      bestContrastTextColor(background) === "#FFFFFF"
+      bestContrastTextColor(background) === "#f2f0eb"
         ? "rgba(255, 255, 255, 0.74)"
         : "rgba(0, 0, 0, 0.66)",
     [],
@@ -1330,15 +1330,15 @@ export default function ContextualActionBar({
   const corporationBarInk = React.useMemo(() => {
     if (!activeCorporation) {
       return {
-        background: "#171c28",
-        border: "#2b3242",
+        background: "#0f0f0f",
+        border: "#2a2a2a",
         ink: "#eaf2ff",
         inkMuted: "rgba(234, 242, 255, 0.66)",
       };
     }
     const background = stationTickerColor(activeCorporation.companyId);
     const ink = bestContrastTextColor(background);
-    const light = ink === "#FFFFFF";
+    const light = ink === "#f2f0eb";
     return {
       background,
       // A translucent black edge darkens any hue by the same amount, so one
@@ -1388,7 +1388,7 @@ export default function ContextualActionBar({
      brand colour. */
   const treasuryNow = activeCorporation?.treasury ?? 0;
   const treasuryAfterWithhold = treasuryNow + declaredRevenue;
-  const corporationInk = "#e2e6ee";
+  const corporationInk = "#f2f0eb";
 
   /* ==================================================================
       DESIGN NOTE 915: "BUY TRAINS" IS A DISCLOSURE, NOT A SUBMISSION

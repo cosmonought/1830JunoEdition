@@ -22,6 +22,7 @@
 // one they were reading.
 
 import React from "react";
+import { ACTION_GREEN, ACTION_GREEN_BORDER, ACTION_GREEN_INK } from "../styles/palette";
 
 import { FONT_SIZE } from "../styles/typography";
 import type { PowerFlow, PowerFlowStep } from "../utils/privatePowerFlow";
@@ -190,9 +191,9 @@ const styles: Record<string, React.CSSProperties> = {
        `PrivateTradePanel`'s #840 for the white frame React could not put back. */
     borderWidth: "1px",
     borderStyle: "solid",
-    borderColor: "#454c5c",
+    borderColor: "#4a4a4a",
     borderRadius: "12px",
-    backgroundColor: "#1e2331",
+    backgroundColor: "#1c1c1c",
     boxShadow: "0 18px 48px rgba(0, 0, 0, 0.55)",
     padding: "18px 20px",
     display: "flex",
@@ -200,20 +201,20 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "12px",
   },
   header: { display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "12px" },
-  title: { margin: 0, fontSize: FONT_SIZE.heading, color: "#e2e6ee" },
+  title: { margin: 0, fontSize: FONT_SIZE.heading, color: "#f2f0eb" },
   close: {
     borderWidth: "1px",
     borderStyle: "solid",
-    borderColor: "#4a5163",
+    borderColor: "#4a4a4a",
     borderRadius: "6px",
     backgroundColor: "transparent",
-    color: "#c8cdd8",
+    color: "#c8c6c0",
     fontSize: FONT_SIZE.control,
     lineHeight: 1,
     padding: "4px 8px",
     cursor: "pointer",
   },
-  who: { margin: 0, fontSize: FONT_SIZE.small, color: "#9aa2b1" },
+  who: { margin: 0, fontSize: FONT_SIZE.small, color: "#a8a6a0" },
   /* Design note #882: the powers panel's `abilityError` treatment, carried over unchanged so the refusal a
      player used to read below the fold looks like the same object in its new home.
      LONGHANDS, per #732/#840: this box sits among siblings (`step`, `stepLive`) that override
@@ -234,9 +235,9 @@ const styles: Record<string, React.CSSProperties> = {
   step: {
     borderWidth: "1px",
     borderStyle: "solid",
-    borderColor: "#3a4150",
+    borderColor: "#3a3a3a",
     borderRadius: "8px",
-    backgroundColor: "#1b2130",
+    backgroundColor: "#141414",
     padding: "12px 14px",
     display: "flex",
     flexDirection: "column",
@@ -246,18 +247,18 @@ const styles: Record<string, React.CSSProperties> = {
      frame `PrivateTradePanel`'s open card wears (#804). One vocabulary for one meaning. */
   stepLive: { borderColor: "#4d8ee0", backgroundColor: "#1d3a55" },
   stepDone: { opacity: 0.66 },
-  stepText: { margin: 0, fontSize: FONT_SIZE.body, color: "#d7dbe4", lineHeight: 1.5 },
-  stepIndex: { fontWeight: 700, color: "#9aa2b1" },
-  supply: { margin: 0, fontSize: FONT_SIZE.small, color: "#9aa2b1" },
+  stepText: { margin: 0, fontSize: FONT_SIZE.body, color: "#c8c6c0", lineHeight: 1.5 },
+  stepIndex: { fontWeight: 700, color: "#a8a6a0" },
+  supply: { margin: 0, fontSize: FONT_SIZE.small, color: "#a8a6a0" },
   stepActions: { display: "flex", flexDirection: "row", justifyContent: "flex-end", gap: "10px" },
   primary: {
     padding: "9px 16px",
     borderRadius: "8px",
     borderWidth: "1px",
     borderStyle: "solid",
-    borderColor: "#4ade80",
-    backgroundColor: "#16a34a",
-    color: "#04140a",
+    borderColor: ACTION_GREEN_BORDER,
+    backgroundColor: ACTION_GREEN,
+    color: ACTION_GREEN_INK,
     fontSize: FONT_SIZE.control,
     fontWeight: 700,
     fontFamily: "inherit",
@@ -268,9 +269,9 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "8px",
     borderWidth: "1px",
     borderStyle: "solid",
-    borderColor: "#4a5163",
-    backgroundColor: "#242b3a",
-    color: "#e2e6ee",
+    borderColor: "#4a4a4a",
+    backgroundColor: "#2a2a2a",
+    color: "#f2f0eb",
     fontSize: FONT_SIZE.control,
     fontFamily: "inherit",
     cursor: "pointer",

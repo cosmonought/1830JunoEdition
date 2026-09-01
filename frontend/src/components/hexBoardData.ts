@@ -293,7 +293,10 @@ export const LAY_TRACK_DIM_ALPHA = 0.55;
 /* 0.42 -> 0.55, plus a SECOND, harder veil as its own constant rather than a multiplier: the base answers "where may I build" (a survey, so every legal hex stays comparable), the focus answers "what am I deciding right now". Deliberately not opaque even at 0.82 -- the board must stay visible enough to judge a tile against its neighbours.
    See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #472 */
 export const LAY_TRACK_FOCUS_DIM_ALPHA = 0.82;
-export const LAY_TRACK_DIM_INK = "#070b14";
+/* Design note #1092: neutralised with the rest of the app. At 55-82% alpha over the board this is a
+   0.8 L* change -- invisible in play -- and taken only so the one veil in the app is not the one place
+   still mixing a blue cast into everything beneath it. */
+export const LAY_TRACK_DIM_INK = "#080808";
 /** The ring on a buildable hex. Green, matching the tile picker's own
  *  confirm affordance (`fabConfirm`), so "you may act here" is one colour
  *  across the board and the ring that appears when you click it. */

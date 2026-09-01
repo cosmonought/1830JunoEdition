@@ -419,19 +419,28 @@ describe("the contrast arithmetic in the note is true", () => {
     return (light + 0.05) / (dark + 0.05);
   };
 
-  it("finds three seats that could not carry white body text", () => {
+  it("no longer finds a seat that cannot carry white body text", () => {
     /* ==================================================================
-        THE CASE AGAINST COLOURING THE WHOLE SURFACE, CHECKED RATHER THAN QUOTED
+        THE TRIPWIRE FIRED, AND THIS IS WHAT IT WAS FOR
        ==================================================================
-       "Doing the whole notification in player colors with adjusted font colors for maximum contrast is
-       perfectly acceptable too" -- and #1050 declined it on three measured ratios. A design note's numbers
-       are exactly the kind of claim that rots when a palette is retuned and nothing goes red.
-       SO THE PROPERTY IS ASSERTED, NOT THE FIGURES: at least one seat colour fails the 4.5:1 body-text
-       threshold against white, which is what makes a per-seat ground a per-seat problem rather than a
-       styling preference. If a future palette clears all six, this goes red and the note should be revisited
-       -- which is the right outcome, and the reason this is not pinned to "exactly three". */
+       THE ORIGINAL CASE: "Doing the whole notification in player colors with adjusted font colors for
+       maximum contrast is perfectly acceptable too" -- and #1050 declined it because three seat colours
+       could not carry white body text. Rather than pin the three figures, that pass asserted the PROPERTY
+       (at least one seat fails 4.5:1 against white) and wrote down what should happen if it ever stopped
+       being true: "If a future palette clears all six, this goes red and the note should be revisited --
+       which is the right outcome."
+
+       DESIGN NOTE 1097 CLEARED ALL SIX. Re-cutting the three faint seats for the president badge changed
+       this property as a side effect: the weakest seat against white is now Ochre `#847400` at 4.69:1, and
+       nothing fails. The test went red on the pass that did it, which is exactly the design working.
+
+       SO THE ASSERTION IS INVERTED RATHER THAN DELETED, and #1050's note has been revisited in place
+       (`PrivateRevenueModal.tsx`). THE DECISION STANDS, on the half of its case that was never about
+       contrast: a full-surface seat colour makes the modal's ground change identity from player to player.
+       What is gone is the measurement, and the note now says so rather than continuing to cite ratios that
+       no longer fail. The option is genuinely open again if anyone wants it. */
     const failing = SEAT_COLORS.filter((seat) => contrast(seat, "#FFFFFF") < 4.5);
-    expect(failing.length).toBeGreaterThan(0);
+    expect(failing).toEqual([]);
   });
 
   it("clears the large-bold threshold on every seat, which is what the stripe needs", () => {

@@ -188,7 +188,7 @@ const styles: Record<string, React.CSSProperties> = {
     border: "1px solid #6a4a3a",
     backgroundColor: "#171219",
     boxShadow: "0 12px 40px rgba(0,0,0,0.6)",
-    color: "#e2e6ee",
+    color: "#f2f0eb",
     fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif",
   },
   header: { display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" },
@@ -215,22 +215,22 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 800,
     letterSpacing: "0.06em",
   },
-  body: { fontSize: FONT_SIZE.small, color: "#d8dce6", lineHeight: 1.45, margin: 0 },
+  body: { fontSize: FONT_SIZE.small, color: "#f2f0eb", lineHeight: 1.45, margin: 0 },
   /* Design note #991: what the herald falls back to when a corporation has no logo file. The acronym in the
      heading is already beside it, so this is deliberately quiet -- a second bold ticker would read as a
      stutter rather than as a missing image. */
-  heraldFallback: { fontSize: FONT_SIZE.micro, fontWeight: 700, color: "#8a90a0" },
+  heraldFallback: { fontSize: FONT_SIZE.micro, fontWeight: 700, color: "#8a8a86" },
   /* Amber: this is the "what it means for you" line, not an error. */
   consequence: { fontSize: FONT_SIZE.small, color: "#e0b062", lineHeight: 1.45, margin: 0 },
   fleetRow: { display: "flex", alignItems: "center", gap: "10px", marginTop: "2px" },
-  fleetLabel: { fontSize: FONT_SIZE.micro, color: "#8a90a0", letterSpacing: "0.06em", fontWeight: 700 },
+  fleetLabel: { fontSize: FONT_SIZE.micro, color: "#8a8a86", letterSpacing: "0.06em", fontWeight: 700 },
   fleetTrains: { display: "flex", gap: "6px", flexWrap: "wrap" },
   trainChip: {
     padding: "2px 9px",
     borderRadius: "6px",
     border: "1px solid #4a4150",
     backgroundColor: "#241d28",
-    color: "#c8cdd8",
+    color: "#c8c6c0",
     fontSize: FONT_SIZE.small,
     fontWeight: 700,
     textDecoration: "line-through",
@@ -247,7 +247,7 @@ const styles: Record<string, React.CSSProperties> = {
   checkbox: { marginTop: "3px", flex: "none" },
   rowText: { display: "flex", flexDirection: "column", gap: "2px", minWidth: 0 },
   rowLabel: { fontSize: FONT_SIZE.small, fontWeight: 700 },
-  rowCaption: { fontSize: FONT_SIZE.micro, color: "#8a90a0", lineHeight: 1.4 },
+  rowCaption: { fontSize: FONT_SIZE.micro, color: "#8a8a86", lineHeight: 1.4 },
   footer: { display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "6px" },
   primaryButton: {
     padding: "7px 14px",

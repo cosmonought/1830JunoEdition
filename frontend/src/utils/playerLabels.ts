@@ -76,22 +76,48 @@ export function sandboxPlayerLabel(address: string): string | null {
    would read as a claim about the PRR. CHOSEN OR ASSIGNED -- both paths live
    here rather than the picker owning the fallback, so no seat is ever colourless
    and two seats can never share a colour. */
+/* ==================================================================
+    DESIGN NOTE 1097: THREE SEATS RE-CUT, AND ONE OF THEM STOPS BEING GREEN
+   ==================================================================
+   TWO FAULTS, FOUND TOGETHER (TECH_DEBT TD-4). Three of the six were too faint on the president badge's
+   white plate -- Moss 4.10:1, Teal 3.98:1, Ochre 3.30:1, all under the 4.5 floor. And #569's own rule above
+   -- "a player stripe in the PRR's red would read as a claim about the PRR" -- was being broken by Moss,
+   which sat 8.2 dE from the B&M's green. Close enough to read as the same colour, on a board where green
+   already means a corporation.
+
+   MOSS COULD NOT BE SAVED AS A GREEN. The B&M owns mid-green; the whole space was searched, and every green
+   dark enough to clear 4.5:1 on white lands within ~11 dE of it. The choice was a tighter margin or a
+   different hue, and the hue was chosen deliberately: #569's rule is about player colour never making a
+   claim about a corporation, and the cleanest way to honour it is for the player set to stop competing for
+   the board's hues at all. Mulberry sits in genuinely empty space -- 24.8 dE from its nearest corporation,
+   26.3 from Plum, and separated from Plum by 27 points of LIGHTNESS as well as hue, so the two hold apart
+   for a reader who cannot use the hue difference.
+
+   THE OTHER TWO ARE ORDINARY DARKENINGS, same names, same character.
+
+   WHAT THIS DOES NOT FIX: Brick is 12.9 dE from the CPR's brown -- below the 15 this pass treated as the
+   bar, above the 8.4 the codebase floors at. It was not one of the three failing contrast and is left
+   alone rather than swept up; recorded here so the next reader knows it was seen and not missed.
+
+   STORED SEATS ARE NOT MIGRATED. A room already holding `#4f8a5c` keeps rendering it -- `player.color`
+   wins over this list, and `SEAT_COLOR_NAMES` falls back to the raw hex for anything unlisted, which is
+   why every call site writes `?? color`. Existing games therefore keep the old dots; new ones get these. */
 export const SEAT_COLORS = [
   "#3f6fa8",
   "#a8593f",
-  "#4f8a5c",
+  "#5a003c",
   "#7a5aa8",
-  "#a88a3f",
-  "#3f8a94",
+  "#847400",
+  "#00686c",
 ] as const;
 
 export const SEAT_COLOR_NAMES: Readonly<Record<string, string>> = {
   "#3f6fa8": "Slate blue",
   "#a8593f": "Brick",
-  "#4f8a5c": "Moss",
+  "#5a003c": "Mulberry",
   "#7a5aa8": "Plum",
-  "#a88a3f": "Ochre",
-  "#3f8a94": "Teal",
+  "#847400": "Ochre",
+  "#00686c": "Teal",
 };
 
 let ROOM_COLORS: Record<string, string> = {};

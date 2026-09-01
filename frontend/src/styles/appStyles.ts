@@ -347,10 +347,13 @@ export const styles: Record<string, React.CSSProperties> = {
   spectatorNotice: {
     width: "100%",
     padding: "14px 28px",
-    backgroundColor: "#1a1710",
-    borderTop: "1px solid #3a2f14",
-    borderBottom: "1px solid #3a2f14",
-    color: "#e0c07a",
+    /* Design note #1098 (TD-6): WAS AMBER, WHICH CLAIMED YOUR ATTENTION FOR A FACT THAT NEVER CHANGES.
+       Amber says "something needs looking at"; watching a game is a state you are simply in, for the whole
+       session. Neutral says it once and stops asking. 10.79:1, up from the gold's 10.21:1. */
+    backgroundColor: "#141414",
+    borderTop: "1px solid #2a2a2a",
+    borderBottom: "1px solid #2a2a2a",
+    color: "#c8c6c0",
     fontSize: FONT_SIZE.control,
     fontWeight: 600,
     boxSizing: "border-box",
@@ -459,7 +462,7 @@ export const styles: Record<string, React.CSSProperties> = {
   },
   roomStripLabel: { display: "inline-flex", alignItems: "center", gap: "6px" },
   roomStripValue: { color: "#f2f0eb", fontWeight: 700 },
-  roomStripDivider: { width: "1px", alignSelf: "stretch", minHeight: "16px", backgroundColor: "#2a3a52" },
+  roomStripDivider: { width: "1px", alignSelf: "stretch", minHeight: "16px", backgroundColor: "#2a2a2a" },
   roomStripError: { color: "#f0b0a8", fontSize: FONT_SIZE.small },
   appRoot: {
     display: "flex",
@@ -933,9 +936,12 @@ export const styles: Record<string, React.CSSProperties> = {
      nothing, and a destructive colour here would make the escape hatch look like the dangerous option when
      the dangerous option is the one that spends the power by accident. */
   actionBarCancelErrand: {
-    borderColor: "#c9a227",
-    color: "#e6cf7a",
-    backgroundColor: "#2a2415",
+    /* Design note #1098 (TD-6): WAS GOLD, FOR A SAFE AND REVERSIBLE ACTION -- its own tooltip says
+       "Nothing is used up". Gold gave a back-out button the weight of a decision. Neutral, at 9.98:1
+       against the gold's 9.97:1, so nothing is lost but the false emphasis. */
+    borderColor: "#3a3a3a",
+    color: "#c8c6c0",
+    backgroundColor: "#1c1c1c",
   },
   actionBarButton: {
     fontSize: FONT_SIZE.strong,
@@ -979,9 +985,17 @@ export const styles: Record<string, React.CSSProperties> = {
   mustBuyTrainNotice: {
     fontSize: FONT_SIZE.small,
     lineHeight: 1.45,
-    color: "#e0c07a",
-    backgroundColor: "#241f12",
-    border: "1px solid #6b5a2a",
+    /* Design note #1098 (TECH_DEBT TD-6): THE ONE THAT BECOMES PINK. #1094 moved "look here" from gold to
+       the brand, and of the seven amber survivors this is the only one that is an OBLIGATION -- the
+       corporation must buy a train before the turn can end, and the president pays if it cannot. That is
+       the strongest "you must act" the game has, which is precisely what pink now means.
+       A LIGHTER PINK THAN `BRAND_PINK_INK`, because this is a PARAGRAPH and not a chip: `#F0A8D4` is
+       9.68:1 here, matching the 9.37:1 the gold gave, where the brand ink would have dropped it to 4.9.
+       It also lands 18.1 dE from `ALERT_CRITICAL_INK` -- further than the brand pink itself, so the one
+       collision #1094 recorded is not made worse by putting pink into the action bar. */
+    color: "#F0A8D4",
+    backgroundColor: "#241018",
+    border: "1px solid #7a2456",
     borderRadius: "6px",
     padding: "7px 10px",
   },
@@ -1150,9 +1164,16 @@ export const styles: Record<string, React.CSSProperties> = {
        liveries by the same amount -- but a translucent plate does not produce one ground, it produces eight
        muddied ones, each the corporation's own hue seen through smoke. The badge changed colour as the turn
        passed round the table, which is the opposite of the "same badge on every livery" the note claimed.
-       SOLID WHITE IS THE ONE GROUND. Every seat colour in `SEAT_COLORS` is a mid-to-dark ink (`#3f6fa8`,
-       `#a8593f`, `#4f8a5c`, `#7a5aa8`, `#a88a3f`, `#3f8a94`), so all six read on white -- which is what
-       #974's contrast argument was actually asking for and did not get.
+       SOLID WHITE IS THE ONE GROUND, so a seat colour is read against a known surface instead of against
+       whichever livery is acting -- which is what #974's contrast argument was actually asking for and did
+       not get.
+
+       CORRECTED (TECH_DEBT TD-4): this note used to continue "every seat colour in `SEAT_COLORS` is a
+       mid-to-dark ink ... so all six read on white". THREE OF THEM DO NOT, and never did -- `#4f8a5c` is
+       4.10:1, `#3f8a94` is 3.98:1 and `#a88a3f` is 3.30:1, all under AA on this ground. The sentence was
+       wrong when it was written, and it was load-bearing: it is the reason this ground is white, and it
+       was cited again to justify keeping white through the re-theme. The GROUND is still right for the
+       reason above; the claim about the six colours was not. Re-cutting them is TD-4's own job.
        THE CROWN'S GOLD IS THE ONE THING THIS COSTS. `PRESIDENT_CROWN_GOLD` was chosen against dark chrome and
        is lower contrast on white; it stays a legible SHAPE and the name beside it carries the identity, so
        this is a small loss rather than a lost fact -- but it is a real one and worth having written down.
@@ -1854,9 +1875,13 @@ export const styles: Record<string, React.CSSProperties> = {
   // and need the width to stay readable at two or three lines.
   hexClickIndicatorBlocked: {
     maxWidth: "320px",
-    backgroundColor: "#2a2114",
-    borderColor: "#8a6a20",
-    color: "#f0dcb0",
+    /* Design note #1098 (TD-6): WAS AMBER, AND A REFUSAL IS NOT A WARNING. This is the 🚫 that appears when
+       a hex cannot take the click; every other refusal in the app is red, and gold made a "no" read as a
+       "careful". Red now -- but a SOFTER red than `hexClickIndicatorError` (4.6 dE apart), because the note
+       below is right that these two differ: an error is the app failing, this is the BOARD RULE holding. */
+    backgroundColor: "#251818",
+    borderColor: "#8a4040",
+    color: "#f5d8d8",
     lineHeight: LINE_HEIGHT.normal,
   },
 };

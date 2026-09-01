@@ -33,8 +33,8 @@ import { styles } from "../styles/appStyles";
    renders, which is the orphan this batch is clearing out. */
 const NETA_CREDIT_CSS = `
 .neta-credit { transition: color 120ms ease, text-shadow 120ms ease; }
-.neta-credit:hover { color: #ffffff; text-shadow: 0 0 8px rgba(255,255,255,0.35); }
-.neta-credit:focus-visible { outline: 2px solid #94a3b8; outline-offset: 2px; color: #ffffff; }
+.neta-credit:hover { color: #f2f0eb; text-shadow: 0 0 8px rgba(255,255,255,0.35); }
+.neta-credit:focus-visible { outline: 2px solid #8a8a86; outline-offset: 2px; color: #f2f0eb; }
 `;
 
 export function AppFooter() {

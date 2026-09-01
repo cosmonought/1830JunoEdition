@@ -69,7 +69,7 @@ function statusDotColor(
     case "error":
       return { backgroundColor: "#c05050" };
     default:
-      return { backgroundColor: "#4a505e" };
+      return { backgroundColor: "#2a2a2a" };
   }
 }
 

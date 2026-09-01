@@ -53,7 +53,7 @@ import { FONT_SIZE } from "../styles/typography";
    at the CALL SITE (the caller decides whose toast it is; this file only paints what it is handed). Removed
    while this file was open for #1049, because an unused import is invisible to `tsc` under these settings and
    reads to the next person as a colour this component applies somewhere. */
-import { CARD_SURFACE } from "../styles/palette";
+import { CARD_INK, CARD_SURFACE } from "../styles/palette";
 import { EraHex } from "./EraHex";
 
 /** Design note #928's window, named so #967's longer one can be expressed as a multiple of it rather than as
@@ -516,13 +516,13 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     gap: "6px",
     marginTop: "6px",
-    color: "#5a6070",
+    color: "#6e6c68",
   },
   eraArrow: { flex: "none" },
   detail: {
     fontSize: FONT_SIZE.micro,
     // Design note #1030: the quieter line on the cream ground -- still secondary, still readable.
-    color: "#5a6070",
+    color: "#6e6c68",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
   },
   /* Design note #984: two columns -- names flush left, figures flush right in tabular figures, so the digits
@@ -540,18 +540,18 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.micro,
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
   },
-  detailRowLabel: { color: "#5a6070", textAlign: "left" },
+  detailRowLabel: { color: "#6e6c68", textAlign: "left" },
   /* Design note #1047: the total reads as a sum rather than another row -- a rule above it and the label in
      the same muted ink as the names, so the eye lands on the figure. */
   detailTotalLabel: {
-    color: "#5a6070",
+    color: "#6e6c68",
     textAlign: "left",
     borderTop: "1px solid #b9ae91",
     paddingTop: "3px",
     marginTop: "2px",
   },
   detailTotalValue: {
-    color: "#12151d",
+    color: "#161616",
     textAlign: "right",
     fontWeight: 700,
     borderTop: "1px solid #b9ae91",
@@ -562,7 +562,7 @@ const styles: Record<string, React.CSSProperties> = {
      the dividend block applies here too -- the number carries the decision, the name only says whose it is. */
   // Design note #1030: darker than the label, for the same reason it used to be brighter -- the figure carries
   // the decision and the contrast has simply inverted with the ground.
-  detailRowValue: { color: "#12151d", textAlign: "right", fontVariantNumeric: "tabular-nums" },
+  detailRowValue: { color: "#161616", textAlign: "right", fontVariantNumeric: "tabular-nums" },
   /* Design note #697: BOTTOM CENTRE, above the status dock. Not top -- the action bar is sticky there and a
      toast over it would cover the controls the player is mid-sequence with, which is the one place it must
      not be. Not a corner either: a receipt for a deliberate action should be on the axis the reader is
@@ -628,7 +628,11 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: CARD_SURFACE,
     border: "1px solid #b9ae91",
     boxShadow: "0 8px 24px rgba(0, 0, 0, 0.55)",
-    color: "#1d2230",
+    /* Design note #1092 cleanup: the ink now points at the same module as the ground above it. #1030's
+       pairing -- dark text on a light toast -- is unchanged and slightly stronger at 17.6:1; what changes is
+       that the two halves can no longer drift apart, which is the exact failure #1048 records for the
+       ground. `batch34` still asserts this literally because it has no better handle. */
+    color: CARD_INK,
     fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif",
     fontSize: FONT_SIZE.body,
     lineHeight: 1.45,
@@ -653,7 +657,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "0 4px",
     lineHeight: 1,
     fontSize: FONT_SIZE.strong,
-    color: "#5a6070",
+    color: "#6e6c68",
     font: "inherit",
   },
   check: { color: "#1f7a4d", fontWeight: 700, flexShrink: 0 },

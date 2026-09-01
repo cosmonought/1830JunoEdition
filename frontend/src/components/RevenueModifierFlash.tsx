@@ -293,7 +293,7 @@ const MALUS_COLOR = "#f87171";
    WHITE BECAUSE IT IS NOT A DIRECTION. Green rises and red falls (#973); a third hue on that axis would
    invite the reader to ask which way it points. White is the absence of the claim, which is exactly what an
    unchanged roll is. */
-const NEUTRAL_COLOR = "#f4f6fb";
+const NEUTRAL_COLOR = "#2a2a2a";
 const NEUTRAL_EDGE = "rgba(244, 246, 251, 0.42)";
 
 /* ==================================================================

@@ -424,7 +424,11 @@ describe("the wash covers the whole entry, and the tags keep their own ink", () 
        `#c8cdd8` at weight 800 on every line, tinted or not, and neither tone style may reach it. */
     const gutter = sliceBetween(TICKER, "logGutter: {", "},");
     expect(gutter).toContain("fontWeight: 800");
-    expect(gutter).toContain('color: "#c8cdd8"');
+    /* Design note #1092 moved this to the ladder's secondary-text step. THE RULE THIS LINE GUARDS IS
+       UNTOUCHED: "do not alter or colorize" forbids the gutter taking its colour from the entry's log TONE,
+       so what matters is that the value is one uniform colour rather than a tone lookup -- which it still
+       is. A re-theme moving every neutral together is not the colorization the bullet was about. */
+    expect(gutter).toContain('color: "#c8c6c0"');
     expect(gutter).not.toContain("logTone");
     expect(gutter).not.toContain("backgroundColor");
     expect(gutter.length).toBeLessThan(400);

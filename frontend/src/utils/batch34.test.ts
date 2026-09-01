@@ -188,7 +188,11 @@ describe("the toast stands off the board", () => {
        ASSERTED AS THE CONSTANT rather than as its value, deliberately. Re-pinning `#f7f5f0` here would put a
        third copy of the colour in the tree and defeat the point of sharing it. */
     expect(body).toContain("backgroundColor: CARD_SURFACE,");
-    expect(body).toContain('color: "#1d2230"');
+    /* Design note #1092: THE INK NOW HAS A CONSTANT, so this asserts the constant rather than a value --
+       which is what the paragraph above already argued for the ground and could not yet do for the ink.
+       The pair #1030 measured is intact and stronger: dark on light, 17.59:1 against the original 13.93:1.
+       Both halves of the pairing now come from one module and cannot drift apart. */
+    expect(body).toContain("color: CARD_INK,");
   });
 
   it("no longer wears the dark green that blended in", () => {

@@ -56,6 +56,15 @@
 // THE FIRST -- "the problem with this would be that it makes the toast notification twice as large" -- WAS A
 // TOAST OBJECTION AND DIED WITH THE TOAST. A modal already has the room.
 //
+// SUPERSEDED IN PART BY DESIGN NOTE 1097 -- READ THIS BEFORE RELYING ON THE PARAGRAPH BELOW. That note
+// re-cut the three failing seat colours, and against white ink ALL SIX NOW CLEAR 4.5:1 (the weakest is Ochre
+// `#847400` at 4.69:1). The measurement this decision rested on no longer says what it said.
+//
+// THE DECISION IS LEFT STANDING ANYWAY, and deliberately: the stripe was also chosen because a full-surface
+// seat colour makes the modal's ground change identity from player to player, which was never a contrast
+// argument. But that is now the WHOLE case rather than half of it, so anyone reopening this should reopen it
+// on those grounds and not by re-running the numbers below -- which no longer fail.
+//
 // AND THE MEASUREMENT DECIDES THE REST. Against white ink, three of the six seat colours fall under the 4.5:1
 // body-text threshold: Ochre `#a88a3f` at 3.3:1, Teal `#3f8a94` at 4.0:1, Moss `#4f8a5c` at 4.1:1. Colouring
 // the whole surface therefore means either darkening every seat's ground or forcing every figure to

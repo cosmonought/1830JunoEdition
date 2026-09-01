@@ -134,8 +134,8 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "10px",
     padding: "7px 14px",
     borderRadius: "8px",
-    border: "1px solid #2b3242",
-    backgroundColor: "#161b27",
+    border: "1px solid #2a2a2a",
+    backgroundColor: "#0f0f0f",
     fontSize: FONT_SIZE.small,
   },
   label: {
@@ -143,12 +143,12 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     letterSpacing: "0.05em",
     textTransform: "uppercase",
-    color: "#9aa0ac",
+    color: "#a8a6a0",
   },
   /* Design note #1083: `code` is DELETED, not left unused. Its one caller was the in-room branch and the
      room code now renders in the title strip, which carries its own copy of this treatment -- an orphaned
      style for a thing this component no longer shows is an invitation to show it again. */
-  muted: { color: "#8a90a0" },
+  muted: { color: "#8a8a86" },
   error: { color: "#e07a7a" },
   joinRow: { display: "flex", flexDirection: "row", alignItems: "center", gap: "6px" },
   input: {
@@ -156,9 +156,9 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.small,
     padding: "5px 8px",
     borderRadius: "6px",
-    border: "1px solid #3a3f4b",
-    backgroundColor: "#0f131b",
-    color: "#e2e6ee",
+    border: "1px solid #3a3a3a",
+    backgroundColor: "#141414",
+    color: "#f2f0eb",
     width: "110px",
     textTransform: "uppercase",
   },
@@ -167,9 +167,9 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     padding: "5px 12px",
     borderRadius: "6px",
-    border: "1px solid #3a3f4b",
-    backgroundColor: "#232936",
-    color: "#c8cdd8",
+    border: "1px solid #3a3a3a",
+    backgroundColor: "#1c1c1c",
+    color: "#c8c6c0",
     cursor: "pointer",
   },
   buttonPrimary: {
@@ -188,7 +188,7 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "6px",
     border: "1px solid transparent",
     backgroundColor: "transparent",
-    color: "#8a90a0",
+    color: "#8a8a86",
     cursor: "pointer",
   },
 };

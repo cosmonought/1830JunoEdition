@@ -77,7 +77,10 @@ describe("the head, the chip and the line are one colour", () => {
     const chip = APP_STYLES.slice(at, APP_STYLES.indexOf("\n  },", at));
     const head = DETAIL.slice(DETAIL.indexOf("  model: {"), DETAIL.indexOf("\n  },", DETAIL.indexOf("  model: {")));
     expect(head.length).toBeGreaterThan(0);
-    ['padding: "2px 8px"', 'borderRadius: "6px"', 'backgroundColor: "#232936"', 'gap: "6px"'].forEach(
+    /* Design note #1092 retoned the fill; the ASSERTION is unchanged in kind, because what this checks is
+       that the two shells agree, not what colour they agree on. It earned its keep here: the re-theme's
+       first pass moved `appStyles.ts` without `RouteChipDetail.tsx` and this line is what reported it. */
+    ['padding: "2px 8px"', 'borderRadius: "6px"', 'backgroundColor: "#1c1c1c"', 'gap: "6px"'].forEach(
       (property) => {
         expect(chip).toContain(property);
         expect(head).toContain(property);
@@ -93,7 +96,7 @@ describe("the head, the chip and the line are one colour", () => {
     const head = DETAIL.slice(DETAIL.indexOf("  model: {"), DETAIL.indexOf("\n  },", DETAIL.indexOf("  model: {")));
     expect(head).toContain('borderWidth: "1px"');
     expect(head).toContain('borderStyle: "solid"');
-    expect(head).toContain('borderColor: "#3a4150"');
+    expect(head).toContain('borderColor: "#3a3a3a"'); // #1092: retoned with the chip it matches.
     expect(head).not.toMatch(/\bborder: /);
   });
 });

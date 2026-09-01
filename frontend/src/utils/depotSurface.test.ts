@@ -69,7 +69,12 @@ describe("the panel sits above its surroundings, not below them", () => {
     /* Read back rather than asserted from memory -- the same discipline #737's premise block uses. The bar's
        card is `#171c28` and the private panel is `#141a26`; this has to clear both, and the assertion names
        them so that a later repaint of either shows up here rather than silently reversing the fix. */
-    expect(strip(read("styles/appStyles.ts"))).toContain('backgroundColor: "#171c28"');
+    /* Design note #1092 retoned the bar's card from `#171c28` to `#0f0f0f`. THE CLAIM THIS TEST MAKES IS
+       UNAFFECTED and was re-checked rather than assumed: the panel is L* 13.83, the card is now L* 4.31 and
+       the private panel L* 9.22, so the panel still clears both and the gap in fact widened. The private
+       panel's `#141a26` is untouched because it lives in a component the re-theme's first pass did not
+       reach -- when it is retoned, this line is where the ordering gets re-checked. */
+    expect(strip(read("styles/appStyles.ts"))).toContain('backgroundColor: "#0f0f0f"');
     expect(strip(read("components/PrivateTradePanel.tsx"))).toContain('backgroundColor: "#141a26"');
     expect(ROOT).toContain('backgroundColor: "#1e2331"');
   });

@@ -29,9 +29,9 @@ import type { GamePhase } from "../utils/gamePhase";
    untouched and still drawn by `HexGridRenderer` and the auction dashboard. */
 
 export const NEUTRAL_PHASE_BADGE: React.CSSProperties = {
-  borderColor: "#3a4055",
-  backgroundColor: "#1b1f29",
-  color: "#a8b0c0",
+  borderColor: "#3a3a3a",
+  backgroundColor: "#141414",
+  color: "#c8c6c0",
 };
 export const PHASE_TINT_STYLES: Readonly<Record<GamePhase["tint"], React.CSSProperties>> = {
   yellow: NEUTRAL_PHASE_BADGE,
@@ -49,8 +49,8 @@ export const styles: Record<string, React.CSSProperties> = {
     gap: "10px",
     width: "100%",
     padding: "6px 20px",
-    backgroundColor: "#1a1d26",
-    borderBottom: "1px solid #2a2e3a",
+    backgroundColor: "#0f0f0f",
+    borderBottom: "1px solid #2a2a2a",
     boxSizing: "border-box",
     flexWrap: "wrap",
     rowGap: "6px",
@@ -108,22 +108,22 @@ export const styles: Record<string, React.CSSProperties> = {
     letterSpacing: "0.03em",
     padding: "2px 8px",
     marginLeft: "-1px",
-    border: "1px solid #2f3542",
-    backgroundColor: "#191d27",
-    color: "#6f7480",
+    border: "1px solid #2a2a2a",
+    backgroundColor: "#141414",
+    color: "#6e6c68",
     whiteSpace: "nowrap",
     flexShrink: 0,
     cursor: "help",
   },
   /* Design note #930: still to come. The same treatment the sub-phase trail gives an unreached step -- it is
      the same fact about a sequence. */
-  orTurnOrderChipUpcoming: { color: "#8a90a0" },
+  orTurnOrderChipUpcoming: { color: "#8a8a86" },
   /* DIMMED, NOT REMOVED. A row that shortens as the round goes on stops being an ORDER and becomes a queue,
      and "have they gone yet" is the question a player asks about the corporations behind them. */
   /* Design note #930: `opacity` dimmed the BORDER as well as the text, which on a livery-coloured chip made
      "already operated" look like a rendering fault. An explicit ink and fill instead, matching
      `subPhaseStepDone`. */
-  orTurnOrderChipDone: { color: "#8a90a0", backgroundColor: "#1c212c" },
+  orTurnOrderChipDone: { color: "#8a8a86", backgroundColor: "#161616" },
   /* THE ACTING ONE IS FILLED, and both its background and its ink are written INLINE at the call site --
      the fill from the corporation's livery, the ink from `bestContrastTextColor` against it. Neither can be
      a static entry here, so there is no `orTurnOrderChipActing` to define; saying so is worth a line,
@@ -188,7 +188,7 @@ export const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.micro,
     fontWeight: 600,
     letterSpacing: "0.02em",
-    color: "#94a3b8",
+    color: "#8a8a86",
     textDecoration: "none",
     whiteSpace: "nowrap",
     flexShrink: 0,
@@ -223,7 +223,7 @@ export const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     letterSpacing: "0.06em",
     textTransform: "uppercase",
-    color: "#8a90a0",
+    color: "#8a8a86",
   },
   topBarRoomCode: {
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
@@ -254,7 +254,7 @@ export const styles: Record<string, React.CSSProperties> = {
   topBarAddress: {
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     fontSize: FONT_SIZE.small,
-    color: "#9aa0ac",
+    color: "#a8a6a0",
     whiteSpace: "nowrap",
   },
   topBarButton: {
@@ -262,9 +262,9 @@ export const styles: Record<string, React.CSSProperties> = {
     fontWeight: 600,
     padding: CONTROL_PADDING.buttonSmall,
     borderRadius: "999px",
-    border: "1px solid #3a3f4b",
-    backgroundColor: "#242833",
-    color: "#c7cbd4",
+    border: "1px solid #3a3a3a",
+    backgroundColor: "#1c1c1c",
+    color: "#c8c6c0",
     cursor: "pointer",
     whiteSpace: "nowrap",
     flexShrink: 0,
@@ -303,9 +303,9 @@ export const styles: Record<string, React.CSSProperties> = {
     lineHeight: 1,
     padding: 0,
     borderRadius: "999px",
-    border: "1px solid #3a3f4b",
-    backgroundColor: "#242833",
-    color: "#6f7480",
+    border: "1px solid #3a3a3a",
+    backgroundColor: "#1c1c1c",
+    color: "#6e6c68",
     cursor: "pointer",
     flexShrink: 0,
   },
@@ -313,9 +313,9 @@ export const styles: Record<string, React.CSSProperties> = {
    *  already spends its colour budget on the wallet and session status dots, and a third colour there would
    *  read as a fourth status rather than as a control the player set. */
   topBarIconButtonOn: {
-    color: "#e8ecf4",
-    borderColor: "rgba(232, 236, 244, 0.55)",
-    backgroundColor: "#2f3442",
+    color: "#f2f0eb",
+    borderColor: "rgba(242, 240, 235, 0.55)",
+    backgroundColor: "#2a2a2a",
   },
   // The one call to action in the bar, so it is the one thing in it with a
   // filled treatment.
@@ -367,10 +367,10 @@ export const styles: Record<string, React.CSSProperties> = {
     width: "100%",
     padding: "12px 20px",
     marginBottom: "14px",
-    backgroundColor: "#1b2130",
+    backgroundColor: "#141414",
     borderWidth: "1px",
     borderStyle: "solid",
-    borderColor: "#2f3646",
+    borderColor: "#2a2a2a",
     borderRadius: "10px",
     boxSizing: "border-box",
   },
@@ -379,7 +379,7 @@ export const styles: Record<string, React.CSSProperties> = {
     fontWeight: 800,
     letterSpacing: "0.6px",
     textTransform: "uppercase",
-    color: "#7f8798",
+    color: "#8a8a86",
   },
   globalActionButton: {
     fontSize: FONT_SIZE.control,
@@ -388,16 +388,16 @@ export const styles: Record<string, React.CSSProperties> = {
     borderRadius: "8px",
     borderWidth: "1px",
     borderStyle: "solid",
-    borderColor: "#3a4055",
-    backgroundColor: "#242c3d",
-    color: "#e6e8ef",
+    borderColor: "#3a3a3a",
+    backgroundColor: "#1c1c1c",
+    color: "#f2f0eb",
     cursor: "pointer",
     whiteSpace: "nowrap",
   },
   // Inline styles cannot express `:disabled` (Lobby.tsx design note #3), so
   // the disabled look is computed, never assumed.
   globalActionButtonDisabled: { opacity: 0.4, cursor: "not-allowed" },
-  globalActionBarHint: { fontSize: FONT_SIZE.small, color: "#8a90a0" },
+  globalActionBarHint: { fontSize: FONT_SIZE.small, color: "#8a8a86" },
   // ---- Sandbox phase switcher (design note #25). Violet, matching the
   // sandbox badge beside it, so it reads as part of the debug affordance
   // and never as a gameplay control. ----
@@ -458,7 +458,7 @@ export const styles: Record<string, React.CSSProperties> = {
     flexShrink: 0,
   },
   roomStripLabel: { display: "inline-flex", alignItems: "center", gap: "6px" },
-  roomStripValue: { color: "#e6e8ef", fontWeight: 700 },
+  roomStripValue: { color: "#f2f0eb", fontWeight: 700 },
   roomStripDivider: { width: "1px", alignSelf: "stretch", minHeight: "16px", backgroundColor: "#2a3a52" },
   roomStripError: { color: "#f0b0a8", fontSize: FONT_SIZE.small },
   appRoot: {
@@ -475,8 +475,8 @@ export const styles: Record<string, React.CSSProperties> = {
        the content. */
     paddingBottom: "96px",
     fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif",
-    backgroundColor: "#12141a",
-    color: "#e6e8ef",
+    backgroundColor: "#080808",
+    color: "#f2f0eb",
   },
   // Design note #12/item 5 (upper brand header): fonts, badges and wallet fields upscaled 40-60% past their
   // original small print so the topmost bar reads on a widescreen panel.
@@ -517,9 +517,9 @@ export const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.strong,
     padding: "9px 18px",
     borderRadius: "8px",
-    border: "1px solid #3a3f4b",
-    backgroundColor: "#242833",
-    color: "#e6e8ef",
+    border: "1px solid #3a3a3a",
+    backgroundColor: "#1c1c1c",
+    color: "#f2f0eb",
     cursor: "pointer",
   },
   errorText: {
@@ -544,10 +544,15 @@ export const styles: Record<string, React.CSSProperties> = {
      so it visually separates from the navigation tabs directly beneath it?"
 
      NEITHER, because both would be a second statement of something already said three ways. `actionBar` is
-     `#1b2130` with a full 1px `#2f3646` border and a 10px radius -- it is a CARD, outlined on all four sides
-     -- while this strip is `#0F172A` and the page behind both is `#12141a`. A bottom border would be a second
+     `#141414` with a full 1px `#2a2a2a` border and a 10px radius -- it is a CARD, outlined on all four sides
+     -- while this strip is `#0f0f0f` and the page behind both is `#080808`. A bottom border would be a second
      border on an edge that already has one; a drop shadow would say "floats above", which is wrong for two
      things stacked in a column.
+
+     Design note #1092 retoned all four of those values and the ARGUMENT is unchanged, which is the point of
+     restating them here rather than leaving the old hexes to rot: the three grounds still step apart in the
+     same order and by a comparable amount, so a card outlined against a strip against a page is still what a
+     reader sees. Only the cast moved, slate-blue to neutral.
 
      WHAT THEY LACKED WAS AIR. Flush, a bordered card and a flat strip read as one welded assembly. 10px of it
      is enough to make them two objects, and it goes HERE rather than on the bar because #426's rule holds: a
@@ -565,7 +570,7 @@ export const styles: Record<string, React.CSSProperties> = {
     gap: "6px",
     rowGap: "6px",
     padding: "6px 16px",
-    backgroundColor: "#0F172A",
+    backgroundColor: "#0f0f0f",
     boxSizing: "border-box",
     maxWidth: "100%",
   },
@@ -579,10 +584,10 @@ export const styles: Record<string, React.CSSProperties> = {
     borderRadius: "10px 10px 0 0",
     borderWidth: "1px",
     borderStyle: "solid",
-    borderColor: "rgba(51, 65, 85, 0.85)",
+    borderColor: "rgba(42, 42, 42, 0.85)",
     borderBottomWidth: 0,
-    backgroundColor: "rgba(15, 23, 42, 0.6)",
-    color: "#94a3b8",
+    backgroundColor: "rgba(15, 15, 15, 0.6)",
+    color: "#8a8a86",
     cursor: "pointer",
   },
   /* The active tab is the only WHITE-edged item in the bar and the only one with a lift, and it keeps the
@@ -599,7 +604,7 @@ export const styles: Record<string, React.CSSProperties> = {
     borderWidth: "1px",
     borderStyle: "solid",
     borderColor: "#3a5a8a",
-    backgroundColor: "#16202e",
+    backgroundColor: "#141414",
     color: "#9ec5ff",
     fontSize: FONT_SIZE.control,
     fontWeight: 700,
@@ -608,11 +613,11 @@ export const styles: Record<string, React.CSSProperties> = {
     whiteSpace: "nowrap",
   },
   mainTabButtonActive: {
-    backgroundColor: "#1E293B",
-    color: "#ffffff",
+    backgroundColor: "#1c1c1c",
+    color: "#f2f0eb",
     fontWeight: 700,
-    borderColor: "rgba(255, 255, 255, 0.8)",
-    borderBottomColor: "#1E293B",
+    borderColor: "rgba(242, 240, 235, 0.8)",
+    borderBottomColor: "#1c1c1c",
     boxShadow: "0 -1px 6px rgba(0, 0, 0, 0.35)",
   },
   // ---- Active Player Turn Notifications -- design note #18/item 4. A
@@ -631,7 +636,7 @@ export const styles: Record<string, React.CSSProperties> = {
   },
   sidebarHint: {
     fontSize: FONT_SIZE.control,
-    color: "#6f7480",
+    color: "#6e6c68",
     margin: "0 0 4px",
   },
   /* Design note #813: the sticky-fit probe's readout. Deliberately plain and deliberately ugly -- it is an
@@ -641,9 +646,9 @@ export const styles: Record<string, React.CSSProperties> = {
     margin: "4px 0 0",
     padding: "3px 8px",
     borderRadius: "4px",
-    border: "1px dashed #4a5163",
-    backgroundColor: "#141a26",
-    color: "#8f98a8",
+    border: "1px dashed #4a4a4a",
+    backgroundColor: "#0f0f0f",
+    color: "#a8a6a0",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     fontSize: FONT_SIZE.micro,
     fontVariantNumeric: "tabular-nums",
@@ -694,10 +699,10 @@ export const styles: Record<string, React.CSSProperties> = {
        Design note #655: the clause that used to end this sentence described a `maxHeight` this bar does not
        have and should not. This bar WRAPS, and a wrapped row growing is the wrap working. */
     padding: "6px 12px",
-    backgroundColor: "#1b2130",
+    backgroundColor: "#141414",
     borderWidth: "1px",
     borderStyle: "solid",
-    borderColor: "#2f3646",
+    borderColor: "#2a2a2a",
     borderRadius: "10px",
     /* Design note #426: no `marginBottom`. See above -- a sticky element's
        own margin scrolls with it and offsets it from `top: 0`. The gap is
@@ -769,7 +774,7 @@ export const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     textTransform: "uppercase",
     letterSpacing: "0.04em",
-    color: "#9aa0ac",
+    color: "#a8a6a0",
   },
   /* Design note #426: TRUE-CENTRED, WHICH THE SPACER PAIR WAS NOT. Two equal spacers centre the group
      BETWEEN THEMSELVES, not on the bar -- the phase badge sits outside the trailing spacer, so the group was
@@ -812,7 +817,7 @@ export const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     letterSpacing: "0.04em",
     textTransform: "uppercase",
-    color: "#8f98a8",
+    color: "#a8a6a0",
     whiteSpace: "nowrap",
   },
   /* Design note #458: the left rail of the non-Operating-Round bar. Holds
@@ -937,9 +942,9 @@ export const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     padding: "9px 18px",
     borderRadius: "8px",
-    border: "1px solid #3a3f4b",
-    backgroundColor: "#242833",
-    color: "#e6e8ef",
+    border: "1px solid #3a3a3a",
+    backgroundColor: "#1c1c1c",
+    color: "#f2f0eb",
     cursor: "pointer",
   },
   /* Design note #619: THE STYLE EXISTED; THE NAME AT THE CALL SITE DID NOT. `ContextualActionBar` reached
@@ -989,13 +994,13 @@ export const styles: Record<string, React.CSSProperties> = {
      belongs outside the set of things the player is choosing between, and dimmer ink plus a dashed edge is that
      boundary. Anything the game offers as an option does not qualify, however secondary it feels. */
   actionBarUtilityButton: {
-    color: "#c7cbd4",
+    color: "#c8c6c0",
     borderStyle: "dashed",
   },
   actionBarDivider: {
     width: "1px",
     alignSelf: "stretch",
-    backgroundColor: "#2a2e3a",
+    backgroundColor: "#2a2a2a",
     margin: "0 6px",
   },
   // ---- Manual Route Point UI -- see design note #11. ----
@@ -1010,7 +1015,7 @@ export const styles: Record<string, React.CSSProperties> = {
     width: "30px",
     height: "16px",
     borderRadius: "999px",
-    backgroundColor: "#3a3f4b",
+    backgroundColor: "#3a3a3a",
     padding: "2px",
     marginRight: "10px",
     verticalAlign: "middle",
@@ -1020,7 +1025,7 @@ export const styles: Record<string, React.CSSProperties> = {
     width: "12px",
     height: "12px",
     borderRadius: "999px",
-    backgroundColor: "#c7cbd4",
+    backgroundColor: "#c8c6c0",
     transition: "transform 0.12s ease",
   },
   routeToggleSwitchThumbActive: {
@@ -1046,8 +1051,8 @@ export const styles: Record<string, React.CSSProperties> = {
     padding: "6px 10px",
     alignContent: "center",
     borderRadius: "8px",
-    backgroundColor: "#171c28",
-    border: "1px solid #2b3242",
+    backgroundColor: "#0f0f0f",
+    border: "1px solid #2a2a2a",
   },
   /* Design note #575: a COLUMN now -- herald+acronym on one line, full name
      under it, matching `rosterIdentityRow` on the Stock Card. It was a
@@ -1150,7 +1155,21 @@ export const styles: Record<string, React.CSSProperties> = {
        #974's contrast argument was actually asking for and did not get.
        THE CROWN'S GOLD IS THE ONE THING THIS COSTS. `PRESIDENT_CROWN_GOLD` was chosen against dark chrome and
        is lower contrast on white; it stays a legible SHAPE and the name beside it carries the identity, so
-       this is a small loss rather than a lost fact -- but it is a real one and worth having written down. */
+       this is a small loss rather than a lost fact -- but it is a real one and worth having written down.
+
+       DESIGN NOTE 1092 SWEPT THIS TO `#f2f0eb` AND IT WAS REVERTED. Recorded so the same tidy-up is not
+       attempted a second time: every other paper surface in the app is now Neta's warm paper, so a lone
+       pure white beside them reads as a value somebody missed, and that is exactly why the sweep took it.
+       But this white is not decoration, it is the CONTRAST GROUND this note chose, and the six seat colours
+       are already tight against it -- the worst, `#a88a3f`, is 3.30:1 on white and 2.89:1 on paper. A
+       re-theme does not get to spend contrast that was this thin to begin with. It stays white, and stays
+       the documented exception to "one paper value".
+
+       AND THE THIN CONTRAST IS OLDER THAN THE RE-THEME. The claim above that "all six read on white" is not
+       true of three of them: `#4f8a5c` is 4.10:1, `#3f8a94` is 3.98:1 and `#a88a3f` is 3.30:1, all under AA
+       today and before #1092 touched anything. The badge survives it for the reason the paragraph above
+       already gives -- the seat colour is a SHAPE here and the name carries the identity -- but the sentence
+       overstates its case, and correcting those three is its own pass rather than a colour swap. */
     backgroundColor: "#ffffff",
     borderRadius: "5px",
     padding: "1px 6px 1px 4px",
@@ -1333,7 +1352,7 @@ export const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.strong,
     fontWeight: 800,
     letterSpacing: "0.3px",
-    color: "#c8cdd8",
+    color: "#c8c6c0",
   },
   /* Design note #578: the room gate. Deliberately plain -- it is a doorway, not a screen.
      Design note #581: the status-line dock, anchored to the bottom EDGE rather than given a height, so the
@@ -1356,8 +1375,8 @@ export const styles: Record<string, React.CSSProperties> = {
        #599's reason, and #605's scroll compensation still pushes the page down by whatever the dock takes. */
     maxHeight: "60vh",
     overflow: "hidden",
-    borderTop: "1px solid #2b3242",
-    backgroundColor: "#11151d",
+    borderTop: "1px solid #2a2a2a",
+    backgroundColor: "#080808",
     boxShadow: "0 -6px 18px rgba(0,0,0,0.35)",
   },
   sandboxGateRoot: { display: "flex", justifyContent: "center", padding: "48px 20px" },
@@ -1369,24 +1388,24 @@ export const styles: Record<string, React.CSSProperties> = {
     maxWidth: "560px",
     padding: "24px 26px",
     borderRadius: "12px",
-    border: "1px solid #2b3242",
-    backgroundColor: "#161b27",
+    border: "1px solid #2a2a2a",
+    backgroundColor: "#0f0f0f",
   },
-  sandboxGateTitle: { margin: 0, fontSize: FONT_SIZE.heading, fontWeight: 800, color: "#e2e6ee" },
+  sandboxGateTitle: { margin: 0, fontSize: FONT_SIZE.heading, fontWeight: 800, color: "#f2f0eb" },
   sandboxGateBody: {
     margin: 0,
     fontSize: FONT_SIZE.body,
     lineHeight: 1.55,
-    color: "#9aa0ac",
+    color: "#a8a6a0",
   },
   sandboxGateQuiet: {
     alignSelf: "flex-start",
     fontSize: FONT_SIZE.small,
     padding: "6px 12px",
     borderRadius: "6px",
-    border: "1px solid #3a3f4b",
+    border: "1px solid #3a3a3a",
     backgroundColor: "transparent",
-    color: "#8a90a0",
+    color: "#8a8a86",
     cursor: "pointer",
   },
   /* Design note #601: eight `rosterPill*` styles deleted with the unreachable branch that was their only
@@ -1492,9 +1511,9 @@ export const styles: Record<string, React.CSSProperties> = {
   subPhaseStep: {
     padding: "2px 8px",
     marginLeft: "-1px",
-    border: "1px solid #2f3542",
-    backgroundColor: "#191d27",
-    color: "#6f7480",
+    border: "1px solid #2a2a2a",
+    backgroundColor: "#141414",
+    color: "#6e6c68",
     fontSize: FONT_SIZE.micro,
     fontWeight: 700,
     letterSpacing: "0.03em",
@@ -1503,7 +1522,7 @@ export const styles: Record<string, React.CSSProperties> = {
   /* Past steps sit between done and pending: still dim, but not as faint as
      what has not happened, so the trail reads left-to-right as travelled,
      here, remaining. */
-  subPhaseStepDone: { color: "#8a90a0", backgroundColor: "#1c212c" },
+  subPhaseStepDone: { color: "#8a8a86", backgroundColor: "#161616" },
   /* The one the player is on. Lifted on all three channels -- fill, ink and
      border -- because a single channel is not enough to win a glance across
      six adjacent boxes, which is the whole job of this element. */
@@ -1523,7 +1542,7 @@ export const styles: Record<string, React.CSSProperties> = {
     gap: "6px",
     marginTop: "4px",
     paddingTop: "4px",
-    borderTop: "1px solid #2b3242",
+    borderTop: "1px solid #2a2a2a",
   },
   /* Design note #739 gave the spectator a muted twin of `condensedTrainChip` -- "same shape, none of the
      affordance ... because the reader cannot act on it and a chip that looks clickable and is not is worse
@@ -1546,7 +1565,7 @@ export const styles: Record<string, React.CSSProperties> = {
     alignSelf: "center",
     marginLeft: "4px",
     paddingLeft: "8px",
-    borderLeft: "1px solid #3a4150",
+    borderLeft: "1px solid #3a3a3a",
     fontSize: FONT_SIZE.small,
     fontWeight: 700,
     color: "#7ee0a1",
@@ -1559,12 +1578,12 @@ export const styles: Record<string, React.CSSProperties> = {
     gap: "6px",
     padding: "2px 8px",
     borderRadius: "6px",
-    border: "1px solid #3a4150",
+    border: "1px solid #3a3a3a",
     // Design note #494: overridden per chip with that train's route ink.
     borderBottomWidth: "2px",
     borderBottomStyle: "solid",
-    backgroundColor: "#232936",
-    color: "#c8cdd8",
+    backgroundColor: "#1c1c1c",
+    color: "#c8c6c0",
     fontSize: FONT_SIZE.small,
     fontFamily: "inherit",
     fontWeight: 700,
@@ -1589,13 +1608,13 @@ export const styles: Record<string, React.CSSProperties> = {
     gap: "12px",
     padding: "8px 4px 2px",
     marginTop: "5px",
-    borderTop: "1px solid #2b3242",
+    borderTop: "1px solid #2a2a2a",
   },
   dividendColumn: { display: "flex", flexDirection: "column", gap: "4px" },
   /* Design note #998: `dividendRuleFooter`/`dividendRuleLine` are GONE with #997's explanation block. An
      orphaned style for a rendering we have just been asked to stop doing is how the rendering comes back --
      the rule this sheet keeps for itself, and the one #976 applied to the power chip's gradient. */
-  dividendHeading: { fontSize: FONT_SIZE.strong, fontWeight: 800, color: "#e2e6ee" },
+  dividendHeading: { fontSize: FONT_SIZE.strong, fontWeight: 800, color: "#f2f0eb" },
   dividendRow: {
     display: "flex",
     flexDirection: "row",
@@ -1607,7 +1626,7 @@ export const styles: Record<string, React.CSSProperties> = {
     alignItems: "baseline",
     gap: "4px 10px",
     fontSize: FONT_SIZE.small,
-    color: "#c8cdd8",
+    color: "#c8c6c0",
   },
   /* The percentage moved OUT of the amount and in beside the name. #705 put a three-part transition on the
      right of this row, and a parenthetical share sitting inside it read as part of the arithmetic; beside the
@@ -1621,7 +1640,7 @@ export const styles: Record<string, React.CSSProperties> = {
     gap: "5px",
   },
   dividendAmount: { fontVariantNumeric: "tabular-nums", color: "#7ee0a1", fontWeight: 700 },
-  dividendPct: { color: "#6f7480", fontWeight: 400 },
+  dividendPct: { color: "#6e6c68", fontWeight: 400 },
   /* Design note #705: the money move, kept on one line of its own so the arrow never separates from the
      figures it points between. Same vocabulary as `treasuryMove` deliberately -- the Pay column and the
      Withhold column are two answers to one question and should not read as two designs. */
@@ -1636,8 +1655,8 @@ export const styles: Record<string, React.CSSProperties> = {
     marginLeft: "auto",
   },
   /* Muted, like the departure figure it follows: the `+` is grammar, not a value. */
-  dividendPlus: { color: "#6f7480", fontWeight: 400 },
-  dividendNote: { fontSize: FONT_SIZE.small, color: "#9aa0ac", lineHeight: 1.4 },
+  dividendPlus: { color: "#6e6c68", fontWeight: 400 },
+  dividendNote: { fontSize: FONT_SIZE.small, color: "#a8a6a0", lineHeight: 1.4 },
   dividendMove: { fontSize: FONT_SIZE.small, fontWeight: 700, color: "#9ec5ff", marginTop: "4px" },
   /* Design note #214: the arrow is the one glyph in the line carrying a DIRECTION, so it takes the
      direction's colour, sized and weighted past the zone-tinted prices either side -- if it merely matched
@@ -1665,7 +1684,7 @@ export const styles: Record<string, React.CSSProperties> = {
   },
   /* The departure is muted and the destination is not: a withhold always
      RAISES the treasury, so the figure that matters is the one after. */
-  treasuryFrom: { color: "#9aa0ac" },
+  treasuryFrom: { color: "#a8a6a0" },
   treasuryTo: { color: "#7ee0a1", fontWeight: 800 },
   /* Design note #713: the sale's market consequence, under the treasury block it accompanies. Sized and
      spaced like `treasuryMove` deliberately -- a player reads one shape for "what this does to a number",
@@ -1689,7 +1708,7 @@ export const styles: Record<string, React.CSSProperties> = {
     fontVariantNumeric: "tabular-nums",
     marginTop: "3px",
   },
-  saleMarketLabel: { color: "#8a90a0", fontWeight: 400, marginRight: "2px" },
+  saleMarketLabel: { color: "#8a8a86", fontWeight: 400, marginRight: "2px" },
   saleMarketArrow: { color: "#f87171", fontWeight: 900, fontSize: "1.15em", lineHeight: 1 },
   dividendMoveArrowUp: { color: "#4ade80" },
   dividendMoveArrowDown: { color: "#f87171" },
@@ -1697,14 +1716,14 @@ export const styles: Record<string, React.CSSProperties> = {
      It takes the muted note ink rather than green or red, because those two
      are the only colours on this line carrying a claim about VALUE, and a
      token pinned at the end of its row has not changed any. */
-  dividendMoveArrowFlat: { color: "#8a90a0" },
-  dividendMoveNote: { color: "#8a90a0", fontWeight: 400 },
-  depotSupply: { fontSize: FONT_SIZE.small, color: "#9aa0ac" },
+  dividendMoveArrowFlat: { color: "#8a8a86" },
+  dividendMoveNote: { color: "#8a8a86", fontWeight: 400 },
+  depotSupply: { fontSize: FONT_SIZE.small, color: "#a8a6a0" },
   /* Design note #279: the Track step's "the action is on the map" hint, and
      nothing else. This used to carry a second string saying the step had no
      button at all -- a caption about an empty div, which is exactly what
      that note deleted. An empty centre column is now allowed to be empty. */
-  orPanelNoActions: { fontSize: FONT_SIZE.small, color: "#6f7480", fontStyle: "italic" },
+  orPanelNoActions: { fontSize: FONT_SIZE.small, color: "#6e6c68", fontStyle: "italic" },
   /* Design note #835: the Track step's "the action is on the map" line, on its OWN row beneath the controls.
      `orPanelActions` wraps, so a hint sharing the row sat to the left of the buttons it describes -- which is
      where it has been since #279, and reads as a label for them rather than as a note under them.
@@ -1715,7 +1734,7 @@ export const styles: Record<string, React.CSSProperties> = {
     flexBasis: "100%",
     textAlign: "center",
     fontSize: FONT_SIZE.small,
-    color: "#6f7480",
+    color: "#6e6c68",
     fontStyle: "italic",
   },
   /* Design note #707: NOT `orPanelNoActions`. That is the Track step's "the action is on the map" hint --
@@ -1743,9 +1762,9 @@ export const styles: Record<string, React.CSSProperties> = {
     gap: "4px",
     padding: "10px 16px",
     borderRadius: "8px",
-    border: "1.5px solid #3a3f4b",
-    backgroundColor: "#1a1d26",
-    color: "#e6e8ef",
+    border: "1.5px solid #3a3a3a",
+    backgroundColor: "#0f0f0f",
+    color: "#f2f0eb",
     cursor: "pointer",
     minWidth: "72px",
   },
@@ -1759,7 +1778,7 @@ export const styles: Record<string, React.CSSProperties> = {
   },
   hardwareTrayCardCost: {
     fontSize: FONT_SIZE.body,
-    color: "#9aa0ac",
+    color: "#a8a6a0",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
   },
   // ---- Buy Private Company Action Tray -- design note #14. ----
@@ -1771,20 +1790,20 @@ export const styles: Record<string, React.CSSProperties> = {
     gap: "10px",
     padding: "10px 14px",
     borderRadius: "8px",
-    border: "1.5px solid #3a3f4b",
-    backgroundColor: "#1a1d26",
+    border: "1.5px solid #3a3a3a",
+    backgroundColor: "#0f0f0f",
   },
   privateCompanyTrayLabel: {
     fontSize: FONT_SIZE.body,
-    color: "#9aa0ac",
+    color: "#a8a6a0",
     fontWeight: 600,
   },
   privateCompanySelect: {
     padding: "6px 10px",
     borderRadius: "6px",
-    border: "1px solid #3a3f4b",
-    backgroundColor: "#242833",
-    color: "#e6e8ef",
+    border: "1px solid #3a3a3a",
+    backgroundColor: "#1c1c1c",
+    color: "#f2f0eb",
   },
   privateCompanyPriceRow: {
     display: "flex",
@@ -1794,7 +1813,7 @@ export const styles: Record<string, React.CSSProperties> = {
   },
   privateCompanyPriceValue: {
     fontSize: FONT_SIZE.body,
-    color: "#e6e8ef",
+    color: "#f2f0eb",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     minWidth: "72px",
   },
@@ -1818,9 +1837,9 @@ export const styles: Record<string, React.CSSProperties> = {
     maxWidth: "240px",
     padding: "8px 12px",
     borderRadius: "8px",
-    backgroundColor: "#242833",
-    border: "1px solid #3a3f4b",
-    color: "#e6e8ef",
+    backgroundColor: "#1c1c1c",
+    border: "1px solid #3a3a3a",
+    color: "#f2f0eb",
     fontSize: FONT_SIZE.small,
     boxShadow: "0 8px 24px rgba(0,0,0,0.45)",
   },

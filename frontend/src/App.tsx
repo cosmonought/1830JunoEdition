@@ -1064,7 +1064,65 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
 
   const pendingFleetNoticesRef = useRef<FleetLossNotice[]>([]);
   const [pendingFleetNotices, setPendingFleetNotices] = useState<FleetLossNotice[]>([]);
+  /** ==================================================================
+   *   DESIGN NOTE 1107: A DISMISSAL HAS TO OUTLIVE THE PAGE, NOT JUST THE UNDO
+   *  ==================================================================
+   *
+   * REPORTED: "refreshing the page triggered the Rust modal despite it having fired several subphases before."
+   *
+   * #1032 MADE THIS KEY THE EVENT rather than the turn, and its note says a rebuild "produces the same key
+   * and a dismissed notice stays dismissed." TRUE OF AN UNDO, where the ref survives because the page does.
+   * FALSE OF A REFRESH, which is the other kind of rebuild: the ref is reconstructed empty, the replay
+   * re-queues the notice, and the modal interrupts a player who acknowledged it half a turn ago. The same
+   * shape as #1094's era toast -- a guard that covers one kind of rebuild and silently not the other.
+   *
+   * `sessionStorage`, NOT THE LOG. #896 considered and rejected an acknowledgement ACTION: "a purely
+   * cosmetic dismissal that Undo could then rewind". Whether one viewer clicked a modal is not game state and
+   * must not enter the log every client replays. It is a per-viewer, per-session fact, which is what this
+   * storage is for -- and what `Lobby` #114 already chose for the same reason ("rejoining a stale room in a
+   * new tab" should not inherit the old one).
+   *
+   * KEYED BY ROOM, so two games in one session cannot inherit each other's acknowledgements.
+   *
+   * WRAPPED, because storage throws in a private window and on a browser with site data blocked -- and the
+   * failure direction is the harmless one: an unreadable store means the modal shows again, which is the
+   * behaviour that was there before this note. */
+  /* Design note #1107: IN THE APP'S OWN STORAGE NAMESPACE, `1830juno.`, and versioned -- the shape
+     `TutorialModal` and `fleetLossNotice`'s silence prefix already use. `appNaming.test.ts` #38 enforces it
+     and explains why the namespace rather than an enumeration is the property: "a `localStorage` key is a
+     persisted identifier -- renaming one silently discards every player's saved preference". My first draft
+     wrote a bare `1830.` prefix and that suite caught it, which is exactly what it is for. */
+  const dismissedStorageKey = sandboxRoomCode
+    ? `1830juno.fleet_loss_dismissed.v1.${sandboxRoomCode}`
+    : null;
   const dismissedFleetNoticesRef = useRef<Set<string>>(new Set());
+  const dismissedLoadedForRef = useRef<string | null>(null);
+  if (dismissedStorageKey && dismissedLoadedForRef.current !== dismissedStorageKey) {
+    dismissedLoadedForRef.current = dismissedStorageKey;
+    try {
+      const saved = window.sessionStorage.getItem(dismissedStorageKey);
+      dismissedFleetNoticesRef.current = new Set<string>(saved ? JSON.parse(saved) : []);
+    } catch {
+      dismissedFleetNoticesRef.current = new Set<string>();
+    }
+  }
+  /** Design note #1107: written on every acknowledgement, so a refresh mid-turn keeps what was clicked. */
+  const rememberDismissed = useCallback(
+    (key: string) => {
+      dismissedFleetNoticesRef.current.add(key);
+      if (!dismissedStorageKey) return;
+      try {
+        window.sessionStorage.setItem(
+          dismissedStorageKey,
+          JSON.stringify(Array.from(dismissedFleetNoticesRef.current)),
+        );
+      } catch {
+        /* A viewer whose browser refuses storage keeps the in-memory set and sees the modal again after a
+           refresh -- the behaviour this note is improving on, not a new failure. */
+      }
+    },
+    [dismissedStorageKey],
+  );
 
   // Renders the whole depot tier by tier; depotInventory already applies the cheapest-first queue rule.
   // See docs/ai_architecture/contract_economy.md - App.tsx #203
@@ -5001,12 +5059,38 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
            point of building the predicate once. Reordering the two calls would have worked today and left the
            next reader one edit away from reintroducing it. */
         const gridBeforeAction = mapGridRef.current;
+        /* ==================================================================
+            DESIGN NOTE 1106: #757 GAVE THE GRID A REF AND LEFT THE PHASE ON RENDER STATE
+           ==================================================================
+           REPORTED: "I refreshed and the entire board reset to Yellow tiles, erasing the Green upgrades that
+           had been laid."
+
+           THE ERA CAME FROM `currentPhase`, WHICH IS `useMemo(() => derivePhase(gameState))` -- React state.
+           A refresh replays the whole log in one burst of awaited dispatches, and React does not commit
+           between them in any way this closure can rely on, so `currentPhase` is still whatever it was when
+           the burst BEGAN: phase 2, tint yellow. Every green upgrade in the log is then judged against a
+           yellow board, `filterSandboxPlacements` returns nothing, `layRefused` answers true, and the tile is
+           dropped. The board rebuilds with exactly the yellow tiles and none of the upgrades -- which is the
+           report, precisely.
+
+           #757 DIAGNOSED THIS EXACT FAILURE FOR THE OTHER INPUT and its note describes what I am fixing:
+           "An Undo replays the whole log in one burst, so a legality check reading React state would judge
+           every lay in that burst against the board as it stood before the burst began -- and refuse
+           legitimate upgrades, because the tile they upgrade would not be there yet." It gave the GRID a ref
+           and left the PHASE reading state. One rule, asked of one of its two inputs -- this project's
+           signature fault, in the function whose note names it.
+
+           SNAPSHOTTED BESIDE THE GRID, per #766's "a snapshot, not a reorder": both halves of this predicate
+           must judge the same instant, or the pair disagrees the way #766's two calls did.
+           READ FROM `sandboxStateRef`, which the reducer writes SYNCHRONOUSLY -- the only thing in this file
+           that is current inside an awaited dispatch, and the reason that ref exists (#537a). */
+        const phaseBeforeAction = derivePhase(sandboxStateRef.current);
         const layRefused = (q: number, r: number, tileId: number, orientation: number) =>
           filterSandboxPlacements([{ tile_id: tileId, orientation }], {
             mapGrid: gridBeforeAction,
             q,
             r,
-            era: ERA_FOR_PHASE_TINT[currentPhase?.tint ?? "yellow"],
+            era: ERA_FOR_PHASE_TINT[phaseBeforeAction?.tint ?? "yellow"],
           }).length === 0;
 
         if ("LayTile" in msg) {
@@ -8547,11 +8631,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     /* BOTH, and they do different jobs. Dropping it from the queue closes this modal now; remembering the
        EVENT key is what stops a log replay from raising it again -- see `fleetLossNotice.ts` #896, and #1032
        for why that key can no longer be the turn's. */
-    dismissedFleetNoticesRef.current.add(noticeDismissKey(notice));
+    // Design note #1107: through the helper, so the acknowledgement reaches `sessionStorage` and survives a
+    // refresh -- the ref alone only ever survived an Undo.
+    rememberDismissed(noticeDismissKey(notice));
     const next = pendingFleetNoticesRef.current.filter((entry) => entry !== notice);
     pendingFleetNoticesRef.current = next;
     setPendingFleetNotices(next);
-  }, [dueFleetNotice]);
+  }, [dueFleetNotice, rememberDismissed]);
 
   const toggleFleetNoticeSilence = useCallback(
     (silenced: boolean) => {

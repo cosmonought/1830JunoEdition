@@ -338,6 +338,94 @@ describe("a corporation that both rusts and overflows is told once about each tr
 });
 
 /* ------------------------------------------------------------------ */
+/* The refresh: a rebuild must not lose the board or repeat a modal    */
+/* ------------------------------------------------------------------ */
+
+describe("a replayed tile lay is judged against the reducer's phase", () => {
+  it("takes the era from the ref the reducer writes, not from render state", () => {
+    /* ==================================================================
+        REPORTED: "the entire board reset to Yellow tiles, erasing the Green upgrades"
+       ==================================================================
+       THE ERA CAME FROM `currentPhase`, which is `useMemo(() => derivePhase(gameState))` -- React state. A
+       refresh replays the whole log in one burst of awaited dispatches, so that memo still holds the phase
+       the burst BEGAN in: phase 2, tint yellow. Every green upgrade is then judged against a yellow board,
+       `filterSandboxPlacements` returns nothing, and the tile is dropped.
+       #757 DIAGNOSED THIS EXACT FAILURE FOR THE OTHER INPUT -- "a legality check reading React state would
+       judge every lay in that burst against the board as it stood before the burst began, and refuse
+       legitimate upgrades" -- gave the GRID a ref, and left the PHASE on state. One rule, one of its two
+       inputs, in the function whose own note names the fault.
+       SNAPSHOTTED BESIDE THE GRID per #766 ("a snapshot, not a reorder"), so both halves judge one instant. */
+    expect(APP).toContain("const phaseBeforeAction = derivePhase(sandboxStateRef.current);");
+    expect(APP).toContain("era: ERA_FOR_PHASE_TINT[phaseBeforeAction?.tint ?? \"yellow\"]");
+  });
+
+  it("no longer asks render state for it", () => {
+    /* THE NEGATIVE THAT MATTERS: `currentPhase` is still right for everything that renders, and wrong only
+       inside a dispatch. Asserted on the predicate's own region so a render-time use elsewhere is untouched. */
+    const predicate = sliceBetween(APP, "const gridBeforeAction = mapGridRef.current;", ").length === 0;");
+    expect(predicate).not.toContain("currentPhase");
+    expect(predicate).toContain("phaseBeforeAction");
+  });
+
+  it("is a real difference, not a theoretical one", () => {
+    /* THE MECHANISM, EXERCISED. Green tile #29 upgrading yellow tile #7 on hex 5,0 is ALLOWED at era Green
+       and REFUSED at era Yellow -- so the era handed to this predicate is exactly what decides whether a
+       replayed upgrade survives the rebuild. Found by search rather than chosen: any pair with this property
+       proves it, and asserting a real one keeps the case honest if the catalog changes. */
+    const { filterSandboxPlacements } = require("../components/sandboxTileLegality") as typeof import("../components/sandboxTileLegality");
+    const { MOCK_MAP_GRID } = require("./mockFixtures") as typeof import("./mockFixtures");
+    /* ORIENTATION MATTERS AND MY FIRST DRAFT GUESSED IT. I found this pair by search -- yellow #7 at rot 3
+       upgrading to green #29 at rot 3 -- and then wrote the case with orientation 0 for both, which is legal
+       for neither era, so it asserted `true` about a placement that is simply invalid. The suite caught it.
+       THE ROTATIONS ARE PART OF THE FIXTURE, not decoration. */
+    const laid = {
+      ...MOCK_MAP_GRID,
+      tiles: [{ q: 5, r: 0, tile_id: 7, orientation: 3 }],
+    };
+    const ask = (era: "Yellow" | "Green") =>
+      filterSandboxPlacements([{ tile_id: 29, orientation: 3 }], {
+        mapGrid: laid as never,
+        q: 5,
+        r: 0,
+        era,
+      }).length > 0;
+    expect(ask("Green")).toBe(true);
+    expect(ask("Yellow")).toBe(false);
+  });
+});
+
+describe("a dismissed fleet notice survives a refresh", () => {
+  it("remembers the acknowledgement outside the page's memory", () => {
+    /* REPORTED: "refreshing the page triggered the Rust modal despite it having fired several subphases
+       before."
+       #1032 KEYED DISMISSAL ON THE EVENT so a rebuild reaches the same key -- true of an UNDO, where the ref
+       survives because the page does, and false of a REFRESH, which reconstructs it empty. The same shape as
+       #1094's era toast: a guard that covers one kind of rebuild and silently not the other. */
+    /* Design note #1107: in the app's own `1830juno.` storage namespace and versioned, the shape the other
+       persisted keys use -- `appNaming.test.ts` enforces that namespace and caught the bare prefix I wrote
+       first. */
+    expect(APP).toContain("1830juno.fleet_loss_dismissed.v1.");
+    expect(APP).toContain("rememberDismissed(noticeDismissKey(notice));");
+  });
+
+  it("keeps it out of the log, which #896 ruled against", () => {
+    /* "A purely cosmetic dismissal that Undo could then rewind." Whether one viewer clicked a modal is not
+       game state and must not enter the log every client replays -- so it lives in `sessionStorage`, keyed by
+       room so two games in a session cannot inherit each other's acknowledgements. */
+    expect(APP).toContain("window.sessionStorage.setItem(\n          dismissedStorageKey,");
+    expect(APP).not.toContain("AcknowledgeFleetNotice");
+  });
+
+  it("fails toward showing the modal when storage refuses", () => {
+    /* A PRIVATE WINDOW THROWS on `sessionStorage`, and the harmless direction is the one that was already the
+       behaviour: the notice shows again. Both the read and the write are wrapped. */
+    const load = sliceBetween(APP, "const saved = window.sessionStorage.getItem", "}");
+    expect(load.length).toBeGreaterThan(0);
+    expect(APP).toContain("dismissedFleetNoticesRef.current = new Set<string>();");
+  });
+});
+
+/* ------------------------------------------------------------------ */
 /* 2: the blizzard, and the rain                                       */
 /* ------------------------------------------------------------------ */
 

@@ -202,8 +202,10 @@ describe("inactive corporation chips wear a damped livery (design note #945)", (
        because "eight unrelated objects" left no way to scan the row -- its evidence was about BORDER AND
        FILL, which stay uniform. Only the ink carries identity, so the strip still reads as one control. */
     const chip = sliceBetween(readStripped("styles/appStyles.ts"), "orTurnOrderChip: {", "},");
-    expect(chip).toContain('border: "1px solid #2f3542"');
-    expect(chip).toContain('backgroundColor: "#191d27"');
+    /* Design note #1092 retoned the hairline; #930's claim is about the border being UNIFORM across the
+       eight chips, not about its hue, so the assertion is the same one in a new colour. */
+    expect(chip).toContain('border: "1px solid #2a2a2a"');
+    expect(chip).toContain('backgroundColor: "#141414"');
   });
 });
 

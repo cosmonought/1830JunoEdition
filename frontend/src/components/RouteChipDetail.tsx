@@ -232,9 +232,13 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "6px",
     borderWidth: "1px",
     borderStyle: "solid",
-    borderColor: "#3a4150",
+    /* Design note #1092: retoned WITH `condensedTrainChip`, not after it. The comment above says these two
+       shells are kept in step by the harness rather than by an import, and that is exactly what caught this
+       -- the re-theme's first pass moved `appStyles.ts` alone and `routeChipHead` failed on the pair going
+       out of agreement, which is the harness doing the job it was written for. */
+    borderColor: "#3a3a3a",
     borderBottomWidth: "2px",
-    backgroundColor: "#232936",
+    backgroundColor: "#1c1c1c",
     fontWeight: 800,
     letterSpacing: "0.02em",
     whiteSpace: "nowrap",

@@ -95,12 +95,13 @@ describe("the palette", () => {
        clear of both edges. If a future palette needs a finer judgement than
        that, THAT is when the better formula earns its length.
 
-       Brick against the CPR's brown is the tightest surviving pair (16.7) and
-       is EXEMPTED BY NAME rather than by lowering the bar, so it stays visible
-       as a known exception instead of quietly setting the standard. */
-    const EXEMPT = new Set(["#a8593f"]); // Brick vs CPR -- see TECH_DEBT TD-4.
+       DESIGN NOTE 1109 REMOVED THE ONE EXEMPTION THIS CASE USED TO CARRY. Brick
+       was `#a8593f` and scored 16.7 against the CPR's brown -- under the floor,
+       excused by name so it stayed visible. Re-cutting it for the Stock Round's
+       paper card moved it deeper and redder, to `#763533`, which scores 21.1 and
+       needs no excuse. Every seat now clears the bar on its own, so there is no
+       exemption list and no place for a future one to hide. */
     for (const color of SEAT_COLORS) {
-      if (EXEMPT.has(color.toLowerCase())) continue;
       for (const [id, livery] of Object.entries(CORPORATION_LIVERY_COLORS)) {
         const separation = cie76(color, livery);
         expect([color, id, separation >= 20]).toEqual([color, id, true]);

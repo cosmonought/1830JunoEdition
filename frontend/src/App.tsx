@@ -11071,6 +11071,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                     // See docs/ai_architecture/stock_market.md - App.tsx #247
                     marketPrices={sandbox ? sandboxMarketPrices : undefined}
                     playerLabel={sandbox ? sandboxPlayerLabel : undefined}
+                    /* Design note #1110: the roster prints each name in that player's own seat colour, and
+                       tints the viewer's own row with theirs. The SHELL answers because the seat order is
+                       here -- `seatColor` falls back by seat INDEX, and the roster is ordered by holding, so
+                       the panel asking for itself would be confidently wrong. Same shape and the same
+                       `-1 -> null` guard as `colorForAddress` on the private-trade panel: a wrong colour
+                       identifies the wrong person, which is worse than no colour at all. */
+                    colorForAddress={(address: string) => {
+                      const seat = gameState?.player_addresses.indexOf(address) ?? -1;
+                      return seat === -1 ? null : seatColor(address, seat);
+                    }}
                     /* Design note #578: `hotseat` gone -- every seat is a browser. */
                     // Design note #34 in that file: the header names the
                     // seat that is up rather than telling the player to

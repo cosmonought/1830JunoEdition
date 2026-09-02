@@ -325,11 +325,28 @@ export const ALERT_CRITICAL_BORDER = "rgba(244, 63, 94, 0.5)";
  *  colour, and 5.71:1 on the new paper. */
 export const CARD_INK_POSITIVE = "#1d6b3f";
 
-/** The president/owner highlight -- dark on pink, never pink on dark.
- *
- *  The construction is the one thing that mattered here and it is untouched;
- *  only the hue moved, gold to brand. It comes out BETTER: 8.96:1 against the
- *  gold pairing's 7.38:1. */
-export const CARD_HIGHLIGHT_BG = "#f7dcea";
-export const CARD_HIGHLIGHT_INK = "#6d1247";
-export const CARD_HIGHLIGHT_BORDER = "#C9338A";
+/* ==================================================================
+    DESIGN NOTE 1108: THE HIGHLIGHT GOES BACK TO GOLD, AND #1094 WAS TOO GREEDY
+   ==================================================================
+   REPORTED: "I hate the pink as both the color for the presidency crown and the 'your shares' highlight. The
+   highlight in particular looks wrong, like it's so close to red/warning that it doesn't vibe right. We used
+   gold before, and I think that read as more intentional: the crown is gold because that's what crowns are,
+   and the line being highlighted in yellow looks like a more-or-less traditional highlight."
+
+   AND THE REPORT IS RIGHT ON A DISTINCTION #1094 MISSED. That note moved "look here" from gold to the brand
+   pink and swept these three along with it, on the reasoning that they were the same idea. They are not.
+   `CARD_BORDER_ACTIVE` marks the card the SYSTEM wants you to look at -- an attention signal, and the brand
+   colour is a fair carrier for it. These three mark something else entirely: a ROLE (president) and a
+   POSSESSION (these shares are yours). Neither is a summons, and dressing them in the accent made the app
+   shout about two facts that were merely true.
+   GOLD ALSO CARRIES MEANING HERE THAT PINK CANNOT. A crown is gold because crowns are gold, and a highlighted
+   line is yellow because that is what a highlighter does. Both are older than any brand, which is exactly
+   what makes them read as intentional rather than as theme applied over content.
+   THE PINK PAIRING MEASURED BETTER AND WAS STILL WRONG -- 8.96:1 against gold's 7.38:1 -- which is worth
+   recording: contrast decided nothing here, and reaching for the better number would have kept a colour the
+   owner correctly rejected. */
+
+/** The president/owner highlight -- dark on gold, never gold on dark. */
+export const CARD_HIGHLIGHT_BG = "#f7e3a8";
+export const CARD_HIGHLIGHT_INK = "#5c4204";
+export const CARD_HIGHLIGHT_BORDER = "#c9a94c";

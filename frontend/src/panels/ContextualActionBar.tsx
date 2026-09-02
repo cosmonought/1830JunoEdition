@@ -1319,9 +1319,25 @@ export default function ContextualActionBar({
      NO CORPORATION -> the neutral dark this bar always had. That state is reachable before the first
      `GetGameState` resolves, and a fallback grey would dress an empty bar as though a company were acting.
      Design note #631: the same secondary-ink rule, factored out because the seat card needs it too. */
+  /* ==================================================================
+      DESIGN NOTE 1107: A COLOUR SWEEP CHANGED A VALUE THAT WAS NOT A COLOUR
+     ==================================================================
+     REPORTED: "the name and $X are in white and seem to have the same treatment, but 'Cash' is in black --
+     something about it does look off."
+     AND IT WAS #1092'S DOING. This compares `bestContrastTextColor`'s RETURN VALUE, which is the literal
+     `"#FFFFFF"` by that function's contract. The re-theme's sweep saw a white hex and retoned it to the
+     paper token like every other white in the app -- so the comparison stopped matching anything, the
+     `false` branch always won, and every seat colour got a black label. On the dark seats that put black
+     text beside the white name the same card had just computed correctly.
+     THE LESSON, AND IT IS THE SWEEP'S ONE REAL BLIND SPOT: this literal was DATA, not style. It is a key
+     compared against a contract, not a colour anything is painted with, and no amount of looking at the
+     property name would have revealed that -- there is no property here. Colours read back from a function
+     are the class to check by hand; see the audit in `docs/` for the others.
+     COMPARED AGAINST THE CONTRACT, NOT A COPY OF IT: the value is whatever `bestContrastTextColor` returns
+     for white, so it is written the way that function writes it. */
   const seatInkMuted = React.useCallback(
     (background: string) =>
-      bestContrastTextColor(background) === "#f2f0eb"
+      bestContrastTextColor(background) === "#FFFFFF"
         ? "rgba(255, 255, 255, 0.74)"
         : "rgba(0, 0, 0, 0.66)",
     [],
@@ -1338,7 +1354,11 @@ export default function ContextualActionBar({
     }
     const background = stationTickerColor(activeCorporation.companyId);
     const ink = bestContrastTextColor(background);
-    const light = ink === "#f2f0eb";
+    /* Design note #1107: the same defect as `seatInkMuted` above, found by auditing for it rather than by
+       report. `bestContrastTextColor` returns the literal `"#FFFFFF"`; the sweep retoned that to paper here
+       too, so `light` was permanently false and the five light-inked corporations -- C&O, ERIE, NNH -- wore
+       a 66%-black muted figure on their own bright livery. */
+    const light = ink === "#FFFFFF";
     return {
       background,
       // A translucent black edge darkens any hue by the same amount, so one

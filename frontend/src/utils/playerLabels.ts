@@ -95,28 +95,40 @@ export function sandboxPlayerLabel(address: string): string | null {
 
    THE OTHER TWO ARE ORDINARY DARKENINGS, same names, same character.
 
-   WHAT THIS DOES NOT FIX: Brick is 12.9 dE from the CPR's brown -- below the 15 this pass treated as the
-   bar, above the 8.4 the codebase floors at. It was not one of the three failing contrast and is left
-   alone rather than swept up; recorded here so the next reader knows it was seen and not missed.
+   ==================================================================
+    DESIGN NOTE 1109: BRICK AND OCHRE AGAIN, THIS TIME FOR THE CARD
+   ==================================================================
+   #1097 TUNED THESE SIX AGAINST THE PRESIDENT BADGE'S WHITE PLATE. Printing player names on the Stock
+   Round's PAPER card asks a slightly harder question -- `CARD_SURFACE` is darker than white -- and two of
+   the six fell just under: Brick at 4.43:1 and Ochre at 4.12:1.
+   THE FIRST ATTEMPT AT BRICK MADE THINGS WORSE, and was caught by the owner rather than by a test:
+   darkening it to `#96482f` walked it straight into the CPR's brown at 9.7 dE, trading a contrast miss for
+   a livery collision -- the exact failure #569's rule exists to prevent, committed while fixing something
+   else.
+   `#763533` GOES DEEPER AND REDDER INSTEAD, away from the CPR rather than toward it. It reads 7.92:1 on the
+   card and 9.02:1 on the badge, and it clears the CPR by 21.1 in the CIE76 the harness measures -- so the
+   BRICK EXEMPTION THAT NOTE RECORDED IS GONE. The set now passes its own guard with nothing excused.
+   OCHRE NEEDED ONLY A NUDGE: `#6f6100`, 5.45:1 on the card, 18.2 dE from the CPR. `#736b00` buys a further
+   3 dE of livery margin for half a point of contrast if a later pass wants it.
 
    STORED SEATS ARE NOT MIGRATED. A room already holding `#4f8a5c` keeps rendering it -- `player.color`
    wins over this list, and `SEAT_COLOR_NAMES` falls back to the raw hex for anything unlisted, which is
    why every call site writes `?? color`. Existing games therefore keep the old dots; new ones get these. */
 export const SEAT_COLORS = [
   "#3f6fa8",
-  "#a8593f",
+  "#763533",
   "#5a003c",
   "#7a5aa8",
-  "#847400",
+  "#6f6100",
   "#00686c",
 ] as const;
 
 export const SEAT_COLOR_NAMES: Readonly<Record<string, string>> = {
   "#3f6fa8": "Slate blue",
-  "#a8593f": "Brick",
+  "#763533": "Brick",
   "#5a003c": "Mulberry",
   "#7a5aa8": "Plum",
-  "#847400": "Ochre",
+  "#6f6100": "Ochre",
   "#00686c": "Teal",
 };
 

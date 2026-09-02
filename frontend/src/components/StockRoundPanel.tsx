@@ -144,6 +144,18 @@ export interface StockRoundPanelProps {
    *  of `juno1abc...wxyz`. Returns `null` to fall back to truncation. Used
    *  by the sandbox; on a real chain there are no names to resolve yet. */
   playerLabel?: (address: string) => string | null;
+  /** ==================================================================
+   *   DESIGN NOTE 1110: THE ROSTER LEARNS WHO IS WHO
+   *  ==================================================================
+   *
+   * ASKED: "printing the player names in their respective player colors, and perhaps using the player
+   * colour to highlight the line for each player instead of yellow."
+   *
+   * SHAPED LIKE `playerLabel` DELIBERATELY -- same optional callback, same `null` for an address with no
+   * seat. This panel cannot work the colour out for itself: `seatColor` falls back to the palette BY SEAT
+   * INDEX, and the roster is ordered by holding, so asking here would hand row 3 seat 3's colour and be
+   * confidently wrong. The shell owns the seating; it answers. */
+  colorForAddress?: (address: string) => string | null;
   /** The room's derived phase (`utils/gamePhase.ts`) for the operating snapshot -- train limit and which
    *  tier is about to rust. Optional: without it the capacity pill reads "n / ?", which is honest. */
   phase?: GamePhase | null;
@@ -188,6 +200,7 @@ function CorporationRoster({
   macroRoundNumber,
   playerCash,
   playerLabel,
+  colorForAddress,
   privateCompanies,
   activeCompanyId,
   onActivateCompany,
@@ -231,6 +244,8 @@ function CorporationRoster({
   /** Design note #357: the acting player's spendable cash, for the buy gate. */
   playerCash?: number | null;
   playerLabel?: (address: string) => string | null;
+  /** Design note #1110: the shell answers, because the seat order lives there. */
+  colorForAddress?: (address: string) => string | null;
   /** Design note #395: the whole private roster; each card filters out its
    *  own. Optional so a caller without game state renders no private rows
    *  rather than needing a stub. */
@@ -713,10 +728,37 @@ function CorporationRoster({
                         }
                         style={{
                           ...styles.ownershipRow,
-                          ...(holding.isSelf ? styles.rosterHoldingRowSelf : {}),
+                          /* ==================================================================
+                              DESIGN NOTE 1110: THE HIGHLIGHT IS THE VIEWER'S OWN COLOUR
+                             ==================================================================
+                             The gold row said "this one is yours" with a highlighter. A tint of the
+                             viewer's own seat colour says the same thing in the language the rest of the
+                             app already uses for identity -- and it says it without spending the accent.
+                             THE INK STAYS DARK AND NEUTRAL, which is the half worth writing down: tinting
+                             the row AND inking it in the same hue collapses the contrast by construction
+                             (3.6:1 at worst, measured). Tint carries identity, ink carries legibility --
+                             13.2:1 at worst this way, and every tint sits 6-11 dE off plain paper, so it
+                             still reads as a highlight rather than as a slightly different paper.
+                             FALLS BACK TO THE GOLD ROW when the shell cannot name a colour, so a seatless
+                             viewer is highlighted rather than unmarked. */
+                          ...(holding.isSelf
+                            ? selfRowTint(colorForAddress?.(holding.address) ?? null)
+                            : {}),
                         }}
                       >
-                        <span style={styles.ownershipName} role="cell">
+                        <span
+                          style={{
+                            ...styles.ownershipName,
+                            /* Design note #1110: each name in its own player's colour. The crown beside it
+                               stays uniform gold -- gold marks a ROLE, the seat colour marks an IDENTITY,
+                               and a crown in the player's colour would stop saying "president" and start
+                               repeating what the name already said. */
+                            ...(colorForAddress?.(holding.address)
+                              ? { color: colorForAddress(holding.address) as string }
+                              : {}),
+                          }}
+                          role="cell"
+                        >
                           {/* Design note #552: the WORD is gone and the crown is back, as our own drawing. #490 removed the emoji
                              because a platform pictogram in a platform colour font could not be relied on to mean anything, and the
                              word that replaced it is nine characters wide in a column that must also fit a name. An inline SVG is
@@ -1750,6 +1792,7 @@ export function StockRoundPanel({
   playerCash,
   marketPrices,
   playerLabel,
+  colorForAddress,
   phase,
   outlook,
   actionsLockedReason,
@@ -1851,6 +1894,7 @@ export function StockRoundPanel({
         macroRoundNumber={macroRoundNumber}
         playerCash={playerCash}
         playerLabel={playerLabel}
+        colorForAddress={colorForAddress}
         privateCompanies={privateCompanies}
         activeCompanyId={activeCompanyId}
         onActivateCompany={setActiveCompanyId}
@@ -1927,6 +1971,38 @@ export default StockRoundPanel;
    of slack is cheaper than re-measuring a proportional font against a fixed cell. */
 const OWNERSHIP_NUM_WIDTH = "100px";
 const OWNERSHIP_GRID = `minmax(0, 1fr) ${OWNERSHIP_NUM_WIDTH} ${OWNERSHIP_NUM_WIDTH}`;
+
+/* ==================================================================
+    DESIGN NOTE 1110: THE VIEWER'S ROW, TINTED IN THEIR OWN COLOUR
+   ==================================================================
+   86% toward the card's paper. Measured rather than guessed: at that mix every one of the six seats lands
+   13.2:1 or better against `CARD_INK` and 6-11 dE away from plain `CARD_SURFACE` -- readable, and visibly
+   a highlight. A heavier mix starts to compete with the corporation livery beside it; a lighter one stops
+   being seen at all.
+   INTEGER CHANNEL MATH, per the project's standing no-floats rule for anything that could round differently
+   between engines. Colour is not money, but the rule costs nothing to keep here.
+   `null` FALLS BACK TO THE GOLD ROW, so a viewer the shell cannot seat is still marked. */
+const SELF_ROW_TINT_PERCENT = 86;
+
+function selfRowTint(seat: string | null): React.CSSProperties {
+  if (!seat || !/^#[0-9a-fA-F]{6}$/.test(seat)) {
+    return styles.rosterHoldingRowSelf;
+  }
+  const channel = (i: number) => {
+    const from = parseInt(seat.slice(i, i + 2), 16);
+    const to = parseInt(CARD_SURFACE.slice(i, i + 2), 16);
+    return Math.round(from + ((to - from) * SELF_ROW_TINT_PERCENT) / 100);
+  };
+  const tint = `#${[1, 3, 5].map((i) => channel(i).toString(16).padStart(2, "0")).join("")}`;
+  return {
+    backgroundColor: tint,
+    color: CARD_INK,
+    fontWeight: 800,
+    borderWidth: "1px",
+    borderStyle: "solid",
+    borderColor: seat,
+  };
+}
 
 const styles: Record<string, React.CSSProperties> = {
   /* Design note #8: the corporation roster.

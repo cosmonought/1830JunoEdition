@@ -55,6 +55,25 @@
         margin: 0;
         font-size: 16px;
         line-height: 1.4;
+        /*
+          Design note #1100: THE GROUND, PAINTED ONCE.
+
+          REPORTED of the sandbox waiting room: "a bright white background that
+          is jarring between the two darks". That screen's root declared layout
+          and no `background`, so the page behind its panel was this element --
+          and this element had no colour, so it was the user-agent default.
+
+          The lobby and the app shell each set `minHeight: 100vh` and their own
+          background, which is why neither ever showed it. That works and it is
+          also a thing every future screen has to remember; painting the body is
+          the half that does not depend on remembering.
+
+          BOTH ARE DONE. The waiting room now paints its own root as well, so
+          the fix does not rest on a rule in a file its author is not reading.
+          `#080808` is the theme's deepest ground, so any gap this shows through
+          is the colour the app would have put there anyway.
+        */
+        background-color: #080808;
       }
     </style>
     <!--

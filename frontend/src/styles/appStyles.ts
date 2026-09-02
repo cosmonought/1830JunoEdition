@@ -185,6 +185,12 @@ export const styles: Record<string, React.CSSProperties> = {
   /* Design note #47: muted by default, brightening on hover -- a credit
      should be findable without competing with the game's own chrome. */
   netaCredit: {
+    /* Design note #1099: the credit carries the logo now, so it lays its two children out rather than
+       being a bare text node. `inline-flex` and not `flex`, so the anchor stays the width of its content
+       and the footer's `justifyContent: center` still centres the pair. */
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "7px",
     fontSize: FONT_SIZE.micro,
     fontWeight: 600,
     letterSpacing: "0.02em",

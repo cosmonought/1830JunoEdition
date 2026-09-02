@@ -22,10 +22,11 @@ import {
   type VariantCopyKey,
 } from "../utils/gameVariants";
 
-import { FONT_SIZE, LINE_HEIGHT } from "../styles/typography";
+import { FONT_FAMILY, FONT_SIZE, LINE_HEIGHT } from "../styles/typography";
 import { waitingRoomBlock, waitingRoomNotice, type SandboxRoomDoc } from "../utils/sandboxRoom";
 import { MAX_PLAYERS, MIN_PLAYERS, certLimitForPlayers, startingCashForPlayers } from "../utils/gameSetup";
 import { SEAT_COLORS, SEAT_COLOR_NAMES } from "../utils/playerLabels";
+import AudioControls, { type AudioControlsProps } from "./AudioControls";
 
 /** Design note #910: the four boolean variants as DATA, so adding a fifth is one row rather than a fifth
  *  hand-written block that could be forgotten -- which is exactly the failure this note is fixing, at the
@@ -65,6 +66,30 @@ export interface SandboxWaitingRoomProps {
   /** Design note #910: the host rewrites the table's house rules; every seat sees them. `undefined` for a
    *  guest, which is what makes the controls read-only rather than absent for them. */
   onSetVariants?: (variants: GameVariants) => void;
+  /** ==================================================================
+   *   DESIGN NOTE 1101: THE RADIO WAS ALREADY PLAYING HERE, WITH NOTHING TO PRESS
+   *  ==================================================================
+   *
+   * ASKED: "can we have the radio playable in the Waiting Room and continue smoothly into the game start?"
+   *
+   * THE CONTINUITY HALF NEEDED NO WORK, and that is worth stating because it looks like it should have.
+   * `useRadioStream`'s element is owned by `AppShell`, built once under a `[]`-dep effect and released only
+   * when that component unmounts. This screen and the game shell are two BRANCHES OF THE SAME RENDER -- an
+   * early return and the fall-through -- so the element is already alive here, and pressing Start does not
+   * touch it. No reconnect, no re-buffer, no gap.
+   *
+   * WHAT WAS MISSING WAS REACH. The toggle lives in `TopBar`, which the early return skips, so the stream
+   * sat there with no control attached. This prop is that control and nothing more.
+   *
+   * SUPERSEDED IN PART BY #1102. This first shipped as a plain on/off toggle, on the reasoning that volume
+   * and per-category switches do not belong on a screen whose job is to be left. REPORTED back: "I'm not
+   * sure the audio button should behave one way in the Waiting Room and another in the Game." The reasoning
+   * was sound and the premise was not -- a player should not learn two audio controls for one app -- so this
+   * now renders the very same `AudioControls` the bar does.
+   *
+   * AND IT BUYS THE AUTOPLAY GESTURE. Browsers require a click before audio may start (#1009), which is why
+   * the stream defaults to paused; a click here satisfies it, so the game never has to ask for one. */
+  audio?: AudioControlsProps["audio"];
 }
 
 export function SandboxWaitingRoom({
@@ -79,6 +104,7 @@ export function SandboxWaitingRoom({
   onStart,
   onLeave,
   onSetVariants,
+  audio,
 }: SandboxWaitingRoomProps) {
   const players = room?.players ?? [];
   const me = players.find((player) => player.id === localPlayerId) ?? null;
@@ -110,9 +136,12 @@ export function SandboxWaitingRoom({
       <div style={styles.panel}>
         <div style={styles.headerRow}>
           <span style={styles.title}>Sandbox waiting room</span>
-          <button type="button" style={styles.quiet} onClick={onLeave}>
-            Leave
-          </button>
+          <div style={styles.headerActions}>
+            {audio && <AudioControls audio={audio} />}
+            <button type="button" style={styles.quiet} onClick={onLeave}>
+              Leave
+            </button>
+          </div>
         </div>
 
         {/* The code, at the size of the thing people have to read aloud. */}
@@ -355,7 +384,29 @@ export function SandboxWaitingRoom({
 export default SandboxWaitingRoom;
 
 const styles: Record<string, React.CSSProperties> = {
-  root: { display: "flex", justifyContent: "center", padding: "40px 20px" },
+  /* ==================================================================
+      DESIGN NOTE 1100: THE ONE SCREEN THAT NEVER PAINTED ITS OWN GROUND
+     ==================================================================
+     REPORTED: "the Lobby and Game screens are both full-page in the color scheme, but the Waiting Room has a
+     bright white background that is jarring between the two darks."
+     AND IT WAS NEVER DARK -- this is not something #1092 broke. This root declared layout and padding only,
+     so the page behind the panel was whatever `body` happened to be, which is the user-agent default. The
+     lobby and the shell each set `minHeight: 100vh` and a `backgroundColor` on their own roots and so never
+     showed it; this screen sits between them and did.
+     BOTH HALVES ARE FIXED, deliberately. This root now paints itself like its two neighbours, AND
+     `index.html` paints `body` -- see the note there. Either alone would have closed the report; together
+     they also close the NEXT screen that forgets, because a full-height root is a thing an author has to
+     remember and a painted body is not. */
+  root: {
+    display: "flex",
+    justifyContent: "center",
+    padding: "40px 20px",
+    minHeight: "100vh",
+    backgroundColor: "#0f0f0f",
+    color: "#f2f0eb",
+    fontFamily: FONT_FAMILY,
+    boxSizing: "border-box",
+  },
   panel: {
     display: "flex",
     flexDirection: "column",
@@ -368,6 +419,7 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: "#0f0f0f",
   },
   headerRow: { display: "flex", alignItems: "center", justifyContent: "space-between" },
+  headerActions: { display: "flex", alignItems: "center", gap: "6px" },
   title: { fontSize: FONT_SIZE.heading, fontWeight: 800, color: "#f2f0eb" },
   codeBlock: {
     display: "flex",

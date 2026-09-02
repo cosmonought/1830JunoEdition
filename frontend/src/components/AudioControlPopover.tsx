@@ -29,6 +29,7 @@
 
 import React, { useEffect, useRef } from "react";
 
+import { ACTION_GREEN, ALERT_CRITICAL_INK } from "../styles/palette";
 import { FONT_SIZE } from "../styles/typography";
 
 export interface AudioCategoryToggle {
@@ -124,7 +125,38 @@ export function AudioControlPopover({
     <div ref={panel} style={styles.panel} role="dialog" aria-label={`${title} settings`}>
       <div style={styles.title}>{title}</div>
 
-      <label style={styles.volumeRow}>
+      <div style={styles.volumeRow}>
+        {/* ==================================================================
+             DESIGN NOTE 1103: A SWITCH, NOT A ROW -- WHICH DROPS #1094'S VISIBLE TEXT
+            ==================================================================
+            ASKED FOR: "the on/off button [should] look like the usual on/off buttons ... my objection is
+            the extra line, not the extra click." The boxed, worded button #1094 ruled on took a full row of
+            its own; a switch on the volume row's own line removes that row rather than just restyling it.
+            #1094'S REASON FOR VISIBLE TEXT WAS THAT COLOUR ALONE WAS AMBIGUOUS -- "On" and "Off" both needed
+            to say what a click does, because the row's colour was the only other signal. A switch does not
+            have that problem: position is a second, colour-independent signal (`aria-checked` gives a third,
+            for assistive tech), so the sentence-per-state text this control's shape justified is no longer
+            required to disambiguate it. The full sentence survives in `aria-label`/`title` per #1078 --
+            dropped only from the visible face of the control, not from what a reader is told.
+            GREEN AND RED, NOT GOLD. #1102's retheme repurposed gold/amber for "waiting on the player" --
+            reusing it here for on/off would collide with that. `ACTION_GREEN` and `ALERT_CRITICAL_INK` are
+            the app's one existing pair for exactly this affirmative/critical distinction, already solid
+            fills elsewhere (`palette.ts`), so this switch introduces no new colour for the retheme to
+            reconcile. */}
+        <button
+          type="button"
+          role="switch"
+          aria-checked={enabled}
+          onClick={() => onEnabledChange(!enabled)}
+          style={{ ...styles.audioSwitchTrack, ...(enabled ? styles.audioSwitchTrackOn : {}) }}
+          aria-label={enabled ? `${title} is on` : `${title} is off`}
+          title={enabled ? `Turn ${title.toLowerCase()} off` : `Turn ${title.toLowerCase()} back on`}
+        >
+          <span
+            style={{ ...styles.audioSwitchThumb, ...(enabled ? styles.audioSwitchThumbOn : {}) }}
+            aria-hidden="true"
+          />
+        </button>
         <input
           type="range"
           min={0}
@@ -157,34 +189,7 @@ export function AudioControlPopover({
           }
         />
         <span style={styles.percent}>{Math.round(volume * 100)}%</span>
-      </label>
-
-      {/* ==================================================================
-           DESIGN NOTE 1094: THE TOGGLE NAMES BOTH STATES NOW
-          ==================================================================
-          RULED: "clicking the red 'Off - click to restore' button must change it to a green 'On - click to
-          turn off' state."
-          IT ONLY EVER NAMED ONE. The off state said "Off — click to restore", which is a state and its
-          action; the on state said "Off", which is neither -- it was a LABEL FOR THE BUTTON'S PURPOSE
-          ("this is the off switch") sitting where the other state puts a description of the world. A control
-          that reads "Off" while the sound is on is ambiguous in the worst available way, and the colour was
-          carrying the whole distinction.
-          SO BOTH HALVES SAY THE SAME TWO THINGS: what is true, then what a click does. Symmetric text, and
-          the red/green pair is now confirming the sentence rather than substituting for it.
-          `aria-pressed` STILL MEANS "off", unchanged from #1075 -- it is the same toggle with the same
-          meaning, and a screen reader now gets the state from the label as well. */}
-      <button
-        type="button"
-        style={{ ...styles.offRow, ...(enabled ? styles.offRowOn : styles.offRowActive) }}
-        onClick={() => onEnabledChange(!enabled)}
-        aria-pressed={!enabled}
-        title={enabled ? `Turn ${title.toLowerCase()} off` : `Turn ${title.toLowerCase()} back on`}
-      >
-        <span style={styles.offGlyph} aria-hidden="true">
-          {enabled ? "♪" : "✕"}
-        </span>
-        <span>{enabled ? "On — click to turn off" : "Off — click to restore"}</span>
-      </button>
+      </div>
 
       {categories.length > 0 && (
         <div style={styles.categories}>
@@ -220,7 +225,7 @@ const styles: Record<string, React.CSSProperties> = {
     top: "calc(100% + 8px)",
     right: 0,
     zIndex: 4200,
-    minWidth: "196px",
+    minWidth: "210px",
     display: "flex",
     flexDirection: "column",
     gap: "8px",
@@ -251,29 +256,33 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#a8a6a0",
     flex: "none",
   },
-  offRow: {
-    display: "flex",
+  /** Design note #1103: track is the button itself -- fill carries the state, position (via the thumb's
+   *  transform below) carries it a second way, and neither depends on the other. */
+  audioSwitchTrack: {
+    display: "inline-flex",
     alignItems: "center",
-    gap: "8px",
-    padding: "5px 8px",
-    borderRadius: "7px",
-    border: "1px solid #3a3a3a",
-    backgroundColor: "#1c1c1c",
-    color: "#c8c6c0",
-    font: "inherit",
-    textAlign: "left",
+    flex: "none",
+    width: "34px",
+    height: "18px",
+    padding: "2px",
+    borderRadius: "999px",
+    border: "none",
+    backgroundColor: ALERT_CRITICAL_INK,
     cursor: "pointer",
+    transition: "background-color 0.15s ease",
   },
-  /* Design note #1075: the Off row LIT means the channel is off -- the same inversion the button in the bar
-     shows by dimming, so the two never disagree about which state is which. */
-  offRowActive: { borderColor: "#8a4a4a", backgroundColor: "#3a1e1e", color: "#f0b8b8" },
-  /** Design note #1094: the green half of the pair, built as the red one's mirror -- same three properties,
-   *  same relationship to the panel ink, so neither state reads as the styled one. */
-  offRowOn: { borderColor: "#3f7a4f", backgroundColor: "#1b3324", color: "#a8ddb8" },
+  audioSwitchTrackOn: { backgroundColor: ACTION_GREEN },
+  audioSwitchThumb: {
+    width: "14px",
+    height: "14px",
+    borderRadius: "999px",
+    backgroundColor: "#f2f0eb",
+    transition: "transform 0.15s ease",
+  },
+  audioSwitchThumbOn: { transform: "translateX(16px)" },
   /** Design note #1094: what `disabled` used to say, said with opacity instead. The control is live -- that
    *  is the point -- but a silent channel should not look like a loud one. */
   sliderQuiet: { opacity: 0.55 },
-  offGlyph: { fontWeight: 800, flex: "none" },
   categories: {
     display: "flex",
     flexDirection: "column",

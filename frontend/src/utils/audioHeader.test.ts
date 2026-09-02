@@ -18,6 +18,10 @@ const { readSource, readStripped, sliceBetween } =
 
 const APP = readStripped("App.tsx");
 const BAR = readStripped("components/TopBar.tsx");
+/* Design note #1102: the audio buttons and their popovers moved out of `TopBar` into `AudioControls`,
+   so the waiting room and the bar render the same control rather than two lookalikes. The assertions
+   below are unchanged in substance -- they follow their subject to its new file. */
+const CONTROLS = readStripped("components/AudioControls.tsx");
 const POPOVER = readStripped("components/AudioControlPopover.tsx");
 const AUDIO_RAW = readSource("utils/audio.ts");
 
@@ -50,7 +54,7 @@ describe("the shell owns the audio state", () => {
 });
 
 describe("the header renders two independent toggles", () => {
-  const GROUP = sliceBetween(BAR, "styles.topBarAudioGroup", "</span>");
+  const GROUP = sliceBetween(CONTROLS, "styles.topBarAudioGroup", "</span>");
 
   it("is aimed at the audio group", () => {
     // The slice's own assumption -- #1008's harness learned this the hard way on a duplicated anchor.
@@ -86,7 +90,10 @@ describe("the header renders two independent toggles", () => {
        THE ASSERTION IS THEREFORE ABOUT THE FACT, NOT THE ATTRIBUTE, which is what it should always have
        been: whatever a screen reader is handed for these buttons has to distinguish on from off. */
     expect(GROUP).toContain("audio.musicPlaying ? \"Radio settings\" : \"Radio settings");
-    expect(GROUP).toContain("audio.sfxEnabled\n                ? \"Sound effect settings\"");
+    /* Design note #1102: this pinned the INDENTATION as well as the claim -- the markup moved out one nesting
+       level with the component and the assertion broke on whitespace alone. Matched without the leading
+       space now, so the next move does not cost a test edit for no change in meaning. */
+    expect(GROUP.replace(/\s+/g, " ")).toContain('audio.sfxEnabled ? "Sound effect settings"');
     // Both states named, so the label is a readout rather than a constant that happens to mention audio.
     expect(GROUP).toContain("radio is off");
     expect(GROUP).toContain("sound effects are off");
@@ -95,20 +102,23 @@ describe("the header renders two independent toggles", () => {
     expect(GROUP).toContain("aria-expanded={audio.onSfxVolume ?");
   });
 
-  it("keeps aria-pressed on the control that is still a toggle", () => {
-    /* THE OFF ROW INSIDE THE POPOVER, which genuinely is pressed-or-not. Asserted in the popover rather than
-       in the bar so the two never both claim to be the toggle -- #891's shape, which this codebase produces
-       more often than any other. */
-    expect(POPOVER).toContain("aria-pressed={!enabled}");
-    /* Inverted deliberately: the row LIT means the channel is OFF, matching the button that dims.
-       Design note #1094: the on-state is a named style now rather than an empty object, because the toggle
-       was ruled to show a green "On — click to turn off" state. THE INVERSION IS UNCHANGED -- `offRowActive`
-       is still the OFF appearance, and it is still the opposite of the bar button's dim. */
-    expect(POPOVER).toContain("...(enabled ? styles.offRowOn : styles.offRowActive)");
+  it("keeps a real switch role on the control that is still a toggle", () => {
+    /* Design note #1103: the boxed, worded Off row became a switch, and `aria-pressed` went with it --
+       `role="switch"` plus `aria-checked` is the correct pairing for this shape, not a stand-in for the old
+       attribute. Asserted in the popover rather than in the bar so the two never both claim to be the
+       toggle -- #891's shape, which this codebase produces more often than any other. */
+    expect(POPOVER).toContain('role="switch"');
+    expect(POPOVER).toContain("aria-checked={enabled}");
+    /* Inverted from the bar button deliberately: green FILL means the channel is ON, matching #1094's
+       red/green pair, while the bar button DIMS for off. Two surfaces, one state, no disagreement. */
+    expect(POPOVER).toContain("...(enabled ? styles.audioSwitchTrackOn : {})");
   });
 
   it("disappears rather than drawing dead buttons when no audio is wired", () => {
-    expect(BAR).toContain("{audio && (");
+    /* Design note #1102: the guard survived the move to `AudioControls`, the parenthesis did not -- the bar
+       now renders one element rather than a block. The CLAIM is unchanged: with no audio wired, nothing is
+       drawn. */
+    expect(BAR).toContain("{audio && <AudioControls");
   });
 });
 

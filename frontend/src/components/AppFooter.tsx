@@ -27,6 +27,7 @@
 import React from "react";
 
 import { styles } from "../styles/appStyles";
+import NetaMark from "./NetaMark";
 
 /* Inline styles cannot express `:hover` or `:focus-visible`; see design note #46. Moved here verbatim with
    the link it styles -- leaving it in `TopBar` would have left a rule for an element that file no longer
@@ -43,6 +44,9 @@ export function AppFooter() {
       <style>{NETA_CREDIT_CSS}</style>
       {/* `rel="noopener noreferrer"` because `target="_blank"` without it hands the new tab a `window.opener`
           handle back into this app -- #47's rule, carried with the link rather than rediscovered. */}
+      {/* Design note #1099: the logo and the words are ONE link, not a logo beside a link. Two adjacent
+          controls going to the same place is two tab stops and two things to announce for one destination;
+          `NetaMark` takes `labelled={false}` for the same reason -- the anchor's own text is the name. */}
       <a
         href="https://netadao.org"
         target="_blank"
@@ -51,6 +55,7 @@ export function AppFooter() {
         style={styles.netaCredit}
         title="Neta DAO — opens netadao.org in a new tab"
       >
+        <NetaMark height={18} labelled={false} />
         Powered by Neta DAO
       </a>
     </footer>

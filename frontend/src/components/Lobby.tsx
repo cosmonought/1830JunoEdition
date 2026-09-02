@@ -35,6 +35,7 @@ import {
 } from "../config";
 import { isFirebaseConfigured, firebaseConfigError } from "../config/firebase";
 import ChatBox from "./ChatBox";
+import AppFooter from "./AppFooter";
 // Design note #524: the Firebase sandbox lobby lives on this screen now.
 import SandboxRoomBar from "./SandboxRoomBar";
 import {
@@ -707,6 +708,20 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
           onBlocked={reportBlocked}
         />
       )}
+
+      {/* ==================================================================
+           DESIGN NOTE 1099: THE LOBBY GETS THE GAME'S FOOTER, NOT ITS OWN
+          ==================================================================
+          REPORTED: "the lobby screen doesn't mention Neta DAO anywhere at all."
+          REUSED RATHER THAN REBUILT. The obvious fix is a logo in the brand header beside "Project 18XX",
+          and it is the wrong one twice over: it would put the attribution in the most valuable strip on the
+          screen -- which is the exact placement #1083 moved it OUT of on the game side -- and it would make
+          two attributions to keep in step, which is how the credit ended up spelled five different ways
+          before #708.
+          `AppFooter` ALREADY FITS: this root is a flex column with bottom padding, and the footer's own
+          `marginTop: auto` pins it to the bottom on a short lobby and lets it follow the list on a long
+          one. Same component, same words, same logo, both screens. */}
+      <AppFooter />
     </div>
   );
 }

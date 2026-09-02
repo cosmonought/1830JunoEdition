@@ -10112,6 +10112,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         onSetColor={handleSetSandboxColor}
         onToggleReady={handleToggleSandboxReady}
         onStart={handleStartSandboxGame}
+        /* Design note #1102: the SAME object `TopBar` gets. #1101 passed only `{playing, onToggle}` on the
+           reasoning that the waiting room needed no volume -- which turned out to be an argument for a
+           different control rather than for a smaller prop, and the whole point now is that there is not a
+           different control. One object, one component, both screens. */
+        audio={audioControls}
         /* Design note #910: host-only, and `undefined` for a guest -- which is what renders the controls
            read-only for them rather than hiding the terms they are about to agree to. */
         onSetVariants={

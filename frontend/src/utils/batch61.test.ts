@@ -41,6 +41,10 @@ const LEDGER = readStripped("components/FinancialLedger.tsx");
 const TOAST = readStripped("components/ActionToast.tsx");
 const POPOVER = readStripped("components/AudioControlPopover.tsx");
 const TOPBAR = readStripped("components/TopBar.tsx");
+/* Design note #1102: the audio buttons and their popovers moved out of `TopBar` into `AudioControls`,
+   so the waiting room and the bar render the same control rather than two lookalikes. The assertions
+   below are unchanged in substance -- they follow their subject to its new file. */
+const CONTROLS = readStripped("components/AudioControls.tsx");
 const HEX = readStripped("components/EraHex.tsx");
 
 /* ------------------------------------------------------------------ */
@@ -316,17 +320,18 @@ describe("the action bar does not flicker through skipped steps", () => {
 /* ------------------------------------------------------------------ */
 
 describe("the audio popover's three controls", () => {
-  it("names both states of the master toggle", () => {
-    /* RULED: the red "Off — click to restore" must become a green "On — click to turn off".
-       THE OLD ON-STATE SAID "Off", which was a label for the button's PURPOSE sitting where the other state
-       puts a description of the world -- ambiguous in the worst available way, with the colour carrying the
-       entire distinction. Both halves now say what is true, then what a click does. */
-    expect(POPOVER).toContain('"On — click to turn off"');
-    expect(POPOVER).toContain('"Off — click to restore"');
-    expect(POPOVER).toContain("styles.offRowOn");
-    /* AND THE TOGGLE IS STILL A TOGGLE to a screen reader. #1078 was a real accessibility regression caused
-       by exactly this kind of relabelling, and `aria-pressed` is what it left behind. */
-    expect(POPOVER).toContain("aria-pressed={!enabled}");
+  it("names both states in aria-label even though the switch dropped visible text", () => {
+    /* Design note #1103 REVERSED #1094's visible-text ruling, not its underlying goal. #1094 needed
+       "On — click to turn off" / "Off — click to restore" ON THE ROW because colour was the row's only other
+       signal. A switch has two colour-independent signals of its own -- thumb position and `aria-checked` --
+       so the full sentence stays required only where it was always doing the real work: what a screen reader
+       is told. Both halves of that sentence still say what is true, then what a click does. */
+    expect(POPOVER).toContain("`Turn ${title.toLowerCase()} off`");
+    expect(POPOVER).toContain("`Turn ${title.toLowerCase()} back on`");
+    /* AND THE TOGGLE IS STILL A TOGGLE to a screen reader -- `role="switch"` plus `aria-checked` now, the
+       correct pairing for this shape, replacing #1078's `aria-pressed` fix rather than dropping it. */
+    expect(POPOVER).toContain('role="switch"');
+    expect(POPOVER).toContain("aria-checked={enabled}");
   });
 
   it("lets the slider turn the channel back on", () => {
@@ -334,8 +339,11 @@ describe("the audio popover's three controls", () => {
        WHICH REQUIRED DROPPING `disabled`, and that is a deliberate reversal of half of #1075: a disabled
        input fires no events at all, so there is no interaction to notice and the rule could not be
        implemented over it. Asserted as an absence because the attribute returning is exactly how this
-       regresses. */
-    const slider = sliceBetween(POPOVER, 'type="range"', "</label>");
+       regresses.
+       Design note #1103 moved the slider out of the `<label>` #1075 wrapped it in -- the switch now sits
+       beside it on a plain row -- so the slice ends at the input's own close rather than a `</label>` that
+       no longer follows it directly. */
+    const slider = sliceBetween(POPOVER, 'type="range"', "/>");
     expect(slider).not.toContain("disabled={!enabled}");
     expect(slider).toContain("if (!enabled) onEnabledChange(true);");
   });
@@ -355,10 +363,11 @@ describe("the audio popover's three controls", () => {
        "OUTSIDE" NOW MEANS OUTSIDE THE DISCLOSURE, trigger and panel together, which is what it always should
        have meant. */
     expect(POPOVER).toContain("const bounds = owner?.current ?? panel.current;");
-    expect(TOPBAR).toContain("const audioGroup = React.useRef<HTMLSpanElement | null>(null);");
-    expect(TOPBAR).toContain("owner={audioGroup}");
+    expect(CONTROLS).toContain("const audioGroup = React.useRef<HTMLSpanElement | null>(null);");
+    expect(CONTROLS).toContain("owner={audioGroup}");
     /* BOTH PANELS GET IT. One wired and one forgotten is how this half-regresses. */
-    expect(TOPBAR.split("owner={audioGroup}").length - 1).toBe(2);
+    // Design note #1102: both popovers moved with the group that owns them.
+    expect(CONTROLS.split("owner={audioGroup}").length - 1).toBe(2);
   });
 
   it("still closes on a drag that ends outside", () => {

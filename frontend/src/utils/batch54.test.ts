@@ -38,6 +38,10 @@ import type { FeedItem } from "./feed";
 const APP = readStripped("App.tsx");
 const AUDIO = readStripped("utils/audio.ts");
 const TOPBAR = readStripped("components/TopBar.tsx");
+/* Design note #1102: the audio buttons and their popovers moved out of `TopBar` into `AudioControls`,
+   so the waiting room and the bar render the same control rather than two lookalikes. The assertions
+   below are unchanged in substance -- they follow their subject to its new file. */
+const CONTROLS = readStripped("components/AudioControls.tsx");
 const POPOVER = readStripped("components/AudioControlPopover.tsx");
 const TICKER = readStripped("components/TopTicker.tsx");
 
@@ -56,19 +60,19 @@ describe("both audio buttons dim the same way", () => {
        and not about a colour: `&#128266;` is an emoji, painted by the emoji font in its own colours, and CSS
        `color` does nothing to it. `&#9835;` is a text character and greys with the button.
        SO THE CLAIM IS "the speaker takes the button's colour", and `fill="currentColor"` is that claim. */
-    expect(TOPBAR).toContain('fill="currentColor"');
+    expect(CONTROLS).toContain('fill="currentColor"');
     // The emoji that could not be dimmed is gone. Named as the numeric entity, which is how it was written.
     expect(TOPBAR).not.toContain("&#128266;");
     // The music note stays -- it was never the problem, and it is the reference the speaker now matches.
-    expect(TOPBAR).toContain("&#9835;");
+    expect(CONTROLS).toContain("&#9835;");
   });
 
   it("keeps the lit style shared, so neither button can drift from the other", () => {
     /* THE ASYMMETRY WAS NEVER IN THE STYLES and this is what stops the next change putting it there: both
        buttons spread the SAME `topBarIconButtonOn` over the SAME base. Counted rather than pinned to a
        surrounding expression -- the count is derived from the source, not written down here. */
-    expect(TOPBAR.split("styles.topBarIconButtonOn").length - 1).toBeGreaterThanOrEqual(2);
-    expect(TOPBAR.split("styles.topBarIconButton,").length - 1).toBeGreaterThanOrEqual(2);
+    // Design note #1102: both buttons moved to `AudioControls`; the count is the same claim in its new file.
+    expect(CONTROLS.split("styles.topBarIconButtonOn").length - 1).toBeGreaterThanOrEqual(2);
   });
 });
 
@@ -174,28 +178,28 @@ describe("the mix is a starting point the player can leave", () => {
 describe("the audio button opens a panel instead of toggling", () => {
   it("holds one open panel, named rather than paired booleans", () => {
     /* TWO FLAGS CAN BOTH BE TRUE and would render two popovers from the same corner of the bar. */
-    expect(TOPBAR).toContain('React.useState<"radio" | "sfx" | null>(null)');
+    expect(CONTROLS).toContain('React.useState<"radio" | "sfx" | null>(null)');
   });
 
   it("keeps the dim as a state readout and the click as an action", () => {
     /* THE CONFLICT THE REPORT SPOTTED IN ITS OWN ASKING: a control cannot both toggle and disclose. Off
        moved inside the panel, which leaves the button with one job and the dim with one meaning. */
-    expect(TOPBAR).toContain('setOpenPanel((current) => (current === "radio" ? null : "radio"))');
-    expect(TOPBAR).toContain('setOpenPanel((current) => (current === "sfx" ? null : "sfx"))');
+    expect(CONTROLS).toContain('setOpenPanel((current) => (current === "radio" ? null : "radio"))');
+    expect(CONTROLS).toContain('setOpenPanel((current) => (current === "sfx" ? null : "sfx"))');
   });
 
   it("falls back to a plain toggle when no volume is wired", () => {
     /* OPTIONAL PROPS, so a shell that wires only the two flags still renders working buttons rather than
        doors onto an empty room. */
-    expect(TOPBAR).toContain("audio.onToggleMusic()");
-    expect(TOPBAR).toContain("audio.onToggleSfx()");
+    expect(CONTROLS).toContain("audio.onToggleMusic()");
+    expect(CONTROLS).toContain("audio.onToggleSfx()");
   });
 
   it("gives the effects panel its categories and the radio panel none", () => {
     /* THE ASYMMETRY IS THE FEATURE. "Which effects play" is a question only the effects channel has. */
-    const sfxPanel = sliceBetween(TOPBAR, 'title="Sound effects"', "/>");
+    const sfxPanel = sliceBetween(CONTROLS, 'title="Sound effects"', "/>");
     expect(sfxPanel).toContain("categories={audio.sfxCategories}");
-    const radioPanel = sliceBetween(TOPBAR, 'title="Radio"', "/>");
+    const radioPanel = sliceBetween(CONTROLS, 'title="Radio"', "/>");
     expect(radioPanel).not.toContain("categories=");
     expect(radioPanel.length).toBeLessThan(600);
   });
@@ -236,15 +240,15 @@ describe("the popover closes easily, unlike the modals", () => {
     expect(POPOVER).toContain("disabled={!enabled}");
   });
 
-  it("lights the Off row when the channel is off", () => {
-    /* THE INVERSION HAS TO MATCH THE BUTTON. The bar's button DIMS when off; the row inside LIGHTS when
-       off, because it is the control that turned it off. Two surfaces, one state, no disagreement. */
-    /* Design note #1094: the on-state is a NAMED STYLE now rather than an empty object -- ruled that the
-       toggle show a green "On — click to turn off" state instead of an unstyled row. THE INVERSION THIS CASE
-       IS ABOUT IS UNTOUCHED: `offRowActive` is still the OFF appearance, still the opposite of the bar
-       button's dim, and the two still cannot disagree about which state is which. */
-    expect(POPOVER).toContain("...(enabled ? styles.offRowOn : styles.offRowActive)");
-    expect(POPOVER).toContain("aria-pressed={!enabled}");
+  it("fills the switch green for on, red for off", () => {
+    /* Design note #1103: the boxed Off row (and the case that guarded its inversion) is gone -- it became a
+       switch on the volume row's own line, dropping the row rather than just restyling it. The inversion
+       this case was about is UNCHANGED in substance: the bar's button dims for off, the switch fills green
+       for on, and the two states never disagree about which is which. `ALERT_CRITICAL_INK` is the switch's
+       resting (off) fill; `audioSwitchTrackOn` overrides it to `ACTION_GREEN`. */
+    expect(POPOVER).toContain("backgroundColor: ALERT_CRITICAL_INK");
+    expect(POPOVER).toContain("audioSwitchTrackOn: { backgroundColor: ACTION_GREEN }");
+    expect(POPOVER).toContain('role="switch"');
   });
 });
 

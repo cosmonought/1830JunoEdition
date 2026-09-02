@@ -29,7 +29,6 @@
 
 import React, { useEffect, useRef } from "react";
 
-import { ACTION_GREEN, ALERT_CRITICAL_INK } from "../styles/palette";
 import { FONT_SIZE } from "../styles/typography";
 
 export interface AudioCategoryToggle {
@@ -143,19 +142,44 @@ export function AudioControlPopover({
             the app's one existing pair for exactly this affirmative/critical distinction, already solid
             fills elsewhere (`palette.ts`), so this switch introduces no new colour for the retheme to
             reconcile. */}
+        {/* ==================================================================
+             DESIGN NOTE 1104: THE SHAPE CARRIES IT, NOT THE COLOUR
+            ==================================================================
+            REPORTED: "I find the green/red toggle unintuitive for the On/Off audio. Can we use the standard
+            'play' triangle and 'stop' square instead?"
+            AND THE COMPLAINT IS ABOUT #1103'S ONE WEAK POINT. That note argued a switch needs no worded
+            label because POSITION is a second signal beside colour -- true of a switch whose thumb visibly
+            travels, and this one is 34px wide, so the travel is a few pixels and the fill was doing almost
+            all the work. Green/red then has to be LEARNED: nothing about red says "press me to start".
+            A TRANSPORT CONTROL IS NOT LEARNED. Play and stop are the most over-taught pair of glyphs there
+            is, and they say what the CLICK DOES rather than what the state is -- which is the question a
+            player actually has in front of a button.
+            THE SEMANTICS ARE UNCHANGED, deliberately: `role="switch"` and `aria-checked` stay, because for
+            assistive tech this is still a two-state control and #1078's rule is that state must reach it.
+            The glyph is the affordance, `aria-checked` is the state, and the tooltip is the sentence. What
+            was dropped is the COLOUR as a state channel, which is what the report was about.
+            AND IT REMOVES A COLLISION #1103 WALKED INTO. Filling green for on put `ACTION_GREEN` -- the
+            confirm/pay colour -- on a control that neither confirms nor pays. The transport button is
+            neutral and borrows nothing. */}
         <button
           type="button"
           role="switch"
           aria-checked={enabled}
           onClick={() => onEnabledChange(!enabled)}
-          style={{ ...styles.audioSwitchTrack, ...(enabled ? styles.audioSwitchTrackOn : {}) }}
-          aria-label={enabled ? `${title} is on` : `${title} is off`}
+          style={styles.audioTransport}
+          aria-label={title}
           title={enabled ? `Turn ${title.toLowerCase()} off` : `Turn ${title.toLowerCase()} back on`}
         >
-          <span
-            style={{ ...styles.audioSwitchThumb, ...(enabled ? styles.audioSwitchThumbOn : {}) }}
-            aria-hidden="true"
-          />
+          {/* Design note #1074's rule, reused: drawn rather than typed. `&#9654;` and `&#9632;` are rendered
+              by the emoji font on several platforms, which ignores `color` -- the exact defect that note
+              fixed by replacing the speaker emoji with an SVG. */}
+          <svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true" focusable="false">
+            {enabled ? (
+              <rect x="2" y="2" width="8" height="8" rx="1" fill="currentColor" />
+            ) : (
+              <path d="M3.5 2.2 10 6 3.5 9.8 Z" fill="currentColor" />
+            )}
+          </svg>
         </button>
         <input
           type="range"
@@ -247,6 +271,23 @@ const styles: Record<string, React.CSSProperties> = {
     textTransform: "uppercase",
     color: "#8a8a86",
   },
+  /* Design note #1104: a transport button, sized to sit on the volume row beside the slider. Neutral by
+     design -- the glyph is the signal, so this borrows no semantic colour. The lit treatment is the same
+     `topBarIconButtonOn` pairing the trigger buttons use, so "on" reads the same on both surfaces. */
+  audioTransport: {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    flex: "none",
+    width: "24px",
+    height: "24px",
+    padding: 0,
+    borderRadius: "6px",
+    border: "1px solid #3a3a3a",
+    backgroundColor: "#1c1c1c",
+    color: "#c8c6c0",
+    cursor: "pointer",
+  },
   volumeRow: { display: "flex", alignItems: "center", gap: "8px" },
   slider: { flex: "1 1 auto", minWidth: 0, cursor: "pointer" },
   percent: {
@@ -258,28 +299,6 @@ const styles: Record<string, React.CSSProperties> = {
   },
   /** Design note #1103: track is the button itself -- fill carries the state, position (via the thumb's
    *  transform below) carries it a second way, and neither depends on the other. */
-  audioSwitchTrack: {
-    display: "inline-flex",
-    alignItems: "center",
-    flex: "none",
-    width: "34px",
-    height: "18px",
-    padding: "2px",
-    borderRadius: "999px",
-    border: "none",
-    backgroundColor: ALERT_CRITICAL_INK,
-    cursor: "pointer",
-    transition: "background-color 0.15s ease",
-  },
-  audioSwitchTrackOn: { backgroundColor: ACTION_GREEN },
-  audioSwitchThumb: {
-    width: "14px",
-    height: "14px",
-    borderRadius: "999px",
-    backgroundColor: "#f2f0eb",
-    transition: "transform 0.15s ease",
-  },
-  audioSwitchThumbOn: { transform: "translateX(16px)" },
   /** Design note #1094: what `disabled` used to say, said with opacity instead. The control is live -- that
    *  is the point -- but a silent channel should not look like a loud one. */
   sliderQuiet: { opacity: 0.55 },

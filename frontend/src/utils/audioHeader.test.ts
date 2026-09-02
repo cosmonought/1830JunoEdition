@@ -109,9 +109,10 @@ describe("the header renders two independent toggles", () => {
        toggle -- #891's shape, which this codebase produces more often than any other. */
     expect(POPOVER).toContain('role="switch"');
     expect(POPOVER).toContain("aria-checked={enabled}");
-    /* Inverted from the bar button deliberately: green FILL means the channel is ON, matching #1094's
-       red/green pair, while the bar button DIMS for off. Two surfaces, one state, no disagreement. */
-    expect(POPOVER).toContain("...(enabled ? styles.audioSwitchTrackOn : {})");
+    /* Design note #1104: the state channel is the GLYPH now, not a fill -- a stop square while playing, a
+       play triangle while stopped. `aria-checked` above is unchanged and is what carries the same fact to
+       assistive tech, which is the half #1078 cared about. */
+    expect(POPOVER).toContain("{enabled ? (");
   });
 
   it("disappears rather than drawing dead buttons when no audio is wired", () => {

@@ -289,7 +289,9 @@ export function useSoundEffect(src: string, enabled: boolean): () => void {
   useEffect(() => {
     const element = new Audio(src);
     element.preload = "auto";
-    // Design note #1013: written down rather than left to the default, so both sides of the mix live together.
+    /* Design note #1013: written down rather than left to the default, so both sides of the mix live
+       together. Design note #1105: this is the SEED only -- the live level is applied at play time, because
+       this element outlives every move of the slider. */
     element.volume = sfxVolume;
     elementRef.current = element;
     return () => {
@@ -309,6 +311,22 @@ export function useSoundEffect(src: string, enabled: boolean): () => void {
     element.addEventListener("ended", release, { once: true });
     element.addEventListener("error", release, { once: true });
     window.setTimeout(release, 15000);
+    /* ==================================================================
+        DESIGN NOTE 1105: THE SLIDER DID NOT REACH THIS SOUND
+       ==================================================================
+       REPORTED: "the SFX are absolutely crazy loud. I don't think the volume slider is actually adjusting
+       their volume: at 5% it sounds just as loud as 100%."
+       AND IT WAS EXACTLY THIS ELEMENT. `playVariantCue` builds a fresh `Audio` per call and sets the level on
+       it, so every cue has always taken the live figure -- verified rather than assumed. This hook builds its
+       element ONCE, in an effect keyed on `[src]`, and set the volume there. So the whistle kept whatever
+       `sfxVolume` happened to be at mount -- the `SFX_VOLUME` default of 1, full scale -- for the life of the
+       page, and the slider moved a number that never reached it again.
+       THE WHISTLE IS THE SOUND A PLAYER HEARS MOST, once per turn for the whole game, which is why "the SFX"
+       read as uniformly loud even though the cues were obeying the control.
+       SO THE LEVEL IS SET AT PLAY TIME, matching `playVariantCue`. The element is still built once -- #1009's
+       reason for that stands, and rebuilding it per play is what this hook exists to avoid. Only the read
+       moved, from mount to use. */
+    element.volume = sfxVolume;
     /* REWOUND BEFORE EVERY PLAY. A second turn arriving while the first whistle is still sounding would
        otherwise be silent -- `play()` on an already-playing element is a no-op, so the notification for the
        event the player actually needs to hear is the one that gets swallowed. */

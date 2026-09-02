@@ -240,15 +240,28 @@ describe("the popover closes easily, unlike the modals", () => {
     expect(POPOVER).toContain("disabled={!enabled}");
   });
 
-  it("fills the switch green for on, red for off", () => {
-    /* Design note #1103: the boxed Off row (and the case that guarded its inversion) is gone -- it became a
-       switch on the volume row's own line, dropping the row rather than just restyling it. The inversion
-       this case was about is UNCHANGED in substance: the bar's button dims for off, the switch fills green
-       for on, and the two states never disagree about which is which. `ALERT_CRITICAL_INK` is the switch's
-       resting (off) fill; `audioSwitchTrackOn` overrides it to `ACTION_GREEN`. */
-    expect(POPOVER).toContain("backgroundColor: ALERT_CRITICAL_INK");
-    expect(POPOVER).toContain("audioSwitchTrackOn: { backgroundColor: ACTION_GREEN }");
+  it("says on and off with a shape rather than a colour", () => {
+    /* ==================================================================
+        DESIGN NOTE 1104 REPLACES THIS CASE, WHICH PINNED THE THING THAT WAS WRONG
+       ==================================================================
+       IT ASSERTED green-for-on and red-for-off. REPORTED since: "I find the green/red toggle unintuitive
+       for the On/Off audio" -- and the complaint is sound, because that pair has to be LEARNED. Nothing
+       about red says "press me to start", and #1103's defence of it (position is a second signal) barely
+       holds on a 34px track whose thumb moves a few pixels.
+       SO THE ASSERTION IS NOW ABOUT THE SHAPE. Play and stop are the transport glyphs every media player
+       has taught, and they say what the CLICK DOES rather than what the state is.
+       DRAWN, NOT TYPED, for #1074's reason -- the entity forms render as emoji on several platforms and
+       ignore `color`, which is the exact defect that note fixed on the speaker.
+       THE SEMANTICS DID NOT MOVE: `role="switch"` and `aria-checked` stay, because for assistive tech this
+       is still a two-state control and #1078's rule is that state must reach it. Only the visible channel
+       changed, which is what the report was about. */
+    expect(POPOVER).toContain('<rect x="2" y="2" width="8" height="8" rx="1" fill="currentColor" />');
+    expect(POPOVER).toContain('<path d="M3.5 2.2 10 6 3.5 9.8 Z" fill="currentColor" />');
     expect(POPOVER).toContain('role="switch"');
+    /* The colour pair is GONE rather than merely unused -- a semantic fill left behind on a control that no
+       longer signals with colour is the next person's confusion. */
+    expect(POPOVER).not.toContain("ACTION_GREEN");
+    expect(POPOVER).not.toContain("ALERT_CRITICAL_INK");
   });
 });
 

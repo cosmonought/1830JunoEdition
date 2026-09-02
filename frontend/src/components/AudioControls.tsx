@@ -47,6 +47,11 @@ export interface AudioControlsProps {
   };
 }
 
+/** Design note #1106: the level a channel wakes at when it is turned on from silence. Half scale rather
+ *  than the channel's own default, because this is not "restore the mix" -- it is the floor that stops an
+ *  "on" that plays nothing. A player who had deliberately set a level keeps it; only zero is overridden. */
+const WAKE_VOLUME = 0.5;
+
 export function AudioControls({ audio }: AudioControlsProps) {
   /* Design note #1075: which panel is open, and #1094's owner ref -- both moved here with the markup they
      serve. Held per instance, so the waiting room's control and the bar's never share a disclosure. */

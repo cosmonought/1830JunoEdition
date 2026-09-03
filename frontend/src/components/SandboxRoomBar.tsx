@@ -96,20 +96,31 @@ export function SandboxRoomBar({
     <div style={bare ? styles.barBare : styles.bar}>
       {!bare && <span style={styles.label}>Sandbox multiplayer</span>}
       {/* ==================================================================
-           DESIGN NOTE 1132: BARE CONTROLS ARE BIGGER CONTROLS
+           DESIGN NOTE 1136: ONE SIZE, ONE COLOUR, AND GREEN ONLY WHILE PRESSED
           ==================================================================
-          REPORTED: "the Host Game and Join Game buttons can be sized up a little bit to hold their own
-          against the title." AND THE TRAY IS WHY THEY WERE SMALL. Inside a bordered strip a button is read
-          relative to the strip, so `small` type and 5px of padding were correct; standing alone on a
-          photograph, under a title 20% of the screen wide, the same button is a scrap.
-          `control` AND ROOMIER PADDING -- one step of the shared scale, not a bespoke size, because a control
-          is exactly what `FONT_SIZE.control` exists for and #299's rule about a control being sized for the
-          hand it is clicked with applies here more than anywhere else on the screen.
-          THE GAME'S COPY IS UNTOUCHED. `bare` is the only surface that grows, which is the same
-          surface-driven shape the footer's mark and the sandbox tray already follow. */}
+          FOUR REPORTS, AND THREE OF THEM ARE ONE FAULT. #1132 sized the bare pair UP -- "they can hold their
+          own against the title" -- and overshot into `control` type with 22px of side padding. That is what
+          made the padding "far too much", it is what left the two buttons "still quite close together"
+          (wide buttons meeting in the middle of a fixed box), and it is why the small "Join" that appears
+          after clicking looked like a different control: it was one, at the ORIGINAL size, beside two that
+          had grown.
+          SO EVERY BUTTON IN THIS BAR IS NOW THE SAME BUTTON. Host, Join game, Join and Cancel all take
+          `bareButton`, which is the size the report proposed -- "I wonder if the smaller Join button is the
+          right size for everything?" It is: `small` type with 7px/16px, one step over the in-game original
+          rather than two.
+          AND NOT GREEN AT REST. "Leaving Host Game green makes it seem like the other option is disabled or
+          lesser value" -- exactly right, and this screen offers two equal doors. `buttonPrimary`'s teal was
+          chosen for a control INSIDE the tray, where it was the only thing worth pressing; alone on a title
+          screen it demotes its neighbour. The teal moves to `:active`, which is the thing the report asked
+          for -- "when players click a button it can become green to show it was pressed" -- and is the one
+          moment a colour like that is a fact rather than a ranking.
+          `:active` NEEDS A STYLESHEET, which is #46's standing exception. The class is applied only in bare
+          mode, so the in-game bar keeps its own look untouched. */}
+      <style>{BARE_BUTTON_CSS}</style>
       <button
         type="button"
-        style={bare ? { ...styles.buttonPrimary, ...styles.buttonBig } : styles.buttonPrimary}
+        className={bare ? "sandbox-bare-btn" : undefined}
+        style={bare ? styles.bareButton : styles.buttonPrimary}
         onClick={onHost}
         disabled={busy}
       >
@@ -131,12 +142,18 @@ export function SandboxRoomBar({
             aria-label="Room code"
             autoFocus
           />
-          <button type="submit" style={styles.button} disabled={busy}>
+          <button
+            type="submit"
+            className={bare ? "sandbox-bare-btn" : undefined}
+            style={bare ? styles.bareButton : styles.button}
+            disabled={busy}
+          >
             Join
           </button>
           <button
             type="button"
-            style={styles.buttonQuiet}
+            className={bare ? "sandbox-bare-btn" : undefined}
+            style={bare ? { ...styles.bareButton, ...styles.bareButtonQuiet } : styles.buttonQuiet}
             onClick={() => {
               setJoining(false);
               setCodeText("");
@@ -148,7 +165,8 @@ export function SandboxRoomBar({
       ) : (
         <button
           type="button"
-          style={bare ? { ...styles.button, ...styles.buttonBig } : styles.button}
+          className={bare ? "sandbox-bare-btn" : undefined}
+          style={bare ? styles.bareButton : styles.button}
           onClick={() => setJoining(true)}
           disabled={busy}
         >
@@ -162,24 +180,59 @@ export function SandboxRoomBar({
 
 export default SandboxRoomBar;
 
+/* Design note #1136: `:active` has no inline form -- #46's standing exception. The teal is the pressed
+   state now rather than a resting rank, and the transition is short enough to read as a press rather than as
+   an animation. Scoped to the bare class so the in-game bar is untouched. */
+const BARE_BUTTON_CSS = `
+.sandbox-bare-btn { transition: background-color 90ms ease, border-color 90ms ease, color 90ms ease; }
+.sandbox-bare-btn:hover:not(:disabled) { background-color: #262626; border-color: #4a4a4a; }
+.sandbox-bare-btn:active:not(:disabled) {
+  background-color: #14312f;
+  border-color: #2f6f6a;
+  color: #7fe0d0;
+}
+.sandbox-bare-btn:focus-visible { outline: 2px solid #8a8a86; outline-offset: 2px; }
+`;
+
 const styles: Record<string, React.CSSProperties> = {
   /* Design note #1131: the tray, minus the tray. Kept as its own object rather than as a spread-with-
      overrides, because "no border, no fill, no padding" said three times in overrides is harder to read than
      the four properties that actually remain. */
-  /* Design note #1132: the size the bare pair take. A separate object rather than a second copy of each
-     button, so "how big is a lobby button" is answered in one place for both of them. */
-  buttonBig: {
-    fontSize: FONT_SIZE.control,
-    fontWeight: 800,
-    padding: "10px 22px",
+  /* ==================================================================
+      DESIGN NOTE 1136: THE ONE LOBBY BUTTON
+     ==================================================================
+     Every control in the bare bar is this -- Host, Join game, Join and Cancel -- so none of them can be
+     "smaller than" another, which is what the join form's Join button was.
+     THE SIZE IS THE ONE THE REPORT PROPOSED: `small` type at 7px/16px. #1132's `control` at 10px/22px was an
+     overcorrection, and the padding is what made two buttons in a fixed box look crowded -- they were nearly
+     touching in the middle of it, which reads as "close together" even though the box had not moved.
+     NEUTRAL, NOT TEAL. Two equal doors, so neither gets the colour that says "press this one". */
+  bareButton: {
+    fontSize: FONT_SIZE.small,
+    fontWeight: 700,
+    padding: "7px 16px",
     borderRadius: "8px",
+    borderWidth: "1px",
+    borderStyle: "solid",
+    borderColor: "#3a3a3a",
+    backgroundColor: "#1c1c1c",
+    color: "#f2f0eb",
     letterSpacing: "0.02em",
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+  },
+  /* Cancel is the one control here that IS lesser -- it undoes rather than does -- so it keeps the size and
+     gives up the fill. The only place in this bar where a difference in weight is a fact. */
+  bareButtonQuiet: {
+    backgroundColor: "transparent",
+    borderColor: "#2a2a2a",
+    color: "#a8a6a0",
+    fontWeight: 600,
   },
   barBare: {
     display: "flex",
     flexDirection: "row",
     alignItems: "center",
-    flexWrap: "wrap",
     /* ==================================================================
         DESIGN NOTE 1132: `center` WAS WHY THE BUTTONS IGNORED THEIR COORDINATES
        ==================================================================
@@ -193,6 +246,17 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: "space-between",
     gap: "12px",
     width: "100%",
+    /* ==================================================================
+        DESIGN NOTE 1136: `wrap` IS WHY THE JOIN FORM JUMPED A LINE
+       ==================================================================
+       REPORTED: "when clicking Join game the join interface jumps below the Host Game button." The bar is a
+       fixed 24% of the scene, and opening the form swaps one button for three controls plus an input -- which
+       at #1132's padding no longer fitted, so `flexWrap: wrap` did exactly what it was told and put them on a
+       second line. A layout that reflows under the thing you just clicked.
+       `nowrap` PLUS THE SMALLER BUTTONS IS WHAT FIXES IT: at 7px/16px the whole form -- Host, code field,
+       Join, Cancel -- fits the same row it opened from, so the only thing that changes on click is the
+       control that was clicked. */
+    flexWrap: "nowrap",
     fontSize: FONT_SIZE.small,
   },
   bar: {

@@ -159,13 +159,37 @@ describe("the room is the page, and the text carries its own ground", () => {
     expect(CONTROLS_BAR).not.toContain('justifyContent: "center"');
   });
 
-  it("sizes the bare pair up without touching the in-game copy", () => {
-    /* THE TRAY WAS WHY THEY WERE SMALL: inside a bordered strip a button is read relative to the strip, so
-       `small` type and 5px of padding were right. Standing alone under a title 20% of the screen wide, the
-       same button is a scrap. One `buttonBig` for both, so the answer lives in one place. */
-    expect(CONTROLS_BAR).toContain("buttonBig:");
-    expect(CONTROLS_BAR).toContain("bare ? { ...styles.buttonPrimary, ...styles.buttonBig }");
-    expect(CONTROLS_BAR).toContain("bare ? { ...styles.button, ...styles.buttonBig }");
+  it("gives every bare control the same size, so none is smaller than another", () => {
+    /* ==================================================================
+        DESIGN NOTE 1136 SUPERSEDES #1132's SIZE
+       ==================================================================
+       #1132 SIZED THE PAIR UP AND OVERSHOT -- `control` type at 10px/22px. That produced three of the four
+       faults reported next: padding "far too much", two buttons "still quite close together" because wide
+       buttons nearly meet inside a fixed box, and a "Join" that looked like a different control because it
+       was one, still at the original size beside two that had grown.
+       FOUR BUTTONS, ONE STYLE. Asserted as the absence of a second size as much as the presence of the
+       shared one -- a leftover `buttonBig` on any single control is exactly the bug that was reported. */
+    expect(CONTROLS_BAR).toContain("bareButton: {");
+    expect(CONTROLS_BAR).not.toContain("buttonBig");
+    expect(CONTROLS_BAR.split("styles.bareButton").length - 1).toBeGreaterThanOrEqual(4);
+  });
+
+  it("stops the join form reflowing under the button that opened it", () => {
+    /* `flexWrap: wrap` IN A FIXED-WIDTH BAR did what it was told: the form does not fit at the old padding,
+       so it went to a second line beneath Host. `nowrap` plus the smaller buttons keeps it on the row it
+       opened from. */
+    expect(CONTROLS_BAR).toContain('flexWrap: "nowrap"');
+  });
+
+  it("keeps green for the press, not for the resting state", () => {
+    /* "Leaving Host Game green makes it seem like the other option is disabled or lesser value" -- and this
+       screen offers two equal doors. The teal moves to `:active`, which is the one moment it states a fact
+       rather than a ranking. Cancel is the single exception that keeps a lesser weight, because it undoes. */
+    expect(CONTROLS_BAR).toContain("sandbox-bare-btn:active");
+    expect(CONTROLS_BAR).toContain("BARE_BUTTON_CSS");
+    const bare = CONTROLS_BAR.slice(CONTROLS_BAR.indexOf("bareButton: {"));
+    expect(bare.slice(0, bare.indexOf("},"))).not.toContain("#14312f");
+    expect(CONTROLS_BAR).toContain("bareButtonQuiet");
   });
 
   it("lets the credit stand on the room, with no plate at all", () => {

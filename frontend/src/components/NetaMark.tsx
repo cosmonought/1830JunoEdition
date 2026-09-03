@@ -60,6 +60,25 @@ export interface NetaMarkProps {
   animated?: boolean;
 }
 
+/* ==================================================================
+    DESIGN NOTE 1116: THE TWO ASSETS DO NOT FILL THEIR FRAMES EQUALLY
+   ==================================================================
+   REPORTED: "the .mp4 in the Lobby footer looks much smaller than the .png in the game room footer."
+   AND IT WAS 49% SMALLER, measured rather than eyeballed. The PNG was cropped to its artwork (#1099), so the
+   mark fills 99% of its frame; the clip was delivered with the orbit's whole sweep as padding and filled
+   only 50%. At a shared 18px element the marks were 17.8px and 9.0px.
+   THE SUGGESTED FIX WAS A BIGGER ELEMENT -- 32px, or `scale(1.3)`. That corrects the mark and grows the
+   FOOTER, because the element's height is the frame's height whatever fraction of it is ink; 36px was the
+   figure that would actually have matched, and a 36px box in an 18px line is a taller footer on every
+   screen.
+   SO THE CLIP WAS CROPPED INSTEAD, to the union of the orbit's bounding box across all 240 frames plus a
+   margin for the bar's round caps. The mark now fills 82% of its frame, and the last 17% is taken by this
+   constant rather than by growing the element -- 22px of video against 18px of image, which puts the two
+   MARKS within a pixel of each other while the footer's line height does not move.
+   `object-fit: contain` WAS ALSO SUGGESTED AND IS A NO-OP HERE: with `width: auto` the element already takes
+   the video's own aspect, so there is nothing for `contain` to letterbox. */
+const ANIMATED_HEIGHT_RATIO = 22 / 18;
+
 export function NetaMark({ height = 22, labelled, animated = false }: NetaMarkProps) {
   const label = "Neta DAO";
 
@@ -73,9 +92,9 @@ export function NetaMark({ height = 22, labelled, animated = false }: NetaMarkPr
         loop
         muted
         playsInline
-        height={height}
+        height={Math.round(height * ANIMATED_HEIGHT_RATIO)}
         style={{
-          height,
+          height: Math.round(height * ANIMATED_HEIGHT_RATIO),
           width: "auto",
           display: "block",
           flex: "none",

@@ -20,6 +20,13 @@ import {
   ALERT_WARN_BG,
   ALERT_WARN_BORDER,
   ALERT_WARN_INK,
+  SANDBOX_INK,
+  SANDBOX_PANEL,
+  SANDBOX_RAISED,
+  SANDBOX_RULE,
+  SANDBOX_RULE_STRONG,
+  SANDBOX_TEXT,
+  SANDBOX_TITLE,
   TURN_PULSE_INK_RGB,
 } from "./palette";
 import type { GamePhase } from "../utils/gamePhase";
@@ -250,6 +257,10 @@ export const styles: Record<string, React.CSSProperties> = {
   // right-hand child, because which child is first varies -- the offline badge and both error spans are
   // conditional -- and an `auto` margin on a node that sometimes does not render un-pins the whole group.
   topBarSpacer: { flex: 1, minWidth: "8px" },
+  /* Design note #1119: the offline state as a dot, so it sits in the same row and the same vocabulary as the
+     session-key and wallet dots rather than as a warning badge shouting a build variable at a player. Amber
+     is the colour the old badge's border carried, kept so the state is recognisable to anyone who knew it. */
+  topBarDotOffline: { backgroundColor: "#d9b95c" },
   topBarDot: {
     width: "9px",
     height: "9px",
@@ -293,6 +304,20 @@ export const styles: Record<string, React.CSSProperties> = {
      ONE TREATMENT, TWO STATES, NO SECOND GLYPH. Muted is the same icon dimmed and unfilled -- a slash through
      a speaker is a third thing to recognise, and at 13px it is a smudge. `aria-pressed` carries the state to
      anybody not reading the colour, which is the half a purely visual toggle leaves out. */
+  /* Design note #1120: the station name beside the radio button. Sized and toned as a QUIET label -- it is
+     an answer to "what is playing", not a control, and the row it sits in is already busy. `maxWidth` plus
+     ellipsis because station names are supplied data and a long one would push the wallet cluster around;
+     the full name is in the `title`. */
+  topBarStationName: {
+    fontSize: FONT_SIZE.micro,
+    color: "#8a8a86",
+    maxWidth: "104px",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+    flexShrink: 1,
+    cursor: "help",
+  },
   topBarAudioGroup: {
     display: "inline-flex",
     alignItems: "center",
@@ -418,16 +443,17 @@ export const styles: Record<string, React.CSSProperties> = {
     borderRadius: "999px",
     borderWidth: "1px",
     borderStyle: "solid",
-    borderColor: "#4a3a6a",
-    backgroundColor: "#1a1424",
-    color: "#9a8ab0",
+    /* Design note #1122: the sandbox family, luminance-matched to the ink ladder it stands beside. */
+    borderColor: SANDBOX_RULE,
+    backgroundColor: SANDBOX_PANEL,
+    color: SANDBOX_TEXT,
     cursor: "pointer",
     whiteSpace: "nowrap",
   },
   phaseToggleButtonActive: {
-    backgroundColor: "#3a2a56",
-    borderColor: "#7a5aa8",
-    color: "#e8d8ff",
+    backgroundColor: SANDBOX_RAISED,
+    borderColor: SANDBOX_RULE_STRONG,
+    color: SANDBOX_INK,
   },
   sandboxBadge: {
     fontSize: FONT_SIZE.micro,
@@ -435,9 +461,11 @@ export const styles: Record<string, React.CSSProperties> = {
     letterSpacing: "0.5px",
     padding: "4px 12px",
     borderRadius: "999px",
-    backgroundColor: "#2a1e3a",
-    border: "1px solid #6a4a8a",
-    color: "#c9a8e8",
+    /* Design note #1122: the badge is the in-game end of the same signal the lobby's strips carry, so it
+       reads from the same constants rather than from a third hand-picked purple. */
+    backgroundColor: SANDBOX_RAISED,
+    border: `1px solid ${SANDBOX_RULE_STRONG}`,
+    color: SANDBOX_TITLE,
     flexShrink: 0,
   },
   /* Design note #901: RED, where the spectator badge is amber. Amber is this app's "be aware"; a broken bank
@@ -679,7 +707,22 @@ export const styles: Record<string, React.CSSProperties> = {
     // Design note #13/item 1: `overflow: "auto"` removed -- exactly the inner scrollbar this item asks to
     // eliminate. With no `overflow` set the pane grows to its content's real height, same as any block, and
     // the page scrolls.
-    padding: "20px",
+    /* ==================================================================
+        DESIGN NOTE 1118: THE TABS SIT ON THEIR CONTENT NOW
+       ==================================================================
+       ASKED FOR AS "remove the unnecessary vertical gap between the tab navigation buttons and the viewport
+       content below it", and the first answer given was the wrong one: #1084's `marginTop` was cited as the
+       obstacle. THAT GAP IS ON THE OTHER SIDE OF THE STRIP -- it separates the action bar ABOVE the tabs
+       from the tabs, and nothing about this request touches it. The gap actually being described was this
+       pane's own top padding, which no note ever argued for.
+       IT COULD NOT HAVE BEEN CLOSED BEFORE #1117 and it can be now, which is the connection worth recording.
+       Flush against a viewport that was #0f0f0f -- the strip's own fill -- the two would have merged into one
+       slab, the failure #1084 names in the sentence "a bordered card and a flat strip read as one welded
+       assembly". With the viewport at #141414 there is a value step across that seam, so touching edges read
+       as a tab strip ATTACHED to its panel rather than as one shape. Which is what tabs are supposed to say.
+       LEFT, RIGHT AND BOTTOM ARE UNCHANGED. The inset is what keeps the panel's border and radius visible;
+       only the top edge had a reason to close. */
+    padding: "0 20px 20px",
   },
   // Contextual top action bar -- design note #8/item 5, upscaled by #12/item 5, slimmed by #31 (the three
   // trays that made it a tall panel are separate blocks below it now, so this is page chrome, not a card).

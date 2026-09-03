@@ -35,7 +35,17 @@ import {
 } from "../config";
 import { isFirebaseConfigured, firebaseConfigError } from "../config/firebase";
 import ChatBox from "./ChatBox";
-import { BRAND_GRADIENT } from "../styles/palette";
+import {
+  CARD_SURFACE,
+  INK,
+  SANDBOX_INK,
+  SANDBOX_PANEL,
+  SANDBOX_RAISED,
+  SANDBOX_RULE,
+  SANDBOX_RULE_STRONG,
+  SANDBOX_TEXT,
+  SANDBOX_TITLE,
+} from "../styles/palette";
 import AppFooter from "./AppFooter";
 // Design note #524: the Firebase sandbox lobby lives on this screen now.
 import SandboxRoomBar from "./SandboxRoomBar";
@@ -559,6 +569,12 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
 
   return (
     <div style={styles.root}>
+      {/* Design note #46 is the standing exception and this is the case it exists for: a media query cannot
+          be expressed as an inline style object, and #1123's grid has to become one column on a narrow
+          window or the two cards halve into unreadable slivers. 860px is where two ~500px columns stop
+          fitting inside the 1040px cap with its gutters -- netadao.org collapses its own `.two-col` at
+          900px, near enough that the two screens behave alike on the same devices. */}
+      <style>{LOBBY_CSS}</style>
       <header style={styles.brandHeader}>
         <div>
           <h1 style={styles.brandTitle}>Project 18XX</h1>
@@ -623,12 +639,6 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
           AND IT IS NOT AMBER. #1094 freed amber to mean "heads up, nothing is broken", and this is one step
           quieter than that: nothing here is wrong, the app is doing exactly what an unconfigured build
           should. The neutral chip is the same one `CHIP_INERT` uses for a genuinely inert fact. */}
-      {chainError && (
-        <div style={styles.chainPill} title={chainError}>
-          <span style={styles.chainDot} aria-hidden="true" />
-          Offline · sandbox active
-        </div>
-      )}
       {wallet.error && <Banner tone="error" text={wallet.error} />}
       {actionError && <Banner tone="error" text={actionError} />}
       {roomsError && <Banner tone="error" text={roomsError} />}
@@ -654,9 +664,25 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
          HOSTING ENTERS IMMEDIATELY. The alternative -- show the code, wait for a start -- is a staging room, and the
          Web3 lobby already has one for a flow that genuinely needs it. A sandbox room needs none of that: the code is
          on the board's own strip, and a joiner can arrive at any point because the log replays. */}
+      {/* ==================================================================
+          DESIGN NOTE 1123: TWO COLUMNS, AND THE ROOM BROWSER IS NOT IN EITHER
+         ==================================================================
+         THE LAYOUT ASKED FOR was left "Play", right "System Status", and the split is right -- one column
+         for the thing you came to do, one for the state of the world. WHAT IT PUT IN THE RIGHT COLUMN IS THE
+         PART THAT COULD NOT STAY: "On-chain rooms -- paused" is a card TODAY because `WEB3_LOBBY_ENABLED` is
+         off. Flip that flag and the same slot renders `RoomBrowser` or `StagingRoom` -- a room list, a seat
+         table, ante controls -- which is not status and does not fit in a half-width sidebar.
+         SO THE GRID HOLDS THE TWO THINGS THAT ARE ALWAYS SMALL, and the Web3 branch renders full-width
+         BELOW it. The paused card is status while it is paused; the browser that replaces it is a primary
+         surface, and it gets the whole width the moment it exists. A layout keyed to the current value of a
+         feature flag would have had to be rebuilt by whoever turns that flag on. */}
+      <div className="lobby-dashboard" style={styles.dashboard}>
+      <div style={styles.dashboardColumn}>
       <section style={styles.sandboxStrip}>
         <div style={styles.sandboxCopy}>
-          <span style={styles.sandboxTitle}>👥 Sandbox Multiplayer</span>
+          {/* Design note #1123: the left column's heading is the invitation, so it names the game rather than
+              the plumbing. "Sandbox Multiplayer" described the transport; this describes the door. */}
+          <span style={styles.sandboxTitle}>▶ Play Project 18XX</span>
           {/* Design note #1114: shortened, as asked. The cut half named the plumbing -- Firestore, no wallet,
               no contract -- which is a developer's sentence on a screen a player reads. What survives is what
               they can act on. The plumbing is still stated, once, in the status pill below. */}
@@ -677,6 +703,37 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
         />
       </section>
 
+      </div>
+      {/* The right column: what the world is doing, as opposed to what you can do about it. */}
+      <div style={styles.dashboardColumn}>
+      {/* Design note #1123: DOCKED AT THE TOP OF THE STATUS COLUMN, as asked. It used to sit above
+          everything, in the run of error banners -- which put a permanent, deliberate state in the slot the
+          screen uses for things that have gone wrong. In a column headed by "on-chain rooms are paused" it
+          is reading the same fact from the other side, and #1114's argument for a quiet pill over an amber
+          slab is unchanged: nothing here is broken. */}
+      {chainError && (
+        <div style={styles.chainPill} title={chainError}>
+          <span style={styles.chainDot} aria-hidden="true" />
+          Offline · sandbox active
+        </div>
+      )}
+      {!WEB3_LOBBY_ENABLED && (
+        <section style={styles.sandboxStrip}>
+          <div style={styles.sandboxCopy}>
+            <span style={styles.sandboxTitle}>⛓ On-chain rooms — paused</span>
+            {/* Design note #1123: the flag name and the filename stay. This card is the one place on the
+                screen whose whole audience is whoever turns the lobby back on -- #1119 moved developer text
+                OFF the surfaces players read, which is a different rule from deleting it everywhere. */}
+            <span style={styles.sandboxNote}>
+              The Juno wallet lobby is switched off while sandbox multiplayer is being tested.
+              Flip <code>WEB3_LOBBY_ENABLED</code> in <code>Lobby.tsx</code> to bring it back.
+            </span>
+          </div>
+        </section>
+      )}
+      </div>
+      </div>
+
       {/* Design note #525: THE WEB3 LOBBY IS PARKED, NOT DELETED. Gated behind ONE flag rather than removed, and the
          constant is at the top of this file where it can be found -- deleting a working staging room to run a
          playtest would cost far more to rebuild than it costs to switch off, and #24 already records what happens
@@ -685,17 +742,9 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
          a room list that cannot be joined, which is a worse trap than the one being removed: a control that looks
          live and refuses is harder to dismiss than one that is absent.
          THE SANDBOX PATHS ARE OUTSIDE IT and unaffected -- the same placement argument #24 made for the hatch. */}
-      {!WEB3_LOBBY_ENABLED ? (
-        <section style={styles.sandboxStrip}>
-          <div style={styles.sandboxCopy}>
-            <span style={styles.sandboxTitle}>⛓ On-chain rooms — paused</span>
-            <span style={styles.sandboxNote}>
-              The Juno wallet lobby is switched off while sandbox multiplayer is being tested.
-              Flip <code>WEB3_LOBBY_ENABLED</code> in <code>Lobby.tsx</code> to bring it back.
-            </span>
-          </div>
-        </section>
-      ) : activeRoomId && room ? (
+      {/* Design note #1123: FULL WIDTH, BELOW THE GRID. The paused card above is status; everything this
+          branch renders is a primary surface, and it gets the whole page the moment the flag turns on. */}
+      {!WEB3_LOBBY_ENABLED ? null : activeRoomId && room ? (
         <StagingRoom
           room={room}
           seats={seats}
@@ -1397,6 +1446,14 @@ function Banner({ tone, text }: { tone: "error" | "warn"; text: string }) {
 /* Inline styles                                                       */
 /* ------------------------------------------------------------------ */
 
+/* Design note #1123: the one rule inline styles cannot carry. Kept next to the grid it collapses rather
+   than in a shared sheet -- this file has no other CSS and a second consumer would be a reason to move it. */
+const LOBBY_CSS = `
+@media (max-width: 860px) {
+  .lobby-dashboard { grid-template-columns: 1fr !important; }
+}
+`;
+
 const styles: Record<string, React.CSSProperties> = {
   /* ==================================================================
       DESIGN NOTE 1114: A WIDTH CAP, AND THE GROUND STAYS ON THE TOKEN
@@ -1466,23 +1523,43 @@ const styles: Record<string, React.CSSProperties> = {
   // reusing any of the blue/green/amber the real gameplay controls use --
   // this is a developer affordance, and it should not read as another way
   // to start a real game. ----
+  /* ==================================================================
+      DESIGN NOTE 1123: A CARD IN A COLUMN, NOT A STRIP ACROSS THE PAGE
+     ==================================================================
+     REPORTED as "the lobby looks too much like a settings menu", and the strips are why: four full-width
+     bands stacked down a 1040px page, each the same height and weight, so nothing on the screen claimed to
+     be the thing you came to do. A settings menu is exactly what a stack of equal-weight full-width rows is.
+     COLUMN-ORIENTED NOW. `flexDirection: "column"` rather than a row with `space-between`, because these are
+     cards in a two-column grid: the copy sits above its controls instead of beside them, which is what lets
+     two of these stand side by side at half width without the buttons crushing the text.
+     THE `margin: "0 28px"` IS GONE and it was a bug. #1114 added the `content` wrapper with its own 20px
+     inset; this margin predates it and was never removed, so the strips sat 48px in while every panel beside
+     them sat at 20px. Two different left edges on one page, from a rule nobody had re-read. */
   sandboxStrip: {
     display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: "20px",
-    flexWrap: "wrap",
-    margin: "0 28px",
-    padding: "16px 20px",
-    backgroundColor: "#1a1424",
+    flexDirection: "column",
+    alignItems: "stretch",
+    gap: "14px",
+    padding: "20px",
+    backgroundColor: SANDBOX_PANEL,
     borderWidth: "1px",
     borderStyle: "solid",
-    borderColor: "#4a3a6a",
+    borderColor: SANDBOX_RULE,
     borderRadius: "12px",
   },
+  /* Design note #1123: the two columns. `1fr 1fr` on desktop and a single column under 860px -- the same
+     shape netadao.org's own `.two-col` uses, collapsing at the same kind of breakpoint. `alignItems: start`
+     so a short status card does not stretch to match a tall play card; they are siblings, not a table row. */
+  dashboard: {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    alignItems: "start",
+    gap: "16px",
+  },
+  dashboardColumn: { display: "flex", flexDirection: "column", gap: "16px", minWidth: 0 },
   sandboxCopy: { display: "flex", flexDirection: "column", gap: "4px", flex: 1, minWidth: "260px" },
-  sandboxTitle: { fontSize: FONT_SIZE.heading, fontWeight: 800, color: "#d9c0f5" },
-  sandboxNote: { fontSize: FONT_SIZE.small, color: "#9a8ab0", lineHeight: LINE_HEIGHT.normal },
+  sandboxTitle: { fontSize: FONT_SIZE.heading, fontWeight: 800, color: SANDBOX_TITLE },
+  sandboxNote: { fontSize: FONT_SIZE.small, color: SANDBOX_TEXT, lineHeight: LINE_HEIGHT.normal },
   sandboxButton: {
     flexShrink: 0,
     fontSize: FONT_SIZE.control,
@@ -1491,9 +1568,9 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "8px",
     borderWidth: "1px",
     borderStyle: "solid",
-    borderColor: "#7a5aa8",
-    backgroundColor: "#3a2a56",
-    color: "#e8d8ff",
+    borderColor: SANDBOX_RULE_STRONG,
+    backgroundColor: SANDBOX_RAISED,
+    color: SANDBOX_INK,
     cursor: "pointer",
   },
   browserGrid: {
@@ -1726,14 +1803,28 @@ const styles: Record<string, React.CSSProperties> = {
      TWO BACKGROUNDS, ONE ELEMENT: the fill is painted over the gradient with `padding-box`/`border-box`
      origins, so the 1px edge shows the axis and the centre stays a dark control with `#f2f0eb` at 16.8:1
      on it. */
+  /* ==================================================================
+      DESIGN NOTE 1123: THE BRAND USES THE GRADIENT FOR TEXT, NOT FOR BUTTONS
+     ==================================================================
+     ASKED FOR as a gradient FILL with pure black bold text, and the fill is the right instinct -- a hairline
+     gradient border is a weak call to action for the one control this screen exists to offer. The colours
+     were the problem, twice over.
+     THE SUPPLIED GRADIENT WAS NOT NETA'S. `#00C3FF -> #FF00EA` was given as "the exact Neta DAO gradient";
+     netadao.org's own `--gradient` is `#C9338A -> #5B8EF0`, which is what `BRAND_GRADIENT` already held.
+     AND BLACK ON THE REAL ONE FAILS. 4.12:1 at the pink end against a 14px bold label, where the bar is 4.5 --
+     14px bold is not "large text", which starts at 18.66px bold. Paper on it fails too, at 4.26:1. There is
+     no ink that clears AA across that sweep, because the gradient crosses mid-luminance in the middle.
+     SO IT IS NETA'S ACTUAL PRIMARY BUTTON. `.btn-primary` on their site is `background: var(--paper); color:
+     var(--ink)` -- a paper slab with ink text, 17.59:1, and the strongest thing this palette can put on a
+     dark page. The gradient stays where the brand puts it: `.grad-text`, and the borders it already edges. */
   primaryButton: {
     fontSize: FONT_SIZE.control,
     fontWeight: 700,
     padding: CONTROL_PADDING.button,
     borderRadius: "8px",
     border: "1px solid transparent",
-    background: `linear-gradient(#141414, #141414) padding-box, ${BRAND_GRADIENT} border-box`,
-    color: "#f2f0eb",
+    backgroundColor: CARD_SURFACE,
+    color: INK,
     cursor: "pointer",
   },
   /* Design note #1114: the ghost button, as asked -- transparent, light text, dark edge. `#3a3a3a` is the
@@ -1794,7 +1885,11 @@ const styles: Record<string, React.CSSProperties> = {
   pillLive: { backgroundColor: "#14301f", color: "#8fe0b0" },
   pillClosed: { backgroundColor: "#2a1614", color: "#f0b0a8" },
   banner: {
-    margin: "0 28px",
+    /* Design note #1123: the SAME stale inset the sandbox strips carried, found by the assertion written for
+       those. #1114's `content` wrapper supplies the 20px; this 28px predates it and put the error banners on
+       a third left edge, 48px in, beside panels at 20px. A margin that survived the thing it was compensating
+       for -- which is the shape of nearly every defect in this file's history. */
+    margin: 0,
     padding: "10px 14px",
     borderRadius: "8px",
     fontSize: FONT_SIZE.body,

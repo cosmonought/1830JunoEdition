@@ -57,6 +57,61 @@ export const INK_MID = "#161616";
 /** Raised surfaces and hover states. */
 export const INK_RAISED = "#1c1c1c";
 
+/* ==================================================================
+    DESIGN NOTE 1117: THE VIEWPORT IS A STEP ON THE LADDER, AND IT HAD FIVE VALUES
+   ==================================================================
+   REPORTED: "the Stocks and Rail Map have a charcoal-coloured viewport background, but Auction and Game
+   Ledger don't. I can't tell if the Stock Market doesn't have it or has a different charcoal."
+   THE READ IS EXACT, INCLUDING THE UNCERTAINTY. Every tab painted its own ground and no two agreed:
+
+     Auction        #0f0f0f + hairline   one step over the page, so only the border showed
+     Stocks         #1c1c1c              the raised step, borrowed -- the brightest of the five
+     Rail Map       #141414              painted by the canvas, not by a style object
+     Stock Market   #0f0f0f, no border   the same near-invisible fill AND nothing to outline it
+     Ledger/Tiles/Rules  -- nothing --   content straight onto the #080808 page
+
+   So the Stock Market read as "maybe nothing, maybe different" because it was BOTH: the faintest fill of the
+   five and the only one with no edge to prove it was a surface at all.
+   ONE TOKEN, AND IT IS `#141414` RATHER THAN EITHER EXTREME. `#0f0f0f` is the tab strip's own fill -- a
+   viewport sharing it makes the strip and the board one slab, which is the thing #1084 was fighting when it
+   added a gap. `#1c1c1c` is INK_RAISED, and spending it on the ground leaves nothing above it for the
+   controls that sit ON the ground. `#141414` is the step between: ground #080808, viewport #141414, raised
+   #1c1c1c -- three rungs, each doing one job, and it is the value the Rail Map had already arrived at.
+   IMPORTED RATHER THAN RETYPED, in all six files. Five copies of a hex is precisely how these drifted. */
+export const INK_VIEWPORT = "#141414";
+
+/* ==================================================================
+    DESIGN NOTE 1122: THE SANDBOX PURPLE IS A SIGNAL, SO IT GETS A LADDER RATHER THAN A DELETION
+   ==================================================================
+   PROPOSED as "remove all purple or navy tints from the card backgrounds", and that reads the colour as a
+   leftover. IT IS NOT ONE. The same family paints the lobby's sandbox strips, the in-game OFFLINE SANDBOX
+   badge, the waiting room and the tutorial's primary button -- four surfaces, one meaning, which is what a
+   deliberate signal looks like rather than a miss. Swept to neutral, a player loses the at-a-glance answer to
+   "am I on a chain that can take my money, or not", and the only thing left saying so is prose.
+   SO IT IS RETONED, NOT REMOVED. The old values were built before the ink ladder existed -- `#1a1424` panels
+   with `#4a3a6a` borders sat at their own arbitrary lightnesses and read as a different application. These
+   are luminance-matched to the neutral rungs they stand beside, with the violet kept in the channel spread:
+
+     SANDBOX_PANEL   #16121e   L 0.0070   sits with INK_VIEWPORT #141414 (L 0.0070)
+     SANDBOX_RAISED  #1f1a2b   L 0.0120   sits with INK_RAISED   #1c1c1c (L 0.0116)
+     SANDBOX_RULE    #332b45   L 0.0286   sits with RULE         #2a2a2a (L 0.0232)
+
+   THE HAIRLINES ARE 1.50:1 AND THAT IS NOT A FAILURE. The neutral hairline they sit beside is 1.40:1 on the
+   same page -- a separator between two dark surfaces is decoration, never the sole carrier of a fact, and
+   holding these to 3:1 would make the sandbox chrome louder than the app it borders. Matched to what the rest
+   of the shell already does rather than to a bar that does not apply.
+   THE INK CLEARS AA WITH ROOM: title 10.36:1, note 7.18:1, button ink 12.20:1.
+   `#7a5aa8` IS NOT IN THIS SET AND MUST NOT BE SWEPT INTO IT. It is Plum, a SEAT colour in `playerLabels.ts`,
+   and it collides by coincidence with the old `sandboxButton` border. A sweep keyed on the hex alone would
+   either miss the chrome or repaint a player -- which is the whole reason these are named constants now. */
+export const SANDBOX_PANEL = "#16121e";
+export const SANDBOX_RAISED = "#1f1a2b";
+export const SANDBOX_RULE = "#332b45";
+export const SANDBOX_RULE_STRONG = "#463c5e";
+export const SANDBOX_TITLE = "#cbbce0";
+export const SANDBOX_TEXT = "#a99cbe";
+export const SANDBOX_INK = "#e2d6f2";
+
 /** The hairline. Rules between rows, chip borders.
  *
  *  READS SLIGHTLY STRONGER THAN THE SLATE IT REPLACES, which is worth stating

@@ -271,7 +271,13 @@ describe("the three effect categories gate their own cues", () => {
        ANDed with the master switch -- turning all effects off must not be overridden by a category left on. */
     expect(APP).toContain("sfxEnabledRef.current && sfxRevenueRef.current");
     expect(APP).toContain("sfxEnabledRef.current && sfxPayoutRef.current");
-    expect(APP).toContain("useTurnWhistle(isMyTurn, sfxEnabled && sfxTurnEnabled)");
+        /* Design note #1116 ADDED A THIRD CONDITION, not a third source of truth: the whistle is now also
+       gated on the opening titles not running, so the "your turn" cue does not fire over the cinematic that
+       the very same event starts. The CLAIM this case makes is the AND -- the master switch and the
+       category both still reach the whistle -- so it is asserted as the fragment they share rather than as
+       the complete expression, which is the anchor rule this file's own header states. */
+    expect(APP).toContain("useTurnWhistle(isMyTurn, sfxEnabled && sfxTurnEnabled");
+    expect(APP).toContain("&& !introPlaying);");
   });
 
   it("reads the categories through refs at the cue sites", () => {

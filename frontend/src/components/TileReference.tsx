@@ -35,6 +35,8 @@ import { TILE_CATALOG_BY_ID, type TileColorTier } from "./hexTileCatalog";
 import type { MapGridResponse } from "./hexContractTypes";
 import { FONT_SIZE } from "../styles/typography";
 import { tileStockTable } from "../utils/tileSupply";
+/* Design note #1117: the one viewport ground, shared rather than retyped. */
+import { INK_VIEWPORT } from "../styles/palette";
 import {
   isUpgradeDeadEnd,
   tileUpgradeGraph,
@@ -368,6 +370,21 @@ export default TileReference;
 
 const styles: Record<string, React.CSSProperties> = {
   root: {
+    /* ==================================================================
+        DESIGN NOTE 1117: THIS TAB HAD NO VIEWPORT AT ALL
+       ==================================================================
+       It rendered its content straight onto the #080808 page while four other tabs each drew a surface of
+       their own, which is what the report is describing: switching to this tab, the ground drops away.
+       The border and radius are here for the same reason the fill is -- the Stock Market had the fill and no
+       edge, and read as "maybe there is no viewport", so a surface without an outline is only half of one.
+       THE MARGIN STANDS IN FOR `canvasPane`. The workspace tabs get their 20px inset from that wrapper; the
+       reference tabs render outside it, so they carry the same inset themselves rather than running to the
+       window edge and losing the border they were just given. */
+    // Design note #1118: top edge closed to meet the tab strip, same as `canvasPane`.
+    margin: "0 20px 20px",
+    backgroundColor: INK_VIEWPORT,
+    border: "1px solid #2a2a2a",
+    borderRadius: "10px",
     display: "flex",
     flexDirection: "column",
     gap: "18px",

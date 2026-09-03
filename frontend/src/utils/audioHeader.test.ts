@@ -68,7 +68,18 @@ describe("the shell owns the audio state", () => {
 });
 
 describe("the header renders two independent toggles", () => {
-  const GROUP = sliceBetween(CONTROLS, "styles.topBarAudioGroup", "</span>");
+  /* ==================================================================
+      DESIGN NOTE 1120: THE END ANCHOR WAS THE FIRST `</span>`, AND THAT STOPPED BEING THE GROUP'S
+     ==================================================================
+     `</span>` was a sound anchor while the group held two buttons and nothing else -- the first one to appear
+     WAS the group's own close. #1120 put the station name between the buttons, as a `<span>`, so the slice
+     ended after the radio button and the three cases about the SFX button began failing on markup that had
+     not changed.
+     ANCHORED ON `<AudioControlPopover` INSTEAD, which is the first thing AFTER both buttons and is structural
+     rather than incidental: a popover is what this group exists to open, so anything added between the
+     buttons stays inside the slice. THE HARNESS CAUGHT ITS OWN DRIFT -- "is aimed at the audio group" failed
+     first and named the reason, which is what that case is for. */
+  const GROUP = sliceBetween(CONTROLS, "styles.topBarAudioGroup", "<AudioControlPopover");
 
   it("is aimed at the audio group", () => {
     // The slice's own assumption -- #1008's harness learned this the hard way on a duplicated anchor.

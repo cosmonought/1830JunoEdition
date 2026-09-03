@@ -213,13 +213,27 @@ export default function TopBar({
           whether pressing it turns it off; "Stop the radio stream" is the answer they were after. */}
       {audio && <AudioControls audio={audio} />}
 
+      {/* ==================================================================
+           DESIGN NOTE 1119: THE ENV VAR WAS THE PART ONLY A DEVELOPER COULD USE
+          ==================================================================
+          IT READ "Offline — REACT_APP_CONTRACT_ADDRESS", in warning yellow, permanently, at the top right of
+          a game. A player cannot act on the name of a build variable, and the badge's own note admits what it
+          was doing -- "the badge shows the actionable half" -- while `firstMissingEnvVar` makes the
+          "actionable half" the variable name. It was actionable for whoever runs the build, which is not who
+          is looking at it.
+          THE FACT SURVIVES, THE SHOUTING DOES NOT. It becomes a dot, which is the vocabulary this bar already
+          speaks twice over -- the session key and the wallet each state themselves as a coloured dot with the
+          detail in a `title`. Amber rather than yellow-on-yellow, sitting with the other two status dots, and
+          the full message including the variable name is still one hover away for the person who can fix it.
+          NOT DELETED, because "the chain is not configured" is the reason every on-chain action will fail and
+          a board that silently does nothing is worse than a quiet dot. It is diagnosis, so it is sized like
+          the other diagnoses instead of like an alarm. */}
       {configError && (
-        <span style={styles.offlineBadge} title={configError}>
-          {/* The full message is long and names a rebuild requirement; the
-              badge shows the actionable half and the tooltip carries the
-              rest, so the bar never wraps. */}
-          Offline — {firstMissingEnvVar(configError) ?? "chain not configured"}
-        </span>
+        <span
+          style={{ ...styles.topBarDot, ...styles.topBarDotOffline }}
+          title={`Offline — ${configError}`}
+          aria-label={`Offline — ${firstMissingEnvVar(configError) ?? "chain not configured"}`}
+        />
       )}
 
       {wallet.error && (

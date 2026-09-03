@@ -81,6 +81,8 @@ import { terrainFeeDue } from "../utils/terrainFee";
 // Design note #727: the palette a private power's hex is marked with.
 import { PRIVATE_POWER_GLOW_STOPS } from "../utils/privatePowerGlow";
 import type { PrivateCompanyState } from "../utils/gameState";
+/* Design note #1117: the one viewport ground, shared rather than retyped. */
+import { INK_VIEWPORT } from "../styles/palette";
 import {
   cityIndexAtPoint,
   cityNodePoints,
@@ -802,7 +804,11 @@ export function HexGridRenderer({
     // Everything outside the authentic 93-hex footprint (including the real
     // A13/A15 gap) simply shows this solid fill; no decorative hex fills any
     // of that space anymore.
-    ctx.fillStyle = "#141414";
+    /* Design note #1117: the Rail Map is the tab that had ALREADY arrived at the right value, which is why
+       #1117 adopted it rather than inventing one. Reading the token rather than repeating the literal is
+       what stops the canvas and the four style objects drifting apart again -- and this one is easiest to
+       miss, because it is a paint call in a render loop rather than a CSS property. */
+    ctx.fillStyle = INK_VIEWPORT;
     ctx.fillRect(0, 0, width, height);
 
     ctx.translate(view.panX, view.panY);

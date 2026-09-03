@@ -77,6 +77,7 @@ import {
   CARD_INK_MUTED,
   CARD_SURFACE,
   CARD_SURFACE_MUTED,
+  INK_VIEWPORT,
 } from "../styles/palette";
 import { showsCurseBesideName } from "../utils/carcosaCurse";
 import CarcosaMark from "./CarcosaMark";
@@ -2593,7 +2594,8 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "12px",
     width: "100%",
     padding: "14px 20px",
-    backgroundColor: "#1c1c1c",
+    // Design note #1117: the one viewport ground, shared by every tab.
+    backgroundColor: INK_VIEWPORT,
     border: "1px solid #2a2a2a",
     borderRadius: "10px",
     boxSizing: "border-box",
@@ -2704,7 +2706,10 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "6px 10px",
     borderRadius: "6px",
     border: "1px solid #3a3a3a",
-    backgroundColor: "#161616",
+    /* Design note #1117: was #161616, a well one step under the old #1c1c1c ground. The ground moved
+       DOWN to #141414 and #161616 landed on top of it -- a well at the same lightness as its floor is
+       not a well. Dropped to the panel step so it still reads as inset. */
+    backgroundColor: "#0f0f0f",
     color: "#c8c6c0",
     cursor: "pointer",
   },
@@ -2739,7 +2744,10 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     padding: "0 9px",
     border: "none",
-    backgroundColor: "#161616",
+    /* Design note #1117: was #161616, a well one step under the old #1c1c1c ground. The ground moved
+       DOWN to #141414 and #161616 landed on top of it -- a well at the same lightness as its floor is
+       not a well. Dropped to the panel step so it still reads as inset. */
+    backgroundColor: "#0f0f0f",
     color: "#8a8a86",
     fontFamily: "inherit",
     cursor: "pointer",

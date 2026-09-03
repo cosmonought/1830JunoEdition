@@ -36,9 +36,11 @@ import {
   ALERT_WARN_BORDER,
   ALERT_WARN_INK,
   CARD_HIGHLIGHT_BORDER,
+  CARD_SURFACE,
   CHIP_INERT_BG,
   CHIP_INERT_BORDER,
   CHIP_INERT_INK,
+  INK_VIEWPORT,
 } from "../styles/palette";
 import { corporationFullName, corporationTitle } from "../utils/corporationNames";
 import { depotInventory, derivePhase, rustOutlook, tileErasAt } from "../utils/gamePhase";
@@ -507,10 +509,11 @@ export function PlayerAssetsSection({
                       // Operating Round rows use. Applied to the ink and a hairline underline rather than as a filled background:
                       // eight saturated fills across a header row would out-shout the percentages underneath, which are the data.
                       // The colour is a wayfinding aid for tracking one column down a tall table, not a highlight.
-                      color: stationTickerColor(company.company_id),
+                      // Design note #1116: both are lifted off the dark panel, the ink further than the rule.
+                      color: liveryInkOnPanel(company.company_id),
                       borderBottomWidth: "2px",
                       borderBottomStyle: "solid",
-                      borderBottomColor: stationTickerColor(company.company_id),
+                      borderBottomColor: liveryRuleOnPanel(company.company_id),
                     }}
                     title={corporationTitle(company.ticker)}
                   >
@@ -901,8 +904,79 @@ function truncate(address: string, lead = 10, trail = 6): string {
 /* Inline styles                                                      */
 /* ------------------------------------------------------------------ */
 
+/* ==================================================================
+    DESIGN NOTE 1116: A LIVERY AS INK IS NOT THE SAME QUESTION AS INK ON A LIVERY
+   ==================================================================
+   REPORTED: "the NYC text is disappearing into the dark background."
+   AND IT IS 1.06:1, which is not faint, it is invisible -- `#1a1a1a` on this panel. But NYC is only the
+   worst of four: the B&O is 1.89, the CPR 2.50 and the PRR 3.13, all under the bar on the same header row. A
+   fix that special-cased NYC -- which is what was suggested -- would have left three corporations broken and
+   made the next report look like a different bug.
+   THE GROUND THOSE RATIOS ARE AGAINST IS `#141414`, AND IT WAS NOT WHEN THEY WERE FIRST MEASURED. This note
+   originally cited `#141414` while the ledger still had NO background of its own and sat on the `#080808`
+   page -- the ratios were quoted against a surface that did not exist yet. #1117 gave every tab the same
+   `INK_VIEWPORT` ground and made the figure true rather than aspirational. It is recorded because the mistake
+   was invisible: a darker ground gives MORE contrast, so every number here was conservative and nothing
+   looked wrong. The next such slip may not be in the safe direction.
+   `bestContrastTextColor` DOES NOT ANSWER THIS. That function picks black or white to sit ON a livery; this
+   needs the livery itself to work AS ink on the panel, which is the opposite direction and has no existing
+   helper. `desaturatedLiveryInk` was the tempting reuse and was measured and rejected: at 55% toward the
+   neutral grey it still leaves five of the eight under 4.5, because a mid-grey is barely lighter than this
+   ground.
+   SO IT LIFTS TOWARD PAPER, 55% of the way to `CARD_SURFACE`. Worst case becomes 5.77:1 (NYC) and the
+   brightest liveries land near 14:1; every corporation keeps its own hue, which is the entire point of the
+   colour here -- design note #13 calls it "a wayfinding aid for tracking one column down a tall table", and
+   forcing NYC to white would have deleted exactly that for the one column that needed it most.
+
+   THE UNDERLINE IS LIFTED TOO, AND THIS PARAGRAPH REPLACES ONE THAT WAS WRONG. The first draft kept the raw
+   livery on the 2px rule and argued that a rule answers to the 3:1 non-text bar rather than 4.5 -- true, and
+   irrelevant, because the rule was measured afterwards and NYC's is 1.06:1 against the same panel. It was
+   invisible for exactly the same reason the text was, and the sentence claiming it "keeps the column
+   identifiable at a glance" was describing a line nobody can see. Four of the eight failed 3:1.
+   THE RULE LIFTS LESS THAN THE INK -- 40%, worst case 3.71:1 -- because it only has to clear the non-text
+   bar, and every point of lift is saturation spent. Two ratios, not one: the underline stays the more
+   saturated of the pair, so the column still reads as its own colour, and the header still reads as words. */
+const LEDGER_INK_LIFT_PERCENT = 55;
+const LEDGER_RULE_LIFT_PERCENT = 40;
+
+/** Mixes a corporation's livery `percent` of the way toward `CARD_SURFACE`, so it can be read AS ink or as a
+ *  rule against the dark ledger panel. One function, two call sites, two percentages -- see #1116. */
+function liftLivery(companyId: number, percent: number): string {
+  const livery = stationTickerColor(companyId);
+  if (!/^#[0-9a-fA-F]{6}$/.test(livery)) return CARD_SURFACE;
+  const channel = (i: number) => {
+    const from = parseInt(livery.slice(i, i + 2), 16);
+    const to = parseInt(CARD_SURFACE.slice(i, i + 2), 16);
+    return Math.round(from + ((to - from) * percent) / 100);
+  };
+  return `#${[1, 3, 5].map((i) => channel(i).toString(16).padStart(2, "0")).join("")}`;
+}
+
+function liveryInkOnPanel(companyId: number): string {
+  return liftLivery(companyId, LEDGER_INK_LIFT_PERCENT);
+}
+
+function liveryRuleOnPanel(companyId: number): string {
+  return liftLivery(companyId, LEDGER_RULE_LIFT_PERCENT);
+}
+
 const styles: Record<string, React.CSSProperties> = {
   root: {
+    /* ==================================================================
+        DESIGN NOTE 1117: THIS TAB HAD NO VIEWPORT AT ALL
+       ==================================================================
+       It rendered its content straight onto the #080808 page while four other tabs each drew a surface of
+       their own, which is what the report is describing: switching to this tab, the ground drops away.
+       The border and radius are here for the same reason the fill is -- the Stock Market had the fill and no
+       edge, and read as "maybe there is no viewport", so a surface without an outline is only half of one.
+       THE MARGIN STANDS IN FOR `canvasPane`. The workspace tabs get their 20px inset from that wrapper; the
+       reference tabs render outside it, so they carry the same inset themselves rather than running to the
+       window edge and losing the border they were just given. */
+    // Design note #1118: top edge closed to meet the tab strip, same as `canvasPane`.
+    margin: "0 20px 20px",
+    backgroundColor: INK_VIEWPORT,
+    border: "1px solid #2a2a2a",
+    borderRadius: "10px",
     display: "flex",
     flexDirection: "column",
     gap: "20px",

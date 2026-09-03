@@ -22,6 +22,8 @@ import { FONT_SIZE } from "../styles/typography";
 import { corporationLabel } from "../utils/corporationNames";
 import { bestContrastTextColor, corporationLiveryColor } from "../styles/corporationLivery";
 import { CorporateLogo } from "./CorporateLogo";
+/* Design note #1117: the one viewport ground, shared rather than retyped. */
+import { INK_VIEWPORT } from "../styles/palette";
 import {
   PAY_DOUBLE_JUMP_MULTIPLE,
   WITHHOLD_DOUBLE_DROP_MULTIPLE,
@@ -1471,7 +1473,8 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     gap: "10px",
     padding: "16px",
-    backgroundColor: "#0f0f0f",
+    // Design note #1117: the one viewport ground, shared by every tab.
+    backgroundColor: INK_VIEWPORT,
     borderRadius: "8px",
     color: "#f2f0eb",
     fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif",

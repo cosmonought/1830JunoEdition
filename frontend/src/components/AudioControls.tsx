@@ -63,6 +63,13 @@ export function AudioControls({ audio }: AudioControlsProps) {
   const [openPanel, setOpenPanel] = React.useState<"radio" | "sfx" | null>(null);
   const audioGroup = React.useRef<HTMLSpanElement | null>(null);
 
+  /* Design note #1120: resolved from the list rather than held as its own string, so the name beside the
+     button and the row ticked inside the popover cannot disagree -- they are the same lookup on the same id.
+     `null` where the shell has wired no stations, which is what keeps the single-stream case looking exactly
+     as it did: one glyph, no label. */
+  const currentStationName =
+    audio.stations?.find((station) => station.id === audio.stationId)?.name ?? null;
+
   return (
       /* Design note #1075: `position: relative` so the popover hangs from the group rather than from the
          viewport -- the bar scrolls with the header on a narrow window, and a fixed panel would part
@@ -77,11 +84,27 @@ export function AudioControls({ audio }: AudioControlsProps) {
           /* Design note #1075: THE CLICK OPENS THE PANEL, it no longer toggles. Off lives inside, which is
              what lets the dim mean one thing -- see the component's own note for why the two jobs could not
              share a control. With no volume wiring the button falls back to being a plain toggle. */
-          onClick={() =>
-            audio.onRadioVolume
-              ? setOpenPanel((current) => (current === "radio" ? null : "radio"))
-              : audio.onToggleMusic()
-          }
+          /* ==================================================================
+              DESIGN NOTE 1106: THE PRESS WAS ASYMMETRIC IN THE NOTE AND SYMMETRIC IN THE CODE
+             ==================================================================
+             ASKED FOR after a playtest: "the radio starts dimmed; the first press should turn it on AND open
+             the slider." #1106 WROTE THAT DOWN AND NEVER WIRED IT -- `WAKE_VOLUME` sat in this file unused,
+             which is how a constant declared for a behaviour proves the behaviour is missing. It surfaced
+             while adding the station name (#1120), because a name shown only while playing is invisible when
+             the first press does not start playback.
+             ASYMMETRIC ON PURPOSE. Pressing a stopped radio starts it and opens the panel; pressing a playing
+             one only opens the panel. Turning it OFF is the popover's transport button, which is the whole of
+             #1075's argument -- one control, one meaning, and the dim then says exactly one thing.
+             THE WAKE IS A FLOOR, NOT A RESTORE. Only a level of zero is overridden, so a player who chose a
+             quiet radio gets their level back and a player who never touched it does not get silence. */
+          onClick={() => {
+            if (!audio.onRadioVolume) return audio.onToggleMusic();
+            if (!audio.musicPlaying) {
+              audio.onToggleMusic();
+              if ((audio.radioVolume ?? 0) <= 0) audio.onRadioVolume(WAKE_VOLUME);
+            }
+            setOpenPanel((current) => (current === "radio" ? null : "radio"));
+          }}
           aria-expanded={audio.onRadioVolume ? openPanel === "radio" : undefined}
           aria-pressed={audio.onRadioVolume ? undefined : audio.musicPlaying}
           /* ==================================================================
@@ -107,17 +130,43 @@ export function AudioControls({ audio }: AudioControlsProps) {
           {/* A note, not a speaker: this one is about MUSIC, and the speaker beside it is about the game. */}
           &#9835;
         </button>
+        {/* ==================================================================
+            DESIGN NOTE 1120: THE STATION HAD NOWHERE TO SAY ITS OWN NAME
+           ==================================================================
+           ASKED FOR once the header had the room: "could we have the current station title displayed next to
+           the radio button?" -- and the picker made it necessary rather than merely nice. With one stream the
+           note glyph was a complete label; with four, the button says a radio exists and nothing about WHICH
+           one, so the only way to read the current station was to open the popover that changes it.
+           A SIBLING, NOT A LABEL INSIDE THE BUTTON. The button is a 26px circle and #299's rule about tabs
+           applies to it too -- growing it to fit a word would make a navigation-sized control out of an icon,
+           and every other icon in this row would then be the odd one out. Outside it, the name is text in a
+           row of text.
+           IT IS HIDDEN WHILE THE RADIO IS OFF, which is the one piece of state the glyph already carries: a
+           station name beside a dimmed button would be naming something that is not playing. `aria-hidden`
+           because the button's own label already announces both the state and the control -- a screen reader
+           that meets this twice learns nothing the second time. */}
+        {audio.musicPlaying && currentStationName && (
+          <span style={styles.topBarStationName} title={`Playing ${currentStationName}`} aria-hidden="true">
+            {currentStationName}
+          </span>
+        )}
         <button
           type="button"
           style={{
             ...styles.topBarIconButton,
             ...(audio.sfxEnabled ? styles.topBarIconButtonOn : {}),
           }}
-          onClick={() =>
-            audio.onSfxVolume
-              ? setOpenPanel((current) => (current === "sfx" ? null : "sfx"))
-              : audio.onToggleSfx()
-          }
+          /* Design note #1106: the same asymmetry, because the report named both buttons -- "this probably
+             also applies to the SFX button". The one difference is that effects have no transport to start,
+             so waking is only ever a volume floor. */
+          onClick={() => {
+            if (!audio.onSfxVolume) return audio.onToggleSfx();
+            if (!audio.sfxEnabled) {
+              audio.onToggleSfx();
+              if ((audio.sfxVolume ?? 0) <= 0) audio.onSfxVolume(WAKE_VOLUME);
+            }
+            setOpenPanel((current) => (current === "sfx" ? null : "sfx"));
+          }}
           aria-expanded={audio.onSfxVolume ? openPanel === "sfx" : undefined}
           aria-pressed={audio.onSfxVolume ? undefined : audio.sfxEnabled}
           /* Design note #1078: the same state in the same place, for the same reason. */
@@ -166,6 +215,13 @@ export function AudioControls({ audio }: AudioControlsProps) {
             onVolumeChange={audio.onRadioVolume}
             enabled={audio.musicPlaying}
             onEnabledChange={audio.onToggleMusic}
+            /* Design note #1115: THESE THREE WERE TYPED AND NEVER PASSED, which is why the picker was
+               reported missing rather than broken -- the popover renders it only when it receives a list,
+               so an unforwarded prop is an invisible feature. `tsc` cannot catch it: every one of them is
+               optional, so omitting all three is a valid call. */
+            stations={audio.stations}
+            stationId={audio.stationId}
+            onStationChange={audio.onStationChange}
             onClose={() => setOpenPanel(null)}
             owner={audioGroup}
           />

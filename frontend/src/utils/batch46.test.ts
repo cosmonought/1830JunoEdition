@@ -31,7 +31,9 @@ const {
 } = require("./variantSfx") as typeof import("./variantSfx");
 const { UNPREDICTABLE_REVENUE_FLAVOR } =
   require("../constants/flavorText") as typeof import("../constants/flavorText");
-const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
+/* Design note #1121: `sliceBetween` joins `readStripped` here, so a case about one guarded construction can
+   be read out of that construction rather than counted across the whole module. */
+const { readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
 
 const APP = readStripped("App.tsx");
 const AUDIO = readStripped("utils/audio.ts");
@@ -339,9 +341,25 @@ describe("the bed gets out of the way", () => {
        construction can assign to it, which is the shape that would have to be undone to reintroduce the
        throw. Counted, because `playQuietly` above has a `catch` of its own and an unbounded match would be
        satisfied by that one. */
+    /* ==================================================================
+        DESIGN NOTE 1121: A COUNT THAT DISAMBIGUATES IS STILL A COUNT
+       ==================================================================
+       `toBe(2)` WAS A TOTAL, and the note above says why it was written that way -- `playQuietly` has a catch
+       of its own, so an unbounded match would be satisfied by the wrong one. Sound reasoning, wrong
+       instrument: #1115 added `loadRadioStation` and `saveRadioStation`, each correctly guarding its own
+       `localStorage` access, and the total went to 4. Two try/catches were ADDED TO THIS MODULE and a case
+       about the Audio constructor failed -- which is the definition of an anchor that is not aimed at its
+       subject.
+       SLICED INSTEAD OF COUNTED. The claim has always been about ONE construction: the element is declared
+       before the `try` so the guarded assignment can reach it, and the failure returns rather than throwing.
+       Read out of the span between that declaration and its own catch, so a fifth guard anywhere else in the
+       file is none of this case's business. */
+    const GUARDED = sliceBetween(AUDIO, "let element: HTMLAudioElement;", "element.volume");
     expect(AUDIO).toContain("let element: HTMLAudioElement;");
-    expect(AUDIO).toContain("element = new Audio(");
-    expect(AUDIO.split("} catch {").length - 1).toBe(2);
+    expect(GUARDED).toContain("element = new Audio(");
+    expect(GUARDED).toContain("} catch {");
+    // The catch RETURNS -- a rethrow, or a fallthrough to `element.volume`, would still match the shape above.
+    expect(GUARDED).toContain("return;");
   });
 });
 

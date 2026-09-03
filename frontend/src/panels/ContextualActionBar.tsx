@@ -4095,8 +4095,32 @@ export default function ContextualActionBar({
       {/* Design note #855: `RouteChipDetail` MOVED INTO THE BAR, beneath the chip row that opens it. It
           rendered here -- outside the sticky element -- so a chip in a travelling bar opened a panel that
           stayed behind. See the chip row for the note. */}
+      {/* ==================================================================
+          DESIGN NOTE 1119: THE HINT NAMED THE ONE CAUSE THAT COULD NOT BE TRUE
+         ==================================================================
+         ASKED as a wording question -- "if this is a developer sandbox warning, remove it; if it is a real
+         prompt, make it shorter" -- and it is neither. IT WAS REPORTING THE WRONG REASON.
+         `sessionReady` HERE IS `controlsEnabled && isMyTurn`, which design note #592d already writes down.
+         So `!sessionReady` has two causes and the sentence named only the first. In the offline sandbox
+         `controlsEnabled` is ALWAYS true, so the only cause that can ever fire is the turn -- and every
+         player who saw this line was being told to initialise a session key in a mode that has none.
+         #681 ALREADY SOLVED THIS ONE ROOM AWAY. `StockRoundPanel` answers the same question in precedence
+         order: "the first thing that would stop the click rather than the last one checked." This is that,
+         with the two causes separated out of the flag that had merged them -- both props were already here,
+         so nothing new had to be threaded to tell the truth.
+         THE SESSION-KEY WORDING IS THE SUGGESTED ONE, nearly. "Connect your wallet" was proposed and is a
+         step early: the wallet connects first and the key is authorised after, so a connected player would
+         be told to do something already done. "Set up" is the plain verb for the same action, and the top
+         bar's own button is right there saying "Session Key". */}
       {!sessionReady && (
-        <span style={styles.sidebarHint}>Initialize the session key above to enable these actions.</span>
+        <span style={styles.sidebarHint}>
+          {isMyTurn
+            ? "Set up your session key to take actions."
+            /* `activePlayerName`, the prop the bar already renders as the seat heading three hundred lines
+               up -- so the hint names whoever the header names, rather than inventing a second answer to the
+               same question. #891's shape is the one this codebase produces most, and it starts here. */
+            : `Waiting for ${activePlayerName ?? "the other players"}.`}
+        </span>
       )}
     </>
   );

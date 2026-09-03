@@ -28,6 +28,10 @@ import { MAX_PLAYERS, MIN_PLAYERS, certLimitForPlayers, startingCashForPlayers }
 import { SEAT_COLORS, SEAT_COLOR_NAMES } from "../utils/playerLabels";
 import AudioControls, { type AudioControlsProps } from "./AudioControls";
 import AppFooter from "./AppFooter";
+/* Design note #1122: the sandbox signal ladder. */
+import {
+  SANDBOX_TITLE,
+} from "../styles/palette";
 
 /** Design note #910: the four boolean variants as DATA, so adding a fifth is one row rather than a fifth
  *  hand-written block that could be forgotten -- which is exactly the failure this note is fixing, at the
@@ -551,7 +555,8 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.micro,
     fontWeight: 800,
     letterSpacing: "0.06em",
-    color: "#d9c0f5",
+    // Design note #1122: the sandbox heading tone, shared rather than re-picked.
+    color: SANDBOX_TITLE,
   },
   youTag: {
     fontSize: FONT_SIZE.micro,

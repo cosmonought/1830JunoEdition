@@ -33,6 +33,7 @@ import {
   CARD_INK_POSITIVE,
   CARD_SURFACE,
   CARD_SURFACE_MUTED,
+  INK_VIEWPORT,
 } from "../styles/palette";
 
 import type {
@@ -869,7 +870,8 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     gap: "14px",
     padding: "18px 20px",
-    backgroundColor: "#0f0f0f",
+    // Design note #1117: the one viewport ground, shared by every tab.
+    backgroundColor: INK_VIEWPORT,
     border: "1px solid #2a2a2a",
     borderRadius: "10px",
     color: "#f2f0eb",

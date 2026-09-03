@@ -1823,8 +1823,6 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      BELOW THE STATE, deliberately: this used to sit beside `useRadioStream` and the category it now reads is
      declared here, so the call moved rather than the declaration. Hook ORDER is unchanged relative to every
      other hook in this component, which is the only thing React cares about. */
-  useTurnWhistle(isMyTurn, sfxEnabled && sfxTurnEnabled);
-
   /* Design note #1075: the slider writes THROUGH to the engine as well as into React state. The engine holds
      what the elements actually play at (`audio.ts` #1074) and React holds what the slider draws; a single
      source would mean either the non-component callers reaching into a hook or the slider reading a module
@@ -2018,6 +2016,24 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     previousRoomStatus.current = status;
     if (previous === "waiting" && status === "playing") setIntroPlaying(true);
   }, [sandboxRoom?.status]);
+
+  /* ==================================================================
+      DESIGN NOTE 1116: THE WHISTLE WAITS FOR THE TITLES
+     ==================================================================
+     REPORTED: the "your turn" whistle fires for the first player while the opening titles are still running.
+     AND THE TWO EVENTS ARE THE SAME EVENT, which is why it is not a coincidence to be timed around: the deal
+     lands, the room goes `playing`, and that single moment both starts the titles (#1111) and makes somebody
+     the acting player. The whistle then sounds over a clip with its own soundtrack, announcing a turn nobody
+     can see or take yet.
+     GATED THROUGH `enabled`, NOT THROUGH A SUPPRESSED EDGE, which matters. `useTurnWhistle` reads the mute
+     inside `play` (#1009), so a false here silences the sound WITHOUT consuming the transition -- and the
+     hook's own `wasMyTurn` ref has already advanced past it. That is the correct outcome and worth stating,
+     because the tempting alternative is to hold the edge and fire it on dismissal, which would whistle at a
+     player who has been looking at their own turn for ten seconds and does not need telling. */
+  useTurnWhistle(isMyTurn, sfxEnabled && sfxTurnEnabled && !introPlaying);
+
+
+
 
 
   /* ==================================================================
@@ -10451,11 +10467,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           // for game 0 on chain.
           <>
             <span style={styles.sandboxBadge}>🧪 OFFLINE SANDBOX</span>
-            {/* The phase switcher that stood here moved into the sandbox toolbar and went with it (#578). Two places
-               to change sandbox settings is worse than one, and the seat switcher needed the room for four buttons. */}
-            <span style={styles.roomStripLabel}>
-              Mock state &middot; hotseat controls above
-            </span>
+            {/* ==================================================================
+                DESIGN NOTE 1119: A LABEL THAT OUTLIVED BOTH THINGS IT NAMED
+               ==================================================================
+               "Mock state &middot; hotseat controls above" is gone. It was written when the phase switcher
+               stood on this strip and pointed at controls that #578 moved into the sandbox toolbar; it then
+               kept pointing at them from a strip they had left. "Hotseat" went the same way -- #578's own
+               note records that every sandbox seat is a browser now, so the word named a mode the app no
+               longer has.
+               NOTHING REPLACES IT, because the badge to its left already says this is a sandbox and the
+               toolbar says what can be changed. This was the third statement of the same fact and the only
+               one that was wrong. */}
           </>
         ) : (
           <>

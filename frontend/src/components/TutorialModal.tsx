@@ -15,6 +15,12 @@
 
 import React, { useCallback, useEffect, useState } from "react";
 import { CONTROL_PADDING, FONT_FAMILY, FONT_SIZE, LINE_HEIGHT } from "../styles/typography";
+/* Design note #1122: the sandbox signal ladder. */
+import {
+  SANDBOX_INK,
+  SANDBOX_RAISED,
+  SANDBOX_RULE_STRONG,
+} from "../styles/palette";
 
 const TUTORIALS_OFF_KEY = "1830juno.tutorials_off.v1";
 const SEEN_PREFIX = "1830juno.tutorial_seen.v1.";
@@ -809,9 +815,11 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: "8px",
     borderWidth: "1px",
     borderStyle: "solid",
-    borderColor: "#7a5aa8",
-    backgroundColor: "#3a2a56",
-    color: "#e8d8ff",
+    /* Design note #1122: retoned onto the sandbox ladder. `#7a5aa8` here was the Plum SEAT colour by
+       coincidence, not by intent -- the constants keep the two from being swept together. */
+    borderColor: SANDBOX_RULE_STRONG,
+    backgroundColor: SANDBOX_RAISED,
+    color: SANDBOX_INK,
     cursor: "pointer",
   },
   secondaryButton: {

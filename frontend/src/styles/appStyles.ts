@@ -211,15 +211,30 @@ export const styles: Record<string, React.CSSProperties> = {
      one step of the scale too -- `micro` next to a 31px mark reads as a caption parked beside a logo rather
      than as the second half of one object. The gap tightens for the same reason: a wide gap at a small type
      size is what turns a lockup into two things. */
+  /* ==================================================================
+      DESIGN NOTE 1135: THE PLATE WAS SOLVING A PROBLEM THAT HAD ALREADY MOVED
+     ==================================================================
+     RULED: "I don't like the logo and 'Powered by Neta DAO' being in a pill/container." AND THE PILL CAN
+     SIMPLY GO, which is worth stating rather than just doing, because two notes in a row argued it was
+     load-bearing.
+     #1132 GAVE THE FOOTER AN OPAQUE STRIP so the mark's `screen` blend had a dark backdrop; #1133 narrowed
+     that strip to a plate on the lockup. Both were answering a black box that appeared when the footer sat
+     BELOW the scene layer on bare ink, at the wrong end of the page. #1133's other half fixed that -- the
+     picture reaches the foot of the root now -- and the corner the credit lands in is one of the darkest
+     parts of the whole photograph: worst pixel L 0.0054 under the page scrim, which is visually black.
+     SO THE BACKDROP IS ALREADY WHAT THE PLATE WAS SUPPLYING. `screen` keys against the room itself, and
+     paper reads 16.64:1 on the worst pixel down there. The plate had become a rectangle drawn to guarantee a
+     condition that was true anyway.
+     THE SHADOW IS THE INSURANCE THAT REPLACES IT, and it is cheap: `cover` crops differently by aspect, so
+     some window somewhere puts a brighter part of the room under this corner. A shadow costs nothing when it
+     is not needed and saves the one case where it is -- which a rectangle does too, far more loudly.
+     WHITE, AS RULED, and closer: the credit stops being `#8a8a86` metadata beside a logo and becomes the
+     other half of one object, which is what the tighter gap is for. */
   netaCreditMeta: {
-    fontSize: FONT_SIZE.small,
-    gap: "10px",
-    /* Design note #1133: the plate the mark keys against, sized to the lockup rather than to the window.
-       `screen` erases the clip's black only when the backdrop is dark, and this is that backdrop. */
-    backgroundColor: "#080808",
-    border: "1px solid #2a2a2a",
-    borderRadius: "999px",
-    padding: "4px 14px 4px 6px",
+    fontSize: FONT_SIZE.micro,
+    gap: "5px",
+    color: "#f2f0eb",
+    textShadow: "0 1px 4px rgba(8, 8, 8, 0.85)",
   },
   /* ==================================================================
       DESIGN NOTE 1083: THE PAGE ENDS HERE

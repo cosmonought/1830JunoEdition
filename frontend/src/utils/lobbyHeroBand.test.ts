@@ -168,7 +168,39 @@ describe("the room is the page, and the text carries its own ground", () => {
     expect(CONTROLS_BAR).toContain("bare ? { ...styles.button, ...styles.buttonBig }");
   });
 
-  it("gives the credit its own ink, sized to the lockup rather than the window", () => {
+  it("lets the credit stand on the room, with no plate at all", () => {
+    /* ==================================================================
+        DESIGN NOTE 1135 SUPERSEDES #1132 AND #1133's PLATE ENTIRELY
+       ==================================================================
+       BOTH ARGUED THE PLATE WAS LOAD-BEARING -- `screen` needs a dark backdrop or the clip's own black turns
+       into a rectangle -- and both were answering a black box that appeared because the footer sat BELOW the
+       scene layer, on bare ink, past the bottom of a `100vh` window. #1133's other half fixed that. The
+       corner the credit now lands in is one of the darkest parts of the photograph: worst pixel L 0.0054
+       under the page scrim, paper at 16.64:1.
+       SO THE CONDITION THE PLATE GUARANTEED IS TRUE WITHOUT IT, and what is left is a text shadow -- which
+       covers the same risk (`cover` crops differently per aspect) without drawing a rectangle to do it. */
+    expect(APP_STYLES).toContain("netaCreditMeta: {");
+    const credit = APP_STYLES.slice(APP_STYLES.indexOf("netaCreditMeta: {"));
+    const body = credit.slice(0, credit.indexOf("},"));
+    expect(body).not.toContain("backgroundColor");
+    expect(body).not.toContain("border");
+    expect(body).toContain('color: "#f2f0eb"');
+    expect(body).toContain("textShadow");
+  });
+
+  it("shrinks the lockup without letting its two halves drift apart", () => {
+    /* "Reduce the entire unit by 10%": 31 -> 28 on the mark, `small` -> `micro` on the words. Asserted as the
+       RATIO, because #1129's whole finding was that the pair reads as one object only while the two sizes
+       move together -- a mark that shrinks alone puts the caption back beside a logo. */
+    expect(FOOTER).toContain("const META_MARK_HEIGHT = 28;");
+    expect(APP_STYLES).toContain("netaCreditMeta");
+    const meta = Number(/META_MARK_HEIGHT = (\d+)/.exec(FOOTER)?.[1]);
+    const game = Number(/GAME_MARK_HEIGHT = (\d+)/.exec(FOOTER)?.[1]);
+    expect(meta / game).toBeGreaterThan(1.4);
+    expect(meta / game).toBeLessThan(1.7);
+  });
+
+  it("keeps the footer above the scene and flush to the left", () => {
     /* ==================================================================
         DESIGN NOTE 1133 NARROWS #1132's STRIP
        ==================================================================
@@ -181,7 +213,6 @@ describe("the room is the page, and the text carries its own ground", () => {
     expect(FOOTER).toContain('surface === "meta" ? styles.appFooterMeta');
     const meta = APP_STYLES.slice(APP_STYLES.indexOf("appFooterMeta: {"));
     expect(meta.slice(0, meta.indexOf("},"))).not.toContain("backgroundColor");
-    expect(APP_STYLES).toContain("netaCreditMeta: {");
   });
 
   it("lets the picture reach the foot of the page", () => {
@@ -263,8 +294,10 @@ describe("the room is the page, and the text carries its own ground", () => {
 describe("the animated mark is big enough to read as motion", () => {
   it("sizes by surface, the way `animated` already does", () => {
     expect(FOOTER).toContain("const GAME_MARK_HEIGHT = 18;");
-    // #1124 guessed 2x and overshot; #1129 settles at 1.7x. Asserted as the ratio, below.
-    expect(FOOTER).toContain("const META_MARK_HEIGHT = 31;");
+    /* #1124 guessed 2x and overshot; #1129 settled at 1.7x; #1135 took 10% off the whole lockup. The size
+       has now moved three times and the RULE has not, so the value is asserted as the ratio below and this
+       case only pins that the size FOLLOWS THE SURFACE. */
+    expect(FOOTER).toContain("const META_MARK_HEIGHT = 28;");
     expect(FOOTER).toContain('surface === "meta" ? META_MARK_HEIGHT : GAME_MARK_HEIGHT');
   });
 
@@ -286,8 +319,9 @@ describe("the animated mark is big enough to read as motion", () => {
        under a hex map where an eye is counting revenue.
        THIS CASE IS THAT DISTINCTION, kept executable: the board's height is still 18. */
     expect(FOOTER).toContain("const GAME_MARK_HEIGHT = 18;");
-    // The doubling asked for in #1124, dialled to the 1.7 asked for in #1129. Derived, not restated.
-    expect(META_OVER_GAME()).toBeCloseTo(1.7, 1);
+    /* #1124 guessed 2x, #1129 dialled it to 1.7, #1135 took another 10% off the whole lockup. Derived from
+       the constants rather than restated, so the number in this file cannot go stale. */
+    expect(META_OVER_GAME()).toBeCloseTo(1.56, 1);
   });
 
   it("still gives the board the still mark, so the two changes stay independent", () => {

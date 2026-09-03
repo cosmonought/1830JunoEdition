@@ -55,7 +55,11 @@ const NETA_CREDIT_CSS = `
    frames sits at y 1-94 of 96, an offset of half a pixel. `alignItems: center` was doing its job; what made
    the pair read as two objects was the SCALE MISMATCH and the gap, not the alignment. */
 const GAME_MARK_HEIGHT = 18;
-const META_MARK_HEIGHT = 31;
+/* Design note #1135: "reduce the entire unit by 10%" -- 31 to 28 on the mark (-9.7%) and `small` to `micro`
+   on the words (12px to 11px, -8.3%). Both land on real steps of the shared scale rather than on a computed
+   fraction, and the RATIO between them barely moves (2.58 to 2.55), which is what keeps #1129's lockup from
+   coming apart again at the smaller size. */
+const META_MARK_HEIGHT = 28;
 
 export interface AppFooterProps {
   /** Design note #1113: the lobby and the waiting room get the moving mark; the board gets the still one.

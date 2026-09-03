@@ -70,24 +70,72 @@ describe("the room is the page, and the text carries its own ground", () => {
     expect(LOBBY).toContain('backgroundAttachment: "fixed"');
   });
 
-  it("gives the hero its own plate, which is what lets the page scrim be light", () => {
-    /* THE SUGGESTION THAT MADE IT POSSIBLE: "provide a background of sorts to Project 18XX". One uniform
-       scrim had to serve both mood and legibility, so it was set by the harder job. Two scrims, two jobs. */
-    expect(LOBBY).toContain("styles.brandHeaderInner");
-    expect(LOBBY).toContain('backgroundColor: "rgba(8, 8, 8, 0.55)"');
+  it("needs no plate, because the title sits where the room is darkest", () => {
+    /* ==================================================================
+        DESIGN NOTE 1130 SUPERSEDES #1129's PLATE
+       ==================================================================
+       THIS ASSERTED THE PLATE ONE TURN AGO, and the plate was the right answer to the question then being
+       asked: a light page scrim plus text on an unknown ground. What changed is that the ground stopped being
+       unknown. The wordmark sits at the TOP of the picture, which is coffered ceiling and dark panelling --
+       worst pixel L 0.026, gilt 6.08:1 unaided -- so the plate was protecting text that did not need it and
+       printing a grey rectangle onto a photograph to do it.
+       THE PAGE SCRIM IS UNCHANGED AT 0.48, which is the part of #1129 that still holds and is asserted above:
+       the reason it could drop from 0.70 was local contrast, and the top of the frame supplies that for free
+       where the plate used to supply it deliberately. */
+    expect(LOBBY).not.toContain("styles.brandHeaderInner");
+    expect(LOBBY).not.toContain('backgroundColor: "rgba(8, 8, 8, 0.55)"');
+    // What replaced it: a shadow on the one line of text that is not the artwork.
+    expect(LOBBY).toContain('textShadow: "0 1px 3px rgba(8, 8, 8, 0.9)"');
   });
 
   it("keeps the gilt readable even where the clip is unsupported", () => {
     /* THE ONE WAY THIS TECHNIQUE FAILS SILENTLY. An engine without `background-clip: text` also lacks
        `-webkit-text-fill-color`, so the transparent fill never lands and `color` shows -- but only if `color`
-       was set. A gradient alone renders an invisible title. */
+       was set. A gradient alone renders an invisible title.
+       Design note #1130: the CSS gilt is the FALLBACK now rather than the title, and both guards still
+       matter -- it is what renders when the artwork 404s. */
     expect(LOBBY).toContain('color: "#e8c877"');
     expect(LOBBY).toContain('WebkitBackgroundClip: "text"');
     expect(LOBBY).toContain('backgroundClip: "text"');
   });
 
-  it("lets the room through the cards instead of pasting them on it", () => {
-    expect(LOBBY).toContain('backgroundColor: "rgba(22, 18, 30, 0.92)"');
+  it("draws the wordmark by keying it, and keeps a title when it fails", () => {
+    /* ==================================================================
+        DESIGN NOTE 1130: TWO FAILURE MODES, BOTH SILENT WITHOUT THIS
+       ==================================================================
+       An `<img>` that 404s renders nothing, and the heading beside it is clipped for screen readers -- so a
+       missing asset would have produced a lobby with no visible title at all. `onError` is what turns that
+       into the CSS gilt instead.
+       AND THE BLEND IS LOAD-BEARING: without `screen` the artwork is a black rectangle pasted on the room,
+       because the file is a JPEG and has no alpha to cut it out with. */
+    expect(LOBBY).toContain('mixBlendMode: "screen"');
+    expect(LOBBY).toContain("onError={() => setTitleArtFailed(true)}");
+    expect(LOBBY).toContain("titleArtFailed ? styles.brandTitle : styles.srOnlyTitle");
+    // The name stays in the document either way -- an image cannot be selected, searched, or spoken.
+    expect(LOBBY).toContain("<h1 style={titleArtFailed");
+  });
+
+  it("ships the wordmark, keyed to true black and small enough to sit beside the room", () => {
+    const p = path.join(PUBLIC_DIR, "images/title-project18xx.jpg");
+    expect(fs.existsSync(p)).toBe(true);
+    // 94KB against the 189KB room. The "it will make the site slow" objection, measured.
+    expect(fs.statSync(p).size).toBeLessThan(130 * 1024);
+  });
+
+  it("has no card left in the middle of the screen", () => {
+    /* Design note #1130 SUPERSEDES #1123's GRID: one centred stage, no panel around it, and the two-column
+       breakpoint gone with the second card. The `sandboxStrip` style survives because `StagingRoom` still
+       uses it -- so this asserts the LAYOUT is gone, not the token. */
+    expect(LOBBY).not.toContain("lobby-dashboard");
+    expect(LOBBY).not.toContain("styles.dashboardColumn");
+    expect(LOBBY).toContain("styles.stage}");
+  });
+
+  it("moves the account furniture to its own corner", () => {
+    expect(LOBBY).toContain("styles.utilityRow");
+    // The paused card's sentence survives where a developer will look and a player will not.
+    expect(LOBBY).not.toContain("On-chain rooms — paused");
+    expect(LOBBY).toContain("WEB3_LOBBY_ENABLED in Lobby.tsx to bring them back");
   });
 });
 

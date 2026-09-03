@@ -142,38 +142,34 @@ describe("the sandbox purple is a signal with a ladder under it", () => {
   });
 });
 
-describe("the dashboard survives the flag it was laid out around", () => {
-  it("puts the play card and the status card in a two-column grid", () => {
-    expect(LOBBY).toContain('gridTemplateColumns: "1fr 1fr"');
-    expect(LOBBY).toContain("className=\"lobby-dashboard\"");
+describe("the stage that replaced the dashboard", () => {
+  /* ==================================================================
+      DESIGN NOTE 1130 SUPERSEDES #1123's GRID
+     ==================================================================
+     THREE CASES HERE ASSERTED A TWO-COLUMN LAYOUT and its 860px collapse. The grid existed because there were
+     two cards; #1130 removed the paused one and took the panel off the other, and one centred column needs
+     neither a grid nor a breakpoint.
+     THE ONE CLAIM WORTH CARRYING FORWARD is the last of the three, and it is asserted below in its new form:
+     the Web3 branch must stay OUTSIDE whatever holds the sandbox controls, because the moment that flag turns
+     on it renders a room list and a staging table rather than a status card. That was #1123's real insight
+     and it survives the layout that occasioned it. */
+  it("centres one stage instead of balancing two columns", () => {
+    expect(LOBBY).toContain("styles.stage}");
+    expect(LOBBY).not.toContain('gridTemplateColumns: "1fr 1fr"');
+    expect(LOBBY).not.toContain("lobby-dashboard");
   });
 
-  it("leaves the room browser outside the grid", () => {
-    /* ==================================================================
-        DESIGN NOTE 1123: THE LAYOUT MUST NOT ENCODE THE CURRENT FLAG VALUE
-       ==================================================================
-       The brief put "On-chain rooms -- paused" in the right column as system status, and it IS status while
-       it is paused. Turn `WEB3_LOBBY_ENABLED` on and the same slot renders `RoomBrowser` or `StagingRoom` --
-       a room list, a seat table, ante controls -- which is a primary surface and does not belong in a
-       half-width sidebar. The paused card is inside the grid; the branch that replaces it is not.
-       ASSERTED BY ORDER, which is the only thing that actually holds the claim: the grid closes before the
-       Web3 branch opens. */
-    const paused = LOBBY.indexOf("!WEB3_LOBBY_ENABLED &&");
+  it("still keeps the room browser out of it", () => {
+    const stage = LOBBY.indexOf("styles.stage}");
     const branch = LOBBY.indexOf("!WEB3_LOBBY_ENABLED ? null :");
-    const grid = LOBBY.indexOf('className="lobby-dashboard"');
-    expect(grid).toBeGreaterThan(-1);
-    // The paused card is inside the grid; the branch that replaces it comes after the grid has closed.
-    expect(paused).toBeGreaterThan(grid);
-    expect(branch).toBeGreaterThan(paused);
-    // And the browser is reached only through that later branch, never from inside a column.
+    expect(stage).toBeGreaterThan(-1);
+    expect(branch).toBeGreaterThan(stage);
     expect(LOBBY.indexOf("<RoomBrowser")).toBeGreaterThan(branch);
   });
 
-  it("collapses to one column on a narrow window", () => {
-    /* Design note #46's standing exception -- a media query has no inline form. Without it the two cards
-       halve into slivers rather than stacking. */
-    expect(LOBBY).toContain("@media (max-width: 860px)");
-    expect(LOBBY).toContain("grid-template-columns: 1fr !important");
+  it("needs no breakpoint, and spends its stylesheet on the title instead", () => {
+    expect(LOBBY).not.toContain("@media (max-width: 860px)");
+    expect(LOBBY).toContain("prefers-reduced-motion");
   });
 
   it("drops the stray margin that gave the strips their own left edge", () => {

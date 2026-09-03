@@ -565,35 +565,44 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
     }
   }, [room, activeRoomId, onEnterGame]);
 
+  /* Design note #1130: whether the wordmark artwork failed to load. State rather than a ref, because the
+     render branches on it -- see the fallback note in the header. */
+  const [titleArtFailed, setTitleArtFailed] = useState(false);
+
   /* ---------------- Render ---------------- */
 
   return (
     <div style={styles.root}>
-      {/* Design note #46 is the standing exception and this is the case it exists for: a media query cannot
-          be expressed as an inline style object, and #1123's grid has to become one column on a narrow
-          window or the two cards halve into unreadable slivers. 860px is where two ~500px columns stop
-          fitting inside the 1040px cap with its gutters -- netadao.org collapses its own `.two-col` at
-          900px, near enough that the two screens behave alike on the same devices. */}
+      {/* Design note #46 is the standing exception and this is the case it exists for: neither a keyframe nor
+          a media query can be expressed as an inline style object.
+          Design note #1130: #1123's 860px breakpoint is GONE WITH ITS GRID -- one centred column needs no
+          collapse, and the wordmark's own `min(520px, 84vw)` handles the narrow case inline. What is left is
+          the title's entrance, wrapped in `prefers-reduced-motion` because a thing that moves on load is
+          exactly what that query exists to switch off. */}
       <style>{LOBBY_CSS}</style>
-      <header style={styles.brandHeader}>
-        {/* Design note #1129: one centred plate holding the title, the strapline and the controls, rather than
-            a title on the left and a control cluster on the right. */}
-        <div style={styles.brandHeaderInner}>
-        <div>
-          <h1 style={styles.brandTitle}>Project 18XX</h1>
-          <p style={styles.brandSubtitle}>Pre-game lobby &middot; rooms stage off-chain and cost nothing until launch</p>
-        </div>
-
+      {/* ==================================================================
+           DESIGN NOTE 1130: THE UTILITY ROW LEAVES THE TITLE ALONE
+          ==================================================================
+          PROPOSED as "move the Display name input, the Connect button and the offline badge to a top-right
+          pinned utility row. This matches standard Web3 application patterns." AGREED, and the reason is
+          better than the precedent: these three are ACCOUNT furniture. They are the same three things in the
+          same corner of every wallet-facing app because they answer "who am I and is this connected", which
+          is a question you ask once and then stop asking.
+          #1129 HAD PUT THEM UNDER THE TITLE, inside the hero plate, on the argument that a centred title with
+          controls pinned right "reads as two designs sharing a row". That was true of a plate holding both.
+          With the account furniture moved to its own corner there is no row left to share -- the title gets
+          the middle of the screen to itself, which is what a title is for. */}
+      <div style={styles.utilityRow}>
+        <input
+          type="text"
+          value={displayName}
+          onChange={(event) => commitDisplayName(event.target.value)}
+          placeholder="Display name"
+          aria-label="Your display name"
+          style={styles.nameInput}
+          maxLength={24}
+        />
         <div style={styles.headerControls}>
-          <input
-            type="text"
-            value={displayName}
-            onChange={(event) => commitDisplayName(event.target.value)}
-            placeholder="Display name"
-            aria-label="Your display name"
-            style={styles.nameInput}
-            maxLength={24}
-          />
           {address ? (
             <>
               <span style={styles.addressBadge} title={address}>
@@ -620,7 +629,63 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
             />
           )}
         </div>
-        </div>
+        {/* Design note #1130: the offline pill joins the account row, and takes the paused card's sentence
+            with it into a tooltip -- see the note where that card used to be. */}
+        {chainError && (
+          <div
+            style={styles.chainPill}
+            title={`${chainError}\n\nOn-chain rooms are switched off while sandbox multiplayer is being tested. Flip WEB3_LOBBY_ENABLED in Lobby.tsx to bring them back.`}
+          >
+            <span style={styles.chainDot} aria-hidden="true" />
+            Offline · sandbox active
+          </div>
+        )}
+      </div>
+
+      {/* ==================================================================
+           DESIGN NOTE 1130: THE TITLE IS ARTWORK NOW, KEYED RATHER THAN CUT OUT
+          ==================================================================
+          A DRAWN WORDMARK REPLACES THE CSS GILT. It arrived with two objections attached -- that it "looks
+          wrong" and that it "will make the site slow" -- and neither survived measurement. It is 94KB at
+          900px against the 189KB room already on this page; and composited it reads better than the CSS
+          version, because Victorian display lettering with filigree is a thing no typeface does with
+          `letter-spacing` and a gradient.
+          `mix-blend-mode: screen` RATHER THAN AN ALPHA CUTOUT -- the technique #1040 established for the
+          yellow sign and #1113 reuses for the animated mark. The artwork is bright-on-black and screen takes
+          black to nothing, so no alpha channel is needed and it stays a JPEG: the same lettering as a PNG
+          with real alpha measured 330KB.
+          THE SOURCE'S BLACKS WERE CRUSHED BEFORE EXPORT, which is what makes this work rather than nearly
+          work. The original's ground is a vignette reaching 30/255 at the edges, and screen-blend lifts every
+          one of those pixels into a visible rectangle around the lettering. A levels ramp to true black
+          removes the halo -- and true black compresses better than near-black, so it is cheaper too.
+          NO PLATE, as proposed, and this is where the full-page picture pays off: the top of the room is
+          coffered ceiling and dark panelling, so the worst pixel behind the title sits at L 0.026 and gilt
+          reads 6.08:1 unaided. #1129's hero plate existed to protect text on an unknown ground; this text
+          sits on a known one, and a plate over it just prints a grey rectangle onto a photograph. */}
+      <header style={styles.brandHeader}>
+        {/* ==================================================================
+             DESIGN NOTE 1130: THE CSS GILT SURVIVES AS THE FALLBACK
+            ==================================================================
+            AN `<img>` THAT 404s LEAVES NOTHING BEHIND IT, and a heading that is only there for screen readers
+            would leave this lobby with no visible title at all -- a worse version of the failure #1129's
+            `color`-before-clip guard was written to prevent. So the gilt gradient it replaced is still here,
+            still measured (4.27:1 at its darkest stop), and stands in the moment the artwork does not arrive.
+            `onError` covers a 404, a decode failure and an offline cache miss alike.
+            ONE HEADING IN BOTH BRANCHES, so a screen reader hears "Project 18XX" exactly once whichever
+            renders: clipped while the artwork carries the name, visible when it cannot. */}
+        <h1 style={titleArtFailed ? styles.brandTitle : styles.srOnlyTitle}>Project 18XX</h1>
+        {!titleArtFailed && (
+          <img
+            className="lobby-wordmark"
+            src={`${process.env.PUBLIC_URL ?? ""}/images/title-project18xx.jpg`}
+            alt=""
+            onError={() => setTitleArtFailed(true)}
+            style={styles.brandWordmark}
+          />
+        )}
+        <p style={styles.brandSubtitle}>
+          Pre-game lobby &middot; rooms stage off-chain and cost nothing until launch
+        </p>
       </header>
 
       {/* Design note #1114: the width cap. The HEADER stays full-bleed above it -- its own background is a
@@ -669,31 +734,47 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
          Web3 lobby already has one for a flow that genuinely needs it. A sandbox room needs none of that: the code is
          on the board's own strip, and a joiner can arrive at any point because the log replays. */}
       {/* ==================================================================
-          DESIGN NOTE 1123: TWO COLUMNS, AND THE ROOM BROWSER IS NOT IN EITHER
+          DESIGN NOTE 1130: THE CARD COMES OFF, SUPERSEDING #1123's GRID
          ==================================================================
-         THE LAYOUT ASKED FOR was left "Play", right "System Status", and the split is right -- one column
-         for the thing you came to do, one for the state of the world. WHAT IT PUT IN THE RIGHT COLUMN IS THE
-         PART THAT COULD NOT STAY: "On-chain rooms -- paused" is a card TODAY because `WEB3_LOBBY_ENABLED` is
-         off. Flip that flag and the same slot renders `RoomBrowser` or `StagingRoom` -- a room list, a seat
-         table, ante controls -- which is not status and does not fit in a half-width sidebar.
-         SO THE GRID HOLDS THE TWO THINGS THAT ARE ALWAYS SMALL, and the Web3 branch renders full-width
-         BELOW it. The paused card is status while it is paused; the browser that replaces it is a primary
-         surface, and it gets the whole width the moment it exists. A layout keyed to the current value of a
-         feature flag would have had to be rebuilt by whoever turns that flag on. */}
-      <div className="lobby-dashboard" style={styles.dashboard}>
-      <div style={styles.dashboardColumn}>
-      <section style={styles.sandboxStrip}>
-        <div style={styles.sandboxCopy}>
-          {/* Design note #1123: the left column's heading is the invitation, so it names the game rather than
-              the plumbing. "Sandbox Multiplayer" described the transport; this describes the door. */}
-          <span style={styles.sandboxTitle}>▶ Play Project 18XX</span>
-          {/* Design note #1114: shortened, as asked. The cut half named the plumbing -- Firestore, no wallet,
-              no contract -- which is a developer's sentence on a screen a player reads. What survives is what
-              they can act on. The plumbing is still stated, once, in the status pill below. */}
-          <span style={styles.sandboxNote}>
-            Real-time multiplayer sandbox. Host a room or join with a room code.
-          </span>
-        </div>
+         ASKED: "I wonder if there's a way we could eliminate the boxes altogether, and instead have the Host
+         Game and Join Game buttons rendered directly on top of the table?"
+         YES, AND IT IS THE BEST IDEA IN THE BATCH. #1123 built two columns because there were two cards to
+         place; removing the paused card leaves one, and that one turns out not to need a card at all. A panel
+         is a device for grouping things that would otherwise scatter -- with one sentence and two buttons
+         there is nothing to gather, and the box was drawing a boundary around the entire contents of the
+         screen.
+         NOT ANCHORED TO THE TABLE, DELIBERATELY, and this is the one place the request is not taken
+         literally. The table is a region of a `cover`-cropped photograph: it moves with the viewport's aspect
+         ratio, so a control pinned to it would slide off it on the first window of a different shape. The
+         stage is CENTRED instead, which puts the buttons over the table on the aspect the picture was framed
+         for and somewhere sensible on every other -- the effect that was asked for, by a means that survives
+         a resize.
+
+         WHAT #1123 GOT RIGHT AND THIS KEEPS: the Web3 branch below is still full-width and still outside this
+         block. "On-chain rooms -- paused" was a card only because the flag is off; flip it and that slot
+         renders a room list and a staging table, which never belonged in a half-width sidebar.
+
+         ==================================================================
+          DESIGN NOTE 1130: THE PAUSED CARD IS GONE, AND THE ARGUMENT FOR IT WAS BACKWARDS
+         ==================================================================
+         PROPOSED as "remove it entirely -- we are designing for the final production state, so we don't need
+         to dedicate half the screen to a non-actionable disabled feature."
+         THE CONCLUSION IS RIGHT AND THE REASONING IS INVERTED. In the final production state the flag is ON
+         and this area renders `RoomBrowser`; designing for production is exactly what #1123 did by giving that
+         branch the full width below. Deleting this card does not design for production -- it removes today's
+         placeholder, which is a smaller and entirely good thing.
+         THE REAL CASE AGAINST IT IS #1119's. Its body named `WEB3_LOBBY_ENABLED` and `Lobby.tsx` -- a build
+         variable and a filename, on the first screen a player opens, which is the exact category of text that
+         batch spent its whole length removing. It was the last one left.
+         THE SENTENCE IS NOT LOST: it moved into the offline pill's tooltip, where a developer will look and a
+         player will not -- the same move #1119 made with the missing env var. */}
+      <div style={styles.stage}>
+        {/* Design note #1130: no `<section>` and no panel -- a line of copy and the two controls, standing on
+            the room. The strapline stays because "host, or join with a code" is the one thing a first-time
+            player needs told; that is a sentence, not a card's worth of copy. */}
+        <p style={styles.stageNote}>
+          Real-time multiplayer sandbox. Host a room, or join with a room code.
+        </p>
         {/* Design note #1083: `appliedCount={0}` and `onLeave={() => undefined}` are GONE with the props
             they fed. Both were placeholders this surface had no use for -- the lobby is never in a room --
             and a required prop satisfied by a stub is a prop the component did not need. */}
@@ -705,37 +786,6 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
           onHost={handleHostSandboxRoom}
           onJoin={handleJoinSandboxRoom}
         />
-      </section>
-
-      </div>
-      {/* The right column: what the world is doing, as opposed to what you can do about it. */}
-      <div style={styles.dashboardColumn}>
-      {/* Design note #1123: DOCKED AT THE TOP OF THE STATUS COLUMN, as asked. It used to sit above
-          everything, in the run of error banners -- which put a permanent, deliberate state in the slot the
-          screen uses for things that have gone wrong. In a column headed by "on-chain rooms are paused" it
-          is reading the same fact from the other side, and #1114's argument for a quiet pill over an amber
-          slab is unchanged: nothing here is broken. */}
-      {chainError && (
-        <div style={styles.chainPill} title={chainError}>
-          <span style={styles.chainDot} aria-hidden="true" />
-          Offline · sandbox active
-        </div>
-      )}
-      {!WEB3_LOBBY_ENABLED && (
-        <section style={styles.sandboxStrip}>
-          <div style={styles.sandboxCopy}>
-            <span style={styles.sandboxTitle}>⛓ On-chain rooms — paused</span>
-            {/* Design note #1123: the flag name and the filename stay. This card is the one place on the
-                screen whose whole audience is whoever turns the lobby back on -- #1119 moved developer text
-                OFF the surfaces players read, which is a different rule from deleting it everywhere. */}
-            <span style={styles.sandboxNote}>
-              The Juno wallet lobby is switched off while sandbox multiplayer is being tested.
-              Flip <code>WEB3_LOBBY_ENABLED</code> in <code>Lobby.tsx</code> to bring it back.
-            </span>
-          </div>
-        </section>
-      )}
-      </div>
       </div>
 
       {/* Design note #525: THE WEB3 LOBBY IS PARKED, NOT DELETED. Gated behind ONE flag rather than removed, and the
@@ -1453,8 +1503,12 @@ function Banner({ tone, text }: { tone: "error" | "warn"; text: string }) {
 /* Design note #1123: the one rule inline styles cannot carry. Kept next to the grid it collapses rather
    than in a shared sheet -- this file has no other CSS and a second consumer would be a reason to move it. */
 const LOBBY_CSS = `
-@media (max-width: 860px) {
-  .lobby-dashboard { grid-template-columns: 1fr !important; }
+@media (prefers-reduced-motion: no-preference) {
+  .lobby-wordmark { animation: lobby-wordmark-in 620ms ease-out both; }
+}
+@keyframes lobby-wordmark-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: none; }
 }
 `;
 
@@ -1509,41 +1563,75 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "0 0 40px",
     boxSizing: "border-box",
   },
-  /* Design note #1129: no background of its own any more -- the page's picture runs behind it unbroken, which
-     is what stops the header reading as a second photograph pasted above the content. The bottom rule stays:
-     it is the line between the front door and the room, and it is now the only thing marking the header. */
+  /* Design note #1130: the header is the wordmark and its strapline, centred, with nothing behind either.
+     #1129's plate is gone and so is the rule that divided header from content -- there is no box edge left
+     for a rule to align to, and a line drawn across a photograph is just a line drawn across a photograph. */
   brandHeader: {
-    display: "flex",
-    justifyContent: "center",
-    padding: "44px 28px 40px",
-    borderBottom: "1px solid #2a2a2a",
-  },
-  /* ==================================================================
-      DESIGN NOTE 1129: THE PANEL THE TITLE ASKED FOR
-     ==================================================================
-     "I think you could provide a background of sorts to Project 18XX and other elements that need one" -- and
-     that is exactly what lets the page scrim be light. A second 0.55 over the 0.48 page puts the hero ground
-     at L 0.058, on which paper reads 8.50:1, the subtitle 5.67:1 and the gilt's darkest stop 4.27:1.
-     BLURRED, NOT SOLID. `backdrop-filter` keeps the room visible THROUGH the plate rather than punching a
-     rectangle out of it -- the difference between a caption plate and a hole. The flat rgba fill is stated as
-     well, because that is what an engine without the filter falls back to, and it is what carries the
-     measured contrast in either case.
-     CENTRED, AS ASKED, AND THE CONTROLS COME WITH IT. A centred title with a name field still pinned to the
-     right reads as two designs sharing a row; stacked under it, the block is one object. */
-  brandHeaderInner: {
     display: "flex",
     flexDirection: "column",
     alignItems: "center",
-    gap: "18px",
+    gap: "10px",
+    padding: "16px 28px 34px",
+  },
+  /* ==================================================================
+      DESIGN NOTE 1130: SCREEN, NOT ALPHA
+     ==================================================================
+     The artwork is gold on true black, and `mix-blend-mode: screen` takes black to nothing -- the technique
+     #1040 established for the yellow sign. It is why this can stay a JPEG: the same lettering as a PNG with a
+     real alpha channel measured 330KB against 94KB here.
+     THE WIDTH IS CAPPED IN BOTH DIRECTIONS. `min(520px, 84vw)` keeps it a title on a desktop and stops a
+     900px image overflowing a phone; height follows the aspect, because only width is set. This is also why
+     #1123's media query could go -- the one responsive rule left is expressible inline. */
+  brandWordmark: {
+    display: "block",
+    width: "min(520px, 84vw)",
+    height: "auto",
+    mixBlendMode: "screen",
+    userSelect: "none",
+  },
+  /* Clipped rather than `display: none`, which screen readers skip rather than read -- the same `srOnly`
+     shape the ledger's tile strip uses. The heading has to stay in the document: an image cannot be selected,
+     searched, translated or spoken. */
+  srOnlyTitle: {
+    position: "absolute",
+    width: "1px",
+    height: "1px",
+    margin: "-1px",
+    padding: 0,
+    overflow: "hidden",
+    clip: "rect(0 0 0 0)",
+    whiteSpace: "nowrap",
+    border: 0,
+  },
+  /* ==================================================================
+      DESIGN NOTE 1130: THE ACCOUNT ROW
+     ==================================================================
+     Pinned right, above everything, and deliberately OUTSIDE the width cap -- account furniture belongs to
+     the window rather than to the column of content. `flex-end` plus `wrap`, so a connected wallet's three
+     chips fall to a second line rather than pushing the row wider than the screen. */
+  utilityRow: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    flexWrap: "wrap",
+    gap: "10px",
+    padding: "14px 20px 0",
+  },
+  /* Design note #1130: the stage -- a centred column holding a sentence and the two controls, with no panel
+     around them. See the note at its call site for why the box came off. */
+  stage: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    gap: "16px",
+    paddingTop: "4px",
+  },
+  stageNote: {
+    margin: 0,
+    fontSize: FONT_SIZE.body,
+    color: "#c8c6c0",
     textAlign: "center",
-    maxWidth: "760px",
-    padding: "26px 34px",
-    borderRadius: "14px",
-    border: "1px solid rgba(201, 169, 76, 0.22)",
-    backgroundColor: "rgba(8, 8, 8, 0.55)",
-    backdropFilter: "blur(3px)",
-    WebkitBackdropFilter: "blur(3px)",
-    boxSizing: "border-box",
+    textShadow: "0 1px 3px rgba(8, 8, 8, 0.9)",
   },
   /* ==================================================================
       DESIGN NOTE 1129: GILT, WITH A SOLID COLOUR UNDERNEATH IT
@@ -1572,9 +1660,16 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundClip: "text",
     WebkitTextFillColor: "transparent",
   },
-  /* Design note #1129: lifted from `#a8a6a0` to the dim step. 5.67:1 on the hero panel -- the old tone was
-     sized for a flat card and would have been marginal over a photograph. */
-  brandSubtitle: { margin: "6px 0 0", fontSize: FONT_SIZE.body, color: "#c8c6c0" },
+  /* Design note #1130: no plate under it now, so it takes a text shadow instead. It sits on the dark ceiling
+     where the wordmark does -- worst pixel L 0.026, so `#c8c6c0` reads 8.8:1 -- and the shadow is insurance
+     for the one viewport aspect that crops the picture somewhere brighter. */
+  brandSubtitle: {
+    margin: 0,
+    fontSize: FONT_SIZE.body,
+    color: "#c8c6c0",
+    textAlign: "center",
+    textShadow: "0 1px 3px rgba(8, 8, 8, 0.9)",
+  },
   headerControls: { display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" },
   nameInput: {
     fontSize: FONT_SIZE.control,
@@ -1634,19 +1729,9 @@ const styles: Record<string, React.CSSProperties> = {
     borderColor: SANDBOX_RULE,
     borderRadius: "12px",
   },
-  /* Design note #1123: the two columns. `1fr 1fr` on desktop and a single column under 860px -- the same
-     shape netadao.org's own `.two-col` uses, collapsing at the same kind of breakpoint. `alignItems: start`
-     so a short status card does not stretch to match a tall play card; they are siblings, not a table row. */
-  dashboard: {
-    display: "grid",
-    gridTemplateColumns: "1fr 1fr",
-    alignItems: "start",
-    gap: "16px",
-  },
-  dashboardColumn: { display: "flex", flexDirection: "column", gap: "16px", minWidth: 0 },
-  sandboxCopy: { display: "flex", flexDirection: "column", gap: "4px", flex: 1, minWidth: "260px" },
-  sandboxTitle: { fontSize: FONT_SIZE.heading, fontWeight: 800, color: SANDBOX_TITLE },
-  sandboxNote: { fontSize: FONT_SIZE.small, color: SANDBOX_TEXT, lineHeight: LINE_HEIGHT.normal },
+  /* Design note #1130: `dashboard`, `dashboardColumn`, `sandboxCopy`, `sandboxTitle` and `sandboxNote` are
+     GONE with the cards they dressed. `sandboxStrip` above stays -- `StagingRoom` still uses it -- which is
+     why it was kept rather than swept with the rest. */
   sandboxButton: {
     flexShrink: 0,
     fontSize: FONT_SIZE.control,

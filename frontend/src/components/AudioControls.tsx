@@ -99,51 +99,74 @@ export function AudioControls({ audio }: AudioControlsProps) {
          company with the button that opened it. */
       <span ref={audioGroup} style={{ ...styles.topBarAudioGroup, position: "relative" }}>
         {/* ==================================================================
-             DESIGN NOTE 1127: THE RADIO STOPS HIDING WHEN IT IS OFF
+             DESIGN NOTE 1134: THE TUNER IS ONE OBJECT, AND IT SLIDES OUT OF ITS BUTTON
             ==================================================================
-             #1120 SHOWED THE NAME ONLY WHILE PLAYING, on the reasoning that "a station name beside a dimmed
-             button would be naming something that is not playing." THAT WAS TRUE AND IT WAS THE WRONG TRADE:
-             ruled here as "it should remain permanently visible, even when playback is stopped, to serve as
-             an ambient feature flag." A radio nobody can see is a radio nobody turns on, and the first thing
-             a control has to do is exist. Naming a stopped station is a smaller cost than being invisible.
-             THE STATE IS STILL CARRIED, by the button's dim and by #1078's label -- which is where it always
-             actually lived. The name says WHICH; the button says WHETHER. Two facts, two elements, rather
-             than one element trying to say both by disappearing.
-             LEFT OF THE TRANSPORT, as asked, and that is also the reading order a media player has taught
-             everyone: what is playing, then the controls for it. */}
+            REPORTED, three faults in one breath: "the station seek buttons are either side of the Radio
+            button, which doesn't make a lot of sense"; they "don't look interactive"; and "the station title
+            doesn't clearly register as a station title" -- everything "sort of floating/un-anchored".
+            ALL THREE ARE THE SAME OMISSION. #1127 added a readout and two steppers as loose siblings in a
+            flex row, so the row had five peers in it and nothing said which three belonged together. Prev on
+            one side of the radio and Next on the other is what that looks like taken to its conclusion: the
+            radio button was sitting INSIDE the control it was supposed to own.
+            SO THEY GET A BOX, in the order ruled: `<| [station] |>` and then the two round buttons.
+            AND THE BOX ADJOINS THE RADIO BUTTON rather than merely sitting near it -- rounded on the left,
+            square on the right, pulled under the circle by half its width so the button caps it. That is the
+            "slides out of it" the report asks for, and it is also the claim: this drawer belongs to THAT
+            button, not to the speaker beside it.
+            #1127's VISIBILITY RULE IS UNCHANGED -- the drawer is permanent, because a radio nobody can see is
+            a radio nobody turns on. What changes is that it now reads as a tuner rather than as debris. */}
         {currentStationName && (
           <span
             style={{
-              ...styles.topBarStationName,
-              ...(audio.musicPlaying ? {} : styles.topBarStationNameOff),
+              ...styles.stationDrawer,
+              ...(audio.musicPlaying ? styles.stationDrawerOn : {}),
             }}
-            title={audio.musicPlaying ? `Playing ${currentStationName}` : `${currentStationName} — radio is off`}
-            aria-hidden="true"
           >
-            {currentStationName}
+            {showTransport && (
+              <button
+                type="button"
+                style={styles.topBarStationStep}
+                onClick={() => stepStation(-1)}
+                aria-label="Previous station"
+                title="Previous station"
+              >
+                {/* `|<` and `>|` as paths rather than characters: the glyphs that look right here are in
+                   fonts that are not everywhere, and #1074's lesson is that a character you did not draw is
+                   a character you cannot style. `currentColor` so they take the drawer's state with it. */}
+                <svg width="9" height="9" viewBox="0 0 10 10" aria-hidden="true" focusable="false">
+                  <path d="M2 1v8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                  <path d="M9 1L4 5l5 4z" fill="currentColor" />
+                </svg>
+              </button>
+            )}
+            <span
+              style={styles.topBarStationName}
+              title={audio.musicPlaying ? `Playing ${currentStationName}` : `${currentStationName} — radio is off`}
+              aria-hidden="true"
+            >
+              {currentStationName}
+            </span>
+            {showTransport && (
+              <button
+                type="button"
+                style={styles.topBarStationStep}
+                onClick={() => stepStation(1)}
+                aria-label="Next station"
+                title="Next station"
+              >
+                <svg width="9" height="9" viewBox="0 0 10 10" aria-hidden="true" focusable="false">
+                  <path d="M1 1l5 4-5 4z" fill="currentColor" />
+                  <path d="M8 1v8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                </svg>
+              </button>
+            )}
           </span>
-        )}
-        {showTransport && (
-          <button
-            type="button"
-            style={styles.topBarStationStep}
-            onClick={() => stepStation(-1)}
-            aria-label="Previous station"
-            title="Previous station"
-          >
-            {/* `|<` and `>|` as paths rather than characters: the glyphs that look right here are in fonts
-               that are not everywhere, and #1074's lesson is that a character you did not draw is a character
-               you cannot style. `currentColor` so they grey with the row. */}
-            <svg width="9" height="9" viewBox="0 0 10 10" aria-hidden="true" focusable="false">
-              <path d="M2 1v8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-              <path d="M9 1L4 5l5 4z" fill="currentColor" />
-            </svg>
-          </button>
         )}
         <button
           type="button"
           style={{
             ...styles.topBarIconButton,
+            ...styles.topBarIconButtonCaps,
             ...(audio.musicPlaying ? styles.topBarIconButtonOn : {}),
           }}
           /* Design note #1075: THE CLICK OPENS THE PANEL, it no longer toggles. Off lives inside, which is
@@ -192,8 +215,32 @@ export function AudioControls({ audio }: AudioControlsProps) {
               : "Radio is off — click for volume and to turn it back on"
           }
         >
-          {/* A note, not a speaker: this one is about MUSIC, and the speaker beside it is about the game. */}
-          &#9835;
+          {/* ==================================================================
+               DESIGN NOTE 1134: THE SAME COLOUR, DIFFERENT INK
+              ==================================================================
+              REPORTED: "the radio button and the SFX button when both turned on don't look like the same
+              colour, the SFX button appears lighter/brighter?" THE COLOURS ARE IDENTICAL -- both spread
+              `topBarIconButtonOn`, which is one object -- and the buttons still did not match, because a
+              declared colour is not the same thing as apparent brightness.
+              `&#9835;` WAS A FONT GLYPH and the speaker is a filled SVG. A hairline-stroked character at
+              12px is thinned further by antialiasing, so the same `#f2f0eb` covers far fewer pixels and
+              reads as grey; a solid path covers all of them and reads as white.
+              THIS IS #1074's FINDING ARRIVING FROM THE OTHER SIDE. That note replaced an EMOJI with an SVG
+              so the speaker could take `color` at all, and left the note alone because the note already
+              did. Both were true; what neither noticed is that matching the colour is only half of matching
+              the button. Drawn now, at a weight chosen against the speaker rather than against a font. */}
+          <svg width="13" height="13" viewBox="0 0 14 14" aria-hidden="true" focusable="false">
+            <path
+              d="M5.1 10.4V3.6l6.1-1.3v6.6"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <ellipse cx="3.4" cy="10.6" rx="1.9" ry="1.6" fill="currentColor" />
+            <ellipse cx="9.5" cy="9.2" rx="1.9" ry="1.6" fill="currentColor" />
+          </svg>
         </button>
         {showTransport && (
           <button

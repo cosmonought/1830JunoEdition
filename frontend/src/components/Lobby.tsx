@@ -615,15 +615,30 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
           </div>
         )}
         <div style={styles.utilityAccount}>
-        <input
-          type="text"
-          value={displayName}
-          onChange={(event) => commitDisplayName(event.target.value)}
-          placeholder="Display name"
-          aria-label="Your display name"
-          style={styles.nameInput}
-          maxLength={24}
-        />
+        {/* ==================================================================
+             DESIGN NOTE 1133: THE DISPLAY NAME DOES NOTHING ON THIS SCREEN
+            ==================================================================
+            ASKED: "does the Display Name field actually do anything or need to be there? It doesn't seem to
+            have any confirm button, and players already set a name when they join a game." BOTH HALVES ARE
+            RIGHT, and the second explains the first.
+            `handleHostSandboxRoom` PASSES THE LITERAL "Host". It never reads this field. The name a sandbox
+            player actually uses is set in the waiting room, which has its own input and its own Save -- so
+            this one has no confirm because there is nothing to confirm it to.
+            IT IS NOT DEAD, THOUGH, WHICH IS WHY IT IS GATED RATHER THAN DELETED: `hostDisplayName`,
+            `claimSeat` and `ChatBox` all read it, and every one of them is inside the Web3 branch. #525's
+            rule for that branch is "parked, not deleted", and a control that serves only the parked path
+            belongs behind the same flag it does -- exactly where #1130 put the paused card's sentence. */}
+        {WEB3_LOBBY_ENABLED && (
+          <input
+            type="text"
+            value={displayName}
+            onChange={(event) => commitDisplayName(event.target.value)}
+            placeholder="Display name"
+            aria-label="Your display name"
+            style={styles.nameInput}
+            maxLength={24}
+          />
+        )}
         <div style={styles.headerControls}>
           {address ? (
             <>
@@ -643,9 +658,14 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
             // The burner-wallet security recommendation ships with the button (`ConnectWalletButton.tsx #0`), so the
             // lobby's connect path shows it just like the in-game top bar's does. Calling `wallet.connect()` directly here
             // is exactly the omission that component exists to make impossible.
+            /* Design note #1133: "most websites just have the Keplr logo with Connect in a button." The mark
+               is the logo -- Keplr's own is a licensed asset this project does not ship, so the word does the
+               naming and the button does the shrinking. `primaryButton`'s paper slab is the lobby's loudest
+               control and was sized for a call to action; this is account furniture in a corner. */
             <ConnectWalletButton
+              label="Connect"
               buttonStyle={disabledButtonStyle(
-                styles.primaryButton,
+                styles.connectButton,
                 wallet.status === "connecting",
               )}
             />
@@ -1587,7 +1607,11 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     flexDirection: "column",
     gap: "16px",
-    padding: "0 0 40px",
+    /* Design note #1133: the bottom padding is GONE. It held the footer 40px off the foot of the page --
+       "sort of floating on the left side of the screen" -- and it was there to keep content clear of a
+       bottom edge back when this screen was a scrolling stack of cards. It is a title screen now, and the
+       credit belongs ON the edge. */
+    padding: 0,
     boxSizing: "border-box",
   },
   /* ==================================================================
@@ -1605,10 +1629,20 @@ const styles: Record<string, React.CSSProperties> = {
      leaving it pinned; `pointerEvents: none` so the layer over the whole window does not eat the footer. */
   sceneClip: {
     position: "absolute",
+    /* ==================================================================
+        DESIGN NOTE 1133: `height: 100vh` LEFT A BAND OF BARE INK AT THE BOTTOM
+       ==================================================================
+       REPORTED: "the footer now scrims the entire lower fourth of the screen." IT WAS NOT THE FOOTER. This
+       layer was pinned to 100vh while the ROOT is `min-height: 100vh` PLUS 40px of bottom padding plus
+       whatever the flow children come to -- so the last stretch of the page had no picture on it at all, and
+       the footer's own ink strip ran into that bare band and read as one enormous slab.
+       `bottom: 0` MAKES IT THE ROOT'S HEIGHT, whatever that turns out to be. The scene inside still sizes
+       itself from the VIEWPORT (`100vh`/`100vw`), so the photograph's framing is unchanged -- only the window
+       it is seen through now reaches the bottom of the page. */
     top: 0,
     left: 0,
     right: 0,
-    height: "100vh",
+    bottom: 0,
     overflow: "hidden",
     zIndex: 0,
     pointerEvents: "none",
@@ -1725,6 +1759,18 @@ const styles: Record<string, React.CSSProperties> = {
   },
   /* Design note #1131: the account half of the row, grouped so `space-between` has two things to separate
      rather than four to scatter. `marginLeft: auto` keeps it right even when the pill is absent. */
+  /* Design note #1133: the compact connect. Same paper-on-ink as `primaryButton` -- it is still the one
+     thing in this row a player might click -- at the row's own scale rather than the stage's. */
+  connectButton: {
+    fontSize: FONT_SIZE.small,
+    fontWeight: 700,
+    padding: "5px 12px",
+    borderRadius: "8px",
+    border: "1px solid transparent",
+    backgroundColor: CARD_SURFACE,
+    color: INK,
+    cursor: "pointer",
+  },
   utilityAccount: {
     display: "flex",
     alignItems: "center",

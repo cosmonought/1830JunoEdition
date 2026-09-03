@@ -211,7 +211,16 @@ export const styles: Record<string, React.CSSProperties> = {
      one step of the scale too -- `micro` next to a 31px mark reads as a caption parked beside a logo rather
      than as the second half of one object. The gap tightens for the same reason: a wide gap at a small type
      size is what turns a lockup into two things. */
-  netaCreditMeta: { fontSize: FONT_SIZE.small, gap: "10px" },
+  netaCreditMeta: {
+    fontSize: FONT_SIZE.small,
+    gap: "10px",
+    /* Design note #1133: the plate the mark keys against, sized to the lockup rather than to the window.
+       `screen` erases the clip's black only when the backdrop is dark, and this is that backdrop. */
+    backgroundColor: "#080808",
+    border: "1px solid #2a2a2a",
+    borderRadius: "999px",
+    padding: "4px 14px 4px 6px",
+  },
   /* ==================================================================
       DESIGN NOTE 1083: THE PAGE ENDS HERE
      ==================================================================
@@ -226,13 +235,22 @@ export const styles: Record<string, React.CSSProperties> = {
   /* Design note #1132: the meta strip. Opaque ink so the mark's `screen` blend has the near-black it was
      drawn for, `relative` + `zIndex` so it sits above the lobby's scene layer rather than under it, and
      `flex-start` because a full-width bar reads from its leading edge. */
+  /* ==================================================================
+      DESIGN NOTE 1133: THE INK MOVES FROM THE BAR TO THE LOCKUP
+     ==================================================================
+     #1132 GAVE THE WHOLE FOOTER AN OPAQUE STRIP so the mark's `screen` blend had a dark backdrop, and that
+     was a full-width slab to solve a problem the width of a logo. With the scene now reaching the foot of the
+     page (#1133 in `Lobby`), the strip had nothing left to do but cover the picture.
+     SO THE BAR IS TRANSPARENT AND THE CREDIT CARRIES ITS OWN GROUND. `netaCreditMeta` is the dark plate now:
+     it is exactly as wide as the thing that needs it, the blend keys against it just as well, and what is
+     left is a small lockup in the bottom-left corner rather than a band across the screen.
+     `position: relative` + `zIndex` STAYS, because the scene layer is still underneath and something has to
+     say which of the two is on top. */
   appFooterMeta: {
     position: "relative",
     zIndex: 1,
     justifyContent: "flex-start",
-    padding: "10px 24px 10px 20px",
-    backgroundColor: "#080808",
-    borderTop: "1px solid #2a2a2a",
+    padding: "0 0 14px 16px",
   },
   appFooter: {
     marginTop: "auto",
@@ -324,14 +342,56 @@ export const styles: Record<string, React.CSSProperties> = {
      an answer to "what is playing", not a control, and the row it sits in is already busy. `maxWidth` plus
      ellipsis because station names are supplied data and a long one would push the wallet cluster around;
      the full name is in the `title`. */
+  /* ==================================================================
+      DESIGN NOTE 1134: THE DRAWER
+     ==================================================================
+     Rounded on the left, SQUARE on the right, and pulled 13px under the 26px radio button so the circle caps
+     its open end. That overlap is the whole idea -- a rectangle merely NEAR a button is another loose object
+     in a row that already had too many; a rectangle the button sits on top of is a thing that came OUT of
+     the button. `paddingRight` covers the tucked-away strip so the last stepper never lands beneath it.
+     ONE COLOUR FOR THE WHOLE ASSEMBLY, carried by `color` and inherited: the steppers draw in `currentColor`
+     and the name reads it too, so the on/off state is stated once here rather than three times at the leaves.
+     The stopped tone is the same `#6e6c68` the disabled controls use -- under the text bar deliberately,
+     because an inert readout should read as inert. */
+  stationDrawer: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "4px",
+    height: "22px",
+    boxSizing: "border-box",
+    padding: "0 17px 0 4px",
+    marginRight: "-13px",
+    borderRadius: "999px 0 0 999px",
+    border: "1px solid #2a2a2a",
+    borderRight: "none",
+    backgroundColor: "#141414",
+    color: "#6e6c68",
+    flexShrink: 1,
+    minWidth: 0,
+  },
+  /* Design note #1134: "when the radio is active, the title and station seeks should be coloured the active
+     white". One declaration, because `currentColor` carries it to every child. */
+  stationDrawerOn: {
+    color: "#f2f0eb",
+    borderColor: "rgba(242, 240, 235, 0.35)",
+    backgroundColor: "#1c1c1c",
+  },
+  /* Design note #1134: the button that caps the drawer has to paint OVER its open edge, and a positioned
+     element with a z-index is the only thing that reliably does. Nothing here blends, so the stacking
+     context this creates costs nothing -- unlike the one that put a box round the lobby title (#1132). */
+  topBarIconButtonCaps: { position: "relative", zIndex: 1 },
   topBarStationName: {
     fontSize: FONT_SIZE.micro,
-    color: "#a8a6a0",
+    fontWeight: 600,
+    letterSpacing: "0.02em",
+    // Design note #1134: inherits the drawer's state colour instead of naming its own.
+    color: "inherit",
     maxWidth: "104px",
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
     flexShrink: 1,
+    minWidth: 0,
     cursor: "help",
   },
   /* ==================================================================
@@ -341,22 +401,33 @@ export const styles: Record<string, React.CSSProperties> = {
      playing. It dims to the same `#6e6c68` the disabled controls use -- 3.52:1 on the bar, which is under the
      text bar and is the POINT: an inert label should read as inert. It is `aria-hidden` and always has been,
      so nothing is lost to a screen reader, which gets the state from the button's own #1078 label instead. */
-  topBarStationNameOff: { color: "#6e6c68" },
+  /* Design note #1134: `topBarStationNameOff` is GONE. The drawer states the state for the whole assembly
+     now, so a second declaration at the leaf could only disagree with it. */
   /* Design note #1127: smaller than `topBarIconButton`'s 26px circle and square rather than round, so the two
      steppers read as satellites of the note button rather than as three equal controls. `#34`'s note that
      this group is the first thing to wrap still holds -- these are the cheapest items in the row to push to a
      second line, which is why they are the smallest. */
+  /* ==================================================================
+      DESIGN NOTE 1134: "THE SEEK BUTTONS DON'T LOOK INTERACTIVE"
+     ==================================================================
+     THEY WERE TRANSPARENT WITH A HAIRLINE, which in this bar is the costume of an inert chip -- `chainPill`
+     and `forcedSignChip` both wear it, and neither does anything on click. Every control here that IS a
+     control has a FILL: `topBarIconButton` is `#1c1c1c` on `#3a3a3a`, and so are the buttons in the room
+     bar. The steppers were dressed as labels.
+     FILLED AND RAISED, to the same recipe as the icon buttons they sit beside -- one step above the drawer
+     they sit in, which is what makes them read as pressable rather than printed. The ink stays
+     `currentColor` so they still take the drawer's on/off state. */
   topBarStationStep: {
-    width: "20px",
-    height: "20px",
+    width: "18px",
+    height: "18px",
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
     padding: 0,
-    borderRadius: "5px",
-    border: "1px solid #2a2a2a",
-    backgroundColor: "transparent",
-    color: "#8a8a86",
+    borderRadius: "4px",
+    border: "1px solid #3a3a3a",
+    backgroundColor: "#262626",
+    color: "inherit",
     cursor: "pointer",
     flexShrink: 0,
   },

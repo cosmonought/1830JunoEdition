@@ -168,13 +168,34 @@ describe("the room is the page, and the text carries its own ground", () => {
     expect(CONTROLS_BAR).toContain("bare ? { ...styles.button, ...styles.buttonBig }");
   });
 
-  it("gives the meta footer its own ink, so the mark has something to key against", () => {
-    /* `screen` ERASES BLACK ONLY WHEN THE BACKDROP IS DARK AND REACHABLE. Over the lobby's photograph the
-       clip's own black stopped being erased and became a rectangle, and the credit's `#8a8a86` vanished into
-       a leather chair. The strip states the ground both were assuming. */
+  it("gives the credit its own ink, sized to the lockup rather than the window", () => {
+    /* ==================================================================
+        DESIGN NOTE 1133 NARROWS #1132's STRIP
+       ==================================================================
+       `screen` ERASES BLACK ONLY WHEN THE BACKDROP IS DARK AND REACHABLE, and #1132 supplied that with a
+       full-width opaque bar -- a slab to solve a problem the width of a logo. The plate belongs on the
+       lockup, which is exactly as wide as the thing that needs it. Asserted as the ABSENCE of the bar's fill
+       as much as the presence of the lockup's, because a leftover strip is invisible in a passing test. */
     expect(APP_STYLES).toContain("appFooterMeta:");
     expect(APP_STYLES).toContain('justifyContent: "flex-start"');
     expect(FOOTER).toContain('surface === "meta" ? styles.appFooterMeta');
+    const meta = APP_STYLES.slice(APP_STYLES.indexOf("appFooterMeta: {"));
+    expect(meta.slice(0, meta.indexOf("},"))).not.toContain("backgroundColor");
+    expect(APP_STYLES).toContain("netaCreditMeta: {");
+  });
+
+  it("lets the picture reach the foot of the page", () => {
+    /* ==================================================================
+        DESIGN NOTE 1133: THE BAND THAT LOOKED LIKE A FOOTER
+       ==================================================================
+       REPORTED as "the footer now scrims the entire lower fourth of the screen", and it was not the footer:
+       `sceneClip` was pinned to `height: 100vh` while the root is `min-height: 100vh` PLUS padding plus its
+       flow children, so the last stretch of the page had no photograph on it and the footer's strip ran into
+       that bare ink as one slab.
+       TWO EDGES, BOTH ASSERTED: the layer reaches the root's bottom, and the root no longer holds the credit
+       40px clear of it. */
+    expect(LOBBY).toContain("bottom: 0,");
+    expect(LOBBY).not.toContain('padding: "0 0 40px"');
   });
 
   it("keeps the layer over the page from eating the page", () => {
@@ -196,6 +217,25 @@ describe("the room is the page, and the text carries its own ground", () => {
     // in a flow column, so there is no container left between the picture and the buttons.
     expect(LOBBY).not.toContain("styles.stage}");
     expect(LOBBY).toContain("styles.tableAnchor");
+  });
+
+  it("keeps the display name behind the flag it actually serves", () => {
+    /* ==================================================================
+        DESIGN NOTE 1133: A FIELD WITH NO CONFIRM, BECAUSE IT HAD NOTHING TO CONFIRM TO
+       ==================================================================
+       `handleHostSandboxRoom` passes the literal "Host" -- it never reads this input. The name a sandbox
+       player uses is set in the waiting room, which has its own field AND its own Save. What DOES read it is
+       `hostDisplayName`, `claimSeat` and `ChatBox`, every one of them inside the Web3 branch -- so it is
+       gated with that branch rather than deleted, which is #525's standing rule for it. */
+    expect(LOBBY).toContain("{WEB3_LOBBY_ENABLED && (");
+    expect(LOBBY).toContain('placeholder="Display name"');
+    expect(LOBBY).toContain('hostSandboxRoom(localPlayerId(), "Host")');
+  });
+
+  it("shrinks the connect button to the row it lives in", () => {
+    // `primaryButton` is the lobby's loudest control and was sized as a call to action; this is furniture.
+    expect(LOBBY).toContain('label="Connect"');
+    expect(LOBBY).toContain("styles.connectButton");
   });
 
   it("splits the utility row: the world on the left, the account on the right", () => {

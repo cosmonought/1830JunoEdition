@@ -28,6 +28,7 @@ const APP = readStripped("App.tsx");
 const TOPBAR = readStripped("components/TopBar.tsx");
 const BAR = readStripped("panels/ContextualActionBar.tsx");
 const CONTROLS = readStripped("components/AudioControls.tsx");
+const APP_STYLES = readStripped("styles/appStyles.ts");
 
 describe("the shell stops narrating its own scaffolding", () => {
   it("drops the label that outlived the controls it pointed at", () => {
@@ -88,7 +89,7 @@ describe("the radio says which station it is playing", () => {
     expect(CONTROLS).toContain("audio.stations?.find((station) => station.id === audio.stationId)?.name");
   });
 
-  it("shows it whether or not something is playing", () => {
+  it("shows the station whether or not something is playing", () => {
     /* ==================================================================
         DESIGN NOTE 1127 SUPERSEDES #1120 ON VISIBILITY
        ==================================================================
@@ -102,7 +103,8 @@ describe("the radio says which station it is playing", () => {
     expect(CONTROLS).toContain("{currentStationName && (");
     expect(CONTROLS).not.toContain("{audio.musicPlaying && currentStationName && (");
     expect(CONTROLS).toContain("styles.topBarStationName");
-    expect(CONTROLS).toContain("styles.topBarStationNameOff");
+    // Design note #1134: the state tone moved from the leaf to the drawer -- see the case below.
+    expect(CONTROLS).toContain("styles.stationDrawer");
   });
 
   it("leaves the single-stream shell looking exactly as it did", () => {

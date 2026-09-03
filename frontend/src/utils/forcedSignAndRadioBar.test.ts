@@ -183,8 +183,10 @@ describe("the radio bar is a permanent control", () => {
        is stopped, to serve as an ambient feature flag." A radio nobody can see is a radio nobody turns on. */
     expect(CONTROLS).toContain("{currentStationName && (");
     expect(CONTROLS).not.toContain("{audio.musicPlaying && currentStationName && (");
-    // The state moves to the tone rather than to presence.
-    expect(CONTROLS).toContain("styles.topBarStationNameOff");
+    /* The state moves to the tone rather than to presence -- and #1134 moved WHERE that tone is declared,
+       from the name itself up to the drawer that now holds it, so `currentColor` states it once for the
+       readout and both steppers together. */
+    expect(CONTROLS).toContain("styles.stationDrawerOn");
   });
 
   it("cycles the stations without opening anything", () => {
@@ -204,8 +206,12 @@ describe("the radio bar is a permanent control", () => {
   it("puts the readout before the transport in source order", () => {
     /* "Move the currently selected station name to the left of the play/pause button" -- asserted as ORDER
        rather than as a style, because that is the claim. */
+    /* Design note #1134 REORDERED THIS DELIBERATELY: the ruling is `<| [station title] |>`, so Previous now
+       comes BEFORE the readout, and the whole tuner comes before the radio button it belongs to. The claim
+       that survives is the one that mattered -- the readout is not stranded on the far side of the transport
+       -- so it is asserted against the RADIO BUTTON, which is what "left of" was always about. */
     expect(CONTROLS.indexOf("styles.topBarStationName")).toBeLessThan(
-      CONTROLS.indexOf('aria-label="Previous station"'),
+      CONTROLS.indexOf('aria-label={audio.musicPlaying ? "Radio settings"'),
     );
   });
 });

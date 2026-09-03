@@ -63,8 +63,18 @@ describe("both audio buttons dim the same way", () => {
     expect(CONTROLS).toContain('fill="currentColor"');
     // The emoji that could not be dimmed is gone. Named as the numeric entity, which is how it was written.
     expect(TOPBAR).not.toContain("&#128266;");
-    // The music note stays -- it was never the problem, and it is the reference the speaker now matches.
-    expect(CONTROLS).toContain("&#9835;");
+    /* ==================================================================
+        DESIGN NOTE 1134: THE NOTE IS DRAWN TOO NOW
+       ==================================================================
+       THIS CASE USED TO ASSERT `&#9835;` SURVIVED, "because it was never the problem, and it is the reference
+       the speaker now matches." True of #1074's problem, which was an EMOJI ignoring `color` outright.
+       IT WAS THE PROBLEM FOR A DIFFERENT ONE. A hairline character at 12px is thinned by antialiasing, so at
+       the identical `#f2f0eb` it covers fewer pixels than a filled path and reads dimmer -- reported later as
+       the two lit buttons not matching. The reference runs the other way now: both are drawn.
+       THE CLAIM THIS CASE MAKES IS UNCHANGED -- whatever is inside these buttons has to take the button's
+       colour -- so it is asserted as that, on both of them, rather than on either glyph. */
+    expect(CONTROLS).not.toContain("&#9835;");
+    expect(CONTROLS.split('fill="currentColor"').length - 1).toBeGreaterThanOrEqual(4);
   });
 
   it("keeps the lit style shared, so neither button can drift from the other", () => {

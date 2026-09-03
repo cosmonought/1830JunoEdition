@@ -207,6 +207,11 @@ export const styles: Record<string, React.CSSProperties> = {
     flexShrink: 0,
     paddingLeft: "2px",
   },
+  /* Design note #1129: the meta surfaces' mark is 31px against the board's 18px, so the words beside it move
+     one step of the scale too -- `micro` next to a 31px mark reads as a caption parked beside a logo rather
+     than as the second half of one object. The gap tightens for the same reason: a wide gap at a small type
+     size is what turns a lockup into two things. */
+  netaCreditMeta: { fontSize: FONT_SIZE.small, gap: "10px" },
   /* ==================================================================
       DESIGN NOTE 1083: THE PAGE ENDS HERE
      ==================================================================

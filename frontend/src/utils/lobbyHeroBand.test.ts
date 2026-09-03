@@ -23,6 +23,7 @@ const { readStripped } = require("./sourceScan") as typeof import("./sourceScan"
 const LOBBY = readStripped("components/Lobby.tsx");
 const WAITING = readStripped("components/SandboxWaitingRoom.tsx");
 const FOOTER = readStripped("components/AppFooter.tsx");
+const APP_STYLES = readStripped("styles/appStyles.ts");
 
 const PUBLIC_DIR = path.join(__dirname, "..", "..", "public");
 
@@ -43,39 +44,67 @@ describe("the two boardrooms stay on their own screens", () => {
   });
 
   it("keeps the hero small enough to sit on a first paint", () => {
-    /* THE LOBBY IS THE FIRST SCREEN AND NOTHING IS CACHED YET, which was the main argument against putting a
-       photo on it at all. 98KB is the price that made the band worth it; a full-page version of the same
-       picture would not have been. */
+    /* THE LOBBY IS THE FIRST SCREEN AND NOTHING IS CACHED YET. #1124 held this to 180KB on the reasoning that
+       "a full-page version of the same picture would not have been" worth it -- and the full page is what got
+       built, so the number moves and the REASON does not. 189KB at 1920x1072/q80 is what the whole room costs;
+       the ceiling stays close enough that a careless re-export still fails here. */
     const bytes = fs.statSync(path.join(PUBLIC_DIR, "images/lobby-boardroom.jpg")).size;
-    expect(bytes).toBeLessThan(180 * 1024);
+    expect(bytes).toBeLessThan(260 * 1024);
   });
 });
 
-describe("the header band earns its scrim", () => {
-  it("layers a gradient over the photo rather than trusting the photo", () => {
-    /* MEASURED AGAINST THE BRIGHTEST PIXEL under the title, not against an average: paper 8.00:1, the dim
-       subtitle 5.33:1. The band deepens downward so it settles into the page instead of ending on a line. */
-    expect(LOBBY).toContain("linear-gradient(rgba(8, 8, 8, 0.70), rgba(8, 8, 8, 0.82))");
+describe("the room is the page, and the text carries its own ground", () => {
+  it("puts the picture on the page rather than in a band", () => {
+    /* ==================================================================
+        DESIGN NOTE 1129 SUPERSEDES #1124 ON PLACEMENT
+       ==================================================================
+       THE THREE CASES HERE USED TO ASSERT A BAND -- a 0.70/0.82 scrim, a `#1c1c1c` fallback, and "exactly one
+       background image, because the body stays on flat tokens". All three were right about a header strip and
+       all three describe a design that could not work: a header is ~15:1 on a wide window against a 5.3:1
+       band, so `cover` kept the middle third and the middle third is foreheads.
+       THE BODY-ON-FLAT-TOKENS RULE IS THE ONE WORTH RE-EXAMINING, since it was my argument against exactly
+       this change. It was about CONTRAST, and the cards answer it a different way now: they are 0.92-opaque
+       over the scrimmed photo, and the ink was re-measured against that blend rather than against the token
+       (title 8.87:1, note 6.15:1). The rule held; the way of satisfying it moved. */
+    expect(LOBBY).toContain("linear-gradient(rgba(8, 8, 8, 0.48), rgba(8, 8, 8, 0.48))");
+    expect(LOBBY).toContain('backgroundAttachment: "fixed"');
   });
 
-  it("keeps a flat fallback under the image", () => {
-    // What shows before 98KB decodes, and on any load where it never does.
-    expect(LOBBY).toContain('backgroundColor: "#1c1c1c"');
+  it("gives the hero its own plate, which is what lets the page scrim be light", () => {
+    /* THE SUGGESTION THAT MADE IT POSSIBLE: "provide a background of sorts to Project 18XX". One uniform
+       scrim had to serve both mood and legibility, so it was set by the harder job. Two scrims, two jobs. */
+    expect(LOBBY).toContain("styles.brandHeaderInner");
+    expect(LOBBY).toContain('backgroundColor: "rgba(8, 8, 8, 0.55)"');
   });
 
-  it("leaves the body of the lobby on flat tokens", () => {
-    /* #1123 MEASURED TWO COLUMNS OF CARDS AGAINST FLAT GROUNDS and a full-bleed photo would have put every
-       one of those figures against a varying one. The picture is allowed exactly one element -- the header,
-       which carries no body text. Asserted by count: one background image on this screen, not two. */
-    expect(LOBBY.split("backgroundImage:").length - 1).toBe(1);
+  it("keeps the gilt readable even where the clip is unsupported", () => {
+    /* THE ONE WAY THIS TECHNIQUE FAILS SILENTLY. An engine without `background-clip: text` also lacks
+       `-webkit-text-fill-color`, so the transparent fill never lands and `color` shows -- but only if `color`
+       was set. A gradient alone renders an invisible title. */
+    expect(LOBBY).toContain('color: "#e8c877"');
+    expect(LOBBY).toContain('WebkitBackgroundClip: "text"');
+    expect(LOBBY).toContain('backgroundClip: "text"');
+  });
+
+  it("lets the room through the cards instead of pasting them on it", () => {
+    expect(LOBBY).toContain('backgroundColor: "rgba(22, 18, 30, 0.92)"');
   });
 });
 
 describe("the animated mark is big enough to read as motion", () => {
   it("sizes by surface, the way `animated` already does", () => {
     expect(FOOTER).toContain("const GAME_MARK_HEIGHT = 18;");
-    expect(FOOTER).toContain("const META_MARK_HEIGHT = 36;");
+    // #1124 guessed 2x and overshot; #1129 settles at 1.7x. Asserted as the ratio, below.
+    expect(FOOTER).toContain("const META_MARK_HEIGHT = 31;");
     expect(FOOTER).toContain('surface === "meta" ? META_MARK_HEIGHT : GAME_MARK_HEIGHT');
+  });
+
+  it("scales the words with the mark, so the pair stays one object", () => {
+    /* REPORTED WITH THE SIZE: "make sure the 'Powered by Neta DAO' is centred to the animated logo so that it
+       reads as a single unit". The alignment was already right -- the orbit's ink sits within half a pixel of
+       its frame's centre -- so what made them read as two things was the scale gap. */
+    expect(FOOTER).toContain("styles.netaCreditMeta");
+    expect(APP_STYLES).toContain("netaCreditMeta:");
   });
 
   it("leaves the board's footer exactly where #1099 put it", () => {
@@ -88,7 +117,8 @@ describe("the animated mark is big enough to read as motion", () => {
        under a hex map where an eye is counting revenue.
        THIS CASE IS THAT DISTINCTION, kept executable: the board's height is still 18. */
     expect(FOOTER).toContain("const GAME_MARK_HEIGHT = 18;");
-    expect(META_OVER_GAME()).toBe(2);
+    // The doubling asked for in #1124, dialled to the 1.7 asked for in #1129. Derived, not restated.
+    expect(META_OVER_GAME()).toBeCloseTo(1.7, 1);
   });
 
   it("still gives the board the still mark, so the two changes stay independent", () => {

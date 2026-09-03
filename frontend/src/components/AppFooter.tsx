@@ -38,11 +38,24 @@ const NETA_CREDIT_CSS = `
 .neta-credit:focus-visible { outline: 2px solid #8a8a86; outline-offset: 2px; color: #f2f0eb; }
 `;
 
-/* Design note #1124: the board's mark is unchanged at #1099's 18px. The meta surfaces double it, which is
-   what makes the orbit legible as motion rather than as a flicker -- at 18px the bar travels about nine
-   pixels a lap, which is small enough to read as noise. */
+/* ==================================================================
+    DESIGN NOTE 1129: 2x OVERSHOT, 1.7x IS THE SIZE
+   ==================================================================
+   #1124 DOUBLED IT ON AN EYEBALLED GUESS -- "I would guess it needs to be doubled, but 1.5x might barely
+   scrape by" -- and 36px came back too big: "it's now too large, I guess we went 2x and maybe 1.7x is the
+   right call." 31px is that, rounded from 30.6.
+   THE MARK IS NOT THE WHOLE UNIT, which is the other half of the same report: "make sure the 'Powered by Neta
+   DAO' is centred to the animated logo so that it reads as a single unit, and perhaps nudge the size of that
+   text up slightly to keep them proportional."
+   SO THE CREDIT'S TYPE SCALES WITH THE MARK. `micro` beside an 18px mark was proportionate; beside a 31px one
+   it reads as a caption someone left next to a logo. The meta surfaces take `small`, the board keeps `micro`
+   -- which is the same surface-driven rule the height already follows, applied to the thing standing next
+   to it. Two sizes that move together, rather than one growing and the other staying put.
+   THE FRAME WAS ALREADY CENTRED and was measured rather than assumed: the orbit's ink bounding box across all
+   frames sits at y 1-94 of 96, an offset of half a pixel. `alignItems: center` was doing its job; what made
+   the pair read as two objects was the SCALE MISMATCH and the gap, not the alignment. */
 const GAME_MARK_HEIGHT = 18;
-const META_MARK_HEIGHT = 36;
+const META_MARK_HEIGHT = 31;
 
 export interface AppFooterProps {
   /** Design note #1113: the lobby and the waiting room get the moving mark; the board gets the still one.
@@ -65,7 +78,10 @@ export function AppFooter({ surface }: AppFooterProps) {
         target="_blank"
         rel="noopener noreferrer"
         className="neta-credit"
-        style={styles.netaCredit}
+        style={{
+          ...styles.netaCredit,
+          ...(surface === "meta" ? styles.netaCreditMeta : {}),
+        }}
         title="Neta DAO — opens netadao.org in a new tab"
       >
         {/* ==================================================================

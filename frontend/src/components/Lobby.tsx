@@ -576,6 +576,9 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
           900px, near enough that the two screens behave alike on the same devices. */}
       <style>{LOBBY_CSS}</style>
       <header style={styles.brandHeader}>
+        {/* Design note #1129: one centred plate holding the title, the strapline and the controls, rather than
+            a title on the left and a control cluster on the right. */}
+        <div style={styles.brandHeaderInner}>
         <div>
           <h1 style={styles.brandTitle}>Project 18XX</h1>
           <p style={styles.brandSubtitle}>Pre-game lobby &middot; rooms stage off-chain and cost nothing until launch</p>
@@ -616,6 +619,7 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
               )}
             />
           )}
+        </div>
         </div>
       </header>
 
@@ -1468,9 +1472,35 @@ const styles: Record<string, React.CSSProperties> = {
      NOT VERTICALLY CENTRED, which was also asked for. The room list grows with the table -- ten staged rooms
      is an ordinary evening -- and centring a column that can outgrow the viewport pushes its head and foot
      off both ends at once, where a top-anchored column simply scrolls. */
+  /* ==================================================================
+      DESIGN NOTE 1129: THE ROOM IS THE PAGE, NOT A LETTERBOX ACROSS THE TOP
+     ==================================================================
+     REPORTED of #1124's banner: "too dark, and the cropping on my screen means I'm only really seeing random
+     heads." BOTH HALVES WERE ONE FAULT AND IT WAS MINE: a header is roughly 15:1 on a wide window while the
+     band was 5.3:1, so `cover` threw away about two thirds of its height and kept the middle -- which is the
+     row of foreheads. No crop survives that ratio. A room cannot be shown through a letterbox.
+     SO THE PICTURE GETS THE WHOLE PAGE, which is the alternative that was then proposed and is the one that
+     removes the problem rather than tuning it. At 1920x1072 there is nothing to crop: the table, the map, the
+     lamps and every figure are in frame, and the aspect is close enough to a browser window that `cover`
+     trims edges rather than content.
+     THE SCRIM DROPS FROM 0.70 TO 0.48 BECAUSE THE TEXT NO LONGER LEANS ON IT. #1124 had one uniform scrim
+     doing two jobs -- mood, and legibility for a title occupying a quarter of the width -- so it was set by
+     the harder job and the picture paid for it. The hero block carries its own panel now, which was the other
+     suggestion and is what made this possible: local contrast where text is, light scrim everywhere else.
+     THE WAITING ROOM PATTERN, reached from the other direction. That screen has been a photo under one
+     near-opaque panel since #1113 and it works; this is the same construction with the occupied room rather
+     than the empty one -- the distinction #1124 drew, and far easier to see at full size than in a strip.
+     `backgroundAttachment: fixed` so the room stays put while the cards scroll over it. */
   root: {
     minHeight: "100vh",
     backgroundColor: "#080808",
+    backgroundImage:
+      "linear-gradient(rgba(8, 8, 8, 0.48), rgba(8, 8, 8, 0.48)), " +
+      `url("${process.env.PUBLIC_URL ?? ""}/images/lobby-boardroom.jpg")`,
+    backgroundSize: "cover",
+    backgroundPosition: "center",
+    backgroundRepeat: "no-repeat",
+    backgroundAttachment: "fixed",
     color: "#f2f0eb",
     fontFamily: FONT_FAMILY,
     display: "flex",
@@ -1479,45 +1509,72 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "0 0 40px",
     boxSizing: "border-box",
   },
-  /* ==================================================================
-      DESIGN NOTE 1124: THE FRONT DOOR SHOWS THE ROOM, IT DOES NOT MOVE INTO IT
-     ==================================================================
-     ASKED as "should the boardroom go in the lobby, or the waiting room, or should the two screens merge",
-     and the answer turned on WHICH boardroom. There are two pictures and they are not interchangeable:
-     THE EMPTY ROOM IS ALREADY IN THE WAITING ROOM AND IS CORRECT THERE, because the room is empty for the
-     same reason the screen exists -- nobody has sat down yet. The picture and the label agree.
-     THE OCCUPIED ROOM WOULD CONTRADICT THAT LABEL and is right here instead. A front door sells the thing
-     you are about to do; six men arguing over a map says it and an empty table cannot. So the two run in
-     sequence -- here is what happens at this table, here is the table waiting for you, now you are at it --
-     rather than one picture doing both jobs badly.
-     A BAND, NOT A PAGE. #1123 just put two columns of cards on this screen and measured their contrast
-     against flat tokens; a full-bleed photo behind all of it would put every one of those figures against a
-     varying ground. The header carries no body text, so it is the one place the picture costs nothing.
-     THE SCRIM IS MEASURED, NOT EYEBALLED. 0.70 at the top rising to 0.82 at the bottom: sampled against the
-     BRIGHTEST pixel anywhere under the title, paper reads 8.00:1 and the dim subtitle 5.33:1. The gradient
-     deepens downward so the band settles into the page instead of ending on a line.
-     `backgroundColor` STAYS as the fallback -- it is what shows for the frame before a 98KB image decodes,
-     and on any load where it never does. */
+  /* Design note #1129: no background of its own any more -- the page's picture runs behind it unbroken, which
+     is what stops the header reading as a second photograph pasted above the content. The bottom rule stays:
+     it is the line between the front door and the room, and it is now the only thing marking the header. */
   brandHeader: {
     display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: "20px",
-    flexWrap: "wrap",
-    padding: "28px 28px",
-    minHeight: "132px",
-    boxSizing: "border-box",
-    backgroundColor: "#1c1c1c",
-    backgroundImage:
-      "linear-gradient(rgba(8, 8, 8, 0.70), rgba(8, 8, 8, 0.82)), " +
-      `url("${process.env.PUBLIC_URL ?? ""}/images/lobby-boardroom.jpg")`,
-    backgroundSize: "cover",
-    backgroundPosition: "center",
-    backgroundRepeat: "no-repeat",
+    justifyContent: "center",
+    padding: "44px 28px 40px",
     borderBottom: "1px solid #2a2a2a",
   },
-  brandTitle: { margin: 0, fontSize: FONT_SIZE.display, fontWeight: 800, color: "#f2f0eb", letterSpacing: "0.5px" },
-  brandSubtitle: { margin: "4px 0 0", fontSize: FONT_SIZE.body, color: "#a8a6a0" },
+  /* ==================================================================
+      DESIGN NOTE 1129: THE PANEL THE TITLE ASKED FOR
+     ==================================================================
+     "I think you could provide a background of sorts to Project 18XX and other elements that need one" -- and
+     that is exactly what lets the page scrim be light. A second 0.55 over the 0.48 page puts the hero ground
+     at L 0.058, on which paper reads 8.50:1, the subtitle 5.67:1 and the gilt's darkest stop 4.27:1.
+     BLURRED, NOT SOLID. `backdrop-filter` keeps the room visible THROUGH the plate rather than punching a
+     rectangle out of it -- the difference between a caption plate and a hole. The flat rgba fill is stated as
+     well, because that is what an engine without the filter falls back to, and it is what carries the
+     measured contrast in either case.
+     CENTRED, AS ASKED, AND THE CONTROLS COME WITH IT. A centred title with a name field still pinned to the
+     right reads as two designs sharing a row; stacked under it, the block is one object. */
+  brandHeaderInner: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    gap: "18px",
+    textAlign: "center",
+    maxWidth: "760px",
+    padding: "26px 34px",
+    borderRadius: "14px",
+    border: "1px solid rgba(201, 169, 76, 0.22)",
+    backgroundColor: "rgba(8, 8, 8, 0.55)",
+    backdropFilter: "blur(3px)",
+    WebkitBackdropFilter: "blur(3px)",
+    boxSizing: "border-box",
+  },
+  /* ==================================================================
+      DESIGN NOTE 1129: GILT, WITH A SOLID COLOUR UNDERNEATH IT
+     ==================================================================
+     ASKED FOR as "a gilded/stylized Project 18XX". GOLD RATHER THAN THE BRAND GRADIENT, deliberately: pink to
+     blue belongs to Neta and appears on this screen already, on the footer mark and the card edges. This is
+     the GAME's name, over a room of brass lamps and gilt frames, and `#c9a94c` is a gold the palette holds.
+     THE SWEEP IS GOLD -> PALE -> GOLD, which is how gilt behaves under a light, and it is bounded at both
+     ends by the same stop so the worst case is a single number: 4.27:1 on the hero panel. At 34px/800 the
+     bar is 3:1 -- large text starts at 18.66px bold -- so it clears with room. A darker bronze stop was
+     measured first and came back 1.93:1.
+     `color` IS SET BEFORE THE CLIP, and that is the whole safety of this technique. An engine without
+     `background-clip: text` also lacks `-webkit-text-fill-color`, so the transparent fill never applies and
+     the solid gold shows through. Setting only the gradient renders an INVISIBLE title on those engines.
+     LARGER THAN `FONT_SIZE.display` AND LEFT LOCAL. 22px is right for a heading inside a screen; this is the
+     one place in the app that is a title card, and promoting the size into the shared scale would push every
+     other `display` heading with it. */
+  brandTitle: {
+    margin: 0,
+    fontSize: "34px",
+    fontWeight: 800,
+    letterSpacing: "1.5px",
+    color: "#e8c877",
+    backgroundImage: "linear-gradient(100deg, #c9a94c 0%, #f5e3ac 50%, #c9a94c 100%)",
+    WebkitBackgroundClip: "text",
+    backgroundClip: "text",
+    WebkitTextFillColor: "transparent",
+  },
+  /* Design note #1129: lifted from `#a8a6a0` to the dim step. 5.67:1 on the hero panel -- the old tone was
+     sized for a flat card and would have been marginal over a photograph. */
+  brandSubtitle: { margin: "6px 0 0", fontSize: FONT_SIZE.body, color: "#c8c6c0" },
   headerControls: { display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" },
   nameInput: {
     fontSize: FONT_SIZE.control,
@@ -1568,7 +1625,10 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "stretch",
     gap: "14px",
     padding: "20px",
-    backgroundColor: SANDBOX_PANEL,
+    /* Design note #1129: 0.92 rather than opaque, so the room shows faintly through the card instead of the
+       card reading as a sticker on a photograph -- the treatment the waiting room's panel already uses. The
+       ink was re-measured against the blend rather than against the flat token: title 8.87:1, note 6.15:1. */
+    backgroundColor: "rgba(22, 18, 30, 0.92)",
     borderWidth: "1px",
     borderStyle: "solid",
     borderColor: SANDBOX_RULE,

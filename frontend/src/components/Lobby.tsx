@@ -1479,14 +1479,41 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "0 0 40px",
     boxSizing: "border-box",
   },
+  /* ==================================================================
+      DESIGN NOTE 1124: THE FRONT DOOR SHOWS THE ROOM, IT DOES NOT MOVE INTO IT
+     ==================================================================
+     ASKED as "should the boardroom go in the lobby, or the waiting room, or should the two screens merge",
+     and the answer turned on WHICH boardroom. There are two pictures and they are not interchangeable:
+     THE EMPTY ROOM IS ALREADY IN THE WAITING ROOM AND IS CORRECT THERE, because the room is empty for the
+     same reason the screen exists -- nobody has sat down yet. The picture and the label agree.
+     THE OCCUPIED ROOM WOULD CONTRADICT THAT LABEL and is right here instead. A front door sells the thing
+     you are about to do; six men arguing over a map says it and an empty table cannot. So the two run in
+     sequence -- here is what happens at this table, here is the table waiting for you, now you are at it --
+     rather than one picture doing both jobs badly.
+     A BAND, NOT A PAGE. #1123 just put two columns of cards on this screen and measured their contrast
+     against flat tokens; a full-bleed photo behind all of it would put every one of those figures against a
+     varying ground. The header carries no body text, so it is the one place the picture costs nothing.
+     THE SCRIM IS MEASURED, NOT EYEBALLED. 0.70 at the top rising to 0.82 at the bottom: sampled against the
+     BRIGHTEST pixel anywhere under the title, paper reads 8.00:1 and the dim subtitle 5.33:1. The gradient
+     deepens downward so the band settles into the page instead of ending on a line.
+     `backgroundColor` STAYS as the fallback -- it is what shows for the frame before a 98KB image decodes,
+     and on any load where it never does. */
   brandHeader: {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
     gap: "20px",
     flexWrap: "wrap",
-    padding: "20px 28px",
+    padding: "28px 28px",
+    minHeight: "132px",
+    boxSizing: "border-box",
     backgroundColor: "#1c1c1c",
+    backgroundImage:
+      "linear-gradient(rgba(8, 8, 8, 0.70), rgba(8, 8, 8, 0.82)), " +
+      `url("${process.env.PUBLIC_URL ?? ""}/images/lobby-boardroom.jpg")`,
+    backgroundSize: "cover",
+    backgroundPosition: "center",
+    backgroundRepeat: "no-repeat",
     borderBottom: "1px solid #2a2a2a",
   },
   brandTitle: { margin: 0, fontSize: FONT_SIZE.display, fontWeight: 800, color: "#f2f0eb", letterSpacing: "0.5px" },

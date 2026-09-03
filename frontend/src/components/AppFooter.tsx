@@ -38,6 +38,12 @@ const NETA_CREDIT_CSS = `
 .neta-credit:focus-visible { outline: 2px solid #8a8a86; outline-offset: 2px; color: #f2f0eb; }
 `;
 
+/* Design note #1124: the board's mark is unchanged at #1099's 18px. The meta surfaces double it, which is
+   what makes the orbit legible as motion rather than as a flicker -- at 18px the bar travels about nine
+   pixels a lap, which is small enough to read as noise. */
+const GAME_MARK_HEIGHT = 18;
+const META_MARK_HEIGHT = 36;
+
 export interface AppFooterProps {
   /** Design note #1113: the lobby and the waiting room get the moving mark; the board gets the still one.
    *  Named for the SURFACE rather than passed as `animated`, so the call site states where it is and this
@@ -62,7 +68,28 @@ export function AppFooter({ surface }: AppFooterProps) {
         style={styles.netaCredit}
         title="Neta DAO — opens netadao.org in a new tab"
       >
-        <NetaMark height={18} labelled={false} animated={surface === "meta"} />
+        {/* ==================================================================
+            DESIGN NOTE 1124: #1116 REFUSED TO GROW THIS AND WAS ANSWERING A DIFFERENT QUESTION
+           ==================================================================
+           REPORTED: "the animated mark is far too small for its animation to register" -- a guess of 2x, with
+           1.5x maybe scraping by.
+           #1116 TURNED DOWN EXACTLY THIS AND ITS REASONING STILL HOLDS WHERE IT APPLIED. That note was about
+           PARITY: the clip's mark was 49% smaller than the image's at a shared 18px, and it fixed the ratio by
+           cropping the asset rather than by growing the element, because "a 36px box in an 18px line is a
+           taller footer on every screen."
+           ON EVERY SCREEN IS THE PART THAT WAS TOO BROAD. The game footer draws the STILL image -- `animated`
+           is false there -- so growing the moving one cannot touch it. And the objection was never really
+           about size, it was about a tall footer under a hex map where movement in the corner pulls an eye
+           that is counting revenue. The lobby and the waiting room are screens where nothing is being
+           counted; they are the surfaces #1113 gave the animation to for that exact reason.
+           SO THE SIZE FOLLOWS THE SURFACE, like `animated` already does. 36px on meta, 18px unchanged on the
+           board -- the doubling that was asked for, spent only where #1116's objection does not reach. One
+           constant, so dialling it back to 1.5x is a single edit. */}
+        <NetaMark
+          height={surface === "meta" ? META_MARK_HEIGHT : GAME_MARK_HEIGHT}
+          labelled={false}
+          animated={surface === "meta"}
+        />
         Powered by Neta DAO
       </a>
     </footer>

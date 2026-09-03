@@ -35,6 +35,7 @@ import {
 } from "../config";
 import { isFirebaseConfigured, firebaseConfigError } from "../config/firebase";
 import ChatBox from "./ChatBox";
+import { BRAND_GRADIENT } from "../styles/palette";
 import AppFooter from "./AppFooter";
 // Design note #524: the Firebase sandbox lobby lives on this screen now.
 import SandboxRoomBar from "./SandboxRoomBar";
@@ -602,14 +603,31 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
         </div>
       </header>
 
+      {/* Design note #1114: the width cap. The HEADER stays full-bleed above it -- its own background is a
+          band across the window and capping it would leave two stripes of root either side -- so the cap
+          wraps everything below instead, which is the part that actually stretches. */}
+      <div style={styles.content}>
+
       {/* Honest, specific banners -- never a silently empty screen. Each
           names what is missing and what still works without it. */}
       {!isFirebaseConfigured() && <Banner tone="error" text={firebaseError ?? "Firebase is not configured."} />}
+      {/* ==================================================================
+           DESIGN NOTE 1114: A STATUS, NOT A WARNING
+          ==================================================================
+          THE BANNER WAS AN AMBER SLAB carrying the whole `chainConfigError()` sentence, which names an
+          environment variable and a rebuild requirement. That is a true thing to tell a developer and the
+          wrong thing to put at the top of the screen a player opens.
+          A PILL RATHER THAN A `<details>` ACCORDION, which was the other option offered. An accordion is a
+          control that invites opening; this does not want opening by most of the people who see it, and the
+          full text is already available on hover where a developer will look for it.
+          AND IT IS NOT AMBER. #1094 freed amber to mean "heads up, nothing is broken", and this is one step
+          quieter than that: nothing here is wrong, the app is doing exactly what an unconfigured build
+          should. The neutral chip is the same one `CHIP_INERT` uses for a genuinely inert fact. */}
       {chainError && (
-        <Banner
-          tone="warn"
-          text={`Chain not configured — you can stage a room and chat, but nothing can launch on-chain. ${chainError}`}
-        />
+        <div style={styles.chainPill} title={chainError}>
+          <span style={styles.chainDot} aria-hidden="true" />
+          Offline · sandbox active
+        </div>
       )}
       {wallet.error && <Banner tone="error" text={wallet.error} />}
       {actionError && <Banner tone="error" text={actionError} />}
@@ -639,9 +657,11 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
       <section style={styles.sandboxStrip}>
         <div style={styles.sandboxCopy}>
           <span style={styles.sandboxTitle}>👥 Sandbox Multiplayer</span>
+          {/* Design note #1114: shortened, as asked. The cut half named the plumbing -- Firestore, no wallet,
+              no contract -- which is a developer's sentence on a screen a player reads. What survives is what
+              they can act on. The plumbing is still stated, once, in the status pill below. */}
           <span style={styles.sandboxNote}>
-            Play the sandbox with other people in real time, over Firestore — still no wallet
-            and no contract. Host a room and read the code out, or join one somebody gives you.
+            Real-time multiplayer sandbox. Host a room or join with a room code.
           </span>
         </div>
         {/* Design note #1083: `appliedCount={0}` and `onLeave={() => undefined}` are GONE with the props
@@ -721,7 +741,9 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
           `AppFooter` ALREADY FITS: this root is a flex column with bottom padding, and the footer's own
           `marginTop: auto` pins it to the bottom on a short lobby and lets it follow the list on a long
           one. Same component, same words, same logo, both screens. */}
-      <AppFooter />
+      </div>
+
+      <AppFooter surface="meta" />
     </div>
   );
 }
@@ -1376,9 +1398,22 @@ function Banner({ tone, text }: { tone: "error" | "warn"; text: string }) {
 /* ------------------------------------------------------------------ */
 
 const styles: Record<string, React.CSSProperties> = {
+  /* ==================================================================
+      DESIGN NOTE 1114: A WIDTH CAP, AND THE GROUND STAYS ON THE TOKEN
+     ==================================================================
+     ASKED FOR: pure black, and a centred max-width container so the cards do not stretch on wide monitors.
+     THE CAP IS RIGHT and is applied below on `content`, as a `maxWidth` and `margin: 0 auto` rather than as
+     a new wrapping element -- the root is already the column everything sits in, so a second container would
+     be a div that exists to hold a number.
+     THE GROUND IS NOT PURE BLACK, deliberately. `#080808` is Neta's own `--ink` and is what every other
+     surface in this app was retoned to (#1092); `#000000` here would make the lobby the one screen off the
+     ladder, and the difference from `#080808` is invisible while the inconsistency is permanent.
+     NOT VERTICALLY CENTRED, which was also asked for. The room list grows with the table -- ten staged rooms
+     is an ordinary evening -- and centring a column that can outgrow the viewport pushes its head and foot
+     off both ends at once, where a top-anchored column simply scrolls. */
   root: {
     minHeight: "100vh",
-    backgroundColor: "#0f0f0f",
+    backgroundColor: "#080808",
     color: "#f2f0eb",
     fontFamily: FONT_FAMILY,
     display: "flex",
@@ -1475,15 +1510,52 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "0 28px",
     alignItems: "start",
   },
+  /* Design note #1114: asked for `#121212` on `#262626`. Both are within a point or two of tokens this app
+     already has, and adding them would put two more near-duplicate neutrals back into a codebase that just
+     finished collapsing 212 of them into eight. `INK_CHIP #141414` is the elevated off-black that was wanted
+     and `RULE #2a2a2a` is the subtle border; the radius stays 12px rather than churning to 8 for no reason.
+     The card now sits one step ABOVE the root, which is the half of the request that actually changes
+     anything -- it was `#0f0f0f` on `#0f0f0f`, an edge with no elevation behind it. */
   panel: {
     display: "flex",
     flexDirection: "column",
     gap: "12px",
     padding: "20px",
-    backgroundColor: "#0f0f0f",
-    border: "1px solid #1c1c1c",
+    backgroundColor: "#141414",
+    border: "1px solid #2a2a2a",
     borderRadius: "12px",
   },
+  /* Design note #1114: 1040px rather than the 960 suggested -- the room browser is a table with a name, a
+     status pill, a seat count and two buttons, and at 960 the buttons start wrapping under the name on a
+     staged room with a long title. `margin: 0 auto` centres it; the root's own column keeps the gaps. */
+  content: {
+    width: "100%",
+    maxWidth: "1040px",
+    margin: "0 auto",
+    display: "flex",
+    flexDirection: "column",
+    gap: "16px",
+    padding: "0 20px",
+    boxSizing: "border-box",
+  },
+  chainPill: {
+    alignSelf: "flex-start",
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "7px",
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 700,
+    letterSpacing: "0.03em",
+    padding: "3px 10px",
+    borderRadius: "999px",
+    border: "1px solid #2a2a2a",
+    backgroundColor: "#141414",
+    color: "#a8a6a0",
+    cursor: "help",
+  },
+  /* The dot is the one coloured thing, and it is the app's own "connecting/undecided" amber rather than a
+     red -- an unconfigured chain is a state, not a failure. */
+  chainDot: { width: "7px", height: "7px", borderRadius: "50%", backgroundColor: "#c9a94c", flex: "none" },
   panelTitle: { margin: 0, fontSize: FONT_SIZE.heading, fontWeight: 700, color: "#f2f0eb" },
   /* Design note #902: the variant rows. Same rhythm as `AutoPassModal`'s condition list -- a label, then what
      it costs you -- because both are asking a player to agree to something before it happens. */
@@ -1638,23 +1710,42 @@ const styles: Record<string, React.CSSProperties> = {
     textAlign: "center",
   },
   roomActions: { display: "flex", gap: "10px", flexWrap: "wrap", marginTop: "4px" },
+  /* ==================================================================
+      DESIGN NOTE 1114: THE BRAND GRADIENT ON THE EDGE, NOT UNDER THE TEXT
+     ==================================================================
+     ASKED FOR: the gradient as the Host button's "border or background", text bright and readable.
+     BACKGROUND FAILS THAT SECOND CLAUSE AND CANNOT BE MADE TO PASS. White on the pink end is 4.86:1 and on
+     the blue end 3.20:1, so a button filled with the axis is legible at one end and not the other, and no
+     ink is right for both. The border is the half of the offer that works, and it is also the half that
+     reads as a brand: a gradient hairline around a dark control is a mark, a gradient slab is a toy.
+     AND THE GRADIENT IN THE PROMPT IS NOT NETA'S. It gave `#00C3FF -> #FF00EA`, a cyan-to-magenta neon that
+     appears nowhere in their identity; their published `--gradient` is `#C9338A -> #5B8EF0`, which is what
+     `BRAND_GRADIENT` already holds because #1092 read it out of their stylesheet rather than eyeballing it.
+     Using the invented pair would have put a fourth palette in an app that just spent a whole pass getting
+     to one.
+     TWO BACKGROUNDS, ONE ELEMENT: the fill is painted over the gradient with `padding-box`/`border-box`
+     origins, so the 1px edge shows the axis and the centre stays a dark control with `#f2f0eb` at 16.8:1
+     on it. */
   primaryButton: {
     fontSize: FONT_SIZE.control,
     fontWeight: 700,
     padding: CONTROL_PADDING.button,
     borderRadius: "8px",
-    border: "1px solid #3a5a82",
-    backgroundColor: "#2a2a2a",
+    border: "1px solid transparent",
+    background: `linear-gradient(#141414, #141414) padding-box, ${BRAND_GRADIENT} border-box`,
     color: "#f2f0eb",
     cursor: "pointer",
   },
+  /* Design note #1114: the ghost button, as asked -- transparent, light text, dark edge. `#3a3a3a` is the
+     ladder's `RULE_STRONG` rather than the `#333333` suggested, which is a third neutral within a point of
+     one this app already has. */
   secondaryButton: {
     fontSize: FONT_SIZE.control,
     fontWeight: 600,
     padding: CONTROL_PADDING.button,
     borderRadius: "8px",
     border: "1px solid #3a3a3a",
-    backgroundColor: "#1c1c1c",
+    backgroundColor: "transparent",
     color: "#f2f0eb",
     cursor: "pointer",
   },

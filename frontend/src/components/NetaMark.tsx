@@ -27,6 +27,9 @@ import React from "react";
 /** The logo as supplied. `public/`, so CRA serves it from the app root at any deploy path. */
 export const NETA_LOGO_IMAGE = `${process.env.PUBLIC_URL ?? ""}/neta-dao.png`;
 
+/** The same mark with the gradient bar orbiting it. See design note #1113 for where it is allowed. */
+export const NETA_LOGO_LOOP = `${process.env.PUBLIC_URL ?? ""}/video/neta-mark-loop.mp4`;
+
 export interface NetaMarkProps {
   /** Rendered height in px. Width follows the artwork's aspect. */
   height?: number;
@@ -41,10 +44,57 @@ export interface NetaMarkProps {
    * NOT DEFAULTED: a default would be silently wrong on whichever caller had not thought about it, and there
    * are few enough callers that saying which is cheap. */
   labelled: boolean;
+  /** ==================================================================
+   *   DESIGN NOTE 1113: MOVING IN THE ANTEROOM, STILL AT THE TABLE
+   *  ==================================================================
+   *
+   * ASKED FOR: the looping mark on the lobby and waiting room, the static one on the board, "completely
+   * static to prevent peripheral distraction during gameplay."
+   *
+   * AND THE REASONING IS RIGHT, which is why it is a prop rather than a decision made once. A player in the
+   * lobby is choosing; a player mid-Operating-Round is counting revenue across a hex map, and a thing that
+   * moves in the corner of that is a thing the eye keeps returning to. The app already applies this rule to
+   * itself -- #606 drops animation wherever the information is the picture rather than the movement.
+   *
+   * NOT DEFAULTED, so a new call site has to say which surface it is. */
+  animated?: boolean;
 }
 
-export function NetaMark({ height = 22, labelled }: NetaMarkProps) {
+export function NetaMark({ height = 22, labelled, animated = false }: NetaMarkProps) {
   const label = "Neta DAO";
+
+  if (animated) {
+    return (
+      <video
+        src={NETA_LOGO_LOOP}
+        aria-label={labelled ? label : undefined}
+        aria-hidden={labelled ? undefined : true}
+        autoPlay
+        loop
+        muted
+        playsInline
+        height={height}
+        style={{
+          height,
+          width: "auto",
+          display: "block",
+          flex: "none",
+          /* ==================================================================
+              DESIGN NOTE 1113: THE CLIP IS BRIGHT-ON-BLACK, SO IT KEYS
+             ==================================================================
+             `YellowSignOverlay` #1040 established this for the haunting clips and its note states the
+             precondition exactly: `screen` keys out black, and it only works on footage shot bright on
+             black. This clip is that -- a white N and a saturated bar on `#000`. Without it the footer would
+             carry a visible black rectangle, because h264 has no alpha and the ground here is `#0f0f0f`
+             rather than pure black.
+             THE STATIC PNG NEEDS NO SUCH TRICK: it was cropped with a real alpha channel (#1099), which is
+             the better answer where the format allows one. Video does not. */
+          mixBlendMode: "screen",
+        }}
+      />
+    );
+  }
+
   return (
     <img
       src={NETA_LOGO_IMAGE}

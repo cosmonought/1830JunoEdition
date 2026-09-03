@@ -66,9 +66,10 @@ describe("the page reads in the order it was ruled to", () => {
   });
 
   it("ends with the footer", () => {
-    above(APP, "{isWorkspaceTab && (", "<AppFooter />");
-    // Last of the five, and there is only one of it.
-    expect(APP.split("<AppFooter />").length - 1).toBe(1);
+    /* Design note #1113: the footer takes a `surface` now -- the lobby gets the moving mark, the board the
+       still one -- so the anchor carries the prop. The claim is unchanged: last of the five, and one of it. */
+    above(APP, "{isWorkspaceTab && (", '<AppFooter surface="game" />');
+    expect(APP.split('<AppFooter surface="game" />').length - 1).toBe(1);
   });
 
   it("keeps the spectator notice in the bar's slot rather than the viewport's", () => {

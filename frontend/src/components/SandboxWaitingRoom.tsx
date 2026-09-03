@@ -27,6 +27,7 @@ import { waitingRoomBlock, waitingRoomNotice, type SandboxRoomDoc } from "../uti
 import { MAX_PLAYERS, MIN_PLAYERS, certLimitForPlayers, startingCashForPlayers } from "../utils/gameSetup";
 import { SEAT_COLORS, SEAT_COLOR_NAMES } from "../utils/playerLabels";
 import AudioControls, { type AudioControlsProps } from "./AudioControls";
+import AppFooter from "./AppFooter";
 
 /** Design note #910: the four boolean variants as DATA, so adding a fifth is one row rather than a fifth
  *  hand-written block that could be forgotten -- which is exactly the failure this note is fixing, at the
@@ -377,6 +378,10 @@ export function SandboxWaitingRoom({
 
         {error && <span style={styles.error}>{error}</span>}
       </div>
+
+      {/* Design note #1113: the meta-UI credit, the same component and the same moving mark the lobby
+          carries. The waiting room is the one screen between them and had no footer at all. */}
+      <AppFooter surface="meta" />
     </div>
   );
 }
@@ -397,12 +402,45 @@ const styles: Record<string, React.CSSProperties> = {
      `index.html` paints `body` -- see the note there. Either alone would have closed the report; together
      they also close the NEXT screen that forgets, because a full-height root is a thing an author has to
      remember and a painted body is not. */
+  /* ==================================================================
+      DESIGN NOTE 1112: THE BOARDROOM BEHIND THE ANTEROOM
+     ==================================================================
+     THE OVERLAY IS MUCH LIGHTER THAN THE ONE SUGGESTED, and the reason is measurable rather than a matter of
+     taste. The proposed treatment was `rgba(0,0,0,0.72)` to `0.85` -- sound advice for an ordinary bright
+     photograph, and wrong for this one. This image is ALREADY dark: its median luminance is 0.008 and its
+     95th percentile is 0.108, with only the three desk lamps above 0.5. Under a 0.72-0.85 wash the 95th
+     percentile lands at 0.023, which is to say the room disappears and what remains is a black screen with
+     three green dots. Rendered side by side, that reads as a rendering fault rather than as a backdrop.
+     0.24 -> 0.38 is where it landed after looking at it: "it doesn't look like it needs much darkening",
+     and it does not -- the wash is here to stop the lamps competing with the panel, not to hide the room.
+     The gradient still runs darker downward, which is the suggestion's good half: it puts the heavier wash
+     under the panel's lower body where the roster and the buttons are.
+     `#080808` RATHER THAN PURE BLACK, so the wash is the theme's own ground and the letterbox edges of a
+     `cover` fit match the page behind them.
+     NO `align-items: center`, which the suggestion also proposed. This panel grows with the roster and the
+     variant toggles; vertically centring it would push a six-player table off both ends of a short window,
+     where top-anchored padding simply scrolls. */
+  /* Design note #1113: a COLUMN now rather than a centred row, so the credit can sit at the foot of the
+     screen. `alignItems: center` keeps the panel where it was -- horizontally centred, top-anchored, which
+     is #1112's rule about not vertically centring a panel that grows with the roster -- and `AppFooter`'s
+     own `marginTop: auto` does the rest: it drops to the bottom on a short room and follows the content on
+     a full one. The only thing that changed for the panel is that it is now a flex ITEM in a column, which
+     is why it keeps its own `width: 100%` and `maxWidth`. */
   root: {
     display: "flex",
-    justifyContent: "center",
-    padding: "40px 20px",
+    flexDirection: "column",
+    alignItems: "center",
+    padding: "40px 20px 0",
     minHeight: "100vh",
     backgroundColor: "#0f0f0f",
+    backgroundImage:
+      "linear-gradient(rgba(8, 8, 8, 0.24), rgba(8, 8, 8, 0.38)), " +
+      `url("${process.env.PUBLIC_URL ?? ""}/images/waiting-room.jpg")`,
+    backgroundSize: "cover",
+    backgroundPosition: "center",
+    backgroundRepeat: "no-repeat",
+    /* The colour stays under the image so a slow or failed load is the ordinary dark screen rather than
+       white -- #1100's point, kept rather than replaced. */
     color: "#f2f0eb",
     fontFamily: FONT_FAMILY,
     boxSizing: "border-box",
@@ -416,7 +454,26 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "22px 24px",
     borderRadius: "12px",
     border: "1px solid #2a2a2a",
-    backgroundColor: "#0f0f0f",
+    /* ==================================================================
+        DESIGN NOTE 1112: NEARLY OPAQUE, AND NO BACKDROP BLUR
+       ==================================================================
+       THE SUGGESTION WAS `rgba(18,18,18,0.88)` WITH `backdrop-filter: blur(8px)`, and those two fight each
+       other: at 88% opacity only an eighth of the backdrop reaches the blur, so the effect is close to
+       invisible while still forcing the compositor to filter the area behind a panel on every frame. Pick
+       one. This picks opacity, and the blur is dropped rather than kept as decoration.
+       0.90 IS A MEASURED FLOOR, NOT A FEEL. A LAMP SITS DIRECTLY BEHIND THIS PANEL -- the brightest pixel in
+       the region it covers is rgb(255, 254, 227) -- so the worst case is not the dark panelling, it is that
+       glow. Under the 0.24-0.38 wash, that spot pushes the effective fill to `#201f1e`, and the ladder's
+       FAINTEST text step lands at 4.75:1 there. Still past AA, which is what sets the number: at 0.88 it is
+       4.54 and at 0.82 it is 4.10 and under the bar. Everywhere else on the panel the backdrop is near black
+       and the fill is effectively `#0f0f0f` at 16.83:1.
+       WHAT IT COSTS, stated because this whole re-theme has refused to spend contrast quietly: primary text
+       goes 16.83 -> 14.45 and the faint step 5.53 -> 4.75, in the one region under the lamp. Accepted --
+       the panel reads as glass over the room, which is the thing that was asked for, and nothing drops below
+       the bar. Opaque again is a one-word change if it looks wrong in play.
+       THE SHADOW IS WHAT ACTUALLY LIFTS IT off the image, and it costs nothing to verify. */
+    backgroundColor: "rgba(15, 15, 15, 0.90)",
+    boxShadow: "0 18px 48px rgba(0, 0, 0, 0.55)",
   },
   headerRow: { display: "flex", alignItems: "center", justifyContent: "space-between" },
   headerActions: { display: "flex", alignItems: "center", gap: "6px" },

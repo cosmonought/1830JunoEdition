@@ -491,6 +491,7 @@ import {
    scoreboard so none of them can word it differently. */
 import { CARCOSA_STAMP_STEP, carcosaEpitaph, cursedCompanies } from "./utils/carcosaCurse";
 import AppFooter from "./components/AppFooter";
+import GameIntroOverlay from "./components/GameIntroOverlay";
 import AuctionPromptModal from "./components/AuctionPromptModal";
 import HomeStationPrompt from "./components/HomeStationPrompt";
 
@@ -1974,6 +1975,31 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   useEffect(() => {
     setSandboxRoomResolved(false);
   }, [sandboxRoomCode]);
+
+  /* ==================================================================
+      DESIGN NOTE 1111: THE OPENING TITLES, ON THE EDGE THAT DEALS THE GAME
+     ==================================================================
+     REQUESTED: the cinematic plays "once all players Ready and the Host clicks Start Game".
+     THE EDGE, NOT THE CLICK. Start writes `SetupGame` and every browser replays it, so a local click would
+     show the titles to the host alone. The room's `waiting` -> `playing` transition is the one event every
+     client sees, and it is what this watches.
+     A REF FOR THE PREVIOUS VALUE, and #1009's reason for the whistle applies unchanged: `status` is a LEVEL
+     re-read on every snapshot, so an effect that fired whenever it was `playing` would replay the titles on
+     every poll for the length of the game. The transition is the event.
+     SEEDED FROM THE FIRST OBSERVED STATUS rather than from `waiting`, which is the OPPOSITE of what the
+     whistle does and deliberately so. There, a page loaded during your turn should whistle. Here, a player
+     who joins a table already in progress -- or reloads mid-game -- must not be shown the opening titles for
+     a game that started an hour ago. Seeding from what is actually there is what makes the first snapshot
+     not an edge. */
+  const previousRoomStatus = useRef<SandboxRoomDoc["status"] | null>(null);
+  const [introPlaying, setIntroPlaying] = useState(false);
+  useEffect(() => {
+    const status = sandboxRoom?.status ?? null;
+    if (status === null) return;
+    const previous = previousRoomStatus.current;
+    previousRoomStatus.current = status;
+    if (previous === "waiting" && status === "playing") setIntroPlaying(true);
+  }, [sandboxRoom?.status]);
 
 
   /* ==================================================================
@@ -11776,7 +11802,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       {/* Design note #1083: the fifth and last item of the ruled order. `marginTop: auto` on its own style
          pins it to the bottom of the root's column on a short page and lets it follow the content on a long
          one -- see `appStyles` #1083 for why it is in the flow rather than fixed like the status dock. */}
-      <AppFooter />
+      <AppFooter surface="game" />
+
+      {/* Design note #1111: LAST, and over everything. The shell above has already dealt and rendered behind
+          it, so dismissing the titles lands on a live game rather than on a loading state. */}
+      {introPlaying && (
+        <GameIntroOverlay onDone={() => setIntroPlaying(false)} sfxEnabled={sfxEnabled} />
+      )}
     </div>
   );
 }

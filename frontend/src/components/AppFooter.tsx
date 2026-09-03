@@ -38,7 +38,14 @@ const NETA_CREDIT_CSS = `
 .neta-credit:focus-visible { outline: 2px solid #8a8a86; outline-offset: 2px; color: #f2f0eb; }
 `;
 
-export function AppFooter() {
+export interface AppFooterProps {
+  /** Design note #1113: the lobby and the waiting room get the moving mark; the board gets the still one.
+   *  Named for the SURFACE rather than passed as `animated`, so the call site states where it is and this
+   *  file keeps the rule about what that means. */
+  surface: "meta" | "game";
+}
+
+export function AppFooter({ surface }: AppFooterProps) {
   return (
     <footer style={styles.appFooter}>
       <style>{NETA_CREDIT_CSS}</style>
@@ -55,7 +62,7 @@ export function AppFooter() {
         style={styles.netaCredit}
         title="Neta DAO — opens netadao.org in a new tab"
       >
-        <NetaMark height={18} labelled={false} />
+        <NetaMark height={18} labelled={false} animated={surface === "meta"} />
         Powered by Neta DAO
       </a>
     </footer>

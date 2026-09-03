@@ -64,9 +64,26 @@ export interface AppFooterProps {
   surface: "meta" | "game";
 }
 
+/* ==================================================================
+    DESIGN NOTE 1132: THE MARK NEEDS A GROUND, NOT A PAGE
+   ==================================================================
+   REPORTED: "the Neta DAO footer logo also appears to now be in a black box and has dropped the 'Powered by
+   Neta DAO' string." BOTH ARE THE LOBBY'S NEW PHOTOGRAPH, arriving underneath a footer that had always stood
+   on flat ink.
+   THE BOX is `mix-blend-mode: screen` with nothing useful behind it. The clip is bright-on-black, and screen
+   only erases that black when the backdrop is dark AND reachable -- over a lit photograph, or cut off from it
+   by a stacking context, the black stops being erased and becomes a rectangle.
+   THE MISSING WORDS are `#8a8a86` at `small`, a tone chosen for a near-black ground, disappearing into a
+   brown leather chair.
+   SO THE META FOOTER CARRIES ITS OWN INK. An opaque strip is what both halves were always assuming, and
+   saying so here is cheaper and far more predictable than requiring every surface that might sit behind this
+   footer to be dark. The board's footer is untouched: it never had a photograph to contend with.
+   FLUSH LEFT, raised in the same breath -- "maybe the 'Powered by Neta DAO' unit needs to be flush left or
+   flush right". Left, because this is a bar now rather than a centred credit, and a bar reads from its
+   leading edge. */
 export function AppFooter({ surface }: AppFooterProps) {
   return (
-    <footer style={styles.appFooter}>
+    <footer style={{ ...styles.appFooter, ...(surface === "meta" ? styles.appFooterMeta : {}) }}>
       <style>{NETA_CREDIT_CSS}</style>
       {/* `rel="noopener noreferrer"` because `target="_blank"` without it hands the new tab a `window.opener`
           handle back into this app -- #47's rule, carried with the link rather than rediscovered. */}

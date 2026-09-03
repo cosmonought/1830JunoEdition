@@ -95,7 +95,24 @@ export function SandboxRoomBar({
   return (
     <div style={bare ? styles.barBare : styles.bar}>
       {!bare && <span style={styles.label}>Sandbox multiplayer</span>}
-      <button type="button" style={styles.buttonPrimary} onClick={onHost} disabled={busy}>
+      {/* ==================================================================
+           DESIGN NOTE 1132: BARE CONTROLS ARE BIGGER CONTROLS
+          ==================================================================
+          REPORTED: "the Host Game and Join Game buttons can be sized up a little bit to hold their own
+          against the title." AND THE TRAY IS WHY THEY WERE SMALL. Inside a bordered strip a button is read
+          relative to the strip, so `small` type and 5px of padding were correct; standing alone on a
+          photograph, under a title 20% of the screen wide, the same button is a scrap.
+          `control` AND ROOMIER PADDING -- one step of the shared scale, not a bespoke size, because a control
+          is exactly what `FONT_SIZE.control` exists for and #299's rule about a control being sized for the
+          hand it is clicked with applies here more than anywhere else on the screen.
+          THE GAME'S COPY IS UNTOUCHED. `bare` is the only surface that grows, which is the same
+          surface-driven shape the footer's mark and the sandbox tray already follow. */}
+      <button
+        type="button"
+        style={bare ? { ...styles.buttonPrimary, ...styles.buttonBig } : styles.buttonPrimary}
+        onClick={onHost}
+        disabled={busy}
+      >
         Host game
       </button>
       {joining ? (
@@ -129,7 +146,12 @@ export function SandboxRoomBar({
           </button>
         </form>
       ) : (
-        <button type="button" style={styles.button} onClick={() => setJoining(true)} disabled={busy}>
+        <button
+          type="button"
+          style={bare ? { ...styles.button, ...styles.buttonBig } : styles.button}
+          onClick={() => setJoining(true)}
+          disabled={busy}
+        >
           Join game
         </button>
       )}
@@ -144,13 +166,33 @@ const styles: Record<string, React.CSSProperties> = {
   /* Design note #1131: the tray, minus the tray. Kept as its own object rather than as a spread-with-
      overrides, because "no border, no fill, no padding" said three times in overrides is harder to read than
      the four properties that actually remain. */
+  /* Design note #1132: the size the bare pair take. A separate object rather than a second copy of each
+     button, so "how big is a lobby button" is answered in one place for both of them. */
+  buttonBig: {
+    fontSize: FONT_SIZE.control,
+    fontWeight: 800,
+    padding: "10px 22px",
+    borderRadius: "8px",
+    letterSpacing: "0.02em",
+  },
   barBare: {
     display: "flex",
     flexDirection: "row",
     alignItems: "center",
     flexWrap: "wrap",
-    justifyContent: "center",
+    /* ==================================================================
+        DESIGN NOTE 1132: `center` WAS WHY THE BUTTONS IGNORED THEIR COORDINATES
+       ==================================================================
+       REPORTED: "the Host Game and Join Game buttons are not at the coordinates I specified." The ANCHOR was
+       right -- a 24% box centred on the scene -- and this line then packed both buttons into the middle of
+       it, so they sat shoulder to shoulder at 0.5 instead of straddling 0.40 and 0.60. A container positioned
+       correctly and a content alignment that ignores it.
+       `space-between` PUTS THEM ON THE BOX'S EDGES, which is what the width was chosen to place. It also
+       behaves when the join form opens: Host stays left, the form takes the right, and the row does not
+       re-centre itself mid-interaction. */
+    justifyContent: "space-between",
     gap: "12px",
+    width: "100%",
     fontSize: FONT_SIZE.small,
   },
   bar: {

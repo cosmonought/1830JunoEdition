@@ -223,6 +223,17 @@ export const styles: Record<string, React.CSSProperties> = {
      On a long page it simply follows the content.
      CLEAR OF THE STATUS DOCK. `appRoot` already carries 96px of bottom padding for the fixed dock (#581);
      this sits inside that padding's flow, above it, so the credit is never underneath the ticker. */
+  /* Design note #1132: the meta strip. Opaque ink so the mark's `screen` blend has the near-black it was
+     drawn for, `relative` + `zIndex` so it sits above the lobby's scene layer rather than under it, and
+     `flex-start` because a full-width bar reads from its leading edge. */
+  appFooterMeta: {
+    position: "relative",
+    zIndex: 1,
+    justifyContent: "flex-start",
+    padding: "10px 24px 10px 20px",
+    backgroundColor: "#080808",
+    borderTop: "1px solid #2a2a2a",
+  },
   appFooter: {
     marginTop: "auto",
     display: "flex",

@@ -1629,26 +1629,39 @@ const styles: Record<string, React.CSSProperties> = {
   /* Design note #1131: "at the lowest" is a BOTTOM edge, so the bottom is what is pinned -- `bottom: 60%`
      puts it 40% down from the top and stays true if the artwork's aspect ever changes. Width drives the
      size: 20% of the scene reaches up among the chandelier's arms and stops clear of the heads at 0.44. */
+  /* ==================================================================
+      DESIGN NOTE 1132: A TRANSFORM HERE PUT A BLACK BOX ROUND THE TITLE
+     ==================================================================
+     REPORTED: "the title has a black box background around it." THE BLEND WAS ISOLATED, and by this rule:
+     `mix-blend-mode` blends an element with the backdrop INSIDE ITS NEAREST STACKING CONTEXT, and `transform`
+     creates a stacking context. `translateX(-50%)` on this box therefore cut the wordmark off from the only
+     thing it had to blend with -- the photograph two levels up -- so `screen` had nothing but transparency
+     underneath and the artwork's own black rendered as a rectangle.
+     CENTRED BY ARITHMETIC INSTEAD. `left: 40%` with `width: 20%` puts the centre at 50% without a transform,
+     which is the same position by a means that does not break the blend. The lesson generalises: NOTHING
+     between a blended element and its backdrop may create a stacking context -- not `transform`, not
+     `opacity` below 1, not `filter`, not a `z-index` on a positioned ancestor. */
   titleAnchor: {
     position: "absolute",
-    left: "50%",
+    left: "40%",
     bottom: "60%",
     width: "20%",
     minWidth: "230px",
-    maxWidth: "86vw",
-    transform: "translateX(-50%)",
   },
   /* Design note #1131: centred on the table at 0.7. A 24%-wide box with `space-between` puts the two buttons
      either side of 0.40 and 0.60 as ruled; `pointerEvents: auto` re-enables clicks that `sceneClip` turned
      off for the layer as a whole. */
+  /* Design note #1132: centred the same way -- `left: 38%` with `width: 24%` puts the box's edges on 0.38 and
+     0.62 and its centre on 0.50. `translateY` is all that remains, and only the vertical: nothing here blends,
+     but keeping both anchors on the same idiom means the next reader does not have to work out why one uses a
+     transform and the other does not. */
   tableAnchor: {
     position: "absolute",
-    left: "50%",
+    left: "38%",
     top: "70%",
     width: "24%",
     minWidth: "300px",
-    maxWidth: "92vw",
-    transform: "translate(-50%, -50%)",
+    transform: "translateY(-50%)",
     pointerEvents: "auto",
   },
   /* Design note #1131: `brandHeader`, `brandSubtitle`, `stage` and `stageNote` are GONE. The header was a

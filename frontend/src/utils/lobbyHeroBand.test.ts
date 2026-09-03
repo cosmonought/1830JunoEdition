@@ -137,6 +137,44 @@ describe("the room is the page, and the text carries its own ground", () => {
     expect(LOBBY).toContain('bottom: "60%"');
     expect(LOBBY).toContain('top: "70%"');
     expect(LOBBY).toContain('width: "24%"');
+    /* ==================================================================
+        DESIGN NOTE 1132: CENTRED BY ARITHMETIC, NOT BY TRANSFORM
+       ==================================================================
+       `left: 50%` + `translateX(-50%)` is the usual idiom and it put a BLACK BOX ROUND THE TITLE: `transform`
+       creates a stacking context, and `mix-blend-mode` only blends with the backdrop inside its nearest one,
+       so the wordmark was cut off from the photograph it needed to key against.
+       `left: 40%` WITH `width: 20%` IS THE SAME POSITION and creates nothing. Asserted as the absence of the
+       horizontal transform, because that is the property that broke it. */
+    expect(LOBBY).toContain('left: "40%"');
+    expect(LOBBY).toContain('left: "38%"');
+    expect(LOBBY).not.toContain('transform: "translateX(-50%)"');
+    expect(LOBBY).not.toContain('transform: "translate(-50%, -50%)",\n    pointerEvents');
+  });
+
+  it("pushes the two buttons to the anchor's edges rather than its middle", () => {
+    /* THE ANCHOR WAS RIGHT AND THE CONTENT ALIGNMENT IGNORED IT. A 24% box centred on the scene with
+       `justify-content: center` packs both buttons at 0.5; `space-between` puts them on 0.38 and 0.62, which
+       is what the width was chosen for. */
+    expect(CONTROLS_BAR).toContain('justifyContent: "space-between"');
+    expect(CONTROLS_BAR).not.toContain('justifyContent: "center"');
+  });
+
+  it("sizes the bare pair up without touching the in-game copy", () => {
+    /* THE TRAY WAS WHY THEY WERE SMALL: inside a bordered strip a button is read relative to the strip, so
+       `small` type and 5px of padding were right. Standing alone under a title 20% of the screen wide, the
+       same button is a scrap. One `buttonBig` for both, so the answer lives in one place. */
+    expect(CONTROLS_BAR).toContain("buttonBig:");
+    expect(CONTROLS_BAR).toContain("bare ? { ...styles.buttonPrimary, ...styles.buttonBig }");
+    expect(CONTROLS_BAR).toContain("bare ? { ...styles.button, ...styles.buttonBig }");
+  });
+
+  it("gives the meta footer its own ink, so the mark has something to key against", () => {
+    /* `screen` ERASES BLACK ONLY WHEN THE BACKDROP IS DARK AND REACHABLE. Over the lobby's photograph the
+       clip's own black stopped being erased and became a rectangle, and the credit's `#8a8a86` vanished into
+       a leather chair. The strip states the ground both were assuming. */
+    expect(APP_STYLES).toContain("appFooterMeta:");
+    expect(APP_STYLES).toContain('justifyContent: "flex-start"');
+    expect(FOOTER).toContain('surface === "meta" ? styles.appFooterMeta');
   });
 
   it("keeps the layer over the page from eating the page", () => {

@@ -70,11 +70,76 @@ export function AudioControls({ audio }: AudioControlsProps) {
   const currentStationName =
     audio.stations?.find((station) => station.id === audio.stationId)?.name ?? null;
 
+  /* ==================================================================
+      DESIGN NOTE 1127: CYCLING IS AN INDEX ON THE LIST, NOT A SECOND LIST
+     ==================================================================
+     Prev and Next are the same lookup #1120 already does, walked by one and WRAPPED -- so four stations are a
+     ring rather than a line with two dead ends. A player who wants the first station back after the fourth
+     presses Next once, which is what the `|<` `>|` pair promises on every device that has ever carried it.
+     `-1` GUARDS THE UNWIRED SHELL. With no stations, or an id the list does not contain, `indexOf` is -1 and
+     both handlers become no-ops rather than jumping to station 0 -- the buttons are not rendered in that case
+     anyway, and a handler that quietly did something else would be worse than one that does nothing. */
+  const stationList = audio.stations ?? [];
+  const stationIndex = stationList.findIndex((station) => station.id === audio.stationId);
+  const stepStation = React.useCallback(
+    (delta: number) => {
+      if (stationIndex < 0 || stationList.length === 0) return;
+      const next = stationList[(stationIndex + delta + stationList.length) % stationList.length];
+      audio.onStationChange?.(next.id);
+    },
+    [audio, stationIndex, stationList],
+  );
+  /* The transport row appears only where there is something to transport between. One station is the
+     single-stream case #1120 protected, and prev/next on a list of one is two buttons that do nothing. */
+  const showTransport = stationList.length > 1 && Boolean(audio.onStationChange);
+
   return (
       /* Design note #1075: `position: relative` so the popover hangs from the group rather than from the
          viewport -- the bar scrolls with the header on a narrow window, and a fixed panel would part
          company with the button that opened it. */
       <span ref={audioGroup} style={{ ...styles.topBarAudioGroup, position: "relative" }}>
+        {/* ==================================================================
+             DESIGN NOTE 1127: THE RADIO STOPS HIDING WHEN IT IS OFF
+            ==================================================================
+             #1120 SHOWED THE NAME ONLY WHILE PLAYING, on the reasoning that "a station name beside a dimmed
+             button would be naming something that is not playing." THAT WAS TRUE AND IT WAS THE WRONG TRADE:
+             ruled here as "it should remain permanently visible, even when playback is stopped, to serve as
+             an ambient feature flag." A radio nobody can see is a radio nobody turns on, and the first thing
+             a control has to do is exist. Naming a stopped station is a smaller cost than being invisible.
+             THE STATE IS STILL CARRIED, by the button's dim and by #1078's label -- which is where it always
+             actually lived. The name says WHICH; the button says WHETHER. Two facts, two elements, rather
+             than one element trying to say both by disappearing.
+             LEFT OF THE TRANSPORT, as asked, and that is also the reading order a media player has taught
+             everyone: what is playing, then the controls for it. */}
+        {currentStationName && (
+          <span
+            style={{
+              ...styles.topBarStationName,
+              ...(audio.musicPlaying ? {} : styles.topBarStationNameOff),
+            }}
+            title={audio.musicPlaying ? `Playing ${currentStationName}` : `${currentStationName} — radio is off`}
+            aria-hidden="true"
+          >
+            {currentStationName}
+          </span>
+        )}
+        {showTransport && (
+          <button
+            type="button"
+            style={styles.topBarStationStep}
+            onClick={() => stepStation(-1)}
+            aria-label="Previous station"
+            title="Previous station"
+          >
+            {/* `|<` and `>|` as paths rather than characters: the glyphs that look right here are in fonts
+               that are not everywhere, and #1074's lesson is that a character you did not draw is a character
+               you cannot style. `currentColor` so they grey with the row. */}
+            <svg width="9" height="9" viewBox="0 0 10 10" aria-hidden="true" focusable="false">
+              <path d="M2 1v8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+              <path d="M9 1L4 5l5 4z" fill="currentColor" />
+            </svg>
+          </button>
+        )}
         <button
           type="button"
           style={{
@@ -130,25 +195,19 @@ export function AudioControls({ audio }: AudioControlsProps) {
           {/* A note, not a speaker: this one is about MUSIC, and the speaker beside it is about the game. */}
           &#9835;
         </button>
-        {/* ==================================================================
-            DESIGN NOTE 1120: THE STATION HAD NOWHERE TO SAY ITS OWN NAME
-           ==================================================================
-           ASKED FOR once the header had the room: "could we have the current station title displayed next to
-           the radio button?" -- and the picker made it necessary rather than merely nice. With one stream the
-           note glyph was a complete label; with four, the button says a radio exists and nothing about WHICH
-           one, so the only way to read the current station was to open the popover that changes it.
-           A SIBLING, NOT A LABEL INSIDE THE BUTTON. The button is a 26px circle and #299's rule about tabs
-           applies to it too -- growing it to fit a word would make a navigation-sized control out of an icon,
-           and every other icon in this row would then be the odd one out. Outside it, the name is text in a
-           row of text.
-           IT IS HIDDEN WHILE THE RADIO IS OFF, which is the one piece of state the glyph already carries: a
-           station name beside a dimmed button would be naming something that is not playing. `aria-hidden`
-           because the button's own label already announces both the state and the control -- a screen reader
-           that meets this twice learns nothing the second time. */}
-        {audio.musicPlaying && currentStationName && (
-          <span style={styles.topBarStationName} title={`Playing ${currentStationName}`} aria-hidden="true">
-            {currentStationName}
-          </span>
+        {showTransport && (
+          <button
+            type="button"
+            style={styles.topBarStationStep}
+            onClick={() => stepStation(1)}
+            aria-label="Next station"
+            title="Next station"
+          >
+            <svg width="9" height="9" viewBox="0 0 10 10" aria-hidden="true" focusable="false">
+              <path d="M1 1l5 4-5 4z" fill="currentColor" />
+              <path d="M8 1v8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+            </svg>
+          </button>
         )}
         <button
           type="button"

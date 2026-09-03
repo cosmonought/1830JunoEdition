@@ -310,13 +310,39 @@ export const styles: Record<string, React.CSSProperties> = {
      the full name is in the `title`. */
   topBarStationName: {
     fontSize: FONT_SIZE.micro,
-    color: "#8a8a86",
+    color: "#a8a6a0",
     maxWidth: "104px",
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
     flexShrink: 1,
     cursor: "help",
+  },
+  /* ==================================================================
+      DESIGN NOTE 1127: STOPPED IS DIMMER, NOT ABSENT
+     ==================================================================
+     The readout is permanent now, so it needs a way to say "this is what WOULD play" without claiming to be
+     playing. It dims to the same `#6e6c68` the disabled controls use -- 3.52:1 on the bar, which is under the
+     text bar and is the POINT: an inert label should read as inert. It is `aria-hidden` and always has been,
+     so nothing is lost to a screen reader, which gets the state from the button's own #1078 label instead. */
+  topBarStationNameOff: { color: "#6e6c68" },
+  /* Design note #1127: smaller than `topBarIconButton`'s 26px circle and square rather than round, so the two
+     steppers read as satellites of the note button rather than as three equal controls. `#34`'s note that
+     this group is the first thing to wrap still holds -- these are the cheapest items in the row to push to a
+     second line, which is why they are the smallest. */
+  topBarStationStep: {
+    width: "20px",
+    height: "20px",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 0,
+    borderRadius: "5px",
+    border: "1px solid #2a2a2a",
+    backgroundColor: "transparent",
+    color: "#8a8a86",
+    cursor: "pointer",
+    flexShrink: 0,
   },
   topBarAudioGroup: {
     display: "inline-flex",
@@ -454,6 +480,32 @@ export const styles: Record<string, React.CSSProperties> = {
     backgroundColor: SANDBOX_RAISED,
     borderColor: SANDBOX_RULE_STRONG,
     color: SANDBOX_INK,
+  },
+  /* ==================================================================
+      DESIGN NOTE 1128: A DEBUG CONTROL DRESSED AS A DEBUG CONTROL
+     ==================================================================
+     It sits next to OFFLINE SANDBOX and borrows that badge's pill shape, because it belongs to the same
+     family -- things that are true about this build rather than about this game. Disarmed it is the inert
+     chip treatment: no fill, a hairline, muted ink, so it does not compete with the badge beside it.
+     ARMED IT GOES AMBER, which #1094 freed to mean "heads up, nothing is broken" -- exactly right for a
+     forced event that has not happened yet. Not red: nothing is wrong, a playtester asked for this. */
+  forcedSignChip: {
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 800,
+    letterSpacing: "0.5px",
+    padding: "3px 10px",
+    borderRadius: "999px",
+    border: "1px solid #2a2a2a",
+    backgroundColor: "transparent",
+    color: "#6e6c68",
+    cursor: "pointer",
+    flexShrink: 0,
+    whiteSpace: "nowrap",
+  },
+  forcedSignChipArmed: {
+    borderColor: "#6b5a24",
+    backgroundColor: "#2a2413",
+    color: "#d9b95c",
   },
   sandboxBadge: {
     fontSize: FONT_SIZE.micro,

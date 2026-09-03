@@ -41,6 +41,8 @@ import { getFirestoreDb } from "../config/firebase";
    `SandboxLogMsg` is the union of it and the setup event, and this module
    only ever handles the union. */
 import type { SandboxLogMsg, SetupPlayer } from "./gameSetup";
+// Design note #1128: the stage union is owned by the module that resolves it, not redeclared here.
+import type { ForcedSignStage } from "./yellowSign";
 
 /** A new top-level collection beside `games`: a sandbox room shares none of RoomDoc's shape, and firestore.rules guards that collection for a different document.
  *  See docs/ai_architecture/firebase_middleware.md - sandboxRoom.ts #519 */
@@ -365,6 +367,22 @@ export interface SandboxRoomDoc {
      preferences -- #902 -- and terms only one person can see are not terms. Holding them in the host's React
      state would show them to the host alone and hand everybody else a different game at the deal. */
   variants: GameVariants;
+  /* ==================================================================
+      DESIGN NOTE 1128: THE DEBUG FLAG IS ON THE ROOM FOR #910's REASON
+     ==================================================================
+     RULED: "in the game room, but only the host should be able to see/trigger it, and it should trigger on
+     the next available window, whoever that player is."
+     THOSE TWO HALVES ARE WHY IT CANNOT LIVE IN THE HOST'S BROWSER. The sign is resolved by the client
+     DISPATCHING the run -- so a flag in React state would be armed on one machine and read on another, and
+     would simply never fire unless the host happened to be the acting player. #910 already made this exact
+     argument about the house rules: "holding them in the host's React state would show them to the host alone
+     and hand everybody else a different game at the deal."
+     ONE FIELD, NOT A QUEUE. Arming twice replaces rather than stacks; the tool is "make the next one happen",
+     and a backlog of forced events is not a thing a playtest wants to reason about.
+     CLEARED BY WHOEVER CONSUMES IT, in the same breath as the run that used it. The board is turn-based, so
+     the acting client is unique and there is no race worth guarding -- and if a write were somehow lost, the
+     worst case is the stage fires twice, which for a debug tool is a nuisance and not a corruption. */
+  forcedSign: ForcedSignStage | null;
 }
 
 function toRoomDoc(code: string, data: DocumentData | undefined): SandboxRoomDoc | null {
@@ -378,6 +396,13 @@ function toRoomDoc(code: string, data: DocumentData | undefined): SandboxRoomDoc
        client must degrade to the standard game rather than reaching the reducer with a length it cannot
        price. A room created before variants existed reads as 1830, which is what it was. */
     variants: resolveVariants(data.variants as Partial<GameVariants> | undefined),
+    /* Validated against the union rather than cast: this is untrusted document data like everything else
+       here, and an unknown string reaching `resolveFlavourLine` would be a silently armed flag that matches
+       no stage and never clears. */
+    forcedSign:
+      data.forcedSign === "mark" || data.forcedSign === "carcosa" || data.forcedSign === "fog"
+        ? data.forcedSign
+        : null,
     players: players
       .filter((entry: unknown): entry is DocumentData => typeof entry === "object" && entry !== null)
       .map((entry: DocumentData) => ({
@@ -450,6 +475,17 @@ export async function setSandboxRoomVariants(
   const db = getFirestoreDb();
   if (!db) return;
   await updateDoc(doc(db, SANDBOX_ROOMS_COLLECTION, roomCode), { variants });
+}
+
+/** Design note #1128: arms or clears the forced-sign flag. `null` is the clear, written by whichever client
+ *  consumed it. */
+export async function setSandboxForcedSign(
+  roomCode: string,
+  stage: ForcedSignStage | null,
+): Promise<void> {
+  const db = getFirestoreDb();
+  if (!db) return;
+  await updateDoc(doc(db, SANDBOX_ROOMS_COLLECTION, roomCode), { forcedSign: stage });
 }
 
 export async function markSandboxRoomPlaying(roomCode: string): Promise<void> {

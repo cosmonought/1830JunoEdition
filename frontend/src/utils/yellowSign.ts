@@ -308,6 +308,31 @@ export interface FlavourResolution {
  * AND IT IS THE CALLER'S NATURAL DRAW THAT COMES IN, not a bucket and a seed -- so this function cannot
  * disagree with `revenueFlavourClause` about what would have been drawn. One selector, one answer, and this
  * only ever replaces it. */
+/* ==================================================================
+    DESIGN NOTE 1128: A FORCED STAGE IS A PLAYTEST TOOL, AND IT GOES THROUGH THE LOG LIKE EVERYTHING ELSE
+   ==================================================================
+   ASKED FOR as "a hidden debug trigger ... set a state flag, the engine reads it at the next valid mechanical
+   window, bypasses the normal RNG check, guarantees the event fires, and then resets the flag."
+   THE SHAPE IS RIGHT AND ONE WORD IN IT WAS WRONG: "the RNG check", singular. There is no single check. The
+   Mark fires when the natural line DRAW lands on it inside phases 2-4; Carcosa needs a critical bonus, the
+   marked corporation acting, phases 5-D, and a 1-in-5 seeded roll; the Fog is a debt with no roll at all.
+   Three stages, three sets of gates, and a single boolean cannot say which.
+   SO THE FLAG NAMES ITS STAGE. `ForcedSignStage` is the same union `FlavourResolution.stage` already reports,
+   which means the thing you ask for and the thing you get back are one vocabulary.
+   WHAT A FORCE BYPASSES AND WHAT IT DOES NOT. It skips the CHANCE and the WINDOW -- the draw, the roll, the
+   phase -- because those are what make a stage unreachable on demand. It does NOT skip the state that makes
+   the line coherent: the Mark still needs an unmarked game and a train to take, because its sentence names
+   the train it deletes; Carcosa still needs a marked corporation that has not already escalated, because it
+   is that corporation's story. A forced stage whose prerequisites are unmet does not fire and does not clear
+   -- it stays armed for "the next available window", which is what was asked for and is better than firing
+   an incoherent line now.
+   #1044 IS NOT VIOLATED BY THIS, and the distinction is worth writing down because it looks like it is. That
+   note bans hidden state as the SOURCE OF TRUTH: the sign is derived from the Activity Log so every client
+   agrees and a replay reproduces it. This flag is not a source of truth -- it is an input to one resolution,
+   and the OUTCOME still goes into the log as text that every other client derives from. The log stays the
+   record. What the flag changes is which line got written, once. */
+export type ForcedSignStage = "mark" | "carcosa" | "fog";
+
 export function resolveFlavourLine(input: {
   naturalLine: string;
   bucket: FlavorBucket;
@@ -326,8 +351,11 @@ export function resolveFlavourLine(input: {
    * fact about `macro_round_number` and one corporation's stored deadline, and this module reads lines
    * rather than boards. The caller answers it with `fogIsDue`. */
   fogDue?: boolean;
+  /** Design note #1128: the armed debug stage, or nothing. Sandbox only -- the shell does not thread it
+   *  anywhere else. */
+  forced?: ForcedSignStage | null;
 }): FlavourResolution {
-  const { naturalLine, bucket, ticker, parts, state, phaseTier, owned, fogDue } = input;
+  const { naturalLine, bucket, ticker, parts, state, phaseTier, owned, fogDue, forced } = input;
 
   /* ==================================================================
       DESIGN NOTE 1092: THE FOG OUTRANKS EVERY OTHER LINE, INCLUDING THE ESCALATION
@@ -339,21 +367,36 @@ export function resolveFlavourLine(input: {
      roll -- it doesn't have to be 0%." So this replaces the CLAUSE and nothing else; the swing, the tint and
      the flash are whatever the die said. The train's last run is an ordinary run that happens to be its
      last, which is a better beat than a forced zero and one fewer special case in `turnRevenueSentence`. */
-  if (fogDue === true) {
+  if (fogDue === true || forced === "fog") {
+    /* Design note #1128: the Fog has no roll to bypass, so forcing it is a straight override of the due-date
+       arithmetic. It keeps its place at the top of the order for the same reason it had it -- a debt that has
+       come due does not wait for a better draw, and a forced one is a debt somebody declared due. */
     return { line: CARCOSA_FOG_LINE, stage: "fog" };
   }
 
   // (3) The escalation, which REPLACES whatever the hash drew.
   if (
-    bucket === "criticalBonus" &&
     state.markedTicker !== null &&
     state.markedTicker === ticker &&
     !state.carcosaSeen &&
-    // Design note #1046: Phase 5 through D only.
-    escalationWindowOpen(phaseTier) &&
-    carcosaRollHits(parts)
+    /* Design note #1128: the three CHANCE-AND-WINDOW gates, skipped together when forced. They are what make
+       this stage unreachable on demand -- a critical bonus you cannot roll for, a phase you cannot skip to,
+       and a 1-in-5. The three conditions above are not gates in that sense; they are who the story is about,
+       and forcing past them would print another corporation's sentence. */
+    (forced === "carcosa" ||
+      (bucket === "criticalBonus" &&
+        // Design note #1046: Phase 5 through D only.
+        escalationWindowOpen(phaseTier) &&
+        carcosaRollHits(parts)))
   ) {
     return { line: YELLOW_SIGN_BONUS_LINE, stage: "carcosa" };
+  }
+
+  /* Design note #1128: FORCED, THE DRAW AND THE WINDOW BOTH GO. The Mark's real gate is that the hash has to
+     land on its line, which is a lottery no amount of playing can hurry; phases 2-4 is the other. What
+     survives is an unmarked game and a train to take -- see the note on `ForcedSignStage`. */
+  if (forced === "mark" && state.markedTicker === null && lowestValueTrain(owned) !== null) {
+    return { line: YELLOW_SIGN_MALUS_LINE, stage: "mark" };
   }
 
   // (1) The mark, on its natural draw, once per game.

@@ -122,6 +122,7 @@ import {
      the fix that note asked for, and it is what stops `derived` going the same
      way. */
   type SandboxAction,
+  setSandboxForcedSign,
   type SandboxRoomDoc,
 } from "./utils/sandboxRoom";
 import { isFirebaseConfigured } from "./config/firebase";
@@ -382,6 +383,7 @@ import {
   // Design note #1092: the doom clock, asked at the run rather than at the boundary.
   fogIsDue,
   yellowSignStateFrom,
+  type ForcedSignStage,
 } from "./utils/yellowSign";
 import YellowSignOverlay from "./components/YellowSignOverlay";
 import type { HauntingComposite } from "./components/YellowSignOverlay";
@@ -2997,6 +2999,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   /* Design note #527: the anteroom's own state, from the room DOCUMENT
      rather than the log. `null` while it loads or when there is no room. */
   const sandboxRoomRef = useRef<string | null>(null);
+  /* Design note #1128: the room DOCUMENT, held in a ref beside the code that fetches it. A ref rather than
+     the state itself because the only reader is inside a dispatch callback, and putting `sandboxRoom` in that
+     closure's dependencies would rebuild every turn handler each time any seat toggled ready. */
+  const sandboxRoomDocRef = useRef<SandboxRoomDoc | null>(null);
   /** The next LOG index to append at -- the log's own length, which never
    *  shrinks even when the game is rewound. */
   const appliedIndexRef = useRef(0);
@@ -3017,6 +3023,46 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   useEffect(() => {
     sandboxRoomRef.current = sandboxRoomCode;
   }, [sandboxRoomCode]);
+  useEffect(() => {
+    sandboxRoomDocRef.current = sandboxRoom;
+  }, [sandboxRoom]);
+
+  /* ==================================================================
+      DESIGN NOTE 1128: THE HOST'S SHORTCUT, AND WHY IT IS ALSO A VISIBLE CHIP
+     ==================================================================
+     RULED: host-only, in the game room, firing at the next available window for whoever is acting.
+     A KEYBOARD SHORTCUT ALONE IS A FEATURE NOBODY FINDS. Ctrl+Shift+Y is what was asked for and it is here,
+     but a hidden tool with no readout cannot say whether it is armed -- and this one may sit armed for
+     several turns while it waits for a corporation that can carry its stage. So the chip beside the sandbox
+     badge is the state, and the shortcut is the accelerator; pressing either cycles the same value.
+     THE CYCLE IS null -> mark -> carcosa -> fog -> null, so one control reaches all three stages and a fourth
+     press disarms. A picker with three buttons would be three controls in a strip that is already carrying a
+     badge and a room code, for a tool that is used a handful of times a playtest.
+     GATED ON HOST AND ON SANDBOX, both. `sandbox` because a chain game has no room document and no business
+     with this; host because that is the ruling. Neither gate is decorative -- a non-host pressing the keys
+     writes nothing, and the chip does not render for them either. */
+  const forcedSign = sandbox ? (sandboxRoom?.forcedSign ?? null) : null;
+  const isSandboxHost = sandbox && sandboxRoom !== null && sandboxRoom.hostId === localId;
+  const cycleForcedSign = useCallback(() => {
+    if (!isSandboxHost) return;
+    const order: (ForcedSignStage | null)[] = [null, "mark", "carcosa", "fog"];
+    const next = order[(order.indexOf(forcedSign) + 1) % order.length];
+    void setSandboxForcedSign(sandboxRoomRef.current ?? "", next);
+  }, [forcedSign, isSandboxHost]);
+
+  useEffect(() => {
+    if (!isSandboxHost) return undefined;
+    const onKey = (event: KeyboardEvent) => {
+      /* `event.key` is "Y" while Shift is held, so it is compared case-insensitively rather than against the
+         shifted glyph -- the same trap `ConnectWalletButton`'s Escape handler avoids by comparing a name. */
+      if (!event.ctrlKey || !event.shiftKey) return;
+      if (event.key.toLowerCase() !== "y") return;
+      event.preventDefault();
+      cycleForcedSign();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isSandboxHost, cycleForcedSign]);
   /* Who the log records as having acted. A LABEL, not an identity -- the
      sandbox has no authentication and this is for the readout, not for
      permission. */
@@ -5713,7 +5759,25 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                    state this run was dispatched against, so the clock is read where every other fact about
                    this turn is read. */
                 fogDue: fogIsDue(ran, before?.macro_round_number ?? 0),
+                /* Design note #1128: the host's armed stage, read off the room document every client is
+                   subscribed to -- so the flag is armed on one machine and consumed on whichever machine is
+                   actually taking the run. `sandbox` gates it because the tool is a playtest affordance and
+                   has no business on a chain game; a room doc does not exist there in any case. */
+                forced: sandbox ? (sandboxRoomDocRef.current?.forcedSign ?? null) : null,
               });
+              /* ==================================================================
+                  DESIGN NOTE 1128: CLEARED ON THE STAGE THAT FIRED, NOT ON THE ATTEMPT
+                 ==================================================================
+                 `resolved.stage` is what actually happened, so comparing it against what was armed is how the
+                 flag learns whether its prerequisites were met. A forced Mark on a corporation with no train
+                 resolves to `null` and the flag STAYS ARMED -- "the next available window", as ruled, rather
+                 than a silent miss that leaves a playtester pressing the button again.
+                 FIRE AND FORGET. The write is not awaited: it is a debug flag, the log line has already been
+                 composed from it, and blocking a turn resolution on a Firestore round trip to tidy up would
+                 be the one way this tool could affect a real game's pacing. */
+              if (sandbox && resolved.stage !== null && resolved.stage === sandboxRoomDocRef.current?.forcedSign) {
+                void setSandboxForcedSign(sandboxRoomRef.current ?? "", null);
+              }
               /* THE SENTENCE IS REBUILT ONLY WHEN THE EGG CHANGED THE CLAUSE, so an ordinary turn goes
                  through exactly the path it always did and the opening/tense rules (#944, #950) are not
                  restated here. */
@@ -10467,6 +10531,25 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           // for game 0 on chain.
           <>
             <span style={styles.sandboxBadge}>🧪 OFFLINE SANDBOX</span>
+            {/* Design note #1128: host only, and it says what is armed rather than merely that something is.
+                A tool that waits for its prerequisites needs to be readable while it waits. */}
+            {isSandboxHost && (
+              <button
+                type="button"
+                style={{
+                  ...styles.forcedSignChip,
+                  ...(forcedSign ? styles.forcedSignChipArmed : {}),
+                }}
+                onClick={cycleForcedSign}
+                title={
+                  forcedSign
+                    ? `Yellow Sign: ${forcedSign} armed. Fires at the next window where it can, for whoever is acting. Ctrl+Shift+Y to change.`
+                    : "Yellow Sign debug: force a stage on the next run. Ctrl+Shift+Y."
+                }
+              >
+                {forcedSign ? `⚠ SIGN: ${forcedSign.toUpperCase()}` : "SIGN: OFF"}
+              </button>
+            )}
             {/* ==================================================================
                 DESIGN NOTE 1119: A LABEL THAT OUTLIVED BOTH THINGS IT NAMED
                ==================================================================

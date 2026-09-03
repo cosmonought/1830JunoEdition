@@ -134,16 +134,26 @@ describe("which tile colours a phase permits", () => {
     }
   });
 
-  it("draws them beside the Phase cell, not in a ninth column", () => {
-    /* CHOSEN BETWEEN THE TWO THE RULING OFFERED. The table already carries eight columns inside a horizontal
-       scroller; a ninth pushes the rightmost facts further out of reach to say something that costs no width
-       inline. ANCHORED ON THE PHASE CELL so this fails if the strip is moved to a column of its own. */
-      const phaseCell = sliceBetween(LEDGER, "{DEPOT_SCHEDULE[row.tier]?.phase", "</td>");
-    expect(phaseCell).toContain("tileErasAt(row.tier as TrainTier)");
-    expect(phaseCell).toContain("<EraHex");
-    // The header row gained no column, which is the other half of the same claim.
-    const header = sliceBetween(LEDGER, "<th style={styles.thCenterB}>Tier</th>", "</thead>");
-    expect(header).not.toContain(">Tiles<");
+  it("draws them in their own column, which #1094 had decided against", () => {
+    /* ==================================================================
+        DESIGN NOTE 1126 SUPERSEDES #1094 ON PLACEMENT, AND ONLY ON PLACEMENT
+       ==================================================================
+       THIS CASE USED TO ASSERT THE OPPOSITE and the note it carried was a fair summary of the trade: "the
+       table already carries eight columns inside a horizontal scroller; a ninth pushes the rightmost facts
+       further out of reach to say something that costs no width inline."
+       THE RULING CHANGED AND THE WIDTH WAS PAID RATHER THAN ARGUED AWAY -- the five columns holding short
+       figures under long labels dropped from 14px of side padding to 8px, which is where the ninth column
+       came from. What #1094 was RIGHT about is preserved below and in the case that follows: the strip is
+       still cumulative, and it still says out loud what it means.
+       INVERTED RATHER THAN DELETED, so the file still records that a choice was made here twice. */
+    const tilesCell = sliceBetween(LEDGER, ">Available Tiles</th>", "</thead>");
+    expect(tilesCell).toBeTruthy();
+    expect(LEDGER).toContain("tileErasAt(row.tier as TrainTier)");
+    expect(LEDGER).toContain("<EraHex");
+    /* THE PHASE CELL IS NOW JUST THE PHASE. Anchored the same way the old case was, from the other side:
+       the hexes must have LEFT it, or the column was added without moving anything into it. */
+    const phaseCell = sliceBetween(LEDGER, "{DEPOT_SCHEDULE[row.tier]?.phase", "</td>");
+    expect(phaseCell).not.toContain("<EraHex");
   });
 
   it("says out loud what three unlabelled hexes mean", () => {

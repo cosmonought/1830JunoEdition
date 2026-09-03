@@ -131,8 +131,17 @@ describe("the table reads the data rather than re-stating it", () => {
   })();
 
   it("has the four headers the report asked for", () => {
+    /* ==================================================================
+        DESIGN NOTE 1126: THE CLAIM IS THE HEADERS, NOT THE STYLE KEY THEY USE
+       ==================================================================
+       THIS PINNED `styles.th` AND THAT WAS NEVER THE POINT. #735's report was about four FACTS getting four
+       columns instead of one column doing all four jobs; which padding token each header carries is a
+       different subject entirely. #1126 moved Phase and Status onto `thTight` to pay for the new Available
+       Tiles column, and this case failed on two headers that are exactly where #735 put them.
+       MATCHED ON THE HEADER TEXT IN A `<th>`, whatever style it wears -- so the next width change is free and
+       a header actually going missing still fails. */
     for (const header of ["Phase", "On First Purchase", "Rusts", "Status"]) {
-      expect(ledger).toContain(`<th style={styles.th}>${header}</th>`);
+      expect(ledger).toMatch(new RegExp(`<th style=\\{styles\\.\\w+\\}>${header}</th>`));
     }
   });
 

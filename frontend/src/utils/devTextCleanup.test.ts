@@ -88,11 +88,21 @@ describe("the radio says which station it is playing", () => {
     expect(CONTROLS).toContain("audio.stations?.find((station) => station.id === audio.stationId)?.name");
   });
 
-  it("shows it beside the button and only while something is playing", () => {
-    /* A NAME BESIDE A DIMMED BUTTON WOULD BE NAMING SOMETHING SILENT, which is the state the glyph's own dim
-       already reports. Gated on the same flag that lights the button, so the two cannot disagree. */
-    expect(CONTROLS).toContain("{audio.musicPlaying && currentStationName && (");
+  it("shows it whether or not something is playing", () => {
+    /* ==================================================================
+        DESIGN NOTE 1127 SUPERSEDES #1120 ON VISIBILITY
+       ==================================================================
+       THIS CASE ASSERTED THE OPPOSITE ONE BATCH AGO, on the reasoning that "a name beside a dimmed button
+       would be naming something silent". True, and the wrong trade: ruled here as "it should remain
+       permanently visible, even when playback is stopped, to serve as an ambient feature flag". A radio
+       nobody can see is a radio nobody turns on, and existing is the first job a control has.
+       THE STATE DID NOT GO ANYWHERE. It moved from presence to tone -- `topBarStationNameOff` dims a stopped
+       station to the same ink the disabled controls use -- and the button's own #1078 label still carries it
+       to anything that is not an eye. Two facts, two elements: the name says WHICH, the button says WHETHER. */
+    expect(CONTROLS).toContain("{currentStationName && (");
+    expect(CONTROLS).not.toContain("{audio.musicPlaying && currentStationName && (");
     expect(CONTROLS).toContain("styles.topBarStationName");
+    expect(CONTROLS).toContain("styles.topBarStationNameOff");
   });
 
   it("leaves the single-stream shell looking exactly as it did", () => {

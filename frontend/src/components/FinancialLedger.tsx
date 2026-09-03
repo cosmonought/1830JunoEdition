@@ -225,9 +225,11 @@ function DepotInventoryTable({ gameState }: { gameState: GameStateResponse }) {
           <thead>
             <tr>
               <th style={styles.thCenterB}>Tier</th>
-              <th style={styles.thNumB}>Cost</th>
-              <th style={styles.thNumB}>Depot Remaining</th>
-              <th style={styles.thNumB}>Corporate Train Limit</th>
+              {/* Design note #1126: the three numeric headers take the tight padding, which is where most of
+                 the ninth column's width comes from -- they hold short figures under long labels. */}
+              <th style={styles.thNumTight}>Cost</th>
+              <th style={styles.thNumTight}>Depot Remaining</th>
+              <th style={styles.thNumTight}>Corporate Train Limit</th>
               {/* Design note #735: FOUR COLUMNS, FOUR FACTS. Reported: "the 'Obsolescence / Event Trigger'
                  column is doing a lot of work, since it's actually listing [game phase] [tile unlock]
                  [rust trigger] and [status]."
@@ -235,10 +237,25 @@ function DepotInventoryTable({ gameState }: { gameState: GameStateResponse }) {
                  things depending on the row -- what buying this tier does to OTHER fleets, and when THIS
                  tier's own trains die. Those are now different columns, so neither has to be parsed.
                  See `depotSchedule.ts` #735. */}
-              <th style={styles.th}>Phase</th>
+              <th style={styles.thTight}>Phase</th>
+              {/* ==================================================================
+                   DESIGN NOTE 1126: THE NINTH COLUMN, SUPERSEDING #1094
+                  ==================================================================
+                  #1094 PUT THE HEXES BESIDE THE PHASE and weighed the ninth column against it: "this table
+                  already carries eight columns inside a horizontal scroller, and a ninth would push the
+                  rightmost facts further out of reach to say something that costs no width at all inline."
+                  THE RULING HAS CHANGED AND THE COST HAS BEEN PAID RATHER THAN ARGUED AWAY. The objection was
+                  never that the column was wrong -- it was the width. So the four columns carrying short
+                  figures under long labels give up padding (14px -> 8px), and the strip moves out to a header
+                  that names it. `tileErasAt` is unchanged and the strip is still cumulative, so #1094's
+                  actual CONTENT rule -- a colour appearing is the unlock -- survives the move intact.
+                  WHAT IS GAINED is a header. Inline, the hexes were three coloured dots after "Phase 3" with
+                  their meaning carried only by a screen-reader sentence; a sighted player had to infer it.
+                  "Available Tiles" says it once, in the place a table says what a column is for. */}
+              <th style={styles.thTight}>Available Tiles</th>
               <th style={styles.th}>On First Purchase</th>
               <th style={styles.th}>Rusts</th>
-              <th style={styles.th}>Status</th>
+              <th style={styles.thTight}>Status</th>
             </tr>
           </thead>
           <tbody>
@@ -264,34 +281,33 @@ function DepotInventoryTable({ gameState }: { gameState: GameStateResponse }) {
                       outlook={outlook}
                     />
                   </td>
-                  <td style={styles.tdNumB}>${row.cost.toLocaleString("en-US")}</td>
-                  <td style={styles.tdNumB}>
+                  <td style={styles.tdNumTight}>${row.cost.toLocaleString("en-US")}</td>
+                  <td style={styles.tdNumTight}>
                     {row.total === null
                       ? "Unlimited"
                       : `${row.remaining ?? "?"} / ${row.total}`}
                   </td>
-                  <td style={styles.tdNumB}>{row.trainLimit}</td>
-                  <td style={styles.td}>
-                    <span style={styles.depotPhase}>{DEPOT_SCHEDULE[row.tier]?.phase ?? "—"}</span>
-                    {/* ==================================================================
-                         DESIGN NOTE 1094: THE HEXES ANSWER "WHEN CAN I LAY GREEN?"
-                        ==================================================================
-                        RULED: "add small, blank colored hexes (Yellow, Green, Brown) to the Bank Depot Train
-                        Inventory next to their respective Phases ... to clearly indicate tile availability."
-                        BESIDE THE PHASE RATHER THAN IN A NINTH COLUMN, chosen between the two the ruling
-                        offered. This table already carries eight columns inside a horizontal scroller, and a
-                        ninth would push the rightmost facts further out of reach to say something that costs
-                        no width at all inline -- where the eye is already reading "Phase 3".
-                        CUMULATIVE, per `tileErasAt` #1094: the strip grows down the table and a colour
-                        APPEARING is the unlock, so both questions are answered by one row.
-                        LABELLED FOR A SCREEN READER, because three `role="presentation"` hexes are silence to
-                        one. The sentence says what the colours mean rather than naming them. */}
+                  <td style={styles.tdNumTight}>{row.trainLimit}</td>
+                  <td style={styles.tdTight}>
+                    <span style={styles.depotPhase}>{DEPOT_SCHEDULE[row.tier]?.phase ?? "\u2014"}</span>
+                  </td>
+                  {/* ==================================================================
+                       DESIGN NOTE 1126: THE STRIP GETS ITS OWN CELL AND KEEPS ITS OWN RULE
+                      ==================================================================
+                      CUMULATIVE, per `tileErasAt` #1094 -- the strip grows down the table and a colour
+                      APPEARING is the unlock, which is what lets one row answer both "what can I lay now"
+                      and "when does green arrive". That rule is unchanged by the move; only the width is.
+                      THE SCREEN-READER SENTENCE STAYS AND IS NOW BELT AND BRACES. #1094 added it because
+                      three `role="presentation"` hexes are silence, and the column header did not exist to
+                      say what they were. The header says it now, and the sentence still names WHICH colours
+                      this row has -- a header cannot, because it is the same for every row. */}
+                  <td style={styles.tdTight}>
                     <span style={styles.depotTiles}>
                       {tileErasAt(row.tier as TrainTier).map((era) => (
                         <EraHex key={era} tone={era} size={11} />
                       ))}
                       <span style={styles.srOnly}>
-                        {` Tiles available: ${tileErasAt(row.tier as TrainTier).join(", ")}.`}
+                        {`Tiles available: ${tileErasAt(row.tier as TrainTier).join(", ")}.`}
                       </span>
                     </span>
                   </td>
@@ -321,7 +337,9 @@ function DepotInventoryTable({ gameState }: { gameState: GameStateResponse }) {
                       {rustLabel(row.tier)}
                     </span>
                   </td>
-                  <td style={styles.td}>
+                  {/* Design note #1126: matches its own header's tight padding -- a header at 8px over a cell at 14px
+                     lets the cell set the column width, which would have given back part of what was just paid. */}
+                  <td style={styles.tdTight}>
                     {row.rusted && <span style={styles.depotRustedBadge}>RUSTED</span>}
                     {!row.rusted && row.soldOut && (
                       <span style={styles.depotSoldOutBadge}>SOLD OUT</span>
@@ -576,9 +594,22 @@ export function PlayerAssetsSection({
                     <td style={styles.tdB}>
                       {/* Design note #405: a name when there is one. */}
                       {playerLabel?.(player) ?? truncate(player)}
+                      {/* ==================================================================
+                           DESIGN NOTE 1125: "#1" WAS A RANK, AND IT IS NOT A RANK
+                          ==================================================================
+                           It sat beside a name in a table of assets, in a MONOSPACE face, which is the
+                           costume this app puts on figures -- so it read as a standing, or a seat number, or
+                           a count of something. The Priority Deal is none of those; it says who opens the
+                           next Stock Round.
+                           SPELLED OUT, AND SHAPED LIKE THE ONE ON THE PLAYER CARDS. #563 put that badge in
+                           the name stripe as an outlined pill; this is the same fact about the same seat two
+                           panels away, so it is the same object. The ink differs because the ground does --
+                           those cards are paper and take the seat colour, this table is `INK_VIEWPORT` -- and
+                           the sky blue it already carried is kept, so the change reads as the same badge
+                           growing words rather than as a new badge appearing. */}
                       {hasPriorityDeal && (
                         <span style={styles.priorityDealMark} title={PRIORITY_DEAL_TOOLTIP}>
-                          #1
+                          Priority Deal
                         </span>
                       )}
                     </td>
@@ -1065,7 +1096,8 @@ const styles: Record<string, React.CSSProperties> = {
     display: "inline-flex",
     alignItems: "center",
     gap: "2px",
-    marginLeft: "6px",
+    // Design note #1126: was `marginLeft: 6px`, which was the gap after "Phase 3". It has its own cell now.
+    marginLeft: 0,
     whiteSpace: "nowrap",
     verticalAlign: "middle",
   },
@@ -1188,19 +1220,26 @@ const styles: Record<string, React.CSSProperties> = {
    *  beside a player's name in a dense table that already carries a crown and an ACTIVE badge elsewhere, and a
    *  third boxed element would turn the name column into a row of competing containers.
    *  `cursor: help` is what signals the tooltip is there at all -- without it the mark looks like decoration. */
+  /* ==================================================================
+      DESIGN NOTE 1125: THE TAILWIND TRANSLATION WENT WITH THE DIGIT
+     ==================================================================
+     Every property here was a note about rendering `#1` faithfully -- a monospace face, `tracking-tight`,
+     `text-sm`. Those were right for a figure and this is not a figure any more.
+     `priorityTag`'s SHAPE, from `PlayerCards`: micro, 900, letterspaced, an outlined pill. Two panels, one
+     badge. `text-sky-400` survives as the ink because it is the one thing a reader can carry between them. */
   priorityDealMark: {
-    marginLeft: "6px",
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-    fontWeight: 700,
-    // `text-sm` in the requested Tailwind spec means "one step below body".
-    // This app's scale is uniformly upsized (see `styles/typography.ts`), so
-    // the honest translation is `small`, not a literal 14px -- a hardcoded
-    // 14px would be the one element in the table ignoring the scale.
-    fontSize: FONT_SIZE.small,
-    // Tailwind `tracking-tight`.
-    letterSpacing: "-0.025em",
-    // Tailwind `text-sky-400`.
+    marginLeft: "8px",
+    display: "inline-block",
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 900,
+    letterSpacing: "0.5px",
+    padding: "1px 6px",
+    borderRadius: "999px",
+    borderWidth: "1px",
+    borderStyle: "solid",
+    borderColor: "#38bdf8",
     color: "#38bdf8",
+    whiteSpace: "nowrap",
     cursor: "help",
   },
   presidentTag: {
@@ -1270,6 +1309,43 @@ const styles: Record<string, React.CSSProperties> = {
     borderBottom: "1px solid #2a2a2a",
     fontWeight: 600,
     whiteSpace: "nowrap",
+  },
+  /* ==================================================================
+      DESIGN NOTE 1126: WHERE THE NINTH COLUMN'S WIDTH CAME FROM
+     ==================================================================
+     14px of side padding on both sides of nine columns is 252px of air in a table that was already scrolling.
+     THE FOUR THAT PAY ARE THE ONES HOLDING SHORT FIGURES UNDER LONG LABELS -- Cost, Depot Remaining,
+     Corporate Train Limit, Phase, Status. "$180" under "Corporate Train Limit" is a cell whose width is set
+     by its header and whose content uses a third of it; taking 6px a side there costs nothing legible.
+     THE PROSE COLUMNS ARE UNTOUCHED. "On First Purchase" and "Rusts" hold sentences, and squeezing a sentence
+     buys width by adding lines, which is the opposite of the trade being made. */
+  thTight: {
+    textAlign: "left",
+    padding: "8px 8px",
+    color: "#8a8a86",
+    borderBottom: "1px solid #2a2a2a",
+    fontWeight: 600,
+    whiteSpace: "nowrap",
+  },
+  thNumTight: {
+    textAlign: "right",
+    padding: "8px 8px",
+    color: "#8a8a86",
+    borderBottom: "1px solid #2a2a2a",
+    borderRight: "1px solid #1c1c1c",
+    fontWeight: 600,
+    whiteSpace: "nowrap",
+  },
+  tdTight: {
+    padding: "8px 8px",
+    borderBottom: "1px solid #161616",
+  },
+  tdNumTight: {
+    padding: "8px 8px",
+    borderBottom: "1px solid #161616",
+    borderRight: "1px solid #161616",
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+    textAlign: "right",
   },
   td: {
     padding: "8px 14px",

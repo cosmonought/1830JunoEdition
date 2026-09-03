@@ -526,14 +526,23 @@ function PrivateCard({
         {/* Face value and revenue as a paired figure row -- the two numbers
             a player compares across cards, so they sit together and large
             rather than as two lines of prose. */}
+        {/* ==================================================================
+             DESIGN NOTE 1125: TWO FIGURES THAT LOOKED LIKE QUANTITIES
+            ==================================================================
+             "20" and "+5" under the words FACE VALUE and REVENUE / OR read as counts, and this is the one
+             screen where a player is doing arithmetic across five cards at once -- comparing $20 against a
+             $5 income, deciding what a private is worth. Every other money figure in this app carries its
+             `$`; these two were the exception, on the surface where the comparison is the whole activity.
+             THE `+` STAYS IN FRONT OF THE `$`, not behind it: "+$5" is the sign of the number and then the
+             number, which is how the Ledger and the Activity Log already write a gain. */}
         <div style={styles.privateCardFigures}>
           <div style={styles.privateCardFigure}>
-            <span style={styles.privateCardFigureValue}>{priv.face_value}</span>
+            <span style={styles.privateCardFigureValue}>${priv.face_value}</span>
             <span style={styles.privateCardFigureLabel}>face value</span>
           </div>
           {catalogEntry && (
             <div style={styles.privateCardFigure}>
-              <span style={styles.privateCardFigureValueRevenue}>+{catalogEntry.revenue}</span>
+              <span style={styles.privateCardFigureValueRevenue}>+${catalogEntry.revenue}</span>
               <span style={styles.privateCardFigureLabel}>revenue / OR</span>
             </div>
           )}

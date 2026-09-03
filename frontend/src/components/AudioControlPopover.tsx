@@ -51,6 +51,21 @@ export interface AudioControlPopoverProps {
   onEnabledChange: (enabled: boolean) => void;
   /** Empty for the radio; the three effect categories for SFX. */
   categories?: readonly AudioCategoryToggle[];
+  /** ==================================================================
+   *   DESIGN NOTE 1115: THE STATION PICKER, RADIO ONLY
+   *  ==================================================================
+   *
+   * Optional and absent for the effects panel, which is what keeps this component one thing: the SFX side
+   * has no station and would render an empty row for a concept it does not have.
+   *
+   * A `<select>` RATHER THAN A ROW OF PILLS, which was the other option offered. Four stations is already at
+   * the edge of what a pill row can hold inside a 260px popover, and the list is the kind of thing that
+   * grows -- a fifth station would wrap the row and a sixth would break it. A select also brings the
+   * platform's own keyboard handling, its own scrolling on a phone, and a name every screen reader already
+   * announces correctly, none of which a row of buttons gets for free. */
+  stations?: readonly { id: string; name: string }[];
+  stationId?: string;
+  onStationChange?: (id: string) => void;
   onClose: () => void;
   /** ==================================================================
    *   DESIGN NOTE 1094: WHAT "OUTSIDE" MEANS
@@ -72,6 +87,9 @@ export function AudioControlPopover({
   enabled,
   onEnabledChange,
   categories = [],
+  stations,
+  stationId,
+  onStationChange,
   onClose,
   owner,
 }: AudioControlPopoverProps) {
@@ -215,6 +233,28 @@ export function AudioControlPopover({
         <span style={styles.percent}>{Math.round(volume * 100)}%</span>
       </div>
 
+      {stations && stations.length > 0 && onStationChange && (
+        /* Design note #1115: UNDER the transport row, as asked. It is not disabled while the radio is off --
+           #1094 removed `disabled` from the slider for the same reason and the reasoning carries: choosing a
+           station on a silent radio is an unambiguous statement about what should play, and the control
+           should take it rather than teach the player it is dead. */
+        <label style={styles.stationRow}>
+          <span style={styles.stationLabel}>Station</span>
+          <select
+            style={styles.stationSelect}
+            value={stationId}
+            onChange={(event) => onStationChange(event.target.value)}
+            aria-label="Radio station"
+          >
+            {stations.map((station) => (
+              <option key={station.id} value={station.id}>
+                {station.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+
       {categories.length > 0 && (
         <div style={styles.categories}>
           {/* Design note #1075: the categories are a subdivision of the channel above them, so they grey out
@@ -274,6 +314,25 @@ const styles: Record<string, React.CSSProperties> = {
   /* Design note #1104: a transport button, sized to sit on the volume row beside the slider. Neutral by
      design -- the glyph is the signal, so this borrows no semantic colour. The lit treatment is the same
      `topBarIconButtonOn` pairing the trigger buttons use, so "on" reads the same on both surfaces. */
+  stationRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+    marginTop: "10px",
+  },
+  stationLabel: { fontSize: FONT_SIZE.micro, color: "#a8a6a0", flex: "none" },
+  stationSelect: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: FONT_SIZE.small,
+    fontFamily: "inherit",
+    padding: "4px 6px",
+    borderRadius: "6px",
+    border: "1px solid #3a3a3a",
+    backgroundColor: "#1c1c1c",
+    color: "#f2f0eb",
+    cursor: "pointer",
+  },
   audioTransport: {
     display: "inline-flex",
     alignItems: "center",

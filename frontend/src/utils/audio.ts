@@ -30,8 +30,59 @@ import { useCallback, useEffect, useRef, useState } from "react";
  *  neither inlines it nor renames it. */
 export const WHISTLE_SRC = "/audio/whistle.mp3";
 
-/** The station. A LIVE stream, which is what shapes `useRadioStream` below. */
+/** The house station. A LIVE stream, which is what shapes `useRadioStream` below.
+ *  Kept as its own export because several tests and `App.tsx` name it directly. */
 export const RADIO_STREAM_URL = "https://s3.radio.co/s39c195d74/listen";
+
+/* ==================================================================
+    DESIGN NOTE 1115: FOUR STATIONS, AND THE ONE THAT IS OURS STAYS FIRST
+   ==================================================================
+   ASKED FOR: a station picker under the on/off control, four stations, the selection persisted.
+
+   AN `id` PER STATION, AND THE ID IS WHAT IS STORED -- not the URL. A stream URL is somebody else's
+   infrastructure and changes without telling us; storing it would mean a player who picked ChillHop in
+   January is silently pinned to a dead endpoint in March, with no way to notice. The id survives a URL
+   change, and an id that is no longer in this table falls back to the house station rather than to nothing.
+
+   ORDER IS DELIBERATE. `neta` first because it is the one station this app is actually FOR; the rest are
+   alphabetical, which is a rule rather than a ranking and so does not invite re-argument.
+
+   THESE ARE THIRD-PARTY ENDPOINTS and two of them are plain `http`-shaped CDN hosts. If any is served over
+   HTTP on an HTTPS page the browser blocks it as mixed content and the element fires `error` -- which is why
+   `useRadioStream` reports a failure rather than sitting silently on a stopped element; see #1115 there. */
+export interface RadioStation {
+  id: string;
+  name: string;
+  url: string;
+}
+
+export const RADIO_STATIONS: readonly RadioStation[] = [
+  { id: "neta", name: "Neta FM", url: RADIO_STREAM_URL },
+  { id: "chillhop", name: "ChillHop", url: "https://fluxmusic.api.radiosphere.io/channels/chillhop/stream.mp3" },
+  { id: "groovesalad", name: "Groove Salad", url: "https://ice1.somafm.com/groovesalad-128-mp3" },
+  { id: "ontheroad", name: "On the Road", url: "https://stream.rcs.revma.com/cgvrymb6p98uv" },
+] as const;
+
+const STATION_STORAGE_KEY = "1830juno.radio_station.v1";
+
+/** The station this browser last chose, or the house one. Never throws -- private browsing and disabled
+ *  storage are ordinary states, and `utils/lobby.ts` treats them the same way one file over. */
+export function loadRadioStation(): RadioStation {
+  try {
+    const saved = window.localStorage.getItem(STATION_STORAGE_KEY);
+    return RADIO_STATIONS.find((station) => station.id === saved) ?? RADIO_STATIONS[0];
+  } catch {
+    return RADIO_STATIONS[0];
+  }
+}
+
+export function saveRadioStation(id: string): void {
+  try {
+    window.localStorage.setItem(STATION_STORAGE_KEY, id);
+  } catch {
+    /* Nothing to do and nothing worth telling the player. */
+  }
+}
 
 /* ==================================================================
     DESIGN NOTE 1013: THE MIX, NOT THE VOLUME
@@ -401,6 +452,40 @@ export function useRadioStream(url: string): RadioStream {
       playQuietly(element);
       return true;
     });
+  }, [url]);
+
+  /* ==================================================================
+      DESIGN NOTE 1115: CHANGING STATION WHILE IT IS PLAYING
+     ==================================================================
+     `toggle` attaches the url it closed over, which is correct for starting and stopping and does NOTHING
+     when the url changes underneath a stream that is already running -- the callback is rebuilt, but nobody
+     calls it. Without this effect, picking a station would silently keep playing the old one until the next
+     stop and start, which is the shape of bug a player reports as "the picker does not work".
+
+     IT REUSES #1009's TEARDOWN RATHER THAN JUST REASSIGNING `src`. Dropping the attribute and calling
+     `load()` closes the socket before the next one opens; assigning over a live stream leaves the previous
+     connection to be collected whenever the engine gets round to it, and on a long session that is a
+     connection per station change.
+
+     GUARDED ON `playing`, so a player who picks a station while the radio is OFF has simply chosen what will
+     start next -- which is what the picker should mean when nothing is sounding. */
+  const firstRun = useRef(true);
+  useEffect(() => {
+    if (firstRun.current) {
+      firstRun.current = false;
+      return;
+    }
+    const element = elementRef.current;
+    if (!element || !playing) return;
+    element.pause();
+    element.removeAttribute("src");
+    element.load();
+    element.src = url;
+    playQuietly(element);
+    // `playing` is deliberately NOT a dependency: this reacts to the STATION changing, not to the
+    // transport. `toggle` already owns starting and stopping, and listing it here would re-attach the
+    // stream every time a player pressed play.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [url]);
 
   return { playing, toggle };

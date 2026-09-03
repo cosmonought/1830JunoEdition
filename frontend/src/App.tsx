@@ -356,9 +356,13 @@ import {
   duckRadio,
   // Design note #1073: the deep duck, for the one clip that competes with the bed rather than sitting over it.
   DUCK_FOR_VIDEO,
+  // Design note #1115: the station table, and the two helpers that persist a choice across sessions.
+  loadRadioStation,
   playVariantCue,
+  RADIO_STATIONS,
   RADIO_STREAM_URL,
   RADIO_VOLUME,
+  saveRadioStation,
   setRadioVolume,
   setSfxVolume,
   SFX_VOLUME,
@@ -1782,7 +1786,18 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     },
     [],
   );
-  const radio = useRadioStream(RADIO_STREAM_URL);
+  /* Design note #1115: the station is the app's state and the URL is derived from it, rather than the other
+     way round -- `useRadioStream` still takes a plain url and knows nothing about stations, which is what
+     keeps the hook a transport. Seeded from `localStorage` in the initialiser so the first render already
+     has the right one and no effect has to correct it. */
+  const [station, setStation] = useState(loadRadioStation);
+  const radio = useRadioStream(station.url);
+  const handleStationChange = useCallback((id: string) => {
+    const next = RADIO_STATIONS.find((entry) => entry.id === id);
+    if (!next) return;
+    setStation(next);
+    saveRadioStation(next.id);
+  }, []);
 
   /* ==================================================================
       DESIGN NOTE 1075: THE MIX IS THE PLAYER'S NOW, AND SO IS WHAT COUNTS AS AN EFFECT
@@ -1827,6 +1842,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     () => ({
       musicPlaying: radio.playing,
       onToggleMusic: radio.toggle,
+      stations: RADIO_STATIONS,
+      stationId: station.id,
+      onStationChange: handleStationChange,
       sfxEnabled,
       onToggleSfx: () => setSfxEnabled((on) => !on),
       radioVolume,

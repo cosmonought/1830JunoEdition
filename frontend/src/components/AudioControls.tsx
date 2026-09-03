@@ -44,6 +44,11 @@ export interface AudioControlsProps {
     sfxVolume?: number;
     onSfxVolume?: (volume: number) => void;
     sfxCategories?: readonly AudioCategoryToggle[];
+    /** Design note #1115: the radio's station list and current pick. Optional like the volume wiring above,
+     *  so a shell that supplies neither still renders the two buttons. */
+    stations?: readonly { id: string; name: string }[];
+    stationId?: string;
+    onStationChange?: (id: string) => void;
   };
 }
 

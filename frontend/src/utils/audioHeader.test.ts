@@ -45,7 +45,21 @@ describe("the shell owns the audio state", () => {
   it("keeps the two channels on separate state", () => {
     // Two toggles, two pieces of state. A single `audioEnabled` would mute the whistle to stop the music.
     expect(APP).toContain("const [sfxEnabled, setSfxEnabled] = useState(true);");
-    expect(APP).toContain("const radio = useRadioStream(RADIO_STREAM_URL);");
+    /* Design note #1115: the stream now takes the SELECTED station's url rather than the house constant.
+       The claim this case makes is unchanged and is the reason it names the hook at all -- the radio is its
+       own state, separate from `sfxEnabled`, so muting one cannot silence the other. The station is a third
+       piece of state feeding it, which is asserted on its own below. */
+    expect(APP).toContain("const radio = useRadioStream(station.url);");
+  });
+
+  it("keeps the station out of the transport and persists the choice", () => {
+    /* Design note #1115: `useRadioStream` stays a transport that knows nothing about stations -- it takes a
+       url. The shell owns which station that is, which is what lets the picker persist without the hook
+       learning about `localStorage`. */
+    expect(APP).toContain("const [station, setStation] = useState(loadRadioStation);");
+    expect(APP).toContain("saveRadioStation(next.id);");
+    // Seeded in the initialiser, so the first render already has the right station and no effect corrects it.
+    expect(APP).not.toContain("useEffect(() => setStation");
   });
 
   it("hands the controls to the header", () => {

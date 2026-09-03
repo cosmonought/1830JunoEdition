@@ -1,7 +1,10 @@
 /** @jest-environment jsdom */
 //
 // ==================================================================
-//  DESIGN NOTE 1105 (harness): THE SLIDER HAS TO REACH THE SOUND
+//  DESIGN NOTE 1105 (harness): THE CONTROLS HAVE TO REACH THE SOUND
+//
+// Renamed from `sfxVolumeReach` by #1115, which added the station cases below: the file is now about every
+// control that has to reach a live element, not the volume alone.
 // ==================================================================
 //
 // REPORTED: "the SFX are absolutely crazy loud. I don't think the volume slider is actually adjusting their

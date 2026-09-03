@@ -593,6 +593,28 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
           With the account furniture moved to its own corner there is no row left to share -- the title gets
           the middle of the screen to itself, which is what a title is for. */}
       <div style={styles.utilityRow}>
+        {/* ==================================================================
+             DESIGN NOTE 1131: THE PILL GOES LEFT, AND THE ROW BECOMES TWO GROUPS
+            ==================================================================
+            RULED: "move 'Offline · sandbox active' to the left side of the screen."
+            AND IT WAS NEVER ACCOUNT FURNITURE, which is what the right-hand group is for. #1130 put it there
+            because it was the third small thing on the screen and the row was where small things had gone.
+            The name, the wallet and the balance answer "who am I"; this answers "what is this build talking
+            to", which is a fact about the WORLD. Opposite ends of the row is the right expression of that.
+            THE OFFSET IT WAS ASKED TO FIX IS ALREADY GONE, and this is worth recording so the next reader
+            does not go looking for it: the title was pushed down by the flow header it used to live in, and
+            #1131 anchored it to the scene instead, where nothing above it can move it. The pill moves because
+            the left is where it belongs, not because the title still needs the room. */}
+        {chainError && (
+          <div
+            style={styles.chainPill}
+            title={`${chainError}\n\nOn-chain rooms are switched off while sandbox multiplayer is being tested. Flip WEB3_LOBBY_ENABLED in Lobby.tsx to bring them back.`}
+          >
+            <span style={styles.chainDot} aria-hidden="true" />
+            Offline · sandbox active
+          </div>
+        )}
+        <div style={styles.utilityAccount}>
         <input
           type="text"
           value={displayName}
@@ -629,66 +651,76 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
             />
           )}
         </div>
-        {/* Design note #1130: the offline pill joins the account row, and takes the paused card's sentence
-            with it into a tooltip -- see the note where that card used to be. */}
-        {chainError && (
-          <div
-            style={styles.chainPill}
-            title={`${chainError}\n\nOn-chain rooms are switched off while sandbox multiplayer is being tested. Flip WEB3_LOBBY_ENABLED in Lobby.tsx to bring them back.`}
-          >
-            <span style={styles.chainDot} aria-hidden="true" />
-            Offline · sandbox active
-          </div>
-        )}
+        </div>
       </div>
 
       {/* ==================================================================
-           DESIGN NOTE 1130: THE TITLE IS ARTWORK NOW, KEYED RATHER THAN CUT OUT
+           DESIGN NOTE 1131: A SCENE WITH COORDINATES, SO THINGS CAN BE ANCHORED TO IT
           ==================================================================
-          A DRAWN WORDMARK REPLACES THE CSS GILT. It arrived with two objections attached -- that it "looks
-          wrong" and that it "will make the site slow" -- and neither survived measurement. It is 94KB at
-          900px against the 189KB room already on this page; and composited it reads better than the CSS
-          version, because Victorian display lettering with filigree is a thing no typeface does with
-          `letter-spacing` and a gradient.
-          `mix-blend-mode: screen` RATHER THAN AN ALPHA CUTOUT -- the technique #1040 established for the
-          yellow sign and #1113 reuses for the animated mark. The artwork is bright-on-black and screen takes
-          black to nothing, so no alpha channel is needed and it stays a JPEG: the same lettering as a PNG
-          with real alpha measured 330KB.
-          THE SOURCE'S BLACKS WERE CRUSHED BEFORE EXPORT, which is what makes this work rather than nearly
-          work. The original's ground is a vignette reaching 30/255 at the edges, and screen-blend lifts every
-          one of those pixels into a visible rectangle around the lettering. A levels ramp to true black
-          removes the halo -- and true black compresses better than near-black, so it is cheaper too.
-          NO PLATE, as proposed, and this is where the full-page picture pays off: the top of the room is
-          coffered ceiling and dark panelling, so the worst pixel behind the title sits at L 0.026 and gilt
-          reads 6.08:1 unaided. #1129's hero plate existed to protect text on an unknown ground; this text
-          sits on a known one, and a plate over it just prints a grey rectangle onto a photograph. */}
-      <header style={styles.brandHeader}>
-        {/* ==================================================================
-             DESIGN NOTE 1130: THE CSS GILT SURVIVES AS THE FALLBACK
-            ==================================================================
-            AN `<img>` THAT 404s LEAVES NOTHING BEHIND IT, and a heading that is only there for screen readers
-            would leave this lobby with no visible title at all -- a worse version of the failure #1129's
-            `color`-before-clip guard was written to prevent. So the gilt gradient it replaced is still here,
-            still measured (4.27:1 at its darkest stop), and stands in the moment the artwork does not arrive.
-            `onError` covers a 404, a decode failure and an offline cache miss alike.
-            ONE HEADING IN BOTH BRANCHES, so a screen reader hears "Project 18XX" exactly once whichever
-            renders: clipped while the artwork carries the name, visible when it cannot. */}
-        <h1 style={titleArtFailed ? styles.brandTitle : styles.srOnlyTitle}>Project 18XX</h1>
-        {!titleArtFailed && (
-          <img
-            className="lobby-wordmark"
-            src={`${process.env.PUBLIC_URL ?? ""}/images/title-project18xx.jpg`}
-            alt=""
-            onError={() => setTitleArtFailed(true)}
-            style={styles.brandWordmark}
-          />
-        )}
-        <p style={styles.brandSubtitle}>
-          Pre-game lobby &middot; rooms stage off-chain and cost nothing until launch
-        </p>
-      </header>
+          RULED, with the positions given directly: "y0.4 x0.5 is where I'd have the Project 18XX at the
+          lowest, x0.4y0.7 and x0.6y0.7 is where I'd put the Host Game and Join Game buttons."
+          I ARGUED AGAINST ANCHORING LAST TURN AND THE OBJECTION WAS SOUND ABOUT THE WRONG THING. With the
+          room as a `background-size: cover` image there ARE no stable coordinates -- the browser crops it
+          differently at every viewport aspect, so a control pinned at 70% would sit on the table on one
+          window and on somebody's lapel on the next. That is a fact about `cover`, not about anchoring.
+          SO THE PICTURE STOPS BEING A BACKGROUND AND BECOMES A BOX WITH A KNOWN ASPECT. `.scene` is sized
+          `max(100vw, 100vh * 1920/1072)` by `max(100vh, 100vw * 1072/1920)` and centred -- which is precisely
+          what `cover` computes, done in CSS where the result is an element children can be positioned inside.
+          The image fills it `100% 100%`, so it is never distorted and percentage coordinates map to the same
+          feature of the photograph on every screen. 0.7 is the table everywhere.
+          `pointerEvents: none` ON THE SCENE, `auto` ON THE CONTROLS, because the scene is a full-bleed layer
+          sitting over the page and would otherwise swallow every click on the footer beneath it. */}
+      <div style={styles.sceneClip} aria-hidden={false}>
+        <div style={styles.scene}>
+          {/* Design note #1131: BOTTOM-ANCHORED at 40%, which is the constraint as it was given -- "at the
+              lowest" is a bottom edge, and pinning the bottom keeps it true whatever the artwork's aspect
+              becomes. The width is what sets the size: 20% of the scene puts the top edge up among the
+              chandelier's arms and the bottom clear of the barons' heads, which begin at 0.44. */}
+          <div style={styles.titleAnchor}>
+            {/* ==================================================================
+                 DESIGN NOTE 1130: THE CSS GILT SURVIVES AS THE FALLBACK
+                ==================================================================
+                AN `<img>` THAT 404s LEAVES NOTHING BEHIND IT, and the heading beside it is clipped for screen
+                readers -- so a missing asset would leave this lobby with no visible title at all, a worse
+                version of the failure #1129's `color`-before-clip guard was written to prevent. The gilt
+                gradient it replaced is still here, still measured, and stands in when the artwork does not
+                arrive. `onError` covers a 404, a decode failure and an offline cache miss alike.
+                ONE HEADING IN BOTH BRANCHES, so a screen reader hears "Project 18XX" exactly once whichever
+                renders: clipped while the artwork carries the name, visible when it cannot. */}
+            <h1 style={titleArtFailed ? styles.brandTitle : styles.srOnlyTitle}>Project 18XX</h1>
+            {!titleArtFailed && (
+              <img
+                className="lobby-wordmark"
+                src={`${process.env.PUBLIC_URL ?? ""}/images/title-project18xx.jpg`}
+                alt=""
+                onError={() => setTitleArtFailed(true)}
+                style={styles.brandWordmark}
+              />
+            )}
+          </div>
 
-      {/* Design note #1114: the width cap. The HEADER stays full-bleed above it -- its own background is a
+          {/* Design note #1131: the controls, on the table at 0.7. `space-between` across a 24%-wide box
+              centred at 0.5 lands the two buttons either side of 0.40 and 0.60 -- the positions as given,
+              expressed as a width rather than as two absolute anchors so the join form can expand in place
+              without a second set of coordinates to keep in step. */}
+          <div style={styles.tableAnchor}>
+            {/* Design note #1083: `appliedCount={0}` and `onLeave={() => undefined}` are GONE with the props
+                they fed. Both were placeholders this surface had no use for -- the lobby is never in a room --
+                and a required prop satisfied by a stub is a prop the component did not need. */}
+            <SandboxRoomBar
+              bare
+              roomCode={null}
+              available={isFirebaseConfigured()}
+              error={sandboxRoomError}
+              busy={sandboxRoomBusy}
+              onHost={handleHostSandboxRoom}
+              onJoin={handleJoinSandboxRoom}
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Design note #1114: the width cap.      {/* Design note #1114: the width cap. The HEADER stays full-bleed above it -- its own background is a
           band across the window and capping it would leave two stripes of root either side -- so the cap
           wraps everything below instead, which is the part that actually stretches. */}
       <div style={styles.content}>
@@ -768,25 +800,20 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
          batch spent its whole length removing. It was the last one left.
          THE SENTENCE IS NOT LOST: it moved into the offline pill's tooltip, where a developer will look and a
          player will not -- the same move #1119 made with the missing env var. */}
-      <div style={styles.stage}>
-        {/* Design note #1130: no `<section>` and no panel -- a line of copy and the two controls, standing on
-            the room. The strapline stays because "host, or join with a code" is the one thing a first-time
-            player needs told; that is a sentence, not a card's worth of copy. */}
-        <p style={styles.stageNote}>
-          Real-time multiplayer sandbox. Host a room, or join with a room code.
-        </p>
-        {/* Design note #1083: `appliedCount={0}` and `onLeave={() => undefined}` are GONE with the props
-            they fed. Both were placeholders this surface had no use for -- the lobby is never in a room --
-            and a required prop satisfied by a stub is a prop the component did not need. */}
-        <SandboxRoomBar
-          roomCode={null}
-          available={isFirebaseConfigured()}
-          error={sandboxRoomError}
-          busy={sandboxRoomBusy}
-          onHost={handleHostSandboxRoom}
-          onJoin={handleJoinSandboxRoom}
-        />
-      </div>
+      {/* ==================================================================
+           DESIGN NOTE 1131: THREE LINES OF COPY, NONE OF THEM NECESSARY
+          ==================================================================
+          RULED: "I'm not sure any of 'Pre-game lobby · rooms stage off-chain and cost nothing until launch',
+          'Real-time multiplayer sandbox. Host a room, or join with a room code.' or 'Sandbox multiplayer'
+          are necessary." THEY ARE NOT, AND THE REASON IS THE SAME FOR ALL THREE: each was captioning a
+          control that had a label already.
+          "SANDBOX MULTIPLAYER" named the tray the buttons sat in, and the tray is gone (#1131 in
+          `SandboxRoomBar`). "Host a room, or join with a room code" restated two buttons that read "Host
+          game" and "Join game". And "rooms stage off-chain and cost nothing until launch" was reassurance
+          about a transaction cost on a screen where the only live path never touches a chain.
+          WHAT WAS ACTUALLY LOAD-BEARING IN THE THIRD ONE survives elsewhere: the offline pill says the chain
+          is off, and its tooltip carries the rest for whoever needs it. Nothing left here is unexplained --
+          it is a title, and two buttons that say what they do. */}
 
       {/* Design note #525: THE WEB3 LOBBY IS PARKED, NOT DELETED. Gated behind ONE flag rather than removed, and the
          constant is at the top of this file where it can be found -- deleting a working staging room to run a
@@ -1545,16 +1572,16 @@ const styles: Record<string, React.CSSProperties> = {
      near-opaque panel since #1113 and it works; this is the same construction with the occupied room rather
      than the empty one -- the distinction #1124 drew, and far easier to see at full size than in a strip.
      `backgroundAttachment: fixed` so the room stays put while the cards scroll over it. */
+  /* Design note #1131: the picture moved to `.scene`, which is an ELEMENT with a known aspect rather than a
+     `cover` background -- see the note at its call site. The root keeps the ink underneath, which is what
+     shows in the margins before the image decodes and behind it if it never does.
+     `position: relative` so the scene can be absolutely placed against it; `overflow-x: hidden` because the
+     scene is deliberately wider than the viewport on a tall window and must not produce a scrollbar. */
   root: {
+    position: "relative",
     minHeight: "100vh",
+    overflowX: "hidden",
     backgroundColor: "#080808",
-    backgroundImage:
-      "linear-gradient(rgba(8, 8, 8, 0.48), rgba(8, 8, 8, 0.48)), " +
-      `url("${process.env.PUBLIC_URL ?? ""}/images/lobby-boardroom.jpg")`,
-    backgroundSize: "cover",
-    backgroundPosition: "center",
-    backgroundRepeat: "no-repeat",
-    backgroundAttachment: "fixed",
     color: "#f2f0eb",
     fontFamily: FONT_FAMILY,
     display: "flex",
@@ -1563,16 +1590,70 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "0 0 40px",
     boxSizing: "border-box",
   },
-  /* Design note #1130: the header is the wordmark and its strapline, centred, with nothing behind either.
-     #1129's plate is gone and so is the rule that divided header from content -- there is no box edge left
-     for a rule to align to, and a line drawn across a photograph is just a line drawn across a photograph. */
-  brandHeader: {
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    gap: "10px",
-    padding: "16px 28px 34px",
+  /* ==================================================================
+      DESIGN NOTE 1131: `cover`, DONE IN CSS SO ITS RESULT IS ADDRESSABLE
+     ==================================================================
+     `sceneClip` is the viewport-sized window; `scene` is the image's own box, sized exactly as
+     `background-size: cover` would compute it and centred the same way, then filled `100% 100%` so the
+     picture is never distorted. The difference from a background is that this one is an ELEMENT: children
+     positioned at 40% or 70% land on the same part of the photograph on every screen, which is the whole
+     reason the anchoring in #1131 is possible at all.
+     THE SCRIM IS A GRADIENT LAYER ABOVE THE IMAGE in the same declaration -- #1129's 0.48, unchanged, and
+     unchanged for its reason: the title sits where the room is darkest and needs no more than this.
+     IT DOES NOT SCROLL AND IT DOES NOT CATCH CLICKS. `position: absolute` inside the root rather than
+     `fixed`, so a long page (the Web3 branch, when that flag turns on) scrolls past it normally rather than
+     leaving it pinned; `pointerEvents: none` so the layer over the whole window does not eat the footer. */
+  sceneClip: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    height: "100vh",
+    overflow: "hidden",
+    zIndex: 0,
+    pointerEvents: "none",
   },
+  scene: {
+    position: "absolute",
+    top: "50%",
+    left: "50%",
+    transform: "translate(-50%, -50%)",
+    width: "max(100%, calc(100vh * 1920 / 1072))",
+    height: "max(100vh, calc(100vw * 1072 / 1920))",
+    backgroundImage:
+      "linear-gradient(rgba(8, 8, 8, 0.48), rgba(8, 8, 8, 0.48)), " +
+      `url("${process.env.PUBLIC_URL ?? ""}/images/lobby-boardroom.jpg")`,
+    backgroundSize: "100% 100%",
+    backgroundRepeat: "no-repeat",
+  },
+  /* Design note #1131: "at the lowest" is a BOTTOM edge, so the bottom is what is pinned -- `bottom: 60%`
+     puts it 40% down from the top and stays true if the artwork's aspect ever changes. Width drives the
+     size: 20% of the scene reaches up among the chandelier's arms and stops clear of the heads at 0.44. */
+  titleAnchor: {
+    position: "absolute",
+    left: "50%",
+    bottom: "60%",
+    width: "20%",
+    minWidth: "230px",
+    maxWidth: "86vw",
+    transform: "translateX(-50%)",
+  },
+  /* Design note #1131: centred on the table at 0.7. A 24%-wide box with `space-between` puts the two buttons
+     either side of 0.40 and 0.60 as ruled; `pointerEvents: auto` re-enables clicks that `sceneClip` turned
+     off for the layer as a whole. */
+  tableAnchor: {
+    position: "absolute",
+    left: "50%",
+    top: "70%",
+    width: "24%",
+    minWidth: "300px",
+    maxWidth: "92vw",
+    transform: "translate(-50%, -50%)",
+    pointerEvents: "auto",
+  },
+  /* Design note #1131: `brandHeader`, `brandSubtitle`, `stage` and `stageNote` are GONE. The header was a
+     flow container for a title and a strapline; the title is anchored to the scene now and the strapline was
+     one of the three lines removed with it. `stage` held the controls, which are anchored too. */
   /* ==================================================================
       DESIGN NOTE 1130: SCREEN, NOT ALPHA
      ==================================================================
@@ -1584,7 +1665,9 @@ const styles: Record<string, React.CSSProperties> = {
      #1123's media query could go -- the one responsive rule left is expressible inline. */
   brandWordmark: {
     display: "block",
-    width: "min(520px, 84vw)",
+    /* Design note #1131: was `min(520px, 84vw)`. The anchor sets the size now, so the image simply fills it
+       -- two places deciding one width is how the title and its anchor would have drifted apart. */
+    width: "100%",
     height: "auto",
     mixBlendMode: "screen",
     userSelect: "none",
@@ -1610,12 +1693,31 @@ const styles: Record<string, React.CSSProperties> = {
      the window rather than to the column of content. `flex-end` plus `wrap`, so a connected wallet's three
      chips fall to a second line rather than pushing the row wider than the screen. */
   utilityRow: {
+    /* ==================================================================
+        DESIGN NOTE 1131: THE STACKING FIX THIS ROW NEEDED AND DID NOT HAVE
+       ==================================================================
+       `sceneClip` is `position: absolute` with `zIndex: 0`, and a POSITIONED element at z-index 0 paints
+       above an unpositioned flow sibling however late that sibling appears in the document. So this row --
+       and `content` below it -- were about to be painted UNDER the photograph, which `pointerEvents: none`
+       would have hidden by leaving them clickable: visibly gone, still working, the hardest kind of bug to
+       read. `position: relative` plus a z-index puts them back on top explicitly. */
+    position: "relative",
+    zIndex: 1,
     display: "flex",
     alignItems: "center",
-    justifyContent: "flex-end",
+    justifyContent: "space-between",
     flexWrap: "wrap",
     gap: "10px",
     padding: "14px 20px 0",
+  },
+  /* Design note #1131: the account half of the row, grouped so `space-between` has two things to separate
+     rather than four to scatter. `marginLeft: auto` keeps it right even when the pill is absent. */
+  utilityAccount: {
+    display: "flex",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: "10px",
+    marginLeft: "auto",
   },
   /* Design note #1130: the stage -- a centred column holding a sentence and the two controls, with no panel
      around them. See the note at its call site for why the box came off. */
@@ -1625,13 +1727,6 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     gap: "16px",
     paddingTop: "4px",
-  },
-  stageNote: {
-    margin: 0,
-    fontSize: FONT_SIZE.body,
-    color: "#c8c6c0",
-    textAlign: "center",
-    textShadow: "0 1px 3px rgba(8, 8, 8, 0.9)",
   },
   /* ==================================================================
       DESIGN NOTE 1129: GILT, WITH A SOLID COLOUR UNDERNEATH IT
@@ -1654,22 +1749,16 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: "34px",
     fontWeight: 800,
     letterSpacing: "1.5px",
+    textAlign: "center",
     color: "#e8c877",
     backgroundImage: "linear-gradient(100deg, #c9a94c 0%, #f5e3ac 50%, #c9a94c 100%)",
     WebkitBackgroundClip: "text",
     backgroundClip: "text",
     WebkitTextFillColor: "transparent",
   },
-  /* Design note #1130: no plate under it now, so it takes a text shadow instead. It sits on the dark ceiling
-     where the wordmark does -- worst pixel L 0.026, so `#c8c6c0` reads 8.8:1 -- and the shadow is insurance
-     for the one viewport aspect that crops the picture somewhere brighter. */
-  brandSubtitle: {
-    margin: 0,
-    fontSize: FONT_SIZE.body,
-    color: "#c8c6c0",
-    textAlign: "center",
-    textShadow: "0 1px 3px rgba(8, 8, 8, 0.9)",
-  },
+  /* Design note #1131: `brandSubtitle` went with its sentence. `brandTitle` above STAYS -- it is the
+     fallback the wordmark falls back to, not a survivor. It also picks up the text shadow the subtitle used
+     to carry, since in that branch it is the one piece of text standing on the photograph unaided. */
   headerControls: { display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" },
   nameInput: {
     fontSize: FONT_SIZE.control,
@@ -1778,6 +1867,9 @@ const styles: Record<string, React.CSSProperties> = {
      status pill, a seat count and two buttons, and at 960 the buttons start wrapping under the name on a
      staged room with a long title. `margin: 0 auto` centres it; the root's own column keeps the gaps. */
   content: {
+    // Design note #1131: above the scene, for the reason set out on `utilityRow`.
+    position: "relative",
+    zIndex: 1,
     width: "100%",
     maxWidth: "1040px",
     margin: "0 auto",

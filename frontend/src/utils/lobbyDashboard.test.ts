@@ -153,17 +153,22 @@ describe("the stage that replaced the dashboard", () => {
      the Web3 branch must stay OUTSIDE whatever holds the sandbox controls, because the moment that flag turns
      on it renders a room list and a staging table rather than a status card. That was #1123's real insight
      and it survives the layout that occasioned it. */
-  it("centres one stage instead of balancing two columns", () => {
-    expect(LOBBY).toContain("styles.stage}");
+  it("anchors the controls to the picture instead of balancing two columns", () => {
+    /* Design note #1131 went one step past #1130: the stage was still a flow container, and the controls are
+       positioned against the scene now. So there is no column, no grid AND no stage. */
+    expect(LOBBY).toContain("styles.tableAnchor");
     expect(LOBBY).not.toContain('gridTemplateColumns: "1fr 1fr"');
     expect(LOBBY).not.toContain("lobby-dashboard");
+    expect(LOBBY).not.toContain("styles.stage}");
   });
 
   it("still keeps the room browser out of it", () => {
-    const stage = LOBBY.indexOf("styles.stage}");
+    /* #1123's ONE SURVIVING CLAIM, through three layouts: the Web3 branch is not inside whatever holds the
+       sandbox controls, because the moment that flag turns on it renders a room list and a staging table. */
+    const anchor = LOBBY.indexOf("styles.tableAnchor");
     const branch = LOBBY.indexOf("!WEB3_LOBBY_ENABLED ? null :");
-    expect(stage).toBeGreaterThan(-1);
-    expect(branch).toBeGreaterThan(stage);
+    expect(anchor).toBeGreaterThan(-1);
+    expect(branch).toBeGreaterThan(anchor);
     expect(LOBBY.indexOf("<RoomBrowser")).toBeGreaterThan(branch);
   });
 

@@ -24,6 +24,7 @@ const LOBBY = readStripped("components/Lobby.tsx");
 const WAITING = readStripped("components/SandboxWaitingRoom.tsx");
 const FOOTER = readStripped("components/AppFooter.tsx");
 const APP_STYLES = readStripped("styles/appStyles.ts");
+const CONTROLS_BAR = readStripped("components/SandboxRoomBar.tsx");
 
 const PUBLIC_DIR = path.join(__dirname, "..", "..", "public");
 
@@ -67,7 +68,10 @@ describe("the room is the page, and the text carries its own ground", () => {
        over the scrimmed photo, and the ink was re-measured against that blend rather than against the token
        (title 8.87:1, note 6.15:1). The rule held; the way of satisfying it moved. */
     expect(LOBBY).toContain("linear-gradient(rgba(8, 8, 8, 0.48), rgba(8, 8, 8, 0.48))");
-    expect(LOBBY).toContain('backgroundAttachment: "fixed"');
+    /* Design note #1131: `backgroundAttachment: fixed` is GONE with the background itself -- the picture is
+       an element now, sized as `cover` would compute it, so that children can be anchored to it. */
+    expect(LOBBY).toContain('width: "max(100%, calc(100vh * 1920 / 1072))"');
+    expect(LOBBY).toContain('height: "max(100vh, calc(100vw * 1072 / 1920))"');
   });
 
   it("needs no plate, because the title sits where the room is darkest", () => {
@@ -84,8 +88,6 @@ describe("the room is the page, and the text carries its own ground", () => {
        where the plate used to supply it deliberately. */
     expect(LOBBY).not.toContain("styles.brandHeaderInner");
     expect(LOBBY).not.toContain('backgroundColor: "rgba(8, 8, 8, 0.55)"');
-    // What replaced it: a shadow on the one line of text that is not the artwork.
-    expect(LOBBY).toContain('textShadow: "0 1px 3px rgba(8, 8, 8, 0.9)"');
   });
 
   it("keeps the gilt readable even where the clip is unsupported", () => {
@@ -122,20 +124,61 @@ describe("the room is the page, and the text carries its own ground", () => {
     expect(fs.statSync(p).size).toBeLessThan(130 * 1024);
   });
 
+  it("anchors the title and the controls to the picture, not to the flow", () => {
+    /* ==================================================================
+        DESIGN NOTE 1131: WHY ANCHORING IS POSSIBLE NOW AND WAS NOT BEFORE
+       ==================================================================
+       I TURNED THIS DOWN LAST TURN and the objection was right about `cover` rather than about anchoring: a
+       background image is cropped differently at every viewport aspect, so 70% would have been the table on
+       one window and a lapel on the next. `.scene` reproduces `cover`'s arithmetic as an ELEMENT, so a child
+       at 70% is on the table on every screen -- checked at 1600x900, 1280x1024 and 430x900.
+       THE POSITIONS ARE THE ONES GIVEN: the title's BOTTOM at 40% ("at the lowest"), the controls centred at
+       70% in a 24% box, which puts them either side of x 0.40 and 0.60. */
+    expect(LOBBY).toContain('bottom: "60%"');
+    expect(LOBBY).toContain('top: "70%"');
+    expect(LOBBY).toContain('width: "24%"');
+  });
+
+  it("keeps the layer over the page from eating the page", () => {
+    /* `sceneClip` covers the window, so without this it swallows every click beneath it -- and being a
+       POSITIONED element at z-index 0 it also paints over unpositioned flow siblings, which would have hidden
+       the utility row and the content while leaving both clickable. */
+    expect(LOBBY).toContain('pointerEvents: "none"');
+    expect(LOBBY).toContain('pointerEvents: "auto"');
+    expect(LOBBY.split("zIndex: 1").length - 1).toBeGreaterThanOrEqual(2);
+  });
+
   it("has no card left in the middle of the screen", () => {
     /* Design note #1130 SUPERSEDES #1123's GRID: one centred stage, no panel around it, and the two-column
        breakpoint gone with the second card. The `sandboxStrip` style survives because `StagingRoom` still
        uses it -- so this asserts the LAYOUT is gone, not the token. */
     expect(LOBBY).not.toContain("lobby-dashboard");
     expect(LOBBY).not.toContain("styles.dashboardColumn");
-    expect(LOBBY).toContain("styles.stage}");
+    // Design note #1131: `styles.stage` went too -- the controls are anchored to the scene now, not stacked
+    // in a flow column, so there is no container left between the picture and the buttons.
+    expect(LOBBY).not.toContain("styles.stage}");
+    expect(LOBBY).toContain("styles.tableAnchor");
   });
 
-  it("moves the account furniture to its own corner", () => {
+  it("splits the utility row: the world on the left, the account on the right", () => {
+    /* Design note #1131: the pill is not account furniture -- the name, wallet and balance answer "who am
+       I", it answers "what is this build talking to". Opposite ends of the row. */
     expect(LOBBY).toContain("styles.utilityRow");
+    expect(LOBBY).toContain("styles.utilityAccount");
+    expect(LOBBY).toContain('justifyContent: "space-between"');
+    expect(LOBBY.indexOf("Offline · sandbox active")).toBeLessThan(LOBBY.indexOf("styles.utilityAccount"));
     // The paused card's sentence survives where a developer will look and a player will not.
     expect(LOBBY).not.toContain("On-chain rooms — paused");
     expect(LOBBY).toContain("WEB3_LOBBY_ENABLED in Lobby.tsx to bring them back");
+  });
+
+  it("drops the three lines of copy that captioned labelled controls", () => {
+    /* RULED: none of the three were necessary. Each was captioning a control that had a label already --
+       "SANDBOX MULTIPLAYER" named the tray, "Host a room, or join with a room code" restated two buttons,
+       and the off-chain reassurance described a cost the only live path never incurs. */
+    expect(LOBBY).not.toContain("<p style={styles.brandSubtitle}>");
+    expect(LOBBY).not.toContain("styles.stageNote");
+    expect(CONTROLS_BAR).toContain("{!bare && <span style={styles.label}>");
   });
 });
 

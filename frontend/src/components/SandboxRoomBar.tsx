@@ -27,6 +27,20 @@ export interface SandboxRoomBarProps {
   busy: boolean;
   onHost: () => void;
   onJoin: (code: string) => void;
+  /** ==================================================================
+   *   DESIGN NOTE 1131: THE SAME CONTROLS, WITHOUT THE TRAY THEY SIT IN
+   *  ==================================================================
+   *
+   * REPORTED of the lobby: "the Host Game and Join Game buttons are still inside a box. Move them out of
+   * that." THE BOX IS THIS COMPONENT'S OWN -- a bordered `#0f0f0f` strip with an uppercase label -- and it is
+   * right where this bar appears in the GAME, which is a dense screen where an unbounded row of controls
+   * would float free of everything around it.
+   * SO IT IS A SURFACE FLAG, NOT A DELETION, the same shape `AppFooter` uses. `bare` drops the tray, the
+   * label and the padding; the buttons, the join form and the error are untouched, because those are the
+   * component and the rest was packaging.
+   * THE LABEL GOES WITH THE TRAY rather than being conditioned separately: "SANDBOX MULTIPLAYER" was naming
+   * the box's contents, and on a title screen the buttons say what they are. */
+  bare?: boolean;
 }
 
 export function SandboxRoomBar({
@@ -36,6 +50,7 @@ export function SandboxRoomBar({
   busy,
   onHost,
   onJoin,
+  bare = false,
 }: SandboxRoomBarProps) {
   const [joining, setJoining] = useState(false);
   const [codeText, setCodeText] = useState("");
@@ -78,8 +93,8 @@ export function SandboxRoomBar({
   if (roomCode) return null;
 
   return (
-    <div style={styles.bar}>
-      <span style={styles.label}>Sandbox multiplayer</span>
+    <div style={bare ? styles.barBare : styles.bar}>
+      {!bare && <span style={styles.label}>Sandbox multiplayer</span>}
       <button type="button" style={styles.buttonPrimary} onClick={onHost} disabled={busy}>
         Host game
       </button>
@@ -126,6 +141,18 @@ export function SandboxRoomBar({
 export default SandboxRoomBar;
 
 const styles: Record<string, React.CSSProperties> = {
+  /* Design note #1131: the tray, minus the tray. Kept as its own object rather than as a spread-with-
+     overrides, because "no border, no fill, no padding" said three times in overrides is harder to read than
+     the four properties that actually remain. */
+  barBare: {
+    display: "flex",
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
+    justifyContent: "center",
+    gap: "12px",
+    fontSize: FONT_SIZE.small,
+  },
   bar: {
     display: "flex",
     flexDirection: "row",

@@ -85,12 +85,65 @@ describe("the intro sequence gains a beginning and an end", () => {
     expect(backstop).toBeGreaterThan(10006 + hold);
   });
 
-  it("clears the title before the locomotive resolves", () => {
-    /* MEASURED FROM THE FILE: the locomotive is fully drawn by ~3s and is the one frame worth not covering.
-       The card must be gone before then, which is an assertion about the art and not about the code. */
+  it("opens on a black screen the clip has to come out from behind", () => {
+    /* ==================================================================
+        DESIGN NOTE 1166d: THE CARD STOPPED COMPETING WITH THE ARTWORK
+       ==================================================================
+       Every earlier version placed the title ON the drawing and looked for the least-bad moment to do it. An
+       opaque half second covers nothing -- and the cost is measurable and tiny: 4.6% of the frame is lit at
+       0.6s, so what the cover hides is black.
+       ASSERTED AS OPACITY AND EXTENT. A transparent card over the same seconds is the old arrangement wearing
+       the new note. */
+    const card = sliceBetween(INTRO, "titleCard: {", "\n  },");
+    expect(card).toContain('backgroundColor: "#000000"');
+    expect(card).toContain("inset: 0");
+    expect(INTRO).toContain('<div className="app-intro-title" style={styles.titleCard}>');
+  });
+
+  it("does not gamble on a delayed play()", () => {
+    /* THE OBVIOUS READING IS TO HOLD PLAYBACK, and that puts a programmatic `play()` inside a timer -- fine on
+       a muted element, a gamble on an unmuted one, and this clip runs unmuted whenever effects are on. Covering
+       a clip that is already playing has neither problem. */
+    expect(INTRO).toContain("autoPlay");
+    expect(INTRO).not.toContain(".play()");
+  });
+
+  it("fades the title and its ground as one element", () => {
+    /* Two layers on two clocks produce a title floating over a half-faded backdrop the first time either is
+       retuned. The card is the black screen, so there is only one clock. */
+    expect(INTRO).toContain("styles.titleArt");
+    const art = sliceBetween(INTRO, "titleArt: {", "\n  },");
+    expect(art).not.toContain("position:");
+    expect(art).toContain('mixBlendMode: "screen"');
+  });
+
+  it("clears the title as the drawing gets going, not a second after", () => {
+    /* ==================================================================
+        DESIGN NOTE 1166c TIGHTENS THIS FROM 3000ms TO THE MEASURED FIGURE
+       ==================================================================
+       IT ALLOWED ANYTHING UNDER 3s, on #1166's reading that the locomotive "draws and holds, ~1.0 to ~4.0" --
+       so it passed comfortably on a card that sat over a FINISHED drawing for about a second, which is what
+       was then reported. A still at 3s cannot distinguish drawing from holding; measuring the lit area can,
+       and puts completion at about 1.3s (4.6% of the frame at 0.6s, 15.0% at 1.0s, 20.7% at 1.5s, 22.7% at
+       2.2s -- the curve is flat well before 2s).
+       BOUNDED ON THE REAL EVENT NOW. A bound that cannot fail on the thing it is named for is not a bound. */
     const holdUntil = Number((RAW_INTRO.match(/const TITLE_HOLD_UNTIL_MS = (\d+);/) ?? [])[1]);
     const fade = Number((RAW_INTRO.match(/const TITLE_FADE_MS = (\d+);/) ?? [])[1]);
-    expect(holdUntil + fade).toBeLessThan(3000);
+    const fadeIn = Number((RAW_INTRO.match(/const TITLE_FADE_IN_MS = (\d+);/) ?? [])[1]);
+    /* Design note #1166d: the bound is tighter again now that the card owns its own beat -- it must be gone
+       while the drawing is still early, which is the whole point of giving it a half second of its own. */
+    expect(holdUntil + fade).toBeLessThanOrEqual(900);
+    /* And still long enough to READ. Two words on a black screen need less than two words competing with
+       artwork did, but not nothing. */
+    expect(holdUntil - fadeIn).toBeGreaterThanOrEqual(350);
+  });
+
+  it("scales the card to the proportion that was asked for", () => {
+    /* "Scaled down a little, like to 70% its current size." Recorded as the arithmetic on #1166b's 62% rather
+       than as a fresh number, so the lineage survives the next adjustment. */
+    const art = sliceBetween(INTRO, "titleArt: {", "\n  },");
+    const width = Number((art.match(/width: "(\d+)%"/) ?? [])[1]);
+    expect(width).toBe(Math.round(62 * 0.7));
   });
 
   it("uses the lobby's own title asset rather than a second copy", () => {
@@ -110,10 +163,17 @@ describe("the intro sequence gains a beginning and an end", () => {
        ASSERTED AS THE ABSENCE OF A TRANSFORM ON THE ELEMENT and the absence of one in its keyframes, because
        either alone reintroduces the bug -- and a transform here would also isolate the element and break the
        `screen` blend the asset depends on (#1131's trap, one level in). */
+    /* Design note #1166d moved the CENTRING to the card's flex box -- the image is a flex child now rather
+       than an absolutely-positioned one, so `inset`/`margin: auto` are the parent's business. The CLAIM is
+       unchanged and is the only thing worth pinning: neither the element nor its keyframes may own a
+       transform, because the animation would clobber it and because a transform isolates the element and
+       kills the `screen` blend. */
     const art = sliceBetween(INTRO, "titleArt: {", "\n  },");
     expect(art).not.toContain("transform");
-    expect(art).toContain("inset: 0");
-    expect(art).toContain('margin: "auto"');
+    const card = sliceBetween(INTRO, "titleCard: {", "\n  },");
+    expect(card).not.toContain("transform");
+    expect(card).toContain('alignItems: "center"');
+    expect(card).toContain('justifyContent: "center"');
     const fade = sliceBetween(RAW_INTRO, "@keyframes app-intro-title-fade {", "}");
     expect(fade).not.toContain("transform");
   });

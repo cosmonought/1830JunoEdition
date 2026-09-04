@@ -192,51 +192,52 @@ describe("the room is the page, and the text carries its own ground", () => {
     expect(CONTROLS_BAR).toContain("bareButtonQuiet");
   });
 
-  it("lets the credit stand on the room, with no plate at all", () => {
+  it("gives all three screens the same footer", () => {
     /* ==================================================================
-        DESIGN NOTE 1135 SUPERSEDES #1132 AND #1133's PLATE ENTIRELY
+        DESIGN NOTE 1137 SUPERSEDES EVERY PER-SURFACE FOOTER OVERRIDE
        ==================================================================
-       BOTH ARGUED THE PLATE WAS LOAD-BEARING -- `screen` needs a dark backdrop or the clip's own black turns
-       into a rectangle -- and both were answering a black box that appeared because the footer sat BELOW the
-       scene layer, on bare ink, past the bottom of a `100vh` window. #1133's other half fixed that. The
-       corner the credit now lands in is one of the darkest parts of the photograph: worst pixel L 0.0054
-       under the page scrim, paper at 16.64:1.
-       SO THE CONDITION THE PLATE GUARANTEED IS TRUE WITHOUT IT, and what is left is a text shadow -- which
-       covers the same risk (`cover` crops differently per aspect) without drawing a rectangle to do it. */
-    expect(APP_STYLES).toContain("netaCreditMeta: {");
-    const credit = APP_STYLES.slice(APP_STYLES.indexOf("netaCreditMeta: {"));
+       REPORTED by walking the three screens in order: fine in the lobby, overlapping the panel in the waiting
+       room, "much smaller and centred" in the game. THE MARK'S HEIGHT HAD MOVED FOUR TIMES -- 18, 36, 31, 28
+       -- and every move was judged on ONE screen with a second value sitting beside it.
+       ONE SIZE, ONE ALIGNMENT, ONE PADDING. Asserted as the ABSENCE of the surface split as much as the
+       presence of the shared values: a per-surface override is precisely what produced the drift, so the
+       guard has to fail if one comes back. */
+    expect(FOOTER).toContain("const MARK_HEIGHT = 28;");
+    expect(FOOTER).not.toContain("GAME_MARK_HEIGHT");
+    expect(FOOTER).not.toContain("META_MARK_HEIGHT");
+    expect(FOOTER).not.toContain("appFooterMeta");
+    expect(APP_STYLES).not.toContain("appFooterMeta:");
+    expect(APP_STYLES).not.toContain("netaCreditMeta:");
+    // Flush right on every surface, and carrying its own gap so no screen has to leave room for it.
+    expect(APP_STYLES).toContain('justifyContent: "flex-end"');
+    expect(APP_STYLES).toContain('padding: "18px 20px 12px"');
+  });
+
+  it("keeps the ink and the shadow the lobby was given, on both surfaces", () => {
+    /* ==================================================================
+        DESIGN NOTE 1137 SUPERSEDES #1132/#1133/#1135's META-ONLY TREATMENT
+       ==================================================================
+       FIVE CASES USED TO LIVE HERE, one per attempt: the footer's opaque strip, the lockup's plate, the
+       no-plate reversal, the by-surface height and the by-surface type. Every one of them was RIGHT about the
+       lobby and silent about the other two screens, which is how the credit ended up looking like three
+       different components.
+       WHAT SURVIVES IS THE SETTLED ANSWER: white, tight, shadowed, no plate -- ruled for the lobby and now
+       applied everywhere, because the shadow costs nothing on a flat ground and there was never a reason the
+       board should disagree. */
+    expect(APP_STYLES).toContain('color: "#f2f0eb"');
+    expect(APP_STYLES).toContain("netaCredit: {");
+    const credit = APP_STYLES.slice(APP_STYLES.indexOf("netaCredit: {"));
     const body = credit.slice(0, credit.indexOf("},"));
-    expect(body).not.toContain("backgroundColor");
-    expect(body).not.toContain("border");
-    expect(body).toContain('color: "#f2f0eb"');
     expect(body).toContain("textShadow");
+    expect(body).not.toContain("backgroundColor");
+    expect(body).toContain('gap: "5px"');
   });
 
-  it("shrinks the lockup without letting its two halves drift apart", () => {
-    /* "Reduce the entire unit by 10%": 31 -> 28 on the mark, `small` -> `micro` on the words. Asserted as the
-       RATIO, because #1129's whole finding was that the pair reads as one object only while the two sizes
-       move together -- a mark that shrinks alone puts the caption back beside a logo. */
-    expect(FOOTER).toContain("const META_MARK_HEIGHT = 28;");
-    expect(APP_STYLES).toContain("netaCreditMeta");
-    const meta = Number(/META_MARK_HEIGHT = (\d+)/.exec(FOOTER)?.[1]);
-    const game = Number(/GAME_MARK_HEIGHT = (\d+)/.exec(FOOTER)?.[1]);
-    expect(meta / game).toBeGreaterThan(1.4);
-    expect(meta / game).toBeLessThan(1.7);
-  });
-
-  it("keeps the footer above the scene and flush to the left", () => {
-    /* ==================================================================
-        DESIGN NOTE 1133 NARROWS #1132's STRIP
-       ==================================================================
-       `screen` ERASES BLACK ONLY WHEN THE BACKDROP IS DARK AND REACHABLE, and #1132 supplied that with a
-       full-width opaque bar -- a slab to solve a problem the width of a logo. The plate belongs on the
-       lockup, which is exactly as wide as the thing that needs it. Asserted as the ABSENCE of the bar's fill
-       as much as the presence of the lockup's, because a leftover strip is invisible in a passing test. */
-    expect(APP_STYLES).toContain("appFooterMeta:");
-    expect(APP_STYLES).toContain('justifyContent: "flex-start"');
-    expect(FOOTER).toContain('surface === "meta" ? styles.appFooterMeta');
-    const meta = APP_STYLES.slice(APP_STYLES.indexOf("appFooterMeta: {"));
-    expect(meta.slice(0, meta.indexOf("},"))).not.toContain("backgroundColor");
+  it("still varies the one thing that was ever about the surface", () => {
+    /* #1113 GAVE THE ANIMATION TO THE ANTEROOM SCREENS because a thing that moves under a hex map pulls an
+       eye that is counting revenue. That argument is about MOTION and says nothing about height -- which is
+       why the size could be standardised and this could not. */
+    expect(FOOTER).toContain('animated={surface === "meta"}');
   });
 
   it("lets the picture reach the foot of the page", () => {
@@ -315,38 +316,34 @@ describe("the room is the page, and the text carries its own ground", () => {
   });
 });
 
-describe("the animated mark is big enough to read as motion", () => {
-  it("sizes by surface, the way `animated` already does", () => {
-    expect(FOOTER).toContain("const GAME_MARK_HEIGHT = 18;");
-    /* #1124 guessed 2x and overshot; #1129 settled at 1.7x; #1135 took 10% off the whole lockup. The size
-       has now moved three times and the RULE has not, so the value is asserted as the ratio below and this
-       case only pins that the size FOLLOWS THE SURFACE. */
-    expect(FOOTER).toContain("const META_MARK_HEIGHT = 28;");
-    expect(FOOTER).toContain('surface === "meta" ? META_MARK_HEIGHT : GAME_MARK_HEIGHT');
-  });
-
-  it("scales the words with the mark, so the pair stays one object", () => {
-    /* REPORTED WITH THE SIZE: "make sure the 'Powered by Neta DAO' is centred to the animated logo so that it
-       reads as a single unit". The alignment was already right -- the orbit's ink sits within half a pixel of
-       its frame's centre -- so what made them read as two things was the scale gap. */
-    expect(FOOTER).toContain("styles.netaCreditMeta");
-    expect(APP_STYLES).toContain("netaCreditMeta:");
-  });
-
-  it("leaves the board's footer exactly where #1099 put it", () => {
+describe("the anteroom and the table share their chrome", () => {
+  it("mounts the shell's own bar rather than a header that looks like it", () => {
     /* ==================================================================
-        DESIGN NOTE 1124: WHY #1116's REFUSAL DOES NOT APPLY HERE
+        DESIGN NOTE 1138: THE CONTROL STOPPED DIFFERING; ITS POSITION KEPT MOVING
        ==================================================================
-       #1116 turned down a bigger element because "a 36px box in an 18px line is a taller footer on every
-       screen" -- and ON EVERY SCREEN was the part that was too broad. The game footer draws the STILL image,
-       so growing the moving one cannot reach it, and the real objection was a tall footer full of movement
-       under a hex map where an eye is counting revenue.
-       THIS CASE IS THAT DISTINCTION, kept executable: the board's height is still 18. */
-    expect(FOOTER).toContain("const GAME_MARK_HEIGHT = 18;");
-    /* #1124 guessed 2x, #1129 dialled it to 1.7, #1135 took another 10% off the whole lockup. Derived from
-       the constants rather than restated, so the number in this file cannot go stale. */
-    expect(META_OVER_GAME()).toBeCloseTo(1.56, 1);
+       #1102 made half of this argument: the waiting room stopped hand-rolling an audio toggle and mounted the
+       bar's own `AudioControls` -- "one object, one component, both screens". What it left was the audio pair
+       sitting INSIDE the waiting-room panel and then jumping to the header at the table.
+       `TopBar` ITSELF, not a second header. Everything wallet- or session-shaped in it is conditional and
+       renders nothing in an offline sandbox, so what arrives is the brand, the room code, the audio pair and
+       the offline dot. Asserted as the import, because a lookalike header would satisfy any test written
+       about what appears on the screen. */
+    expect(WAITING).toContain('import TopBar from "./TopBar"');
+    expect(WAITING).toContain("<TopBar roomName={roomCode} onLeaveGame={onLeave} audio={audio} />");
+    // The panel no longer carries its own copy of either control.
+    expect(WAITING).not.toContain("<AudioControls audio={audio} />");
+    expect(WAITING).not.toContain("styles.headerActions");
   });
+
+  it("lets the bar reach the window edges", () => {
+    /* The root's inset moved to `panelWrap`. Left where it was, it would have drawn a stripe of photograph
+       above a bar that is meant to sit on the edge -- which is the same class of fault as the footer band. */
+    expect(WAITING).toContain("styles.panelWrap");
+    expect(WAITING).toContain('padding: "24px 20px 0"');
+  });
+});
+
+describe("the animated mark is big enough to read as motion", () => {
 
   it("still gives the board the still mark, so the two changes stay independent", () => {
     expect(FOOTER).toContain('animated={surface === "meta"}');

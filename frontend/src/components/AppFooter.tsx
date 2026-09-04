@@ -39,27 +39,20 @@ const NETA_CREDIT_CSS = `
 `;
 
 /* ==================================================================
-    DESIGN NOTE 1129: 2x OVERSHOT, 1.7x IS THE SIZE
+    DESIGN NOTE 1137: ONE HEIGHT, AFTER FOUR ATTEMPTS AT TWO
    ==================================================================
-   #1124 DOUBLED IT ON AN EYEBALLED GUESS -- "I would guess it needs to be doubled, but 1.5x might barely
-   scrape by" -- and 36px came back too big: "it's now too large, I guess we went 2x and maybe 1.7x is the
-   right call." 31px is that, rounded from 30.6.
-   THE MARK IS NOT THE WHOLE UNIT, which is the other half of the same report: "make sure the 'Powered by Neta
-   DAO' is centred to the animated logo so that it reads as a single unit, and perhaps nudge the size of that
-   text up slightly to keep them proportional."
-   SO THE CREDIT'S TYPE SCALES WITH THE MARK. `micro` beside an 18px mark was proportionate; beside a 31px one
-   it reads as a caption someone left next to a logo. The meta surfaces take `small`, the board keeps `micro`
-   -- which is the same surface-driven rule the height already follows, applied to the thing standing next
-   to it. Two sizes that move together, rather than one growing and the other staying put.
-   THE FRAME WAS ALREADY CENTRED and was measured rather than assumed: the orbit's ink bounding box across all
-   frames sits at y 1-94 of 96, an offset of half a pixel. `alignItems: center` was doing its job; what made
-   the pair read as two objects was the SCALE MISMATCH and the gap, not the alignment. */
-const GAME_MARK_HEIGHT = 18;
+   THIS CONSTANT HAS MOVED FOUR TIMES -- 18 everywhere (#1099), 36 on meta (#1124), 31 (#1129), 28 (#1135) --
+   and every move was reasoned about ONE screen while a second value sat beside it. The result is the report:
+   the credit is "much smaller" in the game than in the lobby, which is not a bug in either value.
+   28 IS THE SURVIVING NUMBER, from the lobby where it was last judged by eye. The board's footer grows by
+   10px, which is the cost of the standardisation and is worth naming: #1116 and #1124 both defended 18 there,
+   and both defended it against MOVEMENT under a hex map rather than against height. The board still draws the
+   STILL mark, so that argument is untouched -- it is a taller static logo, not a moving one. */
 /* Design note #1135: "reduce the entire unit by 10%" -- 31 to 28 on the mark (-9.7%) and `small` to `micro`
    on the words (12px to 11px, -8.3%). Both land on real steps of the shared scale rather than on a computed
    fraction, and the RATIO between them barely moves (2.58 to 2.55), which is what keeps #1129's lockup from
    coming apart again at the smaller size. */
-const META_MARK_HEIGHT = 28;
+const MARK_HEIGHT = 28;
 
 export interface AppFooterProps {
   /** Design note #1113: the lobby and the waiting room get the moving mark; the board gets the still one.
@@ -87,7 +80,7 @@ export interface AppFooterProps {
    leading edge. */
 export function AppFooter({ surface }: AppFooterProps) {
   return (
-    <footer style={{ ...styles.appFooter, ...(surface === "meta" ? styles.appFooterMeta : {}) }}>
+    <footer style={styles.appFooter}>
       <style>{NETA_CREDIT_CSS}</style>
       {/* `rel="noopener noreferrer"` because `target="_blank"` without it hands the new tab a `window.opener`
           handle back into this app -- #47's rule, carried with the link rather than rediscovered. */}
@@ -99,10 +92,7 @@ export function AppFooter({ surface }: AppFooterProps) {
         target="_blank"
         rel="noopener noreferrer"
         className="neta-credit"
-        style={{
-          ...styles.netaCredit,
-          ...(surface === "meta" ? styles.netaCreditMeta : {}),
-        }}
+        style={styles.netaCredit}
         title="Neta DAO — opens netadao.org in a new tab"
       >
         {/* ==================================================================
@@ -122,11 +112,11 @@ export function AppFooter({ surface }: AppFooterProps) {
            SO THE SIZE FOLLOWS THE SURFACE, like `animated` already does. 36px on meta, 18px unchanged on the
            board -- the doubling that was asked for, spent only where #1116's objection does not reach. One
            constant, so dialling it back to 1.5x is a single edit. */}
-        <NetaMark
-          height={surface === "meta" ? META_MARK_HEIGHT : GAME_MARK_HEIGHT}
-          labelled={false}
-          animated={surface === "meta"}
-        />
+        {/* Design note #1137: the SIZE no longer follows the surface -- only the MOVEMENT does, which was
+            always the distinction that mattered. #1113 gave the animation to the anteroom screens because a
+            thing that moves under a hex map pulls an eye that is counting revenue; that argument is about
+            motion and says nothing about height. One size, both surfaces. */}
+        <NetaMark height={MARK_HEIGHT} labelled={false} animated={surface === "meta"} />
         Powered by Neta DAO
       </a>
     </footer>

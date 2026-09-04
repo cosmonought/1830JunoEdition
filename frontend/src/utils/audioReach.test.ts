@@ -110,14 +110,28 @@ describe("the station picker reaches the stream", () => {
     };
   }
 
-  it("re-attaches the element when the station changes mid-play", () => {
+  it("moves to the new station when it changes mid-play", () => {
+    /* ==================================================================
+        DESIGN NOTE 1139 SUPERSEDES THE MECHANISM, NOT THE CLAIM
+       ==================================================================
+       THIS ASSERTED THAT THE SAME ELEMENT TOOK THE NEW `src`, which was the mechanism #1115 used: rewind the
+       one shared element in place. That is the mechanism the buffering race turned out to be about -- `load()`
+       aborts a fetch without waiting for the abort to finish, so the old stream could still be heard under
+       the new one.
+       THE ELEMENT IS REPLACED NOW, so the old one ends up with NO src rather than the new one. The claim the
+       case exists for is untouched and is what it checks: after picking a station, the radio is playing that
+       station. Asserted against whichever element is live, rather than against the one that happened to be
+       live before the change. */
     built.length = 0;
     const probe = mount("https://example.test/one");
-    const element = built[built.length - 1];
     act(() => { probe.api().toggle(); });          // start
-    expect(element.src).toBe("https://example.test/one");
+    expect(built[built.length - 1].src).toBe("https://example.test/one");
     probe.rerender("https://example.test/two");     // pick another station
-    expect(element.src).toBe("https://example.test/two");
+    expect(built[built.length - 1].src).toBe("https://example.test/two");
+    /* WHAT THIS FILE CANNOT CHECK, said out loud so the next reader does not add it and watch it pass
+       vacuously: that the retired element was actually flushed. `FakeAudio.removeAttribute` here is a no-op
+       and there is no `getAttribute` at all, so an assertion about the outgoing element would be testing the
+       stub. `audioRaceGuard.test.ts` makes that claim against real elements instead. */
   });
 
   it("leaves a stopped radio stopped when the station changes", () => {

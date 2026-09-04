@@ -26,7 +26,10 @@ import { FONT_FAMILY, FONT_SIZE, LINE_HEIGHT } from "../styles/typography";
 import { waitingRoomBlock, waitingRoomNotice, type SandboxRoomDoc } from "../utils/sandboxRoom";
 import { MAX_PLAYERS, MIN_PLAYERS, certLimitForPlayers, startingCashForPlayers } from "../utils/gameSetup";
 import { SEAT_COLORS, SEAT_COLOR_NAMES } from "../utils/playerLabels";
-import AudioControls, { type AudioControlsProps } from "./AudioControls";
+import { type AudioControlsProps } from "./AudioControls";
+/* Design note #1138: the shell's own bar, mounted here so the audio controls stop moving between the
+   anteroom and the table. */
+import TopBar from "./TopBar";
 import AppFooter from "./AppFooter";
 /* Design note #1122: the sandbox signal ladder. */
 import {
@@ -138,15 +141,30 @@ export function SandboxWaitingRoom({
 
   return (
     <div style={styles.root}>
+      {/* ==================================================================
+           DESIGN NOTE 1138: THE ANTEROOM GETS THE SHELL'S OWN TITLE BAR
+          ==================================================================
+          ASKED: "should the Waiting Room have the same title bar as the Game Room ... right now the audio
+          controls are in the Waiting Room panel and then jump to the title bar, when they could probably just
+          live there between the two rooms?"
+          YES, AND IT IS `TopBar` ITSELF rather than a second header that looks like it. #1102 already made
+          this argument one level down: the waiting room stopped hand-rolling an audio toggle and mounted the
+          bar's own `AudioControls`, "one object, one component, both screens". The control stopped differing
+          and only its POSITION kept moving -- which is the half that jumps.
+          NOTHING IRRELEVANT COMES WITH IT. `TopBar` reads the wallet and the session from context and every
+          one of those is conditional: no wallet is connected in an offline sandbox, so the address, the
+          balance, the session-key dot and the error slots all render nothing. What is left is the brand, the
+          room code, the audio pair and the offline dot -- which is the header this screen wanted.
+          `roomName` CARRIES THE CODE, so the bar shows it the same way the game does. The panel keeps its own
+          `codeBlock` below: that one is the code at the size people read it aloud from, which is a different
+          job from the bar's running label. */}
+      <TopBar roomName={roomCode} onLeaveGame={onLeave} audio={audio} />
+      {/* Design note #1138: the bar runs to the window's edges, so the inset that used to live on the root
+          moves here -- onto the thing that actually wants it. */}
+      <div style={styles.panelWrap}>
       <div style={styles.panel}>
         <div style={styles.headerRow}>
           <span style={styles.title}>Sandbox waiting room</span>
-          <div style={styles.headerActions}>
-            {audio && <AudioControls audio={audio} />}
-            <button type="button" style={styles.quiet} onClick={onLeave}>
-              Leave
-            </button>
-          </div>
         </div>
 
         {/* The code, at the size of the thing people have to read aloud. */}
@@ -385,6 +403,7 @@ export function SandboxWaitingRoom({
 
       {/* Design note #1113: the meta-UI credit, the same component and the same moving mark the lobby
           carries. The waiting room is the one screen between them and had no footer at all. */}
+      </div>
       <AppFooter surface="meta" />
     </div>
   );
@@ -434,7 +453,26 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     flexDirection: "column",
     alignItems: "center",
-    padding: "40px 20px 0",
+    /* ==================================================================
+        DESIGN NOTE 1137: THE PANEL DID NOT GROW -- THE ROOM AROUND IT DID
+       ==================================================================
+       ASKED: "did the Waiting Room panel become huge at some point? I remember it used to fit on my screen
+       and now I have to scroll." THE PANEL IS UNCHANGED. Its `maxWidth`, its padding and its contents are
+       what they were; three edits to the ROOT are what stopped it fitting, and they arrived one at a time in
+       three different batches:
+         the retheme      added `minHeight: 100vh`, so the root stopped being as tall as its content
+         the same batch   mounted `AudioControls` inside the panel
+         the cinematic    added `AppFooter` and DROPPED `justifyContent: center`
+       Each was right on its own. Together they turned a centred panel on an auto-height page into a
+       top-anchored panel plus a footer on a page with a floor -- and 40px of top padding that made sense
+       when the panel was centred is dead weight once it is anchored to the top.
+       24px, AND THE CENTRING STAYS OFF: #1112's rule is that a panel which grows with the roster must not be
+       vertically centred, or it walks up the screen as players arrive. The padding is what gives back the
+       room the footer took. */
+    /* Design note #1138: no padding at all -- `TopBar` is full-bleed and brings its own, so any inset here
+       would leave a stripe of photograph above a bar meant to sit on the window's edge. The panel's own
+       breathing room moved to `panelWrap`. */
+    padding: 0,
     minHeight: "100vh",
     backgroundColor: "#0f0f0f",
     backgroundImage:
@@ -447,6 +485,16 @@ const styles: Record<string, React.CSSProperties> = {
        white -- #1100's point, kept rather than replaced. */
     color: "#f2f0eb",
     fontFamily: FONT_FAMILY,
+    boxSizing: "border-box",
+  },
+  /* Design note #1138: what the root's padding used to be, on the element that wants it. `alignItems` keeps
+     the panel centred horizontally now that the root is no longer doing it for the bar as well. */
+  panelWrap: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    width: "100%",
+    padding: "24px 20px 0",
     boxSizing: "border-box",
   },
   panel: {
@@ -480,7 +528,6 @@ const styles: Record<string, React.CSSProperties> = {
     boxShadow: "0 18px 48px rgba(0, 0, 0, 0.55)",
   },
   headerRow: { display: "flex", alignItems: "center", justifyContent: "space-between" },
-  headerActions: { display: "flex", alignItems: "center", gap: "6px" },
   title: { fontSize: FONT_SIZE.heading, fontWeight: 800, color: "#f2f0eb" },
   codeBlock: {
     display: "flex",
@@ -653,15 +700,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.small,
     lineHeight: LINE_HEIGHT.normal,
     color: "#9ec5ff",
-  },
-  quiet: {
-    fontSize: FONT_SIZE.small,
-    padding: "5px 10px",
-    borderRadius: "6px",
-    border: "1px solid transparent",
-    backgroundColor: "transparent",
-    color: "#8a8a86",
-    cursor: "pointer",
   },
   error: { fontSize: FONT_SIZE.small, color: "#e07a7a" },
 };

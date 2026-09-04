@@ -154,13 +154,34 @@ function clampVolume(value: number): number {
  *  `.catch` of `undefined` and take the render with it, so the result is checked before it is chained.
  *  THE CATCH IS SILENT BY DESIGN. Autoplay refusal is the expected case before the player's first click, not
  *  a fault, and there is nothing a player could do with the message. */
-export function playQuietly(element: HTMLAudioElement): void {
+export function playQuietly(element: HTMLAudioElement, stillWanted?: () => boolean): void {
   try {
     const started = element.play() as Promise<void> | undefined;
-    if (started && typeof started.catch === "function") {
-      started.catch(() => {
-        /* Blocked, interrupted, or unsupported. Silence is the whole point. */
-      });
+    if (started && typeof started.then === "function") {
+      started.then(
+        () => {
+          /* ==================================================================
+              DESIGN NOTE 1139: THE LATE RESOLVE, AND WHAT "IGNORE IT" HAS TO MEAN
+             ==================================================================
+             ASKED FOR: "if an older station's play() promise resolves after the user has already switched,
+             explicitly catch and ignore it so it doesn't interrupt the active stream."
+             IGNORING IT IS NOT ENOUGH ON ITS OWN, and this is the part worth stating: a resolved `play()` has
+             ALREADY STARTED THE SOUND by the time the handler runs. Doing nothing here would leave the stale
+             element playing. So the stale case PAUSES.
+             AND IT IS SAFE TO PAUSE ONLY BECAUSE THE ELEMENT IS PER-STATION (see `useRadioStream`). With one
+             shared element this handler could not tell "my play is stale" from "my play is stale and someone
+             else's play is now running on the same element", and pausing would have silenced the station the
+             player just chose -- turning a two-second bleed into a dead radio. */
+          if (stillWanted && !stillWanted()) {
+            element.pause();
+            element.removeAttribute("src");
+            element.load();
+          }
+        },
+        () => {
+          /* Blocked, interrupted, or unsupported. Silence is the whole point. */
+        },
+      );
     }
   } catch {
     /* Some engines throw synchronously rather than rejecting. Same answer. */
@@ -413,15 +434,47 @@ export function useRadioStream(url: string): RadioStream {
   const elementRef = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
 
-  useEffect(() => {
+  /* ==================================================================
+      DESIGN NOTE 1139: A GENERATION TOKEN, AND A FRESH ELEMENT TO GO WITH IT
+     ==================================================================
+     REPORTED: "old streams that were delayed in buffering are occasionally resolving late and hijacking the
+     current stream for a few seconds."
+     THE FLUSH WAS ALREADY THERE. `removeAttribute("src")` plus `load()` is #1009's stop, and #1115 already
+     reused it on every station change -- so the first of the three things asked for was in place, and the bug
+     survived it. That is the useful clue: `load()` ABORTS the fetch, it does not wait for the abort to
+     finish, and assigning the next `src` in the same tick starts a second resource selection while the first
+     is still unwinding. What the player hears is the tail of the old buffer arriving under the new station.
+     SO THE ELEMENT IS REPLACED, NOT REWOUND. A discarded element cannot bleed into the next one: its buffer,
+     its socket and its pending play request go with it, and nothing they do afterwards can reach the element
+     that is now playing. This is the part the token alone could not have fixed.
+     #1009 WARNED AGAINST EXACTLY THIS AND ITS WARNING STILL HOLDS WHERE IT APPLIED -- "constructing a fresh
+     `Audio` per start would leak one element per click". That is about the TOGGLE, which is pressed freely
+     and is left alone here; this swaps only when the station actually changes, and it tears the old one down
+     explicitly rather than dropping it on the floor.
+     THE TOKEN IS THE SECOND HALF. The swap is synchronous but `play()` is not, so a promise from station A
+     can still settle after the player has moved to B. Every attach carries the generation it was issued in,
+     and `playQuietly` checks it before letting a late success stand. */
+  const stationToken = useRef(0);
+
+  /** Design note #1139: one place that knows how to retire an element, so the unmount path, the toggle's stop
+   *  and the station swap cannot drift apart about what "stopped" means. */
+  const retire = useCallback((element: HTMLAudioElement | null) => {
+    if (!element) return;
+    element.pause();
+    element.removeAttribute("src");
+    element.load();
+  }, []);
+
+  /** Design note #1139: a new element, wired to the mix and to the duck registry. The registry holds ONE
+   *  target, so registering the newcomer replaces the outgoing one -- which is why the swap below registers
+   *  before it retires, and never leaves a ducked volume pointing at a discarded element. */
+  const buildElement = useCallback(() => {
     const element = new Audio();
     // Nothing is fetched until a `src` is attached, which is the autoplay-safe default stated as a property.
     element.preload = "none";
-    /* Design note #1013: the bed sits UNDER the whistle. Set on the element rather than at each `play()`, so a
-       stop-and-start does not quietly come back at full volume. */
-    // Design note #1074: the current level, not the default -- a reconnect must not undo the slider.
+    /* Design note #1013: the bed sits UNDER the whistle. Design note #1074: the CURRENT level, not the
+       default -- a reconnect, or a station change, must not undo the slider. */
     element.volume = radioVolume;
-    elementRef.current = element;
     /* Design note #1041: the bed announces itself as duckable. Nothing that plays a sound has to know the
        radio exists, and the radio does not have to know what is playing. */
     registerDuckTarget({
@@ -429,13 +482,18 @@ export function useRadioStream(url: string): RadioStream {
         element.volume = value;
       },
     });
+    return element;
+  }, []);
+
+  useEffect(() => {
+    const element = buildElement();
+    elementRef.current = element;
     return () => {
       registerDuckTarget(null);
-      element.pause();
-      element.removeAttribute("src");
-      element.load();
+      retire(element);
       elementRef.current = null;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const toggle = useCallback(() => {
@@ -443,16 +501,18 @@ export function useRadioStream(url: string): RadioStream {
     if (!element) return;
     setPlaying((wasPlaying) => {
       if (wasPlaying) {
-        element.pause();
-        element.removeAttribute("src");
-        element.load();
+        /* Design note #1139: a stop invalidates whatever is in flight. Without this, a play issued a moment
+           before the stop could resolve afterwards and quietly restart a radio the player just switched off. */
+        stationToken.current += 1;
+        retire(element);
         return false;
       }
+      const token = (stationToken.current += 1);
       element.src = url;
-      playQuietly(element);
+      playQuietly(element, () => stationToken.current === token);
       return true;
     });
-  }, [url]);
+  }, [retire, url]);
 
   /* ==================================================================
       DESIGN NOTE 1115: CHANGING STATION WHILE IT IS PLAYING
@@ -462,26 +522,27 @@ export function useRadioStream(url: string): RadioStream {
      calls it. Without this effect, picking a station would silently keep playing the old one until the next
      stop and start, which is the shape of bug a player reports as "the picker does not work".
 
-     IT REUSES #1009's TEARDOWN RATHER THAN JUST REASSIGNING `src`. Dropping the attribute and calling
-     `load()` closes the socket before the next one opens; assigning over a live stream leaves the previous
-     connection to be collected whenever the engine gets round to it, and on a long session that is a
-     connection per station change.
-
      GUARDED ON `playing`, so a player who picks a station while the radio is OFF has simply chosen what will
-     start next -- which is what the picker should mean when nothing is sounding. */
+     start next -- which is what the picker should mean when nothing is sounding.
+
+     Design note #1139: what this effect DOES changed. It used to rewind the one shared element in place; it
+     now swaps in a new one, for the reason set out on `stationToken` above. */
   const firstRun = useRef(true);
   useEffect(() => {
     if (firstRun.current) {
       firstRun.current = false;
       return;
     }
-    const element = elementRef.current;
-    if (!element || !playing) return;
-    element.pause();
-    element.removeAttribute("src");
-    element.load();
+    if (!playing) return;
+    const outgoing = elementRef.current;
+    const token = (stationToken.current += 1);
+    const element = buildElement();
+    elementRef.current = element;
+    /* RETIRED AFTER THE REPLACEMENT IS REGISTERED, so the duck registry never points at a dead element for
+       even one statement -- a cue firing in that gap would otherwise duck nothing. */
+    retire(outgoing);
     element.src = url;
-    playQuietly(element);
+    playQuietly(element, () => stationToken.current === token);
     // `playing` is deliberately NOT a dependency: this reacts to the STATION changing, not to the
     // transport. `toggle` already owns starting and stopping, and listing it here would re-attach the
     // stream every time a player pressed play.

@@ -197,15 +197,17 @@ export const styles: Record<string, React.CSSProperties> = {
        and the footer's `justifyContent: center` still centres the pair. */
     display: "inline-flex",
     alignItems: "center",
-    gap: "7px",
+    // Design note #1137: 5px, the lobby's tightened gap (#1135), now the only gap.
+    gap: "5px",
     fontSize: FONT_SIZE.micro,
     fontWeight: 600,
     letterSpacing: "0.02em",
-    color: "#8a8a86",
+    // Design note #1137: white, tight and shadowed on every surface -- see the note above `appFooter`.
+    color: "#f2f0eb",
+    textShadow: "0 1px 4px rgba(8, 8, 8, 0.85)",
     textDecoration: "none",
     whiteSpace: "nowrap",
     flexShrink: 0,
-    paddingLeft: "2px",
   },
   /* Design note #1129: the meta surfaces' mark is 31px against the board's 18px, so the words beside it move
      one step of the scale too -- `micro` next to a 31px mark reads as a caption parked beside a logo rather
@@ -230,12 +232,9 @@ export const styles: Record<string, React.CSSProperties> = {
      is not needed and saves the one case where it is -- which a rectangle does too, far more loudly.
      WHITE, AS RULED, and closer: the credit stops being `#8a8a86` metadata beside a logo and becomes the
      other half of one object, which is what the tighter gap is for. */
-  netaCreditMeta: {
-    fontSize: FONT_SIZE.micro,
-    gap: "5px",
-    color: "#f2f0eb",
-    textShadow: "0 1px 4px rgba(8, 8, 8, 0.85)",
-  },
+  /* Design note #1137: `netaCreditMeta` is GONE and its three properties moved into `netaCredit` itself --
+     white, tight, shadowed. They were ruled for the lobby (#1135) and there was never a reason the board
+     should disagree: the shadow costs nothing on a flat ground, and the credit reads as one lockup on both. */
   /* ==================================================================
       DESIGN NOTE 1083: THE PAGE ENDS HERE
      ==================================================================
@@ -251,28 +250,29 @@ export const styles: Record<string, React.CSSProperties> = {
      drawn for, `relative` + `zIndex` so it sits above the lobby's scene layer rather than under it, and
      `flex-start` because a full-width bar reads from its leading edge. */
   /* ==================================================================
-      DESIGN NOTE 1133: THE INK MOVES FROM THE BAR TO THE LOCKUP
+      DESIGN NOTE 1137: ONE FOOTER, THREE SCREENS
      ==================================================================
-     #1132 GAVE THE WHOLE FOOTER AN OPAQUE STRIP so the mark's `screen` blend had a dark backdrop, and that
-     was a full-width slab to solve a problem the width of a logo. With the scene now reaching the foot of the
-     page (#1133 in `Lobby`), the strip had nothing left to do but cover the picture.
-     SO THE BAR IS TRANSPARENT AND THE CREDIT CARRIES ITS OWN GROUND. `netaCreditMeta` is the dark plate now:
-     it is exactly as wide as the thing that needs it, the blend keys against it just as well, and what is
-     left is a small lockup in the bottom-left corner rather than a band across the screen.
-     `position: relative` + `zIndex` STAYS, because the scene layer is still underneath and something has to
-     say which of the two is on top. */
-  appFooterMeta: {
-    position: "relative",
-    zIndex: 1,
-    justifyContent: "flex-start",
-    padding: "0 0 14px 16px",
-  },
+     REPORTED across all three: fine in the lobby, "nearly overlapping the panel" in the waiting room with the
+     mark "rising above" it, and "much smaller and centred" in the game. THREE TREATMENTS FOR ONE CREDIT, and
+     each was reasoned separately -- #1124 sized the meta mark up so its animation would register, #1132 moved
+     the meta footer flush left, and the board kept #1099's original 18px centred. Nobody ever compared them
+     side by side, which is exactly what a player does by walking through the three screens in order.
+     STANDARDISED, AS RULED: one size, one alignment, one padding, on every surface. `appFooterMeta` is gone
+     rather than retuned -- a per-surface override is the thing that produced the drift, so what replaces it
+     is nothing.
+     FLUSH RIGHT, also as ruled. The lobby's account row is already right-aligned and the game's top bar puts
+     its wallet cluster there; the credit joining that edge makes one margin the app's furniture column
+     instead of two competing ones.
+     THE TOP PADDING IS THE OVERLAP FIX. `marginTop: auto` pins this to the bottom of a flex column, and in
+     the waiting room the panel can reach that far -- so with no space above it the mark butted the panel and
+     appeared to climb it. 18px is a gap the footer carries itself, rather than something each surface has to
+     remember to leave. */
   appFooter: {
     marginTop: "auto",
     display: "flex",
-    justifyContent: "center",
+    justifyContent: "flex-end",
     alignItems: "center",
-    padding: "14px 16px 4px",
+    padding: "18px 20px 12px",
     boxSizing: "border-box",
     width: "100%",
   },

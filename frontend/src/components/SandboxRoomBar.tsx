@@ -28,6 +28,18 @@ export interface SandboxRoomBarProps {
   onHost: () => void;
   onJoin: (code: string) => void;
   /** ==================================================================
+   *   DESIGN NOTE 1137: THE ERROR HAD NO WAY TO BE WRONG ABOUT ITSELF
+   *  ==================================================================
+   *
+   * REPORTED: "the error for entering a malformed room code persists indefinitely, even after a player hits
+   * cancel." THE ERROR BELONGS TO THE PARENT and every route that could retire it belonged here. `onJoin`
+   * sets it; Cancel and the next keystroke are the two moments it stops being true, and both of those happen
+   * inside this component, which had no way to say so.
+   * FIRED ON CANCEL AND ON EDIT, not just on Cancel. A player who mistypes and corrects the code without
+   * cancelling is looking at a verdict on a string they have already replaced -- the same staleness, one
+   * interaction earlier. Optional, so the in-game caller is unaffected. */
+  onClearError?: () => void;
+  /** ==================================================================
    *   DESIGN NOTE 1131: THE SAME CONTROLS, WITHOUT THE TRAY THEY SIT IN
    *  ==================================================================
    *
@@ -50,6 +62,7 @@ export function SandboxRoomBar({
   busy,
   onHost,
   onJoin,
+  onClearError,
   bare = false,
 }: SandboxRoomBarProps) {
   const [joining, setJoining] = useState(false);
@@ -137,7 +150,11 @@ export function SandboxRoomBar({
           <input
             style={styles.input}
             value={codeText}
-            onChange={(event) => setCodeText(event.target.value)}
+            onChange={(event) => {
+              // Design note #1137: the verdict was about the old string.
+              if (codeText !== event.target.value) onClearError?.();
+              setCodeText(event.target.value);
+            }}
             placeholder="JUNO-4T2"
             aria-label="Room code"
             autoFocus
@@ -157,6 +174,8 @@ export function SandboxRoomBar({
             onClick={() => {
               setJoining(false);
               setCodeText("");
+              // Design note #1137: leaving the form retires its error with it.
+              onClearError?.();
             }}
           >
             Cancel
@@ -167,7 +186,10 @@ export function SandboxRoomBar({
           type="button"
           className={bare ? "sandbox-bare-btn" : undefined}
           style={bare ? styles.bareButton : styles.button}
-          onClick={() => setJoining(true)}
+          onClick={() => {
+            onClearError?.();
+            setJoining(true);
+          }}
           disabled={busy}
         >
           Join game

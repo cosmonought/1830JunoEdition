@@ -242,20 +242,19 @@ export function AudioControls({ audio }: AudioControlsProps) {
             <ellipse cx="9.5" cy="9.2" rx="1.9" ry="1.6" fill="currentColor" />
           </svg>
         </button>
-        {showTransport && (
-          <button
-            type="button"
-            style={styles.topBarStationStep}
-            onClick={() => stepStation(1)}
-            aria-label="Next station"
-            title="Next station"
-          >
-            <svg width="9" height="9" viewBox="0 0 10 10" aria-hidden="true" focusable="false">
-              <path d="M1 1l5 4-5 4z" fill="currentColor" />
-              <path d="M8 1v8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-            </svg>
-          </button>
-        )}
+        {/* ==================================================================
+             DESIGN NOTE 1137: THE SECOND `|>` WAS MINE, LEFT BEHIND BY #1134
+            ==================================================================
+            REPORTED: "there is a stray |> to the right of the radio button." IT WAS A DUPLICATE, not a
+            misplacement. #1127 put Prev and Next either side of the radio button; #1134 moved the tuner into
+            a drawer BEFORE that button, and the edit that did it replaced the span from the readout up to the
+            radio button -- which covered the readout and Prev, and stopped short of the Next that came after.
+            So Next was rendered twice, and the copy nobody could see was the one that had moved.
+            THE STEPPER THAT SURVIVES IS THE ONE IN THE DRAWER. `stepStation(1)` was wired identically in
+            both, which is why this looked cosmetic rather than broken: pressing either advanced the station.
+            A HALF-APPLIED MOVE IS THE SHAPE TO WATCH FOR HERE -- the same fault as the `routeChipHead` sweep
+            that retoned one file of a pair. Cutting a range and pasting it elsewhere leaves whatever sat past
+            the end of the range exactly where it was. */}
         <button
           type="button"
           style={{

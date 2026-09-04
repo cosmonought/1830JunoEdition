@@ -118,12 +118,22 @@ describe("playQuietly swallows everything play() can do wrong", () => {
        whether `.catch` was called on it. This fails the moment the handler is dropped, which is what the
        requirement is about. The three cases below then cover what happens when the promise is not a promise
        at all. */
-    const catchSpy = jest.fn();
-    play.mockReturnValue({ catch: catchSpy } as unknown as Promise<void>);
+    /* ==================================================================
+        DESIGN NOTE 1139: `.catch` BECAME `.then(ok, fail)`, AND THE SPY HAD TO FOLLOW
+       ==================================================================
+       THIS SPIED ON `.catch` SPECIFICALLY, which was exactly right while the failure path was the only one
+       that mattered. #1139 gave the success path work to do -- a `play()` that resolves LATE, after the
+       player has changed station, has already started the sound and has to be stopped -- so the handler
+       moved to the two-argument `then`.
+       THE CLAIM IS UNCHANGED AND IS WHAT IS ASSERTED: whatever `play()` hands back, a rejection handler is
+       attached to it. Spying on `then` and checking its SECOND argument is that same requirement, stated
+       against the shape the code now uses. */
+    const thenSpy = jest.fn();
+    play.mockReturnValue({ then: thenSpy } as unknown as Promise<void>);
 
     playQuietly(new Audio(WHISTLE_SRC));
-    expect(catchSpy).toHaveBeenCalledTimes(1);
-    expect(typeof catchSpy.mock.calls[0][0]).toBe("function");
+    expect(thenSpy).toHaveBeenCalledTimes(1);
+    expect(typeof thenSpy.mock.calls[0][1]).toBe("function");
   });
 
   it("survives a rejected promise", async () => {

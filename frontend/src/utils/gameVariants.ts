@@ -224,10 +224,26 @@ export const VARIANT_COPY: Readonly<Record<VariantCopyKey, { label: string; blur
     label: "Gentle rust (easier)",
     blurb: "A rusting train gets one last Operating Round turn before it goes.",
   },
+  /* ==================================================================
+      DESIGN NOTE 1168: THE BLURB SAYS WHEN, AND STOPS EXPLAINING WHY
+     ==================================================================
+     SUPPLIED VERBATIM: "Delays the private company auction and B&O open to the start of Phase 3. Watch your
+     cash carefully or your rivals might get the advantage!"
+     THE OLD TEXT SAID THE SAME THING THE LONG WAY -- "auctioned at the end of the Operating Round set in
+     which the first 3-train is bought" is the definition of Phase 3, spelled out. A player choosing house
+     rules in a waiting room wants to know WHEN the privates arrive; the mechanism by which the game knows it
+     has reached Phase 3 is not the toggle's business.
+     THE CLOSING SENTENCE SURVIVES UNCHANGED, and deliberately: it is the only line in this table that says
+     what the variant will FEEL like rather than what it does, and the replacement text keeps it word for
+     word.
+     ONE STRING, TWO SCREENS. #961a moved this table here because the Lobby and the Waiting Room had drifted
+     to different wordings of the same variant -- "one variant with two names, on the two screens a table
+     reads before agreeing to it" -- so this edit reaches the Lobby as well, which is the arrangement working
+     rather than a side effect to check. */
   delayedAuction: {
     label: "Delayed private auction (harder)",
     blurb:
-      "The game opens on Stock Round 1 with no private companies; they are auctioned at the end of the Operating Round set in which the first 3-train is bought. Corporations must float on share capital alone until then, and the B&O cannot be traded until the auction concludes. Watch your cash carefully or your rivals might get the advantage!",
+      "Delays the private company auction and B&O open to the start of Phase 3. Watch your cash carefully or your rivals might get the advantage!",
   },
 };
 

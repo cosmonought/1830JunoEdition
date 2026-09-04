@@ -121,17 +121,33 @@ const SKIP_FADE_CSS = `
   from { opacity: 0; transform: translateY(4px); }
   to   { opacity: 1; transform: translateY(0); }
 }
-@keyframes app-intro-title-in {
-  from { opacity: 0; transform: scale(1.04); }
-  to   { opacity: 1; transform: scale(1); }
-}
+/* ==================================================================
+    DESIGN NOTE 1166b: THE ANIMATION ATE THE CENTRING
+   ==================================================================
+   REPORTED: "I only see like the top left quarter-ish of the Project 18XX title."
+   AND THAT IS EXACTLY WHAT A CLOBBERED TRANSFORM LOOKS LIKE. The card was centred with the usual
+   translate(-50%, -50%) and then handed to a keyframe that animated transform for the scale-in -- with fill
+   mode both, so the animated value REPLACED the centring for the whole of the card's life. The element's
+   top-left corner sat at the middle of the screen and the picture ran off to the right and down, which shows
+   the top-left quarter of it. One property, two owners.
+   SO THE KEYFRAMES OWN OPACITY AND NOTHING ELSE, and the centring moved to inset-plus-auto-margins, which
+   needs no transform at all. The scale-in is gone rather than reimplemented: it was decoration, and buying it
+   back would mean writing the translate into every frame of two keyframes and keeping them in step.
+   IT ALSO PROTECTS THE BLEND. #1131 records that a transform makes a stacking context and mix-blend-mode
+   stops compositing against what is behind it -- that note is about an ANCESTOR, and an animated transform on
+   the blended element itself isolates it just as well. The title is keyed off its own black; a transform here
+   was quietly risking the thing that makes the asset usable over footage at all. */
 @keyframes app-intro-word-in {
   from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 .app-intro-title {
-  animation: app-intro-title-in ${TITLE_FADE_IN_MS}ms ease-out both,
+  animation: app-intro-title-fade ${TITLE_FADE_IN_MS}ms ease-out both,
              app-intro-title-out ${TITLE_FADE_MS}ms ease-in ${TITLE_HOLD_UNTIL_MS}ms both;
+}
+@keyframes app-intro-title-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 @keyframes app-intro-title-out {
   from { opacity: 1; }
@@ -225,6 +241,10 @@ export function GameIntroOverlay({ onDone, sfxEnabled }: GameIntroOverlayProps) 
   return (
     <div style={styles.backdrop} role="dialog" aria-modal="true" aria-label="Opening titles">
       <style>{SKIP_FADE_CSS}</style>
+      {/* Design note #1166b: the stage is the rectangle the video paints into, so the two overlays below are
+          positioned in the PICTURE's coordinates rather than the window's. The skip stays outside it -- that
+          one belongs to the screen corner, not to the artwork. */}
+      <div style={styles.stage}>
       <video
         style={styles.video}
         src={GAME_INTRO_SRC}
@@ -275,6 +295,8 @@ export function GameIntroOverlay({ onDone, sfxEnabled }: GameIntroOverlayProps) 
         </p>
       )}
 
+      </div>
+
       {skipVisible && (
         <button type="button" className="app-intro-skip" style={styles.skip} onClick={finish} autoFocus>
           Skip intro
@@ -318,12 +340,38 @@ const styles: Record<string, React.CSSProperties> = {
   /* Design note #1166: the title card. `position: absolute` over the video rather than in flow, `screen` to
      key it off its own black ground (the lobby's own treatment, #1131), and no pointer events -- the skip is
      the only thing on this layer a click should ever find. */
+  /* ==================================================================
+      DESIGN NOTE 1166b: A STAGE THAT IS THE PICTURE, NOT THE SCREEN
+     ==================================================================
+     REPORTED: "the Powered by Neta DAO renders on top of the Neta DAO logo -- it needs to be bumped
+     downward."
+     IT WAS AT 68% OF THE OVERLAY, and the overlay is the whole window while the video is `object-fit:
+     contain` -- letterboxed inside it on any viewport that is not 16:9. So a percentage of the overlay is not
+     a percentage of the PICTURE, and the gap between the two is however much black is above and below.
+     MEASURED, so the number is not a guess twice over: sampling the final frame, the completed mark occupies
+     28% to 72% of the frame's height. 68% was inside it before any letterboxing was taken into account.
+     THE FIX IS A BOX THAT REPRODUCES `contain`. `aspect-ratio: 16 / 9` with both maxima at 100%, centred in
+     the flex backdrop, is exactly the rectangle the video paints into -- so the overlays are positioned
+     against the same coordinates the artwork is, on every window shape. No viewport units, which also keeps
+     it clear of #1144's finding that `vw`/`vh` are scaled by an enclosing `zoom`. */
+  stage: {
+    position: "relative",
+    width: "100%",
+    aspectRatio: "16 / 9",
+    maxWidth: "100%",
+    maxHeight: "100%",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  /* Design note #1166b: centred by insets and auto margins rather than by a transform -- see the keyframes
+     for why this element must not own one. */
   titleArt: {
     position: "absolute",
-    top: "50%",
-    left: "50%",
-    transform: "translate(-50%, -50%)",
-    width: "min(62vw, 780px)",
+    inset: 0,
+    margin: "auto",
+    width: "62%",
+    height: "auto",
     mixBlendMode: "screen",
     pointerEvents: "none",
   },
@@ -332,7 +380,9 @@ const styles: Record<string, React.CSSProperties> = {
      title is, so neither can shift the video's own centring. */
   credit: {
     position: "absolute",
-    top: "68%",
+    /* Design note #1166b: the mark ends at 72% of the frame, measured. 80% clears it inside the stage, which
+       is the picture's own box rather than the window's. */
+    top: "80%",
     left: 0,
     right: 0,
     margin: 0,

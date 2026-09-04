@@ -111,12 +111,30 @@ const styles: Record<string, React.CSSProperties> = {
   /* `listStyle: none` with a drawn marker rather than a browser disc: the disc's indent is not controllable
      across engines and these sit in a 200px card where four wasted pixels show. */
   list: { display: "flex", flexDirection: "column", gap: "3px", margin: 0, padding: 0, listStyle: "none" },
+  /* ==================================================================
+      DESIGN NOTE 1167: A STEP UP, BECAUSE THE COLOUR WAS ALREADY THE ONE ASKED FOR
+     ==================================================================
+     ASKED: "either bump the size of the font a smidge up, or use the font color that's on the Corporation
+     cards on the Stocks tab, which seems to be the same size but a darker/sharper contrasting color."
+     THE SECOND OPTION HAD NOTHING TO CHANGE. Measured: this text and `StockRoundPanel`'s `privateRules` are
+     both `CARD_INK_MUTED` on `CARD_SURFACE` at `FONT_SIZE.micro` -- the same ink, the same ground, the same
+     size, 11.09:1 either way. There is no darker colour in use on the corporation card to adopt.
+     SO THE DIFFERENCE IS THE FORM, NOT THE INK. The corporation card runs its rules as a paragraph; this runs
+     them as short bullets, each behind a marker and a gap, on a denser card -- and broken text at 11px reads
+     lighter than continuous text at 11px even when every value matches. That is a real perception with a
+     cause, and the cause is not addressable by colour.
+     WHICH LEAVES THE FIRST OPTION, and it is one rung: `micro` to `small`. NOT A NEW VALUE -- #1151 spent a
+     batch removing twelve of those -- and not `CARD_INK`, which would make this text sharper than the card it
+     was asked to match rather than equal to it.
+     THE CONSEQUENCE, STATED: these bullets are now one step larger than the corporation card's prose. That is
+     a deliberate divergence from the parity the report cited, and the alternative -- raising both -- is a
+     change to a surface nobody reported. */
   bullet: {
     display: "flex",
     flexDirection: "row",
     alignItems: "flex-start",
     gap: "6px",
-    fontSize: FONT_SIZE.micro,
+    fontSize: FONT_SIZE.small,
     lineHeight: 1.45,
   },
   marker: { flex: "none", lineHeight: 1.45, opacity: 0.7 },
@@ -139,11 +157,13 @@ const styles: Record<string, React.CSSProperties> = {
     textDecoration: "underline",
     cursor: "pointer",
   },
+  /* Design note #1167: the long form moves with the bullets. It is the same prose one disclosure deeper, and
+     a detail smaller than the summary that opened it would read as a footnote to a footnote. */
   detail: {
     margin: 0,
     padding: "7px 9px",
     borderRadius: RADIUS.control,
-    fontSize: FONT_SIZE.micro,
+    fontSize: FONT_SIZE.small,
     lineHeight: 1.5,
   },
 };

@@ -98,6 +98,44 @@ describe("the intro sequence gains a beginning and an end", () => {
     expect(sliceBetween(INTRO, "titleArt: {", "\n  },")).toContain('mixBlendMode: "screen"');
   });
 
+  it("centres the title without a transform, because the keyframes own that", () => {
+    /* ==================================================================
+        DESIGN NOTE 1166b: ONE PROPERTY, TWO OWNERS
+       ==================================================================
+       REPORTED: "I only see like the top left quarter-ish of the Project 18XX title."
+       THE CARD WAS CENTRED WITH `translate(-50%, -50%)` AND ANIMATED ON `transform`, with fill mode `both` --
+       so the keyframe's value replaced the centring permanently. The element's top-left corner sat at the
+       middle of the screen and the picture ran off to the right and down, which shows exactly the top-left
+       quarter of it.
+       ASSERTED AS THE ABSENCE OF A TRANSFORM ON THE ELEMENT and the absence of one in its keyframes, because
+       either alone reintroduces the bug -- and a transform here would also isolate the element and break the
+       `screen` blend the asset depends on (#1131's trap, one level in). */
+    const art = sliceBetween(INTRO, "titleArt: {", "\n  },");
+    expect(art).not.toContain("transform");
+    expect(art).toContain("inset: 0");
+    expect(art).toContain('margin: "auto"');
+    const fade = sliceBetween(RAW_INTRO, "@keyframes app-intro-title-fade {", "}");
+    expect(fade).not.toContain("transform");
+  });
+
+  it("positions the overlays against the picture, not the window", () => {
+    /* THE VIDEO IS `object-fit: contain`, so on any viewport that is not 16:9 it is letterboxed and a
+       percentage of the overlay is not a percentage of the artwork. The stage reproduces the contain box, so
+       the numbers below mean what they say. */
+    const stage = sliceBetween(INTRO, "stage: {", "\n  },");
+    expect(stage).toContain('aspectRatio: "16 / 9"');
+    expect(stage).toContain('maxHeight: "100%"');
+    expect(INTRO).toContain("<div style={styles.stage}>");
+  });
+
+  it("clears the mark it sits under, measured from the frame", () => {
+    /* SAMPLED FROM THE FINAL FRAME: the completed mark occupies 28% to 72% of the height. 68% -- the first
+       value -- was inside it before letterboxing was even considered. */
+    const credit = sliceBetween(INTRO, "credit: {", "\n  },");
+    const top = Number((credit.match(/top: "(\d+)%"/) ?? [])[1]);
+    expect(top).toBeGreaterThan(72);
+  });
+
   it("unmounts the card rather than leaving it at zero opacity", () => {
     /* An element over the video is an element the pointer can meet, and the skip is the only thing on this
        layer meant to be clickable. */

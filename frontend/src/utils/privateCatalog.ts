@@ -207,7 +207,20 @@ export const PRIVATE_COMPANY_CATALOG: Readonly<Record<number, PrivateCatalogEntr
     revenue: 25,
     faceValue: 160,
     abilityBullets: [
-      "Its auction buyer was handed a 10% PRR share on purchase.",
+    /* ==================================================================
+        DESIGN NOTE 1167: A CARD SAYS WHAT A PRIVATE DOES, NOT WHAT IT DID
+       ==================================================================
+       REPORTED: "the Private Company special power/rules text on the PC cards in the Auction tab is written in
+       past tense for some reason."
+       TWO BULLETS, AND THEY ARE THE SAME TWO. Every other private's power is something its owner may DO later,
+       so those wrote themselves in the present; the C&A's share and the B&O's certificate both arrive AT
+       PURCHASE -- so for whoever already holds the card the event really has happened, and the sentences slid
+       into the past to match. That is a log entry's tense, and this is a reference: a player reading it in the
+       auction has not bought the thing yet, and is deciding whether to.
+       THE LONG FORM WAS ALREADY RIGHT, which is what makes this a drift rather than a policy -- "whoever buys
+       it out of the auction IS HANDED a 10% PRR share" sits a few lines below the bullet that said "was
+       handed". One private, two tenses, three lines apart. */
+      "Its auction buyer is handed a 10% PRR share on purchase.",
       "Nothing further to trigger \u2014 the company stays open.",
     ],
     ability:
@@ -220,7 +233,7 @@ export const PRIVATE_COMPANY_CATALOG: Readonly<Record<number, PrivateCatalogEntr
     // Design note #660: both halves are enforced now, so the summary can
     // state them as facts about the board rather than as flavour.
     abilityBullets: [
-      "Came with the B&O president\u2019s certificate and set its par.",
+      "Comes with the B&O president\u2019s certificate and sets its par.",
       "Never sellable to a corporation; closes on the B&O\u2019s first train.",
     ],
     ability:

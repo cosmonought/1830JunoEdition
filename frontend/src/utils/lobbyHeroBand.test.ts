@@ -69,9 +69,32 @@ describe("the room is the page, and the text carries its own ground", () => {
        (title 8.87:1, note 6.15:1). The rule held; the way of satisfying it moved. */
     expect(LOBBY).toContain("linear-gradient(rgba(8, 8, 8, 0.48), rgba(8, 8, 8, 0.48))");
     /* Design note #1131: `backgroundAttachment: fixed` is GONE with the background itself -- the picture is
-       an element now, sized as `cover` would compute it, so that children can be anchored to it. */
-    expect(LOBBY).toContain('width: "max(100%, calc(100vh * 1920 / 1072))"');
-    expect(LOBBY).toContain('height: "max(100vh, calc(100vw * 1072 / 1920))"');
+       an element now, sized as `cover` would compute it, so that children can be anchored to it.
+       ==================================================================
+        DESIGN NOTE 1144 SUPERSEDES THE SPELLING OF THIS ASSERTION, NOT ITS CLAIM
+       ==================================================================
+       IT READ `'width: "max(100%, calc(100vh * 1920 / 1072))"'` -- the whole declaration, quotes and all --
+       and #1144 broke it by putting the viewport terms in the chrome's zoom space, where `100vh` had stopped
+       meaning the viewport. The ratio is untouched; the units moved. That is the third time this harness has
+       gone red over an expression rather than a property (see `stepJumpButton.test.ts` #859 for the same
+       lesson learned on a `<div>`), so this now asserts the two things #1131 actually argues for:
+         the box is `cover`'s OWN arithmetic, ratio and all -- not `background-size: cover` on a parent;
+         and it is the max of a proportional term and a viewport term, which is what makes it an ELEMENT
+         children can be anchored inside.
+       THE `1920 / 1072` IS THE LOAD-BEARING PART and is asserted exactly, because it is the photograph's real
+       aspect: a wrong ratio here is a stretched room, and no other test in this file would notice. */
+    expect(LOBBY).toContain("* 1920 / 1072");
+    expect(LOBBY).toContain("* 1072 / 1920");
+    expect(LOBBY).toMatch(/width: `max\(100%, calc\(\$\{[^}]+\}vh \* 1920 \/ 1072\)\)`/);
+    /* Design note #1144: and the units are in ONE space. A bare `100vh` surviving here is the specific bug
+       that would leave the photograph letterboxed on a tall window -- see `uiScale.test.ts`, which owns the
+       reasoning; this line is the tripwire on the file that would show it. */
+    expect(LOBBY).not.toContain("calc(100vh *");
+    /* The other half of the same box, re-anchored for the same reason. Both axes are asserted rather than
+       one, because `cover` is the MAX of the two fits and a box with one correct axis is not cover -- it is a
+       picture that happens to be right on wide windows. */
+    expect(LOBBY).toMatch(/height: `max\(\$\{[^}]+\}vh, calc\(\$\{[^}]+\}vw \* 1072 \/ 1920\)\)`/);
+    expect(LOBBY).not.toContain("max(100vh,");
   });
 
   it("needs no plate, because the title sits where the room is darkest", () => {

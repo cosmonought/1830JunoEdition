@@ -46,6 +46,46 @@ export const PHASE_TINT_STYLES: Readonly<Record<GamePhase["tint"], React.CSSProp
   brown: NEUTRAL_PHASE_BADGE,
 };
 
+/* ==================================================================
+    DESIGN NOTE 1144: ONE NUMBER, AND WHY IT IS NOT A SETTING YET
+   ==================================================================
+   0.7 IS THE FIGURE THE PLAYER WAS ALREADY USING, arrived at over several playtests rather than guessed at
+   here. RULED: "fixed now, control later if playtesters ask" -- so it is a constant in one place, and a
+   `localStorage`-backed picker in the top bar is a follow-up rather than a control nobody has asked for, in
+   a bar several batches have spent their length de-cluttering. */
+export const UI_SCALE = 0.7;
+
+/* ==================================================================
+    DESIGN NOTE 1144: ONE ZOOM, SPREAD ON ALL THREE ROOTS
+   ==================================================================
+   THE LOBBY AND THE WAITING ROOM ARE NOT INSIDE THE SHELL. Both are early returns above `AppShell`'s root, so
+   a zoom applied there alone would have left the game room at 70% and the two screens on either side of it at
+   100% -- and the batch immediately before this one spent its length making the footer read the SAME on all
+   three ("the Lobby and Waiting Room ones look like they could shrink another 10%"). Scaling one of the three
+   would have undone that with the first screen change.
+   IT IS ALSO WHAT THE REPORT DESCRIBES. A browser's zoom control is not per-route; the player has been at 70%
+   on every screen, and that is the state the three footers were balanced in.
+   EXPORTED AS AN OBJECT rather than left as a `styles` entry, because two of its three consumers do not import
+   this table at all and should not start importing a shell's style sheet to get one declaration. */
+export const CHROME_ZOOM: React.CSSProperties = {
+  zoom: UI_SCALE,
+  /* ==================================================================
+      DESIGN NOTE 1144: A VIEWPORT UNIT INSIDE A ZOOM IS NOT A VIEWPORT UNIT
+     ==================================================================
+     MEASURED, not reasoned about, because the two plausible answers differ by 30% of the screen: in Chrome
+     148 a `100vh` box inside `zoom: 0.7` comes back 560px tall on an 800px window. `vh` resolves against the
+     real viewport and is THEN scaled, so the `minHeight: 100vh` that keeps a ground under every one of these
+     three screens would stop three-tenths of the way up and show the body colour beneath it. That is the same
+     fault as #1140's footer band, arriving by a different route.
+     CORRECTED HERE RATHER THAN IN EACH ROOT, so the compensation travels with the thing that causes it. A
+     reader who deletes the zoom deletes this with it, instead of leaving a 142vh floor behind.
+     WHAT SURVIVED THE SAME MEASUREMENT UNTOUCHED, so nobody re-checks it: a `position: fixed` layer inside the
+     zoom still covers the whole window (the fixed containing block is zoom-adjusted), and a child at
+     `width: 100%` still fills it -- so the modals' `84vh` caps and the toast's `100vw` clamp scale WITH their
+     contents and read exactly as before, one size smaller. */
+  minHeight: `${100 / UI_SCALE}vh`,
+};
+
 export const styles: Record<string, React.CSSProperties> = {
   /* Design note #34: the single slim top bar. 6px vertical against the old header's 16px -- the point of
      the consolidation was vertical space, so the row has to actually be short. `flexWrap` stays on: the
@@ -673,6 +713,32 @@ export const styles: Record<string, React.CSSProperties> = {
   roomStripValue: { color: "#f2f0eb", fontWeight: 700 },
   roomStripDivider: { width: "1px", alignSelf: "stretch", minHeight: "16px", backgroundColor: "#2a2a2a" },
   roomStripError: { color: "#f0b0a8", fontSize: FONT_SIZE.small },
+  /* ==================================================================
+      DESIGN NOTE 1144: THE ZOOM THE PLAYER HAD BEEN APPLYING BY HAND
+     ==================================================================
+     REPORTED: "I have to scale my browser to 70% for these things to look right, and it may have been that
+     I've been playing with a 70% browser scaling until this latest playtest ... if you don't see anything
+     changed that would affect their scaling, then this is likely the culprit."
+     NOTHING CHANGED, AND THE HISTORY SAYS SO. `typography.ts` has not moved since `a014db5`, and the retheme's
+     whole diff on the Auction and Stock panels is two lines, both hex values. The Auction's cards-per-row and
+     the Stock panel's are decided by `minmax(240px)` and `minmax(300px)` floors that no commit in this
+     sequence touches. The app draws today what it drew before; the reader had been viewing it 1.43x smaller.
+     `typography.ts` #3 DIAGNOSED THIS EXACT THING AND UNDERSHOT. Its own words: "two earlier passes compounded
+     to about 1.4x, and a UI drawn 1.4x too large is one a player fixes with the zoom control -- which is the
+     report." It then took the type down and stopped, which is the half that was reachable: 601 of the 622
+     `fontSize` call sites read that module, but only 21 of 413 paddings read `CONTROL_PADDING`. Type came down
+     and its boxes did not, which is the failure that note warns about one paragraph later -- "text shrunk
+     without shrinking its box leaves controls that are small AND still tall".
+     SO THE SCALE IS APPLIED THE WAY THE PLAYER WAS APPLYING IT. `zoom` scales everything a browser's own zoom
+     scales -- type, padding, gaps, borders, the lot -- which is precisely why it succeeds where three passes
+     over a type module could not: it does not need 392 paddings to have been centralised.
+     THE CANVASES ARE EXCLUDED, because they were never the problem. Both renderers already carry zoom-aware
+     scaling of their own (`HexGridRenderer` #30 caps the board to the viewport), and the report says so
+     directly: "the one thing that doesn't seem to have grown is the Rail Map". `boardPane` counter-zooms.
+     NOT `transform: scale()`, which was the other candidate and is wrong here: a transform does not affect
+     layout, so the page would be drawn small inside a full-size box and every scroll height, sticky offset
+     and `100vh` would still be computed at 100%. `zoom` reflows, which is the entire point. */
+  appChromeZoom: CHROME_ZOOM,
   appRoot: {
     display: "flex",
     flexDirection: "column",
@@ -2088,6 +2154,16 @@ export const styles: Record<string, React.CSSProperties> = {
     minWidth: "72px",
   },
   boardPane: {
+    /* ==================================================================
+        DESIGN NOTE 1144: THE BOARD OPTS OUT OF THE CHROME'S ZOOM
+       ==================================================================
+       "The one thing that doesn't seem to have grown is the Rail Map, perhaps because it's drawn as its own
+       thing" -- and that is exactly right: both canvas renderers already scale themselves against the
+       viewport (`HexGridRenderer` #30 caps the board to it), so the chrome's 0.7 would shrink a surface that
+       was already the correct size and then be undone by the renderer's own fit pass fighting it.
+       `1 / UI_SCALE` RATHER THAN A LITERAL, so the two can never drift: whatever the chrome scales by, this
+       divides by, and a future change to `UI_SCALE` moves both ends together. */
+    zoom: 1 / UI_SCALE,
     flex: 1,
     display: "flex",
     // Was "center"/"center" -- changed to "stretch" (design note #19/item 3

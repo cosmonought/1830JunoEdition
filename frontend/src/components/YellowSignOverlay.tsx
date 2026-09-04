@@ -79,6 +79,8 @@
 // still contained.
 
 import React from "react";
+// Design note #1144: the chrome's scale, so this layer can divide back out of it.
+import { UI_SCALE } from "../styles/appStyles";
 
 /** Which of the two treatments a clip needs. Design note #1093: a property of how the clip was shot. */
 export type HauntingComposite = "screen" | "feather";
@@ -167,6 +169,25 @@ const FOG_MASK =
 
 const styles: Record<string, React.CSSProperties> = {
   container: {
+    /* ==================================================================
+        DESIGN NOTE 1144: ART AT VIEWPORT SIZE OPTS OUT OF THE CHROME'S ZOOM
+       ==================================================================
+       The shell's root carries `zoom: UI_SCALE` so the game room's CHROME draws at the size the player was
+       reaching for the browser's zoom control to get.
+       AN EARLIER DRAFT OF THIS NOTE SAID `inset: 0` WOULD STOP MEANING "THE VIEWPORT". IT WAS WRONG: measured
+       in Chrome 148, a fixed layer inside `zoom: 0.7` still comes back the full size of the window, because
+       the containing block a fixed element gets is itself zoom-adjusted.
+       WHAT THE MEASUREMENT DID FIND IS THIS SURFACE'S ACTUAL PROBLEM -- `vw` and `vh` DO scale. A `100vh` box
+       inside `zoom: 0.7` measures 560px on an 800px window, so #73's carefully argued `88vw` sign would have
+       been drawn at 62vw and the caps below it at 50vh, quietly undoing the one decision that note explains
+       at length.
+       COUNTER-ZOOMED RATHER THAN MOVED OUT OF THE TREE, which was the alternative: a portal would work and
+       would put this layer somewhere a reader does not expect to find it. `1 / UI_SCALE` is the same idiom
+       `boardPane` uses, and for the same reason -- this is ART sized to the window, not chrome sized to the
+       reader.
+       THE MODALS ARE DELIBERATELY NOT DOING THIS. A confirm dialog is chrome and should shrink with the rest
+       of it; only the surfaces that are pictures at viewport size are exempt. */
+    zoom: 1 / UI_SCALE,
     position: "fixed",
     inset: 0,
     display: "flex",

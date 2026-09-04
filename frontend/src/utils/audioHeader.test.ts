@@ -37,7 +37,10 @@ describe("the shell owns the audio state", () => {
        `isMyTurn` stayed the one answer all three notifications read. THAT is what this case is about, and
        pinning the complete argument list would have broken on a change that left the claim intact.
        The `isMyTurn,` fragment carries it: the whistle asks the same question the flash and the glow ask. */
-    expect(APP).toContain("useTurnWhistle(isMyTurn,");
+    /* Design note #1143: the call is multi-line now (a third argument, for the one-render-late gate), so
+       this matches the collapsed form. The claim is unchanged and is the reason the fragment is this short:
+       the whistle asks the same `isMyTurn` the flash and the glow ask. */
+    expect(APP.replace(/\s+/g, " ")).toContain("useTurnWhistle( isMyTurn,");
     // And the mute still reaches it, whatever else has been ANDed alongside.
     expect(APP).toContain("sfxEnabled && sfxTurnEnabled");
   });

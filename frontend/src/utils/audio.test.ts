@@ -50,8 +50,17 @@ let originalAudio: typeof Audio;
 
 let radio: RadioStream | null = null;
 
-function WhistleProbe({ isMyTurn, enabled }: { isMyTurn: boolean; enabled: boolean }) {
-  useTurnWhistle(isMyTurn, enabled);
+function WhistleProbe({
+  isMyTurn,
+  enabled,
+  suppressed,
+}: {
+  isMyTurn: boolean;
+  enabled: boolean;
+  /** Design note #1143: evaluated when the edge fires, not when the component rendered. */
+  suppressed?: () => boolean;
+}) {
+  useTurnWhistle(isMyTurn, enabled, suppressed);
   return null;
 }
 
@@ -385,5 +394,56 @@ describe("the radio stream waits for a click", () => {
     act(() => root.render(createElement("div")));
     expect(pause).toHaveBeenCalled();
     expect(stream.getAttribute("src")).toBeNull();
+  });
+});
+
+describe("the opening titles silence the first whistle", () => {
+  /* ==================================================================
+      DESIGN NOTE 1143: THE GATE THAT WAS ONE RENDER LATE
+     ==================================================================
+     REPORTED: "when the host starts the game, the active player's turn sound triggers instantaneously."
+     #1116 HAD ALREADY WRITTEN A GATE and its note says the whistle waits for the titles -- so a source scan
+     for `!introPlaying` would have passed while the bug was live. That is exactly why these cases mount.
+     THE SHAPE OF THE BUG: the deal, the room going `playing` and the acting player arrive in ONE commit. A
+     sibling effect queues `setIntroPlaying(true)`; the whistle's effect, later in the same commit, still
+     reads the `enabled` computed during that render, when the flag was false. `useSoundEffect` assigns its
+     `enabledRef` during render too, so the ref carries the stale value as well.
+     A REF IS THE ONLY THING TRUE EARLY ENOUGH, which is what the third argument exists to read. */
+
+  it("stays silent when the suppressor is true at the moment the turn arrives", () => {
+    /* THE REGRESSION CASE, and it is deliberately written the way the bug happens: `enabled` is TRUE, exactly
+       as it is during the commit that starts the game, and only the suppressor knows better. A test that also
+       set `enabled: false` would pass against the broken code. */
+    mount(createElement(WhistleProbe, { isMyTurn: false, enabled: true, suppressed: () => true }));
+    mount(createElement(WhistleProbe, { isMyTurn: true, enabled: true, suppressed: () => true }));
+    expect(play).not.toHaveBeenCalled();
+  });
+
+  it("consumes the edge rather than saving it for later", () => {
+    /* #1116's RULING, still right and now testable: a player who has been looking at their own turn for ten
+       seconds does not need telling. The suppressed turn does not whistle when the suppressor later clears --
+       only a NEW turn does. */
+    mount(createElement(WhistleProbe, { isMyTurn: false, enabled: true, suppressed: () => true }));
+    mount(createElement(WhistleProbe, { isMyTurn: true, enabled: true, suppressed: () => true }));
+    mount(createElement(WhistleProbe, { isMyTurn: true, enabled: true, suppressed: () => false }));
+    expect(play).not.toHaveBeenCalled();
+  });
+
+  it("whistles for the next turn once the titles are done", () => {
+    mount(createElement(WhistleProbe, { isMyTurn: false, enabled: true, suppressed: () => true }));
+    mount(createElement(WhistleProbe, { isMyTurn: true, enabled: true, suppressed: () => true }));
+    // The turn passes to somebody else, then comes back with the intro long finished.
+    mount(createElement(WhistleProbe, { isMyTurn: false, enabled: true, suppressed: () => false }));
+    mount(createElement(WhistleProbe, { isMyTurn: true, enabled: true, suppressed: () => false }));
+    expect(play).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves every caller that passes no suppressor exactly as it was", () => {
+    /* The argument is optional and two other callers omit it. `undefined?.()` is falsy, so the ordinary path
+       runs unchanged -- asserted rather than assumed, since a `!suppressed()` without the optional call would
+       have thrown for every one of them. */
+    mount(createElement(WhistleProbe, { isMyTurn: false, enabled: true }));
+    mount(createElement(WhistleProbe, { isMyTurn: true, enabled: true }));
+    expect(play).toHaveBeenCalledTimes(1);
   });
 });

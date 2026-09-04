@@ -286,8 +286,17 @@ describe("the three effect categories gate their own cues", () => {
        the very same event starts. The CLAIM this case makes is the AND -- the master switch and the
        category both still reach the whistle -- so it is asserted as the fragment they share rather than as
        the complete expression, which is the anchor rule this file's own header states. */
-    expect(APP).toContain("useTurnWhistle(isMyTurn, sfxEnabled && sfxTurnEnabled");
-    expect(APP).toContain("&& !introPlaying);");
+    /* ==================================================================
+        DESIGN NOTE 1143: WHITESPACE AGAIN, AND THE CLAIM IS STILL THE `AND`
+       ==================================================================
+       #1116 ADDED `!introPlaying` AND THIS CASE WIDENED TO A FRAGMENT to accommodate it. #1143 added a THIRD
+       argument -- a suppressor evaluated when the edge fires, because the boolean above is one render late --
+       and the call went multi-line, so a fragment spanning the argument list broke on formatting.
+       MATCHED ON THE WHITESPACE-COLLAPSED FORM. The claim has never changed: the master switch and the
+       category BOTH reach the whistle, ANDed rather than one replacing the other. Collapsing runs of space
+       is what lets that be asserted without also asserting how prettier chose to wrap the call. */
+    const flat = APP.replace(/\s+/g, " ");
+    expect(flat).toContain("useTurnWhistle( isMyTurn, sfxEnabled && sfxTurnEnabled && !introPlaying,");
   });
 
   it("reads the categories through refs at the cue sites", () => {

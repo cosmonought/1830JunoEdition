@@ -24,6 +24,7 @@ import { ACTION_GREEN, ACTION_GREEN_BORDER, ACTION_GREEN_INK } from "../styles/p
 import { TilePreviewThumbnail, type StationPreviewMarker } from "./HexGridRenderer";
 import type { LegalTilePlacement } from "./hexContractTypes";
 import { FONT_SIZE } from "../styles/typography";
+import { UI_SCALE } from "../styles/appStyles";
 
 export interface RadialTileSelectorProps {
   /** The click's offset INSIDE the canvas -- design note #1. Board-relative,
@@ -806,6 +807,21 @@ const styles: Record<string, React.CSSProperties> = {
     pointerEvents: "none",
   },
   backdrop: {
+    /* ==================================================================
+        DESIGN NOTE 1144: A RING DRAWN IN BOARD COORDINATES BELONGS TO THE BOARD'S SCALE
+       ==================================================================
+       THE SHELL DRAWS AT 70% AND THE MAP DOES NOT -- `boardPane` counter-zooms the canvas, because the two
+       renderers were never what grew. This selector is mounted in the SHELL's tree but positioned entirely in
+       the CANVAS's coordinates: `left`/`top` come from `canvasEl.getBoundingClientRect()`, and `radius` is
+       derived from `hexRadiusPx`, measured off the same canvas.
+       LEFT INSIDE THE ZOOM, THOSE NUMBERS WOULD HAVE BEEN MULTIPLIED BY 0.7 ON THE WAY TO THE SCREEN. A rect
+       is reported in visual pixels; a `left` written inside a zoomed subtree is a layout pixel. The ring would
+       have opened at seven-tenths of the distance from the top-left corner to the hex it belongs to -- close
+       enough to look like a hover offset on a small board, plainly wrong on a large one -- and drawn at 70% of
+       the tile it encircles.
+       SO IT OPTS OUT, exactly as `boardPane` does. This is the general rule and it is worth stating once: a
+       layer positioned in MEASURED pixels must be drawn at the scale those pixels were measured at. */
+    zoom: 1 / UI_SCALE,
     position: "fixed",
     inset: 0,
     zIndex: 60,

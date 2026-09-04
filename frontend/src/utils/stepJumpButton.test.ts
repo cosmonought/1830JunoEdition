@@ -356,8 +356,19 @@ describe("a jump is not an action", () => {
        DESIGN NOTE 831 MOVED IT OFF THE JSX. With a second destination owned by a different component, an
        inline style would have made the map's owner responsible for this bar's height. The hook writes it to
        whatever target it is handed, which is #810's own argument applied to two targets instead of one. */
+    /* ==================================================================
+        DESIGN NOTE 1144 SUPERSEDES THE SPELLING, AND THE NOTE BELOW PREDICTED IT
+       ==================================================================
+       THIS LINE ASSERTED THE EXACT EXPRESSION `${clearance}px` and #1144 broke it by dividing the value on
+       its way in -- the clearance is measured in VISUAL pixels and this is written as a LAYOUT length inside
+       the shell's `zoom: 0.7`, so passed through unconverted it reserved seven-tenths of the bar.
+       THE IRONY IS INSTRUCTIVE: the paragraph immediately below this one already argued that an assertion
+       which fails over an unrelated edit "is testing the spelling, not the rule", and the line above it was
+       doing exactly that. Fixed here rather than argued about again.
+       THE RULE IS "the clearance lands on the DESTINATION as a scroll margin". Whatever arithmetic converts
+       it is the shell's business and `uiScale.test.ts` owns that claim. */
     const dollar = String.fromCharCode(36);
-    expect(CODE).toContain("node.style.scrollMarginTop = `" + dollar + "{clearance}px`;");
+    expect(CODE).toMatch(/node\.style\.scrollMarginTop = `\$\{clearance[^}]*\}px`;/);
     /* THE PROPERTY IS "THE REF IS ON THE WRAPPER", not the wrapper's exact opening tag. This assertion used
        to read `"<div ref={stepPanelRef}>"` and #859 broke it by adding `style={styles.stepPanelRow}` to that
        very element -- a green harness turning red over a change it had no opinion about. Kept as a record of

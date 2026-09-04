@@ -47,6 +47,7 @@ import {
   SANDBOX_TITLE,
 } from "../styles/palette";
 import AppFooter from "./AppFooter";
+import { CHROME_ZOOM, UI_SCALE } from "../styles/appStyles";
 // Design note #524: the Firebase sandbox lobby lives on this screen now.
 import SandboxRoomBar from "./SandboxRoomBar";
 import {
@@ -572,7 +573,7 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
   /* ---------------- Render ---------------- */
 
   return (
-    <div style={styles.root}>
+    <div style={{ ...styles.root, ...CHROME_ZOOM }}>
       {/* Design note #46 is the standing exception and this is the case it exists for: neither a keyframe nor
           a media query can be expressed as an inline style object.
           Design note #1130: #1123's 860px breakpoint is GONE WITH ITS GRID -- one centred column needs no
@@ -1652,8 +1653,19 @@ const styles: Record<string, React.CSSProperties> = {
     top: "50%",
     left: "50%",
     transform: "translate(-50%, -50%)",
-    width: "max(100%, calc(100vh * 1920 / 1072))",
-    height: "max(100vh, calc(100vw * 1072 / 1920))",
+    /* ==================================================================
+        DESIGN NOTE 1144: THE COVER ARITHMETIC HAD TO MOVE INTO THE ZOOM'S SPACE
+       ==================================================================
+       THIS IS THE ONE PLACE THE ZOOM COULD HAVE BROKEN SILENTLY. Each `max()` weighs a PERCENTAGE of the
+       parent against a VIEWPORT unit, and under `zoom: 0.7` those two stop being comparable: `100%` is
+       resolved inside the zoomed box (already 1/0.7 of the window in layout terms) while `100vh` is the real
+       window and is only scaled afterwards. The comparison would have been made between a scaled number and
+       an unscaled one, and #1131's whole claim -- "children positioned at 40% or 70% land on the same part of
+       the photograph on every screen" -- rests on this box being exactly `cover` and nothing else.
+       DIVIDING THE VIEWPORT TERMS PUTS BOTH SIDES IN LAYOUT SPACE, where the `max()` means what it meant
+       before the zoom existed. The ratios are untouched: this is a change of units, not of framing. */
+    width: `max(100%, calc(${100 / UI_SCALE}vh * 1920 / 1072))`,
+    height: `max(${100 / UI_SCALE}vh, calc(${100 / UI_SCALE}vw * 1072 / 1920))`,
     backgroundImage:
       "linear-gradient(rgba(8, 8, 8, 0.48), rgba(8, 8, 8, 0.48)), " +
       `url("${process.env.PUBLIC_URL ?? ""}/images/lobby-boardroom.jpg")`,

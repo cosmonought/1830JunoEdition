@@ -572,12 +572,39 @@ export function useRadioStream(url: string): RadioStream {
  *
  *  THE MUTE IS CHECKED INSIDE `play`, NOT HERE, so muting mid-turn does not count as an edge and unmuting
  *  does not replay one. The ref that carries it is `useSoundEffect`'s, for that reason. */
-export function useTurnWhistle(isMyTurn: boolean, enabled: boolean): void {
+export function useTurnWhistle(
+  isMyTurn: boolean,
+  enabled: boolean,
+  /* ==================================================================
+   *  DESIGN NOTE 1143: A GATE THAT IS ONLY TRUE ONE RENDER TOO LATE IS NOT A GATE
+   * ==================================================================
+   *
+   * REPORTED: "when the host starts the game, the active player's turn sound triggers instantaneously -- it
+   * needs to be delayed until the cinematic intro ends or is skipped." #1116 ALREADY WROTE THAT GATE and its
+   * note says the whistle waits for the titles. It does not, and the reason is timing rather than logic.
+   * `introPlaying` IS STATE, SET FROM AN EFFECT. The deal lands, the room goes `playing`, and one commit
+   * carries both facts: the status effect queues `setIntroPlaying(true)`, and the whistle's effect -- later
+   * in the same commit -- still sees the `enabled` computed during THAT render, when `introPlaying` was
+   * false. `useSoundEffect` assigns `enabledRef.current` during render for good reasons of its own (#1009's
+   * stable callback), which means the ref carries the stale value too. The flag becomes true on the NEXT
+   * render, by which point the whistle has already sounded.
+   * SO THE SUPPRESSION IS A FUNCTION, evaluated when the edge fires rather than when the component rendered.
+   * A caller can hand it a ref that a sibling effect has already set in the same commit, which is the only
+   * thing in React that is true early enough to catch this.
+   * IT SUPPRESSES RATHER THAN DEFERS, and #1116's reasoning for that is untouched and still right: the edge
+   * is consumed, so nobody gets a whistle ten seconds later announcing a turn they have been looking at. */
+  suppressed?: () => boolean,
+): void {
   const play = useSoundEffect(WHISTLE_SRC, enabled);
   const wasMyTurn = useRef(false);
+  /* Read through a ref for the same reason `enabled` is: a caller passing an inline arrow would otherwise
+     rebuild this effect every render, and an effect keyed on a changing function identity is how a one-shot
+     ends up firing twice. */
+  const suppressedRef = useRef(suppressed);
+  suppressedRef.current = suppressed;
 
   useEffect(() => {
-    if (isMyTurn && !wasMyTurn.current) play();
+    if (isMyTurn && !wasMyTurn.current && !suppressedRef.current?.()) play();
     wasMyTurn.current = isMyTurn;
   }, [isMyTurn, play]);
 }

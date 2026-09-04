@@ -90,7 +90,7 @@ import { dividendDeclaration, marketMoveDirection } from "../utils/dividendStep"
 // Design note #494: the per-train route ink, so the collapsed chips match
 // the lines on the map.
 import { routeTrainColor } from "../styles/routeLivery";
-import { styles, PHASE_TINT_STYLES } from "../styles/appStyles";
+import { styles, PHASE_TINT_STYLES, UI_SCALE } from "../styles/appStyles";
 // Design note #975: the chip's own type scale and the x-height ratio, so its star can be derived from the
 // text beside it rather than typed as a pixel count.
 import { FONT_SIZE, X_HEIGHT_RATIO } from "../styles/typography";
@@ -322,6 +322,25 @@ function MarketMoveLine({
    coalesced to one per frame. `resize` is listened to alongside `scroll` because a reflow above the
    panel moves its pin line without the scroll position changing -- and a media query may change the
    sticky offset too. */
+/* ==================================================================
+    DESIGN NOTE 1144: TWO KINDS OF PIXEL MEET IN THIS FILE, AND ONLY ONE OF THEM IS ZOOMED
+   ==================================================================
+   MEASURED IN CHROME 148, because the answer is not guessable and the whole pin test rests on it: inside
+   `zoom: 0.7`, `getBoundingClientRect().height` on a 50px box returns 35 -- VISUAL pixels -- while
+   `getComputedStyle(node).top` on a `top: 20px` sticky returns "20px" -- LAYOUT pixels, un-zoomed. The two
+   reads in this file sit in the same arithmetic: `rect.top - stickyTop`, and `stickyTop + rect.height`.
+   TODAY THE BAR IS `top: 0` AND ZERO IS ZERO IN BOTH SPACES, which is exactly why this is worth writing
+   down rather than leaving to be discovered. `stickyCollapse.ts` #480 reads the offset instead of assuming
+   it precisely so a future non-zero `top` works -- and under the zoom that future value would have been
+   silently 43% too large in every comparison, shifting the pin line and the auto-scroll clearance together.
+   CONVERTED AT THE READ, once, so everything downstream is in one space: visual pixels, which is what the
+   rects and `window.innerHeight` are already in. */
+/* Module-level rather than a `useCallback`, because BOTH hooks in this file make this read and a callback
+   defined in one is invisible to the other -- which is how the two would have drifted apart. */
+function measuredStickyTop(node: HTMLElement): number {
+  return stickyTopOffset(window.getComputedStyle(node).top) * UI_SCALE;
+}
+
 function useCondensedWhenPinned(): [React.RefObject<HTMLDivElement>, boolean, boolean, number] {
   const ref = React.useRef<HTMLDivElement>(null);
   const [condensed, setCondensed] = React.useState(false);
@@ -363,7 +382,7 @@ function useCondensedWhenPinned(): [React.RefObject<HTMLDivElement>, boolean, bo
       const node = ref.current;
       if (!node) return;
       if (stickyTop === null) {
-        stickyTop = stickyTopOffset(window.getComputedStyle(node).top);
+        stickyTop = measuredStickyTop(node);
       }
       const rect = node.getBoundingClientRect();
       /* Design note #720: measured on the SAME rect as the pin distance, in the same rAF. Two reads would be
@@ -564,7 +583,7 @@ function useStickyFitProbe(
         return;
       }
       const viewport = window.innerHeight;
-      const stickyTop = stickyTopOffset(window.getComputedStyle(bar).top);
+      const stickyTop = measuredStickyTop(bar);
       /* ==================================================================
          DESIGN NOTE 828a: THE PROBE HAD TO STOP ADDING WHAT IT NOW CONTAINS
          ==================================================================
@@ -1243,7 +1262,11 @@ export default function ContextualActionBar({
       const node = target instanceof HTMLElement ? target : (target?.current ?? null);
       if (!node) return undefined;
       // Design note #810/#831: the destination carries the bar's height, whoever owns the element.
-      node.style.scrollMarginTop = `${clearance}px`;
+      /* Design note #1144: `clearance` is a VISUAL measurement (see `measuredStickyTop`) and this is a
+         LAYOUT length, written on a node inside the shell's `zoom: 0.7`. Passed through unconverted it would
+         reserve seven-tenths of the bar's height, and #810's whole point -- "the Action Bar covers the actual
+         Buy Trains subpanel" -- would come back as a thinner version of itself. */
+      node.style.scrollMarginTop = `${clearance / UI_SCALE}px`;
       if (typeof IntersectionObserver === "undefined") return undefined;
       const observer = new IntersectionObserver(
         ([entry]) => {
@@ -1257,6 +1280,16 @@ export default function ContextualActionBar({
            for a target taller than the viewport, which is precisely when scrolling to the TOP of it is still
            useful.
            Design note #810: and the strip behind the bar does not count as seen. */
+        /* ==================================================================
+            DESIGN NOTE 1144: THIS ONE IS NOT DIVIDED, AND THAT IS NOT AN OVERSIGHT
+           ==================================================================
+           Two lines above, the same `clearance` IS divided by `UI_SCALE` -- so this reads as an inconsistency
+           and would invite a tidying edit that breaks it. The difference is whose space each number lands in.
+           `scrollMarginTop` is a CSS length on a node INSIDE the zoom, and is scaled on the way to the screen.
+           An IntersectionObserver's `rootMargin` is an adjustment to the ROOT's bounds -- the viewport -- and
+           the viewport is not inside anything. It is already in the visual pixels `clearance` was measured in.
+           DIVIDING IT WOULD WIDEN THE OBSERVED REGION BY 43% and the jump button would go quiet while the bar
+           still covered the panel, which is the exact condition it exists to announce. */
         { threshold: 0.25, rootMargin: `-${clearance}px 0px 0px 0px` },
       );
       observer.observe(node);

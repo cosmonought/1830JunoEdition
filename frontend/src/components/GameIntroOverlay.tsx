@@ -31,6 +31,8 @@ import React from "react";
 
 import { FONT_SIZE } from "../styles/typography";
 import { duckRadio, DUCK_FOR_VIDEO } from "../utils/audio";
+// Design note #1144: the chrome's scale, so this layer can divide back out of it.
+import { UI_SCALE } from "../styles/appStyles";
 
 /** Served from `public/`, like the haunting clips. `video/` rather than `audio/`: those three live beside
  *  the variant SFX they belong to, and this is not a sound effect. */
@@ -124,6 +126,25 @@ const styles: Record<string, React.CSSProperties> = {
   /* Above everything. The shell's own layers top out in the low thousands (`ActionToast` sits at 4000), so
      this clears them by an order of magnitude rather than by one. */
   backdrop: {
+    /* ==================================================================
+        DESIGN NOTE 1144: ART AT VIEWPORT SIZE OPTS OUT OF THE CHROME'S ZOOM
+       ==================================================================
+       The shell's root carries `zoom: UI_SCALE` so the game room's CHROME draws at the size the player was
+       reaching for the browser's zoom control to get.
+       AN EARLIER DRAFT OF THIS NOTE SAID `inset: 0` WOULD STOP MEANING "THE VIEWPORT". IT WAS WRONG, and it
+       was wrong in the confident direction: measured in Chrome 148, a fixed layer inside `zoom: 0.7` still
+       comes back the full width and height of the window, because the containing block a fixed element gets
+       is itself zoom-adjusted. The clip would have played full-bleed with or without this line.
+       WHAT ACTUALLY SHRINKS IS EVERYTHING AUTHORED IN PIXELS INSIDE THE LAYER -- here, "Skip intro". The
+       video is a raster stretched to a box that covers the window either way, so it is unaffected; the button
+       is a control sized to a cinematic, and at 70% it becomes a small grey word on a full-screen picture.
+       COUNTER-ZOOMED RATHER THAN MOVED OUT OF THE TREE, which was the alternative: a portal would work and
+       would put this layer somewhere a reader does not expect to find it. `1 / UI_SCALE` is the same idiom
+       `boardPane` uses, and for the same reason -- this is ART sized to the window, not chrome sized to the
+       reader.
+       THE MODALS ARE DELIBERATELY NOT DOING THIS. A confirm dialog is chrome and should shrink with the rest
+       of it; only the surfaces that are pictures at viewport size are exempt. */
+    zoom: 1 / UI_SCALE,
     position: "fixed",
     inset: 0,
     zIndex: 40000,

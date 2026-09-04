@@ -31,6 +31,7 @@ import { type AudioControlsProps } from "./AudioControls";
    anteroom and the table. */
 import TopBar from "./TopBar";
 import AppFooter from "./AppFooter";
+import { CHROME_ZOOM } from "../styles/appStyles";
 /* Design note #1122: the sandbox signal ladder. */
 import {
   SANDBOX_TITLE,
@@ -139,8 +140,12 @@ export function SandboxWaitingRoom({
   const cash = startingCashForPlayers(players.length);
   const certs = certLimitForPlayers(players.length);
 
+  /* Design note #1144: the same 70% the shell and the lobby draw at. This screen is the one the report named
+     first -- "did the Waiting Room panel become huge at some point?" -- and #1137 answered the half of that
+     question that was about the ROOT. This is the other half: the panel really is drawn larger than the
+     player has been reading it at, because they have been reading everything at 70%. */
   return (
-    <div style={styles.root}>
+    <div style={{ ...styles.root, ...CHROME_ZOOM }}>
       {/* ==================================================================
            DESIGN NOTE 1138: THE ANTEROOM GETS THE SHELL'S OWN TITLE BAR
           ==================================================================

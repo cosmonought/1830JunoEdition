@@ -528,7 +528,7 @@ import MainTabBar, {
   surfaceTabFor,
   type MainTab,
 } from "./components/MainTabBar";
-import { styles } from "./styles/appStyles";
+import { UI_SCALE, styles } from "./styles/appStyles";
 import { PHASE_SHIFT_PULSE_CSS, TURN_PULSE_KEYFRAMES_CSS } from "./styles/animations";
 import {
   BO_PRIVATE_ID,
@@ -2013,12 +2013,21 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      not an edge. */
   const previousRoomStatus = useRef<SandboxRoomDoc["status"] | null>(null);
   const [introPlaying, setIntroPlaying] = useState(false);
+  /* Design note #1143: the same fact as `introPlaying`, in the one form that is true early enough. The
+     status effect below and the whistle's effect run in the SAME commit, and state queued by the first is
+     not visible to the second -- a ref written there is. Kept beside the state rather than replacing it,
+     because the RENDER still needs a boolean: the overlay is mounted from `introPlaying`. */
+  const introPlayingRef = useRef(false);
   useEffect(() => {
     const status = sandboxRoom?.status ?? null;
     if (status === null) return;
     const previous = previousRoomStatus.current;
     previousRoomStatus.current = status;
-    if (previous === "waiting" && status === "playing") setIntroPlaying(true);
+    if (previous === "waiting" && status === "playing") {
+      // Design note #1143: the ref FIRST, so the whistle's effect later in this same commit can see it.
+      introPlayingRef.current = true;
+      setIntroPlaying(true);
+    }
   }, [sandboxRoom?.status]);
 
   /* ==================================================================
@@ -2034,7 +2043,21 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      hook's own `wasMyTurn` ref has already advanced past it. That is the correct outcome and worth stating,
      because the tempting alternative is to hold the edge and fire it on dismissal, which would whistle at a
      player who has been looking at their own turn for ten seconds and does not need telling. */
-  useTurnWhistle(isMyTurn, sfxEnabled && sfxTurnEnabled && !introPlaying);
+  /* ==================================================================
+      DESIGN NOTE 1143: #1116's GATE WAS RIGHT AND ONE RENDER LATE
+     ==================================================================
+     THE `!introPlaying` TERM STAYS -- it is what silences the whistle on every render after the first, and
+     removing it would leave the suppressor doing two jobs. What is added is the third argument, which is the
+     same question asked at a moment when the answer is already known: the deal, the room going `playing` and
+     the acting player all arrive in ONE commit, and the state this expression reads does not update until
+     the next one.
+     SO THE TWO TOGETHER ARE THE GATE: the ref catches the opening frame, the boolean holds it shut for the
+     rest of the clip. Neither alone is sufficient, which is why both are here. */
+  useTurnWhistle(
+    isMyTurn,
+    sfxEnabled && sfxTurnEnabled && !introPlaying,
+    () => introPlayingRef.current,
+  );
 
 
 
@@ -10371,7 +10394,27 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     ) : null;
 
   return (
-    <div style={{ ...styles.appRoot, paddingBottom: `${statusDockHeight + 12}px` }}>
+    /* Design note #1144: the chrome's zoom sits on the shell's own root, so everything the game room draws
+       is inside it -- the tab strip, the panels, the action bar and the status dock alike. The two canvas
+       panes opt back out; see `boardPane`. */
+    <div
+      style={{
+        ...styles.appRoot,
+        ...styles.appChromeZoom,
+        /* ==================================================================
+            DESIGN NOTE 1144: A MEASURED PIXEL AND A WRITTEN PIXEL ARE NOT THE SAME PIXEL
+           ==================================================================
+           `statusDockHeight` comes from `getBoundingClientRect().height`, which on a zoomed subtree reports
+           VISUAL pixels -- what the reader sees. This padding is written INSIDE that subtree, where a length
+           is a layout pixel and gets multiplied by `UI_SCALE` on its way to the screen. Passing the measured
+           number straight through would reserve 70% of the room the dock actually occupies, and the dock
+           would sit over the last of the content.
+           DIVIDED BACK INTO LAYOUT SPACE at the point of USE, deliberately, rather than at the measurement:
+           the observer's `pendingDockScrollRef` compares its delta against scroll offsets, which are visual
+           too, and converting at the source would silently put that arithmetic in the wrong space instead. */
+        paddingBottom: `${statusDockHeight / UI_SCALE + 12}px`,
+      }}
+    >
       {/* Design note #18/item 4, made MANDATORY by #21: keyframes injected unconditionally (Chatbox.tsx
          #2's convention for this codebase's inline-style escape hatch) and the pulsing overlay mounts off bare
          `isMyTurn` -- no gating value. The document-title flash is the other half and has no DOM footprint. */}
@@ -12030,7 +12073,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       {/* Design note #1111: LAST, and over everything. The shell above has already dealt and rendered behind
           it, so dismissing the titles lands on a live game rather than on a loading state. */}
       {introPlaying && (
-        <GameIntroOverlay onDone={() => setIntroPlaying(false)} sfxEnabled={sfxEnabled} />
+        <GameIntroOverlay
+          onDone={() => {
+            // Design note #1143: both, together -- the ref is what the next turn's edge will consult.
+            introPlayingRef.current = false;
+            setIntroPlaying(false);
+          }}
+          sfxEnabled={sfxEnabled}
+        />
       )}
     </div>
   );

@@ -95,6 +95,15 @@ export interface StockRoundPanelProps {
   /** Design note #713: where the token lands after selling this many certificates, or `null` when the
    *  chart cannot say. The WALK lives in `projectShareSaleMove`, which owns the direction. */
   salePriceAfter?: (companyId: number, certificates: number) => number | null;
+  /** ==================================================================
+   *   DESIGN NOTE 1141: THE PANEL ASKS FOR THE CHART, IT DOES NOT DRAW IT
+   *  ==================================================================
+   *
+   * The same split the action bar takes: this panel is given PRICES (`salePriceAfter` returns a number) and
+   * has no cell coordinates and no other corporation's position. `App` owns the modal because `App` owns the
+   * board -- see the note on `onPeekMarket` there. The certificate count travels with the call because the
+   * size the player has selected is what decides how far the token falls. */
+  onPeekSaleMarket?: (companyId: number, certificates: number) => void;
   purchaseBlockFor?: (
     companyId: number,
     source: "Ipo" | "Bank",
@@ -213,6 +222,7 @@ function CorporationRoster({
   purchaseBlockFor,
   saleBlockFor,
   salePriceAfter,
+  onPeekSaleMarket,
   onSellShares,
   controlsDisabled,
   controlsBlockedReason,
@@ -227,6 +237,7 @@ function CorporationRoster({
   /** Design note #713: where the token lands after selling this many certificates, or `null` when the
    *  chart cannot say. The WALK lives in `projectShareSaleMove`, which owns the direction. */
   salePriceAfter?: (companyId: number, certificates: number) => number | null;
+  onPeekSaleMarket?: (companyId: number, certificates: number) => void;
   /** Design note #712: the zone rules, resolved by `App` against the whole board. */
   purchaseBlockFor?: (
     companyId: number,
@@ -870,6 +881,7 @@ function CorporationRoster({
               purchaseBlockFor={purchaseBlockFor}
               saleBlockFor={saleBlockFor}
               salePriceAfter={salePriceAfter}
+              onPeekSaleMarket={onPeekSaleMarket}
               connectedAddress={connectedAddress}
               macroRoundNumber={macroRoundNumber}
               playerCash={playerCash}
@@ -963,6 +975,7 @@ function CompanyActions({
   purchaseBlockFor,
   saleBlockFor,
   salePriceAfter,
+  onPeekSaleMarket,
   onSellShares,
   controlsDisabled,
   controlsBlockedReason,
@@ -987,6 +1000,7 @@ function CompanyActions({
   /** Design note #713: where the token lands after selling this many certificates, or `null` when the
    *  chart cannot say. The WALK lives in `projectShareSaleMove`, which owns the direction. */
   salePriceAfter?: (companyId: number, certificates: number) => number | null;
+  onPeekSaleMarket?: (companyId: number, certificates: number) => void;
   /** Design note #712: why this purchase is illegal, or `null`. Resolved by `App` against the whole board. */
   purchaseBlockFor?: (
     companyId: number,
@@ -1506,6 +1520,11 @@ function CompanyActions({
             /* Design note #951: the price move joins the cash move rather than sitting under it. `after`
                equal to the current price IS the floor case -- `projectShareSaleMove` returns today's price
                when the token cannot drop -- so it is normalised to `null` here and the row says so. */
+            onPeekMarket={
+              onPeekSaleMarket
+                ? () => onPeekSaleMarket(company.company_id, certificatesIn(sellPercentage))
+                : undefined
+            }
             marketMove={(() => {
               if (!salePriceAfter || marketPrice === null) return null;
               const after = salePriceAfter(
@@ -1643,6 +1662,7 @@ function TreasuryProjectionBlock({
   seatColor,
   action,
   marketMove = null,
+  onPeekMarket,
 }: {
   projection: TreasuryProjection;
   /** The acting seat's colour, or `null` when it is not known -- the block then
@@ -1666,6 +1686,8 @@ function TreasuryProjectionBlock({
      PASSED AS DATA, NOT AS A NODE. The block renders `ZonedPrice` itself so the zone tooltip #713 argued for
      survives the move -- handing in a ready-made element would have put the formatting back at the call site,
      which is the thing being fixed. */
+  /** Design note #1141: opens the mini-camera for this sale, or absent where there is no chart to show. */
+  onPeekMarket?: () => void;
   marketMove?: {
     /** The corporation, so the row can say WHOSE share value moved -- the cash row above it is the player's,
      *  and two unlabelled rows in one block would be ambiguous about that. */
@@ -1760,6 +1782,34 @@ function TreasuryProjectionBlock({
                 </span>
               </>
             )}
+            {/* ==================================================================
+                 DESIGN NOTE 1141: THE SAME DOOR, ON THE SALE'S OWN READOUT
+                ==================================================================
+                RULED alongside the dividend columns: the inline figures stay exactly as they are and gain a
+                trigger. It sits INSIDE `projectionFigures` rather than after the row, so it reads as part of
+                the price statement rather than as a control the row acquired.
+                OFFERED EVEN AT THE FLOOR, unlike the dividend line's -- and deliberately. #743a's note above
+                is about a sale that cannot lower the price, which is precisely the moment a player might want
+                to SEE why: the chart shows the token sitting on the bottom row with nothing beneath it. */}
+            {onPeekMarket && (
+              <button
+                type="button"
+                style={styles.marketPeekButton}
+                onClick={onPeekMarket}
+                aria-label="See this sale on the market chart"
+                title="See this sale on the market chart"
+              >
+                <svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true" focusable="false">
+                  <circle cx="5" cy="5" r="3.4" fill="none" stroke="currentColor" strokeWidth="1.5" />
+                  <path
+                    d="M7.6 7.6L10.5 10.5"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                  />
+                </svg>
+              </button>
+            )}
           </span>
         </span>
       )}
@@ -1783,6 +1833,7 @@ export function StockRoundPanel({
   purchaseBlockFor,
   saleBlockFor,
   salePriceAfter,
+  onPeekSaleMarket,
   sessionReady,
   isMyTurn,
   hotseat = false,

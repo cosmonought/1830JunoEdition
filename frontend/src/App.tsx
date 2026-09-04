@@ -99,6 +99,8 @@ import {
 } from "./utils/gameSetup";
 // Design note #522: the Sandbox multiplayer bridge.
 import SandboxRoomBar from "./components/SandboxRoomBar";
+/* Design note #1141: the mini-camera and the dialog that frames it. */
+import MarketPeekModal from "./components/MarketPeekModal";
 import SandboxWaitingRoom from "./components/SandboxWaitingRoom";
 import {
   appendSandboxAction,
@@ -7376,6 +7378,28 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     [gameState, viewerAddress],
   );
 
+  /* ==================================================================
+      DESIGN NOTE 1141: THE SHELL OWNS THE MINI-CAMERA
+     ==================================================================
+     RULED: the inline readouts stay and become clickable; the click opens "a centered modal containing a 5x5
+     localized view of the stock market ... the true board state: color zones, physical ledges/cliffs, and all
+     other corporation tokens."
+     HELD HERE FOR THE REASON THE TUTORIAL LIBRARY AND THE INTRO OVERLAY ARE: a centred modal has to escape
+     the panel that summoned it, and the market data it needs -- `marketGrid`, the acting cell, the roster --
+     already lives at this level. The action bar and the Stock Round panel each say only WHICH move the player
+     asked about; neither is handed a board to draw.
+     ONE PIECE OF STATE FOR THREE TRIGGERS. Pay, withhold and a share sale differ in exactly two facts -- the
+     cell the token lands on, and the sentence under the chart -- so they resolve to the same shape rather
+     than to three overlays that would drift apart the way the three footers did (#1137).
+     DECLARED ABOVE BOTH OPENERS rather than beside either: `openSalePeek` sits several thousand lines
+     earlier, and a `useState` a closure reaches backwards for is legal, fragile, and reads as a bug. */
+  const [marketPeek, setMarketPeek] = useState<{
+    company: { company_id: number; ticker: string };
+    startNode: { x: number; y: number };
+    projectedNode: { x: number; y: number } | null;
+    action: "pay" | "withhold" | "sell";
+  } | null>(null);
+
   const salePriceAfter = useCallback(
     (companyId: number, certificates: number): number | null => {
       /* THE CELL, NOT THE PRICE. #434: "the chart repeats prices across rows, so a first-match search
@@ -7387,6 +7411,36 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       return landed ? landed.price : null;
     },
     [marketGrid],
+  );
+
+  /* Design note #1141: the sale's mini-camera, reading the SAME cell and the SAME walk `salePriceAfter`
+     above does -- two functions over one `projectShareSaleMove`, rather than a second opinion about how far
+     a sale drops a token. #434's warning applies to both identically: the CELL is the starting point,
+     because the chart repeats prices across rows. */
+  const openSalePeek = useCallback(
+    (companyId: number, certificates: number) => {
+      const cell = marketGrid?.positions.find((entry) => entry.company_id === companyId);
+      if (!cell) return;
+      const company = gameState?.public_companies.find(
+        (entry) => entry.company_id === companyId,
+      );
+      if (!company) return;
+      const from = { x: cell.x, y: cell.y };
+      const landed = projectShareSaleMove(from, certificates);
+      setMarketPeek({
+        company: { company_id: company.company_id, ticker: company.ticker },
+        startNode: from,
+        /* #743a's FLOOR, normalised the same way the dividend opener normalises a corner: the projection
+           returns today's cell when the token cannot fall, and the chart says so in words rather than
+           animating nothing. */
+        projectedNode:
+          landed && (landed.x !== from.x || landed.y !== from.y)
+            ? { x: landed.x, y: landed.y }
+            : null,
+        action: "sell",
+      });
+    },
+    [marketGrid, gameState],
   );
 
   /* ==================================================================
@@ -10126,6 +10180,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     () => projectDividendFrom(dividendCell, "pay", dividendSteps),
     [dividendCell, dividendSteps],
   );
+
+
   /* ==================================================================
       DESIGN NOTE 994: THE WITHHOLD READOUT NEEDED THE FIGURE IT HAD BEEN DENIED
      ==================================================================
@@ -10149,6 +10205,38 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   const withholdProjection = useMemo(
     () => projectDividendFrom(dividendCell, "withhold", withholdSteps),
     [dividendCell, withholdSteps],
+  );
+
+  /* Design note #1141: the mini-camera's state is declared above `salePriceAfter`, with the note that
+     explains it. This is the dividend half of the pair that fills it. */
+
+
+  /* Design note #1141: the projections the PREVIEW walks are the ones the BOARD walks -- `projectDividendCellMove`
+     is the arm the sandbox reducer itself calls (#891, stated in `dividendStepFrom`). A preview that took its
+     own step would be #891 with a magnifying glass on it. */
+  const openDividendPeek = useCallback(
+    (which: "pay" | "withhold") => {
+      if (!dividendCell || !activeCorporationContext) return;
+      const from = { x: dividendCell.x, y: dividendCell.y };
+      const steps = which === "pay" ? dividendSteps : withholdSteps;
+      const landed = projectDividendCellMove(from, which, steps);
+      setMarketPeek({
+        company: {
+          company_id: activeCorporationContext.companyId,
+          ticker: activeCorporationContext.ticker,
+        },
+        startNode: from,
+        /* `null` where the board cannot move it. `projectDividendCellMove` returns the START cell at a true
+           corner, so an unmoved token is normalised here rather than animating zero pixels and reading as a
+           bug. The chart's own caption says so in words. */
+        projectedNode:
+          landed && (landed.x !== from.x || landed.y !== from.y)
+            ? { x: landed.x, y: landed.y }
+            : null,
+        action: which,
+      });
+    },
+    [dividendCell, activeCorporationContext, dividendSteps, withholdSteps],
   );
 
   /* ==================================================================
@@ -10778,6 +10866,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
            the search cannot disagree about whether a run exists. */
         maxRouteRevenue={maxRouteRevenue}
         activeCorporation={activeCorporationContext}
+        onPeekMarket={openDividendPeek}
         /* Design note #673: the previewed lay, as the card's provisional
            treasury. `after` is non-null here because `pendingLayCost` only
            survives with a positive fee, which needs a known balance. */
@@ -11021,6 +11110,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         onClose={() => setTutorialLibraryOpen(false)}
       />
 
+      {/* Design note #1141: the mini-camera. Rendered beside `TutorialLibrary` for the same reason it is --
+          a modal over the whole shell rather than a part of the panel that summoned it. */}
+      {marketPeek && (
+        <MarketPeekModal
+          peek={marketPeek}
+          positions={marketGrid?.positions ?? []}
+          onClose={() => setMarketPeek(null)}
+        />
+      )}
+
       {/* In-place accordion ticker + inline control strip -- design notes #18-#20. Docked below the nav tabs
          (#20/item 3), full-width, visible on every tab. No modal: the old Feed Overlay is gone, replaced by
          `TopTicker`'s own in-place accordion body. `InlineQuickChat` sits below it, always mounted regardless of
@@ -11207,6 +11306,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                     purchaseBlockFor={purchaseBlockFor}
                     saleBlockFor={saleBlockFor}
                     salePriceAfter={salePriceAfter}
+                  onPeekSaleMarket={openSalePeek}
                     onSellShares={handleSellShares}
                     sessionReady={controlsEnabled}
                     isMyTurn={isMyTurn}

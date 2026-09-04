@@ -180,6 +180,7 @@ function MarketMoveLine({
   projection,
   direction,
   steps = 1,
+  onOpenChart,
 }: {
   currentPrice: number | null;
   projection: MarketProjection | null;
@@ -197,6 +198,17 @@ function MarketMoveLine({
    * DEFAULTED TO ONE so the two call sites that do not care read as before -- there is only one variant
    * that can produce a two, and every other caller is describing a single step by definition. */
   steps?: number;
+  /** ==================================================================
+   *   DESIGN NOTE 1141: THE LINE BECOMES THE DOOR TO THE CHART
+   *  ==================================================================
+   *
+   * RULED: "keep the permanent, inline text readouts exactly as they are now ... make these readouts
+   * clickable buttons." So the line is UNCHANGED as a readout -- every figure, arrow, colour and
+   * parenthetical above stays where #489, #891 and #998 put it -- and gains a trigger appended AFTER it.
+   * OPTIONAL, so a caller with no chart to show renders precisely what it rendered before. That is what
+   * keeps the "not on the market chart" branch below honest: a corporation with no cell has nothing to
+   * open, and the button must not appear promising otherwise. */
+  onOpenChart?: () => void;
 }) {
   /* Design note #214: THE ARROW CARRIES THE MEANING (glyph superseded by #489; the colour argument
      stands). Grey arrows made the two columns look identical at a glance, so green for the rise and red
@@ -279,6 +291,22 @@ function MarketMoveLine({
             ? " (already at the ceiling of the chart)"
             : " (already at the floor of the chart)"}
         </span>
+      )}
+      {/* Design note #1141: the door. A glyph rather than a word, because the line it joins is already a
+          sentence and this is the third thing on it; the accessible name carries what the glyph cannot. */}
+      {onOpenChart && (
+        <button
+          type="button"
+          style={styles.marketPeekButton}
+          onClick={onOpenChart}
+          aria-label={`See this move on the market chart`}
+          title="See this move on the market chart"
+        >
+          <svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true" focusable="false">
+            <circle cx="5" cy="5" r="3.4" fill="none" stroke="currentColor" strokeWidth="1.5" />
+            <path d="M7.6 7.6L10.5 10.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+          </svg>
+        </button>
       )}
     </span>
   );
@@ -655,6 +683,7 @@ export default function ContextualActionBar({
   dividendPrice,
   payProjection,
   withholdProjection,
+  onPeekMarket,
   dividendMoveSteps = null,
   selectedHardwareModel,
   onEndOperatingTurn,
@@ -980,6 +1009,18 @@ export default function ContextualActionBar({
    *  current price is not on the chart. */
   payProjection: MarketProjection | null;
   withholdProjection: MarketProjection | null;
+  /** ==================================================================
+   *   DESIGN NOTE 1141: THE BAR ASKS FOR THE CHART, IT DOES NOT DRAW IT
+   *  ==================================================================
+   *
+   * A CALLBACK RATHER THAN THE DATA, and the reason is what this panel is given: it holds PRICES -- a
+   * `dividendPrice` number and two `MarketProjection`s -- and has never held a cell coordinate or the other
+   * corporations' positions. Handing it `marketGrid` so it could render a preview would widen a panel that
+   * already takes ninety props, to carry a board it does not otherwise reason about.
+   * THE SHELL OWNS THE MODAL for the same reason it owns the tutorial library and the intro overlay: a
+   * centred modal has to escape this panel's stacking context, and `App` is where the market data already
+   * lives. This says "the player pressed the magnifier on the pay column"; everything else is up there. */
+  onPeekMarket?: (which: "pay" | "withhold") => void;
   /* ==================================================================
    *  DESIGN NOTE 998: HOW MANY CELLS EACH DECISION MOVES
    * ==================================================================
@@ -3469,6 +3510,7 @@ export default function ContextualActionBar({
                   projection={payProjection}
                   direction="pay"
                   steps={dividendMoveSteps?.pay ?? 1}
+                  onOpenChart={onPeekMarket ? () => onPeekMarket("pay") : undefined}
                 />
               </div>
 
@@ -3505,6 +3547,7 @@ export default function ContextualActionBar({
                   projection={withholdProjection}
                   direction="withhold"
                   steps={dividendMoveSteps?.withhold ?? 1}
+                  onOpenChart={onPeekMarket ? () => onPeekMarket("withhold") : undefined}
                 />
               </div>
               {/* Design note #998: #997's EXPLANATION FOOTER WAS HERE and is gone. It rendered the two

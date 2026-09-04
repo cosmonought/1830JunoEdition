@@ -1963,6 +1963,31 @@ export const styles: Record<string, React.CSSProperties> = {
      token pinned at the end of its row has not changed any. */
   dividendMoveArrowFlat: { color: "#8a8a86" },
   dividendMoveNote: { color: "#8a8a86", fontWeight: 400 },
+  /* ==================================================================
+      DESIGN NOTE 1141: THE DOOR ON THE MOVE LINE
+     ==================================================================
+     A quiet glyph rather than a button-shaped button: this line is a READOUT that has gained an affordance,
+     not a control that has gained a label, and giving it a fill would make it compete with the actual
+     decision buttons a few pixels away. The hairline and the hover lift are enough to say "pressable" in a
+     panel where every real control has a fill -- the same vocabulary the station steppers use (#1134), read
+     from the other end.
+     BASELINE-ALIGNED, so it sits ON the sentence rather than beside it. */
+  marketPeekButton: {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: "17px",
+    height: "17px",
+    marginLeft: "6px",
+    verticalAlign: "-3px",
+    padding: 0,
+    borderRadius: "4px",
+    border: "1px solid #3a3a3a",
+    backgroundColor: "transparent",
+    color: "#a8a6a0",
+    cursor: "pointer",
+    flexShrink: 0,
+  },
   depotSupply: { fontSize: FONT_SIZE.small, color: "#a8a6a0" },
   /* Design note #279: the Track step's "the action is on the map" hint, and
      nothing else. This used to carry a second string saying the step had no

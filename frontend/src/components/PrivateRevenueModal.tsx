@@ -83,7 +83,7 @@
 // Design note #1052: `useEffect` left with the Escape listener -- one exit, and no hook to hold it open.
 import React from "react";
 
-import { FONT_SIZE } from "../styles/typography";
+import { FONT_SIZE, RADIUS } from "../styles/typography";
 import {
   CARD_BORDER,
   CARD_DIVIDER,
@@ -92,6 +92,7 @@ import {
   CARD_INK_MUTED,
   CARD_INK_POSITIVE,
   CARD_SURFACE,
+  CARD_SURFACE_MUTED,
 } from "../styles/palette";
 // Design note #1050: the same per-seat ink choice the player card's own stripe makes.
 import { bestContrastTextColor } from "../styles/corporationLivery";
@@ -351,9 +352,27 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     gap: "10px",
     padding: "16px 18px",
-    borderRadius: "12px",
+    borderRadius: RADIUS.layer,
     border: `1px solid ${CARD_BORDER}`,
-    backgroundColor: CARD_SURFACE,
+    /* ==================================================================
+        DESIGN NOTE 1162: THE GROUND RECEDES; THE CARDS DO NOT RISE
+       ==================================================================
+       REPORTED: "the modal background uses the exact same color as the player cards inside it, creating a
+       flat, unreadable hierarchy."
+       LITERALLY THE SAME COLOUR, and not by resemblance: this panel was `CARD_SURFACE` and the player card
+       inside it declared no background at all, so it INHERITED the identical `#f2f0eb`. The only thing
+       between them was a `CARD_DIVIDER` hairline at 1.13:1 -- a line you can find if you already know it is
+       there.
+       THE SUGGESTED FIX ASSUMED THE INK LADDER -- "map the cards to a slightly lighter rung on the ink/purple
+       ladder" -- and this is a PAPER surface. There is no lighter rung: `CARD_SURFACE` is the top of it, and
+       lightening the cards would mean inventing a colour above the lightest one the system has.
+       SO THE CONTAINER STEPS DOWN INSTEAD, which is the same relationship reached from the other end and the
+       conventional direction for paper: the desk is darker than what lies on it. `CARD_SURFACE_MUTED` is
+       already in the ladder for exactly this, so nothing new is introduced.
+       MEASURED: the two surfaces separate at 1.20:1, which is a visible step for adjacent large areas without
+       becoming two competing brightnesses; `CARD_INK` reads 12.69:1 on the new ground, so the panel's own
+       captions and headings keep AA with room to spare (they were 15.28:1). */
+    backgroundColor: CARD_SURFACE_MUTED,
     boxShadow: "0 12px 40px rgba(0,0,0,0.6)",
     color: CARD_INK,
     fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif",
@@ -368,11 +387,17 @@ const styles: Record<string, React.CSSProperties> = {
     flex: "none",
   },
   phaseCaption: { margin: 0, fontSize: FONT_SIZE.micro, color: CARD_INK_MUTED, lineHeight: 1.45 },
+  /* Design note #1162: the card names its own surface now. Inheriting was the whole fault -- an object that
+     does not declare a ground cannot be distinguished from the one it sits on, and it silently followed the
+     panel every time that changed. The border steps up from `CARD_DIVIDER` to `CARD_BORDER` to match the
+     panel's own edge, and a short shadow does the lifting the colour step starts. */
   mine: {
     display: "flex",
     flexDirection: "column",
-    borderRadius: "9px",
-    border: `1px solid ${CARD_DIVIDER}`,
+    borderRadius: RADIUS.card,
+    border: `1px solid ${CARD_BORDER}`,
+    backgroundColor: CARD_SURFACE,
+    boxShadow: "0 1px 3px rgba(8, 8, 8, 0.18)",
     overflow: "hidden",
     marginTop: "2px",
   },
@@ -465,7 +490,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   othersRows: { display: "flex", flexDirection: "column", gap: "3px" },
   otherRow: { display: "flex", alignItems: "center", gap: "8px", fontSize: FONT_SIZE.small },
-  swatch: { width: "10px", height: "10px", borderRadius: "3px", flex: "none" },
+  swatch: { width: "10px", height: "10px", borderRadius: RADIUS.control, flex: "none" },
   swatchUnknown: { backgroundColor: CARD_DIVIDER },
   otherName: {
     color: CARD_INK_MUTED,
@@ -494,7 +519,7 @@ const styles: Record<string, React.CSSProperties> = {
   footer: { display: "flex", justifyContent: "flex-end", marginTop: "4px" },
   primaryButton: {
     padding: "7px 14px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     border: "1px solid #3f7a55",
     backgroundColor: "#1d4030",
     color: "#e6f5ec",

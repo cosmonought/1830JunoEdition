@@ -47,7 +47,7 @@
 
 import React, { useEffect } from "react";
 
-import { FONT_SIZE } from "../styles/typography";
+import { FONT_SIZE, RADIUS } from "../styles/typography";
 /* Design note #1048: the auction private cards' own surface, shared rather than matched by eye.
    `CARD_ACCENT` WAS IMPORTED HERE AND NEVER USED -- #1048 left it behind when the accent turned out to belong
    at the CALL SITE (the caller decides whose toast it is; this file only paints what it is handed). Removed
@@ -158,7 +158,17 @@ export const PRIVATE_REVENUE_TOAST_MS = 3200;
  *  it. "2-train bought. Depot: 5 remaining." is about a 900ms read; 1.5x of that plus the 180ms entrance is
  *  comfortably under three, so the figure is generous rather than tight -- which is the direction this
  *  project's toast constants have had to be corrected in three times (#983, #1000, #1016). */
-export const DEPOT_TOAST_MS = 3000;
+/* ==================================================================
+    DESIGN NOTE 1147: TWO SECONDS, AS A CAP RATHER THAN AS A RATIO
+   ==================================================================
+   REPORTED: "hard cap their duration at exactly 2 seconds."
+   #1072 DERIVED 3,000ms FROM THE STANDARD WINDOW using this project's rule of thumb -- readable ~1.5x before
+   it goes away -- and the derivation is sound; it simply produces a longer window than the player wants for a
+   sentence they now see two or three times a game rather than a dozen. A figure that was ASKED FOR is better
+   evidence than a figure that was calculated, so this is a stated constant and not `STANDARD_TOAST_MS * n`:
+   tying it to the standard window would silently move it the next time that window is retuned, which is
+   exactly what a cap is supposed to prevent. */
+export const DEPOT_TOAST_MS = 2000;
 
 /** Where a toast sits. `"center"` is every toast in the app but one -- see design note #1016 on `toastCorner`
  *  for why the private payout is the exception. */
@@ -599,7 +609,11 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "9px",
     maxWidth: "min(560px, calc(100vw - 32px))",
     padding: "10px 16px",
-    borderRadius: "10px",
+    /* Design note #1151: PROMOTED BY HAND. The sweep mapped each site from the value it already had, which
+       preserves the original author's sense of scale -- but this surface was authored at the card step and is
+       a floating layer by the rule, so the old value and the role disagreed. The role wins; that disagreement
+       is exactly what the hand pass after the sweep is for. */
+    borderRadius: RADIUS.layer,
     /* ==================================================================
         DESIGN NOTE 1030: CREAM ON THE DARK BOARD, NOT DARK GREEN ON IT
        ==================================================================

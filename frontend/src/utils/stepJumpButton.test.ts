@@ -239,9 +239,12 @@ describe("a jump is not an action", () => {
        hint rendered first sat to the LEFT of the controls it describes -- which is where #279 left it.
        BOTH HALVES, because either alone passes while the other is wrong: the style key claims the full row,
        and the source order puts it after Skip. */
+    /* Design note #1164a: the sentence is a CONSTANT now -- #1164 typed it a second time for the toast and
+       #870 had already put it on screen, which is one instruction in two literals. Both assertions follow the
+       USE rather than the words, so a reworded hint moves in one place. */
     expect(CODE).toContain("styles.orPanelStepHint");
     expect(CODE.indexOf("Skip {OPERATING_SUB_PHASE_LABELS")).toBeLessThan(
-      CODE.indexOf("Click a hex on the Rail Map to lay track."),
+      CODE.indexOf("{LAY_TRACK_HINT}</span>"),
     );
   });
 
@@ -256,7 +259,7 @@ describe("a jump is not an action", () => {
        one that may not is `position: static` (#720), parked above the map, where an extra line is free.
        `condensed` would have worked and then flickered -- it means "has stuck and travelled", so the row
        would vanish mid-scroll rather than being a property of the bar's shape. */
-    const at = CODE.indexOf("Click a hex on the Rail Map to lay track.");
+    const at = CODE.indexOf("{LAY_TRACK_HINT}</span>");
     expect(at).toBeGreaterThan(-1);
     /* THE GUARD IS ON THE SAME CONDITION, read backwards from the sentence to the `{` that opens it -- an
        assertion that merely found `!mayPin` anywhere in the file would pass on the two style lines that

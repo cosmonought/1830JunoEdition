@@ -12,7 +12,7 @@
 // is cited. New notes go in docs/ai_architecture/, not back in this header.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FONT_SIZE } from "../styles/typography";
+import { FONT_SIZE, RADIUS } from "../styles/typography";
 import {
   STATION_RADIUS_RATIO,
   tileCityAnchors,
@@ -378,6 +378,18 @@ export interface HexGridRendererProps {
     /** Design note #886: `[company_id, city_index]` for every token standing on the hex, derived from
      *  connectivity at this facing (#878). */
     tokenCities?: ReadonlyArray<readonly [number, number]>;
+    /** ==================================================================
+     *   DESIGN NOTE 1145: THE GHOST STOPS BEING A GHOST ONCE IT HAS BEEN SENT
+     *  ==================================================================
+     *  A preview is a tile being CONSIDERED, and the dashes are what say so. Between the confirm and the
+     *  board coming back with the lay -- a full round trip in a room -- it is no longer being considered: it
+     *  is what the hex is about to hold, and it is the only picture of that the player has. Drawn solid, it
+     *  is indistinguishable from the laid tile that replaces it, so the replacement is invisible instead of
+     *  being a flash of empty hex.
+     *  DASHES ARE THE ONLY DIFFERENCE, deliberately. The fill and the track were already drawn exactly as a
+     *  laid tile draws them, which is why this is one branch rather than a second rendering path -- a second
+     *  path is how the ghost and the tile would come to disagree about what was laid. */
+    committed?: boolean;
   } | null;
   /** The live current_global_era, driving which off-board revenue tier renders. Defaults to Yellow so this still renders before a live query is wired.
    *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #15 */
@@ -420,7 +432,7 @@ const MAP_CONTROLS_PANEL_STYLE: React.CSSProperties = {
   alignItems: "stretch",
   gap: "6px",
   padding: "8px",
-  borderRadius: "10px",
+  borderRadius: RADIUS.card,
   border: "1.5px solid #5c6a52",
   backgroundColor: "rgba(20, 20, 20, 0.85)",
   boxShadow: "0 2px 8px rgba(0, 0, 0, 0.5)",
@@ -432,7 +444,7 @@ const MAP_CONTROLS_PANEL_STYLE: React.CSSProperties = {
  *  row. */
 const CAMERA_CONTROL_BUTTON_STYLE: React.CSSProperties = {
   padding: "10px 14px",
-  borderRadius: "6px",
+  borderRadius: RADIUS.control,
   border: "2px solid #5c6a52",
   backgroundColor: "rgba(255, 255, 255, 0.06)",
   color: "#f4ecd8",
@@ -452,7 +464,7 @@ const HOVER_TOOLTIP_STYLE: React.CSSProperties = {
   zIndex: 20,
   pointerEvents: "none",
   padding: "6px 8px",
-  borderRadius: "6px",
+  borderRadius: RADIUS.control,
   backgroundColor: "rgba(18, 20, 26, 0.94)",
   border: "1px solid #6e6c68",
   color: "#f4ecd8",
@@ -1891,7 +1903,8 @@ export function HexGridRenderer({
       drawHexPath(ctx, previewCenter, hexSize);
       ctx.fillStyle = previewCatalogEntry ? ERA_TILE_FILL[previewCatalogEntry.color] : "#dddddd";
       ctx.fill();
-      ctx.setLineDash([5, 4]);
+      // Design note #1145: dashed while it is a proposal, solid once it has been sent.
+      if (!previewTile.committed) ctx.setLineDash([5, 4]);
       ctx.strokeStyle = previewCatalogEntry
         ? COLOR_TIER_STROKE[previewCatalogEntry.color]
         : "#c0392b";

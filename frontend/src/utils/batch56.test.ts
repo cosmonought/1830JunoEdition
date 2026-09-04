@@ -324,8 +324,21 @@ describe("reduced motion keeps every figure and the whole lifetime", () => {
   });
 
   it("keeps the payout figure on screen with no merge to absorb it", () => {
+    /* ==================================================================
+        DESIGN NOTE 1163 EXTENDS THE DECLARATION THIS PINNED
+       ==================================================================
+       THE THIRD COPY OF THIS ASSERTION -- `batch52` and `batch63` hold the others, all three pinning the whole
+       of `.app-money-machine-landed { opacity: 1; }` as a string. #1163 added a second property to it: the
+       merged row now collapses its grid track as well as fading, so the panel stops leaving a payer-row-shaped
+       hole above the total.
+       WHICH MAKES THE CLAIM BIGGER RATHER THAN SMALLER, and all three copies say so now: a reduced-motion
+       reader keeps the payout on screen as a static statement, and a figure that kept its opacity while losing
+       its track would be visible with nowhere to be. Both properties are asserted.
+       THAT THIS LIVED IN THREE FILES IS ITS OWN FINDING. One rule, three harnesses, none of which knew about
+       the others -- so a change to it fails three times and has to be answered three times. */
     const reduced = sliceBetween(MACHINE, "@media (prefers-reduced-motion: reduce) {", "}\n`");
-    expect(reduced).toContain(".app-money-machine-landed { opacity: 1; }");
+    expect(reduced).toContain(".app-money-machine-landed { opacity: 1;");
+    expect(reduced).toContain("grid-template-rows: 1fr;");
     expect(reduced).toContain(".app-money-machine { animation: none; }");
   });
 });

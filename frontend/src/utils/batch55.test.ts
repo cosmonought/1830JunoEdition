@@ -41,6 +41,11 @@ const HEAD = "B&O ran for $210. It enjoyed a 20% bonus. ";
 const TAIL = "The mail arrived on time.";
 
 const item = (over: Partial<FeedItem> = {}): FeedItem => ({
+
+/* Design note #1151 superseded the SPELLING of the radius assertions in this file, not their claims. The app held twelve
+   near-identical radii doing the work of one; they are three named steps now, so a case that pinned a pixel value was
+   testing the literal rather than the property it stood for. Each reads the token it now is. */
+
   id: "1",
   kind: "log",
   seq: 1,
@@ -304,7 +309,7 @@ describe("green, red, and one alpha between them", () => {
     ]) {
       expect(style).toContain("backgroundColor");
       expect(style).toContain('padding: "1px 6px"');
-      expect(style).toContain('borderRadius: "4px"');
+      expect(style).toContain('borderRadius: RADIUS.control');
       expect(style).not.toContain("linear-gradient");
     }
     // And what makes it a full-width fill rather than a pill around the words.

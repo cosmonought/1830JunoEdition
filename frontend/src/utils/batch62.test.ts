@@ -54,6 +54,11 @@ const contrast = (a: readonly number[], b: readonly number[]) => {
 
 /** The alpha the file declares, read rather than restated. */
 const declaredAlpha = Number(
+
+/* Design note #1151 superseded the SPELLING of the radius assertions in this file, not their claims. The app held twelve
+   near-identical radii doing the work of one; they are three named steps now, so a case that pinned a pixel value was
+   testing the literal rather than the property it stood for. Each reads the token it now is. */
+
   /const TONE_TINT_ALPHA = ([0-9.]+);/.exec(TICKER)?.[1] ?? "NaN",
 );
 
@@ -148,7 +153,7 @@ describe("the revenue tint fills the whole row", () => {
     expect(bonus).not.toContain("borderRadius");
     const entry = sliceBetween(TICKER, "logEntry: {", "fontSize:");
     expect(entry).toContain('padding: "6px 12px"');
-    expect(entry).toContain('borderRadius: "8px"');
+    expect(entry).toContain('borderRadius: RADIUS.card');
   });
 
   it("keeps the collapsed ticker's wash, which was already right", () => {

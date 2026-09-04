@@ -22,7 +22,7 @@ import {
   type VariantCopyKey,
 } from "../utils/gameVariants";
 
-import { FONT_FAMILY, FONT_SIZE, LINE_HEIGHT } from "../styles/typography";
+import { FONT_FAMILY, FONT_SIZE, LINE_HEIGHT, RADIUS } from "../styles/typography";
 import { waitingRoomBlock, waitingRoomNotice, type SandboxRoomDoc } from "../utils/sandboxRoom";
 import { MAX_PLAYERS, MIN_PLAYERS, certLimitForPlayers, startingCashForPlayers } from "../utils/gameSetup";
 import { SEAT_COLORS, SEAT_COLOR_NAMES } from "../utils/playerLabels";
@@ -509,7 +509,7 @@ const styles: Record<string, React.CSSProperties> = {
     width: "100%",
     maxWidth: "520px",
     padding: "22px 24px",
-    borderRadius: "12px",
+    borderRadius: RADIUS.layer,
     border: "1px solid #2a2a2a",
     /* ==================================================================
         DESIGN NOTE 1112: NEARLY OPAQUE, AND NO BACKDROP BLUR
@@ -539,7 +539,7 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     gap: "4px",
     padding: "12px 14px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     backgroundColor: "#141414",
     border: "1px solid #2a2a2a",
   },
@@ -573,19 +573,19 @@ const styles: Record<string, React.CSSProperties> = {
   swatch: {
     width: "26px",
     height: "26px",
-    borderRadius: "50%",
+    borderRadius: RADIUS.circle,
     border: "2px solid transparent",
     cursor: "pointer",
     padding: 0,
   },
   swatchMine: { borderColor: "#f2f0eb", boxShadow: "0 0 0 2px rgba(226,230,238,0.25)" },
   swatchTaken: { opacity: 0.28, cursor: "not-allowed" },
-  rosterDot: { width: "10px", height: "10px", borderRadius: "50%", flex: "none" },
+  rosterDot: { width: "10px", height: "10px", borderRadius: RADIUS.circle, flex: "none" },
   input: {
     flex: 1,
     fontSize: FONT_SIZE.control,
     padding: "7px 10px",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     border: "1px solid #3a3a3a",
     backgroundColor: "#141414",
     color: "#f2f0eb",
@@ -597,7 +597,7 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     justifyContent: "space-between",
     padding: "6px 10px",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     backgroundColor: "#1c1c1c",
     fontSize: FONT_SIZE.small,
     color: "#c8c6c0",
@@ -624,7 +624,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.control,
     fontWeight: 700,
     padding: "8px 16px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     border: "1px solid #3a3a3a",
     backgroundColor: "#1c1c1c",
     color: "#c8c6c0",
@@ -634,7 +634,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.control,
     fontWeight: 800,
     padding: "8px 16px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     border: "1px solid #2f6f6a",
     backgroundColor: "#14312f",
     color: "#7fe0d0",
@@ -644,7 +644,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.control,
     fontWeight: 800,
     padding: "8px 18px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     border: "1px solid #38bdf8",
     backgroundColor: "#1d3a55",
     color: "#9ec5ff",
@@ -658,7 +658,7 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     gap: "8px",
     padding: "12px 14px",
-    borderRadius: "10px",
+    borderRadius: RADIUS.card,
     border: "1px solid #2a2a2a",
     backgroundColor: "#0f0f0f",
     marginTop: "10px",
@@ -675,7 +675,7 @@ const styles: Record<string, React.CSSProperties> = {
   variantSelect: {
     fontSize: FONT_SIZE.small,
     padding: "5px 8px",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     border: "1px solid #3a3a3a",
     backgroundColor: "#141414",
     color: "#f2f0eb",

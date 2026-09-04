@@ -196,6 +196,9 @@ export interface SandboxMarketPosition {
   x: number;
   y: number;
   price: string;
+  /** Design note #1159: the arrival ordinal (#646), carried through so the board can stack in the order the
+   *  operating cursor already plays in. `undefined` off a real chain, which has no such field. */
+  enteredAt?: number;
 }
 
 /** Unfloated corporations are OMITTED, not parked at a default cell -- their card shows a dash, and a token would contradict it in the opposite direction.
@@ -213,6 +216,21 @@ export function sandboxMarketPositions(marks: SandboxMarketPrices): SandboxMarke
       x: mark.x,
       y: mark.y,
       price: String(mark.price),
+      /* ==================================================================
+          DESIGN NOTE 1159: THE ARRIVAL ORDINAL REACHES THE BOARD
+         ==================================================================
+         REPORTED: "in the physical game, corporation tokens stack when they occupy the same cell, with new
+         entrants taking the bottom of the stack -- play then happens top-to-bottom. There is no such stack
+         happening on our cells, the corporation markers are simply scattered around it."
+         THE ORDER ALREADY EXISTED AND STOPPED HERE. #646 stamps `enteredAt` on every landing and #647 sorts
+         the operating order by price, then rightmost column, then arrival ascending -- which is the rule the
+         report restates. So the ENGINE has been playing in the physical game's order all along; this function
+         was dropping the field on the way to the view, and the chart could only scatter because it had
+         nothing to sort by.
+         OPTIONAL ON THE WIRE TYPE, NOT REQUIRED. A real chain's `MarketPositionEntry` has no such field, and
+         the renderer falls back to a deterministic order rather than throwing -- the same shape
+         `station_tokens` uses for a pre-G-12 contract. */
+      enteredAt: mark.enteredAt,
     });
   }
   return positions;

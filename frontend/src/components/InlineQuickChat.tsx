@@ -11,7 +11,7 @@
 
 import React from "react";
 import type { FeedFilter } from "../utils/feed";
-import { CONTROL_PADDING, FONT_SIZE } from "../styles/typography";
+import { CONTROL_PADDING, FONT_SIZE, RADIUS } from "../styles/typography";
 
 export interface InlineQuickChatProps {
   draft: string;
@@ -111,7 +111,7 @@ const styles: Record<string, React.CSSProperties> = {
     minWidth: "120px",
     fontSize: FONT_SIZE.control,
     padding: CONTROL_PADDING.input,
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     border: "1px solid #3a3a3a",
     backgroundColor: "#0f0f0f",
     color: "#f2f0eb",
@@ -121,7 +121,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.control,
     fontWeight: 600,
     padding: CONTROL_PADDING.button,
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     border: "1px solid #3a3a3a",
     backgroundColor: "#1c1c1c",
     color: "#f2f0eb",
@@ -150,7 +150,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.small,
     fontWeight: 700,
     padding: CONTROL_PADDING.buttonSmall,
-    borderRadius: "999px",
+    borderRadius: RADIUS.pill,
     // Longhand: `pillActive` overrides `borderColor` alone, and mixing that
     // against a `border` shorthand is the same warning `Lobby.tsx`'s tab bar
     // hit.

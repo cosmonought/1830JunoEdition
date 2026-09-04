@@ -46,7 +46,7 @@
 
 import React, { useEffect, useState } from "react";
 
-import { FONT_SIZE } from "../styles/typography";
+import { FONT_SIZE, RADIUS } from "../styles/typography";
 /* Design note #1098: the card palette, and the per-seat ink picker the player card's own stripe uses. Both
    are borrowed rather than matched by eye -- that borrowing IS the change. */
 import {
@@ -365,27 +365,43 @@ export function DividendMoneyMachine({ event, onCue, onDone }: DividendMoneyMach
                 : "app-money-machine-landed"
           }
         >
-          <span style={styles.payer}>
-            <CorporateLogo
-              ticker={event.ticker}
-              size={16}
-              title={`${event.ticker} herald`}
-              fallbackStyle={styles.heraldFallback}
-            />
-            <span style={styles.payerTicker}>{event.ticker}</span>
-          </span>
-          <span style={styles.payerAmount}>+${event.amount}</span>
+          {/* Design note #1163: the flex row moved inside the collapsing track. A grid track cannot animate to
+              zero around a child that will not shrink, so the padding and the `min-height: 0` live here. */}
+          <div style={styles.payerRowInner}>
+            <span style={styles.payer}>
+              <CorporateLogo
+                ticker={event.ticker}
+                size={16}
+                title={`${event.ticker} herald`}
+                fallbackStyle={styles.heraldFallback}
+              />
+              <span style={styles.payerTicker}>{event.ticker}</span>
+            </span>
+            <span style={styles.payerAmount}>+${event.amount}</span>
+          </div>
         </div>
 
         {/* ==================================================================
              DESIGN NOTE 1098: THE TOTAL, AND ITS LABEL
             ==================================================================
             THE NAME LEFT THIS ROW for the stripe, which left the total floating against an empty gutter and
-            broke the label/figure rhythm the payer row above it keeps. `your cash` restores it.
+            broke the label/figure rhythm the payer row above it keeps. A caption restores it.
             FLAGGED AS AN ADDITION rather than slipped in: no such caption existed before. It is here because
-            the layout asked for it, not because the report did. */}
+            the layout asked for it, not because the report did.
+            ==================================================================
+             DESIGN NOTE 1163: "your" WAS THE WORD THE STRIPE ALREADY SAID
+            ==================================================================
+            ASKED: "the 'your cash' string seems unnecessary since it already has the player name and color
+            strip above it: why not just 'Cash'?"
+            AND #1098 IS WHY IT READ THAT WAY. That note moved the NAME up into the stripe and then wrote a
+            caption for the gutter it left -- so the panel gained a possessive at the same moment it gained
+            the thing that made the possessive redundant. The seat colour and the player's own name are
+            directly above; "your" answers a question nobody was still asking.
+            THE CAPTION ITSELF STAYS, because #1098's actual argument was about the label/figure RHYTHM and
+            that is untouched: the row still reads caption-then-figure like the payer row above it. Only the
+            word that duplicated the stripe is gone. */}
         <div style={styles.holderRow}>
-          <span style={styles.holderLabel}>your cash</span>
+          <span style={styles.holderLabel}>Cash</span>
           <span style={styles.holderTotal}>${shown}</span>
         </div>
       </div>
@@ -439,8 +455,27 @@ const MONEY_MACHINE_CSS = `
 .app-money-machine-fall {
   animation: app-money-machine-drop ${MONEY_MACHINE_FALL_MS}ms cubic-bezier(0.55, 0, 0.9, 0.55) forwards;
 }
+/* ==================================================================
+    DESIGN NOTE 1163: A MERGED ROW MUST STOP TAKING UP ROOM
+   ==================================================================
+   ASKED: "should the popover shrink as the two lines merge? Right now after the merge/sum there is a large
+   blank space above the player's cash which kind of distracts from reading the cash information."
+   OPACITY ZERO HIDES A BOX; IT DOES NOT REMOVE ONE. The payer row went invisible on the merge and went on
+   occupying its full height, so the panel kept a payer-row-shaped hole above the one figure the whole
+   animation exists to deliver -- and the eye is drawn to the gap rather than to the total under it.
+   COLLAPSED WITH GRID-TEMPLATE-ROWS, not max-height. A max-height animation has to guess a ceiling, and the
+   collapse then visibly finishes early and pauses; one-fr to zero-fr interpolates to exactly the row's own
+   height whatever the font does to it. A zero min-height and a hidden overflow on the inner row are what let
+   a grid track actually reach zero.
+   AND NOT ONE BACKTICK IN THIS PARAGRAPH, which is #1061's warning and which I walked into writing it: this
+   note lives inside a template literal, the string ends at the first backtick, and tsc then reports the
+   error somewhere else entirely. Four times now.
+   ON THE SAME CLOCK AS THE MERGE, so the space closes as the figure lands rather than afterwards -- the
+   report describes one movement, not a shrink that follows a merge. */
 .app-money-machine-landed {
   opacity: 0;
+  grid-template-rows: 0fr;
+  padding-top: 0;
 }
 @media (prefers-reduced-motion: reduce) {
   .app-money-machine { animation: none; }
@@ -449,7 +484,11 @@ const MONEY_MACHINE_CSS = `
   /* "DISPLAYING THE +$[PAYOUT] STATICALLY NEXT TO IT." The merged phase hides the payer line once it has been
      absorbed, which is the whole point of the merge -- and with no merge to watch there is nothing to absorb,
      so the figure stays on screen as a static statement of what arrived. */
-  .app-money-machine-landed { opacity: 1; }
+  /* Design note #1163: and its TRACK, or the row would collapse to nothing while staying "visible" -- the
+     reduced-motion path shows the payout as a static statement beside the total, which needs the space it
+     occupies as much as the opacity it keeps. */
+  .app-money-machine-landed { opacity: 1; grid-template-rows: 1fr; padding-top: 7px; }
+  .app-money-machine-fall, .app-money-machine-waiting, .app-money-machine-landed { transition: none; }
 }
 `;
 
@@ -473,7 +512,7 @@ const styles: Record<string, React.CSSProperties> = {
        player card's does, and a padded parent would inset it into a floating band. The rows below carry their
        own padding instead -- which is how `PlayerCards` arranges the same thing. */
     padding: "0 0 9px",
-    borderRadius: "10px",
+    borderRadius: RADIUS.card,
     /* Design note #1098: the card's own border, and `overflow: hidden` so the stripe's square top corners are
        clipped to the panel's radius rather than poking out of it. */
     border: `1px solid ${CARD_BORDER}`,
@@ -509,12 +548,22 @@ const styles: Record<string, React.CSSProperties> = {
   /** Design note #232: a seat the roster cannot place gets the muted paper, never a guessed hue -- the same
    *  answer `PrivateRevenueModal` #1050 gives for the same absence. */
   stripeUnknown: { backgroundColor: CARD_DIVIDER, color: CARD_INK },
+  /* Design note #1163: a one-track grid so the row can collapse to nothing. The flex row it used to be moved
+     inside, to `payerRowInner` -- a grid track cannot animate to zero around a child that refuses to shrink. */
   payerRow: {
+    display: "grid",
+    gridTemplateRows: "1fr",
+    paddingTop: "7px",
+    transition: `grid-template-rows ${MONEY_MACHINE_FALL_MS}ms ease, opacity ${MONEY_MACHINE_FALL_MS}ms ease, padding-top ${MONEY_MACHINE_FALL_MS}ms ease`,
+  },
+  payerRowInner: {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
     gap: "12px",
-    padding: "7px 13px 0",
+    padding: "0 13px",
+    minHeight: 0,
+    overflow: "hidden",
   },
   payer: { display: "inline-flex", alignItems: "center", gap: "6px", minWidth: 0 },
   payerTicker: {

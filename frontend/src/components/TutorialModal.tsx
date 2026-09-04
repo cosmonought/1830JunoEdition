@@ -14,7 +14,7 @@
 // See docs/ai_architecture/ui_shell_layout.md, TutorialModal.tsx #0 / #1.
 
 import React, { useCallback, useEffect, useState } from "react";
-import { CONTROL_PADDING, FONT_FAMILY, FONT_SIZE, LINE_HEIGHT } from "../styles/typography";
+import { CONTROL_PADDING, FONT_FAMILY, FONT_SIZE, LINE_HEIGHT, RADIUS } from "../styles/typography";
 /* Design note #1122: the sandbox signal ladder. */
 import {
   SANDBOX_INK,
@@ -740,7 +740,7 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "14px",
     width: "min(560px, 100%)",
     padding: "22px 24px",
-    borderRadius: "14px",
+    borderRadius: RADIUS.layer,
     backgroundColor: "#141414",
     borderWidth: "1px",
     borderStyle: "solid",
@@ -770,7 +770,7 @@ const styles: Record<string, React.CSSProperties> = {
     width: "9px",
     height: "9px",
     padding: 0,
-    borderRadius: "50%",
+    borderRadius: RADIUS.circle,
     border: "none",
     backgroundColor: "#3a3a3a",
     cursor: "pointer",
@@ -794,7 +794,7 @@ const styles: Record<string, React.CSSProperties> = {
     textAlign: "left",
     padding: "10px 12px",
     marginTop: "8px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     border: "1px solid #3a3a3a",
     backgroundColor: "#141414",
     color: "#f2f0eb",
@@ -812,7 +812,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.control,
     fontWeight: 700,
     padding: CONTROL_PADDING.button,
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     borderWidth: "1px",
     borderStyle: "solid",
     /* Design note #1122: retoned onto the sandbox ladder. `#7a5aa8` here was the Plum SEAT colour by
@@ -826,7 +826,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.control,
     fontWeight: 600,
     padding: CONTROL_PADDING.button,
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     borderWidth: "1px",
     borderStyle: "solid",
     borderColor: "#3a3a3a",

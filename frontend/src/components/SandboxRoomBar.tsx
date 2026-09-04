@@ -13,7 +13,8 @@
 
 import React, { useState } from "react";
 
-import { FONT_SIZE } from "../styles/typography";
+import { FONT_SIZE, RADIUS } from "../styles/typography";
+import { BRAND_PINK } from "../styles/palette";
 
 export interface SandboxRoomBarProps {
   /** `null` when not in a room -- the ordinary solo sandbox. */
@@ -205,9 +206,29 @@ export default SandboxRoomBar;
 /* Design note #1136: `:active` has no inline form -- #46's standing exception. The teal is the pressed
    state now rather than a resting rank, and the transition is short enough to read as a press rather than as
    an animation. Scoped to the bare class so the in-game bar is untouched. */
+/* ==================================================================
+    DESIGN NOTE 1165: THE HOVER IS NETA'S, AND ONLY WHERE THERE IS A POINTER
+   ==================================================================
+   ASKED: "add a distinct hover state for desktop users. Keep it strictly within the Neta DAO design tokens."
+   THE OLD ONE WAS TWO GREYS -- #262626 on #1c1c1c, which is a shade nobody notices on a photograph. The brand
+   has exactly two colours and #1092 took them from Neta's own stylesheet rather than from the logo, so the
+   pink is quotable rather than approximate: border to BRAND_PINK, with the same pink as a low glow so the
+   edge does not have to carry the whole signal alone.
+   GATED ON A REAL POINTER, which is the "for desktop users" half and not decoration: a `:hover` rule on a
+   touch screen fires on tap and STICKS until something else is touched, so the button that was pressed stays
+   lit afterwards. #1148 hit exactly this on the float badge; asking the browser is the fix there and here.
+   NO GRADIENT ON THE BORDER. `BRAND_GRADIENT` exists and cannot be a border-color without a second painted
+   layer -- and a two-stop edge on a 45px control is a detail nobody resolves. The pink is the half of the
+   brand that reads at this size. */
 const BARE_BUTTON_CSS = `
-.sandbox-bare-btn { transition: background-color 90ms ease, border-color 90ms ease, color 90ms ease; }
-.sandbox-bare-btn:hover:not(:disabled) { background-color: #262626; border-color: #4a4a4a; }
+.sandbox-bare-btn { transition: background-color 90ms ease, border-color 90ms ease, color 90ms ease, box-shadow 90ms ease; }
+@media (hover: hover) and (pointer: fine) {
+  .sandbox-bare-btn:hover:not(:disabled) {
+    background-color: #262626;
+    border-color: ${BRAND_PINK};
+    box-shadow: 0 0 0 1px ${BRAND_PINK}, 0 6px 18px rgba(201, 51, 138, 0.28);
+  }
+}
 .sandbox-bare-btn:active:not(:disabled) {
   background-color: #14312f;
   border-color: #2f6f6a;
@@ -229,11 +250,28 @@ const styles: Record<string, React.CSSProperties> = {
      overcorrection, and the padding is what made two buttons in a fixed box look crowded -- they were nearly
      touching in the middle of it, which reads as "close together" even though the box had not moved.
      NEUTRAL, NOT TEAL. Two equal doors, so neither gets the colour that says "press this one". */
+  /* ==================================================================
+      DESIGN NOTE 1165: BIGGER, AND #1136'S PREMISE IS WHAT EXPIRED
+     ==================================================================
+     ASKED: "scale up the Host Game and Join Game buttons by roughly 60% so they feel like true primary
+     actions on the screen."
+     #1136 CHOSE `small` AT 7/16 DELIBERATELY and called `control` at 10/22 "an overcorrection" -- and its
+     reason was crowding: "the padding is what made two buttons in a fixed box look crowded, they were nearly
+     touching in the middle of it". THE BOX IS GONE. #1131 removed the tray and #1132 anchored these two onto
+     the boardroom photograph at the coordinates the report named, so there is no longer a container for them
+     to crowd; they float on a full-bleed image, where `small` type reads as a caption rather than a door.
+     SIXTY PERCENT, TAKEN ON THE BUTTON AND NOT ONLY THE TYPE. The control was about 28px tall (12px type in
+     7px padding); it is about 45px now (16px type in 13px), which is the ~60% the report asked for.
+     THE TYPE STAYS ON THE SCALE, at `heading`. 12px x 1.6 is 19.2 and there is no 19 -- and #1151 has just
+     finished removing twelve near-identical values that were invented exactly this way. The presence comes
+     from the padding, which is not a scale and was never meant to be.
+     STILL ONE BUTTON FOR ALL FOUR. #1136's rule is that Host, Join game, Join and Cancel are the same
+     control so none can read as lesser; they all grow together, and Cancel keeps its quiet fill. */
   bareButton: {
-    fontSize: FONT_SIZE.small,
+    fontSize: FONT_SIZE.heading,
     fontWeight: 700,
-    padding: "7px 16px",
-    borderRadius: "8px",
+    padding: "13px 30px",
+    borderRadius: RADIUS.card,
     borderWidth: "1px",
     borderStyle: "solid",
     borderColor: "#3a3a3a",
@@ -288,7 +326,7 @@ const styles: Record<string, React.CSSProperties> = {
     flexWrap: "wrap",
     gap: "10px",
     padding: "7px 14px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     border: "1px solid #2a2a2a",
     backgroundColor: "#0f0f0f",
     fontSize: FONT_SIZE.small,
@@ -310,7 +348,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     fontSize: FONT_SIZE.small,
     padding: "5px 8px",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     border: "1px solid #3a3a3a",
     backgroundColor: "#141414",
     color: "#f2f0eb",
@@ -321,7 +359,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.small,
     fontWeight: 700,
     padding: "5px 12px",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     border: "1px solid #3a3a3a",
     backgroundColor: "#1c1c1c",
     color: "#c8c6c0",
@@ -331,7 +369,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.small,
     fontWeight: 800,
     padding: "5px 12px",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     border: "1px solid #2f6f6a",
     backgroundColor: "#14312f",
     color: "#7fe0d0",
@@ -340,7 +378,7 @@ const styles: Record<string, React.CSSProperties> = {
   buttonQuiet: {
     fontSize: FONT_SIZE.small,
     padding: "5px 10px",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     border: "1px solid transparent",
     backgroundColor: "transparent",
     color: "#8a8a86",

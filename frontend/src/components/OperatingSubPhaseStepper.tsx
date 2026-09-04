@@ -25,7 +25,7 @@
 
 import React from "react";
 
-import { FONT_SIZE } from "../styles/typography";
+import { FONT_SIZE, RADIUS } from "../styles/typography";
 
 /** The legal, chronologically-ordered action sub-phases within one corporation's Operating Round turn. Mirrors
  *  `or_phase::OR_PHASE_ORDER`, which is the AUTHORITY rather than a description (design note #1). Lives here
@@ -256,7 +256,7 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     gap: "6px",
     padding: "4px 10px",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     borderWidth: "1px",
     borderStyle: "solid",
     borderColor: "#3a3a3a",
@@ -298,7 +298,7 @@ const styles: Record<string, React.CSSProperties> = {
   controls: { display: "inline-flex", flexDirection: "row", gap: "8px", alignItems: "center" },
   advanceButton: {
     padding: "5px 12px",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     border: "1px solid #4a4a4a",
     backgroundColor: "#1c1c1c",
     color: "#f2f0eb",
@@ -308,7 +308,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   skipButton: {
     padding: "5px 12px",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     border: "1px solid #3a5a8a",
     backgroundColor: "#1d2a3f",
     color: "#9ec5ff",

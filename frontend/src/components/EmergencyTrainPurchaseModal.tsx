@@ -16,7 +16,7 @@
 
 import React from "react";
 
-import { FONT_SIZE } from "../styles/typography";
+import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { ACTION_GREEN, ACTION_GREEN_BORDER, ACTION_GREEN_INK } from "../styles/palette";
 import type { GameStateResponse, PublicCompanyState } from "../utils/gameState";
 import {
@@ -444,7 +444,11 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: "#0f0f0f",
     border: "1px solid #3a3a3a",
     borderTop: "3px solid #c9a227",
-    borderRadius: "10px",
+    /* Design note #1151: PROMOTED BY HAND. The sweep mapped each site from the value it already had, which
+       preserves the original author's sense of scale -- but this surface was authored at the card step and is
+       a floating layer by the rule, so the old value and the role disagreed. The role wins; that disagreement
+       is exactly what the hand pass after the sweep is for. */
+    borderRadius: RADIUS.layer,
     boxShadow: "0 18px 48px rgba(0,0,0,0.6)",
     boxSizing: "border-box",
   },
@@ -461,7 +465,7 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#f0c9c9",
     border: "1px solid #6b2f2f",
     backgroundColor: "#2a1618",
-    borderRadius: "999px",
+    borderRadius: RADIUS.pill,
     padding: "2px 9px",
   },
   emptyHoldings: { margin: 0, fontSize: FONT_SIZE.small, color: "#8a8a86" },
@@ -475,7 +479,7 @@ const styles: Record<string, React.CSSProperties> = {
     letterSpacing: "0.06em",
     color: "#e0b062",
     border: "1px solid #6b5a1f",
-    borderRadius: "4px",
+    borderRadius: RADIUS.control,
     padding: "0 4px",
   },
   restrictionNote: {
@@ -505,7 +509,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "10px 12px",
     backgroundColor: "#141414",
     border: "1px solid #2a2a2a",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
   },
   ledgerRule: { height: "1px", backgroundColor: "#2a2a2a", margin: "3px 0" },
   row: { display: "flex", alignItems: "baseline", gap: "10px" },
@@ -532,7 +536,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "8px 10px",
     backgroundColor: "#141414",
     border: "1px solid #2a2a2a",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
   },
   holdingRow: { display: "flex", alignItems: "center", gap: "10px" },
   holdingTicker: {
@@ -560,7 +564,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.micro,
     fontWeight: 700,
     fontFamily: "inherit",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     borderWidth: "1px",
     borderStyle: "solid",
     cursor: "pointer",
@@ -579,7 +583,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   sellSelect: {
     padding: "4px 8px",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     border: "1px solid #4a4a4a",
     backgroundColor: "#1c1c1c",
     color: "#f2f0eb",
@@ -596,7 +600,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   sellAllButton: {
     padding: "7px 14px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     border: "1px solid #4ade80",
     backgroundColor: "#166534",
     color: "#f2f0eb",
@@ -618,7 +622,7 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#f0c9c9",
     backgroundColor: "#2a1618",
     border: "1px solid #6b2f2f",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
   },
   footer: { display: "flex", flexDirection: "column", gap: "6px" },
   footerReason: { fontSize: FONT_SIZE.micro, color: "#8a8a86", lineHeight: 1.4 },
@@ -643,7 +647,7 @@ const styles: Record<string, React.CSSProperties> = {
     color: ACTION_GREEN_INK,
     backgroundColor: ACTION_GREEN,
     border: `1px solid ${ACTION_GREEN_BORDER}`,
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     cursor: "pointer",
   },
   confirmButtonDisabled: {

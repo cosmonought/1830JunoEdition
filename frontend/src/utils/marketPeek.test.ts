@@ -19,7 +19,6 @@
 export {};
 
 const { readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
-const { previewCentre } = require("../components/StockMarketPreview") as typeof import("../components/StockMarketPreview");
 const {
   PRICE_GRID,
   projectDividendCellMove,
@@ -67,54 +66,17 @@ describe("the preview reads the board rather than re-deriving it", () => {
   });
 });
 
-describe("the camera frames the move, not just the token", () => {
-  /* Centring on the token is the obvious reading of the brief and it drops the destination off the edge of a
-     5x5 window on any two-cell move -- omitting the single cell the preview was opened for. */
-  const window5 = (centre: { x: number; y: number }, node: { x: number; y: number }) =>
-    Math.abs(node.x - centre.x) <= 2 && Math.abs(node.y - centre.y) <= 2;
-
-  it("keeps a one-step dividend move in frame", () => {
-    const from = { x: 8, y: 5 };
-    const to = projectDividendCellMove(from, "pay");
-    expect(to).not.toBeNull();
-    const centre = previewCentre(from, to ? { x: to.x, y: to.y } : null);
-    expect(window5(centre, from)).toBe(true);
-    expect(window5(centre, { x: to!.x, y: to!.y })).toBe(true);
-  });
-
-  it("keeps a double move in frame", () => {
-    const from = { x: 8, y: 5 };
-    const to = projectDividendCellMove(from, "pay", 2);
-    const centre = previewCentre(from, to ? { x: to.x, y: to.y } : null);
-    expect(window5(centre, from)).toBe(true);
-    expect(window5(centre, { x: to!.x, y: to!.y })).toBe(true);
-  });
-
-  it("keeps a four-block sale in frame, which is the case that breaks token-centring", () => {
-    /* FOUR ROWS IS FURTHER THAN A 5x5 WINDOW REACHES FROM ITS OWN CENTRE, so this is the case that decides
-       whether the midpoint rule was necessary rather than tidy. */
-    const from = { x: 6, y: 8 };
-    const to = projectShareSaleMove(from, 4);
-    expect(to).not.toBeNull();
-    const centre = previewCentre(from, { x: to!.x, y: to!.y });
-    expect(window5(centre, from)).toBe(true);
-    expect(window5(centre, { x: to!.x, y: to!.y })).toBe(true);
-  });
-
-  it("never centres somewhere the chart cannot fill", () => {
-    /* The window is clamped inward, so a token in a corner still gets five columns of chart rather than two
-       columns and three empty slots. Checked against every real cell rather than a sample. */
-    const xs = PRICE_GRID.map((cell) => cell.x);
-    const ys = PRICE_GRID.map((cell) => cell.y);
-    for (const cell of PRICE_GRID) {
-      const centre = previewCentre({ x: cell.x, y: cell.y }, null);
-      expect(centre.x).toBeGreaterThanOrEqual(Math.min(...xs) + 2);
-      expect(centre.x).toBeLessThanOrEqual(Math.max(...xs) - 2);
-      expect(centre.y).toBeGreaterThanOrEqual(Math.min(...ys) + 2);
-      expect(centre.y).toBeLessThanOrEqual(Math.max(...ys) - 2);
-    }
-  });
-});
+/* ==================================================================
+    DESIGN NOTE 1156 RETIRES THIS BLOCK WITH THE WINDOW IT GUARDED
+   ==================================================================
+   IT HAD FIVE CASES ABOUT `previewCentre`, and every one of them asked the same question: given that only
+   five columns can be shown, are they the RIGHT five -- does the destination stay in frame on a double move,
+   does a four-block sale, is the window ever centred somewhere the chart cannot fill. Good questions about a
+   camera that has to crop.
+   THE CAMERA NO LONGER CROPS. The dialog was widened and the whole 19x11 board is drawn, so there is no
+   centre to choose and no cell that can fall outside the frame -- `previewCentre` is deleted rather than left
+   exported with no caller. The property that replaces all five is one line in `marketCamera.test.ts`: every
+   cell of `PRICE_GRID` is rendered. A test for the right crop cannot survive the crop being removed. */
 
 describe("the move repeats without ever running backwards", () => {
   it("snaps back rather than animating the return", () => {
@@ -161,7 +123,20 @@ describe("the trigger is a click on the readout, not a hover on the button", () 
     /* THE PART OF THE BRIEF THAT WAS TURNED DOWN, kept as a guard: hovering the decision buttons would have
        duplicated a fact three components already state, gated it behind a pointer, and re-added the row #951
        consolidated away. The lines themselves are untouched -- every figure, arrow and parenthetical. */
-    expect(BAR).toContain("Market move: <ZonedPrice price={currentPrice} />");
+    /* ==================================================================
+        DESIGN NOTE 1153 SUPERSEDES THE SPELLING OF THIS ONE ASSERTION
+       ==================================================================
+       IT PINNED `"Market move: <ZonedPrice price={currentPrice} />"` -- the label, the colon and the element,
+       as one run of source. #1153 split that line into a LABEL cell and a FIGURES cell so its `$current ->
+       $new` lands in the same column as the payout rows above it (reported: "the 'market move' on payout needs
+       to be aligned with the other $current > $new values"), and the colon went with the sentence.
+       THE CLAIM WAS NEVER ABOUT THE MARKUP. #1141's property is that the readout is PERMANENT -- that the
+       mini-camera was added beside it rather than replacing it with something hover-gated -- so what has to be
+       true is that the line still states both prices unconditionally. That is asserted directly now, and it
+       survives any future rewording of the label. */
+    expect(BAR).toContain("<ZonedPrice price={currentPrice} />");
+    expect(BAR).toContain("<ZonedPrice price={projection.price} />");
+    expect(BAR).toContain("Market move");
     expect(BAR).toContain("(double move)");
     expect(SR).toContain("already at the bottom of its column");
     /* NO HOVER ON THE TRIGGER, which is the claim -- and it is asserted against `MarketMoveLine` itself

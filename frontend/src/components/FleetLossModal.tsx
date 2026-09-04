@@ -29,7 +29,7 @@
 
 import React from "react";
 
-import { FONT_SIZE } from "../styles/typography";
+import { FONT_SIZE, RADIUS } from "../styles/typography";
 // Design note #991: the same herald the board and the corporation card draw, not a second rendering of it.
 import { CorporateLogo } from "./CorporateLogo";
 import {
@@ -184,7 +184,7 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     gap: "10px",
     padding: "18px 20px",
-    borderRadius: "12px",
+    borderRadius: RADIUS.layer,
     border: "1px solid #6a4a3a",
     backgroundColor: "#171219",
     boxShadow: "0 12px 40px rgba(0,0,0,0.6)",
@@ -197,7 +197,7 @@ const styles: Record<string, React.CSSProperties> = {
      carries a COMPLETE `border`, so React never has to reconcile one against a sibling's `borderColor`. */
   chipRust: {
     padding: "2px 8px",
-    borderRadius: "999px",
+    borderRadius: RADIUS.pill,
     border: "1px solid #8a4a3a",
     backgroundColor: "#3a1e18",
     color: "#e8a58c",
@@ -207,7 +207,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   chipLimit: {
     padding: "2px 8px",
-    borderRadius: "999px",
+    borderRadius: RADIUS.pill,
     border: "1px solid #7a6a3a",
     backgroundColor: "#332c18",
     color: "#e0c98c",
@@ -227,7 +227,7 @@ const styles: Record<string, React.CSSProperties> = {
   fleetTrains: { display: "flex", gap: "6px", flexWrap: "wrap" },
   trainChip: {
     padding: "2px 9px",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     border: "1px solid #4a4150",
     backgroundColor: "#241d28",
     color: "#c8c6c0",
@@ -251,7 +251,7 @@ const styles: Record<string, React.CSSProperties> = {
   footer: { display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "6px" },
   primaryButton: {
     padding: "7px 14px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     border: "1px solid #3f7a55",
     backgroundColor: "#1d4030",
     color: "#e6f5ec",

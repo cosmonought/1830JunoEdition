@@ -20,7 +20,7 @@
 
 import React from "react";
 
-import { FONT_SIZE } from "../styles/typography";
+import { FONT_SIZE, RADIUS } from "../styles/typography";
 // Design note #494: the same per-train ink the map's route overlay uses.
 import { routeTrainColor } from "../styles/routeLivery";
 
@@ -557,7 +557,7 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     gap: "12px",
     padding: "12px 14px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     backgroundColor: "#0f0f0f",
     border: "1px solid #2a2a2a",
   },
@@ -568,7 +568,7 @@ const styles: Record<string, React.CSSProperties> = {
      selection to paint. `modeButton` survives as that button's own look, which is what it always described. */
   modeButton: {
     padding: "7px 20px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     border: "1px solid #4a4a4a",
     backgroundColor: "#1c1c1c",
     color: "#c8c6c0",
@@ -581,7 +581,7 @@ const styles: Record<string, React.CSSProperties> = {
   table: {
     display: "flex",
     flexDirection: "column",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     border: "1px solid #2a2a2a",
     overflow: "hidden",
   },
@@ -670,7 +670,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.small,
     color: "#8a8a86",
     padding: "2px 7px",
-    borderRadius: "999px",
+    borderRadius: RADIUS.pill,
     border: "1px solid #2a2a2a",
   },
   pathHexPaying: { color: "#f4ecd8", borderColor: "#3a3a3a", backgroundColor: "#1c1c1c" },
@@ -708,7 +708,7 @@ const styles: Record<string, React.CSSProperties> = {
   trainChip: {
     minWidth: "30px",
     padding: "4px 10px",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     border: "1px solid #4a4a4a",
     backgroundColor: "#1c1c1c",
     color: "#c8c6c0",
@@ -729,7 +729,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     color: "#f4ecd8",
     padding: "3px 9px",
-    borderRadius: "999px",
+    borderRadius: RADIUS.pill,
     backgroundColor: "#1c1c1c",
     border: "1px solid #3a3a3a",
   },
@@ -744,7 +744,7 @@ const styles: Record<string, React.CSSProperties> = {
   clearButton: {
     fontSize: FONT_SIZE.body,
     padding: "5px 12px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     border: "1px solid #3a3a3a",
     backgroundColor: "#1c1c1c",
     color: "#c8c6c0",
@@ -764,7 +764,7 @@ const styles: Record<string, React.CSSProperties> = {
   runButton: {
     width: "100%",
     padding: "11px 18px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     border: "1px solid #2f7d55",
     backgroundColor: "#1d5c40",
     color: "#eafff2",

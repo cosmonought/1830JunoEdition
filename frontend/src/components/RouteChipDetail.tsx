@@ -29,7 +29,7 @@
 // only thing that changes with `canClear` is whether the Clear button is there.
 
 import React from "react";
-import { FONT_SIZE } from "../styles/typography";
+import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { TrainGlyph } from "./TrainGlyph";
 import { trainTier } from "../utils/gamePhase";
 import { routeTrainColor } from "../styles/routeLivery";
@@ -229,7 +229,7 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     gap: "6px",
     padding: "2px 8px",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     borderWidth: "1px",
     borderStyle: "solid",
     /* Design note #1092: retoned WITH `condensedTrainChip`, not after it. The comment above says these two
@@ -281,7 +281,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   clear: {
     padding: "2px 9px",
-    borderRadius: "5px",
+    borderRadius: RADIUS.control,
     border: "1px solid #4a4a4a",
     backgroundColor: "transparent",
     color: "#c8c6c0",

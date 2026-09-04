@@ -23,7 +23,7 @@ import { ACTION_GREEN, ACTION_GREEN_BORDER, ACTION_GREEN_INK } from "../styles/p
 
 import { TilePreviewThumbnail, type StationPreviewMarker } from "./HexGridRenderer";
 import type { LegalTilePlacement } from "./hexContractTypes";
-import { FONT_SIZE } from "../styles/typography";
+import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { UI_SCALE } from "../styles/appStyles";
 
 export interface RadialTileSelectorProps {
@@ -794,7 +794,7 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: "center",
     width: "30px",
     height: "30px",
-    borderRadius: "50%",
+    borderRadius: RADIUS.circle,
     border: "2px solid rgba(0, 0, 0, 0.45)",
     boxShadow: "0 2px 5px rgba(0,0,0,0.55)",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
@@ -849,7 +849,7 @@ const styles: Record<string, React.CSSProperties> = {
   fab: {
     width: "34px",
     height: "34px",
-    borderRadius: "999px",
+    borderRadius: RADIUS.pill,
     borderWidth: "2px",
     borderStyle: "solid",
     fontSize: "16px",
@@ -884,7 +884,7 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     gap: "8px",
     padding: "4px 12px",
-    borderRadius: "999px",
+    borderRadius: RADIUS.pill,
     backgroundColor: "rgba(15, 20, 32, 0.92)",
     border: "1px solid #3a3a3a",
     whiteSpace: "nowrap",

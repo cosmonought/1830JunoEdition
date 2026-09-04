@@ -20,7 +20,7 @@ import React from "react";
 
 import StockMarketPreview from "./StockMarketPreview";
 import { type MarketPositionEntry } from "./StockMarketRenderer";
-import { FONT_SIZE } from "../styles/typography";
+import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { INK_TEXT, INK_TEXT_MUTED, RULE } from "../styles/palette";
 
 export interface MarketPeek {
@@ -120,7 +120,17 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     flexDirection: "column",
     gap: "10px",
-    maxWidth: "min(92vw, 420px)",
+    /* ==================================================================
+        DESIGN NOTE 1156: THE DIALOG GREW SO THE CHART DID NOT HAVE TO SHRINK
+       ==================================================================
+       420px was sized for #1141's 5x5 window. The whole board is 19 columns, which at that width is 22px a
+       column -- narrower than a token and far too narrow for a three-digit price -- so showing all of it
+       needed the dialog to grow rather than the cells to disappear.
+       `min(96vw, ...)` KEEPS THE PHONE CASE HONEST: on a narrow screen the dialog is the screen and the chart
+       scrolls inside it, which is better than 120 cells rendered below legibility. */
+    maxWidth: "min(96vw, 900px)",
+    maxHeight: "min(88vh, 620px)",
+    overflow: "auto",
   },
   head: {
     display: "flex",
@@ -139,7 +149,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: 0,
     fontSize: FONT_SIZE.heading,
     lineHeight: 1,
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     border: `1px solid ${RULE}`,
     backgroundColor: "transparent",
     color: INK_TEXT_MUTED,

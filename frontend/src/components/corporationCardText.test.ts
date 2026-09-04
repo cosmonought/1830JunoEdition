@@ -159,13 +159,39 @@ describe("the livery stripe's one badge slot", () => {
   });
 
   it("branches the slot on float rather than rendering both", () => {
-    /* The exclusivity, checked structurally: the float-progress figure and
-       the last-run figure must sit on opposite sides of one `is_floated`
-       conditional. Asserting the ternary is cruder than rendering the
-       component, and it is the check that would actually fail if someone
-       restored the second badge alongside the first. */
-    expect(CODE).toMatch(/company\.is_floated \?[\s\S]{0,400}?Last run/);
-    expect(CODE).toMatch(/Last run[\s\S]{0,400}?FLOAT_THRESHOLD_PERCENT/);
+    /* ==================================================================
+        DESIGN NOTE 1148 SUPERSEDES THE PROXY, AND THE CLAIM GETS STRONGER
+       ==================================================================
+       THE CLAIM IS UNCHANGED and #503's harness note above states it well: the two facts are MUTUALLY
+       EXCLUSIVE and share one slot, and "a test for the caption alone would pass against a card that rendered
+       both at once, which is the exact regression this arrangement can suffer."
+       IT WAS CHECKED BY CHARACTER DISTANCE -- `is_floated ?` within 400 characters of "Last run", and "Last
+       run" within 400 of `FLOAT_THRESHOLD_PERCENT`. That worked while both readings were expressions sitting
+       inside the ternary. #1148 gave the unfloated side its own component, because that slot now holds two
+       readings of one number and needs state; the percentage moved with it, several hundred lines away, and
+       the second distance could no longer be satisfied by any correct arrangement.
+       SO THE EXCLUSIVITY IS ASSERTED ON THE BRANCHES THEMSELVES, which is what the distances were standing in
+       for: one `is_floated` ternary, the last-run span on one side, the float badge on the other, and each
+       rendered exactly once in the file. That fails on a card restoring the second badge -- the regression
+       #503 named -- and it no longer depends on how much prose sits between two strings. */
+    /* SCOPED TO THE STRIPE BEFORE ANYTHING IS ASSERTED, and that is not tidiness. The file holds TWO
+       `company.is_floated ?` ternaries, so a whole-file regex with open-ended `[\s\S]*?` spans can match the
+       other one paired with this one's badge and pass against an arrangement nobody wrote. Cutting the region
+       first is what makes the structural test actually structural -- the previous version's real weakness was
+       not the number 400, it was reasoning about distance instead of about scope. */
+    const stripe = CODE.slice(
+      CODE.indexOf("styles.rosterLiveryRight"),
+      CODE.indexOf("styles.rosterPriceRow"),
+    );
+    expect(stripe).toMatch(
+      /company\.is_floated \? \([\s\S]*?Last run[\s\S]*?\) : \([\s\S]*?<FloatProgressBadge/,
+    );
+    // Exactly one of each in the slot, so restoring the second badge beside the first goes red.
+    expect(stripe.split("<FloatProgressBadge").length - 1).toBe(1);
+    expect(stripe.split(">Last run<").length - 1).toBe(1);
+    /* AND THE PERCENTAGE IS NOT ALSO DRAWN BESIDE THE RUN. It lives inside the badge component now, which is
+       the half of the old second distance that was worth keeping. */
+    expect(stripe).not.toContain("FLOAT_THRESHOLD_PERCENT");
   });
 });
 

@@ -21,7 +21,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { ACTION_GREEN, ACTION_GREEN_BORDER, ACTION_GREEN_INK } from "../styles/palette";
 
 
-import { FONT_SIZE } from "../styles/typography";
+import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { corporationLabel } from "../utils/corporationNames";
 import { purchaseCeiling } from "../utils/purchaseCeiling";
 import {
@@ -1558,7 +1558,7 @@ const styles: Record<string, React.CSSProperties> = {
        ordering holds through the half-migrated state rather than only at the end of it. */
     backgroundColor: "#1c1c1c",
     border: "1px solid #4a4a4a",
-    borderRadius: "10px",
+    borderRadius: RADIUS.card,
     boxShadow: "0 6px 18px rgba(0, 0, 0, 0.45)",
   },
   /* Design note #508: the pinned form. Tighter on every axis and without
@@ -1652,7 +1652,7 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     gap: "10px",
     padding: "3px 8px",
-    borderRadius: "5px",
+    borderRadius: RADIUS.control,
     border: "1px solid transparent",
     backgroundColor: "transparent",
     /* Design note #635: A ROW THAT DOES NOTHING SHOULD NOT OFFER TO. `cursor: help` was inherited from the card
@@ -1744,7 +1744,7 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     gap: "1px",
     padding: "4px 6px",
-    borderRadius: "7px",
+    borderRadius: RADIUS.control,
     border: "1px solid #3a3a3a",
     backgroundColor: "#0f0f0f",
   },
@@ -1756,7 +1756,7 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: "transparent",
     border: "none",
     padding: "3px 8px",
-    borderRadius: "5px",
+    borderRadius: RADIUS.control,
     fontSize: FONT_SIZE.control,
     fontWeight: 700,
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
@@ -1799,7 +1799,7 @@ const styles: Record<string, React.CSSProperties> = {
   priceInput: {
     width: "120px",
     padding: "7px 10px",
-    borderRadius: "7px",
+    borderRadius: RADIUS.control,
     border: "1px solid #3a3a3a",
     backgroundColor: "#0f0f0f",
     color: "#f2f0eb",
@@ -1815,7 +1815,7 @@ const styles: Record<string, React.CSSProperties> = {
     width: "100%",
     textAlign: "left",
     padding: "9px 12px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     border: "1px solid #3a3a3a",
     backgroundColor: "#0f0f0f",
     color: "#f2f0eb",
@@ -1834,7 +1834,7 @@ const styles: Record<string, React.CSSProperties> = {
     width: "100%",
     textAlign: "left",
     padding: "5px 8px",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     border: "1px solid #2a2a2a",
     backgroundColor: "transparent",
     color: "#c8c6c0",
@@ -1862,7 +1862,7 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "12px",
     flexWrap: "wrap",
     padding: "7px 10px",
-    borderRadius: "7px",
+    borderRadius: RADIUS.control,
     backgroundColor: "#0f0f0f",
     border: "1px solid #2a2a2a",
   },
@@ -1870,7 +1870,7 @@ const styles: Record<string, React.CSSProperties> = {
   tokenDot: {
     width: "10px",
     height: "10px",
-    borderRadius: "50%",
+    borderRadius: RADIUS.circle,
     flexShrink: 0,
     borderWidth: "1px",
     borderStyle: "solid",
@@ -1886,7 +1886,7 @@ const styles: Record<string, React.CSSProperties> = {
     minWidth: "34px",
     justifyContent: "center",
     padding: "5px 9px",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     border: "1px solid #4a4a4a",
     backgroundColor: "#1c1c1c",
     color: "#f2f0eb",
@@ -1908,7 +1908,7 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     gap: "8px",
     padding: "12px 14px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     border: "1px solid #3a5a8a",
     backgroundColor: "#0f0f0f",
   },
@@ -1923,7 +1923,7 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#f0d68a",
     backgroundColor: "rgba(201, 169, 76, 0.12)",
     border: "1px solid rgba(201, 169, 76, 0.4)",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     padding: "7px 9px",
   },
   offerRow: { display: "flex", flexWrap: "wrap", gap: "8px", alignItems: "center" },
@@ -1931,7 +1931,7 @@ const styles: Record<string, React.CSSProperties> = {
   /* ---- Shared ---- */
   primaryButton: {
     padding: "8px 16px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     border: `1px solid ${ACTION_GREEN_BORDER}`,
     backgroundColor: ACTION_GREEN,
     color: ACTION_GREEN_INK,
@@ -1942,7 +1942,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   secondaryButton: {
     padding: "8px 16px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     border: "1px solid #4a4a4a",
     backgroundColor: "#1c1c1c",
     color: "#c8c6c0",
@@ -1964,7 +1964,7 @@ const styles: Record<string, React.CSSProperties> = {
   emergencyButton: {
     alignSelf: "flex-start",
     padding: "8px 16px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     border: "1px solid #f59e0b",
     backgroundColor: "#3a2a10",
     color: "#fcd34d",
@@ -1996,7 +1996,7 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     gap: "8px",
     padding: "14px 16px",
-    borderRadius: "12px",
+    borderRadius: RADIUS.layer,
     border: "1px solid #3a5a8a",
     backgroundColor: "#0f0f0f",
     boxShadow: "0 10px 34px rgba(0,0,0,0.6)",
@@ -2005,7 +2005,7 @@ const styles: Record<string, React.CSSProperties> = {
   promptDot: {
     width: "9px",
     height: "9px",
-    borderRadius: "999px",
+    borderRadius: RADIUS.pill,
     backgroundColor: "#38bdf8",
     flexShrink: 0,
   },
@@ -2026,7 +2026,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   promptButton: {
     padding: "7px 16px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     borderWidth: "1px",
     borderStyle: "solid",
     fontSize: FONT_SIZE.control,

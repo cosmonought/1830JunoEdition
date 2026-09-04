@@ -25,7 +25,7 @@
 
 import React, { useState } from "react";
 
-import { FONT_SIZE } from "../styles/typography";
+import { FONT_SIZE, RADIUS } from "../styles/typography";
 import {
   DEFAULT_AUTO_PASS_CONDITIONS,
   type AutoPassConditions,
@@ -203,7 +203,7 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     gap: "10px",
     padding: "18px 20px",
-    borderRadius: "12px",
+    borderRadius: RADIUS.layer,
     border: "1px solid #3a3a3a",
     backgroundColor: "#0f0f0f",
     boxShadow: "0 12px 40px rgba(0,0,0,0.6)",
@@ -249,7 +249,7 @@ const styles: Record<string, React.CSSProperties> = {
   footer: { display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "6px" },
   secondaryButton: {
     padding: "7px 14px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     border: "1px solid #3a3a3a",
     backgroundColor: "transparent",
     color: "#c8c6c0",
@@ -258,7 +258,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   primaryButton: {
     padding: "7px 14px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     border: "1px solid #3f7a55",
     backgroundColor: "#1d4030",
     color: "#e6f5ec",

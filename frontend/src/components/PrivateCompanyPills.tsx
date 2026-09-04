@@ -15,7 +15,7 @@
 
 import React, { useState } from "react";
 
-import { FONT_SIZE } from "../styles/typography";
+import { FONT_SIZE, RADIUS } from "../styles/typography";
 /* Design note #1035: the SAME four constants the train chips and the phase badge escalate on. A private
    about to close and a train about to rust are both "an asset the next purchases take away", and a warning
    drawn differently from the warning beside it reads as a different KIND of thing (#839). */
@@ -162,7 +162,7 @@ const styles: Record<string, React.CSSProperties> = {
   pill: {
     flexShrink: 0,
     padding: "1px 6px",
-    borderRadius: "4px",
+    borderRadius: RADIUS.control,
     borderWidth: "1px",
     borderStyle: "solid",
     font: "inherit",
@@ -189,7 +189,7 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     gap: "2px",
     padding: "6px 8px",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     border: "1px solid #39415280",
     backgroundColor: "#1c1c1c",
     maxWidth: "340px",

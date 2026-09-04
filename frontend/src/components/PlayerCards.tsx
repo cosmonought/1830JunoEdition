@@ -18,7 +18,7 @@
 
 import React, { useState } from "react";
 
-import { FONT_SIZE } from "../styles/typography";
+import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { PresidentCrown, PRESIDENT_CROWN_GOLD } from "./PresidentCrown";
 import { bestContrastTextColor } from "../styles/corporationLivery";
 // Design note #670: the same badge the Operating Round's cash strip uses. The
@@ -428,7 +428,7 @@ export const styles: Record<string, React.CSSProperties> = {
   card: {
     display: "flex",
     flexDirection: "column",
-    borderRadius: "9px",
+    borderRadius: RADIUS.card,
     border: "1px solid #2a2a2a",
     backgroundColor: "#f4f1e8",
     color: "#1c1c1c",
@@ -491,7 +491,7 @@ export const styles: Record<string, React.CSSProperties> = {
     fontWeight: 900,
     letterSpacing: "0.5px",
     padding: "1px 5px",
-    borderRadius: "999px",
+    borderRadius: RADIUS.pill,
     borderWidth: "1px",
     borderStyle: "solid",
   },

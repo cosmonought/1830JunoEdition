@@ -100,15 +100,27 @@ describe("an action states its own treasury movement", () => {
     expect(line).not.toContain("Treasury now");
   });
 
-  it("falls back to the destination when there is no origin to name", () => {
-    /* A LIVE CHAIN REPORTS NO `afterState` (#2) and a corporation absent from the before-state has no MOVE --
-       its opening balance is not a change, which is the distinction `treasuryProvenance` draws too. Half a
-       transition is worse than a plain figure, so the plain figure is what it prints. */
+  it("says nothing when the figure did not move", () => {
+    /* ==================================================================
+        DESIGN NOTE 1146 SUPERSEDES THIS CASE'S ANSWER, NOT ITS QUESTION
+       ==================================================================
+       IT ASSERTED `Treasury now $880` HERE, on the reasoning that "half a transition is worse than a plain
+       figure, so the plain figure is what it prints". That was a choice between two ways of stating a fact,
+       and it missed a third option: not stating it.
+       REPORTED: "'PRR laid Tile #57 on H10. Treasury now $1000.' If an action results in no change to a
+       corporation's treasury, the treasury amount does not need to print. It falsely implies the treasury was
+       affected." A figure at the end of a sentence about an action reads as a consequence OF that action, and
+       this branch fires on every free tile lay -- which is most of them.
+       #1066 ARGUED THE SAME POINT FROM THE OTHER DIRECTION: "a balance invites no question; a TRANSITION
+       invites one immediately". A clause that invites no question is not worth printing, and printing it
+       where nothing happened is the one case where it actively misinforms.
+       THE FIXTURE IS UNCHANGED so the case still tests what it always tested -- an action against a treasury
+       that did not move -- and only the expected sentence has flipped. */
     const line = describeGameplayAction(
       { LayTile: { protocol_id: CO, tile_id: 57, q: 0, r: 0 } } as never,
       context(board("880"), board("880")) as never,
     );
-    expect(line).toContain("Treasury now $880.");
+    expect(line).not.toContain("Treasury");
   });
 
   it("says nothing at all when the resolved state is missing", () => {

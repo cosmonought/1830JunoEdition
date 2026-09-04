@@ -13,7 +13,7 @@
 
 import React from "react";
 
-import { FONT_SIZE } from "../styles/typography";
+import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { CorporateLogo } from "./CorporateLogo";
 import { corporationFullName } from "../utils/corporationNames";
 
@@ -186,7 +186,7 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     gap: "12px",
     width: "min(460px, 100%)",
-    borderRadius: "12px",
+    borderRadius: RADIUS.layer,
     border: "1px solid #3a3a3a",
     backgroundColor: "#1c1c1c",
     color: "#f2f0eb",
@@ -228,7 +228,7 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "10px",
     margin: "0 20px",
     padding: "10px 14px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     border: "1px solid #3a3a3a",
     backgroundColor: "#141414",
   },
@@ -253,7 +253,7 @@ const styles: Record<string, React.CSSProperties> = {
   confirm: {
     margin: "0 20px 20px",
     padding: "11px 16px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     border: "1px solid #4d8ee0",
     backgroundColor: "#2f6fb2",
     color: "#f2f0eb",

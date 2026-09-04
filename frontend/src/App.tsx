@@ -584,6 +584,7 @@ import {
   resolvePrivateExchange,
 } from "./utils/privateExchange";
 import { effectiveActions, undoReachFor } from "./utils/logRevert";
+import { buildSandboxLogExport } from "./utils/logExport";
 import { RIVAL_ROUTE_INDEX_BASE, watcherTrainDrafts } from "./utils/watcherRouteChips";
 import { autoSkipExit } from "./utils/autoSkipExit";
 import { overrunsReach, reachForDrafting } from "./utils/trainReach";
@@ -611,9 +612,15 @@ import {
   setRoomNicknames,
 } from "./utils/playerLabels";
 import { RevenueModifierFlash, type RevenueFlashSignal } from "./components/RevenueModifierFlash";
+import { RADIUS } from "./styles/typography";
 /* Built once. `layTrackFocus` re-runs this filter for every candidate hex on the board, and rebuilding a
    276-entry list inside that loop would be the only expensive thing in the pass. */
 const ALL_TILE_PLACEMENTS = localCatalogPlacements();
+
+/** Design note #1145: how long a sent-but-unarrived placement may go on being drawn. An upper bound on a
+ *  Firestore round trip, not a typical one -- past it, a refused or lost action must stop being pictured as
+ *  a tile that is on its way. */
+const COMMITTED_PREVIEW_MS = 4000;
 
 /* Design note #875: `RIVAL_ROUTE_INDEX_BASE` moved to `watcherRouteChips.ts`, which is now the thing that
    applies it. #740's reasoning travels with it: "rivals' live routes are keyed above any real train index, so
@@ -753,7 +760,7 @@ const gameOverReopenStyle: React.CSSProperties = {
   transform: "translateX(-50%)",
   zIndex: 1500,
   padding: "8px 16px",
-  borderRadius: "999px",
+  borderRadius: RADIUS.pill,
   border: "1px solid #7a6320",
   backgroundColor: "#241d0e",
   color: "#f0dfa8",
@@ -2219,6 +2226,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
        *  connectivity at THIS orientation (#878). The board draws from it and the lay sends it, so the ghost
        *  and the dispatch cannot disagree about where a marker lands. */
       tokenCities?: ReadonlyArray<[number, number]>;
+      /** Design note #1145: this lay has been SENT and the board has not come back with it yet. Drawn solid
+       *  rather than dashed, and held until the grid contains it -- see `handleSandboxLayTile`. */
+      committed?: boolean;
     } | null
   >(null);
 
@@ -2805,6 +2815,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     kind: "paid" | "free";
     offsetX: number;
     offsetY: number;
+  } | null>(null);
+
+  /** Design note #1145: a station placement that has been SENT and has not come back on the board yet.
+   *  Overlaid on the canvas roster only -- never on the one the rules read. `null` the rest of the time. */
+  const [committedStation, setCommittedStation] = useState<{
+    companyId: number;
+    q: number;
+    r: number;
+    cityIndex: number | null;
   } | null>(null);
 
   /* Design note #850: read through a ref for the same reason `isMyTurnRef` is -- the click handler is a
@@ -6993,6 +7012,68 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     );
   }, [sandbox, runGameplayAction, gameId, logInfo, localId, sandboxRoom, describeLoggedAction]);
 
+  /* ==================================================================
+      DESIGN NOTE 1160: THE HOST CAN HAND OVER THE LOG
+     ==================================================================
+     A REPORTED UNDO FAULT SURVIVED FIVE HYPOTHESES and could not be reproduced from the code: the reducer
+     preserves the revenue through every arm, the die spans 80-120% and cannot move a figure by a third,
+     appends are transactional so new entries cannot collide, the shell has held no revenue cache since #934,
+     and the reporter established the corporation ran ONE train with no route worth the figure shown. What
+     that leaves is a question about one specific log -- and #522's "the log is the game" cuts both ways: given
+     the entries the failing turn is exactly reproducible in a test, and without them it is a guess.
+     PLACED BESIDE THE UNDO IT EXISTS TO INVESTIGATE, and not merged into the Yellow Sign's key handler even
+     though it borrows that tool's shape -- host-only, sandbox-only, a keyboard accelerator with no new
+     chrome. Merging them would have put this several hundred lines above `logInfo`, and the two tools share
+     nothing but a modifier key.
+     IT REPORTS ON FAILURE TOO. `navigator.clipboard` is absent on an insecure origin and rejects without a
+     gesture in some browsers; a debug tool that fails silently is worse than none, so the console is the
+     fallback and the Activity Log line says which of the two happened.
+     IT NAMES DUPLICATE INDICES because that is the one fault the export can see by itself, and it is a live
+     suspect: `effectiveActions` kills a revert's range by INDEX while #1026 made only the revert's own
+     identity an id, so two entries sharing an index are still undone together. #1026's own report was a room
+     that "rolled back to a much earlier state" for that reason. A clean log rules the family out at a
+     glance. */
+  const copySandboxLog = useCallback(() => {
+    if (!isSandboxHost) return;
+    const dump = buildSandboxLogExport(sandboxLogRef.current, sandboxRoomRef.current);
+    const text = JSON.stringify(dump, null, 2);
+    const duplicates =
+      dump.duplicateIndices.length > 0
+        ? ` ${dump.duplicateIndices.length} DUPLICATE INDEX/INDICES: ${dump.duplicateIndices.join(", ")}.`
+        : "";
+    const said = (how: string) =>
+      logInfo("Debug", `Action log (${dump.actionCount} entries) ${how}.${duplicates}`);
+    const toConsole = () => {
+      // eslint-disable-next-line no-console
+      console.log(text);
+    };
+    try {
+      void navigator.clipboard
+        .writeText(text)
+        .then(() => said("copied to the clipboard"))
+        .catch(() => {
+          toConsole();
+          said("could not reach the clipboard and was printed to the browser console instead");
+        });
+    } catch {
+      toConsole();
+      said("was printed to the browser console");
+    }
+  }, [isSandboxHost, logInfo]);
+
+  useEffect(() => {
+    if (!isSandboxHost) return undefined;
+    const onKey = (event: KeyboardEvent) => {
+      // Design note #1160: Ctrl+Shift+L, beside the sign's own Ctrl+Shift+Y.
+      if (!event.ctrlKey || !event.shiftKey) return;
+      if (event.key.toLowerCase() !== "l") return;
+      event.preventDefault();
+      copySandboxLog();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isSandboxHost, copySandboxLog]);
+
   /* handleUndoToRoundStart is gone with the second button; undoToRoundStart stays exported and tested.
      See docs/ai_architecture/state_machine.md - App.tsx #592 */
 
@@ -8209,6 +8290,22 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     if (!pendingToken) return;
     const { q, r, cityIndex, kind } = pendingToken;
     setPendingToken(null);
+    /* ==================================================================
+        DESIGN NOTE 1145: THE TOKEN HAS NO GHOST TO HOLD, SO IT IS GIVEN ONE
+       ==================================================================
+       REPORTED alongside the tile: "the exact same thing happens with station token placement."
+       IT IS THE SAME GAP AND A DIFFERENT SHAPE. A tile has a picture of itself already on screen -- the
+       preview -- and #1145 fixes that hex by not taking it away. A token has NO board-side preview at all:
+       `pendingToken` draws the confirm RING, and the marker itself comes from `public_companies`. So the ring
+       closes on the click and the city stays bare for the whole round trip.
+       RECORDED HERE AND OVERLAID ONLY ON THE CANVAS -- see `boardCompanies`. The ring still closes at once,
+       because the player answered it. */
+    setCommittedStation({
+      companyId: pendingToken.companyId ?? actingProtocolId,
+      q,
+      r,
+      cityIndex,
+    });
     /* Design note #866: the standing request ends when the placement does. The board re-answers it on every
        view change, so a confirmed token that left the request set would immediately stage a second one. */
     setAutoStageStation(null);
@@ -8940,6 +9037,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   ]);
 
   const autoSkippedRef = useRef<Set<string>>(new Set());
+  /** Design note #1145: the (turn, corporation, step) key the auto-skip last DISPATCHED for. Non-null only
+   *  between sending a skip and the board moving off that step -- in a room, a full Firestore round trip. */
+  const skipDispatchedForRef = useRef<string | null>(null);
   useEffect(() => {
     if (!autoSkipReason) return;
     /* Design note #774: the same fix as the forced withhold above, for the same reason. `autoSkipReason` is
@@ -8952,6 +9052,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     const key = turnGuardKey(turnIdentity, actingProtocolId, orSubPhase);
     if (autoSkippedRef.current.has(key)) return;
     autoSkippedRef.current.add(key);
+    /* Design note #1145: and the step this skip is IN FLIGHT for, which is what holds the bar frozen until
+       the board actually moves. Written beside the spend so the two cannot come apart -- they are one fact
+       recorded twice for two different questions ("may I dispatch again" and "has it landed yet"). */
+    skipDispatchedForRef.current = key;
     /* ==================================================================
        DESIGN NOTE 876: SKIPPING THE LAST STEP IS ENDING THE TURN
        ==================================================================
@@ -9027,10 +9131,35 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
 
      THE REF IS WRITTEN DURING RENDER, deliberately and idempotently: for a given render it stores the value
      that render already computed, so a double invocation under StrictMode writes the same thing twice. */
+  /* ==================================================================
+      DESIGN NOTE 1145: #1094'S FREEZE RELEASED AT DISPATCH, AND DISPATCH STOPPED BEING INSTANT
+     ==================================================================
+     REPORTED AGAIN, in nearly the words of the first report: "the auto-skip through Operating subphases is
+     briefly flashing each subphase's Action Bar before landing on the actionable one."
+
+     #1094 IS NOT WRONG. Its third clause -- "this key not already spent" -- exists so a freeze cannot outlive
+     the dispatch that justifies it, and it was right in the world it was written in: SOLO sandbox applies the
+     reducer synchronously inside the click, so `autoSkippedRef.add(key)` and the step actually moving are the
+     same instant. There is no gap to paint.
+
+     A ROOM PUT A NETWORK ROUND TRIP IN THAT GAP. `runGameplayAction` appends to Firestore and returns; the
+     step moves when the snapshot comes back (#522, "the log is the game"). So the effect marks the key spent,
+     the freeze releases, and the client then re-renders SEVERAL TIMES -- the one-second `now` tick alone
+     guarantees it -- with the skipped step live and unfrozen. Every one of those paints the bar #1094 exists
+     to keep off the screen.
+
+     SO THE RELEASE MOVES FROM "THE SKIP WAS SENT" TO "THE STEP ACTUALLY MOVED", which is what the freeze was
+     always describing and what was only accidentally the same thing before. `skipDispatchedForRef` holds the
+     key the effect last dispatched for; the key carries the step, so the comparison goes false by itself the
+     moment the board advances -- there is nothing to clear and no second fact to keep in step.
+     #1094'S PROTECTION SURVIVES INTACT. Returning to a step whose key is already spent finds the ref pointing
+     at a key that is no longer current, so the bar is NOT frozen -- which is the stuck-freeze case that
+     clause was defending against, and the reason it is narrowed rather than deleted. */
+  const autoSkipKey = turnGuardKey(turnIdentity, actingProtocolId, orSubPhase);
   const autoSkipPending =
     autoSkipReason !== null &&
     isMyTurn &&
-    !autoSkippedRef.current.has(turnGuardKey(turnIdentity, actingProtocolId, orSubPhase));
+    (!autoSkippedRef.current.has(autoSkipKey) || skipDispatchedForRef.current === autoSkipKey);
   const settledSubPhaseRef = useRef(orSubPhase);
   if (!autoSkipPending) settledSubPhaseRef.current = orSubPhase;
   /** The step the Action Bar should draw: the live one, or the last settled one while a skip run resolves. */
@@ -9100,7 +9229,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       // the cursor off `Track` on success) rather than inventing a sandbox
       // sequencing rule.
       setLiveOrSubPhase("Tokens");
-      setPreviewTile(null);
+      /* Design note #1145: the ghost is NOT cleared here. It is marked sent and held until the board comes
+         back with the lay -- see `handleRingConfirmed` for why, and the release effect below for when. */
+      setPreviewTile((current) => (current ? { ...current, committed: true } : current));
     },
     [runGameplayAction, gameId, actingProtocolId],
   );
@@ -9225,6 +9356,119 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       current?.kind === "private-tile" ? null : current,
     );
   }, []);
+
+  /* ==================================================================
+      DESIGN NOTE 1145: A CONFIRM CLOSES THE RING BUT MUST NOT ERASE THE TILE
+     ==================================================================
+     REPORTED: "when clicking the green checkmark to lay a tile, the screen briefly flashes with the empty hex
+     before the tile is laid ... this used to be instantaneous."
+
+     IT USED TO BE, AND SOLO SANDBOX STILL IS. There, the reducer applies inside the click, so the ghost being
+     torn down and the tile appearing are one React commit and nothing in between is ever drawn. In a ROOM the
+     click appends to Firestore and returns (#522, "the log is the game"); the board moves when the snapshot
+     comes back. `handleDismissRadial` cleared the ghost at the near end of that trip and the tile arrived at
+     the far end, so the hex was drawn EMPTY for the whole round trip -- the one picture of the hex that was
+     never true.
+
+     THE RING STILL CLOSES INSTANTLY, which is the half of the dismissal the player asked for by pressing
+     confirm. Only the ghost stays, and it stays as `committed` -- drawn solid, identical to the tile that
+     replaces it (see `HexGridRenderer` #1145), so the arrival is invisible rather than a flash.
+
+     NOT AN OPTIMISTIC APPLY. Nothing is written to the grid, the log or the reducer; this is a PICTURE held a
+     few hundred milliseconds longer than it used to be. #891's fault -- two components deriving one fact and
+     disagreeing -- needs two derivations to be possible, and there is still exactly one: the ghost draws what
+     the dispatch sent, which is what #886 already established ("the lay now sends exactly what was drawn").
+     THE ERRAND RULE IS `handleDismissRadial`'S, UNCHANGED. A private-tile errand still ends when the ring
+     does; a lay that claimed it has already cleared it above. */
+  const handleRingConfirmed = useCallback(() => {
+    setRadialSelector(null);
+    setPreviewTile((current) => (current ? { ...current, committed: true } : current));
+    setHomeStationPlacement((current) =>
+      current?.kind === "private-tile" ? null : current,
+    );
+  }, []);
+
+  /* ==================================================================
+      DESIGN NOTE 1145: THE HELD GHOST IS RELEASED BY THE BOARD, OR BY A CLOCK
+     ==================================================================
+     THE ORDINARY RELEASE IS THE ARRIVAL. The grid comes back holding this tile at this hex, the ghost is
+     dropped, and the two pictures were identical, so nothing moved on screen. That is the entire feature.
+
+     THE CLOCK IS THE HONEST PART. A held ghost is a claim that the lay is on its way, and a lay can be
+     REFUSED -- `applySandboxLayTile` takes a `layRefused` arm, #891 refuses one the treasury cannot cover,
+     and an append can simply fail. Without a deadline the refusal would leave a solid tile drawn on a hex
+     that does not have one: a picture the board disagrees with, held indefinitely, which is a worse bug than
+     the flash this note is fixing and a much quieter one.
+     FOUR SECONDS IS AN UPPER BOUND ON A ROUND TRIP, not a guess at a typical one. Past it, the empty hex is
+     the truth and the player is better off seeing it -- the refusal's own log line is what explains it.
+     MATCHED ON THE TILE, NOT JUST THE HEX, because an upgrade lands on a hex that already holds a tile; only
+     the id changes, and a hex test would release the ghost the instant it was drawn. */
+  useEffect(() => {
+    if (!previewTile?.committed) return undefined;
+    const { q, r, tileId } = previewTile;
+    if (mapGrid.tiles.some((tile) => tile.q === q && tile.r === r && tile.tile_id === tileId)) {
+      setPreviewTile(null);
+      return undefined;
+    }
+    const timer = window.setTimeout(() => setPreviewTile(null), COMMITTED_PREVIEW_MS);
+    return () => window.clearTimeout(timer);
+  }, [previewTile, mapGrid]);
+
+  /* ==================================================================
+      DESIGN NOTE 1145: THE IN-FLIGHT TOKEN IS A PICTURE, AND ONLY THE CANVAS SEES IT
+     ==================================================================
+     THE CONTAINMENT IS THE WHOLE DESIGN. `gameState.public_companies` reaches the board through exactly one
+     prop, and this memo sits on that one wire. A token that has been sent and not yet confirmed is therefore
+     visible to the RENDERER and to nothing else -- not to route legality, not to the reducer, not to the
+     connectivity check that decides where the next tile's tokens land. Those all read `gameState` directly
+     and go on seeing the board as the log describes it, which is the only reading of it that can be right.
+     A ROSTER-WIDE OPTIMISTIC TOKEN WOULD HAVE BEEN THE OBVIOUS SHAPE and it is the dangerous one: an unlanded
+     token that votes on route legality is #891 with real consequences, and it would be invisible until two
+     players' route calculations disagreed.
+     `station_tokens` IS EXTENDED ONLY IF IT IS ALREADY POPULATED. Its own type comment is explicit that an
+     empty list alongside a non-empty `station_token_hexes` means "this chain does not know", never "no
+     tokens" -- so seeding a first entry here would turn an unknown into a claim, and the renderer would stop
+     using the fallback that is currently drawing every other token on the board correctly. */
+  const boardCompanies = useMemo(() => {
+    const roster = gameState?.public_companies;
+    if (!roster || !committedStation) return roster;
+    const { companyId, q, r, cityIndex } = committedStation;
+    return roster.map((company) =>
+      company.company_id !== companyId ||
+      company.station_token_hexes.some(([hq, hr]) => hq === q && hr === r)
+        ? company
+        : {
+            ...company,
+            station_token_hexes: [...company.station_token_hexes, [q, r] as [number, number]],
+            ...(company.station_tokens && company.station_tokens.length > 0
+              ? {
+                  station_tokens: [
+                    ...company.station_tokens,
+                    [q, r, cityIndex ?? 0] as [number, number, number],
+                  ],
+                }
+              : {}),
+          },
+    );
+  }, [gameState?.public_companies, committedStation]);
+
+  /* Design note #1145: released by the board or by the clock, exactly as the held tile is -- and for the
+     same reason. A refused placement must not leave a token drawn on a city that does not hold one. */
+  useEffect(() => {
+    if (!committedStation) return undefined;
+    const { companyId, q, r } = committedStation;
+    const landed = (gameState?.public_companies ?? []).some(
+      (company) =>
+        company.company_id === companyId &&
+        company.station_token_hexes.some(([hq, hr]) => hq === q && hr === r),
+    );
+    if (landed) {
+      setCommittedStation(null);
+      return undefined;
+    }
+    const timer = window.setTimeout(() => setCommittedStation(null), COMMITTED_PREVIEW_MS);
+    return () => window.clearTimeout(timer);
+  }, [committedStation, gameState?.public_companies]);
 
   /* ==================================================================
       DESIGN NOTE 886: ONE DERIVATION, EVERY SURFACE THAT DRAWS A TOKEN
@@ -10091,7 +10335,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       setHomeStationPlacement(null);
       if (homeStationPlacement) setActiveMainTab(homeStationPlacement.returnTab);
     }
-    handleDismissRadial();
+    // Design note #1145: closes the ring, keeps the tile.
+    handleRingConfirmed();
   }, [
     radialSelector,
     previewTile,
@@ -10100,7 +10345,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     handleSandboxLayTile,
     runGameplayAction,
     gameId,
-    handleDismissRadial,
+    handleRingConfirmed,
     actingProtocolId,
     homeStationPlacement,
     /* Design note #886: `mapGrid` and `gameState` left this list with the derivation itself -- the lay now
@@ -10955,6 +11200,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
            `onShowMap` exists to resolve. */
         mapEl={activeMainTab === "map" ? boardEl : null}
         onShowMap={handleShowMap}
+        /* Design note #1164: the toast channel, so the Lay Track button can say where to click on a surface a
+           touch screen can actually show -- its `title` never could. */
+        onSayWhereToClick={showActionToast}
         /* Design note #987: `onFrameNetwork`/`canFrameNetwork` are GONE. The Lay Track button now
            switches to the Rail Map tab and does nothing else -- no camera move, no page scroll. */
         /* Design note #846: the same offers the board rings, so the chip and the hue ring cannot
@@ -11510,7 +11758,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                       currentEra={gameState?.current_global_era ?? "Yellow"}
                       // PublicCompanyState[] is structurally assignable to StationTokenCompany[]; omitted entirely until gameState resolves.
                       // See docs/ai_architecture/canvas_rendering.md - App.tsx #36
-                      publicCompanies={gameState?.public_companies}
+                      /* Design note #1145: the roster WITH an in-flight placement drawn on it. The canvas is
+                         the only consumer of this overlay; every rule still reads `gameState` itself. */
+                      publicCompanies={boardCompanies}
                       // Design note #318: the reservation badges read this
                       // roster and clear themselves when a private closes.
                       privateCompanies={gameState?.private_companies}

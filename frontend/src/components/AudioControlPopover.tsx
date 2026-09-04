@@ -29,7 +29,7 @@
 
 import React, { useEffect, useRef } from "react";
 
-import { FONT_SIZE } from "../styles/typography";
+import { FONT_SIZE, RADIUS } from "../styles/typography";
 
 export interface AudioCategoryToggle {
   key: string;
@@ -294,7 +294,11 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     gap: "8px",
     padding: "10px 12px",
-    borderRadius: "10px",
+    /* Design note #1151: PROMOTED BY HAND. The sweep mapped each site from the value it already had, which
+       preserves the original author's sense of scale -- but this surface was authored at the card step and is
+       a floating layer by the rule, so the old value and the role disagreed. The role wins; that disagreement
+       is exactly what the hand pass after the sweep is for. */
+    borderRadius: RADIUS.layer,
     border: "1px solid #3a3a3a",
     backgroundColor: "#1c1c1c",
     boxShadow: "0 12px 30px rgba(0,0,0,0.6)",
@@ -327,7 +331,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.small,
     fontFamily: "inherit",
     padding: "4px 6px",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     border: "1px solid #3a3a3a",
     backgroundColor: "#1c1c1c",
     color: "#f2f0eb",
@@ -341,7 +345,7 @@ const styles: Record<string, React.CSSProperties> = {
     width: "24px",
     height: "24px",
     padding: 0,
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     border: "1px solid #3a3a3a",
     backgroundColor: "#1c1c1c",
     color: "#c8c6c0",

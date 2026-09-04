@@ -45,7 +45,7 @@
 // no content. Styles left over from the deleted view are deleted rather than left dead in the file.
 
 import React, { useEffect, useRef, useState } from "react";
-import { FONT_SIZE } from "../styles/typography";
+import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { PRIVATE_COMPANY_CATALOG, abilitySummary } from "../utils/privateCatalog";
 // Design note #640: which build the browser is actually running.
 import { UI_BUILD_LABEL } from "../utils/buildStamp";
@@ -787,7 +787,7 @@ const styles: Record<string, React.CSSProperties> = {
     margin: "0 20px 20px",
     backgroundColor: INK_VIEWPORT,
     border: "1px solid #2a2a2a",
-    borderRadius: "10px",
+    borderRadius: RADIUS.card,
     display: "flex",
     flexDirection: "column",
     gap: "20px",
@@ -930,7 +930,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "10px 14px",
     background: "#1c1c1c",
     border: "1px solid #2a2a2a",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
   },
   flowItemHead: {
     display: "flex",
@@ -964,7 +964,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "16px 20px",
     backgroundColor: "#080808",
     border: "1px solid #3a3a3a",
-    borderRadius: "10px",
+    borderRadius: RADIUS.card,
   },
   currentRoundBlock: {
     display: "flex",
@@ -985,7 +985,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "14px 18px",
     backgroundColor: "#080808",
     border: "1px solid #3a3a3a",
-    borderRadius: "10px",
+    borderRadius: RADIUS.card,
   },
   quickStripTitle: {
     margin: 0,
@@ -1078,7 +1078,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.control,
     fontWeight: 700,
     padding: "4px 12px",
-    borderRadius: "999px",
+    borderRadius: RADIUS.pill,
     backgroundColor: "#2a3a2a",
     color: "#8fe0a0",
     border: "1px solid #3f5f42",

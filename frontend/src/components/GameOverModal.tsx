@@ -10,7 +10,7 @@
 
 import React from "react";
 
-import { FONT_SIZE } from "../styles/typography";
+import { FONT_SIZE, RADIUS } from "../styles/typography";
 import type { PlayerStanding } from "../utils/endgame";
 import CarcosaMark from "./CarcosaMark";
 
@@ -258,7 +258,7 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: "#0f0f0f",
     border: "1px solid #3a3a3a",
     borderTop: "3px solid #c9a227",
-    borderRadius: "12px",
+    borderRadius: RADIUS.layer,
     boxShadow: "0 22px 60px rgba(0,0,0,0.7)",
     boxSizing: "border-box",
   },
@@ -274,7 +274,7 @@ const styles: Record<string, React.CSSProperties> = {
   verdict: {
     margin: "4px 0",
     padding: "10px 14px",
-    borderRadius: "9px",
+    borderRadius: RADIUS.card,
     fontSize: FONT_SIZE.heading,
     fontWeight: 800,
     textAlign: "center",
@@ -290,14 +290,14 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "8px 10px",
     backgroundColor: "#141414",
     border: "1px solid #2a2a2a",
-    borderRadius: "9px",
+    borderRadius: RADIUS.card,
   },
   row: {
     display: "flex",
     alignItems: "center",
     gap: "8px",
     padding: "5px 6px",
-    borderRadius: "5px",
+    borderRadius: RADIUS.control,
     fontSize: FONT_SIZE.small,
     fontVariantNumeric: "tabular-nums",
     color: "#c8c6c0",
@@ -332,7 +332,7 @@ const styles: Record<string, React.CSSProperties> = {
   footerButtons: { display: "flex", gap: "8px", flex: "none" },
   secondaryButton: {
     padding: "7px 14px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     border: "1px solid #3a3a3a",
     backgroundColor: "transparent",
     color: "#c8c6c0",
@@ -341,7 +341,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   primaryButton: {
     padding: "7px 14px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     border: "1px solid #7a6320",
     backgroundColor: "#3b3113",
     color: "#f0dfa8",
@@ -352,7 +352,7 @@ const styles: Record<string, React.CSSProperties> = {
   tagYou: {
     marginLeft: "6px",
     padding: "1px 6px",
-    borderRadius: "999px",
+    borderRadius: RADIUS.pill,
     border: "1px solid #3f5f8a",
     backgroundColor: "#1d3350",
     color: "#bcd4f0",
@@ -365,7 +365,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 800,
     color: "#0f0f0f",
     backgroundColor: "#7ee0a1",
-    borderRadius: "4px",
+    borderRadius: RADIUS.control,
     padding: "0 5px",
   },
   tagBankrupt: {
@@ -373,7 +373,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 800,
     color: "#f0c9c9",
     border: "1px solid #6b2f2f",
-    borderRadius: "4px",
+    borderRadius: RADIUS.control,
     padding: "0 5px",
   },
   payoutNote: { margin: 0, fontSize: FONT_SIZE.micro, color: "#8a8a86", lineHeight: 1.45 },

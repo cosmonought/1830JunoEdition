@@ -13,7 +13,7 @@
 // Design notes: see `docs/ai_architecture/contract_economy.md`.
 
 import React, { useEffect, useRef, useState } from "react";
-import { FONT_SIZE } from "../styles/typography";
+import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { privateClosureTier } from "../utils/purchaseWarnings";
 import { PRIVATE_COMPANY_CATALOG } from "../utils/privateCatalog";
 import { SpecialPowerBlock } from "./SpecialPowerBlock";
@@ -882,7 +882,7 @@ const styles: Record<string, React.CSSProperties> = {
     // Design note #1117: the one viewport ground, shared by every tab.
     backgroundColor: INK_VIEWPORT,
     border: "1px solid #2a2a2a",
-    borderRadius: "10px",
+    borderRadius: RADIUS.card,
     color: "#f2f0eb",
     fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif",
     width: "100%",
@@ -963,7 +963,7 @@ const styles: Record<string, React.CSSProperties> = {
     borderColor: CARD_BORDER,
     borderLeftWidth: "5px",
     borderLeftColor: CARD_ACCENT,
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     height: "100%",
     minHeight: "260px",
     boxSizing: "border-box",
@@ -981,7 +981,7 @@ const styles: Record<string, React.CSSProperties> = {
     borderWidth: "1px",
     borderStyle: "solid",
     borderColor: CARD_BORDER,
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     height: "100%",
     minHeight: "260px",
     boxSizing: "border-box",
@@ -1001,7 +1001,7 @@ const styles: Record<string, React.CSSProperties> = {
     borderColor: CARD_BORDER,
     borderLeftWidth: "5px",
     borderLeftColor: "#8a8a86",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     minHeight: "260px",
     boxSizing: "border-box",
     // Greyed rather than hidden: the board should still show all six.
@@ -1017,7 +1017,7 @@ const styles: Record<string, React.CSSProperties> = {
     width: "100%",
     textAlign: "center",
     padding: "9px 10px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     /* Design note #1092 cleanup: was `#e4e1d8`, a hand-written near-miss of `CARD_SURFACE_MUTED` sitting
        beside `CARD_BORDER` from the same module. Exactly the drift `palette.ts` was created to stop -- an
        inert surface written twice, once as a token and once as a literal a shade off it. */
@@ -1099,7 +1099,7 @@ const styles: Record<string, React.CSSProperties> = {
     color: CARD_BUY_GREEN_INK,
     backgroundColor: CARD_BUY_GREEN_TINT,
     border: `1px solid ${CARD_BUY_GREEN}`,
-    borderRadius: "4px",
+    borderRadius: RADIUS.control,
     padding: "2px 6px",
   },
   privateCardFaceValue: {
@@ -1149,7 +1149,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     color: CARD_INK,
     padding: "2px 6px",
-    borderRadius: "4px",
+    borderRadius: RADIUS.control,
   },
   bidRowEntryOwn: {
     display: "flex",
@@ -1159,7 +1159,7 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#14522f",
     backgroundColor: "#dcf0e2",
     padding: "2px 6px",
-    borderRadius: "4px",
+    borderRadius: RADIUS.control,
   },
   bidAmount: {
     fontWeight: 700,
@@ -1219,7 +1219,7 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#1c4a63",
     backgroundColor: "#dcecf5",
     border: "1px solid #7fb2cc",
-    borderRadius: "4px",
+    borderRadius: RADIUS.control,
     padding: "2px 6px",
     whiteSpace: "nowrap",
   },
@@ -1230,7 +1230,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 800,
     letterSpacing: "0.4px",
     padding: "2px 9px",
-    borderRadius: "999px",
+    borderRadius: RADIUS.pill,
     color: "#7a2020",
     backgroundColor: "#f8dcd6",
     borderWidth: "1px",
@@ -1243,7 +1243,7 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#14522f",
     backgroundColor: "#d9f0e1",
     border: "1px solid #6cb98b",
-    borderRadius: "4px",
+    borderRadius: RADIUS.control,
     padding: "2px 6px",
     whiteSpace: "nowrap",
   },
@@ -1256,7 +1256,7 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#8a4a10",
     backgroundColor: "#fbe6cd",
     border: "1px solid #d09040",
-    borderRadius: "4px",
+    borderRadius: RADIUS.control,
     padding: "2px 6px",
     whiteSpace: "nowrap",
   },
@@ -1293,7 +1293,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.small,
     fontWeight: 700,
     padding: "7px 8px",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     borderWidth: "1px",
     borderStyle: "solid",
     borderColor: CARD_DIVIDER,
@@ -1309,7 +1309,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.small,
     fontWeight: 800,
     padding: "7px 12px",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     borderWidth: "1px",
     borderStyle: "solid",
     borderColor: "#2c6e4a",
@@ -1323,7 +1323,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.small,
     fontWeight: 700,
     padding: "7px 12px",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     borderWidth: "1px",
     borderStyle: "solid",
     borderColor: "#a06a5a",
@@ -1355,7 +1355,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "12px",
     backgroundColor: "#211c0f",
     border: "1px solid #6b5a1f",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
   },
   // The Buy button on the lowest-offered private -- the panel's only
   // outright purchase, and its only green control. See `CARD_BUY_GREEN`.
@@ -1368,7 +1368,7 @@ const styles: Record<string, React.CSSProperties> = {
     borderWidth: "1px",
     borderStyle: "solid",
     borderColor: CARD_BUY_GREEN_DARK,
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     cursor: "pointer",
   },
   secondaryButton: {
@@ -1378,7 +1378,7 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#f2f0eb",
     backgroundColor: "#2a2a2a",
     border: "1px solid #3a3a3a",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     cursor: "pointer",
   },
   passButton: {
@@ -1388,7 +1388,7 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#c8c6c0",
     backgroundColor: "transparent",
     border: "1px solid #3a3a3a",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     cursor: "pointer",
   },
   bidRow: {
@@ -1403,7 +1403,7 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: "#0f0f0f",
     color: "#f2f0eb",
     border: "1px solid #3a3a3a",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
   },
   numberInput: {
     width: "90px",
@@ -1413,7 +1413,7 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: "#0f0f0f",
     color: "#f2f0eb",
     border: "1px solid #3a3a3a",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
   },
   hintText: {
     fontSize: FONT_SIZE.micro,
@@ -1426,7 +1426,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 800,
     color: "#0d1117",
     backgroundColor: "#7ee0a1",
-    borderRadius: "4px",
+    borderRadius: RADIUS.control,
     padding: "2px 7px",
     whiteSpace: "nowrap",
   },
@@ -1435,7 +1435,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     color: "#8ee08a",
     border: "1px solid #2f5a2f",
-    borderRadius: "4px",
+    borderRadius: RADIUS.control,
     padding: "1px 5px",
   },
   /* Design note #302: red. It marks the player everyone else must outbid -- an alarm for the other bidders
@@ -1450,14 +1450,14 @@ const styles: Record<string, React.CSSProperties> = {
     flexWrap: "wrap",
     gap: "10px",
     padding: "10px 12px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     border: "1px solid #2f7d55",
     backgroundColor: "#16241d",
   },
   auctionOverText: { fontSize: FONT_SIZE.strong, fontWeight: 700, color: "#cfe9d9" },
   proceedButton: {
     padding: "7px 16px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     border: "1px solid #2f7d55",
     backgroundColor: "#1d5c40",
     color: "#eafff2",
@@ -1484,7 +1484,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     color: "#d4a94c",
     border: "1px solid #6b5a1f",
-    borderRadius: "4px",
+    borderRadius: RADIUS.control,
     padding: "1px 5px",
   },
 };

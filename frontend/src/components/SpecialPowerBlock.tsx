@@ -27,7 +27,7 @@
 // the id it names. A div with an onClick reads to a screen reader as text that mysteriously changes.
 
 import React, { useId, useState } from "react";
-import { FONT_SIZE } from "../styles/typography";
+import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { abilitySummary, type PrivateCatalogEntry } from "../utils/privateCatalog";
 
 export interface SpecialPowerBlockProps {
@@ -142,7 +142,7 @@ const styles: Record<string, React.CSSProperties> = {
   detail: {
     margin: 0,
     padding: "7px 9px",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     fontSize: FONT_SIZE.micro,
     lineHeight: 1.5,
   },

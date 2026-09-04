@@ -268,8 +268,19 @@ describe("the auto-camera is dead (design note #987)", () => {
        correctly and scrolling to the top of the page are the same outcome. There was nothing to fix.
        THE TAB SWITCH IS THE HALF THAT WAS ALWAYS DOING WORK (#833): a player on the Stock Market tab has no
        map pane at all, and that is the one case where this button can help. */
-    const goToMap = sliceBetween(BAR, "const goToMap = React.useCallback(", "}, [mapEl, onShowMap]);");
+    /* Design note #1164: the dependency list gained `onSayWhereToClick`, so this slice's END MARKER moved --
+       it named the deps verbatim, which is the narrowest possible way to describe "the end of this callback".
+       Sliced to the closing brace instead; what the case is about is the BODY, and the body's claim is
+       unchanged. */
+    const goToMap = sliceBetween(BAR, "const goToMap = React.useCallback(", "\n  }, [");
     expect(goToMap).toContain("if (!mapEl) onShowMap?.();");
+    /* ==================================================================
+        DESIGN NOTE 1164 ADDS A SENTENCE, NOT A MOVEMENT
+       ==================================================================
+       The callback now also SAYS where to click, because #987 left it a deliberate no-op once the map is
+       showing and a player pressing an inert control deserves an answer. That is speech, not navigation --
+       the rule this case guards is that the callback moves the PAGE not at all, and it still does not. */
+    expect(goToMap).toContain("onSayWhereToClick?.(");
     /* ==================================================================
         `scroll`, NOT `scrollTo` -- THE NARROW FORM LET A CONTROL THROUGH
        ==================================================================

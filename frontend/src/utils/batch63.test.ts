@@ -257,7 +257,17 @@ describe("what the name's departure left behind", () => {
        cost the row the label/figure rhythm the payer row keeps. It is here because the layout asked, not
        because the report did -- which is the distinction #1052 drew about the figure I had added to a
        borrowed component, and the reason this case names it as mine. */
-    expect(MACHINE).toContain("your cash");
+    /* ==================================================================
+        DESIGN NOTE 1163 KEPT THE CAPTION AND DROPPED ONE WORD OF IT
+       ==================================================================
+       IT PINNED "your cash", and the possessive is the half that did not survive: REPORTED as "the 'your
+       cash' string seems unnecessary since it already has the player name and color strip above it".
+       AND THIS CASE'S OWN ARGUMENT IS WHY. It records that the caption exists because "the name leaving the
+       body row emptied its gutter and cost the row the label/figure rhythm" -- a claim about RHYTHM, which a
+       one-word caption satisfies exactly as well. The word that went was the one duplicating the stripe the
+       same note moved the name into.
+       SO THE ASSERTION FOLLOWS THE CLAIM: there is a caption, and it is in the label's own style. */
+    expect(MACHINE).toContain(">Cash</span>");
     expect(MACHINE).toContain("styles.holderLabel");
   });
 });

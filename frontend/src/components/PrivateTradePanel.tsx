@@ -24,7 +24,7 @@ import React, { useMemo, useState } from "react";
 import { ACTION_GREEN, ACTION_GREEN_BORDER, ACTION_GREEN_INK } from "../styles/palette";
 
 import type { PrivateCompanyState } from "../utils/gameState";
-import { FONT_SIZE } from "../styles/typography";
+import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { STICKY_OPTIONAL } from "../utils/stickyCollapse";
 import { corporateSaleBlockReason } from "../utils/baltimorePrivate";
 import { PRIVATE_COMPANY_CATALOG, abilitySummary } from "../utils/privateCatalog";
@@ -736,7 +736,7 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     gap: "10px",
     padding: "18px 20px",
-    borderRadius: "12px",
+    borderRadius: RADIUS.layer,
     border: "1px solid #3a3a3a",
     backgroundColor: "#0f0f0f",
     boxShadow: "0 12px 40px rgba(0,0,0,0.6)",
@@ -747,7 +747,7 @@ const styles: Record<string, React.CSSProperties> = {
     marginLeft: "auto",
     width: "30px",
     height: "30px",
-    borderRadius: "999px",
+    borderRadius: RADIUS.pill,
     border: "1px solid #4a4a4a",
     backgroundColor: "#1c1c1c",
     color: "#c8c6c0",
@@ -799,7 +799,7 @@ const styles: Record<string, React.CSSProperties> = {
   rowGroup: {
     display: "flex",
     flexDirection: "column",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     borderWidth: "1px",
     borderStyle: "solid",
     borderColor: "#3a3a3a",
@@ -966,7 +966,7 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "8px",
     margin: "0 12px 10px",
     padding: "8px 10px",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     backgroundColor: "#1c1c1c",
   },
   cardRule: {
@@ -1006,7 +1006,7 @@ const styles: Record<string, React.CSSProperties> = {
   priceInput: {
     width: "130px",
     padding: "8px 10px",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     border: "1px solid #4a4a4a",
     backgroundColor: "#141414",
     color: "#f2f0eb",
@@ -1020,7 +1020,7 @@ const styles: Record<string, React.CSSProperties> = {
      button beside it -- #772's rule again, since neither `tsc` nor ESLint can see an orphan key here. */
   primaryButton: {
     padding: "9px 18px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     border: `1px solid ${ACTION_GREEN_BORDER}`,
     backgroundColor: ACTION_GREEN,
     color: ACTION_GREEN_INK,
@@ -1065,7 +1065,7 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     gap: "8px",
     padding: "14px 16px",
-    borderRadius: "12px",
+    borderRadius: RADIUS.layer,
     border: "2px solid #c9a227",
     backgroundColor: "#2a2415",
     boxShadow: "0 10px 34px rgba(0,0,0,0.6), 0 0 18px rgba(201, 162, 39, 0.35)",
@@ -1074,7 +1074,7 @@ const styles: Record<string, React.CSSProperties> = {
   promptDot: {
     width: "9px",
     height: "9px",
-    borderRadius: "999px",
+    borderRadius: RADIUS.pill,
     // Design note #932: the dot and the title move with the panel, or the header keeps the old register.
     backgroundColor: "#e6cf7a",
     flexShrink: 0,
@@ -1109,7 +1109,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   promptButton: {
     padding: "7px 16px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     borderWidth: "1px",
     borderStyle: "solid",
     fontSize: FONT_SIZE.control,

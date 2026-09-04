@@ -16,7 +16,7 @@
 
 import React from "react";
 
-import { FONT_SIZE } from "../styles/typography";
+import { FONT_SIZE, RADIUS } from "../styles/typography";
 import type { StationTokenSlot } from "../utils/stationTokens";
 
 export interface StationTokenRowProps {
@@ -116,7 +116,7 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "8px",
     // Design note #1: the inset the tokens read against.
     padding: "4px 8px",
-    borderRadius: "7px",
+    borderRadius: RADIUS.control,
     backgroundColor: "rgba(0, 0, 0, 0.22)",
   },
   slot: {
@@ -128,7 +128,7 @@ const styles: Record<string, React.CSSProperties> = {
   token: {
     width: "16px",
     height: "16px",
-    borderRadius: "50%",
+    borderRadius: RADIUS.circle,
     borderWidth: "1.5px",
     borderStyle: "solid",
     boxSizing: "border-box",

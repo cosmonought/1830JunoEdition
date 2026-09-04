@@ -150,11 +150,34 @@ export function actingActor(context: ActionLogContext): string {
  *  one branch below) and `afterState` is the settled one. With either missing there is no movement to state,
  *  so the suffix is empty rather than half-printed -- #562's rule that a missing figure and a real one are
  *  different facts, applied to a pair. */
+/* ==================================================================
+    DESIGN NOTE 1146: A BALANCE PRINTED AFTER AN ACTION READS AS A CONSEQUENCE OF IT
+   ==================================================================
+   REPORTED: "the log is printing statements like 'PRR laid Tile #57 on H10. Treasury now $1000.' If an action
+   results in no change to a corporation's treasury, the treasury amount does not need to print. It falsely
+   implies the treasury was affected."
+
+   AND THE IMPLICATION IS THE WHOLE PROBLEM, because most tile lays are free. A reader who sees a figure at the
+   end of a sentence about an action reasonably takes the two to be related -- so the one form of this line
+   that was meant to be NEUTRAL is the form that misinforms, and it is also the form that prints most often.
+
+   #1066 SAW THIS FROM THE OTHER SIDE AND IS WHAT MAKES THE FIX OBVIOUS. It observed that "Treasury now $920 --
+   a balance -- invites no question. A TRANSITION invites one immediately", and used that to argue for showing
+   the movement. The same observation says what to do when there is no movement: a balance that invites no
+   question is not worth a clause, and printing it where nothing happened is the only case where it can
+   actively mislead.
+
+   SO THE LINE IS NOW EXACTLY THE MOVEMENT AND NOTHING ELSE. Silent when the figure did not move, and silent
+   when there is no BEFORE to compare against -- which is `describeTreasuryMoves`' own rule, stated there as
+   "a corporation that did not exist before has no MOVE to report; its opening balance is not a change". The
+   two authorities on this figure now answer the question identically, which is #891's fault closed off rather
+   than left open.
+   NOTHING IS LOST TO THE DIAGNOSTIC. #750's separate line reads the DIFF and already skips `from === to`, so
+   a suppressed clause here can never be the only record of a movement -- there is no movement. */
 function treasurySuffix(context: ActionLogContext, companyId: number): string {
   const before = treasuryIn(context.gameState, companyId);
   const after = treasuryIn(context.afterState, companyId);
-  if (after === undefined) return "";
-  if (before === undefined || before === after) return ` Treasury now $${after}.`;
+  if (after === undefined || before === undefined || before === after) return "";
   return ` Treasury $${before} → $${after}.`;
 }
 
@@ -231,7 +254,25 @@ export function trainPurchaseToastLine(
   const left = settled ? settled.remaining : Math.max(0, (tier.remaining ?? 1) - 1);
   /* `unlimited` FOR THE DIESELS, matching the long line. "Depot: null remaining" is the failure #232 keeps
      naming, and the D-train genuinely has no count to give. */
-  const remaining = left === null ? "unlimited" : `${left}`;
+  /* ==================================================================
+      DESIGN NOTE 1147: THE TOAST FIRES WHEN THE CLOCK IS NEARLY OUT, NOT ON EVERY TICK
+     ==================================================================
+     REPORTED: "the train-buying toasts are lasting too long and firing too often ... only fire these toasts
+     when the Depot has 2 or fewer available trains."
+
+     #1063 WIDENED THIS TOAST TO EVERY SEAT and the argument was about the END of a tier, not the middle of
+     one: "a depot train leaving is the phase clock, every player is counting it, and a rival buying the last
+     4-train changes what everybody else should do next." Six 4-trains means six toasts, and five of them say
+     the clock is still running -- which is the thing nobody needs telling. The sixth is the one that matters.
+     SO THE RULE IS THE NOTE'S OWN REASONING, APPLIED. Silent while the tier has depth; audible for the last
+     two, which is the window in which a rival's purchase actually changes anybody's plan.
+     THE TIER'S COUNT, NOT THE WHOLE DEPOT'S. It is the number this very sentence prints, it is what the phase
+     change is keyed on, and a total across every tier would stay above two until the endgame -- silencing the
+     toast through every phase change in the game except the last.
+     `unlimited` IS NEVER FEWER THAN TWO. The diesels have no count to run down and no phase beyond them, so
+     there is no clock for this toast to be reporting. */
+  if (left === null || left > 2) return null;
+  const remaining = `${left}`;
   /* ==================================================================
       DESIGN NOTE 1072: THE TOAST IS ABOUT THE DEPOT, NOT ABOUT THE BUYER
      ==================================================================
@@ -243,7 +284,26 @@ export function trainPurchaseToastLine(
      operating queue; the count is the part that belongs to the table.
      THE ACTIVITY LOG STILL NAMES THE BUYER, and that is the division: the log is the record you scroll back
      through, where "who" is the first thing you need; the toast is a glance at a number going down. */
-  return `${tier.tier}-train bought. Depot: ${remaining} remaining.`;
+  /* ==================================================================
+      DESIGN NOTE 1147 REVERSES #1072 ON THE BUYER'S NAME, AND SAYS WHY
+     ==================================================================
+     #1072 REMOVED IT, on this reasoning: "the toast notification should just be for the Depot Supply, so it
+     doesn't need to say which corporation bought a train (players will already know whose turn it is)." That
+     was right for the toast it was describing -- one that fired on EVERY depot purchase, where the name was
+     the predictable half of a sentence a player was about to see six more of.
+     THE RULE ABOVE CHANGES WHAT THIS SENTENCE IS. It now fires two or three times a game, at the moments the
+     phase clock is about to turn over, and at those moments WHO bought is no longer the incidental half: the
+     corporation that takes the second-to-last 4-train is the one that will be operating with a train the
+     others may not get, and a player reading a corner toast is not necessarily looking at the operating
+     queue. A rare sentence can afford the word that a frequent one could not.
+     REQUESTED IN THOSE TERMS -- "update the text to explicitly state which corporation bought the train" --
+     and recorded as a reversal rather than folded in silently, because the earlier reasoning was sound and a
+     future reader deserves to know which premise expired rather than concluding the note was ignored. */
+  const ticker =
+    context.gameState?.public_companies.find((entry) => entry.company_id === protocolId)?.ticker ??
+    null;
+  const buyer = ticker === null ? "A corporation" : ticker;
+  return `${buyer} bought a ${tier.tier}-train. Depot: ${remaining} remaining.`;
 }
 
 /** Whether this message's own sentence already states the corporation's treasury movement.

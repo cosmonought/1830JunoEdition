@@ -18,10 +18,12 @@
 // around a ring instead of a diagonal cascade, shrinking by `1.15 / sqrt(count)`.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { FONT_SIZE } from "../styles/typography";
+import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { corporationLabel } from "../utils/corporationNames";
 import { bestContrastTextColor, corporationLiveryColor } from "../styles/corporationLivery";
 import { CorporateLogo } from "./CorporateLogo";
+import { MarketToken } from "./MarketToken";
+import { stackOffset, stackOrder } from "../utils/marketStack";
 /* Design note #1117: the one viewport ground, shared rather than retyped. */
 import { INK_VIEWPORT } from "../styles/palette";
 import {
@@ -44,6 +46,10 @@ export interface MarketPositionEntry {
   x: number;
   y: number;
   price: string | null;
+  /** Design note #1159: the arrival ordinal, when the source keeps one. The sandbox reducer stamps it (#646)
+   *  and the operating order already sorts on it (#647); a real chain sends nothing, and the stack falls back
+   *  to a deterministic order rather than throwing -- `station_tokens`' rule for an older contract. */
+  enteredAt?: number;
 }
 
 /** Mirrors `msg.rs`'s `MarketGridResponse` exactly -- `QueryMsg::GetMarketGrid`'s
@@ -1008,15 +1014,29 @@ const PRICE_CELL_BY_KEY: ReadonlyMap<string, PriceCell> = new Map(
   PRICE_GRID.map((cell) => [cellKey(cell.x, cell.y), cell]),
 );
 
+/* ==================================================================
+    DESIGN NOTE 1159: THE HOVER LIFTS ONE TOKEN INSTEAD OF SCATTERING THE PILE
+   ==================================================================
+   #452 SHRANK AND SCATTERED THE WHOLE CLUSTER so the price underneath could be read, which was the right
+   answer to a scatter: the tokens were already spread, so the only way to see past them was to move them all
+   and make them smaller.
+   A STACK ASKS A DIFFERENT QUESTION. The pile is deliberately overlapping now, and the thing a reader wants
+   is not the price under it -- it is WHICH corporation each disc is, which the report says plainly: "mousing
+   over one (or clicking on touch devices) should lift it out of the stack to see which it is."
+   SO THE HOVER IS PER TOKEN, NOT PER CLUSTER, and it lifts rather than shrinks -- growing slightly and
+   rising above its neighbours is what "out of the stack" looks like. `:focus-within` comes along so a
+   keyboard reader gets the same lift, and a tap on a touch screen lands on `:hover` in every engine that
+   matters, which is the report's "or clicking on touch devices".
+   THE SCATTER VARIABLES ARE GONE with the behaviour they parameterised. */
 const MARKET_TOKEN_SCATTER_CSS = `
 .market-token-cluster .market-token {
-  transition: transform 140ms ease, opacity 140ms ease;
+  transition: transform 140ms ease, box-shadow 140ms ease;
 }
-.market-token-cluster:hover .market-token {
-  /* Design note #689: the scale is a variable now. A cluster and a lone token need different amounts of it,
-     and CSS cannot count occupants -- so the call site, which can, supplies it. */
-  transform: translate(var(--scatter-x, 0px), var(--scatter-y, 0px)) scale(var(--scatter-scale, 0.72));
-  opacity: 0.88;
+.market-token-cluster .market-token:hover,
+.market-token-cluster .market-token:focus-visible {
+  transform: translateY(calc(var(--stack-lift, 6px) * -1)) scale(1.18);
+  z-index: 60;
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.7);
 }
 @media (prefers-reduced-motion: reduce) {
   .market-token-cluster .market-token { transition: none; }
@@ -1347,55 +1367,46 @@ export function StockMarketRenderer({
                     : undefined
                 }
               >
-                {group.occupants.map((occupant, index) => {
-                  const offset = deriveTokenClusterOffset(index, occupantCount, cellSize, tokenDiameterPx);
-                  // Design note #689: the hover vector, which is NOT the resting one for a lone token.
-                  const scatter = deriveTokenScatterOffset(offset, occupantCount, cellSize);
+                {/* ==================================================================
+                      DESIGN NOTE 1159: A STACK, NOT A SCATTER
+                    ==================================================================
+                    REPORTED: "there is no such stack happening on our cells, the corporation markers are
+                    simply scattered around it ... we need to stack them in a line with overlapping edges."
+                    #24(2)(c) CHOSE THE SCATTER OVER A CASCADE and gave a real reason -- "the old diagonal
+                    cascade buried all but the front-most" -- which is an objection to a cascade with nothing
+                    to lift the buried ones out. The report supplies the missing half in the same breath
+                    ("mousing over one should lift it out of the stack"), so the objection is answered rather
+                    than overruled, and the cascade can carry meaning the scatter never could.
+                    THE ORDER IS THE OPERATING CURSOR'S, taken from `stackOrder` so this cannot become a
+                    second opinion about turn order (#891). Earliest arrival on top: it operates first, and a
+                    new entrant slides underneath exactly as the cardboard does. */}
+                {stackOrder(group.occupants).map((occupant, index) => {
+                  const offset = {
+                    x: 0,
+                    y: stackOffset(index, occupantCount, tokenDiameterPx),
+                  };
                   return (
-                    <span
+                    /* Design note #1155: the DISC is `MarketToken`'s now -- livery, computed ink, and #430's
+                       herald-or-acronym threshold -- and everything left here is PLACEMENT. That seam is what
+                       lets the mini-camera draw the same object without inheriting this chart's scatter. */
+                    <MarketToken
                       key={occupant.company_id}
                       className="market-token"
+                      companyId={occupant.company_id}
+                      ticker={occupant.ticker}
+                      diameterPx={tokenDiameterPx}
+                      fontSizePx={tokenFontSizePx}
+                      title={`${corporationLabel(occupant.ticker)} — $${occupant.price ?? "?"}`}
                       style={{
-                        ...styles.tokenBadge,
-                        /* Design note #452: how far and in which direction a token travels on hover. A cluster moves along
-                           the spoke that already positioned it; #689 gives a LONE token a direction of its own, because it
-                           has no spoke and shrinking in place never uncovers a price it is centred on. */
-                        ["--scatter-x" as string]: `${scatter.x}px`,
-                        ["--scatter-y" as string]: `${scatter.y}px`,
-                        ["--scatter-scale" as string]: `${scatter.scale}`,
-                        backgroundColor: tickerColor(occupant.company_id),
-                        // Design note #430: computed ink, for the same
-                        // reason the par pill above takes it.
-                        color: bestContrastTextColor(tickerColor(occupant.company_id)),
-                        width: `${tokenDiameterPx}px`,
-                        height: `${tokenDiameterPx}px`,
-                        fontSize: `${tokenFontSizePx}px`,
+                        position: "absolute",
+                        pointerEvents: "auto",
                         top: `calc(50% + ${offset.y}px - ${tokenDiameterPx / 2}px)`,
                         left: `calc(50% + ${offset.x}px - ${tokenDiameterPx / 2}px)`,
-                        zIndex: 10 + index,
+                        /* Design note #1159: earliest arrival on TOP, so the z-order runs the opposite way
+                           to the paint order -- the token that operates first is the one the eye reaches. */
+                        zIndex: 10 + (occupantCount - index),
                       }}
-                      title={`${corporationLabel(occupant.ticker)} — $${occupant.price ?? "?"}`}
-                    >
-                      {/* Design note #430: a size THRESHOLD, not a blanket. These tokens run from 46px down to about 14px,
-                         and a herald legible at the top of that range is a coloured smudge at the bottom -- the same
-                         judgement that keeps the map's 18px station tokens on text. The threshold decides per token, from
-                         the same number the circle is drawn at, so it stays correct as the chart resizes. */}
-                      {tokenDiameterPx >= MIN_LOGO_TOKEN_DIAMETER_PX ? (
-                        <CorporateLogo
-                          ticker={occupant.ticker}
-                          size={Math.round(tokenDiameterPx * 0.56)}
-                          /* Design note #429: bounded to the circle. Without
-                             this the default 2.4x cap would run a wide
-                             herald out of both sides and the badge's
-                             `overflow: hidden` would crop it. */
-                          maxWidth={Math.round(tokenDiameterPx * 0.78)}
-                          color={bestContrastTextColor(tickerColor(occupant.company_id))}
-                          title={`${corporationLabel(occupant.ticker)} — $${occupant.price ?? "?"}`}
-                        />
-                      ) : (
-                        occupant.ticker
-                      )}
-                    </span>
+                    />
                   );
                 })}
               </div>
@@ -1475,7 +1486,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "16px",
     // Design note #1117: the one viewport ground, shared by every tab.
     backgroundColor: INK_VIEWPORT,
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     color: "#f2f0eb",
     fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif",
     // Design note #21/item 3: `overflow: "auto"` and `height: "100%"` both removed -- the inner scrollbar
@@ -1517,7 +1528,7 @@ const styles: Record<string, React.CSSProperties> = {
   cellLegendSwatch: {
     width: "18px",
     height: "13px",
-    borderRadius: "3px",
+    borderRadius: RADIUS.control,
     border: "1px solid rgba(0, 0, 0, 0.45)",
     flex: "none",
     alignSelf: "center",
@@ -1538,8 +1549,26 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     flexDirection: "column",
     gap: "16px",
-    // Design note #26: takes the pane, minus the slim tray.
-    flex: "1 1 auto",
+    /* ==================================================================
+        DESIGN NOTE 1161: `flex-basis: auto` IS WHAT WRAPPED THE TRAY, AND IT LATCHED
+       ==================================================================
+       REPORTED: "the Par/IPO tray is no longer on the same line as the Stock Market matrix. It has been
+       pushed below it, causing a massive vertical scroll."
+       #26 ALREADY INTENDED THIS TO SHRINK -- its note says "`minWidth: 0` is what actually lets the grid
+       shrink-and-grow instead of squeezing the tray" -- and `minWidth: 0` cannot do that alone. A wrapping
+       flex line is packed by each item's HYPOTHETICAL main size, and `flex-basis: auto` makes that the
+       CONTENT width: nineteen columns at the current cell size. `min-width` is consulted when the line is
+       sized, which is after the browser has already decided how many lines there are. So the grid asked for
+       its full content width, the 168px tray did not fit beside it, and the row broke.
+       AND THE BREAK IS SELF-SUSTAINING, which is why it reads as a hard regression rather than a squeeze.
+       The `ResizeObserver` measures this column and derives `cellSize` from what it finds. Wrapped, this
+       column has the WHOLE row to itself -- so the cells grow to fill it, the content gets wider still, and
+       the layout can never come back. One wrap latches the tray under the matrix for the rest of the session.
+       `flex: 1 1 0` UNLATCHES IT. A zero basis means the hypothetical size is zero, so this column always
+       fits beside the tray and the line never breaks; it then grows into exactly the space the tray leaves,
+       which is the width the observer was always meant to be measuring. The cell size follows the pane down
+       instead of the pane following the cells up. */
+    flex: "1 1 0",
     minWidth: 0,
   },
   // Wraps just the grid so the `ResizeObserver` measures only the matrix's own space (design note
@@ -1586,7 +1615,7 @@ const styles: Record<string, React.CSSProperties> = {
     boxSizing: "border-box",
     backgroundColor: "#0f0f0f",
     border: "1.5px solid #2a2a2a",
-    borderRadius: "10px",
+    borderRadius: RADIUS.card,
   },
   // ---- Market Compass Rose -- see design note #747. ----
   compass: {
@@ -1600,7 +1629,7 @@ const styles: Record<string, React.CSSProperties> = {
     boxSizing: "border-box",
     backgroundColor: "#0f0f0f",
     border: "1.5px solid #2a2a2a",
-    borderRadius: "10px",
+    borderRadius: RADIUS.card,
     textAlign: "center",
   },
   compassTitle: {
@@ -1660,7 +1689,7 @@ const styles: Record<string, React.CSSProperties> = {
     minWidth: "300px",
     backgroundColor: "#0f0f0f",
     border: "1.5px solid #2a2a2a",
-    borderRadius: "10px",
+    borderRadius: RADIUS.card,
   },
   parTrayHeader: {
     display: "flex",
@@ -1687,7 +1716,7 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: "space-between",
     gap: "12px",
     padding: "11px 16px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     // Neutral steel-gray, decoupled from both the main chart's gold par
     // fills and its exception-zone tints -- see design note #14.
     backgroundColor: PAR_TRAY_ROW_BG,
@@ -1729,7 +1758,7 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     justifyContent: "center",
     padding: "5px 11px",
-    borderRadius: "999px",
+    borderRadius: RADIUS.pill,
     border: "1px solid rgba(0, 0, 0, 0.35)",
     whiteSpace: "nowrap",
   },
@@ -1760,7 +1789,7 @@ const styles: Record<string, React.CSSProperties> = {
     // See design note #7 -- bright enough that adjacent cells' shared edges
     // read as a clear boundary/movement-path grid.
     border: "1px solid #3a3a3a",
-    borderRadius: "3px",
+    borderRadius: RADIUS.control,
     // `hidden`, not `visible` (design note #17): a gradient must never bleed past its cell into the grid
     // gap. Safe because live tokens are independent sibling grid items (#5), so a deep stack still spills.
     overflow: "hidden",
@@ -1828,7 +1857,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     fontWeight: 700,
     // Design note #430: computed per livery at the call site.
-    borderRadius: "50%",
+    borderRadius: RADIUS.circle,
     border: "2px solid rgba(0, 0, 0, 0.4)",
     boxShadow: "0 2px 4px rgba(0, 0, 0, 0.55)",
     whiteSpace: "nowrap",

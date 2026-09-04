@@ -28,7 +28,7 @@ import {
 import { firebaseConfigError, getFirestoreDb } from "../config/firebase";
 import { chatCollectionPath, seatLabel } from "../utils/lobby";
 import { colorForAuthor, type ChatMessage } from "../utils/feed";
-import { CONTROL_PADDING, FONT_FAMILY, FONT_SIZE } from "../styles/typography";
+import { CONTROL_PADDING, FONT_FAMILY, FONT_SIZE, RADIUS } from "../styles/typography";
 
 /** How much scrollback a client subscribes to. Bounded because this is a
  *  live listener over a collection that only ever grows -- an unbounded
@@ -361,7 +361,7 @@ const styles: Record<string, React.CSSProperties> = {
     minHeight: 0,
     backgroundColor: "#0f0f0f",
     border: "1px solid #1c1c1c",
-    borderRadius: "12px",
+    borderRadius: RADIUS.layer,
     overflow: "hidden",
     fontFamily: FONT_FAMILY,
   },
@@ -380,7 +380,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.small,
     fontWeight: 700,
     padding: "2px 8px",
-    borderRadius: "999px",
+    borderRadius: RADIUS.pill,
     backgroundColor: "#2a2a2a",
     color: "#a8a6a0",
   },
@@ -402,7 +402,7 @@ const styles: Record<string, React.CSSProperties> = {
   message: {
     borderLeft: "3px solid #2a2a2a",
     backgroundColor: "#1c1c1c",
-    borderRadius: "0 10px 10px 10px",
+    borderRadius: `0 ${RADIUS.card} ${RADIUS.card} ${RADIUS.card}`,
     padding: "6px 12px",
   },
   messageHeader: {
@@ -443,7 +443,7 @@ const styles: Record<string, React.CSSProperties> = {
     flex: 1,
     fontSize: FONT_SIZE.control,
     padding: CONTROL_PADDING.input,
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     border: "1px solid #3a3a3a",
     backgroundColor: "#0f0f0f",
     color: "#f2f0eb",
@@ -453,7 +453,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.control,
     fontWeight: 600,
     padding: CONTROL_PADDING.button,
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     border: "1px solid #3a3a3a",
     backgroundColor: "#1c1c1c",
     color: "#f2f0eb",

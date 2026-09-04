@@ -1,5 +1,6 @@
 import React from "react";
 import { ACTION_GREEN, ACTION_GREEN_BORDER, ACTION_GREEN_INK } from "../styles/palette";
+import { RADIUS } from "../styles/typography";
 
 /* ==================================================================
  *  DESIGN NOTE 761: A WHITE SCREEN IS A REPORT NOBODY CAN FILE
@@ -94,7 +95,7 @@ export class CrashScreen extends React.Component<
             onClick={() => window.location.reload()}
             style={{
               padding: "8px 16px",
-              borderRadius: "8px",
+              borderRadius: RADIUS.card,
               border: `1px solid ${ACTION_GREEN_BORDER}`,
               backgroundColor: ACTION_GREEN,
               color: "#f2f0eb",
@@ -116,7 +117,7 @@ export class CrashScreen extends React.Component<
             }}
             style={{
               padding: "8px 16px",
-              borderRadius: "8px",
+              borderRadius: RADIUS.card,
               border: "1px solid #4a4a4a",
               backgroundColor: "#1c1c1c",
               color: "#c8c6c0",
@@ -133,7 +134,7 @@ export class CrashScreen extends React.Component<
           style={{
             margin: 0,
             padding: "14px",
-            borderRadius: "10px",
+            borderRadius: RADIUS.card,
             border: "1px solid #2a2a2a",
             backgroundColor: "#0f0f0f",
             color: "#c8c6c0",

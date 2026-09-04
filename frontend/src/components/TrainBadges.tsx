@@ -31,7 +31,7 @@ import {
   CARD_INK_FAINT,
   CARD_SURFACE_MUTED,
 } from "../styles/palette";
-import { FONT_SIZE } from "../styles/typography";
+import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { TrainGlyph } from "./TrainGlyph";
 import {
   phaseAlertLevel,
@@ -681,7 +681,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: "5px",
+    borderRadius: RADIUS.control,
     fontWeight: 800,
     fontVariantNumeric: "tabular-nums",
     borderWidth: "1px",
@@ -707,7 +707,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: "inline-flex",
     alignItems: "center",
     gap: "5px",
-    borderRadius: "999px",
+    borderRadius: RADIUS.pill,
     fontWeight: 800,
     fontVariantNumeric: "tabular-nums",
     borderWidth: "1px",

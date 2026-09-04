@@ -48,9 +48,18 @@ const SIGN = readStripped("components/YellowSignOverlay.tsx");
 
 describe("the scale is one number", () => {
   it("is the figure the player arrived at, not a round one", () => {
-    /* 0.7 is a REPORT, not a preference: "I have to scale my browser to 70% for these things to look right."
-       A test that only checked "some number is exported" would pass on 0.75 chosen because it looked nicer. */
-    expect(UI_SCALE).toBe(0.7);
+    /* A REPORT, NOT A PREFERENCE. A test that only checked "some number is exported" would pass on 0.75 chosen
+       because it looked nicer.
+       ==================================================================
+        DESIGN NOTE 1149: THE SECOND READING, WHICH IS A PRODUCT
+       ==================================================================
+       IT WAS 0.7, read off the browser's zoom control. REPORTED AFTERWARDS: "I still need to zoom out my
+       browser to 90% to get the right aspect" -- and because the two zooms compose as a PRODUCT (the chrome
+       lands at `F * s * b` and the board at `W - F * s * b`, so any pair with the same `s * b` is the same
+       layout), 0.7 x 0.9 is exactly what the player is looking at rather than an approximation of it.
+       ASSERTED AS THE PRODUCT, not as the literal, so the arithmetic is stated where it can be checked. */
+    expect(UI_SCALE).toBeCloseTo(0.7 * 0.9, 10);
+    expect(UI_SCALE).toBe(0.63);
   });
 
   it("is never spelled out again as a literal", () => {

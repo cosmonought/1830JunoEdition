@@ -90,7 +90,16 @@ describe("a tile lay says what it was charged for", () => {
     const line = describeGameplayAction(lay, context(board("1000"), board("1000")) as never);
     expect(line).not.toContain("terrain");
     expect(line).toContain("B&O laid Tile #57 on ");
-    expect(line).toContain("Treasury now $1000.");
+    /* ==================================================================
+        DESIGN NOTE 1146: AND IT NOW SAYS NOTHING ABOUT THE TREASURY EITHER
+       ==================================================================
+       THIS LINE IS THE ONE THAT GOT REPORTED, almost verbatim: "'PRR laid Tile #57 on H10. Treasury now
+       $1000.' If an action results in no change to a corporation's treasury, the treasury amount does not
+       need to print. It falsely implies the treasury was affected."
+       THE CASE ALREADY MADE THE ARGUMENT AGAINST ITSELF two lines up -- "a line claiming an expense nobody was
+       charged is worse than a line that says less" -- and then asserted a balance that reads as exactly such a
+       claim. The reasoning was right and it had not been carried all the way to the end of the sentence. */
+    expect(line).not.toContain("Treasury");
   });
 
   it("asks the diff rather than the fee table", () => {
@@ -225,17 +234,30 @@ describe("a cursor mode is not a game event", () => {
 /* ------------------------------------------------------------------ */
 
 describe("the depot toast is about the depot", () => {
-  it("drops the corporation from the sentence", () => {
-    /* REPORTED: "it doesn't need to say which corporation bought a train (players will already know whose
-       turn it is)." The name belongs to the TURN, which is on screen in the action bar; the count belongs to
-       the table. The Activity Log still names the buyer, which is the division. */
-    expect(LOG).toContain("`${tier.tier}-train bought. Depot: ${remaining} remaining.`");
+  it("names the corporation again, because the sentence is now rare", () => {
+    /* ==================================================================
+        DESIGN NOTE 1147 REVERSES THIS CASE, AND THE PREMISE IS WHAT CHANGED
+       ==================================================================
+       IT ASSERTED THE ABSENCE OF THE NAME, on #1072's reasoning: "it doesn't need to say which corporation
+       bought a train (players will already know whose turn it is)." That argument was about a sentence firing
+       on EVERY depot purchase, where the name is the predictable half of something you are about to read six
+       more of.
+       THE TOAST NOW FIRES ONLY FOR THE LAST TWO OF A TIER. At those moments -- the phase clock about to turn
+       over -- who bought is the half that changes what everybody else does next, and a player reading a corner
+       toast is not necessarily looking at the operating queue.
+       RECORDED AS A REVERSAL rather than quietly rewritten, because #1072's reasoning was sound within its own
+       premise and the next reader should be able to see which premise expired. */
+    expect(LOG).toContain("`${buyer} bought a ${tier.tier}-train. Depot: ${remaining} remaining.`");
   });
 
   it("has its own shorter window", () => {
     /* #928 SET 3,700ms FOR A LONGER LINE -- "too short for players to read the financial details" when the
-       receipt carried a route total, a percentage and an amount. Six words and a number is a different read. */
-    expect(DEPOT_TOAST_MS).toBe(3000);
+       receipt carried a route total, a percentage and an amount. Six words and a number is a different read.
+       #1072 THEN DERIVED 3,000ms from that rule of thumb, and #1147 replaces the derivation with a figure that
+       was ASKED FOR: "hard cap their duration at exactly 2 seconds." A requested number is better evidence
+       than a calculated one, and the relationship to the standard window is still asserted below -- that part
+       of the claim never depended on which figure sat here. */
+    expect(DEPOT_TOAST_MS).toBe(2000);
     expect(DEPOT_TOAST_MS).toBeLessThan(STANDARD_TOAST_MS);
   });
 

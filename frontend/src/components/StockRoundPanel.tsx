@@ -47,6 +47,7 @@ import { certificatesIn, saleProceeds } from "../utils/shareSale";
 // Design note #749: the float rule, shared with the reducer so the card and the board cannot disagree.
 import {
   FLOAT_THRESHOLD_PERCENT,
+  floatCostIn,
   metFloatThreshold,
   soldFromIpoPercent,
 } from "../utils/floatThreshold";
@@ -59,7 +60,7 @@ import {
 } from "../utils/corporationCardOrder";
 import { StationTokenRow } from "./StationTokenRow";
 import { stationTokenSlots } from "../utils/stationTokens";
-import { FONT_SIZE } from "../styles/typography";
+import { FONT_SIZE, RADIUS } from "../styles/typography";
 // Design note #389: the same ink-on-fill helper the map's station
 // tokens use, so a corporate colour is legible on the card for the
 // same reason it is legible on the board.
@@ -200,6 +201,103 @@ interface RosterHolding {
   isSelf: boolean;
 }
 
+/* ==================================================================
+    DESIGN NOTE 1148: THE SAME FACT IN THE OTHER UNIT, ON THE BADGE THAT ALREADY STATES IT
+   ==================================================================
+   ASKED: "make the float progress in the colour stripe clickable to alternate to say something like
+   '$[6xPar - sharesSold] of $[6xPar]'", and afterwards: "that can be a hoverable alternative display for
+   non-touch devices, if possible."
+
+   HOVER AND CLICK ARE THE SAME SWAP REACHED TWO WAYS, which is why this is one component and not two
+   behaviours. A pointer that can hover gets the alternate for as long as it rests there and gives it back;
+   a press -- the only gesture a touch screen has -- keeps it. Neither is the "real" control: the badge holds
+   two readings of one number and either gesture turns it over.
+   THE HOVER HALF IS CSS, because a `mouseenter` handler on a touch device fires on tap and then STICKS
+   until something else is touched, which would make the press behave differently on the two device classes
+   for no reason a player could learn. `@media (hover: hover) and (pointer: fine)` asks the browser the
+   question directly, and `<style>` is this codebase's documented escape hatch for a rule inline styles
+   cannot express (#46).
+
+   WORDED "left of", NOT AS A BARE SLASH. The percentage reading is `sold / needed` -- PROGRESS -- and the
+   money reading asked for is `remaining of total`, which is the opposite direction. Two readings that swap
+   in one slot while silently reversing which end they measure from is a misreading waiting to happen, so
+   the money form spends one word saying which it is. The percentages keep the slash they have always had.
+
+   NO PAR, NO SECOND READING. An unparred corporation has no price, so there is no dollar figure to alternate
+   to -- and the badge renders exactly as it did before this note, plain text with no affordance, rather than
+   a control that turns over to show a blank. */
+const FLOAT_BADGE_CSS = `
+.float-badge-alt { display: none; }
+@media (hover: hover) and (pointer: fine) {
+  .float-badge:hover .float-badge-main { display: none; }
+  .float-badge:hover .float-badge-alt { display: inline; }
+}
+`;
+
+function FloatProgressBadge({
+  company,
+  liveryInk,
+}: {
+  company: Pick<PublicCompanyState, "ticker" | "par_value" | "ipo_pool_percentage">;
+  liveryInk: string;
+}) {
+  const [showMoney, setShowMoney] = useState(false);
+  const sold = soldFromIpoPercent(company);
+  const par = company.par_value === null ? 0 : Number(company.par_value);
+  const percentReading = `${sold}% / ${FLOAT_THRESHOLD_PERCENT}%`;
+  const badgeStyle = { ...styles.rosterLiveryBadge, color: liveryInk, borderColor: liveryInk };
+
+  if (!(par > 0)) {
+    return (
+      <span
+        style={badgeStyle}
+        title={`${sold}% has left the IPO; ${FLOAT_THRESHOLD_PERCENT}% floats this corporation.`}
+      >
+        {percentReading}
+      </span>
+    );
+  }
+
+  const { remaining } = floatCostIn(par, sold);
+  /* ==================================================================
+      DESIGN NOTE 1148a: "$268 LEFT OF $402" WAS AMBIGUOUS, AND THE FIX IS FEWER FIGURES
+     ==================================================================
+     REPORTED, of my own wording: "'$268 left of $402' is ambiguous/unclear to me, but I recognize your
+     impulse as correct."
+     THE IMPULSE WAS TO DISAMBIGUATE A DIRECTION. The percentage reading counts UP (`sold / needed`) and the
+     money reading counts DOWN (what is still owed), and two readings that swap in one slot while silently
+     reversing which end they measure from is a misreading waiting to happen -- so the money form had to say
+     which it was. It said it by naming both ends, which resolved the direction and introduced a worse
+     question: what IS the second number.
+     THE TOTAL WAS NEVER THE POINT. Nobody at this table needs to know a float costs $402 in the abstract;
+     they need to know what it still takes. Dropping it takes the ambiguity with it, and the one word that was
+     doing the disambiguating -- "needed" -- does it just as well against a single figure.
+     THE SAME SENTENCE AS THE PAR LADDER'S, deliberately. Both are `floatCostIn(...).remaining` on the same
+     card, and at par-selection time they are numerically identical (nothing has left the IPO yet, so remaining
+     IS the total). Two wordings for one quantity in one card is the fault this codebase keeps finding, so
+     there is one wording. */
+  const moneyReading = `$${remaining} needed to float`;
+  /* The gesture decides which reading is RESTING; hover always shows the other one. So a player who has
+     pressed the badge into money can still hover it for the percentage, rather than the affordance going
+     dead once used. */
+  const main = showMoney ? moneyReading : percentReading;
+  const alt = showMoney ? percentReading : moneyReading;
+
+  return (
+    <button
+      type="button"
+      className="float-badge"
+      style={{ ...badgeStyle, ...styles.floatBadgeButton }}
+      onClick={() => setShowMoney((was) => !was)}
+      aria-label={`${sold}% of ${FLOAT_THRESHOLD_PERCENT}% has left the IPO; ${moneyReading} to float. Activate to switch the reading.`}
+      title={`${sold}% has left the IPO; ${FLOAT_THRESHOLD_PERCENT}% floats this corporation. ${moneyReading}.`}
+    >
+      <span className="float-badge-main">{main}</span>
+      <span className="float-badge-alt">{alt}</span>
+    </button>
+  );
+}
+
 function CorporationRoster({
   publicCompanies,
   phase,
@@ -318,6 +416,9 @@ function CorporationRoster({
 
   return (
     <div style={styles.section}>
+      {/* Design note #1148: injected once for the whole roster rather than once per card, and
+         unconditionally -- #18's convention for this codebase's inline-style escape hatch (#46). */}
+      <style>{FLOAT_BADGE_CSS}</style>
       <span style={styles.sectionLabel}>Corporations</span>
       <div style={styles.rosterGrid}>
         {/* Design note #464 (supersedes #446): the order is HELD. #446 sorted floated companies to the front
@@ -494,25 +595,23 @@ function CorporationRoster({
                      "--" NOT "$0" for a corporation that has never run (design note #465): "0" is reported both by a
                      company that earned nothing and by one that has never turned a wheel. */}
                   <span style={styles.rosterLiveryRight}>
-                    <span
-                      style={{ ...styles.rosterLiveryBadge, color: liveryInk, borderColor: liveryInk }}
-                      title={
-                        company.is_floated
-                          ? hasRunRoutes
+                    {company.is_floated ? (
+                      <span
+                        style={{ ...styles.rosterLiveryBadge, color: liveryInk, borderColor: liveryInk }}
+                        title={
+                          hasRunRoutes
                             ? `${company.ticker} last ran its trains for $${lastRun}.`
                             : `${company.ticker} has floated but has not yet run its trains.`
-                          : `${soldFromIpoPercent(company)}% has left the IPO; ${FLOAT_THRESHOLD_PERCENT}% floats this corporation.`
-                      }
-                    >
-                      {company.is_floated ? (
-                        <>
-                          <span style={styles.rosterLiveryBadgeCaption}>Last run</span>
-                          {hasRunRoutes ? `$${lastRun}` : "--"}
-                        </>
-                      ) : (
-                        `${soldFromIpoPercent(company)}% / ${FLOAT_THRESHOLD_PERCENT}%`
-                      )}
-                    </span>
+                        }
+                      >
+                        <span style={styles.rosterLiveryBadgeCaption}>Last run</span>
+                        {hasRunRoutes ? `$${lastRun}` : "--"}
+                      </span>
+                    ) : (
+                      /* Design note #1148: the unfloated slot carries two readings of one number now, so it
+                         is a component with its own state rather than an expression. */
+                      <FloatProgressBadge company={company} liveryInk={liveryInk} />
+                    )}
                   </span>
                 </div>
 
@@ -1199,6 +1298,28 @@ function CompanyActions({
                 </React.Fragment>
               ))}
             </div>
+            {/* ==================================================================
+                 DESIGN NOTE 1148: WHAT THE RUNG THE PLAYER IS ON WOULD COST
+                ==================================================================
+                ASKED: "when a player is parring a company, it would be highly useful to know the dollar
+                amount required to float."
+                LIVE UNDER THE LADDER, WHICH IS THE POINT. A toggle elsewhere would give the same number a
+                click later and hide the percentage to do it; here the figure moves as the player moves across
+                the rungs, so the ladder stops being a row of prices and becomes the choice it actually is --
+                $67 asks $402 of the table, $100 asks $600 for a richer treasury.
+                WORDED AS THE CORPORATION'S REQUIREMENT, NOT THE READER'S BILL. The president buys the 20%
+                certificate and the other 40% must come from ANYBODY, so "you need $402" would be false -- and
+                falsely discouraging at exactly the moment a player is deciding how ambitious to be. "Needed"
+                is impersonal and says nothing about whose money it is, which is the whole reason it is the
+                word here. See `floatCostIn` for the arithmetic and the same warning where it is computed.
+                #1148a: and this is the badge's sentence too, to the letter -- one quantity, one wording.
+                SILENT WITH NO RUNG SELECTED, on this file's own rule against inventing a figure: there is no
+                par yet, so there is no cost, and "$0 to float" would be a number that is not true. */}
+            {parValue !== "" && Number(parValue) > 0 && (
+              <span style={styles.parFloatNote}>
+                {`$${floatCostIn(Number(parValue), soldFromIpoPercent(company)).remaining} needed to float`}
+              </span>
+            )}
           </div>
         )}
 
@@ -2122,6 +2243,27 @@ const styles: Record<string, React.CSSProperties> = {
     textTransform: "uppercase",
     color: CARD_INK_FAINT,
   },
+  /* Design note #1148: the float cost, under the rung that sets it. `CARD_INK_MUTED` rather than the label's
+     `CARD_INK_FAINT` -- this is a FIGURE the player is reading, not a caption naming a control, and the two
+     weights are what keep the ladder the loudest thing in the block. Not uppercased for the same reason. */
+  /* Design note #1148: a button that must weigh exactly what the span it replaced weighed. Every visual
+     property still comes from `rosterLiveryBadge`; this only undoes what a `<button>` brings with it --
+     the user-agent font (the badge sets size and weight but never the family), its own background, and the
+     text alignment that would fight the badge's `inline-flex`. `cursor` is the only thing ADDED, because it
+     is the affordance: the badge has to look pressable or nobody will press it. */
+  floatBadgeButton: {
+    appearance: "none",
+    background: "none",
+    fontFamily: "inherit",
+    lineHeight: "inherit",
+    textAlign: "center",
+    cursor: "pointer",
+  },
+  parFloatNote: {
+    fontSize: FONT_SIZE.micro,
+    color: CARD_INK_MUTED,
+    fontVariantNumeric: "tabular-nums",
+  },
   /* ---- Pass row (design note #10: the one global action) ---- */
   passRow: {
     display: "flex",
@@ -2143,7 +2285,7 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: CARD_SURFACE,
     borderWidth: "2px",
     borderStyle: "solid",
-    borderRadius: "10px",
+    borderRadius: RADIUS.card,
     // Design note #389: the livery stripe bleeds to the card's edges, so
     // the card clips it back inside the corner radius.
     overflow: "hidden",
@@ -2276,7 +2418,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "2px 4px",
     margin: 0,
     border: "none",
-    borderRadius: "4px",
+    borderRadius: RADIUS.control,
     background: "transparent",
     font: "inherit",
     fontSize: FONT_SIZE.micro,
@@ -2356,7 +2498,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 800,
     letterSpacing: "0.04em",
     padding: "2px 7px",
-    borderRadius: "999px",
+    borderRadius: RADIUS.pill,
     borderWidth: "1px",
     borderStyle: "solid",
     fontVariantNumeric: "tabular-nums",
@@ -2405,7 +2547,7 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: "rgba(0, 0, 0, 0.05)",
     borderTop: "3px solid",
     borderTopColor: CARD_INK_MUTED,
-    borderRadius: "0 0 8px 8px",
+    borderRadius: `0 0 ${RADIUS.card} ${RADIUS.card}`,
   },
   projectionLabel: {
     fontSize: FONT_SIZE.micro,
@@ -2479,11 +2621,11 @@ const styles: Record<string, React.CSSProperties> = {
     whiteSpace: "nowrap",
   },
   rosterFloatedBadge: {
-    fontSize: FONT_SIZE.micro, fontWeight: 700, padding: "2px 8px", borderRadius: "999px",
+    fontSize: FONT_SIZE.micro, fontWeight: 700, padding: "2px 8px", borderRadius: RADIUS.pill,
     backgroundColor: "#d9f0e1", color: "#14522f",
   },
   rosterUnfloatedBadge: {
-    fontSize: FONT_SIZE.micro, fontWeight: 700, padding: "2px 8px", borderRadius: "999px",
+    fontSize: FONT_SIZE.micro, fontWeight: 700, padding: "2px 8px", borderRadius: RADIUS.pill,
     backgroundColor: CARD_HIGHLIGHT_BG, color: "#6b4e05",
   },
   // Design note #32: says WHY the controls are dead. A grid of greyed-out
@@ -2494,7 +2636,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.small,
     fontWeight: 700,
     padding: "3px 8px",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     borderWidth: "1px",
     borderStyle: "solid",
     borderColor: CARD_DIVIDER,
@@ -2544,7 +2686,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.small,
     color: CARD_INK,
     padding: "2px 4px",
-    borderRadius: "4px",
+    borderRadius: RADIUS.control,
   },
   ownershipHeadRow: {
     display: "grid",
@@ -2622,7 +2764,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     color: CARD_HIGHLIGHT_INK,
     backgroundColor: CARD_HIGHLIGHT_BG,
-    borderRadius: "4px",
+    borderRadius: RADIUS.control,
     padding: "3px 7px",
     alignSelf: "flex-start",
   },
@@ -2648,7 +2790,7 @@ const styles: Record<string, React.CSSProperties> = {
     // Design note #1117: the one viewport ground, shared by every tab.
     backgroundColor: INK_VIEWPORT,
     border: "1px solid #2a2a2a",
-    borderRadius: "10px",
+    borderRadius: RADIUS.card,
     boxSizing: "border-box",
   },
   headerRow: {
@@ -2712,7 +2854,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.body,
     fontWeight: 700,
     padding: "6px 12px",
-    borderRadius: "999px",
+    borderRadius: RADIUS.pill,
     border: "1.5px solid",
     backgroundColor: "transparent",
     cursor: "pointer",
@@ -2721,7 +2863,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: "inline-block",
     width: "6px",
     height: "6px",
-    borderRadius: "50%",
+    borderRadius: RADIUS.circle,
     backgroundColor: "currentColor",
   },
   emptyHint: {
@@ -2732,7 +2874,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.micro,
     fontWeight: 700,
     padding: "2px 8px",
-    borderRadius: "999px",
+    borderRadius: RADIUS.pill,
     backgroundColor: "#2a2a2a",
     color: "#a8a6a0",
   },
@@ -2755,7 +2897,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.body,
     fontWeight: 600,
     padding: "6px 10px",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     border: "1px solid #3a3a3a",
     /* Design note #1117: was #161616, a well one step under the old #1c1c1c ground. The ground moved
        DOWN to #141414 and #161616 landed on top of it -- a well at the same lightness as its floor is
@@ -2784,7 +2926,7 @@ const styles: Record<string, React.CSSProperties> = {
   sourceSwitch: {
     display: "flex",
     flexShrink: 0,
-    borderRadius: "7px",
+    borderRadius: RADIUS.control,
     borderWidth: "1px",
     borderStyle: "solid",
     borderColor: "#3a3a3a",
@@ -2846,7 +2988,7 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     gap: "1px",
     padding: "5px 6px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     borderWidth: "1px",
     borderStyle: "solid",
     borderColor: CARD_DIVIDER,
@@ -2860,7 +3002,7 @@ const styles: Record<string, React.CSSProperties> = {
     // separators that is 30px reclaimed, which is what makes one line fit.
     padding: "2px 3px",
     whiteSpace: "nowrap",
-    borderRadius: "5px",
+    borderRadius: RADIUS.control,
     fontSize: FONT_SIZE.small,
     fontWeight: 700,
     fontVariantNumeric: "tabular-nums",
@@ -2880,7 +3022,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.body,
     fontWeight: 700,
     padding: "9px 14px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     border: "1px solid #3a3a3a",
     backgroundColor: "#1c1c1c",
     color: "#f2f0eb",
@@ -2890,7 +3032,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.body,
     fontWeight: 700,
     padding: "9px 18px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     border: "1px solid #4a3f3f",
     backgroundColor: "#2c2020",
     color: "#e8c7c7",

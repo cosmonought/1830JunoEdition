@@ -29,7 +29,7 @@
 
 import React from "react";
 
-import { FONT_SIZE } from "../styles/typography";
+import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { duckRadio, DUCK_FOR_VIDEO } from "../utils/audio";
 // Design note #1144: the chrome's scale, so this layer can divide back out of it.
 import { UI_SCALE } from "../styles/appStyles";
@@ -38,10 +38,75 @@ import { UI_SCALE } from "../styles/appStyles";
  *  the variant SFX they belong to, and this is not a sound effect. */
 export const GAME_INTRO_SRC = `${process.env.PUBLIC_URL ?? ""}/video/game-intro.mp4`;
 
+/* ==================================================================
+    DESIGN NOTE 1166: THE CLIP'S OWN SHAPE, MEASURED RATHER THAN GUESSED
+   ==================================================================
+   The timings below place DOM over a pre-rendered video, so every one of them is an assertion about what is
+   on screen at that second -- and a wrong one puts a title card over the shot it was meant to introduce. They
+   were read off the file: 10.006s long, sampled at nine points.
+     0.0 - ~1.0   faint blueprint linework, very dark and sparse
+     ~1.0 - ~4.0  the locomotive schematic draws and holds, cream on black
+     ~4.5 - ~6.5  the map: a gold network over the north-east
+     ~7.5 - ~9.0  the Neta mark drawing itself in outline
+     ~9.5 - end   the completed mark, solid, with its gradient bar
+   THE OPENING IS THE ONLY DARK BED IN THE CLIP, which is what decides where the title goes: over the sparse
+   linework, gone before the locomotive resolves. The report offered "over it, then out before the transition
+   to the map" as the alternative, and the locomotive at 3s is the one frame worth not covering.
+   THESE ARE CONSTANTS SO THEY CAN BE RETUNED after watching, which is the honest state of any number placed
+   over art by someone reading frames rather than watching the cut. */
+const TITLE_FADE_IN_MS = 150;
+const TITLE_HOLD_UNTIL_MS = 1700;
+const TITLE_FADE_MS = 500;
+
+/** Design note #1166: the extra beat on the finished mark, asked for as "1-2 seconds". The video element
+ *  holds its last frame when it ends, so this is a delay before `finish`, not a second render. */
+const LOGO_HOLD_MS = 1600;
+
 /** The clip's own length. The overlay does not depend on it -- `onEnded` is the real signal -- but a timer
  *  this long is the backstop for an engine that never fires it (a decode failure, a tab suspended mid-clip).
- *  Generous rather than exact, so a slow start is not cut short. */
+ *  Generous rather than exact, so a slow start is not cut short.
+ *  Design note #1166: it must now also clear the clip PLUS the hold -- 10.0s + 1.6s -- or the backstop would
+ *  cut the credit off mid-fade on a machine where `onEnded` is late rather than absent. */
 const INTRO_BACKSTOP_MS = 14000;
+
+/* ==================================================================
+    DESIGN NOTE 1166a: "POWERED BY", BECAUSE THREE SURFACES ALREADY SAY IT
+   ==================================================================
+   ASKED: "do you think 'brought to you' is right here when we've used 'powered by' everywhere else?"
+   IT IS NOT, AND THE COUNT IS THE ARGUMENT. `AppFooter` carries "Powered by Neta DAO" on the Lobby, the
+   Waiting Room and the Game Room -- and the intro plays BETWEEN two of them, so a player would read one
+   phrasing in the cinematic and a different one in the footer of the screen it hands them to, seconds apart.
+   THE PROJECT HAS ALREADY RULED ON THIS EXACT CLASS. #961a found one variant carrying two names across two
+   screens and called it what it is: "one variant with two names, on the two screens a table reads before
+   agreeing to it". A brand line is the same kind of fact.
+   GENRE CONVENTION IS THE ONLY THING ON THE OTHER SIDE -- a title card conventionally reads "brought to you
+   by" -- and consistency of a name beats the convention of a form, particularly when the two appear within a
+   few seconds of each other on adjacent screens.
+
+   WORDS, NOT LETTERS. The report offered "each letter/word appearing in sequence", and twenty-odd letters
+   inside the cue would be a stutter rather than a reveal -- four words reads as writing appearing. */
+export const CREDIT_WORDS = ["Powered", "by", "Neta", "DAO"] as const;
+const CREDIT_WORD_STAGGER_MS = 140;
+
+/* ==================================================================
+    DESIGN NOTE 1166a: THE CREDIT WRITES ITSELF WHILE THE MARK DOES
+   ==================================================================
+   ASKED: "do you have it synced to the part of the video where the Neta DAO logo is being drawn, or did you
+   put it after that?"
+   AFTER, and the question is a better idea than the spec. #1166 mounted it on `ended`, so the words arrived
+   once the picture had stopped -- correct to the letter of "during this final frame hold", and a beat late:
+   the mark draws itself from about 7.5s to 9.0s, which is the one moment in the clip with movement to travel
+   alongside.
+   CUED OFF `timeupdate`, NOT A TIMER. A `setTimeout` measured from play START drifts the moment the clip
+   stutters or begins late, and would then place the words against a frame that is not the one they were
+   written for. `currentTime` is the picture's own clock, so this cannot drift from it by construction --
+   which is the same reason #1166 used `ended` rather than counting to ten thousand.
+   8.6s PUTS THE LAST WORD ON THE COMPLETED MARK. Four words at 140ms plus a 320ms fade is about 740ms, so the
+   line finishes around 9.35s -- just as the mark resolves at ~9.5s -- and the hold then belongs entirely to
+   reading it rather than to waiting for it.
+   `ended` REMAINS A FALLBACK. An engine that never fires `timeupdate` still gets the credit, one beat late,
+   which is exactly the behaviour #1166 shipped. A cue that can only fail closed. */
+const CREDIT_CUE_SECONDS = 8.6;
 
 /** How long before the skip offers itself. Long enough that the opening is not competing with a control,
  *  short enough that nobody feels held. */
@@ -56,8 +121,37 @@ const SKIP_FADE_CSS = `
   from { opacity: 0; transform: translateY(4px); }
   to   { opacity: 1; transform: translateY(0); }
 }
+@keyframes app-intro-title-in {
+  from { opacity: 0; transform: scale(1.04); }
+  to   { opacity: 1; transform: scale(1); }
+}
+@keyframes app-intro-word-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.app-intro-title {
+  animation: app-intro-title-in ${TITLE_FADE_IN_MS}ms ease-out both,
+             app-intro-title-out ${TITLE_FADE_MS}ms ease-in ${TITLE_HOLD_UNTIL_MS}ms both;
+}
+@keyframes app-intro-title-out {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+/* Design note #1166: each word arrives on its own delay, which is the "fading in from left to right" the
+   report describes. The delay is supplied per span by the call site -- CSS cannot count siblings and produce
+   a number from the count, and nth-child rules would have to be written out one per word.
+   NO BACKTICKS IN THIS BLOCK, which DividendMoneyMachine #1061 warned about and which I have now walked into
+   twice in one batch, in two different files: this comment sits inside a template literal, the string ends at
+   the first backtick, and tsc reports the failure somewhere else entirely. The warning belongs beside every
+   such block rather than in the one file that first paid for it. */
+.app-intro-word { animation: app-intro-word-in 320ms ease-out both; }
 @media (prefers-reduced-motion: reduce) {
   .app-intro-skip { animation: none !important; }
+  /* The title still has to LEAVE, or it would sit over the locomotive for the rest of the clip -- so this one
+     keeps its fade rather than being switched off. #606's rule is that the information survives, and here the
+     information is that the card is temporary. */
+  .app-intro-title { animation: app-intro-title-out ${TITLE_FADE_MS}ms linear ${TITLE_HOLD_UNTIL_MS}ms both; }
+  .app-intro-word { animation: none !important; opacity: 1 !important; transform: none !important; }
 }
 `;
 
@@ -80,6 +174,35 @@ export function GameIntroOverlay({ onDone, sfxEnabled }: GameIntroOverlayProps) 
     finished.current = true;
     onDone();
   }, [onDone]);
+
+  /* ==================================================================
+      DESIGN NOTE 1166: THE CLIP ENDS; THE SEQUENCE DOES NOT
+     ==================================================================
+     ASKED: "at the end of the video, please hold the final completed logo frame for an extra 1-2 seconds.
+     During this final frame hold, fade in the text 'brought to you by Neta DAO' underneath the completed
+     logo."
+     `onEnded` USED TO BE `finish` DIRECTLY, so the mark was on screen for a frame and then gone. A video
+     element holds its last frame when it stops, which is what makes this a DELAY rather than a still image
+     rendered over the top: the picture the player keeps looking at is the clip's own final frame.
+     THE CREDIT MOUNTS ON THE SAME EDGE, so it cannot appear over the map or the drawing -- it exists only in
+     the window the hold creates.
+     SKIP AND ESCAPE STILL CUT IT, because `finish` is unchanged and every path still runs through it. A hold
+     that could not be skipped would have made the last two seconds the one part of a skippable sequence that
+     was not. */
+  const [holding, setHolding] = React.useState(false);
+  /* Design note #1166a: the credit has its own flag now. It is raised by the clip reaching the mark's draw,
+     and the hold no longer owns it -- `holding` still governs the title card's removal and the delay before
+     `finish`, which are the two things that really do belong to the end. */
+  const [creditVisible, setCreditVisible] = React.useState(false);
+  const onTimeUpdate = React.useCallback((event: React.SyntheticEvent<HTMLVideoElement>) => {
+    if (event.currentTarget.currentTime >= CREDIT_CUE_SECONDS) setCreditVisible(true);
+  }, []);
+  const holdEnded = React.useCallback(() => {
+    setHolding(true);
+    // Design note #1166a: the fallback for an engine that never fired `timeupdate`.
+    setCreditVisible(true);
+    window.setTimeout(finish, LOGO_HOLD_MS);
+  }, [finish]);
 
   React.useEffect(() => {
     /* Design note #1041's registry, used as intended: the radio drops to 20% under the clip and comes back
@@ -109,10 +232,49 @@ export function GameIntroOverlay({ onDone, sfxEnabled }: GameIntroOverlayProps) 
         playsInline
         muted={!sfxEnabled}
         loop={false}
-        onEnded={finish}
+        onEnded={holdEnded}
+        onTimeUpdate={onTimeUpdate}
         /* A clip that will not decode must not become a ten-second black screen with a button on it. */
         onError={finish}
       />
+      {/* ==================================================================
+            DESIGN NOTE 1166: THE TITLE CARD, ON THE ONE DARK BED THE CLIP HAS
+          ==================================================================
+          ASKED: "incorporate the Project 18XX title image into the cinematic intro sequence ... appear right
+          at the start ... fading out before the train schematic drawing starts."
+          THE SAME ASSET THE LOBBY USES, deliberately: a second rendering of the title would be a second thing
+          to keep in step, and #1131 already established this file as the one that carries it.
+          `mix-blend-mode: screen` KEYS IT OFF ITS OWN BLACK, which is how the lobby draws it and what lets a
+          rectangular JPEG sit over moving footage without a visible box. #1131 also records the trap that
+          comes with it: a transform or an opacity on an ANCESTOR makes a stacking context and the blend stops
+          working -- so the animation is on this element and the wrapper is a plain flex box.
+          NOT RENDERED AT ALL ONCE IT HAS GONE, rather than left at zero opacity: an element over the video is
+          an element the pointer can meet, and #1111's skip is the only thing on this layer meant to be. */}
+      {!holding && (
+        <img
+          className="app-intro-title"
+          style={styles.titleArt}
+          src={`${process.env.PUBLIC_URL ?? ""}/images/title-project18xx.jpg`}
+          alt=""
+          aria-hidden="true"
+        />
+      )}
+
+      {/* Design note #1166: the credit, one word at a time, in the window the hold opens. */}
+      {creditVisible && (
+        <p style={styles.credit}>
+          {CREDIT_WORDS.map((word, index) => (
+            <span
+              key={word}
+              className="app-intro-word"
+              style={{ animationDelay: `${index * CREDIT_WORD_STAGGER_MS}ms` }}
+            >
+              {word}{" "}
+            </span>
+          ))}
+        </p>
+      )}
+
       {skipVisible && (
         <button type="button" className="app-intro-skip" style={styles.skip} onClick={finish} autoFocus>
           Skip intro
@@ -153,6 +315,35 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     justifyContent: "center",
   },
+  /* Design note #1166: the title card. `position: absolute` over the video rather than in flow, `screen` to
+     key it off its own black ground (the lobby's own treatment, #1131), and no pointer events -- the skip is
+     the only thing on this layer a click should ever find. */
+  titleArt: {
+    position: "absolute",
+    top: "50%",
+    left: "50%",
+    transform: "translate(-50%, -50%)",
+    width: "min(62vw, 780px)",
+    mixBlendMode: "screen",
+    pointerEvents: "none",
+  },
+  /* Design note #1166: under the finished mark. The mark sits centred and occupies roughly the middle third,
+     so this clears it rather than guessing at a gap -- and it is `position: absolute` for the same reason the
+     title is, so neither can shift the video's own centring. */
+  credit: {
+    position: "absolute",
+    top: "68%",
+    left: 0,
+    right: 0,
+    margin: 0,
+    textAlign: "center",
+    fontSize: FONT_SIZE.heading,
+    fontWeight: 600,
+    letterSpacing: "0.08em",
+    color: "#f2f0eb",
+    textShadow: "0 2px 12px rgba(0,0,0,0.8)",
+    pointerEvents: "none",
+  },
   /* `contain` rather than `cover`: the clip is a drawing with content at its edges, and cropping it to fill
      a wide window would cut the map it is drawing. The letterbox is the theme's own ground, so it reads as
      framing rather than as a gap. */
@@ -165,7 +356,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     fontFamily: "inherit",
     padding: "7px 16px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     border: "1px solid #3a3a3a",
     backgroundColor: "rgba(20, 20, 20, 0.82)",
     color: "#c8c6c0",

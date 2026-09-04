@@ -23,7 +23,7 @@ import type { GameStateResponse, PlayerNetWorthResponse, QueryCapableClient } fr
 // Design note #497: the local valuation, for when there is no chain to ask.
 import { estimatePlayerNetWorth, sharePriceFor } from "../utils/gameState";
 import { PRIORITY_DEAL_TOOLTIP } from "../utils/gameState";
-import { FONT_SIZE } from "../styles/typography";
+import { FONT_SIZE, RADIUS } from "../styles/typography";
 // `ContextualSubPanel` design note #170: a name beats a truncated hash, and this returns `null` for a real
 // wallet so live rooms are unchanged.
 // Design note #559: the ROOM-AWARE resolver. Importing it from `sandboxState` got the fixture's Alice/Bob
@@ -1007,7 +1007,7 @@ const styles: Record<string, React.CSSProperties> = {
     margin: "0 20px 20px",
     backgroundColor: INK_VIEWPORT,
     border: "1px solid #2a2a2a",
-    borderRadius: "10px",
+    borderRadius: RADIUS.card,
     display: "flex",
     flexDirection: "column",
     gap: "20px",
@@ -1133,7 +1133,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 800,
     letterSpacing: "0.4px",
     padding: "1px 7px",
-    borderRadius: "999px",
+    borderRadius: RADIUS.pill,
     backgroundColor: "rgba(244, 63, 94, 0.18)",
     border: "1px solid #f43f5e",
     color: "#fda4af",
@@ -1147,7 +1147,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 800,
     letterSpacing: "0.4px",
     padding: "1px 7px",
-    borderRadius: "999px",
+    borderRadius: RADIUS.pill,
     backgroundColor: "#1c1c1c",
     border: "1px solid #4a4a4a",
     color: "#a8a6a0",
@@ -1159,7 +1159,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 800,
     letterSpacing: "0.4px",
     padding: "1px 7px",
-    borderRadius: "999px",
+    borderRadius: RADIUS.pill,
     backgroundColor: "rgba(201, 169, 76, 0.18)",
     border: "1px solid #c9a94c",
     color: "#e0c070",
@@ -1234,7 +1234,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 900,
     letterSpacing: "0.5px",
     padding: "1px 6px",
-    borderRadius: "999px",
+    borderRadius: RADIUS.pill,
     borderWidth: "1px",
     borderStyle: "solid",
     borderColor: "#38bdf8",
@@ -1274,7 +1274,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.micro,
     fontWeight: 700,
     padding: "1px 6px",
-    borderRadius: "4px",
+    borderRadius: RADIUS.control,
     backgroundColor: "#2a2a2a",
     border: "1px solid #3a3a3a",
     color: "#c8c6c0",
@@ -1430,7 +1430,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     letterSpacing: "0.4px",
     padding: "2px 8px",
-    borderRadius: "4px",
+    borderRadius: RADIUS.control,
     backgroundColor: CHIP_INERT_BG,
     border: `1px solid ${CHIP_INERT_BORDER}`,
     color: CHIP_INERT_INK,
@@ -1440,7 +1440,7 @@ const styles: Record<string, React.CSSProperties> = {
   tokenDot: {
     width: "10px",
     height: "10px",
-    borderRadius: "50%",
+    borderRadius: RADIUS.circle,
     flexShrink: 0,
     borderWidth: "1px",
     borderStyle: "solid",

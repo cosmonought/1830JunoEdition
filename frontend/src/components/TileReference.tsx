@@ -28,19 +28,20 @@
 //
 // See docs/ai_architecture/hex_tile_math.md, TileReference.tsx #677.
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 
 import { TilePreviewThumbnail } from "./HexGridRenderer";
 import { TILE_CATALOG_BY_ID, type TileColorTier } from "./hexTileCatalog";
 import type { MapGridResponse } from "./hexContractTypes";
-import { FONT_SIZE } from "../styles/typography";
-import { tileStockTable } from "../utils/tileSupply";
+import { FONT_SIZE, RADIUS } from "../styles/typography";
+import { tileStockTable, type TileStock } from "../utils/tileSupply";
 /* Design note #1117: the one viewport ground, shared rather than retyped. */
 import { INK_VIEWPORT } from "../styles/palette";
 import {
   isUpgradeDeadEnd,
   tileUpgradeGraph,
   tileUpgradeSources,
+  type TileUpgradeGraph,
 } from "../utils/tileUpgrades";
 
 export interface TileReferenceProps {
@@ -99,6 +100,55 @@ const TERRAIN_LABEL: Readonly<Record<string, string>> = {
   BostonHub: "Boston",
   NewYorkHub: "New York",
 };
+
+/* ==================================================================
+    DESIGN NOTE 1152: THE ANSWER MOVED UP TO THE ROW THAT ASKED IT
+   ==================================================================
+   REPORTED: "on the tiles tab, clicking a tile currently appends an upgrade panel all the way at the bottom
+   of the screen", asked as a request to replace the panel with the board's radial ring.
+
+   #693 PUT THE PANEL INSIDE THE TRAY DELIBERATELY -- "the answer appears under the question" -- and the
+   reasoning was sound at TRAY granularity and wrong at TILE granularity. A tray holds up to eighteen tiles
+   over four or five rows; the panel rendered after the whole grid, so clicking a tile in the top row put its
+   answer four rows away, which is the complaint word for word.
+
+   THE RING WAS ASKED FOR AND IS NOT WHAT THIS DOES, and the reason is worth recording rather than leaving as
+   a silent decline. On the map that ring is a CHOOSER: you pick a candidate, rotate it and confirm a lay.
+   Here there is nothing to lay. A control that borrows the chooser's exact appearance but cannot choose
+   teaches the wrong lesson -- a player will click a candidate expecting to place it -- and the useful click
+   on this tab is "show me THAT tile's chain", which is a browse, the opposite gesture. #693's own words for
+   this were "a radial menu is a board tool"; that half of it still holds.
+   SO THE PANEL KEEPS ITS SHAPE AND FIXES ITS POSITION, which is what the report is actually about.
+
+   IT NEEDS THE COLUMN COUNT, and the grid is `auto-fill`, so only the browser knows it. `gridTemplateColumns`
+   resolves to a list of used track sizes, and counting them is the one property of that list that does not
+   care what the sizes are -- so this reads a count and never a pixel, which is what keeps it indifferent to
+   the chrome's zoom (#1144's lesson, one file over).
+   RE-MEASURED ON RESIZE, because the count changes with the window and a stale one would open the panel in
+   the middle of a row. */
+function useGridColumnCount(ref: React.RefObject<HTMLDivElement | null>): number {
+  const [columns, setColumns] = useState(1);
+  useEffect(() => {
+    const node = ref.current;
+    if (!node || typeof ResizeObserver === "undefined") return undefined;
+    const measure = () => {
+      const tracks = window.getComputedStyle(node).gridTemplateColumns;
+      /* `none` before the first layout, and a single track reads as one column either way. */
+      setColumns(Math.max(1, tracks && tracks !== "none" ? tracks.split(" ").length : 1));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [ref]);
+  return columns;
+}
+
+/** The last index on the row that holds `selected` -- or `null` when nothing in this tray is selected. */
+function rowEndFor(selectedIndex: number, columns: number, count: number): number | null {
+  if (selectedIndex < 0) return null;
+  return Math.min(count - 1, Math.floor(selectedIndex / columns) * columns + columns - 1);
+}
 
 /** One tile's place in the chain -- design note #693.
  *
@@ -171,7 +221,159 @@ function TileUpgradeDetail({
   );
 }
 
-export function TileReference({ mapGrid }: TileReferenceProps) {
+export /* Design note #1152: ONE TRAY, and it is a component because the panel's position depends on the grid's
+   resolved column count -- which needs a ref and an effect, and hooks cannot be called from inside a
+   `.map()`. The body below is #692's and #693's, carried over unchanged apart from where the panel sits. */
+function TileTray({
+  tier,
+  ids,
+  isTopTier,
+  stock,
+  live,
+  graph,
+  selectedTileId,
+  onSelect,
+}: {
+  tier: TileColorTier;
+  ids: readonly number[];
+  isTopTier: boolean;
+  /* The real types, read off the callers rather than approximated -- both are READONLY maps, and a
+     widened signature here would have quietly claimed this component may write to them. */
+  stock: ReadonlyMap<number, TileStock>;
+  live: boolean;
+  graph: TileUpgradeGraph;
+  selectedTileId: number | null;
+  onSelect: (tileId: number | null) => void;
+}) {
+  const gridRef = React.useRef<HTMLDivElement | null>(null);
+  const columns = useGridColumnCount(gridRef);
+  const selectedIndex = selectedTileId === null ? -1 : ids.indexOf(selectedTileId);
+  const panelAfterIndex = rowEndFor(selectedIndex, columns, ids.length);
+  const setSelectedTileId = onSelect;
+  return (
+          <section
+            key={tier}
+            style={{ ...styles.tray, borderColor: TIER_INK[tier] }}
+            aria-label={`${tier} tiles`}
+          >
+            <header style={styles.trayHead}>
+              <h3 style={{ ...styles.trayTitle, color: TIER_INK[tier] }}>{tier}</h3>
+              {/* Design note #692: "Top tier -- nothing replaces it" was on all EIGHTEEN brown tiles, and it
+                  is a fact about the TIER. Said once, on the thing it is true of. `PlayerCards` #567 removed
+                  three marks on the same reasoning: a caption repeated on every member of a group is telling
+                  the reader about the group in the least efficient available place. */}
+              <span style={styles.trayNote}>
+                {isTopTier
+                  ? "The top tier — nothing replaces these."
+                  : `${ids.length} tiles`}
+              </span>
+            </header>
+
+            <div style={styles.trayContents} ref={gridRef}>
+              {ids.map((tileId, index) => {
+                const entry = TILE_CATALOG_BY_ID.get(tileId);
+                if (!entry) return null;
+                /* Design note #693: the tray tile no longer reads `successors` at all -- the panel does. Left
+                   as a comment rather than a stale binding, because an unused lookup here is how the chips
+                   would find their way back. */
+                const supply = stock.get(tileId);
+                const family = FAMILY_FOR_TERRAIN[entry.terrain];
+                const isSelected = tileId === selectedTileId;
+                /* Design note #1152: a fragment, so the panel can follow the tile that ENDS the selected
+                   row without the tiles after it moving. Keyed on the tile, which is what `key` was on before
+                   the wrapper existed. */
+                return (
+                  <React.Fragment key={tileId}>
+                  {/* Design note #692: no border, no background. A tile is contents, and its own artwork is
+                     already a bounded shape -- a box around a hexagon is a box around something that did not
+                     need one.
+                     Design note #693: and it is a BUTTON now -- see the note on the detail panel below. Styled
+                     as contents still; the affordance is the pointer, the pressed ring and `aria-pressed`,
+                     none of which add a box. */}
+                  <button
+                    type="button"
+                    aria-pressed={isSelected}
+                    aria-label={`Tile #${tileId} — ${isSelected ? "hide" : "show"} its upgrade path`}
+                    onClick={() => setSelectedTileId(isSelected ? null : tileId)}
+                    style={{
+                      ...styles.trayTile,
+                      ...(isSelected ? { ...styles.trayTileSelected, borderColor: TIER_INK[tier] } : {}),
+                    }}
+                  >
+                    {/* Design note #692a: sized up from 44px. The artwork is the thing this tab is FOR, and at
+                        44 a green city and a green crossover are two dark hexagons -- which is the reading the
+                        report is describing when it says the page looks messy. */}
+                    <TilePreviewThumbnail tileId={tileId} orientation={0} size={64} />
+
+                    <span style={{ ...styles.tileId, color: TIER_INK[tier] }}>
+                      #{tileId}
+                      {family && (
+                        <span style={styles.familyTag} title={FAMILY_BLURB[family]}>
+                          {family}
+                        </span>
+                      )}
+                    </span>
+
+                    {/* Design note #677: the SUPPLY, which is why a player opens this tab mid-game. */}
+                    <span style={styles.supply}>
+                      {supply
+                        ? live
+                          ? `${supply.remaining} / ${supply.printed}`
+                          : `${supply.printed} in tray`
+                        : "—"}
+                    </span>
+
+                    {/* Design note #693: THE UPGRADE CHIPS ARE GONE FROM HERE. #692 shrank them to bare
+                        numbered ids and it was still reported as "very cluttered and chaotic" -- correctly,
+                        because the problem was never their size. An upgrade path is a RELATIONSHIP, and this
+                        page was drawing all of them at once: 46 tiles carrying up to seven references each is
+                        a hundred tile ids competing with the 46 they sit beneath, at the same weight, in the
+                        same typeface. No amount of shrinking fixes simultaneity.
+                        A relationship is only interesting ONE AT A TIME. It moves to the panel below. */}
+
+                    {/* Design note #677: NOT THE SAME AS "nothing follows brown", which is why this survives
+                        while the top-tier line moved to the heading. A yellow or green tile with no successor
+                        fixes its hex at that colour for the rest of the game -- a cost the player is choosing
+                        to pay, true of eight tiles rather than of a whole tier.
+                        `isUpgradeDeadEnd`, NOT `!isTopTier && targets.length === 0`. The first draft of this
+                        tray inlined that expression and left the import unused, which is how it was caught --
+                        the predicate is the util's (`tileUpgrades.ts` #675), it already draws exactly this
+                        distinction, and it is tested. A second copy here is a second opinion about which
+                        tiles are dead ends. */}
+                    {isUpgradeDeadEnd(tileId) && (
+                      <span
+                        style={styles.deadEnd}
+                        title={`No green or brown tile can replace #${tileId}, so laying it fixes that hex at ${tier.toLowerCase()} for the rest of the game.`}
+                      >
+                        No upgrade
+                      </span>
+                    )}
+                  </button>
+                  {/* Design note #1152: the answer, as a GRID ITEM spanning every column, placed immediately
+                      after the last tile on the row that holds the selection. It therefore opens within one
+                      row's height of the tile that was clicked -- #693's "the answer appears under the
+                      question", finally true at the granularity the question is asked at -- and the rest of
+                      that row stays intact above it rather than being pushed below the answer. */}
+                  {index === panelAfterIndex && selectedTileId !== null && (
+                    <div style={styles.detailRow}>
+                      <TileUpgradeDetail
+                        tileId={selectedTileId}
+                        tier={tier}
+                        targets={graph.successors.get(selectedTileId) ?? []}
+                        onClose={() => onSelect(null)}
+                      />
+                    </div>
+                  )}
+                  </React.Fragment>
+                );
+              })}
+            </div>
+
+          </section>
+  );
+}
+
+function TileReference({ mapGrid }: TileReferenceProps) {
   /* The sweep is real work and the board does not change under it, so both
      derivations are memoised on the one input that matters. */
   /* Design note #693: ONE SELECTION FOR THE WHOLE TAB, mirroring `StockRoundPanel`'s `activeCompanyId`
@@ -238,130 +440,19 @@ export function TileReference({ mapGrid }: TileReferenceProps) {
          hierarchy looks like.
          SO THE TIER TAKES THE BORDER and the heading sits ON it; the tiles are loose contents. Nothing about
          the information changed -- only which level of it is drawn as an object. */}
-      {TIERS.map((tier) => {
-        const ids = byTier.get(tier) ?? [];
-        const isTopTier = tier === TIERS[TIERS.length - 1];
-        return (
-          <section
-            key={tier}
-            style={{ ...styles.tray, borderColor: TIER_INK[tier] }}
-            aria-label={`${tier} tiles`}
-          >
-            <header style={styles.trayHead}>
-              <h3 style={{ ...styles.trayTitle, color: TIER_INK[tier] }}>{tier}</h3>
-              {/* Design note #692: "Top tier -- nothing replaces it" was on all EIGHTEEN brown tiles, and it
-                  is a fact about the TIER. Said once, on the thing it is true of. `PlayerCards` #567 removed
-                  three marks on the same reasoning: a caption repeated on every member of a group is telling
-                  the reader about the group in the least efficient available place. */}
-              <span style={styles.trayNote}>
-                {isTopTier
-                  ? "The top tier — nothing replaces these."
-                  : `${ids.length} tiles`}
-              </span>
-            </header>
-
-            <div style={styles.trayContents}>
-              {ids.map((tileId) => {
-                const entry = TILE_CATALOG_BY_ID.get(tileId);
-                if (!entry) return null;
-                /* Design note #693: the tray tile no longer reads `successors` at all -- the panel does. Left
-                   as a comment rather than a stale binding, because an unused lookup here is how the chips
-                   would find their way back. */
-                const supply = stock.get(tileId);
-                const family = FAMILY_FOR_TERRAIN[entry.terrain];
-                const isSelected = tileId === selectedTileId;
-                return (
-                  /* Design note #692: no border, no background. A tile is contents, and its own artwork is
-                     already a bounded shape -- a box around a hexagon is a box around something that did not
-                     need one.
-                     Design note #693: and it is a BUTTON now -- see the note on the detail panel below. Styled
-                     as contents still; the affordance is the pointer, the pressed ring and `aria-pressed`,
-                     none of which add a box. */
-                  <button
-                    key={tileId}
-                    type="button"
-                    aria-pressed={isSelected}
-                    aria-label={`Tile #${tileId} — ${isSelected ? "hide" : "show"} its upgrade path`}
-                    onClick={() => setSelectedTileId(isSelected ? null : tileId)}
-                    style={{
-                      ...styles.trayTile,
-                      ...(isSelected ? { ...styles.trayTileSelected, borderColor: TIER_INK[tier] } : {}),
-                    }}
-                  >
-                    {/* Design note #692a: sized up from 44px. The artwork is the thing this tab is FOR, and at
-                        44 a green city and a green crossover are two dark hexagons -- which is the reading the
-                        report is describing when it says the page looks messy. */}
-                    <TilePreviewThumbnail tileId={tileId} orientation={0} size={64} />
-
-                    <span style={{ ...styles.tileId, color: TIER_INK[tier] }}>
-                      #{tileId}
-                      {family && (
-                        <span style={styles.familyTag} title={FAMILY_BLURB[family]}>
-                          {family}
-                        </span>
-                      )}
-                    </span>
-
-                    {/* Design note #677: the SUPPLY, which is why a player opens this tab mid-game. */}
-                    <span style={styles.supply}>
-                      {supply
-                        ? live
-                          ? `${supply.remaining} / ${supply.printed}`
-                          : `${supply.printed} in tray`
-                        : "—"}
-                    </span>
-
-                    {/* Design note #693: THE UPGRADE CHIPS ARE GONE FROM HERE. #692 shrank them to bare
-                        numbered ids and it was still reported as "very cluttered and chaotic" -- correctly,
-                        because the problem was never their size. An upgrade path is a RELATIONSHIP, and this
-                        page was drawing all of them at once: 46 tiles carrying up to seven references each is
-                        a hundred tile ids competing with the 46 they sit beneath, at the same weight, in the
-                        same typeface. No amount of shrinking fixes simultaneity.
-                        A relationship is only interesting ONE AT A TIME. It moves to the panel below. */}
-
-                    {/* Design note #677: NOT THE SAME AS "nothing follows brown", which is why this survives
-                        while the top-tier line moved to the heading. A yellow or green tile with no successor
-                        fixes its hex at that colour for the rest of the game -- a cost the player is choosing
-                        to pay, true of eight tiles rather than of a whole tier.
-                        `isUpgradeDeadEnd`, NOT `!isTopTier && targets.length === 0`. The first draft of this
-                        tray inlined that expression and left the import unused, which is how it was caught --
-                        the predicate is the util's (`tileUpgrades.ts` #675), it already draws exactly this
-                        distinction, and it is tested. A second copy here is a second opinion about which
-                        tiles are dead ends. */}
-                    {isUpgradeDeadEnd(tileId) && (
-                      <span
-                        style={styles.deadEnd}
-                        title={`No green or brown tile can replace #${tileId}, so laying it fixes that hex at ${tier.toLowerCase()} for the rest of the game.`}
-                      >
-                        No upgrade
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Design note #693: THE ANSWER APPEARS UNDER THE QUESTION.
-                Rendered inside the tray that HOLDS the selected tile rather than at the top of the page, so
-                the panel opens where the reader just clicked -- and only ever one tray has one, because the
-                selection is a single value.
-                ON THE WORRY that a tile with seven upgrades would be messy here: seven tiles in a panel of
-                their own is not the problem the report describes. Seven were unreadable when they were one of
-                46 simultaneous lists; alone, with room and a caption, they are a short row.
-                IT SHOWS BOTH DIRECTIONS, which the inline chips never could. `tileUpgradeSources` has been
-                exported and tested since #675 and had no caller -- an orphan by this codebase's own rule --
-                and it is what turns "what does this become" into "where does this sit in the chain". */}
-            {selectedTileId !== null && ids.includes(selectedTileId) && (
-              <TileUpgradeDetail
-                tileId={selectedTileId}
-                tier={tier}
-                targets={graph.successors.get(selectedTileId) ?? []}
-                onClose={() => setSelectedTileId(null)}
-              />
-            )}
-          </section>
-        );
-      })}
+      {TIERS.map((tier) => (
+        <TileTray
+          key={tier}
+          tier={tier}
+          ids={byTier.get(tier) ?? []}
+          isTopTier={tier === TIERS[TIERS.length - 1]}
+          stock={stock}
+          live={live}
+          graph={graph}
+          selectedTileId={selectedTileId}
+          onSelect={setSelectedTileId}
+        />
+      ))}
     </section>
   );
 }
@@ -384,7 +475,7 @@ const styles: Record<string, React.CSSProperties> = {
     margin: "0 20px 20px",
     backgroundColor: INK_VIEWPORT,
     border: "1px solid #2a2a2a",
-    borderRadius: "10px",
+    borderRadius: RADIUS.card,
     display: "flex",
     flexDirection: "column",
     gap: "18px",
@@ -409,7 +500,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "14px 16px",
     backgroundColor: "#0f0f0f",
     border: "1px solid #2a2a2a",
-    borderRadius: "10px",
+    borderRadius: RADIUS.card,
   },
   sectionTitle: {
     margin: 0,
@@ -440,7 +531,7 @@ const styles: Record<string, React.CSSProperties> = {
     /* Overridden per tier; a neutral here so a missing colour degrades to a
        visible tray rather than an invisible one. */
     borderColor: "#2a2a2a",
-    borderRadius: "12px",
+    borderRadius: RADIUS.layer,
   },
   trayHead: {
     display: "flex",
@@ -459,6 +550,10 @@ const styles: Record<string, React.CSSProperties> = {
   trayNote: { fontSize: FONT_SIZE.small, color: "#8a8a86" },
   /* `auto-fill` at a width that fits the 64px artwork plus its figures. The tiles reflow; the tray does not
      scroll, because a tray you have to scroll inside is a list wearing a border. */
+  /* Design note #1152: spans every column, whatever `auto-fill` resolved to. `1 / -1` is the whole point --
+     it needs no knowledge of the column count, which is why the count is only ever used to decide WHERE the
+     item goes and never how wide it is. */
+  detailRow: { gridColumn: "1 / -1" },
   trayContents: {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fill, minmax(132px, 1fr))",
@@ -483,7 +578,7 @@ const styles: Record<string, React.CSSProperties> = {
        Both renders now write the same property, so the diff always has a value to set. */
     backgroundColor: "transparent",
     border: "1px solid transparent",
-    borderRadius: "10px",
+    borderRadius: RADIUS.card,
     font: "inherit",
     color: "inherit",
     cursor: "pointer",
@@ -501,7 +596,7 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: "rgba(255, 255, 255, 0.04)",
     border: "1px solid",
     borderColor: "#2a2a2a",
-    borderRadius: "10px",
+    borderRadius: RADIUS.card,
   },
   detailHead: { display: "flex", alignItems: "baseline", gap: "10px" },
   detailTitle: {

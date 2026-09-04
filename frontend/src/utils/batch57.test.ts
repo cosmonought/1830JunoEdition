@@ -36,6 +36,11 @@ const SHEET = readStripped("styles/appStyles.ts");
 
 /** Both sides through `anchorIndex`, so a missing anchor throws rather than passing as -1. */
 const above = (haystack: string, first: string, second: string) => {
+
+/* Design note #1151 superseded the SPELLING of the radius assertions in this file, not their claims. The app held twelve
+   near-identical radii doing the work of one; they are three named steps now, so a case that pinned a pixel value was
+   testing the literal rather than the property it stood for. Each reads the token it now is. */
+
   expect(anchorIndex(haystack, first, `first: ${first}`)).toBeLessThan(
     anchorIndex(haystack, second, `second: ${second}`),
   );
@@ -155,7 +160,7 @@ describe("the bar keeps its pin and gains its own inset", () => {
        thing said three ways. The gap goes on the TABS because #426 forbids it on the bar. */
     expect(sliceBetween(SHEET, "mainTabBar: {", "},")).toContain('marginTop: "10px"');
     const bar = sliceBetween(SHEET, "actionBar: {", "},");
-    expect(bar).toContain('borderRadius: "10px"');
+    expect(bar).toContain('borderRadius: RADIUS.card');
     expect(bar).not.toContain("boxShadow");
     /* THE SHADOW EXISTS WHERE IT IS TRUE: the pinned form, which is the one moment the bar really is floating
        over something. Already there since #298 -- this case is what stops it being added twice. */

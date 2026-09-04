@@ -13,7 +13,7 @@
 
 import React, { useState } from "react";
 
-import { FONT_SIZE } from "../styles/typography";
+import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { PAR_VALUE_LADDER } from "./StockRoundPanel";
 
 export interface AuctionPromptModalProps {
@@ -159,7 +159,7 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "12px",
     width: "min(460px, 100%)",
     padding: "18px 20px",
-    borderRadius: "12px",
+    borderRadius: RADIUS.layer,
     border: "1px solid #3a3a3a",
     backgroundColor: "#1c1c1c",
     color: "#f2f0eb",
@@ -171,7 +171,7 @@ const styles: Record<string, React.CSSProperties> = {
   rung: {
     flex: "1 1 auto",
     padding: "9px 4px",
-    borderRadius: "7px",
+    borderRadius: RADIUS.control,
     border: "1px solid #3a3a3a",
     backgroundColor: "#141414",
     color: "#f2f0eb",
@@ -193,7 +193,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   confirm: {
     padding: "11px 16px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     border: "1px solid #4d8ee0",
     backgroundColor: "#2f6fb2",
     color: "#f2f0eb",

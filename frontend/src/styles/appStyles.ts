@@ -12,7 +12,7 @@
 
 import React from "react";
 
-import { CONTROL_PADDING, FONT_SIZE, LINE_HEIGHT } from "./typography";
+import { CONTROL_PADDING, FONT_SIZE, LINE_HEIGHT, RADIUS } from "./typography";
 import {
   ALERT_CRITICAL_BG,
   ALERT_CRITICAL_BORDER,
@@ -49,11 +49,32 @@ export const PHASE_TINT_STYLES: Readonly<Record<GamePhase["tint"], React.CSSProp
 /* ==================================================================
     DESIGN NOTE 1144: ONE NUMBER, AND WHY IT IS NOT A SETTING YET
    ==================================================================
-   0.7 IS THE FIGURE THE PLAYER WAS ALREADY USING, arrived at over several playtests rather than guessed at
-   here. RULED: "fixed now, control later if playtesters ask" -- so it is a constant in one place, and a
-   `localStorage`-backed picker in the top bar is a follow-up rather than a control nobody has asked for, in
-   a bar several batches have spent their length de-cluttering. */
-export const UI_SCALE = 0.7;
+   0.7 WAS THE FIGURE THE PLAYER WAS ALREADY USING, read off their browser's zoom control over several
+   playtests rather than guessed at here. RULED: "fixed now, control later if playtesters ask" -- so it is a
+   constant in one place, and a `localStorage`-backed picker in the top bar is a follow-up rather than a
+   control nobody has asked for, in a bar several batches have spent their length de-cluttering.
+
+   ==================================================================
+    DESIGN NOTE 1149: 0.63, AND WHY MULTIPLYING THE TWO ZOOMS IS EXACT
+   ==================================================================
+   REPORTED against #1144: "I still need to zoom out my browser to 90% to get the right aspect."
+
+   THE TWO ZOOMS COMPOSE, AND THE COMPOSITION DEPENDS ONLY ON THEIR PRODUCT -- which is worth deriving rather
+   than assuming, because the obvious worry is that they do NOT compose. Browser zoom scales everything
+   uniformly; this one shrinks the FIXED chrome and lets the flexible board pane absorb whatever that frees.
+   Those sound like different operations. With fixed chrome `F`, viewport `W`, app scale `s` and browser zoom
+   `b`, the root lays out at `(W / b) / s`, so the board pane takes `(W / b) / s - F` and lands on screen at
+   `W - F * s * b`, with the chrome at `F * s * b`. Both terms see `s` and `b` only as a product: the split
+   between chrome and board is identical for any pair with the same `k = s * b`.
+   SO 0.7 x 0.9 IS NOT AN APPROXIMATION OF WHAT THE PLAYER IS LOOKING AT. It is the same layout, and setting
+   the constant to 0.63 at 100% browser zoom reproduces it exactly rather than merely closely.
+   AND IT SAYS THE ORIGINAL READING WAS SIMPLY SHORT. #1144 took 0.7 from the browser control, which is a
+   coarse instrument -- Chrome's next step down from 100% IS 90%, and 80% and 67% are the ones after it, so a
+   player converging on "about right" through those stops can only land within about a tenth. Two playtests
+   have now bracketed it, and 0.63 is the second reading rather than a correction of a mistake in the first.
+   TWICE IS THE SIGNAL FOR THE PICKER. If a third reading moves it again, the follow-up ruled out above has
+   earned its place: this is a per-reader preference being fitted by successive approximation from here. */
+export const UI_SCALE = 0.63;
 
 /* ==================================================================
     DESIGN NOTE 1144: ONE ZOOM, SPREAD ON ALL THREE ROOTS
@@ -180,7 +201,7 @@ export const styles: Record<string, React.CSSProperties> = {
     fontWeight: 800,
     letterSpacing: "0.03em",
     padding: "3px 10px",
-    borderRadius: "999px",
+    borderRadius: RADIUS.pill,
     borderWidth: "1px",
     borderStyle: "solid",
     whiteSpace: "nowrap",
@@ -195,7 +216,7 @@ export const styles: Record<string, React.CSSProperties> = {
     fontWeight: 800,
     letterSpacing: "0.02em",
     padding: "3px 9px",
-    borderRadius: "999px",
+    borderRadius: RADIUS.pill,
     borderWidth: "1px",
     borderStyle: "solid",
     whiteSpace: "nowrap",
@@ -374,7 +395,7 @@ export const styles: Record<string, React.CSSProperties> = {
   topBarDot: {
     width: "9px",
     height: "9px",
-    borderRadius: "50%",
+    borderRadius: RADIUS.circle,
     flexShrink: 0,
     cursor: "help",
   },
@@ -388,7 +409,7 @@ export const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.small,
     fontWeight: 600,
     padding: CONTROL_PADDING.buttonSmall,
-    borderRadius: "999px",
+    borderRadius: RADIUS.pill,
     border: "1px solid #3a3a3a",
     backgroundColor: "#1c1c1c",
     color: "#c8c6c0",
@@ -437,7 +458,7 @@ export const styles: Record<string, React.CSSProperties> = {
     boxSizing: "border-box",
     padding: "0 17px 0 4px",
     marginRight: "-13px",
-    borderRadius: "999px 0 0 999px",
+    borderRadius: `${RADIUS.pill} 0 0 ${RADIUS.pill}`,
     border: "1px solid #2a2a2a",
     borderRight: "none",
     backgroundColor: "#141414",
@@ -500,7 +521,7 @@ export const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     justifyContent: "center",
     padding: 0,
-    borderRadius: "4px",
+    borderRadius: RADIUS.control,
     border: "1px solid #3a3a3a",
     backgroundColor: "#262626",
     color: "inherit",
@@ -522,7 +543,7 @@ export const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.small,
     lineHeight: 1,
     padding: 0,
-    borderRadius: "999px",
+    borderRadius: RADIUS.pill,
     border: "1px solid #3a3a3a",
     backgroundColor: "#1c1c1c",
     color: "#6e6c68",
@@ -543,7 +564,7 @@ export const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.small,
     fontWeight: 700,
     padding: CONTROL_PADDING.buttonSmall,
-    borderRadius: "999px",
+    borderRadius: RADIUS.pill,
     border: "1px solid #2f6f6a",
     backgroundColor: "#14312f",
     color: "#7fe0d0",
@@ -594,7 +615,7 @@ export const styles: Record<string, React.CSSProperties> = {
     borderWidth: "1px",
     borderStyle: "solid",
     borderColor: "#2a2a2a",
-    borderRadius: "10px",
+    borderRadius: RADIUS.card,
     boxSizing: "border-box",
   },
   globalActionBarLabel: {
@@ -608,7 +629,7 @@ export const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.control,
     fontWeight: 700,
     padding: CONTROL_PADDING.button,
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     borderWidth: "1px",
     borderStyle: "solid",
     borderColor: "#3a3a3a",
@@ -629,7 +650,7 @@ export const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.small,
     fontWeight: 700,
     padding: CONTROL_PADDING.buttonSmall,
-    borderRadius: "999px",
+    borderRadius: RADIUS.pill,
     borderWidth: "1px",
     borderStyle: "solid",
     /* Design note #1122: the sandbox family, luminance-matched to the ink ladder it stands beside. */
@@ -657,7 +678,7 @@ export const styles: Record<string, React.CSSProperties> = {
     fontWeight: 800,
     letterSpacing: "0.5px",
     padding: "3px 10px",
-    borderRadius: "999px",
+    borderRadius: RADIUS.pill,
     border: "1px solid #2a2a2a",
     backgroundColor: "transparent",
     color: "#6e6c68",
@@ -675,7 +696,7 @@ export const styles: Record<string, React.CSSProperties> = {
     fontWeight: 800,
     letterSpacing: "0.5px",
     padding: "4px 12px",
-    borderRadius: "999px",
+    borderRadius: RADIUS.pill,
     /* Design note #1122: the badge is the in-game end of the same signal the lobby's strips carry, so it
        reads from the same constants rather than from a third hand-picked purple. */
     backgroundColor: SANDBOX_RAISED,
@@ -692,7 +713,7 @@ export const styles: Record<string, React.CSSProperties> = {
     fontWeight: 800,
     letterSpacing: "0.5px",
     padding: "4px 12px",
-    borderRadius: "999px",
+    borderRadius: RADIUS.pill,
     backgroundColor: "#3d1a18",
     border: "1px solid #8a3a30",
     color: "#f0a898",
@@ -703,7 +724,7 @@ export const styles: Record<string, React.CSSProperties> = {
     fontWeight: 800,
     letterSpacing: "0.5px",
     padding: "4px 12px",
-    borderRadius: "999px",
+    borderRadius: RADIUS.pill,
     backgroundColor: "#3a2f14",
     border: "1px solid #6a5a24",
     color: "#e0c07a",
@@ -765,7 +786,7 @@ export const styles: Record<string, React.CSSProperties> = {
     alignItems: "baseline",
     gap: "6px",
     padding: "4px 12px",
-    borderRadius: "999px",
+    borderRadius: RADIUS.pill,
     border: "1px solid #2f6f6a",
     backgroundColor: "#14312f",
   },
@@ -785,7 +806,7 @@ export const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.small,
     fontWeight: 600,
     padding: "4px 10px",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     border: "1px solid #6b5a24",
     backgroundColor: "#2a2413",
     color: "#d9b95c",
@@ -794,7 +815,7 @@ export const styles: Record<string, React.CSSProperties> = {
   button: {
     fontSize: FONT_SIZE.strong,
     padding: "9px 18px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     border: "1px solid #3a3a3a",
     backgroundColor: "#1c1c1c",
     color: "#f2f0eb",
@@ -847,7 +868,23 @@ export const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     gap: "6px",
     rowGap: "6px",
-    padding: "6px 16px",
+    /* ==================================================================
+        DESIGN NOTE 1150: THE STRIP AND ITS PANEL DISAGREED BY FOUR PIXELS
+       ==================================================================
+       REPORTED: "the game room tabs sit slightly outside the viewport, with the leftmost tab extending a bit
+       off the side."
+       FOUND BY READING THE TWO INSETS RATHER THAN BY EYE, because four pixels is exactly the size of mistake
+       that gets attributed to something else: this strip inset its buttons by 16 and `canvasPane` insets the
+       panel below by 20, so the leftmost tab began four pixels to the LEFT of the panel it belongs to. Not
+       "off the viewport" in the literal sense -- outside the shape the tabs are supposed to be attached to,
+       which is what the eye reports.
+       NEITHER NUMBER WAS EVER ARGUED FOR against the other. #1118 closed the vertical seam between these two
+       surfaces and made them read as one assembly, which is precisely what turned a horizontal difference
+       nobody could see into one nobody could miss -- the same story as #1117 making the viewport ground
+       visible before this strip's alignment could matter at all.
+       MATCHED TO THE PANEL, not split between them: 20 is the one with a reason (it "keeps the panel's border
+       and radius visible", #1118), and 16 was only ever the strip's own habit. */
+    padding: "6px 20px",
     backgroundColor: "#0f0f0f",
     boxSizing: "border-box",
     maxWidth: "100%",
@@ -859,7 +896,7 @@ export const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.control,
     fontWeight: 600,
     padding: "7px 18px",
-    borderRadius: "10px 10px 0 0",
+    borderRadius: `${RADIUS.card} ${RADIUS.card} 0 0`,
     borderWidth: "1px",
     borderStyle: "solid",
     borderColor: "rgba(42, 42, 42, 0.85)",
@@ -878,7 +915,7 @@ export const styles: Record<string, React.CSSProperties> = {
     flexShrink: 1,
     minWidth: 0,
     padding: "6px 10px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     borderWidth: "1px",
     borderStyle: "solid",
     borderColor: "#3a5a8a",
@@ -923,7 +960,7 @@ export const styles: Record<string, React.CSSProperties> = {
   fitProbe: {
     margin: "4px 0 0",
     padding: "3px 8px",
-    borderRadius: "4px",
+    borderRadius: RADIUS.control,
     border: "1px dashed #4a4a4a",
     backgroundColor: "#0f0f0f",
     color: "#a8a6a0",
@@ -996,7 +1033,7 @@ export const styles: Record<string, React.CSSProperties> = {
     borderWidth: "1px",
     borderStyle: "solid",
     borderColor: "#2a2a2a",
-    borderRadius: "10px",
+    borderRadius: RADIUS.card,
     /* Design note #426: no `marginBottom`. See above -- a sticky element's
        own margin scrolls with it and offsets it from `top: 0`. The gap is
        now the following content's `marginTop`, which stays put.
@@ -1237,7 +1274,7 @@ export const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.strong,
     fontWeight: 700,
     padding: "9px 18px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     border: "1px solid #3a3a3a",
     backgroundColor: "#1c1c1c",
     color: "#f2f0eb",
@@ -1286,7 +1323,7 @@ export const styles: Record<string, React.CSSProperties> = {
     color: "#F0A8D4",
     backgroundColor: "#241018",
     border: "1px solid #7a2456",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     padding: "7px 10px",
   },
   /* Design note #674: UNDO ONLY, now. Skip wore this too and was reported as looking "slightly dimmer than the
@@ -1318,7 +1355,7 @@ export const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     width: "30px",
     height: "16px",
-    borderRadius: "999px",
+    borderRadius: RADIUS.pill,
     backgroundColor: "#3a3a3a",
     padding: "2px",
     marginRight: "10px",
@@ -1328,7 +1365,7 @@ export const styles: Record<string, React.CSSProperties> = {
   routeToggleSwitchThumb: {
     width: "12px",
     height: "12px",
-    borderRadius: "999px",
+    borderRadius: RADIUS.pill,
     backgroundColor: "#c8c6c0",
     transition: "transform 0.12s ease",
   },
@@ -1354,7 +1391,7 @@ export const styles: Record<string, React.CSSProperties> = {
        against the padding edge. 6px, plus `alignContent: center`. */
     padding: "6px 10px",
     alignContent: "center",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     backgroundColor: "#0f0f0f",
     border: "1px solid #2a2a2a",
   },
@@ -1482,7 +1519,7 @@ export const styles: Record<string, React.CSSProperties> = {
        already gives -- the seat colour is a SHAPE here and the name carries the identity -- but the sentence
        overstates its case, and correcting those three is its own pass rather than a colour swap. */
     backgroundColor: "#ffffff",
-    borderRadius: "5px",
+    borderRadius: RADIUS.control,
     padding: "1px 6px 1px 4px",
     fontWeight: 700,
   },
@@ -1544,7 +1581,7 @@ export const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.micro,
     fontWeight: 700,
     padding: "1px 6px",
-    borderRadius: "4px",
+    borderRadius: RADIUS.control,
     borderWidth: "1px",
     borderStyle: "solid",
     whiteSpace: "nowrap",
@@ -1610,7 +1647,7 @@ export const styles: Record<string, React.CSSProperties> = {
     alignItems: "baseline",
     gap: "12px",
     padding: "5px 12px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     borderWidth: "1px",
     borderStyle: "solid",
     whiteSpace: "nowrap",
@@ -1698,7 +1735,7 @@ export const styles: Record<string, React.CSSProperties> = {
     width: "100%",
     maxWidth: "560px",
     padding: "24px 26px",
-    borderRadius: "12px",
+    borderRadius: RADIUS.layer,
     border: "1px solid #2a2a2a",
     backgroundColor: "#0f0f0f",
   },
@@ -1713,7 +1750,7 @@ export const styles: Record<string, React.CSSProperties> = {
     alignSelf: "flex-start",
     fontSize: FONT_SIZE.small,
     padding: "6px 12px",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     border: "1px solid #3a3a3a",
     backgroundColor: "transparent",
     color: "#8a8a86",
@@ -1812,7 +1849,7 @@ export const styles: Record<string, React.CSSProperties> = {
     flexWrap: "nowrap",
     alignItems: "center",
     marginLeft: "10px",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     minWidth: 0,
     flexShrink: 0,
   },
@@ -1888,7 +1925,7 @@ export const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     gap: "6px",
     padding: "2px 8px",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     border: "1px solid #3a3a3a",
     // Design note #494: overridden per chip with that train's route ink.
     borderBottomWidth: "2px",
@@ -1913,35 +1950,61 @@ export const styles: Record<string, React.CSSProperties> = {
     color: "#7ee0a1",
     fontWeight: 800,
   },
+  /* ==================================================================
+      DESIGN NOTE 1153: THE TWO COLUMNS STOP BEING HALF THE BAR EACH
+     ==================================================================
+     REPORTED, at length: "the Pay Out side lists the entities on a flush left column and the payout results on
+     a flush right column; the Withhold side lists entities and payouts in a single string" -- and then the
+     consequence, "the Payout subpanel is split into two columns where the payout results are directly visible
+     under the Payout button, but the entities and Market Move are far to the left of it."
+     `1fr 1fr` IS WHERE THAT GAP CAME FROM. Each column took half the bar -- which on a wide screen is several
+     hundred pixels -- and `dividendRow`'s `space-between` then pushed the holder and the figures to opposite
+     ends of it. The panel was not spacious; it was stretched, and the two halves of every fact were as far
+     apart as the layout could put them.
+     THE REPORT'S OWN CONCLUSION IS WHAT THIS IMPLEMENTS: "the consequence subpanel on Pay Out could also be
+     'compressed' ... we might be able to significantly narrow them together, and then use that for the
+     Withhold." So both sides become the same compact `label | figures` pair, sized to their contents, and the
+     PAIR is centred -- which is what puts each column under the centred button it belongs to, the thing the
+     report wanted from the Withhold side and could not see how to get from Pay.
+     A RESTATEMENT OF THIS REQUEST GOT THE DIRECTION BACKWARDS -- "compress the Pay Out list ... matching the
+     clean, readable column feel of the Withhold side" -- and the report says plainly that the Withhold side is
+     a SINGLE STRING with no columns to match. Compressing Pay and then giving that form to Withhold is the
+     opposite operation, and it is the one that was asked for. */
   dividendPanel: {
-    display: "grid",
-    gridTemplateColumns: "1fr 1fr",
-    gap: "12px",
+    display: "flex",
+    flexWrap: "wrap",
+    justifyContent: "center",
+    alignItems: "flex-start",
+    gap: "12px 40px",
     padding: "8px 4px 2px",
     marginTop: "5px",
     borderTop: "1px solid #2a2a2a",
   },
-  dividendColumn: { display: "flex", flexDirection: "column", gap: "4px" },
+  /* Design note #1153: a two-column grid sized to its CONTENT, so every `label | figures` pair in the column
+     shares one edge and the figures stack into a readable column of their own. `max-content` is what keeps it
+     compact -- the column is now as wide as its widest row and no wider, which is the "narrow them together"
+     the report asked for. */
+  dividendColumn: {
+    display: "grid",
+    gridTemplateColumns: "max-content max-content",
+    columnGap: "12px",
+    rowGap: "4px",
+    alignItems: "baseline",
+  },
   /* Design note #998: `dividendRuleFooter`/`dividendRuleLine` are GONE with #997's explanation block. An
      orphaned style for a rendering we have just been asked to stop doing is how the rendering comes back --
      the rule this sheet keeps for itself, and the one #976 applied to the power chip's gradient. */
-  dividendHeading: { fontSize: FONT_SIZE.strong, fontWeight: 800, color: "#f2f0eb" },
-  dividendRow: {
-    display: "flex",
-    flexDirection: "row",
-    justifyContent: "space-between",
-    /* Design note #705: WRAPS RATHER THAN OVERFLOWS. The row carries five things now (holder, share, and the
-       three-part money move) in half the panel's width, and the bar is `position: sticky` -- it narrows with
-       the viewport and cannot be scrolled sideways. A wrapped second line is legible; a clipped one is not. */
-    flexWrap: "wrap",
-    alignItems: "baseline",
-    gap: "4px 10px",
-    fontSize: FONT_SIZE.small,
-    color: "#c8c6c0",
-  },
+  /* Design note #1153: `dividendRow` and `dividendHeading` are GONE, not left behind. The row wrapper became
+     `display: contents` so its children could join the column's grid, and the headings were deleted as
+     redundant with the buttons -- an unused style entry is the half of a deletion that gets forgotten, and
+     this table has had that pointed out in it before (`appStyles.ts`, the `PRIVATE_POWER_GLOW_STOPS` import).
+     Recorded rather than silently removed so a reader looking for either name finds out where it went. */
   /* The percentage moved OUT of the amount and in beside the name. #705 put a three-part transition on the
      right of this row, and a parenthetical share sitting inside it read as part of the arithmetic; beside the
      holder it is what it always was -- a fact about who this is, not about the money. */
+  /* Design note #1153: the label cell. `FONT_SIZE.strong` is the size `dividendHeading` used to have -- the
+     report asked for exactly that trade ("the font size/emphasis used on these titles could be applied to the
+     entities and payouts"), so the panel gains a step on the facts rather than only losing two lines. */
   dividendHolder: {
     whiteSpace: "nowrap",
     // Design note #706: the treasury row carries a herald before its name, so the row is a flex line rather
@@ -1949,6 +2012,8 @@ export const styles: Record<string, React.CSSProperties> = {
     display: "inline-flex",
     alignItems: "center",
     gap: "5px",
+    fontSize: FONT_SIZE.strong,
+    color: "#e8e6e0",
   },
   dividendAmount: { fontVariantNumeric: "tabular-nums", color: "#7ee0a1", fontWeight: 700 },
   dividendPct: { color: "#6e6c68", fontWeight: 400 },
@@ -1963,12 +2028,41 @@ export const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     fontVariantNumeric: "tabular-nums",
     whiteSpace: "nowrap",
-    marginLeft: "auto",
+    /* Design note #1153: `marginLeft: auto` is GONE. It pushed the figures to the far end of a half-bar-wide
+       column, which is precisely the separation the report describes; in a `max-content` grid the cell sits
+       against its label with one gap between them. */
+    fontSize: FONT_SIZE.strong,
   },
   /* Muted, like the departure figure it follows: the `+` is grammar, not a value. */
   dividendPlus: { color: "#6e6c68", fontWeight: 400 },
-  dividendNote: { fontSize: FONT_SIZE.small, color: "#a8a6a0", lineHeight: 1.4 },
-  dividendMove: { fontSize: FONT_SIZE.small, fontWeight: 700, color: "#9ec5ff", marginTop: "4px" },
+  /* Design note #1153: spans both cells. It is a SENTENCE where every other row is a pair, so without this it
+     would be squeezed into the label column and wrap against a figures column that has nothing in it. */
+  dividendNote: {
+    gridColumn: "1 / -1",
+    fontSize: FONT_SIZE.small,
+    color: "#a8a6a0",
+    lineHeight: 1.4,
+  },
+  /* Design note #1153: the market move is a label cell and a figures cell now, so its `$current -> $new`
+     lands in the same column as every other pair above it -- which is the alignment the report opens with.
+     `marginTop` is gone with the split: the grid's `rowGap` spaces it like any other row, and a margin on one
+     of two cells in a row would have tilted them against each other. */
+  dividendMoveLabel: {
+    fontSize: FONT_SIZE.strong,
+    fontWeight: 700,
+    color: "#9ec5ff",
+    whiteSpace: "nowrap",
+  },
+  dividendMove: { fontSize: FONT_SIZE.strong, fontWeight: 700, color: "#9ec5ff", cursor: "pointer" },
+  /* Design note #1154: the label half of the widened hit area. A separate entry rather than a spread, because
+     a label with no chart to open must NOT claim to be pressable -- `MarketMoveLine` picks between the two. */
+  dividendMoveLabelOpens: {
+    fontSize: FONT_SIZE.strong,
+    fontWeight: 700,
+    color: "#9ec5ff",
+    whiteSpace: "nowrap",
+    cursor: "pointer",
+  },
   /* Design note #214: the arrow is the one glyph in the line carrying a DIRECTION, so it takes the
      direction's colour, sized and weighted past the zone-tinted prices either side -- if it merely matched
      them the line would read as three coloured things competing rather than one movement between two values.
@@ -1988,10 +2082,9 @@ export const styles: Record<string, React.CSSProperties> = {
     flexDirection: "row",
     alignItems: "center",
     gap: "6px",
-    fontSize: FONT_SIZE.small,
+    fontSize: FONT_SIZE.strong,
     fontWeight: 700,
     fontVariantNumeric: "tabular-nums",
-    marginTop: "2px",
   },
   /* The departure is muted and the destination is not: a withhold always
      RAISES the treasury, so the figure that matters is the one after. */
@@ -2047,7 +2140,7 @@ export const styles: Record<string, React.CSSProperties> = {
     marginLeft: "6px",
     verticalAlign: "-3px",
     padding: 0,
-    borderRadius: "4px",
+    borderRadius: RADIUS.control,
     border: "1px solid #3a3a3a",
     backgroundColor: "transparent",
     color: "#a8a6a0",
@@ -2097,7 +2190,7 @@ export const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     gap: "4px",
     padding: "10px 16px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     border: "1.5px solid #3a3a3a",
     backgroundColor: "#0f0f0f",
     color: "#f2f0eb",
@@ -2125,7 +2218,7 @@ export const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     gap: "10px",
     padding: "10px 14px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     border: "1.5px solid #3a3a3a",
     backgroundColor: "#0f0f0f",
   },
@@ -2136,7 +2229,7 @@ export const styles: Record<string, React.CSSProperties> = {
   },
   privateCompanySelect: {
     padding: "6px 10px",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     border: "1px solid #3a3a3a",
     backgroundColor: "#1c1c1c",
     color: "#f2f0eb",
@@ -2182,7 +2275,7 @@ export const styles: Record<string, React.CSSProperties> = {
     zIndex: 1000,
     maxWidth: "240px",
     padding: "8px 12px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     backgroundColor: "#1c1c1c",
     border: "1px solid #3a3a3a",
     color: "#f2f0eb",

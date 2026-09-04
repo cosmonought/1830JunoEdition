@@ -18,7 +18,7 @@
 import React, { useEffect, useRef } from "react";
 import type { FeedItem } from "../utils/feed";
 import { colorForAuthor } from "../utils/feed";
-import { FONT_FAMILY, FONT_SIZE } from "../styles/typography";
+import { FONT_FAMILY, FONT_SIZE, RADIUS } from "../styles/typography";
 
 /* Design note #615: FIVE ROWS, NOW THAT FIVE ROWS IS NOT A LIMIT. Seven was never chosen as a reading
    height -- #476 found this constant being used to TRUNCATE the history and left it at seven while
@@ -711,7 +711,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.micro,
     fontWeight: 700,
     padding: "3px 0",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     border: "1px solid #2a2a2a",
     backgroundColor: "#141414",
     color: "#a8a6a0",
@@ -726,7 +726,7 @@ const styles: Record<string, React.CSSProperties> = {
     minWidth: "24px",
     height: "24px",
     padding: "0 8px",
-    borderRadius: "999px",
+    borderRadius: RADIUS.pill,
     backgroundColor: "#c0392b",
     color: "#ffe8e8",
     display: "flex",
@@ -786,7 +786,7 @@ const styles: Record<string, React.CSSProperties> = {
     borderLeftStyle: "solid",
     borderLeftColor: "#3a3a3a",
     backgroundColor: "#1c1c1c",
-    borderRadius: "0 10px 10px 10px",
+    borderRadius: `0 ${RADIUS.card} ${RADIUS.card} ${RADIUS.card}`,
     padding: "6px 12px",
   },
   chatEntryHeader: {
@@ -844,7 +844,7 @@ const styles: Record<string, React.CSSProperties> = {
     /* Design note #425: a rounded rectangle, not a 999px pill. The pill
        shape was built for a single clipped line; on wrapped text it bows
        the left and right edges away from the words. */
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     fontSize: FONT_SIZE.body,
   },
   /* Design note #425: the four columns of the old expanded row are DELETED -- an inferred category pill, a
@@ -861,7 +861,7 @@ const styles: Record<string, React.CSSProperties> = {
     minWidth: 0,
     maxWidth: "100%",
     padding: "2px 8px",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     border: "1px solid transparent",
     backgroundColor: "transparent",
     color: "#a8a6a0",
@@ -873,7 +873,7 @@ const styles: Record<string, React.CSSProperties> = {
   stickyLineDot: {
     width: "6px",
     height: "6px",
-    borderRadius: "50%",
+    borderRadius: RADIUS.circle,
     backgroundColor: "#2f6f6a",
     flexShrink: 0,
   },
@@ -940,12 +940,12 @@ const styles: Record<string, React.CSSProperties> = {
   logToneBonus: {
     backgroundColor: toneWash(TONE_BONUS_RGB),
     padding: "1px 6px",
-    borderRadius: "4px",
+    borderRadius: RADIUS.control,
   },
   logToneMalus: {
     backgroundColor: toneWash(TONE_MALUS_RGB),
     padding: "1px 6px",
-    borderRadius: "4px",
+    borderRadius: RADIUS.control,
   },
   /* ==================================================================
       DESIGN NOTE 1095: THE EXPANDED ROW'S FILL, FLATTENED

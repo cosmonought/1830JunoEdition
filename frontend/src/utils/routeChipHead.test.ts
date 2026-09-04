@@ -22,6 +22,11 @@ const DETAIL = stripComments(RAW);
 const GLYPH = stripComments(readSource("components/TrainGlyph.tsx"));
 const APP_STYLES = stripComments(readSource("styles/appStyles.ts"));
 
+/* Design note #1151 superseded the SPELLING of the radius assertions in this file, not their claims. The app held twelve
+   near-identical radii doing the work of one; they are three named steps now, so a case that pinned a pixel value was
+   testing the literal rather than the property it stood for. Each reads the token it now is. */
+
+
 describe("the glyph is the revenue-centre marks", () => {
   it("draws one carriage per revenue centre the train reaches", () => {
     /* THE THING THE REPORT CALLED "the revenue center marks". `cars` is the train's reach, so a 3-Train's
@@ -80,7 +85,7 @@ describe("the head, the chip and the line are one colour", () => {
     /* Design note #1092 retoned the fill; the ASSERTION is unchanged in kind, because what this checks is
        that the two shells agree, not what colour they agree on. It earned its keep here: the re-theme's
        first pass moved `appStyles.ts` without `RouteChipDetail.tsx` and this line is what reported it. */
-    ['padding: "2px 8px"', 'borderRadius: "6px"', 'backgroundColor: "#1c1c1c"', 'gap: "6px"'].forEach(
+    ['padding: "2px 8px"', 'borderRadius: RADIUS.control', 'backgroundColor: "#1c1c1c"', 'gap: "6px"'].forEach(
       (property) => {
         expect(chip).toContain(property);
         expect(head).toContain(property);

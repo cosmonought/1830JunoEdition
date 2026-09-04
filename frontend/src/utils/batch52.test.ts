@@ -40,7 +40,11 @@ const FLASH = readStripped("components/RevenueModifierFlash.tsx");
 
 const CO = 3;
 /** A board whose depot still has stock, so the tier lookup both sentences make resolves. */
-const board = (ownedByCo: readonly string[]): GameStateResponse =>
+/* Design note #1147: the treasury is a PARAMETER now. It was hardcoded at "800" on both sides, so the
+   fixture described a train purchase that debited nothing -- which #1146 then correctly stopped printing a
+   treasury line for, taking a case with it. A purchase that does not pay for the train is not the thing these
+   cases mean to describe. */
+const board = (ownedByCo: readonly string[], treasury = "800"): GameStateResponse =>
   ({
     current_round_type: "OperatingRound",
     operating_sub_phase: "Hardware",
@@ -57,7 +61,7 @@ const board = (ownedByCo: readonly string[]): GameStateResponse =>
         company_id: CO,
         ticker: "C&O",
         is_floated: true,
-        treasury: "800",
+        treasury,
         last_route_revenue: "0",
         station_token_hexes: [[0, 0]],
         owned_trains: ownedByCo,
@@ -74,6 +78,23 @@ const context = (before: GameStateResponse, after: GameStateResponse) => ({
 });
 
 const buy = { BuyHardwareFromPool: { game_id: 1, protocol_id: CO } } as never;
+
+/* ==================================================================
+    DESIGN NOTE 1147: THESE CASES NEEDED A NEARLY-EMPTY TIER TO SAY ANYTHING
+   ==================================================================
+   THEY USED `board([])` -> `board(["2"])`, a full depot losing its first train, and that is now exactly the
+   case the toast declines: "only fire these toasts when the Depot has 2 or fewer available trains." The
+   sentence they assert about is still the sentence -- it just has a gate in front of it now, so the fixture
+   has to get past the gate before the assertion means anything.
+   FOUR 2-TRAINS OUT LEAVES TWO, of the six 1830 prints. `nearlyOut` is the purchase that takes the fourth. */
+const OWNED_BEFORE_LAST_TWO = ["2", "2", "2"] as const;
+const OWNED_AFTER_LAST_TWO = ["2", "2", "2", "2"] as const;
+const nearlyOut = () =>
+  context(
+    board([...OWNED_BEFORE_LAST_TWO], "800"),
+    // The 2-train costs $80, and a fixture whose treasury does not move describes a purchase nobody paid for.
+    board([...OWNED_AFTER_LAST_TWO], "720"),
+  ) as never;
 
 /* ------------------------------------------------------------------ */
 /* The broadcast                                                       */
@@ -127,16 +148,33 @@ describe("the toast says the short form and the log says the long one", () => {
        later: "it doesn't need to say which corporation bought a train (players will already know whose turn
        it is)." The name belongs to the TURN, which is on screen in the action bar; the count belongs to the
        table, which is why this toast was widened to every seat in the first place. */
-    const line = trainPurchaseToastLine(buy, context(board([]), board(["2"])) as never);
-    expect(line).toMatch(/^\d-train bought\. Depot: \d+ remaining\.$/);
-    expect(line).not.toContain("C&O");
+    /* ==================================================================
+        DESIGN NOTE 1147 REVERSES #1072 ABOVE, AND THE REASON IS THE GATE
+       ==================================================================
+       #1072 TOOK THE NAME OUT and the argument was about FREQUENCY: with a toast on every depot purchase, the
+       corporation is the predictable half of a sentence the player is about to see six more of, while the
+       count is the part that belongs to the table. That premise has now expired. The toast fires two or three
+       times a game, at the moments the phase clock is about to turn over, and at those moments who took the
+       second-to-last 4-train is the part that changes what everybody else does next.
+       REQUESTED IN THOSE TERMS: "update the text to explicitly state which corporation bought the train."
+       THE COUNT IS STILL THE SUBJECT. The name is a prefix, not a replacement -- everything #1063 and #1072
+       argued about the depot figure holds, and the sentence still ends where it always ended. */
+    const line = trainPurchaseToastLine(buy, nearlyOut());
+    expect(line).toMatch(/^C&O bought a \d-train\. Depot: \d+ remaining\.$/);
+  });
+
+  it("declines while the tier still has depth", () => {
+    /* THE OTHER HALF OF #1147, and the half that is the actual report: "the train-buying toasts are ...
+       firing too often." A full depot losing its first train is news to nobody, and it was the case every
+       assertion in this describe block used to run on. */
+    expect(trainPurchaseToastLine(buy, context(board([]), board(["2"])) as never)).toBeNull();
   });
 
   it("drops the price and the treasury the log keeps", () => {
     /* THE WHOLE REASON THIS IS A SECOND SENTENCE. The corner has room for one clause; the Activity Log is a
        record and keeps the figures a player may want to check later. */
-    const short = trainPurchaseToastLine(buy, context(board([]), board(["2"])) as never) ?? "";
-    const long = describeGameplayAction(buy, context(board([]), board(["2"])) as never) ?? "";
+    const short = trainPurchaseToastLine(buy, nearlyOut()) ?? "";
+    const long = describeGameplayAction(buy, nearlyOut()) ?? "";
     expect(short).not.toContain("$");
     expect(long).toContain("for $");
     expect(long).toContain("Treasury");
@@ -147,10 +185,10 @@ describe("the toast says the short form and the log says the long one", () => {
        figures because they were built from two different states. Two sentences from one `context` cannot do
        that, and this is the case that says so: whatever the long line claims about the tier and the depot,
        the short one claims too. */
-    const ctx = context(board([]), board(["2"])) as never;
+    const ctx = nearlyOut();
     const short = trainPurchaseToastLine(buy, ctx) ?? "";
     const long = describeGameplayAction(buy, ctx) ?? "";
-    const tier = short.match(/^(\S+)-train bought/)?.[1];
+    const tier = short.match(/bought a (\S+)-train/)?.[1];
     const left = short.match(/Depot: (\S+) remaining/)?.[1];
     expect(tier).toBeTruthy();
     expect(left).toBeTruthy();
@@ -388,8 +426,18 @@ describe("reduced motion is a different schedule, not just a stilled one", () =>
     /* "DISPLAYING THE +$[PAYOUT] STATICALLY NEXT TO IT." The merged phase hides the payer line, which is the
        point of a merge; with nothing to watch it absorb, hiding it would delete the figure the panel is
        about. Handled in the media block so the component needs no second render path. */
+    /* ==================================================================
+        DESIGN NOTE 1163 EXTENDS THIS RULE, AND THE ASSERTION WITH IT
+       ==================================================================
+       IT PINNED THE WHOLE DECLARATION, `.app-money-machine-landed { opacity: 1; }`, and #1163 added a second
+       property to it: the merged row now COLLAPSES ITS GRID TRACK as well as fading, so the panel stops
+       leaving a payer-row-shaped hole above the total.
+       WHICH MAKES THIS CASE'S CLAIM BIGGER, NOT SMALLER. A reduced-motion reader keeps the figure on screen
+       as a static statement -- and a figure that kept its opacity while losing its track would be visible
+       with nowhere to be. So the override has to restore BOTH, and both are asserted. */
     const reduced = sliceBetween(MACHINE, "@media (prefers-reduced-motion: reduce) {", "}\n`");
-    expect(reduced).toContain(".app-money-machine-landed { opacity: 1; }");
+    expect(reduced).toContain(".app-money-machine-landed { opacity: 1;");
+    expect(reduced).toContain("grid-template-rows: 1fr;");
     expect(reduced).toContain(".app-money-machine { animation: none; }");
     expect(reduced).toContain(".app-money-machine-out { transition: none;");
   });

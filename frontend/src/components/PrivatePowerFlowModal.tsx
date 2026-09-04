@@ -24,7 +24,7 @@
 import React from "react";
 import { ACTION_GREEN, ACTION_GREEN_BORDER, ACTION_GREEN_INK } from "../styles/palette";
 
-import { FONT_SIZE } from "../styles/typography";
+import { FONT_SIZE, RADIUS } from "../styles/typography";
 import type { PowerFlow, PowerFlowStep } from "../utils/privatePowerFlow";
 
 export interface PrivatePowerFlowModalProps {
@@ -192,7 +192,7 @@ const styles: Record<string, React.CSSProperties> = {
     borderWidth: "1px",
     borderStyle: "solid",
     borderColor: "#4a4a4a",
-    borderRadius: "12px",
+    borderRadius: RADIUS.layer,
     backgroundColor: "#1c1c1c",
     boxShadow: "0 18px 48px rgba(0, 0, 0, 0.55)",
     padding: "18px 20px",
@@ -206,7 +206,7 @@ const styles: Record<string, React.CSSProperties> = {
     borderWidth: "1px",
     borderStyle: "solid",
     borderColor: "#4a4a4a",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     backgroundColor: "transparent",
     color: "#c8c6c0",
     fontSize: FONT_SIZE.control,
@@ -223,7 +223,7 @@ const styles: Record<string, React.CSSProperties> = {
   refusal: {
     margin: 0,
     padding: "9px 11px",
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     borderWidth: "1px",
     borderStyle: "solid",
     borderColor: "#6b4a2f",
@@ -236,7 +236,7 @@ const styles: Record<string, React.CSSProperties> = {
     borderWidth: "1px",
     borderStyle: "solid",
     borderColor: "#3a3a3a",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     backgroundColor: "#141414",
     padding: "12px 14px",
     display: "flex",
@@ -253,7 +253,7 @@ const styles: Record<string, React.CSSProperties> = {
   stepActions: { display: "flex", flexDirection: "row", justifyContent: "flex-end", gap: "10px" },
   primary: {
     padding: "9px 16px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     borderWidth: "1px",
     borderStyle: "solid",
     borderColor: ACTION_GREEN_BORDER,
@@ -266,7 +266,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   secondary: {
     padding: "9px 16px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     borderWidth: "1px",
     borderStyle: "solid",
     borderColor: "#4a4a4a",

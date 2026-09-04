@@ -17,7 +17,7 @@
 
 import React from "react";
 
-import { FONT_SIZE } from "../styles/typography";
+import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { bestContrastTextColor } from "../styles/corporationLivery";
 
 export interface SeatOrderTrailProps {
@@ -240,7 +240,7 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "stretch",
     minWidth: 0,
     padding: 0,
-    borderRadius: "6px",
+    borderRadius: RADIUS.control,
     border: "1px solid #2a2a2a",
     backgroundColor: "#141414",
     overflow: "hidden",
@@ -362,7 +362,7 @@ const styles: Record<string, React.CSSProperties> = {
     letterSpacing: "0.08em",
     color: "#e0b050",
     border: "1px solid #6b5a2a",
-    borderRadius: "3px",
+    borderRadius: RADIUS.control,
     padding: "0 4px",
     lineHeight: 1.5,
     backgroundColor: "transparent",

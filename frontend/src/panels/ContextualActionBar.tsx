@@ -178,14 +178,19 @@ const POWER_CHIP_STAR_PX = Math.round(parseFloat(FONT_SIZE.strong) * X_HEIGHT_RA
 function MarketMoveLine({
   currentPrice,
   projection,
-  direction,
   steps = 1,
   onOpenChart,
 }: {
   currentPrice: number | null;
   projection: MarketProjection | null;
-  /** Which way the token travels: paying out steps right, withholding left. */
-  direction: "pay" | "withhold";
+  /* ==================================================================
+      DESIGN NOTE 1154: `direction` IS GONE, AND ITS OWN NOTE PREDICTED THIS
+     ==================================================================
+     #489 TOOK IT OFF THE ARROW -- "the colour is computed from the prices, which fixes a real bug: `rising`
+     was `direction === "pay"`, an assumption that paying always raises the price" -- and left it reading the
+     chart's edge, with the comment "this is the one place `direction` is still the right thing to read".
+     THAT PLACE WAS THE BRANCH #1154 DELETED. With the edge explanations gone the prop has no reader at all,
+     and a prop every caller computes and nothing consumes is the half of a deletion that gets left behind. */
   /* ==================================================================
    *  DESIGN NOTE 998: HOW FAR, SO THE LINE CAN SAY WHEN IT IS TWO
    * ==================================================================
@@ -226,17 +231,111 @@ function MarketMoveLine({
   // No chart position at all -- an unfloated corporation, or a price the
   // grid has no cell for. Saying so beats printing an arrow between two
   // dashes, which would read as a move to nowhere.
+  /* ==================================================================
+      DESIGN NOTE 1153: THIS LINE IS TWO CELLS NOW, NOT ONE SENTENCE
+     ==================================================================
+     REPORTED: "the 'market move' on payout needs to be aligned with the other $current > $new values."
+     IT COULD NOT BE, AS ONE SPAN. Every row above it is a label and a pair of figures, and this was a single
+     run of text whose figures began wherever the words "Market move:" happened to end -- so the one line on
+     the panel that shares its grammar with the rows was the only one whose numbers did not share their
+     column. Split into a label cell and a figures cell, it drops into the same two-column grid as the rest
+     and the arrows stack.
+     THE COLON GOES WITH THE SENTENCE. It punctuated a phrase; a cell in a column of labels does not need it,
+     and the rows beside it never had one. */
   if (projection === null || currentPrice === null) {
     return (
-      <span style={styles.dividendMove}>
-        Market move: not on the market chart
-      </span>
+      <>
+        <span style={styles.dividendMoveLabel}>Market move</span>
+        <span style={styles.dividendMove}>not on the market chart</span>
+      </>
+    );
+  }
+
+  /* ==================================================================
+      DESIGN NOTE 1154: A TOKEN THAT DID NOT MOVE IS NOT AT THE CEILING
+     ==================================================================
+     REPORTED: "on the volatile stock market variant, when a corporation token doesn't move on a Dividends
+     payout, the text reads 'Market move: $90 -> $90 (already at the ceiling of the chart)'. But the issue
+     here is not that the corporation is at the ceiling of the chart; it's that it didn't pay out enough to
+     move."
+
+     THE SENTENCE WAS FALSE, WHICH IS WORSE THAN VERBOSE. `projection.moves` says only that the token stayed
+     put, and this line then GUESSED at a reason from `direction` -- so under a variant where the size of the
+     payout decides whether the price moves at all, it confidently reported chart geometry as the cause. The
+     app did not know why the token stayed; it asserted the one reason it happened to have words for.
+     #891 IS THE SAME FAULT, ONE STEP BACK. That note fixed these parentheticals for naming an edge the chart
+     does not have ("a ROW has a left and a right edge, not a top and a bottom"), and left in place the deeper
+     problem: this line was in the business of explaining a cause it cannot observe.
+     RULED: "instead of trying to program parenthetical explanations for when market moves are at the top of
+     the chart, on a ledge, or at a cliff, can we just have 'Market move: $x (unchanged)'?" -- and the answer
+     is yes for a stronger reason than brevity. `(unchanged)` is the whole of what this function actually
+     knows, and it is true under every variant and at every position on the board, including the ones nobody
+     has written a variant for yet.
+     ONE PRICE, NOT TWO. "$90 -> $90" is an arrow between two identical numbers, which reads as a bug in the
+     arrow rather than as a fact about the price -- the report's own diagnosis of why the old line needed a
+     parenthetical to look deliberate.
+     `(double move)` SURVIVES because it describes a move that HAPPENED, and #998's reasoning for the wording
+     is untouched. It is a fact about distance, not a guess at a cause. */
+  if (!projection.moves) {
+    return (
+      <>
+        {/* Design note #1154: the same hit area on the branch where nothing moved -- which is the one a
+            player is MOST likely to want to open, because "why did it not move" is the question the line
+            deliberately no longer answers in words. */}
+        <span
+          style={onOpenChart ? styles.dividendMoveLabelOpens : styles.dividendMoveLabel}
+          onClick={onOpenChart}
+        >
+          Market move
+        </span>
+        <span style={styles.dividendMove} onClick={onOpenChart}>
+          <ZonedPrice price={currentPrice} />
+          <span style={styles.dividendMoveNote}> (unchanged)</span>
+          {onOpenChart && (
+            <button
+              type="button"
+              style={styles.marketPeekButton}
+              onClick={onOpenChart}
+              aria-label="See this position on the market chart"
+              title="See this position on the market chart"
+            >
+              <svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true" focusable="false">
+                <circle cx="5" cy="5" r="3.4" fill="none" stroke="currentColor" strokeWidth="1.5" />
+                <path d="M7.6 7.6L10.5 10.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              </svg>
+            </button>
+          )}
+        </span>
+      </>
     );
   }
 
   return (
-    <span style={styles.dividendMove}>
-      Market move: <ZonedPrice price={currentPrice} />{" "}
+    <>
+  /* ==================================================================
+      DESIGN NOTE 1154: THE WHOLE LINE OPENS THE CHART, AND THE GLASS STAYS
+     ==================================================================
+     ASKED: "the magnifying glass for 'Market move' is placed at the end, which is okay, but I think it might
+     be useful to just have the whole 'Market Move' line hoverable (on mouses) or clickable (on touch
+     displays)."
+     A RESTATEMENT OF THIS ASKED FOR THE GLASS TO BE REMOVED ENTIRELY, and the report says the opposite in its
+     first clause -- the placement is fine, the HIT AREA is what was too small. Deleting the icon would take
+     away the only thing on the line that says it can be opened at all: a line of text that silently responds
+     to a click is a feature nobody finds. The glass is the affordance; the line is the target.
+     BOTH CELLS CARRY THE HANDLER rather than a wrapper carrying it, because the label and the figures are two
+     items of the column's grid (#1153) and a wrapper around them would have to be `display: contents` -- which
+     has no box, and therefore cannot receive a click. Two handlers over two cells cover the same span.
+     THE BUTTON REMAINS THE SEMANTIC CONTROL. It keeps the focus, the `aria-label` and the keyboard; the cells
+     are a pointer convenience on top of it, which is why they take no `role` and no tab stop -- a second
+     focusable thing for one action would make the line two tab stops for a keyboard reader. */
+      <span
+        style={onOpenChart ? styles.dividendMoveLabelOpens : styles.dividendMoveLabel}
+        onClick={onOpenChart}
+      >
+        Market move
+      </span>
+      <span style={styles.dividendMove} onClick={onOpenChart}>
+      <ZonedPrice price={currentPrice} />{" "}
       <span
         style={{
           ...styles.dividendMoveArrow,
@@ -285,13 +384,6 @@ function MarketMoveLine({
       {steps >= 2 && projection.moves && (
         <span style={styles.dividendMoveNote}> (double move)</span>
       )}
-      {!projection.moves && (
-        <span style={styles.dividendMoveNote}>
-          {direction === "pay"
-            ? " (already at the ceiling of the chart)"
-            : " (already at the floor of the chart)"}
-        </span>
-      )}
       {/* Design note #1141: the door. A glyph rather than a word, because the line it joins is already a
           sentence and this is the third thing on it; the accessible name carries what the glyph cannot. */}
       {onOpenChart && (
@@ -308,7 +400,8 @@ function MarketMoveLine({
           </svg>
         </button>
       )}
-    </span>
+      </span>
+    </>
   );
 }
 
@@ -337,6 +430,18 @@ function MarketMoveLine({
    rects and `window.innerHeight` are already in. */
 /* Module-level rather than a `useCallback`, because BOTH hooks in this file make this read and a callback
    defined in one is invisible to the other -- which is how the two would have drifted apart. */
+/* ==================================================================
+    DESIGN NOTE 1164a: THE SENTENCE ALREADY EXISTED TWICE OVER
+   ==================================================================
+   #1164 gave the Lay Track button a spoken answer and typed the sentence out -- and #870 had ALREADY put the
+   same words on screen as `orPanelStepHint`. Two literals, one instruction: #891's shape, and the version of
+   it that bites quietly, because the two would drift a word at a time and nobody would see both at once.
+   THEY ARE NOT REDUNDANT, WHICH IS WHY BOTH SURVIVE. #870 gates the printed row on `!mayPin` -- the bar is
+   parked above the map, so a whole line costs no board -- and deliberately hides it once the bar can travel,
+   which is exactly when it is stuck over the map and a player is most likely to press the button for help.
+   The toast covers the state the row gives up. One sentence, two moments. */
+export const LAY_TRACK_HINT = "Click a hex on the Rail Map to lay track.";
+
 function measuredStickyTop(node: HTMLElement): number {
   return stickyTopOffset(window.getComputedStyle(node).top) * UI_SCALE;
 }
@@ -680,6 +785,7 @@ export default function ContextualActionBar({
   armedErrand = null,
   mapEl = null,
   onShowMap,
+  onSayWhereToClick,
   powerOffers = [],
   onUsePowerOffer,
   privatePurchase,
@@ -929,6 +1035,29 @@ export default function ContextualActionBar({
   /** Design note #833: bring the Rail Map tab forward. Not a game action and it dispatches nothing (#263):
    *  it is the first half of the same jump, for a player who is looking at the Stock Market. */
   onShowMap?: () => void;
+  /** ==================================================================
+   *   DESIGN NOTE 1164: THE BUTTON SAYS WHERE, BECAUSE IT CANNOT DO IT FOR YOU
+   *  ==================================================================
+   *
+   * ASKED: "A Final(??) solution for the 'Lay 1 Track' button: could there be a tooltip on clicking it that
+   * says 'Click a hex on the Rail Map below'?"
+   *
+   * THE SENTENCE ALREADY EXISTED, IN THE PLACE NOBODY READS IT. The button's `title` has said "Click a hex
+   * there to lay track" since #831 -- and a `title` needs a hover held for a second and does not exist at all
+   * on a touch screen, which is the population this step keeps confusing.
+   *
+   * AND #987 IS WHAT MAKES THE CLICK THE RIGHT MOMENT. That note made the button a deliberate no-op once the
+   * map is already showing -- correctly, since there is nothing to travel to -- and the cost it accepted is a
+   * control that appears inert exactly when a player presses it hoping for guidance. This fills that gap with
+   * the one thing the button can honestly offer: not an action, but a direction.
+   *
+   * NOT A "CANCEL" STATE, and the reporter's own argument is the reason: turning the button into a control
+   * with an active/cancel toggle "would make Lay 1 Track something players think they need to click when
+   * instead it's just there to remind them it's the active action". It is a signpost. Signposts do not have
+   * an off switch.
+   *
+   * OPTIONAL, so a shell with no toast channel simply gets the old silence rather than a crash. */
+  onSayWhereToClick?: (text: string) => void;
   /* ==================================================================
       DESIGN NOTE 888: THE JUMP FRAMES THE TRACK, IT DOES NOT FIND THE MAP
      ==================================================================
@@ -1358,7 +1487,12 @@ export default function ContextualActionBar({
      control (#732's one-channel rule), and the refusal to lay lives on the hex (#716). */
   const goToMap = React.useCallback(() => {
     if (!mapEl) onShowMap?.();
-  }, [mapEl, onShowMap]);
+    /* Design note #1164: said on EVERY press, including the one that also switches tabs. A player who has
+       just been moved to the map still has to be told what to do when they get there, and a message that
+       appeared only on the no-op press would be teaching the lesson in the one case where the button already
+       did something visible. */
+    onSayWhereToClick?.(LAY_TRACK_HINT);
+  }, [mapEl, onShowMap, onSayWhereToClick]);
 
   /* Design note #481: the strip, as three facts instead of six chips.
      `null` when the cursor sits on a step this era does not show -- the
@@ -1721,7 +1855,22 @@ export default function ContextualActionBar({
                   // decision turns on, and it was the one thing the button did
                   // not say. 1830 splits revenue ten ways -- one share is 10% --
                   // so a $180 route pays $18 a share.
-                  label: `Pay Dividends ($${declaredPerShare} per share)`,
+                  /* ==================================================================
+                      DESIGN NOTE 1153: THE BUTTON CARRIES THE TOTAL, BECAUSE THE HEADING NO LONGER DOES
+                     ==================================================================
+                     ASKED: "given that the buttons already list the amounts in play, is it necessary for their
+                     subpanels to have 'Pay out $10 - $1/share' or 'Withhold $10'? ... but push back here if
+                     necessary."
+                     THE HEADINGS GO AND THIS IS THE CONDITION THAT MAKES THAT LOSSLESS, which is the pushback:
+                     the buttons did NOT already list every amount in play. This one carried the per-share
+                     figure and the heading carried the TOTAL, so deleting the heading as it stood would have
+                     taken the only visible statement of what the corporation earned with it -- leaving it in a
+                     `title` attribute, which is invisible on a tablet.
+                     BOTH FIGURES, IN #188's ORDER OF IMPORTANCE. That note put the per-share number on the
+                     button because "1830 splits revenue ten ways ... so a $180 route pays $18 a share" -- it is
+                     still the figure the decision turns on, so it keeps the emphasis of the parenthetical while
+                     the total takes the plain position beside the verb. */
+                  label: `Pay Dividends $${declaredRevenue} ($${declaredPerShare}/share)`,
                   onClick: onPayDividends,
                   title: `Splits $${declaredRevenue} between every shareholder at $${declaredPerShare} per 10% share.`,
                 },
@@ -1729,9 +1878,13 @@ export default function ContextualActionBar({
             : []),
           {
             key: "withhold-revenue",
+            /* Design note #1153: "Withhold $X to Treasury", asked for in those words and mirroring the Pay
+               button beside it -- the two decisions are a comparison, and a comparison is easier when both
+               sides state their figure in the same shape. The $0 branch already named its amount and is
+               untouched; #414's whole point is that it is a different sentence about a different rule. */
             label:
               declaredRevenue > 0
-                ? "Withhold to Corporate Treasury"
+                ? `Withhold $${declaredRevenue} to Treasury`
                 : "Withhold $0 — Share Price Steps Left",
             onClick: onWithholdRevenue,
             title:
@@ -3182,7 +3335,7 @@ export default function ContextualActionBar({
                  proposing "Select a Hex to Lay 1 Track" as a label; the reply withdrew it -- "no change
                  needed" -- once the real behaviour was named. #834's constant "Lay 1 Track" stands. */}
               {mayActThisTurn && orSubPhase === "Track" && !mayPin && (
-                <span style={styles.orPanelStepHint}>Click a hex on the Rail Map to lay track.</span>
+                <span style={styles.orPanelStepHint}>{LAY_TRACK_HINT}</span>
               )}
               {/* Design note #707/#619 said: SAY THE OBLIGATION, DO NOT ONLY REFUSE IT. #278 withdrew Skip on
                   Dividends silently, and this note argued that here "a Skip that is simply absent reads as a
@@ -3469,10 +3622,22 @@ export default function ContextualActionBar({
               decision" -- is about controls, and it is untouched. */}
           {orSubPhase === "Dividends" && (
             <div style={styles.dividendPanel}>
+              {/* ==================================================================
+                    DESIGN NOTE 1153: THE HEADINGS ARE GONE FROM BOTH COLUMNS
+                  ==================================================================
+                  ASKED: "given that the buttons already list the amounts in play, is it necessary for their
+                  subpanels to have 'Pay out $10 - $1/share' or 'Withhold $10'? ... the font size/emphasis used
+                  on these (unnecessary) titles could be applied to the entities and payouts without harm."
+                  AND THEY WERE RESTATING THE BUTTON DIRECTLY ABOVE THEM. Two lines apart, in the same column,
+                  at the same figures -- which is the pattern #1057 and #998 have each removed from this panel
+                  already ("the figures directly above it already state the outcome").
+                  THE EMPHASIS MOVES WHERE IT WAS ASKED TO GO. `dividendHeading` was the only `FONT_SIZE.strong`
+                  in this panel; the rows now take it, so the panel gains a size step on the figures rather than
+                  merely losing two lines.
+                  LOSSLESS ONLY BECAUSE OF #1153's BUTTON CHANGE -- the Pay heading was the sole visible
+                  statement of the TOTAL, and the button carries it now. Deleting these first would have been a
+                  quiet subtraction. */}
               <div style={styles.dividendColumn}>
-                <span style={styles.dividendHeading}>
-                  Pay out ${declaredRevenue} &middot; ${declaredPerShare}/share
-                </span>
                 {dividendPayouts.length === 0 ? (
                   <span style={styles.dividendNote}>
                     No shareholders on record — the whole payout would go to the bank pool.
@@ -3495,12 +3660,14 @@ export default function ContextualActionBar({
                      value the cash briefly becomes -- and the line keeps `MarketMoveLine`'s and the withhold
                      transition's single-arrow grammar, which is the consistency the report is reaching for. */
                   dividendPayouts.map((row) => (
-                    <span
-                      key={row.holder}
-                      style={styles.dividendRow}
-                      title={describeDividendRow(row)}
-                    >
-                      <span style={styles.dividendHolder}>
+                    /* Design note #1153: `display: contents`, so the holder and the figures become items of
+                       the COLUMN's grid rather than of a row box of their own. That is what makes every
+                       `$before + $amount -> $after` share one column edge instead of each row spacing itself.
+                       THE TOOLTIP MOVES DOWN A LEVEL with it: a `display: contents` element has no box, so a
+                       `title` on it has nothing to hover. It sits on the holder, which is the part a reader
+                       points at to ask "who is this". */
+                    <React.Fragment key={row.holder}>
+                      <span style={styles.dividendHolder} title={describeDividendRow(row)}>
                         {/* Design note #706: the bank pool pays the CORPORATION, so its row wears the same
                             herald the Withhold column gives the treasury -- the two columns are now showing
                             the same balance and should say so in the same way. */}
@@ -3535,13 +3702,12 @@ export default function ContextualActionBar({
                           <span style={styles.treasuryTo}>${row.cashAfter}</span>
                         </span>
                       )}
-                    </span>
+                    </React.Fragment>
                   ))
                 )}
                 <MarketMoveLine
                   currentPrice={dividendPrice}
                   projection={payProjection}
-                  direction="pay"
                   steps={dividendMoveSteps?.pay ?? 1}
                   onOpenChart={onPeekMarket ? () => onPeekMarket("pay") : undefined}
                 />
@@ -3555,16 +3721,30 @@ export default function ContextualActionBar({
                  THE HERALD IS THE SUBJECT -- whose treasury this is was the one fact the sentence carried that the
                  numbers do not, and a logo says it in the space a pronoun took. */}
               <div style={styles.dividendColumn}>
-                <span style={styles.dividendHeading}>Withhold ${dividendRevenue}</span>
-                <span style={styles.treasuryMove}>
+                {/* ==================================================================
+                      DESIGN NOTE 1153: THE WITHHOLD LINE SAYS WHAT THE FIGURES ARE
+                    ==================================================================
+                    REPORTED: "on Withhold, we currently have [herald] $current > $new. Let's have it read:
+                    '[herald] Treasury $current > $new'."
+                    #509a PUT THE HERALD HERE TO REPLACE A PRONOUN -- "whose treasury this is was the one fact
+                    the sentence carried that the numbers do not" -- and answered WHOSE without answering WHAT.
+                    A logo beside two figures identifies the corporation and leaves the reader to infer that the
+                    balance is its treasury rather than, say, its share price, which is the other number on this
+                    panel that moves between two values.
+                    IT ALSO MAKES THE TWO COLUMNS PARSE ALIKE, which is the layout half of the same report: the
+                    payout rows are `who | figures`, and this is now `what | figures` in the same two cells. */}
+                <span style={styles.dividendHolder}>
                   {activeCorporation && (
                     <CorporateLogo
                       ticker={activeCorporation.ticker}
-                      size={18}
+                      size={14}
                       color={corporationInk}
                       title={`${activeCorporation.ticker} treasury`}
                     />
                   )}
+                  Treasury
+                </span>
+                <span style={styles.treasuryMove}>
                   <span style={styles.treasuryFrom}>${treasuryNow}</span>
                   <span
                     style={{ ...styles.dividendMoveArrow, ...styles.dividendMoveArrowUp }}
@@ -3578,7 +3758,6 @@ export default function ContextualActionBar({
                 <MarketMoveLine
                   currentPrice={dividendPrice}
                   projection={withholdProjection}
-                  direction="withhold"
                   steps={dividendMoveSteps?.withhold ?? 1}
                   onOpenChart={onPeekMarket ? () => onPeekMarket("withhold") : undefined}
                 />

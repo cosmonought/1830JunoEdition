@@ -11,7 +11,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 
 import { useWallet } from "../context/WalletContext";
-import { CONTROL_PADDING, FONT_FAMILY, FONT_SIZE, LINE_HEIGHT } from "../styles/typography";
+import { CONTROL_PADDING, FONT_FAMILY, FONT_SIZE, LINE_HEIGHT, RADIUS } from "../styles/typography";
 
 export interface ConnectWalletButtonProps {
   /** Style for the button itself, so the top bar and the lobby can each
@@ -125,7 +125,7 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "14px",
     width: "min(520px, 100%)",
     padding: "22px 24px",
-    borderRadius: "14px",
+    borderRadius: RADIUS.layer,
     backgroundColor: "#1b2130",
     borderWidth: "1px",
     borderStyle: "solid",
@@ -146,7 +146,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.control,
     fontWeight: 700,
     padding: CONTROL_PADDING.button,
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     borderWidth: "1px",
     borderStyle: "solid",
     borderColor: "#6b5a24",
@@ -158,7 +158,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.control,
     fontWeight: 600,
     padding: CONTROL_PADDING.button,
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     borderWidth: "1px",
     borderStyle: "solid",
     borderColor: "#3a3a3a",

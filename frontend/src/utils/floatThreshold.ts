@@ -52,6 +52,42 @@ export function soldFromIpoPercent(company: Pick<PublicCompanyState, "ipo_pool_p
   return Math.max(0, Math.min(100, 100 - ipo));
 }
 
+/* ==================================================================
+ *  DESIGN NOTE 1148: THE FLOAT LINE, IN MONEY
+ * ==================================================================
+ *
+ * ASKED: "when a player is parring a company, it would be highly useful to know the dollar amount required to
+ * float."
+ *
+ * AND THE USEFUL MOMENT IS WHILE THEY ARE CHOOSING, which is what decided where this goes rather than what it
+ * computes. The par ladder is a row of prices and every rung implies a different float cost -- $67 asks $402
+ * of the table, $100 asks $600 -- so the figure is not a readout that happens to sit near the control, it is
+ * the consequence the control is choosing between. 1830's actual tension, stated: a high par capitalises the
+ * corporation richly and makes it harder to get off the ground.
+ *
+ * PRICED IN 10% BLOCKS, WHICH IS WHY THIS IS ARITHMETIC AND NOT A TABLE. Every share costs par per 10%,
+ * including the president's 20% certificate at twice par -- so the money that must cross the table to move
+ * `soldFromIpoPercent` to sixty is just the gap in blocks times the price, and the certificate sizes never
+ * enter into it. `FLOAT_THRESHOLD_PERCENT` is read rather than repeated, so a variant that floats at a
+ * different mark moves this with it.
+ *
+ * WHOSE MONEY IT IS, STATED HERE BECAUSE THE CALLERS KEEP ASKING: not the parring player's alone. They buy
+ * the president's 20% and the remaining 40% must be bought by ANYBODY, themselves included, over following
+ * turns. `remaining` is therefore a figure about the CORPORATION, not a bill presented to one player, and a
+ * caller that words it as "you need" would be lying about it.
+ */
+export function floatCostIn(par: number, soldFromIpo: number): {
+  /** What sixty percent of this corporation costs at this par -- the whole float, from an empty IPO. */
+  total: number;
+  /** What is still to be bought. Zero once the threshold is met, never negative. */
+  remaining: number;
+} {
+  if (!Number.isFinite(par) || par <= 0) return { total: 0, remaining: 0 };
+  const blocks = FLOAT_THRESHOLD_PERCENT / 10;
+  const soldBlocks = Math.max(0, Math.min(blocks, soldFromIpo / 10));
+  return { total: blocks * par, remaining: Math.round((blocks - soldBlocks) * par) };
+}
+
 /** How much sits in players' hands right now. NOT the float measure -- kept because the roster pill and the
  *  ledger legitimately want it, and separated so the next reader has to choose between two named quantities
  *  rather than assume one. */

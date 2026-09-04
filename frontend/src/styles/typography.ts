@@ -101,3 +101,47 @@ export const FONT_FAMILY = "system-ui, -apple-system, Segoe UI, sans-serif";
 /** Monospace, for addresses and ids where character alignment aids
  *  comparison. */
 export const FONT_FAMILY_MONO = "ui-monospace, SFMono-Regular, Menlo, monospace";
+
+/* ==================================================================
+    DESIGN NOTE 1151: TWELVE RADII WERE DOING THE WORK OF ONE
+   ==================================================================
+   REPORTED: "currently every element uses rounded edges", asked as a request to square the player surfaces so
+   they would read differently from the corporations'.
+
+   THE PERCEPTION WAS RIGHT AND THE CAUSE IS ITS OPPOSITE, which is why this is a scale and not a split.
+   Counted across the app there were TWELVE distinct radii -- 3, 4, 5, 6, 7, 8, 9, 10, 12 and 14px, plus the
+   pill and the circle -- and they were scattered INSIDE single components: `AutoPassModal` used 8 and 12,
+   `EmergencyTrainPurchaseModal` 4 and 6, `AudioControlPopover` 6 and 10. Nobody chose those against each
+   other; they accreted one surface at a time.
+   A ONE-PIXEL DIFFERENCE CARRIES NO INFORMATION AND STILL COSTS ALIGNMENT. Ten values spanning 3 to 14px do
+   the visual work of a single value -- everything reads as "sort of rounded" -- while making it impossible for
+   any radius to mean anything, because nothing is separated enough to be recognised as a category. That is
+   exactly "everything looks the same", arrived at from too many values rather than too few.
+
+   THE SPLIT THAT WAS ASKED FOR FIRST IS DELIBERATELY NOT WHAT THIS IS. Squaring player surfaces would have put
+   a second, much weaker channel on a distinction SEAT COLOUR and LIVERY already carry loudly -- and the
+   boundary turned out to be genuinely fuzzy: the auction prompt is one person's par plus a table handoff, the
+   toast carries corporate news and personal refusals through one component, an emergency train purchase is a
+   corporation's action funded from a president's pocket. A shape rule whose exceptions cannot be told from its
+   mistakes teaches nothing. RULED, after that was laid out: "everything looking the same is probably the main
+   issue."
+
+   SO SHAPE SAYS WHAT KIND OF THING THIS IS, NOT WHOSE IT IS. Three steps, six pixels apart, which is far
+   enough that neighbours are distinguishable at real sizes and close enough that the app still looks like
+   itself. The rule is SIZE-ORDERED and needs no judgement about ownership: the bigger and the more floating a
+   surface, the softer its corner.
+   `pill` AND `circle` ARE NOT STEPS ON THIS SCALE and keep their values untouched. They are SHAPES -- a pill
+   is a pill at any size -- and folding them into a graduated scale would have been the same category error as
+   the one this note is fixing, one level up. */
+export const RADIUS = {
+  /** Buttons, inputs, chips, badges -- anything a finger presses or a word sits in. Was 3-7px. */
+  control: "4px",
+  /** Cards, panels, tables, the tab strip -- the surfaces content lives ON. Was 8-10px. */
+  card: "10px",
+  /** Modals, toasts, popovers -- surfaces that float ABOVE the page. Was 12-14px. */
+  layer: "16px",
+  /** Not a step: a pill is a pill at any size. */
+  pill: "999px",
+  /** Not a step either: a circle is a shape. */
+  circle: "50%",
+} as const;

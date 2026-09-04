@@ -34,7 +34,7 @@ import { privateClosureAlert } from "../utils/purchaseWarnings";
 import { CapacityPill, LastRoutePayout, TrainChips } from "./TrainBadges";
 import { stationTickerColor } from "./hexContractTypes";
 import type { MarketGridResponse } from "./StockMarketRenderer";
-import { FONT_SIZE } from "../styles/typography";
+import { FONT_SIZE, RADIUS } from "../styles/typography";
 // Design note #559: the ROOM-AWARE resolver. Importing it from
 // `sandboxState` got the fixture's Alice/Bob table, which returns null
 // for a real room id -- so presidents rendered as raw `p-` ids here
@@ -473,7 +473,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "18px 20px",
     backgroundColor: "#0f0f0f",
     border: "1px solid #2a2a2a",
-    borderRadius: "10px",
+    borderRadius: RADIUS.card,
     color: "#f2f0eb",
     fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif",
   },
@@ -629,7 +629,7 @@ const styles: Record<string, React.CSSProperties> = {
   tokenDot: {
     width: "10px",
     height: "10px",
-    borderRadius: "50%",
+    borderRadius: RADIUS.circle,
     flexShrink: 0,
     borderWidth: "1px",
     borderStyle: "solid",
@@ -681,7 +681,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif",
     padding: "2px 9px",
-    borderRadius: "999px",
+    borderRadius: RADIUS.pill,
     backgroundColor: "#1f7a3f",
     color: "#eafff0",
   },
@@ -698,7 +698,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     letterSpacing: "0.4px",
     padding: "2px 8px",
-    borderRadius: "4px",
+    borderRadius: RADIUS.control,
     backgroundColor: CHIP_INERT_BG,
     border: `1px solid ${CHIP_INERT_BORDER}`,
     color: CHIP_INERT_INK,

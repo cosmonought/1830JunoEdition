@@ -35,6 +35,11 @@ const WATERFALL = readStripped("components/WaterfallAuctionDashboard.tsx");
  *  which nothing would happen. Everything below forces against this baseline, so a pass means the force did
  *  the work rather than the turn happening to qualify. */
 const QUIET_TURN = {
+
+/* Design note #1151 superseded the SPELLING of the radius assertions in this file, not their claims. The app held twelve
+   near-identical radii doing the work of one; they are three named steps now, so a case that pinned a pixel value was
+   testing the literal rather than the property it stood for. Each reads the token it now is. */
+
   naturalLine: "an ordinary day on the line.",
   /* A REAL BUCKET NAME, and the first draft used `"smallBonus"`, which is not one -- `skipFrom` indexes
      `UNPREDICTABLE_REVENUE_FLAVOR[bucket]` and an invented key made it read `.length` off `undefined`. The
@@ -226,7 +231,7 @@ describe("the small readability fixes", () => {
     expect(LEDGER).toContain(">\n                          Priority Deal\n                        </span>");
     expect(LEDGER).not.toContain("#1\n                        </span>");
     // `priorityTag`'s shape, from `PlayerCards` -- one badge, two panels.
-    expect(LEDGER).toContain('borderRadius: "999px"');
+    expect(LEDGER).toContain('borderRadius: RADIUS.pill');
   });
 
   it("gives the tiles their own column and pays for it in padding", () => {

@@ -132,10 +132,24 @@ describe("corporations keep the word Treasury", () => {
   });
 
   it("is still what a withhold pays into", () => {
-    // "Withhold to Corporate Treasury" -- correct, and the clearest statement of the rule in the whole app.
-    expect(code(path.join(SRC, "panels", "ContextualActionBar.tsx"))).toContain(
-      "Corporate Treasury",
-    );
+    /* ==================================================================
+        DESIGN NOTE 1153: THE ADJECTIVE WENT, THE WORD STAYED
+       ==================================================================
+       THIS PINNED "Corporate Treasury" and called it "the clearest statement of the rule in the whole app",
+       which it was: the one label that put a corporation's word for its money right where a player is choosing
+       between that pile and their own.
+       REQUESTED VERBATIM as "Withhold $x to Treasury", alongside the change that puts the total on the button.
+       THE RULE THIS FILE GUARDS IS "ONE WORD PER PILE" -- Cash for a player, Treasury for a corporation -- and
+       it is intact: the button still names the corporation's money Treasury, and no player surface has been
+       allowed to borrow the word (the sweep above is what actually holds that line). What was lost is the
+       adjective's TEACHING, not the vocabulary.
+       SO THE ASSERTION FOLLOWS THE RULE RATHER THAN THE PHRASE, and the phrase's disappearance is recorded
+       here rather than left for someone to rediscover as a regression. If the contrast turns out to want
+       spelling out again, "Corporate" goes back in this one label and this case tightens with it. */
+    expect(code(path.join(SRC, "panels", "ContextualActionBar.tsx"))).toContain("to Treasury`");
+    /* AND NO PLAYER PILE PICKED THE WORD UP while this label was being shortened, which is the half of the
+       rule a shortened label could plausibly have broken. */
+    expect(code(path.join(SRC, "components", "PlayerCards.tsx"))).not.toMatch(/Treasury/i);
   });
 });
 

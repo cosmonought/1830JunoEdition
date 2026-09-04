@@ -37,6 +37,11 @@ const SURFACES: Readonly<Record<string, string>> = {
 
 const APP_STYLES = readStripped("styles/appStyles.ts");
 
+/* Design note #1151 superseded the SPELLING of the radius assertions in this file, not their claims. The app held twelve
+   near-identical radii doing the work of one; they are three named steps now, so a case that pinned a pixel value was
+   testing the literal rather than the property it stood for. Each reads the token it now is. */
+
+
 function relativeLuminance(hex: string): number {
   const channel = (i: number) => {
     const value = parseInt(hex.slice(i, i + 2), 16) / 255;
@@ -91,7 +96,7 @@ describe("every tab stands on the same ground", () => {
     ]) {
       const source = readStripped(path);
       expect(source).toContain('border: "1px solid #2a2a2a"');
-      expect(source).toContain('borderRadius: "10px"');
+      expect(source).toContain('borderRadius: RADIUS.card');
     }
   });
 });

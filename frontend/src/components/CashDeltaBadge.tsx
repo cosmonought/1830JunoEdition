@@ -24,7 +24,7 @@
 
 import React from "react";
 
-import { FONT_SIZE } from "../styles/typography";
+import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { formatCashDelta } from "../utils/cashDelta";
 
 /* The badge ARRIVES and LEAVES, and both halves matter. A figure that appears
@@ -80,7 +80,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     fontVariantNumeric: "tabular-nums",
     padding: "1px 5px",
-    borderRadius: "4px",
+    borderRadius: RADIUS.control,
     border: "1px solid transparent",
   },
   /* Green up, amber down -- NOT red. Red in this app marks a contested

@@ -21,7 +21,7 @@
 // See docs/ai_architecture/contract_economy.md, TrainTradePanel.tsx.
 
 import React, { useEffect, useMemo, useState } from "react";
-import { FONT_SIZE } from "../styles/typography";
+import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { corporationLabel } from "../utils/corporationNames";
 
 /** Mirrors `msg::TrainOfferEntry` exactly. */
@@ -366,7 +366,7 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "14px 18px",
     backgroundColor: "#080808",
     border: "1px solid #3a3a3a",
-    borderRadius: "10px",
+    borderRadius: RADIUS.card,
   },
   headerRow: { display: "flex", alignItems: "baseline", gap: "12px" },
   headerTitle: { fontSize: FONT_SIZE.strong, fontWeight: 700, color: "#f2f0eb" },
@@ -383,7 +383,7 @@ const styles: Record<string, React.CSSProperties> = {
   select: {
     fontSize: FONT_SIZE.control,
     padding: "7px 10px",
-    borderRadius: "7px",
+    borderRadius: RADIUS.control,
     border: "1px solid #3a3a3a",
     backgroundColor: "#0f0f0f",
     color: "#f2f0eb",
@@ -393,7 +393,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     fontSize: FONT_SIZE.control,
     padding: "7px 10px",
-    borderRadius: "7px",
+    borderRadius: RADIUS.control,
     border: "1px solid #3a3a3a",
     backgroundColor: "#0f0f0f",
     color: "#f2f0eb",
@@ -402,7 +402,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.control,
     fontWeight: 700,
     padding: "8px 16px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     border: "1px solid #3a3a3a",
     backgroundColor: "#1c1c1c",
     color: "#f2f0eb",
@@ -415,7 +415,7 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     gap: "12px",
     padding: "10px 14px",
-    borderRadius: "8px",
+    borderRadius: RADIUS.card,
     border: "1px solid #6b5a24",
     backgroundColor: "#2a2413",
   },
@@ -425,7 +425,7 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     gap: "12px",
     padding: "8px 10px",
-    borderRadius: "7px",
+    borderRadius: RADIUS.control,
     backgroundColor: "#0f0f0f",
     border: "1px solid #2a2a2a",
   },
@@ -435,7 +435,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.body,
     fontWeight: 700,
     padding: "6px 12px",
-    borderRadius: "7px",
+    borderRadius: RADIUS.control,
     border: "1px solid #2f6f3f",
     backgroundColor: "#1a3d26",
     color: "#8fe0a8",
@@ -445,7 +445,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.body,
     fontWeight: 700,
     padding: "6px 12px",
-    borderRadius: "7px",
+    borderRadius: RADIUS.control,
     border: "1px solid #7a3030",
     backgroundColor: "#3a1c1c",
     color: "#e79a9a",
@@ -455,7 +455,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.body,
     fontWeight: 700,
     padding: "6px 12px",
-    borderRadius: "7px",
+    borderRadius: RADIUS.control,
     border: "1px solid #6b5a24",
     backgroundColor: "#3a3116",
     color: "#e0c97a",

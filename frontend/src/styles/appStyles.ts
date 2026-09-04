@@ -269,8 +269,29 @@ export const styles: Record<string, React.CSSProperties> = {
      remember to leave. */
   appFooter: {
     marginTop: "auto",
+    /* ==================================================================
+        DESIGN NOTE 1140: THE Z-INDEX WENT OUT WITH THE OVERRIDE THAT CARRIED IT
+       ==================================================================
+       REPORTED: "'Powered by Neta DAO' doesn't render on the Lobby page, just the animation." THE TEXT WAS
+       ALWAYS IN THE MARKUP -- what changed is what paints over it.
+       #1132 GAVE THE META FOOTER `position: relative` AND A Z-INDEX, buried among the four properties that
+       made it a flush-left ink strip, and the reason was never about ink: the lobby's `sceneClip` is a
+       POSITIONED element at z-index 0, and a positioned element paints above unpositioned in-flow siblings
+       however late they appear in the document. Without a z-index of its own the whole footer goes under the
+       photograph.
+       #1137 THEN DELETED THAT OVERRIDE WHOLESALE, on the correct reasoning that a per-surface footer style
+       was what had let three screens drift apart -- and took the stacking fix with it, because it had never
+       been labelled as anything but part of the strip. The mark survived because `mix-blend-mode` promotes it
+       to its own compositing layer; the words, having no such trick, simply went under.
+       SO IT LIVES ON THE BASE STYLE NOW, where it costs nothing on a flat shell and is not something a future
+       "one footer, no overrides" sweep can quietly remove. */
+    position: "relative",
+    zIndex: 1,
     display: "flex",
-    justifyContent: "flex-end",
+    /* Design note #1140: BACK TO CENTRE. Flush right was #1137's answer to a footer that looked wrong beside
+       everything else, and the wrongness turned out to be the missing half of the lockup rather than its
+       alignment -- see the note on `MARK_HEIGHT`. Centred is where it started and where a credit belongs. */
+    justifyContent: "center",
     alignItems: "center",
     padding: "18px 20px 12px",
     boxSizing: "border-box",

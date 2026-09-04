@@ -47,7 +47,23 @@ const NETA_CREDIT_CSS = `
    28 IS THE SURVIVING NUMBER, from the lobby where it was last judged by eye. The board's footer grows by
    10px, which is the cost of the standardisation and is worth naming: #1116 and #1124 both defended 18 there,
    and both defended it against MOVEMENT under a hex map rather than against height. The board still draws the
-   STILL mark, so that argument is untouched -- it is a taller static logo, not a moving one. */
+   STILL mark, so that argument is untouched -- it is a taller static logo, not a moving one.
+
+   ==================================================================
+    DESIGN NOTE 1140: THE SIZES WERE ALREADY EQUAL, AND ONE SCREEN WAS DRAWING HALF A LOCKUP
+   ==================================================================
+   ASKED, after the standardisation: "the Lobby and Waiting Room ones look like they could shrink another 10%
+   OR the Game Room could grow another 10% to try to get them closer in size."
+   THERE IS NO GAP LEFT TO CLOSE. Since #1137 there is ONE height and ONE type size, read by all three
+   screens from this constant and from `netaCredit` -- so a 10% move in either direction would not bring them
+   together, it would push them apart again and re-create precisely the drift that report was about.
+   WHAT WAS ACTUALLY DIFFERENT is in the same message: "'Powered by Neta DAO' doesn't render on the Lobby."
+   The lobby was drawing the mark alone while the board drew mark-plus-words, and a lone 28px logo reads as a
+   different size from a 28px logo with a caption beside it. The cause is #1140's z-index above; the sizes
+   were never the thing.
+   SO NOTHING MOVES HERE, deliberately, and this note exists so the next reader does not "fix" a discrepancy
+   by editing a number that is already shared. If the three still look unequal once the words are back, the
+   change is to THIS constant and it moves all three together. */
 /* Design note #1135: "reduce the entire unit by 10%" -- 31 to 28 on the mark (-9.7%) and `small` to `micro`
    on the words (12px to 11px, -8.3%). Both land on real steps of the shared scale rather than on a computed
    fraction, and the RATIO between them barely moves (2.58 to 2.55), which is what keeps #1129's lockup from

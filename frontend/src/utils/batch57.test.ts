@@ -279,9 +279,19 @@ describe("the credit and the room name swapped places", () => {
     /* `marginTop: auto` IN THE ROOT'S COLUMN pushes it down on a short page and lets it follow content on a
        long one. NOT `position: fixed` -- that is what `statusLineDock` is, and it is fixed because a player
        consults it mid-scroll. A credit is read once; pinning it would spend permanent viewport height. */
+    /* ==================================================================
+        DESIGN NOTE 1140: "NOT PINNED" WAS ASSERTED AS "NO `position` AT ALL"
+       ==================================================================
+       THE CLAIM IN THIS CASE'S OWN NOTE IS ABOUT PINNING -- `fixed` spends permanent viewport height on a
+       credit that is read once -- and it was written as the absence of the whole property. `position:
+       relative` pins nothing; it is a stacking anchor, and #1140 needs one here because the lobby paints a
+       photograph in a positioned layer that would otherwise cover the footer.
+       NARROWED TO THE TWO VALUES THE CLAIM IS ACTUALLY ABOUT. A future `fixed` or `sticky` still fails; a
+       `relative` that exists to keep the credit visible no longer does. */
     const footer = sliceBetween(SHEET, "appFooter: {", "},");
     expect(footer).toContain('marginTop: "auto"');
-    expect(footer).not.toContain("position:");
+    expect(footer).not.toContain('position: "fixed"');
+    expect(footer).not.toContain('position: "sticky"');
     expect(sliceBetween(SHEET, "appRoot: {", "},")).toContain('flexDirection: "column"');
   });
 });

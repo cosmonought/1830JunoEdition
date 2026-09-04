@@ -208,9 +208,39 @@ describe("the room is the page, and the text carries its own ground", () => {
     expect(FOOTER).not.toContain("appFooterMeta");
     expect(APP_STYLES).not.toContain("appFooterMeta:");
     expect(APP_STYLES).not.toContain("netaCreditMeta:");
-    // Flush right on every surface, and carrying its own gap so no screen has to leave room for it.
-    expect(APP_STYLES).toContain('justifyContent: "flex-end"');
+    /* Design note #1140: CENTRED, not flush right. #1137 moved it to the right edge to answer a footer that
+       "looked odd compared to the other elements on screen" -- and the oddness was the lobby drawing the mark
+       without its words, not the alignment. Centred is where it started. */
     expect(APP_STYLES).toContain('padding: "18px 20px 12px"');
+  });
+
+  it("keeps the footer above whatever the screen paints behind it", () => {
+    /* ==================================================================
+        DESIGN NOTE 1140: THE REGRESSION #1137 CARRIED OUT WITH THE OVERRIDE
+       ==================================================================
+       REPORTED as "'Powered by Neta DAO' doesn't render on the Lobby page, just the animation." The lobby's
+       `sceneClip` is a POSITIONED element at z-index 0, and a positioned element paints above unpositioned
+       in-flow siblings however late they appear -- so a footer with no z-index of its own goes under the
+       photograph. #1132 had fixed that inside `appFooterMeta`, where it read as part of an ink strip rather
+       than as a stacking fix, and #1137 deleted the override wholesale.
+       THE MARK SURVIVED AND THE WORDS DID NOT, which is the detail that identifies the cause: `mix-blend-mode`
+       promotes the mark to its own compositing layer and plain text has no such trick.
+       ON THE BASE STYLE NOW, so the next "one footer, no overrides" sweep cannot take it again. */
+    const footer = APP_STYLES.slice(APP_STYLES.indexOf("appFooter: {"));
+    const body = footer.slice(0, footer.indexOf("},"));
+    expect(body).toContain('position: "relative"');
+    expect(body).toContain("zIndex: 1");
+  });
+
+  it("does not answer a size complaint by un-sharing the size", () => {
+    /* ASKED FOR as "shrink the meta ones 10% OR grow the game one 10%", and there is no gap left to close:
+       #1137 gave all three ONE height and ONE type size. Either move would push them apart and re-create the
+       drift the standardisation removed. Asserted as the absence of a second constant, which is the shape the
+       "fix" would have taken. */
+    expect(FOOTER).toContain("const MARK_HEIGHT = 28;");
+    expect(FOOTER).not.toContain("META_MARK_HEIGHT");
+    expect(FOOTER).not.toContain("GAME_MARK_HEIGHT");
+    expect(APP_STYLES).not.toContain("netaCreditMeta");
   });
 
   it("keeps the ink and the shadow the lobby was given, on both surfaces", () => {

@@ -121,7 +121,23 @@ export function SandboxWaitingRoom({
   /* Design note #910: read off the ROOM, so a guest and the host are looking at one answer. */
   const variants = room?.variants ?? STANDARD_VARIANTS;
   const canEditVariants = isHost && room?.status === "waiting" && !busy && onSetVariants !== undefined;
+  /* ==================================================================
+     DESIGN NOTE 1169a: AN INITIALISER IS NOT A SUBSCRIPTION
+     ==================================================================
+     `useState(me?.nickname ?? "")` reads its argument ONCE, on the mount -- and on the mount there is no `me`,
+     because the seat arrives with the first snapshot one round trip later (#764's third state, again). So the
+     field opened empty for a player who already had a name: rejoin a room, or reload into one, and the box
+     said nothing while the roster below it said "B". Found next to #1169 rather than reported, and it is the
+     same shape -- a control drawn from data that had not arrived yet.
+     SEEDED ONCE, AND NEVER OVER TYPING. `touched` is what separates "has not been filled in yet" from "is
+     deliberately empty because I am clearing it", which a `!nicknameText` test would run together. */
   const [nicknameText, setNicknameText] = useState(me?.nickname ?? "");
+  const [nicknameTouched, setNicknameTouched] = useState(false);
+  const knownNickname = me?.nickname ?? "";
+  React.useEffect(() => {
+    if (nicknameTouched || knownNickname === "") return;
+    setNicknameText(knownNickname);
+  }, [knownNickname, nicknameTouched]);
 
   const enough = players.length >= MIN_PLAYERS;
   const allReady = players.length > 0 && players.every((player) => player.isReady);
@@ -189,7 +205,10 @@ export function SandboxWaitingRoom({
           <input
             style={styles.input}
             value={nicknameText}
-            onChange={(event) => setNicknameText(event.target.value)}
+            onChange={(event) => {
+              setNicknameTouched(true);
+              setNicknameText(event.target.value);
+            }}
             placeholder="Your name"
             aria-label="Your nickname"
             maxLength={20}

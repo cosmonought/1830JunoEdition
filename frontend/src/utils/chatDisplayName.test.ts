@@ -82,10 +82,15 @@ describe("the chat is handed the roster nickname in a sandbox room", () => {
        from six hundred lines below would be a temporal dead zone -- the fault that white-screened the game.
        `tsc` catches the direct form, which is the only reason this one was cheap; the memo form is what
        `memoDeadZone.test.ts` exists for. */
+    /* Design note #1169 re-anchored this: `sandboxRoom` is no longer the raw state but a memo over it and the
+       in-flight seat, so BOTH have to sit above the hook -- and the memo is precisely the form the note above
+       says `tsc` does not catch. Asserting the pair, in order, rather than the one name that used to be both. */
     const app = read("App.tsx");
-    const declared = app.indexOf("const [sandboxRoom, setSandboxRoom]");
+    const stated = app.indexOf("const [sandboxRoomDoc, setSandboxRoom]");
+    const declared = app.indexOf("const sandboxRoom = useMemo(");
     const used = app.indexOf("const sandboxChatName =");
-    expect(declared).toBeGreaterThan(-1);
+    expect(stated).toBeGreaterThan(-1);
+    expect(declared).toBeGreaterThan(stated);
     expect(used).toBeGreaterThan(declared);
   });
 });

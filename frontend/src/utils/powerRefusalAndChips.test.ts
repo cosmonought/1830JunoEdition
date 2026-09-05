@@ -268,7 +268,10 @@ describe("the powers panel is gone, and took nothing live with it (design note #
        "fixed" by asserting the escape, which pins the encoding rather than the words. Calling
        `abilitySummary` reads what the table renders. */
     const ca = abilitySummary(PRIVATE_COMPANY_CATALOG[5]);
-    expect(ca).toContain("Its auction buyer was handed a 10% PRR share on purchase.");
+    /* Design note #1167 put this sentence into the present tense -- the card describes a power a reader is
+       deciding about, not a history. Re-anchored rather than loosened: the point of quoting the whole
+       sentence is that the summary renders the CATALOG's words, so a substring match would stop testing it. */
+    expect(ca).toContain("Its auction buyer is handed a 10% PRR share on purchase.");
     expect(ca).toContain("Nothing further to trigger");
     expect(ca).toContain("the company stays open");
     /* AND THE TABLE RENDERS THAT SUMMARY rather than prose of its own -- #843's own rule, which is what

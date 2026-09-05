@@ -127,6 +127,14 @@ import {
   setSandboxForcedSign,
   type SandboxRoomDoc,
 } from "./utils/sandboxRoom";
+/* Design note #1169: the in-flight seat, and the rules for when it stops being in flight. */
+import {
+  applyPendingSeat,
+  dropSeatKeys,
+  settledSeatKeys,
+  PENDING_SEAT_BACKSTOP_MS,
+  type PendingSeat,
+} from "./utils/pendingSeat";
 import { isFirebaseConfigured } from "./config/firebase";
 import StockMarketRenderer, {
   marketCellForPrice,
@@ -1981,7 +1989,37 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     setSrParValues({});
   }, [activeSeatLabel]);
 
-  const [sandboxRoom, setSandboxRoom] = useState<SandboxRoomDoc | null>(null);
+  const [sandboxRoomDoc, setSandboxRoom] = useState<SandboxRoomDoc | null>(null);
+
+  /* Design note #1169: the seat's in-flight choices, drawn over the snapshot until the snapshot agrees.
+     `upsertSandboxPlayer` is a TRANSACTION, and a transaction is the one Firestore write that cannot be
+     latency-compensated -- so nickname, colour and ready were the only three controls on this screen that
+     showed nothing until the server answered. The overlay goes on the room itself rather than beside each
+     control, so every reader below sees one answer (#891) and the three writers' carry-forward (#569)
+     carries what is in flight rather than what the server last said. */
+  const [pendingSeat, setPendingSeat] = useState<PendingSeat | null>(null);
+  const sandboxRoom = useMemo(
+    () => applyPendingSeat(sandboxRoomDoc, localId, pendingSeat),
+    [sandboxRoomDoc, localId, pendingSeat],
+  );
+
+  /* Design note #1169: released by the commit, not by a clock -- a field goes the instant the server's answer
+     matches it. The raw `sandboxRoomDoc` is deliberately what this reads: comparing the overlay against
+     itself would settle every field immediately and echo nothing. */
+  useEffect(() => {
+    if (!pendingSeat) return;
+    const settled = settledSeatKeys(sandboxRoomDoc, localId, pendingSeat);
+    if (settled.length === 0) return;
+    setPendingSeat((current) => dropSeatKeys(current, settled));
+  }, [sandboxRoomDoc, localId, pendingSeat]);
+
+  /* Design note #1169: and never longer than a plausible round trip, because a write that silently did
+     nothing would otherwise leave the echo on screen forever. */
+  useEffect(() => {
+    if (!pendingSeat) return undefined;
+    const timer = window.setTimeout(() => setPendingSeat(null), PENDING_SEAT_BACKSTOP_MS);
+    return () => window.clearTimeout(timer);
+  }, [pendingSeat]);
 
   /* ==================================================================
      DESIGN NOTE 764: `null` MEANT TWO THINGS AND THE SCREEN PICKED THE WRONG ONE
@@ -3068,8 +3106,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     sandboxRoomRef.current = sandboxRoomCode;
   }, [sandboxRoomCode]);
   useEffect(() => {
-    sandboxRoomDocRef.current = sandboxRoom;
-  }, [sandboxRoom]);
+    /* Design note #1169: the RAW snapshot, not the echoed room. Its only readers want `forcedSign` -- a flag
+       other clients write -- so the seat overlay is noise to them, and pointing this at the overlay would
+       re-arm the ref on every keystroke-committed rename for a field the echo never touches. */
+    sandboxRoomDocRef.current = sandboxRoomDoc;
+  }, [sandboxRoomDoc]);
 
   /* ==================================================================
       DESIGN NOTE 1128: THE HOST'S SHORTCUT, AND WHY IT IS ALSO A VISIBLE CHIP
@@ -10108,14 +10149,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     (nickname: string) => {
       if (!sandboxRoomCode) return;
       const mine = sandboxRoom?.players.find((player) => player.id === localId);
+      const named = nickname.trim() || "Player";
+      /* Design note #1169: shown before it is written, because the transaction behind this cannot echo. */
+      setPendingSeat((current) => ({ ...current, nickname: named }));
       void upsertSandboxPlayer(sandboxRoomCode, {
         id: localId,
-        nickname: nickname.trim() || "Player",
+        nickname: named,
         isReady: mine?.isReady ?? false,
         // Design note #569: carried, not dropped. The upsert REPLACES the
         // entry, so a field left out of one write is erased by it.
         ...(mine?.color ? { color: mine.color } : {}),
-      });
+      }).catch(() => setPendingSeat((current) => dropSeatKeys(current, ["nickname"])));
     },
     [sandboxRoomCode, sandboxRoom, localId],
   );
@@ -10127,12 +10171,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     (color: string | null) => {
       if (!sandboxRoomCode) return;
       const mine = sandboxRoom?.players.find((player) => player.id === localId);
+      /* Design note #1169: the swatch's ring is the ONLY answer this control gives, and it was drawn from the
+         server's copy -- so until the commit landed, a click did nothing visible at all. `null` is a choice
+         here, not an absence, so it is written into the echo rather than skipped. */
+      setPendingSeat((current) => ({ ...current, color }));
       void upsertSandboxPlayer(sandboxRoomCode, {
         id: localId,
         nickname: mine?.nickname ?? "Player",
         isReady: mine?.isReady ?? false,
         ...(color ? { color } : {}),
-      });
+      }).catch(() => setPendingSeat((current) => dropSeatKeys(current, ["color"])));
     },
     [sandboxRoomCode, sandboxRoom, localId],
   );
@@ -10141,6 +10189,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     (isReady: boolean) => {
       if (!sandboxRoomCode) return;
       const mine = sandboxRoom?.players.find((player) => player.id === localId);
+      /* Design note #1169: this one gates Start, so its lag was the most expensive of the three -- a player
+         tapping Ready twice because the first tap looked ignored toggles themselves back out. */
+      setPendingSeat((current) => ({ ...current, isReady }));
       void upsertSandboxPlayer(sandboxRoomCode, {
         id: localId,
         nickname: mine?.nickname || "Player",
@@ -10148,7 +10199,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         // Design note #569: carried, for the same reason the nickname write
         // carries the ready flag -- this replaces the whole entry.
         ...(mine?.color ? { color: mine.color } : {}),
-      });
+      }).catch(() => setPendingSeat((current) => dropSeatKeys(current, ["isReady"])));
     },
     [sandboxRoomCode, sandboxRoom, localId],
   );

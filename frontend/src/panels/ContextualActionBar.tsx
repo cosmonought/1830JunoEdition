@@ -312,7 +312,7 @@ function MarketMoveLine({
 
   return (
     <>
-  /* ==================================================================
+      {/* ==================================================================
       DESIGN NOTE 1154: THE WHOLE LINE OPENS THE CHART, AND THE GLASS STAYS
      ==================================================================
      ASKED: "the magnifying glass for 'Market move' is placed at the end, which is okay, but I think it might
@@ -327,7 +327,23 @@ function MarketMoveLine({
      has no box, and therefore cannot receive a click. Two handlers over two cells cover the same span.
      THE BUTTON REMAINS THE SEMANTIC CONTROL. It keeps the focus, the `aria-label` and the keyboard; the cells
      are a pointer convenience on top of it, which is why they take no `role` and no tab stop -- a second
-     focusable thing for one action would make the line two tab stops for a keyboard reader. */
+     focusable thing for one action would make the line two tab stops for a keyboard reader.
+
+     ==================================================================
+      DESIGN NOTE 1175: AND THE NOTE ITSELF WAS ON SCREEN FOR A WEEK
+     ==================================================================
+     REPORTED: "I clicked Run Routes and a large line of text suddenly appeared over my Dividends Action Bar
+     reading: '$920->$950/* DESIGN NOTE 1154: THE WHOLE LINE OPENS THE CHART ...'".
+     THE NOTE ABOVE WAS WRITTEN AS `/* ... *\/` INSIDE JSX CHILDREN, where a bare block comment is not a
+     comment at all -- it is a TEXT NODE, and React dutifully rendered three hundred words of it between the
+     price and the label. The three comments a few lines below this one are `{/* ... *\/}` and always were;
+     this one was typed without the braces and nothing objected, because it is valid JSX either way.
+     IT SURVIVED BECAUSE OF WHERE IT LIVES. This branch renders only during the Dividends sub-phase of an
+     Operating Round, so the fault was invisible until somebody ran routes -- and #7a's "printed twice ...
+     running two trains" is the same node, rendered once per dividend line.
+     AND IT ATE THE TABLES, which is the part that made it a layout bug rather than an eyesore: the parent is
+     the dividend column's grid (#1153), so a stray text node is a stray GRID ITEM, and every cell after it
+     shifted by one. */}
       <span
         style={onOpenChart ? styles.dividendMoveLabelOpens : styles.dividendMoveLabel}
         onClick={onOpenChart}

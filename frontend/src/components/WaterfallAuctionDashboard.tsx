@@ -16,7 +16,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { privateClosureTier } from "../utils/purchaseWarnings";
 import { PRIVATE_COMPANY_CATALOG } from "../utils/privateCatalog";
-import { SpecialPowerBlock } from "./SpecialPowerBlock";
+import { SpecialPowerBlock, CARD_SECTION_CAPTION } from "./SpecialPowerBlock";
 import { auctionFunds, bidRejectionReason, type PlayerAuctionFunds } from "../utils/auctionEscrow";
 import {
   CARD_ACCENT,
@@ -26,6 +26,8 @@ import {
   CARD_BUY_GREEN_DARK,
   CARD_BUY_GREEN_INK,
   CARD_BUY_GREEN_TINT,
+  CARD_CAPTION_GOLD,
+  CARD_CAPTION_GOLD_WASH,
   CARD_DIVIDER,
   CARD_INK,
   CARD_INK_FAINT,
@@ -580,8 +582,8 @@ function PrivateCard({
         <SpecialPowerBlock
           entry={catalogEntry}
           ink={CARD_INK_MUTED}
-          captionInk="#8a7332"
-          detailBackground="rgba(138, 115, 50, 0.09)"
+          captionInk={CARD_CAPTION_GOLD}
+          detailBackground={CARD_CAPTION_GOLD_WASH}
         />
       )}
 
@@ -589,46 +591,72 @@ function PrivateCard({
          mini-auction bidders list a few pixels apart, showing the SAME people with different columns. The
          obvious question is which one is current, and there was no answer because both were.
          During a mini-auction the one table gains TURN and LEADER tags rather than being duplicated. */}
-      <div style={styles.privateCardBids} ref={bidListRef}>
-        {priv.bids.length === 0 ? (
-          <span style={styles.noBidsText}>
-            {priv.is_lowest_offered ? "Buy outright at face value" : "No standing bids"}
-          </span>
-        ) : (
-          sortedBids.map((bid) => {
-            const isLeader = isCompetingInMiniAuction && miniAuction?.high_bidder === bid.bidder;
-            const isTurn = isCompetingInMiniAuction && miniAuction?.current_turn === bid.bidder;
-            return (
-              <div
-                key={bid.bidder}
-                ref={isTurn ? turnRowRef : undefined}
-                style={
-                  bid.bidder === connectedWalletAddress ? styles.bidRowEntryOwn : styles.bidRowEntry
-                }
-              >
-                <span style={styles.bidRowName}>
-                  {nameFor(bid.bidder, playerLabel, 6, 4)}
-                  {isTurn && <span style={styles.youBadge}>TURN</span>}
-                  {/* Design note #321: A STAR, NOT A WORD. #302 was right about WHO it belongs on and wrong about the
-                     shape: "LEADING" is seven characters saying what the largest number in the column already says, and it
-                     sat next to "TURN", so the busiest row carried two shouted words competing for one glance.
-                     The word survives as the `title`, and the `aria-label` is the sentence while the star is `aria-hidden`. */}
-                  {isLeader && (
-                    <span
-                      style={styles.leadingStar}
-                      title={`${nameFor(bid.bidder, playerLabel)} holds the high bid in this mini-auction.`}
-                      aria-label="Leading bidder"
-                      role="img"
-                    >
-                      {"\u2605"}
-                    </span>
-                  )}
-                </span>
-                <span style={styles.bidAmount}>${bid.bid_amount}</span>
-              </div>
-            );
-          })
-        )}
+      {/* ==================================================================
+           DESIGN NOTE 1171: THE SECTION THAT NEVER SAID WHAT IT WAS
+          ==================================================================
+          REPORTED: "didn't there used to be a table header saying 'Bidder' and 'Amount' or something similar?
+          It is a little bit hard to tell where that information is when it just rolls under the special
+          powers and Full Rules click."
+          HALF THE MEMORY IS REAL. There was never a column header, but the first version of this card carried
+          a `highestBidderLine` above the list -- "Highest bidder: 0x1a2b -- 175 VGP" -- and that style is
+          still declared below, rendered by nothing, which is the ghost being remembered.
+          THE CAUSE IS THE NEIGHBOUR, THOUGH. `SpecialPowerBlock` above ends with an underlined "Full Rules"
+          button, and the bid rows began immediately after it with no label and no rule between them. A
+          captioned region followed by an uncaptioned one does not read as two regions.
+          SO IT BORROWS THE CAPTION THE CARD ALREADY HAS rather than inventing a header. The two sections now
+          open the same way, in the same gold, five pixels above their content -- `CARD_SECTION_CAPTION` is
+          that shape, exported from the component that had it (#1171 there).
+          NOT COLUMN HEADINGS, which is what was asked for and is the more expensive answer: #21 caps this
+          list at ~104px so six bidders cannot stretch the card past its row-mates, and a header row inside
+          that scroller spends one of about three and a half visible rows on every card -- including the empty
+          ones, where it would caption nothing. A left-aligned name against a right-aligned `$175` in
+          monospace is not a pair anybody misreads; what was missing was the region's NAME, not its columns'.
+          THE EMPTY LINE LOSES THE WORDS THE CAPTION NOW SAYS, so the card does not print "Standing bids"
+          twice. "Buy outright at face value" keeps its second half because that is a different fact -- the
+          lowest offer can be taken at face value, which is an affordance rather than an absence. */}
+      <div style={styles.bidSection}>
+        <span style={styles.bidSectionCaption}>Standing bids</span>
+        <div style={styles.privateCardBids} ref={bidListRef}>
+          {priv.bids.length === 0 ? (
+            <span style={styles.noBidsText}>
+              {priv.is_lowest_offered ? "None — buy outright at face value" : "None yet"}
+            </span>
+          ) : (
+            sortedBids.map((bid) => {
+              const isLeader = isCompetingInMiniAuction && miniAuction?.high_bidder === bid.bidder;
+              const isTurn = isCompetingInMiniAuction && miniAuction?.current_turn === bid.bidder;
+              return (
+                <div
+                  key={bid.bidder}
+                  ref={isTurn ? turnRowRef : undefined}
+                  style={
+                    bid.bidder === connectedWalletAddress ? styles.bidRowEntryOwn : styles.bidRowEntry
+                  }
+                >
+                  <span style={styles.bidRowName}>
+                    {nameFor(bid.bidder, playerLabel, 6, 4)}
+                    {isTurn && <span style={styles.youBadge}>TURN</span>}
+                    {/* Design note #321: A STAR, NOT A WORD. #302 was right about WHO it belongs on and wrong about the
+                       shape: "LEADING" is seven characters saying what the largest number in the column already says, and it
+                       sat next to "TURN", so the busiest row carried two shouted words competing for one glance.
+                       The word survives as the `title`, and the `aria-label` is the sentence while the star is `aria-hidden`. */}
+                    {isLeader && (
+                      <span
+                        style={styles.leadingStar}
+                        title={`${nameFor(bid.bidder, playerLabel)} holds the high bid in this mini-auction.`}
+                        aria-label="Leading bidder"
+                        role="img"
+                      >
+                        {"\u2605"}
+                      </span>
+                    )}
+                  </span>
+                  <span style={styles.bidAmount}>${bid.bid_amount}</span>
+                </div>
+              );
+            })
+          )}
+        </div>
       </div>
 
       {/* ---- Actions, on the card face -- design note #17 ------------- */}
@@ -821,8 +849,8 @@ function SoldPrivateCard({
         <SpecialPowerBlock
           entry={catalogEntry}
           ink={CARD_INK_MUTED}
-          captionInk="#8a7332"
-          detailBackground="rgba(138, 115, 50, 0.09)"
+          captionInk={CARD_CAPTION_GOLD}
+          detailBackground={CARD_CAPTION_GOLD_WASH}
         />
       )}
       <div style={styles.soldBadgeWrap}>
@@ -1111,6 +1139,18 @@ const styles: Record<string, React.CSSProperties> = {
      height, and because grid rows stretch, ONE contested company inflates every card in its row and drags
      the buttons out of alignment. Capped at ~3.5 rows -- the leader plus the chase, with a cut-off edge to
      show there is more. `flexShrink: 0` on the action block keeps the buttons anchored. */
+  /* Design note #1171: caption and list as ONE child of the card, so the card's own 9px gap separates this
+     section from the powers block above it while the caption stays 5px from the rows it names -- the same
+     two distances `SpecialPowerBlock` uses, which is what makes them read as sibling sections rather than as
+     a label that drifted. `minHeight: 0` is passed down so the scroller inside can still shrink. */
+  bidSection: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "5px",
+    minWidth: 0,
+    minHeight: 0,
+  },
+  bidSectionCaption: { ...CARD_SECTION_CAPTION, color: CARD_CAPTION_GOLD },
   privateCardBids: {
     maxHeight: "104px",
     overflowY: "auto",
@@ -1122,7 +1162,6 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     flexDirection: "column",
     gap: "4px",
-    marginTop: "4px",
   },
   noBidsText: {
     fontSize: FONT_SIZE.small,
@@ -1260,11 +1299,11 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "2px 6px",
     whiteSpace: "nowrap",
   },
-  highestBidderLine: {
-    fontSize: FONT_SIZE.micro,
-    color: CARD_INK_MUTED,
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-  },
+  /* Design note #1171: `highestBidderLine` is GONE. It rendered "Highest bidder: 0x1a2b -- 175 VGP" above
+     this list in the card's first version, stopped being rendered at some point, and stayed here as a
+     declaration nothing read -- which is the line the report remembered as a table header. The caption
+     replaces the job it was doing; keeping the style would leave a fourth answer to "how does this card
+     label a section" lying around for somebody to pick up. */
   // Design note #11: the interaction band, a horizontal row BELOW the privates. The heavy top border and
   // recessed background state that this area serves all six cards above, which is exactly the confusion the
   // old side-by-side layout caused.

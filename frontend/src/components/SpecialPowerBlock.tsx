@@ -100,14 +100,33 @@ export function SpecialPowerBlock({
  *  choosing between the two shapes finds both in one place. */
 export { abilitySummary };
 
+/* ==================================================================
+    DESIGN NOTE 1171: THE CARD'S SECTION LABEL, NOW THAT A SECOND SECTION WANTS ONE
+   ==================================================================
+   REPORTED: "didn't there used to be a table header saying 'Bidder' and 'Amount'... it is a little bit hard
+   to tell where that information is when it just rolls under the special powers and Full Rules click."
+   THERE NEVER WAS A COLUMN HEADER. The original card carried a `highestBidderLine` -- "Highest bidder: 0x1a2b
+   -- 175 VGP" -- above the list, and its style is STILL in `WaterfallAuctionDashboard` as a dead declaration
+   nothing renders. So the memory is real and the shape it is remembered in is not.
+   AND THE ACTUAL FAULT IS ADJACENCY, not a missing header. This block announces itself with a caption; the
+   bid list below it announced nothing at all. One labelled region followed by an unlabelled one reads as a
+   continuation of the first, which is exactly the report: the bids "roll under" the powers.
+   SO THE CAPTION LEAVES THIS FILE. It is the card's idiom for "a new section starts here" rather than this
+   component's private decoration, and a second hand-typed copy of four properties in the dashboard is the
+   #891 fault in miniature -- two places stating one rule, drifting the first time either is touched.
+   THE INK STAYS A PROP. #772's rule holds: this component is used on parchment and on dark chrome, so the
+   colour cannot live with the shape. Callers spread this and set `color` themselves. */
+export const CARD_SECTION_CAPTION: React.CSSProperties = {
+  fontSize: FONT_SIZE.micro,
+  fontWeight: 800,
+  letterSpacing: "0.5px",
+  textTransform: "uppercase",
+};
+
 const styles: Record<string, React.CSSProperties> = {
   block: { display: "flex", flexDirection: "column", gap: "5px", minWidth: 0 },
-  caption: {
-    fontSize: FONT_SIZE.micro,
-    fontWeight: 800,
-    letterSpacing: "0.5px",
-    textTransform: "uppercase",
-  },
+  // Design note #1171: the shared token, read rather than restated -- see the export above.
+  caption: CARD_SECTION_CAPTION,
   /* `listStyle: none` with a drawn marker rather than a browser disc: the disc's indent is not controllable
      across engines and these sit in a 200px card where four wasted pixels show. */
   list: { display: "flex", flexDirection: "column", gap: "3px", margin: 0, padding: 0, listStyle: "none" },

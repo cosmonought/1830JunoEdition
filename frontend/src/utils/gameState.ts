@@ -412,6 +412,25 @@ export interface GameStateResponse {
    *  IN STATE FOR #723'S REASON, like #744's: Undo replays the log, so anything the reducer must decide
    *  travels in the state the reducer replays. */
   turn_action_taken?: boolean;
+  /** ==================================================================
+   *   DESIGN NOTE 1172: THE COUNT RULE 4 WAS ALWAYS WAITING FOR
+   *  ==================================================================
+   *
+   * `sharePurchaseBlock` has enforced "one certificate purchase per turn, waived for Brown-zone Bank Pool
+   * shares" since #712 -- reading a `boughtThisTurn` parameter that NO CALLER HAS EVER PASSED. It defaults to
+   * `0`, so the branch could not fire, and the rule was #712's own reported fault repeated inside #712's own
+   * fix: "encoded as PREDICATES and none of them as GATES."
+   *
+   * A COUNT OF CERTIFICATES, NOT A BOOLEAN, because the Brown allowance is expressed in certificates and
+   * arrives as one message with a `quantity`. A flag would answer "have you bought" where the rule asks "how
+   * many have you taken".
+   *
+   * SEPARATE FROM `turn_action_taken` ABOVE, which a SALE also sets: 1830 lets a player sell and then buy in
+   * one turn, so a shared flag would refuse the legal half of that.
+   *
+   * IN STATE FOR #723'S REASON, like the two records above it: Undo replays the log, so anything the reducer
+   * must decide travels in the state the reducer replays. */
+  bought_this_turn?: number;
   consecutive_passes: number;
   current_global_era: TileColor;
   /** Operating Round Corporation Turn Queue -- `company_id`s in turn order. */

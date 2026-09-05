@@ -460,7 +460,12 @@ describe("the off switch is always reachable", () => {
   it("still gates Pass itself on the turn", () => {
     /* THE CONTROL ON THE SPLIT. `sessionReady` was not weakened -- it was left alone and a second predicate
        carved out beside it, so the button that ENDS a turn still needs one. */
-    expect(app).toContain("sessionReady={controlsEnabled && isMyTurn}");
+    /* Design note #1173 re-anchored this: the acting gate gained a fourth condition, the in-flight latch, so
+       the string is now `controlsEnabled && isMyTurn && !actionInFlight`. The CLAIM is unchanged and this
+       still tests it -- the button that ends a turn wears the turn gate -- and it is now strictly stronger,
+       which is the direction a control on a carve-out should ever move. Asserted on the `isMyTurn` half so a
+       future condition beside it does not break the test it is supposed to satisfy. */
+    expect(app).toContain("sessionReady={controlsEnabled && isMyTurn && !actionInFlight}");
   });
 
   it("keeps offering it through the auction while armed", () => {

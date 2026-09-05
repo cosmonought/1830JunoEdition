@@ -405,3 +405,19 @@ export const CARD_INK_POSITIVE = "#1d6b3f";
 export const CARD_HIGHLIGHT_BG = "#f7e3a8";
 export const CARD_HIGHLIGHT_INK = "#5c4204";
 export const CARD_HIGHLIGHT_BORDER = "#c9a94c";
+
+/* ==================================================================
+    DESIGN NOTE 1171: THE CAPTION GOLD GETS A NAME BEFORE IT GETS A THIRD USE
+   ==================================================================
+   This was a literal typed twice in `WaterfallAuctionDashboard` -- once on the live card's "Special power"
+   caption and once on the sold card's -- and #1171 was about to add a third for "Standing bids". Two copies
+   is a colour; three is a rule nobody wrote down.
+   DEEP ENOUGH TO BE INK, not the highlight above it: 5.9:1 on `CARD_SURFACE`, where `CARD_HIGHLIGHT_BORDER`
+   is 2.1:1 and is a border for that reason. The two golds are not interchangeable and this note is the only
+   place that says so.
+   `TileSelectionPopup` USES THE SAME HEX AND IS LEFT ALONE, deliberately: it is a border on a tile chip, a
+   different job that happens to have landed on the same value. Renaming it here would assert a relationship
+   that does not exist and would make a future change to one silently change the other. */
+export const CARD_CAPTION_GOLD = "#8a7332";
+/** The panel behind a revealed "Full Rules" paragraph -- the caption gold at 9%. */
+export const CARD_CAPTION_GOLD_WASH = "rgba(138, 115, 50, 0.09)";

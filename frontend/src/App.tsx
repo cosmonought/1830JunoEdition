@@ -630,6 +630,11 @@ const ALL_TILE_PLACEMENTS = localCatalogPlacements();
  *  a tile that is on its way. */
 const COMMITTED_PREVIEW_MS = 4000;
 
+/* Design note #1173: how long the controls stay latched with no snapshot. Longer than a Firestore round trip
+   on a bad connection, short enough that a dropped listener does not strand a player who could otherwise
+   retry. The same reasoning, and the same figure, as #1169's seat echo. */
+const ACTION_LATCH_BACKSTOP_MS = 6000;
+
 /* Design note #875: `RIVAL_ROUTE_INDEX_BASE` moved to `watcherRouteChips.ts`, which is now the thing that
    applies it. #740's reasoning travels with it: "rivals' live routes are keyed above any real train index, so
    a watcher's overlay can never collide with their own on the key three surfaces join by (#373)." Imported
@@ -3078,6 +3083,57 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   const [sandboxRoomError, setSandboxRoomError] = useState<string | null>(null);
   const [sandboxRoomBusy, setSandboxRoomBusy] = useState(false);
   const [sandboxAppliedCount, setSandboxAppliedCount] = useState(0);
+  /* ==================================================================
+      DESIGN NOTE 1173: THE TURN GATE WAS READING A STATE ONE ROUND TRIP OLD
+     ==================================================================
+     REPORTED as two things a week apart, and they are one window seen from two seats:
+       "other players are clicking buttons and triggering actions on my turn"
+       "they bought a share of B&O and it didn't register, so they clicked again and suddenly they had two"
+     THE ONLY THING STOPPING AN OFF-TURN ACTION IS `!isMyTurnRef.current` IN `runGameplayAction`, and
+     `isMyTurn` derives from `gameState`, which in a ROOM moves only when the Firestore snapshot returns
+     (#522, "the log is the game"). So between a click and the snapshot the acting client still reads its own
+     turn as live and its buttons stay lit. Click, see nothing, click again: the gate passes both, #916's
+     optimistic index advance dutifully gives the second its own log index, and the snapshot returns carrying
+     two purchases. From the NEXT player -- who already has the snapshot -- the same window is somebody else
+     acting on their turn.
+     THIS IS #1145 AND #1169's ROUND TRIP ON THE ONE PATH WHERE IT CORRUPTS STATE rather than merely looking
+     slow, so it gets the same medicine and one more: the shell now knows an action is in flight.
+     THE INDEX, NOT A BOOLEAN. Cleared when the applied cursor passes the position this write took, so the
+     latch releases on the arrival of THIS action rather than on the next snapshot to arrive from anybody --
+     which at a four-player table is a different event.
+
+     ==================================================================
+      DESIGN NOTE 1173a: WHERE IT IS SET, AND WHAT IT DELIBERATELY DOES NOT DO
+     ==================================================================
+     SET BEFORE THE AWAIT, because the double-click lands DURING the Firestore write -- a latch taken from the
+     resolved index would be armed after the damage. `appendAt` is the position the write is taking and is
+     known before it starts.
+     ONLY A PLAYER'S OWN PRESS. A replay is somebody else's action arriving and an `automatic` dispatch is the
+     game moving on the player's behalf; neither is a press a hand could repeat, and latching on them would
+     grey the board during the app's own housekeeping.
+     IT GREYS CONTROLS AND DOES NOT CLOSE THE DISPATCH GATE, which is the whole reason it is a UI flag rather
+     than a fourth condition on `runGameplayAction`'s turn check. #916's route loop and #1077's multi-train
+     buy send several messages from ONE press, in code, without passing back through a button -- closing the
+     gate would break both, while greying a button cannot, because nobody is clicking it.
+     AND IT IS NOT AUTHORITY. #1174 in `sandboxSession.ts` records why the reducer cannot answer "was this
+     player on turn" without reading the cursor #549 forbids it to read. This is the courtesy that stops the
+     hand; the rule it would take belongs to the audit. */
+  const [pendingAppendIndex, setPendingAppendIndex] = useState<number | null>(null);
+  const actionInFlight = pendingAppendIndex !== null;
+
+  useEffect(() => {
+    if (pendingAppendIndex === null) return;
+    if (sandboxAppliedCount > pendingAppendIndex) setPendingAppendIndex(null);
+  }, [sandboxAppliedCount, pendingAppendIndex]);
+
+  /* Design note #1173: and never longer than a plausible round trip. A write that failed, or a room whose
+     listener has dropped, must not leave a player unable to act -- a stuck latch is a worse bug than the one
+     it prevents, because the player cannot even retry their way out of it. */
+  useEffect(() => {
+    if (pendingAppendIndex === null) return undefined;
+    const timer = window.setTimeout(() => setPendingAppendIndex(null), ACTION_LATCH_BACKSTOP_MS);
+    return () => window.clearTimeout(timer);
+  }, [pendingAppendIndex]);
   /* Design note #527: the anteroom's own state, from the room DOCUMENT
      rather than the log. `null` while it loads or when there is no room. */
   const sandboxRoomRef = useRef<string | null>(null);
@@ -4713,6 +4769,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
              from the log itself, which stays the authority. A failed write does not advance, so a refused
              append leaves the position free for a retry. */
           const appendAt = appliedIndexRef.current;
+          // Design note #1173a, whose reasoning is on `pendingAppendIndex`.
+          if (options?.automatic !== true) setPendingAppendIndex(appendAt);
           const allocated = await appendSandboxAction(
             roomCode,
             appendAt,
@@ -4736,6 +4794,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
              fix introduced rather than one it found. Compared against `null` explicitly. */
           if (allocated === null) {
             setSandboxRoomError("Could not reach the room — that action was not sent.");
+            // Design note #1173a: released -- nothing will advance the cursor past an action that never landed.
+            setPendingAppendIndex((current) => (current === appendAt ? null : current));
           } else if (appliedIndexRef.current === appendAt) {
             /* Design note #916: only when nothing else has moved it. A snapshot may already have landed
                during the await and advanced it past this write; overwriting that with `appendAt + 1` would
@@ -7507,6 +7567,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           (marketGrid?.positions ?? []).map((entry) => [entry.company_id, Number(entry.price)]),
         ),
         zoneForPrice: marketZoneForPrice,
+        /* Design note #1172: the panel passes it too, so the button is GREYED with the sentence rather than
+           refusing after the click -- #619's rule, and the reason the reducer's copy of this call is not
+           enough on its own. The two now hand `sharePurchaseBlock` the same five facts. */
+        boughtThisTurn: gameState.bought_this_turn ?? 0,
       });
     },
     [gameState, viewerAddress, marketGrid, marketPriceForCompany],
@@ -11132,7 +11196,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         orSubPhase={displayedSubPhase}
         // Controls go dead off-turn so a player is not invited to click what the dispatch gate will refuse.
         // See docs/ai_architecture/session_keys_wallet.md - App.tsx #536
-        sessionReady={controlsEnabled && isMyTurn}
+        /* Design note #1173: the ACTING gate, narrowed by the in-flight latch. `isMyTurn={isMyTurn}` further
+           down is deliberately NOT narrowed -- #1242 on this bar: "A SECOND FLAG, NOT A NARROWER
+           `isMyTurn`. This bar reads `isMyTurn` for six things, and five of them are" presentation. Blanking
+           the turn band and the rival drafts for half a second after every press would be a worse bug than
+           the double-click. */
+        sessionReady={controlsEnabled && isMyTurn && !actionInFlight}
         // WaterfallPass and PassTurn are different contract messages, not one action with two names.
         // See docs/ai_architecture/contract_economy.md - App.tsx #31
         onPassTurn={isWaterfallPhase ? handleWaterfallPass : handlePassTurn}
@@ -11652,6 +11721,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                     onSellShares={handleSellShares}
                     sessionReady={controlsEnabled}
                     isMyTurn={isMyTurn}
+                    // Design note #1173: the fourth condition on #32's single flag, for the window between a
+                    // press and the snapshot that proves it landed.
+                    actionInFlight={actionInFlight}
                     connectedAddress={viewerAddress}
                     // Design note #31 in that file: powers the front-face
                     // operating snapshot -- train limit and which tier is

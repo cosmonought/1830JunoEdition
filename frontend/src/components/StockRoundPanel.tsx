@@ -176,6 +176,18 @@ export interface StockRoundPanelProps {
   /** Why buying and selling are unavailable, or `null` when they are legal. Design note #32: the roster
    *  became a persistent tab (`App.tsx #41`), so it is reachable outside a Stock Round. */
   actionsLockedReason?: string | null;
+  /** ==================================================================
+   *   DESIGN NOTE 1173: A PRESS THIS PLAYER HAS MADE AND NOT YET SEEN LAND
+   *  ==================================================================
+   *
+   * In a room an action is APPENDED and the board moves when the snapshot replays it, so for one round trip
+   * a player who has already bought still reads their own turn as live. That is the window they clicked
+   * twice in, and it is how one purchase became two.
+   *
+   * A SEPARATE CONDITION FROM `isMyTurn`, not a narrowing of it, because during this window it genuinely IS
+   * their turn -- the state simply does not know yet that they have spent it. Folding the two together would
+   * also make the header say "Waiting for your turn..." to the player whose turn it still is. */
+  actionInFlight?: boolean;
   /** Design note #464: the round, so the card order is recomputed at the
    *  Operating Round boundary and held through the Stock Round. */
   roundType: RoundType | null;
@@ -1969,6 +1981,7 @@ export function StockRoundPanel({
   phase,
   outlook,
   actionsLockedReason,
+  actionInFlight = false,
   roundType,
   lockedCompanyIds,
 }: StockRoundPanelProps) {
@@ -1992,7 +2005,10 @@ export function StockRoundPanel({
      controls only -- the roster stays fully readable, and expanding a card to
      study a rival's holdings on their turn is exactly when a player has time to
      do it. Browsing is not acting. */
-  const controlsDisabled = !sessionReady || actionsLockedReason != null || !isMyTurn;
+  /* Design note #1173: THE FOURTH CONDITION, added to the flag rather than to the controls -- which is #32's
+     whole argument above and #681's when it added the third. Five controls inherit it and none can miss it. */
+  const controlsDisabled =
+    !sessionReady || actionsLockedReason != null || !isMyTurn || actionInFlight;
 
   /* Design note #681: WHY, in one sentence, for whichever control is asked.
      A greyed button that cannot say why is the failure #619 describes from the
@@ -2004,7 +2020,12 @@ export function StockRoundPanel({
     : (actionsLockedReason ??
       (!isMyTurn
         ? `It is ${activePlayerLabel ?? "another player"}'s turn.`
-        : null));
+        : /* Design note #1173: LAST in the precedence, because it is the only one of the four that is about
+             to resolve itself. A player reading this is being told to wait a moment rather than that they
+             may not act -- which is why it is phrased as a report on their own press. */
+          actionInFlight
+          ? "Sending your last action — one moment."
+          : null));
   /* Design note #396: the ACTIVE card -- the one whose action bar renders.
      Renamed from `expandedCompanyId`: it no longer expands anything, it
      decides where the controls live. */

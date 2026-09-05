@@ -175,6 +175,8 @@ function advanceSeat(state: GameStateResponse): GameStateResponse {
        seat-moving functions rather than in the arms that call them -- an arm can be added, and the next one
        will inherit this without its author knowing the flag exists. */
     turn_action_taken: false,
+    // Design note #1172: the purchase count has the same life and is cleared on the same rule.
+    bought_this_turn: 0,
   };
 }
 
@@ -404,6 +406,8 @@ function recordPass(state: GameStateResponse): GameStateResponse {
     consecutive_passes: streak,
     // Design note #745: this moves the seat too, so it clears the turn flag on the same rule as `advanceSeat`.
     turn_action_taken: false,
+    // Design note #1172: and the purchase count with it.
+    bought_this_turn: 0,
   };
 
   if (streak < count) return advanced;
@@ -749,6 +753,7 @@ export function openingStockRoundReset(
   | "consecutive_passes"
   | "last_trader_index"
   | "turn_action_taken"
+  | "bought_this_turn"
   | "active_player_index"
 > {
   return {
@@ -761,6 +766,9 @@ export function openingStockRoundReset(
     /* Design note #745: the seat is being MOVED without going through either seat-moving function. A stale
        `true` here would let the Priority Deal holder's opening Pass slip out of the streak. */
     turn_action_taken: false,
+    /* Design note #1172: the third clearing site, and the one #745's comment above predicted -- "the seat is
+       being MOVED without going through either seat-moving function". */
+    bought_this_turn: 0,
     // The Priority Deal holder opens the Stock Round -- design note #353.
     active_player_index: state.priority_deal_index,
   };
@@ -2754,6 +2762,48 @@ function applyOneAction(
         ? logged
         : null;
 
+  /* ==================================================================
+      DESIGN NOTE 1174: THE TURN CHECK THAT CANNOT LIVE HERE, AND WHY
+     ==================================================================
+     REPORTED: "other players are clicking buttons and triggering actions on my turn."
+     AND THE DIAGNOSIS HOLDS: the only turn gate in the app is `runGameplayAction`'s `!isMyTurnRef.current`,
+     on the client that dispatches, reading a `gameState` a room keeps one Firestore round trip behind
+     (#1173). Nothing here has ever asked. `actor` above is resolved for ATTRIBUTION -- whose cash moves,
+     whose name the log carries -- and never compared against the seat.
+
+     I ADDED THAT COMPARISON AND IT WAS WRONG. `offTurnRefusal(state, msg, actor)` sat here, refusing a
+     Stock Round `BuyStock`/`SellStock`/`PassTurn` whose actor was not `player_addresses[active_player_index]`.
+     It broke ten tests across four suites, and the one that matters is `replayAttribution` -- #549's harness,
+     whose whole subject is this:
+
+       "`applySandboxAction` resolved the acting player as `state.player_addresses[state.active_player_index]`
+        -- the turn cursor on whichever machine was doing the applying ... it means the reducer is not a
+        function of the log: feed the same message to two clients whose cursors differ and they credit two
+        different players, silently, forever after."
+
+     #549 REMOVED THE CURSOR AS AN INPUT TO ATTRIBUTION. My gate put it back as an input to something
+     STRICTER -- whether the action applies at all -- so two clients whose cursors disagreed would not merely
+     credit different players, one would apply the purchase and the other would drop it. That is the same
+     divergence one layer deeper, and #549's test hands the same message to `state(0)` and `state(1)` and
+     asserts they agree precisely to catch it.
+
+     SO THE AUTHORITY QUESTION IS NOT ANSWERABLE FROM INSIDE THE REPLAY, and this note is what the audit
+     needs rather than a fix. "Whose turn is it" has FOUR answers and this function can compute only one:
+
+       Stock Round        `player_addresses[active_player_index]`   the cursor -- which #549 forbids reading
+       Waterfall auction  the auction's own rotation                needs `waterfallState`, not passed here
+       Mini-auction       `mini_auction.current_turn` (#544)        needs `waterfallState`, not passed here
+       Operating Round    the operating corporation's PRESIDENT     not the seat index at all
+
+     And four flows are legitimately off-turn: a null actor in solo play (#549b), `automatic` dispatches
+     re-attributed to `actingAddressRef`, `offTurn` consent answers on a two-party trade (#701), and a
+     `SellStock` that does not advance the seat at all.
+     WHAT ACTUALLY BELONGS HERE IS A TURN STAMPED ON THE LOG ENTRY -- an action carrying the seat it was taken
+     for, so the check compares two things the log controls and the cursor stops being consulted. That is a
+     log-format change, which is the audit's business and not a patch's.
+     WHAT SHIPS INSTEAD is #1173's in-flight latch, which stops the hand that produced the report, and
+     #1172's purchase count, which stops the duplicate inside a turn. Neither reads the cursor. */
+
   // Passing means two things: a player declining a seat-driven turn, or a CORPORATION ending its OR turn. Treating both as a seat advance strands the OR on its first company.
   // See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #0
   if ("PassTurn" in msg) {
@@ -2845,6 +2895,24 @@ function applyOneAction(
         zone: ctx.marketZoneFor(protocol_id),
         marketPrices: ctx.marketPricesByCompany ?? null,
         zoneForPrice: ctx.zoneForPrice,
+        /* ==================================================================
+            DESIGN NOTE 1172: THE ARGUMENT RULE 4 HAS BEEN WAITING FOR SINCE #712
+           ==================================================================
+           REPORTED: "they bought a share of B&O and it didn't register, so they clicked again and suddenly
+           they had two B&O shares."
+           `sharePurchaseBlock` HAS REFUSED THIS SINCE #712 and could never fire, because `boughtThisTurn`
+           defaults to `0` and no caller -- not this one, not the panel's -- ever passed it. The rule was
+           written, tested against its own unit, and unreachable in the game.
+           IT NORMALLY GOES UNNOTICED because a buy ends with `advanceSeat`, so the seat moves out from under
+           a second purchase and the turn gate catches it instead. Two windows defeat that: #769 HOLDS the
+           seat when the purchase floats a corporation owing a home token, and a room's turn gate reads a
+           `gameState` one Firestore round trip behind (#1173). In both, the seat still belongs to the buyer
+           and nothing else was checking.
+           THE BROWN ALLOWANCE IS UNTOUCHED, and this is why the count is certificates rather than a flag: a
+           Brown-zone Bank Pool multi-buy arrives as ONE message carrying `quantity`, so it is one purchase
+           however many certificates it takes, and `allowsExtraPoolBuys` still waives the rule for the second
+           message as well. */
+        boughtThisTurn: state.bought_this_turn ?? 0,
       });
       if (blocked !== null) return state;
     }
@@ -2889,7 +2957,15 @@ function applyOneAction(
        AFTER the float check, because a buy that both floats a company and
        crowns a new president must resolve the float against the holdings that
        caused it, not against a board mid-transfer. */
-    const settledBuy = markTrader(settlePresidencies(floated).state, actor);
+    /* Design note #1172: the count the rule above reads, recorded on the purchase that earns it. CERTIFICATES
+       taken, not messages sent, so a Brown-zone pool buy of three reports three -- and ACCUMULATED rather
+       than set, because the Brown allowance permits a second message in the same turn and the rule needs the
+       running total to judge it. Cleared by the three sites that clear `turn_action_taken` (#745). */
+    const counted: GameStateResponse = {
+      ...settlePresidencies(floated).state,
+      bought_this_turn: (state.bought_this_turn ?? 0) + certificates,
+    };
+    const settledBuy = markTrader(counted, actor);
 
     /* ==================================================================
        DESIGN NOTE 769: THE SEAT STAYS WITH THE PRESIDENT UNTIL THE TOKEN IS DOWN

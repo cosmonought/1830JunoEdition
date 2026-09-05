@@ -42,9 +42,46 @@ describe("the payout panel closes the gap it opens", () => {
        then pauses at nothing -- visible as a stutter on a 500ms move. `1fr` to `0fr` resolves to the row's own
        height whatever the font does to it. */
     const row = sliceBetween(MACHINE, "payerRow: {", "\n  },");
-    expect(row).toContain('gridTemplateRows: "1fr"');
     expect(row).toContain("transition:");
     expect(row).not.toContain("maxHeight");
+  });
+
+  it("keeps every phase-varying property OUT of the inline style", () => {
+    /* ==================================================================
+        DESIGN NOTE 1175: THE ASSERTION THAT WAS TRUE AND PROVED NOTHING
+       ==================================================================
+       REPORTED: the compression "does not happen" -- after #1163 shipped, and after this file went green.
+       THIS TEST PASSED BECAUSE IT CHECKED THE TWO HALVES SEPARATELY. One case asserted the class carries
+       `grid-template-rows: 0fr`; another asserted the element carries `gridTemplateRows: "1fr"`. Both were
+       true. Together they are the bug: an inline declaration outranks any stylesheet rule whatever its
+       specificity, so the class could never win and the row never collapsed.
+       SO THE PROPERTY IS THE RELATIONSHIP, not either half. Anything a phase class sets must not also be set
+       on the element, and that is checkable directly -- which is what this now does, for every property the
+       three phase classes name rather than only for the two that were reported. */
+    const raw = require("fs").readFileSync(
+      require("path").join(__dirname, "..", "components", "DividendMoneyMachine.tsx"),
+      "utf8",
+    ) as string;
+    const row = sliceBetween(MACHINE, "payerRow: {", "\n  },");
+    /* The properties the phase classes fight over, named once. `opacity` is included even though it was never
+       inline: it is the one that DID work, and the reason the row went invisible while keeping its space. */
+    for (const [css, inline] of [
+      ["grid-template-rows", "gridTemplateRows"],
+      ["padding-top", "paddingTop"],
+      ["opacity", "opacity"],
+    ] as const) {
+      expect([css, raw.includes(css + ":")]).toEqual([css, true]);
+      expect([inline, row.includes(inline + ":")]).toEqual([inline, false]);
+    }
+  });
+
+  it("gives the open state a class of its own, so the cascade has two rules to choose between", () => {
+    const raw = require("fs").readFileSync(
+      require("path").join(__dirname, "..", "components", "DividendMoneyMachine.tsx"),
+      "utf8",
+    ) as string;
+    expect(raw).toContain(".app-money-machine-waiting,\n.app-money-machine-fall {");
+    expect(raw).toContain("grid-template-rows: 1fr;\n  padding-top: 7px;");
   });
 
   it("gives the inner row what a collapsing track needs", () => {

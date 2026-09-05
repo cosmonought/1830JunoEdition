@@ -456,6 +456,27 @@ const MONEY_MACHINE_CSS = `
   animation: app-money-machine-drop ${MONEY_MACHINE_FALL_MS}ms cubic-bezier(0.55, 0, 0.9, 0.55) forwards;
 }
 /* ==================================================================
+    DESIGN NOTE 1175: THE OPEN TRACK HAD TO LEAVE THE INLINE STYLE
+   ==================================================================
+   REPORTED: "you reported that when players received dividends payments that the slide-out notification would
+   compress with the merge/sum, but this does not happen."
+   AND IT COULD NOT HAVE. #1163 put the open state on the ELEMENT -- an inline grid-template-rows of one-fr
+   and a seven-pixel padding -- and the collapsed state in the class below. An inline declaration outranks
+   every stylesheet rule regardless of selector specificity, so the class could never move the track. The one
+   property it did change is opacity, which #1163 did not set inline; the row therefore went invisible on the
+   merge and kept every pixel of its space, which is precisely the report #1163 was written to answer, still
+   true after it shipped.
+   SO BOTH STATES ARE CLASSES NOW and the cascade decides between two single-class selectors in source order,
+   which is the ordinary mechanism rather than a fight. The element keeps only what does not vary by phase.
+   THIS ALSO REPAIRS THE REDUCED-MOTION PATH, which had the same fault one layer down: its override of the
+   collapsed row was a stylesheet rule aimed at an inline value and lost for the same reason.
+   NO BACKTICKS IN THIS PARAGRAPH -- #1061, and the note below says how many times now. */
+.app-money-machine-waiting,
+.app-money-machine-fall {
+  grid-template-rows: 1fr;
+  padding-top: 7px;
+}
+/* ==================================================================
     DESIGN NOTE 1163: A MERGED ROW MUST STOP TAKING UP ROOM
    ==================================================================
    ASKED: "should the popover shrink as the two lines merge? Right now after the merge/sum there is a large
@@ -552,8 +573,10 @@ const styles: Record<string, React.CSSProperties> = {
      inside, to `payerRowInner` -- a grid track cannot animate to zero around a child that refuses to shrink. */
   payerRow: {
     display: "grid",
-    gridTemplateRows: "1fr",
-    paddingTop: "7px",
+    /* Design note #1175: `gridTemplateRows` and `paddingTop` are NOT here. They vary by phase, and a phase is
+       expressed as a class on this element -- an inline value would outrank every one of those classes and
+       pin the row open, which is exactly what it did. What remains is phase-independent: the grid itself, and
+       the transition that both states animate along. */
     transition: `grid-template-rows ${MONEY_MACHINE_FALL_MS}ms ease, opacity ${MONEY_MACHINE_FALL_MS}ms ease, padding-top ${MONEY_MACHINE_FALL_MS}ms ease`,
   },
   payerRowInner: {

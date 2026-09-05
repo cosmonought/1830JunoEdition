@@ -1420,6 +1420,43 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     [],
   );
 
+  /* ==================================================================
+      DESIGN NOTE 1177: TWO SOURCES FOR ONE PRICE, IN ONE CONTEXT OBJECT
+     ==================================================================
+     REPORTED: "Every player is showing different amounts of Cash for every other player, including
+     themselves."
+     THAT IS DIVERGENCE, which is #549's subject: the reducer must be a function of the log and only of the
+     log. It was not. The context handed to `applySandboxAction` carried the chart TWICE --
+     `marketPriceFor` off `sandboxMarketRef` (written synchronously, fresh) and `marketPricesByCompany` off
+     `marketGrid`, a memo over `sandboxMarket`, the STATE (committed by React, and therefore stale for the
+     whole of a drain).
+     AND THE STALE ONE DECIDES WHETHER A PURCHASE HAPPENS. It feeds `certificateBreakdown` inside
+     `sharePurchaseBlock`, whose #7 note says an absent table means "everything counts" -- so a client whose
+     chart had not committed counted certificates a fresher client exempted, refused the purchase, and
+     returned the state UNCHANGED (#712). One client charges the buyer and moves the share; another does
+     neither. Nothing reconciles them afterwards, which is why it reads as permanent.
+     HOW STALE IS PER CLIENT, which is what turns a race into a divergence. A client replaying forty actions
+     in one drain never commits between them; a client applying one action per snapshot is nearly fresh. Same
+     log, same code, different answers -- and a refresh puts one client firmly in the first case, which is why
+     the report arrived after one.
+     SO THE RECORD IS BUILT FROM THE REF, beside the two callbacks that already read it. One source, one
+     answer (#891). `marketGrid` keeps its job -- it is what the CHART renders from, where state is correct
+     and reactivity is the point. */
+  /* NO NULLS BY CONSTRUCTION, and typed that way rather than widened to match the looser of the two
+     consumers: `sandboxMarketPositions` skips a corporation with no mark entirely (#401), so every entry it
+     returns carries a real price. `refusalReasonFor` requires the narrow type and `sharePurchaseBlock`
+     accepts it, so the accurate type is also the one that fits both. */
+  const marketPricesFromRef = useCallback(
+    (): Readonly<Record<number, number>> =>
+      Object.fromEntries(
+        sandboxMarketPositions(sandboxMarketRef.current).map((entry) => [
+          entry.company_id,
+          Number(entry.price),
+        ]),
+      ),
+    [],
+  );
+
   /* Operating-order tie-breaks read the same ref as the price, for the same reason (#411/#647).
      See docs/ai_architecture/stock_market.md - App.tsx #646 */
   const marketMarkForCompany = useCallback(
@@ -2341,6 +2378,32 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      action -- see the bar's #833 for why the jump owns both halves. */
   const handleShowMap = useCallback(() => setActiveMainTab("map"), []);
 
+  /* ==================================================================
+      DESIGN NOTE 1176: THE BADGE ASKS THE POWER, NOT THE ROSTER
+     ==================================================================
+     REPORTED: "the private company acronyms+stars are lingering on hexes even after tiles have been laid on
+     them ... as soon as any tile is laid on these hexes, their private powers are disabled and the markers
+     are removed."
+     THE POWERS WERE DISABLED CORRECTLY. `dhPower` and `cslPower` above both carry `forfeited`, computed from
+     the laid tiles, and every rule surface reads them. The badge did not: it was drawn from
+     `private_companies` alone, which only knows OPEN versus CLOSED.
+     "STILL HAS SOMETHING TO OFFER" IS THE TEST, and it is not the same as "nobody has built here". The D&H's
+     own tile lay sets `hexBuilt` while leaving the free station live -- the token is the second half of that
+     lay (#725) -- so the badge has to survive its owner's tile and vanish on anybody else's. Reading
+     `forfeited` alone would keep a badge over a spent power; reading `hexBuilt` alone would erase a badge
+     over a live one. The conjunction below is the only form that is right in both directions.
+     COMPUTED HERE, BESIDE THE TWO STATES IT READS, and passed down as a conclusion. The canvas has neither
+     the tiles nor the used-ability ledger, and giving it those would make a third reading of a fact that two
+     places already agree on. */
+  const livePrivatePowerIds = useMemo(() => {
+    const live = new Set<number>();
+    if (!dhPower.forfeited && (dhPower.layAvailable || dhPower.tokenAvailable)) {
+      live.add(DH_PRIVATE_ID);
+    }
+    if (!cslPower.forfeited && cslPower.layAvailable) live.add(CSL_PRIVATE_ID);
+    return live;
+  }, [dhPower, cslPower]);
+
   /* Design note #727: the hexes this corporation may build on by POWER rather than by reach. Both privates
      answer the same question, so one set covers them and a third power would need no renderer change. */
   /* Design note #845: ONE LIST, TWO ENTRY POINTS. The hexes the board rings and the chips the bar offers are
@@ -3121,10 +3184,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   const [pendingAppendIndex, setPendingAppendIndex] = useState<number | null>(null);
   const actionInFlight = pendingAppendIndex !== null;
 
-  useEffect(() => {
-    if (pendingAppendIndex === null) return;
-    if (sandboxAppliedCount > pendingAppendIndex) setPendingAppendIndex(null);
-  }, [sandboxAppliedCount, pendingAppendIndex]);
+  /* Design note #1173c: THE RELEASE MOVED INTO THE DRAIN. It was an effect here comparing
+     `sandboxAppliedCount` -- a count of EFFECTIVE actions -- against an index taken from the raw log, two
+     scales that part company the moment anything is undone. The drain releases it now, against the ref, in
+     the scale it was taken in. Nothing releases the latch here any more, deliberately: one owner. */
 
   /* Design note #1173: and never longer than a plausible round trip. A write that failed, or a room whose
      listener has dropped, must not leave a player unable to act -- a stuck latch is a worse bug than the one
@@ -4605,7 +4668,23 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         detail,
         timestamp,
         timestampMs,
-        round: (round ?? roundLabelRef.current) ?? undefined,
+        /* ==================================================================
+            DESIGN NOTE 1178: THE STAMP WAS TAKEN AT WRITE TIME AND STILL CAME FROM BEFORE THE DRAIN
+           ==================================================================
+           #343 put the round in a REF "so the stamp is taken at write time, not closed over when the callback
+           was built", which is right about closures and not enough. The ref is fed by a `useEffect`, so it
+           updates when React COMMITS -- and a drain replaying a whole log commits nothing until it finishes.
+           Every line of a refreshed game therefore carried one round: the one before the replay began.
+           THAT IS THE "SEQUENCE ORDERING" HALF OF THE REPORT. The feed groups by this stamp, so a log whose
+           every entry claims the opening round has visibly lost its order even though `seq` is intact.
+           DERIVED AT READ TIME FROM THE SYNCHRONOUS REF, which is updated after each action rather than after
+           each commit. `roundLabelRef` remains the answer off the sandbox, where `sandboxStateRef` is null,
+           there is no drain, and a chain action arrives alone. */
+        round:
+          (round ??
+            (sandboxStateRef.current
+              ? roundStampFor(sandboxStateRef.current)
+              : roundLabelRef.current)) ?? undefined,
         ...(tone ? { tone } : {}),
         /* Design note #1079: `> 0` rather than truthiness -- an index of 0 would mean a line that is ALL
            flavour, which no composer produces and which would italicise the corporation's own name. */
@@ -4697,15 +4776,35 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     ) => {
       /* The label is derived here, once, from the state before the action applies - call sites used to pass contract variant names.
          See docs/ai_architecture/state_machine.md - App.tsx #262 */
+      /* ==================================================================
+          DESIGN NOTE 1178: THE LOG DESCRIBED FORTY ACTIONS AGAINST ONE BOARD
+         ==================================================================
+         REPORTED: "Refreshing the page several times has caused the Activity Log to lose all player
+         information and sequence ordering."
+         BOTH HALVES ARE ONE CAUSE, and it is #1177's cause one surface over. This context was built from
+         `gameState` -- the committed React state, captured in this callback's closure -- and every label in a
+         drain was composed against it. Playing normally that is invisible: a drain holds ONE action, so the
+         closure's state really is the state before it. A REFRESH REPLAYS THE WHOLE LOG IN ONE DRAIN, React
+         commits nothing in between, and action forty is described against the board as it stood before action
+         one.
+         WHICH IS THE SEEDED BOARD, and that is why the information does not merely lag, it VANISHES. Before
+         `SetupGame` replays there are no seats, no presidents and no holdings, so every lookup that turns an
+         id into a person or a corporation into its owner comes back empty -- and `roundLabelFor` returns the
+         opening round for all of them, which is the "sequence ordering" half: every line stamped with one
+         round reads as a log that has lost its order, because it has.
+         SO IT READS THE REF, which `runGameplayAction` writes synchronously after each action (#316's rule,
+         and the same reason #767 gave the tile grid one). `sandboxStateRef` is the state BEFORE the action
+         being described, action by action, which is exactly what this context is documented to want.
+         THE LIVE PATH IS UNTOUCHED. Off the sandbox there is no ref and no drain -- a chain action arrives
+         alone -- so `gameState` is both correct and the only thing available. */
       const describeContext = {
-        gameState,
+        gameState: sandbox ? (sandboxStateRef.current ?? gameState) : gameState,
         mapGrid,
         era: ERA_FOR_PHASE_TINT[currentPhase?.tint ?? "yellow"],
         labelForAddress: (address: string) =>
           sandboxPlayerLabel(address) ?? truncateAddress(address),
-        marketPrices: Object.fromEntries(
-          (marketGrid?.positions ?? []).map((entry) => [entry.company_id, Number(entry.price)]),
-        ),
+        // Design note #1177: the ref here too -- a label that quotes a price must quote the one the trade used.
+        marketPrices: marketPricesFromRef(),
         /* `projectPrice` REMOVED with design note #775: the dividend sentence no longer projects a move,
            because `Market Move` already reports the one the market atom made. */
         /* Design note #478: the step the button was pressed FROM. Read from
@@ -5668,12 +5767,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                purchase on every client rather than trusting the one that drew the button. */
             marketZoneFor: (companyId: number) =>
               marketZoneForPrice(marketPriceForCompany(companyId)),
-            marketPricesByCompany: Object.fromEntries(
-              (marketGrid?.positions ?? []).map((entry) => [
-                entry.company_id,
-                Number(entry.price),
-              ]),
-            ),
+            /* Design note #1177: the REF, like `marketPriceFor` above it. This read `marketGrid`, a memo over
+               committed state, so within one drain the reducer priced a trade from a fresh chart and judged
+               the certificate limit against a stale one -- and the staleness varied by client. */
+            marketPricesByCompany: marketPricesFromRef(),
             zoneForPrice: marketZoneForPrice,
             // Design note #647: the token's position -- column and arrival.
             marketMarkFor: marketMarkForCompany,
@@ -6631,12 +6728,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
               actor: options?.actor ?? viewerAddressRef.current,
               marketZoneFor: (companyId: number) =>
                 marketZoneForPrice(marketPriceForCompany(companyId)),
-              marketPricesByCompany: Object.fromEntries(
-                (marketGrid?.positions ?? []).map((entry) => [
-                  entry.company_id,
-                  Number(entry.price),
-                ]),
-              ),
+              /* Design note #1177: the same ref the refusal itself was judged against. This read `marketGrid`
+                 too, so a receipt could explain a refusal using a chart the reducer had not seen -- a
+                 narration fault rather than a divergence one, since nothing here writes state, but it is the
+                 same fact read from two places and it would misname the rule that actually fired. */
+              marketPricesByCompany: marketPricesFromRef(),
               zoneForPrice: marketZoneForPrice,
             })
           : null;
@@ -10053,6 +10149,27 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             }
           }
           if (live) setSandboxAppliedCount(appliedCountRef.current);
+          /* ==================================================================
+              DESIGN NOTE 1173c: THE LATCH WAS COMPARING TWO DIFFERENT SCALES
+             ==================================================================
+             REPORTED: "there is a long lag between submitting an action and waiting for the new subphase
+             action bar buttons to be clickable" -- on every action, and new with #1173.
+             `appliedIndexRef` IS AN INDEX and `appliedCountRef` IS A COUNT OF EFFECTIVE ACTIONS. They agree
+             only in a room where nothing has ever been undone: `effectiveActions` DROPS reverted entries, so
+             after a single Undo the effective count sits permanently below the raw log index -- while
+             `appliedIndexRef` is computed from the raw log a dozen lines above ("an undone action still
+             occupies its index"). #1173 latched on the index and waited for the count to pass it, which in a
+             room that has seen an Undo it can never do. Every action then sat greyed until the six-second
+             backstop, which is exactly the reported lag and is a far worse bug than the double-click it was
+             added to prevent.
+             RELEASED HERE, WHERE THE CLIENT HAS CAUGHT UP, and against the ref in the same scale the latch
+             was taken in. This is also the honest moment: the drain has applied everything it knows about, so
+             the player's own action has come back or never will. */
+          if (live) {
+            setPendingAppendIndex((current) =>
+              current !== null && appliedIndexRef.current > current ? null : current,
+            );
+          }
 
           /* Design note #668: whatever arrived while the loop was running. The
              room is only caught up once there is nothing waiting -- returning
@@ -11887,6 +12004,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                       // Design note #318: the reservation badges read this
                       // roster and clear themselves when a private closes.
                       privateCompanies={gameState?.private_companies}
+                      /* Design note #1176: ...and this, which is what clears them when the POWER goes --
+                         closing is only one of the three ways that happens. */
+                      livePrivatePowerIds={livePrivatePowerIds}
                       routeOverlays={manualRouteOverlay}
                       // Design note #374: the map both reads and drives the
                       // shared cursor.

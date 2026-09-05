@@ -75,13 +75,44 @@ describe("the payout panel closes the gap it opens", () => {
     }
   });
 
-  it("gives the open state a class of its own, so the cascade has two rules to choose between", () => {
+  it("closes the track on the FALL, so the compression happens during the merge", () => {
+    /* ==================================================================
+        DESIGN NOTE 1179: THIS CASE PINNED THE WRONG PHASE
+       ==================================================================
+       #1175 asserted that `-waiting` and `-fall` shared one rule holding the track OPEN, which was true and
+       was the bug #1179 then found: with the collapse hung on `-landed`, the row dropped and faded for a full
+       five hundred milliseconds and only then began to close. REPORTED as "a noticable delay between the
+       merge and the narrowing ... the slide-out should compress during the merge, then hang for a moment on
+       the total."
+       SO THE THREE PHASES NOW DIFFER, and which one closes the track is the whole of the fix -- exactly the
+       kind of thing a later edit could undo while leaving every other assertion in this file green. The order
+       below is the timeline: open, closing, closed. */
     const raw = require("fs").readFileSync(
       require("path").join(__dirname, "..", "components", "DividendMoneyMachine.tsx"),
       "utf8",
     ) as string;
-    expect(raw).toContain(".app-money-machine-waiting,\n.app-money-machine-fall {");
-    expect(raw).toContain("grid-template-rows: 1fr;\n  padding-top: 7px;");
+    /* Open while the payout is being read. */
+    expect(raw).toContain(".app-money-machine-waiting {\n  grid-template-rows: 1fr;\n  padding-top: 7px;\n}");
+    /* Closing on the same clock as the drop -- the compression IS the merge. */
+    expect(raw).toContain(".app-money-machine-fall {\n  grid-template-rows: 0fr;\n  padding-top: 0;\n}");
+    /* Still closed once it lands, which is what leaves a full linger holding the total. */
+    expect(raw).toContain("grid-template-rows: 0fr;\n  padding-top: 0;\n}");
+    /* AND THE DROP ANIMATION IS ON THAT SAME CLASS, which is what makes "during" true rather than merely
+       earlier: one class, one moment, two things moving together. */
+    expect(raw).toContain(".app-money-machine-fall {\n  animation: app-money-machine-drop");
+  });
+
+  it("leaves the linger holding a settled total rather than a closing gap", () => {
+    /* The hold was always a second long; the collapse was eating the first half of it. Pinned as the ARITHMETIC
+       rather than as a number, so a retune of the fall or the linger keeps the property or fails loudly. */
+    const machine = require("../components/DividendMoneyMachine") as typeof import("../components/DividendMoneyMachine");
+    expect(machine.MONEY_MACHINE_MERGE_AT_MS).toBe(
+      machine.MONEY_MACHINE_FALL_AT_MS + machine.MONEY_MACHINE_FALL_MS,
+    );
+    expect(machine.MONEY_MACHINE_LEAVE_AT_MS - machine.MONEY_MACHINE_MERGE_AT_MS).toBe(
+      machine.MONEY_MACHINE_LINGER_MS,
+    );
+    expect(machine.MONEY_MACHINE_LINGER_MS).toBeGreaterThanOrEqual(machine.MONEY_MACHINE_FALL_MS);
   });
 
   it("gives the inner row what a collapsing track needs", () => {

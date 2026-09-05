@@ -176,10 +176,36 @@ describe("the controls go quiet while a press is in flight", () => {
     expect(dispatch).toContain("if (options?.automatic !== true) setPendingAppendIndex(appendAt);");
   });
 
-  it("releases on the arrival of THIS action, not of any snapshot", () => {
-    /* At a four-player table somebody else's action lands in the same window, and clearing on that would open
-       the controls again before the player's own move had come back. */
-    expect(APP).toContain("if (sandboxAppliedCount > pendingAppendIndex) setPendingAppendIndex(null);");
+  it("releases against an INDEX, in the scale the latch was taken in", () => {
+    /* ==================================================================
+        DESIGN NOTE 1173c: THIS TEST PINNED THE BUG IN PLACE
+       ==================================================================
+       REPORTED: "there is a long lag between submitting an action and waiting for the new subphase action bar
+       buttons to be clickable" -- every action, and new with #1173.
+       THE LATCH COMPARED AN INDEX AGAINST A COUNT. `pendingAppendIndex` is `appliedIndexRef`, computed from
+       the RAW log ("an undone action still occupies its index"); `sandboxAppliedCount` is
+       `appliedCountRef`, a count of EFFECTIVE actions, and `effectiveActions` drops reverted ones. After a
+       single Undo anywhere in the room the count sits permanently below the index and the release condition
+       becomes unreachable -- so every action waited out the six-second backstop.
+       AND THIS CASE ASSERTED THE BROKEN LINE VERBATIM, which is the lesson worth keeping: a source-scan test
+       pins whatever it is shown, so a wrong expression written confidently arrives with a guard that will
+       defend it. What the test could not see is that the two names live in different scales.
+       SO IT ASSERTS THE PROPERTY NOW -- released in the drain, against the ref, index against index. */
+    expect(APP).not.toContain("sandboxAppliedCount > pendingAppendIndex");
+    expect(APP).toContain(
+      "current !== null && appliedIndexRef.current > current ? null : current,",
+    );
+  });
+
+  it("releases where the client has caught up, so one place owns it", () => {
+    /* The drain has applied everything it knows about at that point, which is the honest moment: the
+       player's own action has either come back or never will. */
+    const drain = sliceBetween(
+      APP,
+      "if (live) setSandboxAppliedCount(appliedCountRef.current);",
+      "const queued = pendingSnapshotRef.current;",
+    );
+    expect(drain).toContain("setPendingAppendIndex(");
   });
 
   it("releases on a failed write, so a dropped action cannot strand the player", () => {

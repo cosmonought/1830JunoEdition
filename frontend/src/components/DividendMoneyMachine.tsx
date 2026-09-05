@@ -471,10 +471,37 @@ const MONEY_MACHINE_CSS = `
    THIS ALSO REPAIRS THE REDUCED-MOTION PATH, which had the same fault one layer down: its override of the
    collapsed row was a stylesheet rule aimed at an inline value and lost for the same reason.
    NO BACKTICKS IN THIS PARAGRAPH -- #1061, and the note below says how many times now. */
-.app-money-machine-waiting,
-.app-money-machine-fall {
+.app-money-machine-waiting {
   grid-template-rows: 1fr;
   padding-top: 7px;
+}
+/* ==================================================================
+    DESIGN NOTE 1179: THE COMPRESSION HAPPENED AFTER THE MERGE, NOT DURING IT
+   ==================================================================
+   REPORTED, once #1175 made the collapse possible at all: "there's a noticable delay between the merge and
+   the narrowing of the slide-out, and as soon as the narrowing happens the slide-out goes away. This is
+   wrong: the slide-out should compress during the merge, then hang for a moment on the total."
+   BOTH HALVES ARE ONE OFF-BY-ONE-PHASE. The collapse was hung on the merged class, which is the frame the
+   fall FINISHES -- so the row dropped and faded for five hundred milliseconds, and only then began to close.
+   The linger that was meant to hold the total was spent watching the gap shut instead, which is why the panel
+   appeared to leave the instant it narrowed.
+   SO IT MOVES ONE PHASE EARLIER, onto the fall itself. The track closes over exactly the milliseconds the
+   payout is travelling, which is what the report asks for and what #1163 described in the first place: "the
+   report describes one movement, not a shrink that follows a merge."
+   THE CLIPPING IS THE POINT, NOT A COST. The inner row hides its overflow, and the drop keyframe carries the
+   figure DOWNWARD while fading it -- so a closing track takes the line away from underneath as it goes,
+   which reads as absorption rather than as a cut. The figure is at zero opacity by the time the track is at
+   zero height either way.
+   AND NOT ONE BACKTICK IN THIS NOTE, which #1061 warns about at the head of this block and which the note on
+   the drop keyframe records being walked into a fourth time. This was the fifth: I quoted two identifiers
+   here, the template literal ended at the first one, and tsc reported a missing comma forty lines away. The
+   reflex the note names is real -- the fix is to write identifiers bare inside this string.
+   AND THE HOLD IS NOW REAL: the merged phase is a full second in which nothing moves and the total is the
+   only thing on screen. No constant changed to buy that -- it was always there, and the collapse was eating
+   the first half of it. */
+.app-money-machine-fall {
+  grid-template-rows: 0fr;
+  padding-top: 0;
 }
 /* ==================================================================
     DESIGN NOTE 1163: A MERGED ROW MUST STOP TAKING UP ROOM

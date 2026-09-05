@@ -86,6 +86,7 @@ import { INK_VIEWPORT } from "../styles/palette";
 import {
   cityIndexAtPoint,
   cityNodePoints,
+  homeRingPoints,
   soleCityIndex,
   stationSlotAnchor,
   tokenCityBucket,
@@ -251,6 +252,21 @@ export interface HexGridRendererProps {
    *  restriction, and every caller that does not have one (the lobby
    *  preview, a thumbnail) genuinely has nothing to say about it. */
   privateCompanies?: readonly PrivateCompanyState[];
+  /** ==================================================================
+   *   DESIGN NOTE 1176: WHICH PRIVATE POWERS ARE STILL WORTH A BADGE
+   *  ==================================================================
+   *
+   * REPORTED: the acronym-and-star markers "are lingering on hexes even after tiles have been laid on them".
+   * They were drawn from `privateCompanies` alone, which says whether a private is OPEN -- not whether its
+   * power on that hex survives. `dhPowerState`/`cslPowerState` had the real answer the whole time.
+   *
+   * A SET OF IDS, RESOLVED BY THE SHELL, because the forfeit depends on the laid tiles and on which halves
+   * the owner has spent, and the canvas is handed neither. Passing the conclusion rather than the inputs is
+   * what keeps this one derivation instead of a third.
+   *
+   * DEFAULTS TO EMPTY, which draws NO badges. A missing answer must not mean "advertise everything" -- that
+   * is the failure being fixed, and a silent default reproducing it is how it would come back. */
+  livePrivatePowerIds?: ReadonlySet<number>;
   /** Fired synchronously on every genuine hex click, before the
    *  `GetLegalTilePlacements` query (if enabled) resolves -- lets the host
    *  app position a popup immediately instead of waiting on the network. */
@@ -499,6 +515,9 @@ const EMPTY_PUBLIC_COMPANIES: StationTokenCompany[] = [];
 /** Same reasoning: a stable identity so an omitted roster does not remount
  *  the memo that derives the reservations. */
 const EMPTY_PRIVATE_COMPANIES: PrivateCompanyState[] = [];
+/* Design note #1176: a stable identity, so the memo below is not invalidated every render by a fresh empty
+   Set -- the same reason `EMPTY_PRIVATE_COMPANIES` is hoisted. */
+const EMPTY_LIVE_POWER_IDS: ReadonlySet<number> = new Set<number>();
 
 /** 2000ms -> 1200ms. The delay stops a sweep trailing tooltips; 2000ms additionally cost the case the delay is FOR -- a player who stopped waited long enough to wonder if anything was coming.
  *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #383 */
@@ -572,14 +591,15 @@ export function HexGridRenderer({
   suppressHoverTooltip = false,
   layFocus,
   privateCompanies = EMPTY_PRIVATE_COMPANIES,
+  livePrivatePowerIds = EMPTY_LIVE_POWER_IDS,
 }: HexGridRendererProps) {
   /* Design note #318: derived once per roster change, not per frame. The
      draw loop runs on every pan and zoom tick, and re-scanning the private
      companies inside it would redo the same six-entry search sixty times a
      second for a result that changes twice a game. */
   const reservations = useMemo(
-    () => reservationsByHex(privateCompanies),
-    [privateCompanies],
+    () => reservationsByHex(privateCompanies, livePrivatePowerIds),
+    [privateCompanies, livePrivatePowerIds],
   );
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -1799,7 +1819,19 @@ export function HexGridRenderer({
             slotNodes,
             stationMarkerPoint(hex.q, hex.r, hexSize, laidHere),
           );
-          const litNodes = homeSlot === null ? slotNodes : [slotNodes[homeSlot]];
+          /* Design note #1181: the SLOT the token will dock into, not the city it belongs to. Those are the
+             same point on a yellow single-slot city and the gap between two circles on a green or brown pill,
+             which is the reported "just centered on the tile". `homeRingPoints` is the function the confirm
+             anchor already resolves through, so the circle that lights and the circle the token appears in
+             cannot diverge -- #858's rule, applied to the other half of the same question. */
+          const litNodes = homeRingPoints({
+            mapGrid,
+            publicCompanies,
+            q: hex.q,
+            r: hex.r,
+            hexSize,
+            homeCityIndex: homeSlot,
+          });
           for (const node of litNodes) {
             if (!node) continue;
             ctx.save();

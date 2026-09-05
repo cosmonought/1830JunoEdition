@@ -52,6 +52,41 @@ export function operatingCorporationId(state: GameStateResponse): number | null 
   return state.active_operating_order[state.active_corporation_index] ?? null;
 }
 
+/* ==================================================================
+    DESIGN NOTE 1182: THE CHECK DIVIDENDS ALREADY MADE, FOR THE REST OF THE TURN
+   ==================================================================
+   REPORTED, with the log: an Operating Round in which one client laid a tile, ran two routes and tried to
+   declare dividends for B&O while the board had C&O operating -- and then did it again a turn later with NNH
+   against NYC. Every action APPLIED except the last, which printed "Only the operating corporation declares
+   dividends" and left the board unchanged.
+   THAT ASYMMETRY IS THE DAMAGE, and it is this file's fault in the mildest way: `dividendRefusal` below has
+   asked "is this corporation the one operating" since #748, and nothing else ever did. So a client whose
+   operating queue disagreed with the board silently rewrote the map and the treasuries, and was stopped only
+   at the one arm that happened to check.
+   WHY THE QUEUES DISAGREE IS A DIFFERENT NOTE. `buildOperatingOrder` filters on floated-with-a-president and
+   sorts on three keys read from the client-local market chart, so any divergence in that chart (#1177) or in
+   who has floated reorders the turn. This does not fix that; it makes the consequence a refusal instead of a
+   corruption.
+   IT IS NOT #1174. That check compared the log entry's ACTOR -- a client identity, resolved through the seat
+   cursor -- and #549 forbids the reducer to read the cursor at all. This compares the corporation carried IN
+   THE MESSAGE against the corporation the state says is operating: both sides are functions of the log, every
+   client reaches the same verdict from the same prefix, and `dividendRefusal` has been doing exactly this in
+   this file the whole time without ever being a divergence source.
+   A REASON, NOT A BOOLEAN, so the log can say which rule fired -- #619 and #712's rule, and the reason the
+   reported line was legible enough to diagnose from. */
+export function wrongCorporationRefusal(
+  state: GameStateResponse,
+  companyId: number,
+  what: string,
+): string | null {
+  const acting = operatingCorporationId(state);
+  /* `null` MEANS THE QUEUE CANNOT ANSWER -- outside an Operating Round, or with an empty order -- and a
+     refusal there would block the auction and the Stock Round, where these messages also travel. Silence is
+     the honest answer to a question this state cannot be asked. */
+  if (acting === null || acting === companyId) return null;
+  return `Only the operating corporation may ${what}.`;
+}
+
 /** Why this dividend declaration must not be applied, or `null` if it may be.
  *
  *  Written as a REASON rather than a boolean for #748's reason: a refusal a player cannot see is

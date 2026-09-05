@@ -42,6 +42,11 @@ function privates(): PrivateCompanyState[] {
   ] as unknown as PrivateCompanyState[];
 }
 
+/* Design note #1176: the existing cases are about CLOSURE and OWNERSHIP, so they pass a set in which both
+   powers are live -- the condition they were all written under, now that it has to be said out loud. The new
+   describe at the foot of this file is where the set itself is the subject. */
+const BOTH_LIVE: ReadonlySet<number> = new Set([2, 3]);
+
 describe("the hover text describes a power, not a claim", () => {
   it("prints the private's actual power", () => {
     /* THE FIELD THAT WAS ALWAYS RIGHT. The badge used to paraphrase it as "Reserved by DH"; it now prints
@@ -51,7 +56,7 @@ describe("the hover text describes a power, not a claim", () => {
        wrong twice: the tile costs $120, and the station is not independent of the lay. #548's rule applies and
        this file cites it three tests down: pin the fact, not the phrasing. What matters is that the badge
        prints the TABLE'S text, prefixed with the initials. */
-    const dh = activeReservations(privates()).find((entry) => entry.initials === "DH")!;
+    const dh = activeReservations(privates(), BOTH_LIVE).find((entry) => entry.initials === "DH")!;
     expect(withReservationNote("Scranton (F16)", dh)).toBe(`Scranton (F16) — DH: ${dh.power}`);
     // And that the text it prints is the corrected one, not the claim #725 removed.
     expect(dh.power).not.toMatch(/at no cost/i);
@@ -62,7 +67,7 @@ describe("the hover text describes a power, not a claim", () => {
     /* THE REPORT, as a property over every badge rather than the one that was quoted. "Reserved by DH" is
        advice a president may act on -- F16 is Scranton, and there are turns where laying it is right for
        anybody. */
-    for (const entry of activeReservations(privates())) {
+    for (const entry of activeReservations(privates(), BOTH_LIVE)) {
       const note = withReservationNote("A hex", entry);
       expect(note).not.toMatch(/reserved|locked|blocked|off limits/i);
     }
@@ -126,13 +131,51 @@ describe("the badge still clears when the private does", () => {
     const closed = privates().map((entry) =>
       entry.private_id === 3 ? { ...entry, closed: true } : entry,
     );
-    expect(activeReservations(closed).map((entry) => entry.initials)).toEqual(["CSL"]);
+    expect(activeReservations(closed, BOTH_LIVE).map((entry) => entry.initials)).toEqual(["CSL"]);
   });
 
   it("marks the hex even while nobody owns the private", () => {
     /* #1 again: during the auction nobody holds the C&SL and the hex still carries the power. What ownership
        changes is who can USE it -- which, after #714, is the only thing the badge was ever about. */
     const unowned = privates().map((entry) => ({ ...entry, owner: null }));
-    expect(activeReservations(unowned)).toHaveLength(2);
+    expect(activeReservations(unowned, BOTH_LIVE)).toHaveLength(2);
+  });
+});
+
+describe("the badge clears when the POWER goes, not only when the company does", () => {
+  /* ==================================================================
+      DESIGN NOTE 1176: THE REPORTED FAULT, AS THE PROPERTY IT BROKE
+     ==================================================================
+     REPORTED: "the private company acronyms+stars are lingering on hexes even after tiles have been laid on
+     them ... as soon as any tile is laid on these hexes, their private powers are disabled and the markers
+     are removed."
+     THE OTHER SURFACES WERE ALREADY RIGHT. `dhPowerState`/`cslPowerState` forfeit on a tile laid by anybody
+     else, and the chips, the offers and the hex glow all read them. Only the badge asked a different
+     question, and it asked the roster -- which knows open from closed and nothing else. */
+
+  it("drops a private whose power has been forfeited or spent", () => {
+    const onlyCsl: ReadonlySet<number> = new Set([2]);
+    expect(activeReservations(privates(), onlyCsl).map((entry) => entry.initials)).toEqual(["CSL"]);
+  });
+
+  it("draws nothing when no power is live", () => {
+    expect(activeReservations(privates(), new Set())).toEqual([]);
+  });
+
+  it("keeps the D&H badge while only its first half is spent", () => {
+    /* THE CASE THAT RULES OUT THE OBVIOUS FIX. Testing "has anybody built here" would erase this badge the
+       moment the D&H used its OWN lay -- and the free station is the second half of that lay (#725), still
+       to come. The shell answers with `layAvailable || tokenAvailable` for exactly this. */
+    const dhOnly: ReadonlySet<number> = new Set([3]);
+    expect(activeReservations(privates(), dhOnly).map((entry) => entry.initials)).toEqual(["DH"]);
+  });
+
+  it("still needs the private open, so the two conditions are AND rather than OR", () => {
+    /* A live power on a closed private is not a state the game can reach, and the badge should not invent one
+       if it ever became reachable. */
+    const closed = privates().map((entry) =>
+      entry.private_id === 3 ? { ...entry, closed: true } : entry,
+    );
+    expect(activeReservations(closed, new Set([3]))).toEqual([]);
   });
 });

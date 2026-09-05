@@ -2017,6 +2017,23 @@ export const styles: Record<string, React.CSSProperties> = {
     columnGap: "12px",
     rowGap: "4px",
     alignItems: "baseline",
+    /* ==================================================================
+        DESIGN NOTE 1180: THE FIGURES NEEDED A RIGHT EDGE
+       ==================================================================
+       REPORTED: "the payout results need to be flush right to be easily readable, they are instead flush
+       left."
+       #1153 GAVE THE COLUMN ONE GRID so every row shares a column edge, and stopped one step short: a
+       `max-content` track is as wide as its widest cell, and a narrower cell inside it sits at the START. So
+       the figures shared a LEFT edge -- which is the one that moves, because it is the digits that vary --
+       and the eye had nothing to run down. `$920 + $54 -> $974` above `$80 -> $90` lines up on the wrong side.
+       ON THE CONTAINER, NOT ON THE FOUR FIGURE CELLS. There are four of them today (the payout group, the
+       bare amount, the withhold transition and the market move) and #32's argument applies exactly: a rule
+       written per-cell is a rule the fifth cell will miss. `justifyItems` makes right the column's default and
+       the exceptions say so themselves.
+       THE EXCEPTIONS ARE THE PROSE. Labels and the empty-state note take `justifySelf: start` -- a sentence
+       ragged on the left is unreadable, and a label pushed against the gutter would undo the pairing #1153
+       built. Everything that is a NUMBER inherits the right edge; everything that is WORDS opts out. */
+    justifyItems: "end",
   },
   /* Design note #998: `dividendRuleFooter`/`dividendRuleLine` are GONE with #997's explanation block. An
      orphaned style for a rendering we have just been asked to stop doing is how the rendering comes back --
@@ -2033,6 +2050,8 @@ export const styles: Record<string, React.CSSProperties> = {
      report asked for exactly that trade ("the font size/emphasis used on these titles could be applied to the
      entities and payouts"), so the panel gains a step on the facts rather than only losing two lines. */
   dividendHolder: {
+    // Design note #1180: words, not figures -- opted out of the column's right edge.
+    justifySelf: "start",
     whiteSpace: "nowrap",
     // Design note #706: the treasury row carries a herald before its name, so the row is a flex line rather
     // than bare text -- and the logo sits ON the baseline with the ticker rather than above it.
@@ -2065,6 +2084,8 @@ export const styles: Record<string, React.CSSProperties> = {
   /* Design note #1153: spans both cells. It is a SENTENCE where every other row is a pair, so without this it
      would be squeezed into the label column and wrap against a figures column that has nothing in it. */
   dividendNote: {
+    // Design note #1180: a sentence across both columns, so it keeps the left margin the figures gave up.
+    justifySelf: "start",
     gridColumn: "1 / -1",
     fontSize: FONT_SIZE.small,
     color: "#a8a6a0",
@@ -2075,6 +2096,8 @@ export const styles: Record<string, React.CSSProperties> = {
      `marginTop` is gone with the split: the grid's `rowGap` spaces it like any other row, and a margin on one
      of two cells in a row would have tilted them against each other. */
   dividendMoveLabel: {
+    // Design note #1180: words, not figures -- opted out of the column's right edge.
+    justifySelf: "start",
     fontSize: FONT_SIZE.strong,
     fontWeight: 700,
     color: "#9ec5ff",
@@ -2084,6 +2107,8 @@ export const styles: Record<string, React.CSSProperties> = {
   /* Design note #1154: the label half of the widened hit area. A separate entry rather than a spread, because
      a label with no chart to open must NOT claim to be pressable -- `MarketMoveLine` picks between the two. */
   dividendMoveLabelOpens: {
+    // Design note #1180: words, not figures -- opted out of the column's right edge.
+    justifySelf: "start",
     fontSize: FONT_SIZE.strong,
     fontWeight: 700,
     color: "#9ec5ff",

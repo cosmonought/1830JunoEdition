@@ -718,6 +718,48 @@ export function stationSlotAnchor(input: {
   };
 }
 
+/* ==================================================================
+    DESIGN NOTE 1181: THE RING LIT THE CITY WHILE THE TOKEN DOCKED IN A SLOT
+   ==================================================================
+   REPORTED: "when placing Home Station tokens on green/brown tiles, the station glow ring is just centered on
+   the tile, not set on the stations."
+   #698 DIAGNOSED THIS EXACT THING ON THE OTHER SURFACE and fixed only that one. Its words: "the preview
+   anchored HERE, to a city, and the placed token docks into a SLOT ... On a one-slot city those are the same
+   point, which is why this held for so long; on a pill the city's anchor is the gap BETWEEN the two circles a
+   token can occupy." That is why it is a green/brown report: yellow cities are single slots, and an upgrade
+   is what turns a city into a pill.
+   SO #698 GAVE THE ANCHOR `nextCitySlotPoint` AND LEFT THE GLOW ON `cityNodePoints`. The confirm ring landed
+   on the circle and the pulsing ring stayed in the gap -- two surfaces answering "where does this token go"
+   with two functions, which is the fault this codebase finds most (#584, #858, #862, #866 all in this file).
+   ONE FUNCTION, CALLED BY BOTH. #858 already argued this for `homeSlotIndex`: "the circle that lights and the
+   circle that may be clicked cannot diverge." The same sentence applies to the circle that lights and the
+   circle the token docks into, and this is that function.
+   THE FALLBACK IS THE CITY NODE, deliberately and in #698's order: a preprinted OO hex has no artwork to dock
+   into, and a city whose slots cannot be resolved is still better rung at its own anchor than not at all. */
+export function homeRingPoints(input: {
+  mapGrid: MapGridResponse;
+  publicCompanies: readonly StationTokenCompany[];
+  q: number;
+  r: number;
+  hexSize: number;
+  /** The city a home station is locked to, or `null` where the president may choose (#742/#858). */
+  homeCityIndex: number | null;
+}): Array<{ x: number; y: number }> {
+  const { mapGrid, publicCompanies, q, r, hexSize, homeCityIndex } = input;
+  const centre = axialToPixel(q, r, hexSize);
+  const nodes = cityNodePoints(mapGrid, q, r, hexSize);
+  /* `null` MEANS EVERY CITY HERE, not "unknown" -- #742's distinction, carried through rather than re-derived.
+     On an OO hex both slots are the president's to pick, so both light. */
+  const cities = homeCityIndex === null ? nodes.map((_, index) => index) : [homeCityIndex];
+  const out: Array<{ x: number; y: number }> = [];
+  for (const city of cities) {
+    const slot = nextCitySlotPoint(mapGrid, publicCompanies, q, r, city, centre, hexSize);
+    const point = slot ?? nodes[city];
+    if (point) out.push(point);
+  }
+  return out;
+}
+
 /** The one city on this hex, or `null` where the choice is real.
  *
  *  THE GUARD ON AUTO-STAGING, and #858's lesson pointed forwards. That report was "a player can select

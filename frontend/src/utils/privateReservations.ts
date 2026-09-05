@@ -109,10 +109,32 @@ export function reservationKey(q: number, r: number): string {
   return `${q},${r}`;
 }
 
+/* ==================================================================
+    DESIGN NOTE 1176: THE BADGE OUTLIVED THE POWER IT ADVERTISES
+   ==================================================================
+   REPORTED: "the private company acronyms+stars are lingering on hexes even after tiles have been laid on
+   them ... as soon as any tile is laid on these hexes, their private powers are disabled and the markers are
+   removed."
+   AND THE POWERS REALLY WERE DISABLED. `dhPowerState` and `cslPowerState` both compute
+   `forfeited = hexBuilt && !layUsed` and the offers, the chips and the hex glow all read it. The BADGE read
+   something else: this function, which clears on `closed` and on absence and has never known whether anybody
+   has built. #891's shape once more -- two surfaces answering one question two ways -- and the half that was
+   wrong is the half a president actually looks at while choosing where to lay.
+   THE LIVE SET IS PASSED IN RATHER THAN RECOMPUTED. The tempting fix is to hand this the laid tiles and test
+   `hexBuilt` here, and it would be a THIRD reading of the same fact, free to drift from the two that already
+   agree. What the caller passes is the conclusion those two already reached.
+   AND IT IS "STILL HAS AN UNSPENT POWER", NOT "NOBODY HAS BUILT", which the D&H makes matter: its owner
+   laying its own tile sets `hexBuilt` while leaving `tokenAvailable` true (the free station is the second
+   half of that lay), so the badge must survive its own tile and die on somebody else's.
+   REQUIRED, NOT OPTIONAL. An optional parameter would let a caller keep the old behaviour by saying nothing,
+   which is exactly how the badge and the power came to disagree in the first place. */
+
 /** Every hex carrying a live private's power. Empty once both privates have closed, which is the state the
  *  badge exists to stop misrepresenting. */
 export function activeReservations(
   privateCompanies: readonly PrivateCompanyState[] | null | undefined,
+  /** Design note #1176: the ids whose power on their own hex is still worth advertising. */
+  livePowerIds: ReadonlySet<number>,
 ): HexReservation[] {
   if (!privateCompanies || privateCompanies.length === 0) return [];
   const out: HexReservation[] = [];
@@ -121,6 +143,8 @@ export function activeReservations(
     const priv = privateCompanies.find((entry) => entry.private_id === rule.privateId);
     // Design note #1: absent or closed, no claim.
     if (!priv || priv.closed) continue;
+    // Design note #1176: spent or forfeited, no badge -- the power is what the badge is about.
+    if (!livePowerIds.has(rule.privateId)) continue;
 
     const hex = STATIC_BOARD_HEXES.find((entry) => entry.label === rule.hexLabel);
     // Design note #2: a label the board does not carry draws nothing.
@@ -148,9 +172,11 @@ export function activeReservations(
  *  sets in `HexGridRenderer` design note #223. */
 export function reservationsByHex(
   privateCompanies: readonly PrivateCompanyState[] | null | undefined,
+  // Design note #1176: carried straight through -- the draw loop asks the same question the panel does.
+  livePowerIds: ReadonlySet<number>,
 ): ReadonlyMap<string, HexReservation> {
   const map = new Map<string, HexReservation>();
-  for (const entry of activeReservations(privateCompanies)) {
+  for (const entry of activeReservations(privateCompanies, livePowerIds)) {
     map.set(reservationKey(entry.q, entry.r), entry);
   }
   return map;

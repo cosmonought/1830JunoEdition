@@ -129,8 +129,29 @@ describe("the renderer consults the rule rather than the marker", () => {
     expect(renderer).toContain("homeCityIndex: homeSlotIndex(");
   });
 
-  it("still lights every node when no single slot is resolved", () => {
-    // The existing `null` path is what carries the both-slots case; the fix routes into it rather than beside it.
-    expect(renderer).toContain("homeSlot === null ? slotNodes : [slotNodes[homeSlot]]");
+  it("still lights every city when no single slot is resolved", () => {
+    /* ==================================================================
+        DESIGN NOTE 1181: THE `null` PATH MOVED, AND THE CLAIM DID NOT
+       ==================================================================
+       This asserted the renderer's own `homeSlot === null ? slotNodes : [slotNodes[homeSlot]]`. #1181 moved
+       that choice into `homeRingPoints`, because the ring was lighting the CITY while the token docked into a
+       SLOT -- the same fault #698 fixed on the confirm preview and left here.
+       THE PROPERTY IS UNCHANGED and is what this case was always about: `null` means the president may pick,
+       so every city lights; a resolved index lights exactly one. Re-anchored to where the branch now lives
+       rather than loosened, and the renderer half still asserts that the answer is THREADED there rather than
+       recomputed -- which is the part that could regress silently. */
+    const tokens = (() => {
+      const fs = require("fs") as typeof import("fs");
+      const path = require("path") as typeof import("path");
+      return fs
+        .readFileSync(path.join(__dirname, "..", "utils", "stationTokens.ts"), "utf8")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/^\s*\/\/.*$/gm, "");
+    })();
+    expect(tokens).toContain(
+      "homeCityIndex === null ? nodes.map((_, index) => index) : [homeCityIndex]",
+    );
+    /* And the renderer hands its answer straight in, so there is still exactly one place that decides. */
+    expect(renderer).toContain("homeCityIndex: homeSlot,");
   });
 });

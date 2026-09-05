@@ -53,7 +53,7 @@ import { shareSaleBlock } from "./shareSale";
 import { metFloatThreshold, FULL_CAPITALISATION_MULTIPLE } from "./floatThreshold";
 // Design note #763: a float is not finished until its home token is on the board.
 import { homeTokenBlock } from "./homeTokenGate";
-import { dividendRefusal } from "./dividendGate";
+import { dividendRefusal, wrongCorporationRefusal } from "./dividendGate";
 // Design note #1019: the purchase gate the reducer never had.
 import { trainPurchaseRefusal } from "./trainPurchaseGate";
 import { dividendSplit } from "./dividendSplit";
@@ -3093,6 +3093,10 @@ function applyOneAction(
        replay: `ctx.mapGrid` does not advance action by action inside the Undo rebuild loop, so a board lookup
        here would be right live and wrong on every rebuild. */
     const { protocol_id, q, r, token_city, token_cities } = msg.LayTile;
+    /* Design note #1182: the reported log opened with a tile laid on G5 for a corporation the board was not
+       operating, and it stuck. A tile is shared terrain -- it changes every other corporation's reach -- so
+       this is the arm where a wrong-corporation action does the most damage to players who were not involved. */
+    if (wrongCorporationRefusal(state, protocol_id, "lay track") !== null) return state;
     const fee = terrainFeeDue(state.terrain_fees_paid, q, r, terrainBuildFeeAt);
     /* ==================================================================
        DESIGN NOTE 891: THE GROUND HAS TO BE PAID FOR, NOT MERELY BILLED
@@ -3255,6 +3259,9 @@ function applyOneAction(
     /* Record the slot ONLY when city_index is in the message -- declining to write down information the app was given is not restraint. Both arrays written in the same order and the same breath.
        See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #560 */
     const { protocol_id, q, r } = msg.PlaceStationToken;
+    /* Design note #1182: a token for a corporation that is not the one operating. Refused rather than placed
+       -- a station on the map is the least reversible thing an Operating Round does. */
+    if (wrongCorporationRefusal(state, protocol_id, "place a station token") !== null) return state;
     const placedCityIndex =
       typeof msg.PlaceStationToken.city_index === "number"
         ? msg.PlaceStationToken.city_index
@@ -3297,6 +3304,9 @@ function applyOneAction(
     // Running a route RECORDS; declaring pays. payout_strategy is deliberately not read here.
     // See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #192
     const { protocol_id, path } = msg.RunManualRoute;
+    /* Design note #1182: the reported log ran two routes for a corporation the board was not operating, and
+       the revenue landed. Refused here, which is also what stops the revenue from being declared later. */
+    if (wrongCorporationRefusal(state, protocol_id, "run routes") !== null) return state;
     // The flat nominal is now only the FALLBACK. With a map to read, the
     // figure comes from the stops the player actually selected, so building
     // a longer route through richer cities visibly pays more -- which is the

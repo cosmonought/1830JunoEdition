@@ -413,6 +413,27 @@ export interface GameStateResponse {
    *  travels in the state the reducer replays. */
   turn_action_taken?: boolean;
   /** ==================================================================
+   *   DESIGN NOTE 1183: THE TURN KEY A RUN ALREADY CARRIES
+   *  ==================================================================
+   *
+   * FROM THE EXPORTED LOG, indices 318 and 319: the same corporation ran the same two routes twice, six
+   * seconds apart, both stamped `revenue_turn: "7.1.7"` and each with its own `revenue_seed`. The revenue
+   * landed twice and index 320 declared dividends on $540 -- exactly twice the $270 those routes earn.
+   *
+   * THE MESSAGE ALREADY IDENTIFIES ITS OWN TURN. `revenue_turn` is round.cycle.corporation, minted by
+   * `turnSeedKey` so an undone run can find its earlier roll (#1051) -- so two runs bearing one key are, by
+   * construction, one turn's run sent twice. `seedAlreadyRolled` was supposed to notice, and could not: it
+   * searches the RAW log, which in a room does not contain the first run until the snapshot returns. The
+   * second click beat it, took a fresh seed, and doubled the money.
+   *
+   * SO THE BOARD REMEMBERS THE LAST KEY IT APPLIED. Both sides come out of the log -- the key travels in the
+   * message and this field is rebuilt by the replay -- so every client refuses the duplicate identically, and
+   * an undo that drops the first run also drops this, which is what lets the legitimate re-dispatch through.
+   *
+   * SELF-SCOPING, so nothing clears it: a different turn mints a different key. That is why this is a key
+   * rather than the counter #1172 needed. */
+  last_run_turn_key?: string | null;
+  /** ==================================================================
    *   DESIGN NOTE 1172: THE COUNT RULE 4 WAS ALWAYS WAITING FOR
    *  ==================================================================
    *

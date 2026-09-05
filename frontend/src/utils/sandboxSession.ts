@@ -53,7 +53,7 @@ import { shareSaleBlock } from "./shareSale";
 import { metFloatThreshold, FULL_CAPITALISATION_MULTIPLE } from "./floatThreshold";
 // Design note #763: a float is not finished until its home token is on the board.
 import { homeTokenBlock } from "./homeTokenGate";
-import { dividendRefusal, wrongCorporationRefusal } from "./dividendGate";
+import { dividendRefusal } from "./dividendGate";
 // Design note #1019: the purchase gate the reducer never had.
 import { trainPurchaseRefusal } from "./trainPurchaseGate";
 import { dividendSplit } from "./dividendSplit";
@@ -3093,10 +3093,6 @@ function applyOneAction(
        replay: `ctx.mapGrid` does not advance action by action inside the Undo rebuild loop, so a board lookup
        here would be right live and wrong on every rebuild. */
     const { protocol_id, q, r, token_city, token_cities } = msg.LayTile;
-    /* Design note #1182: the reported log opened with a tile laid on G5 for a corporation the board was not
-       operating, and it stuck. A tile is shared terrain -- it changes every other corporation's reach -- so
-       this is the arm where a wrong-corporation action does the most damage to players who were not involved. */
-    if (wrongCorporationRefusal(state, protocol_id, "lay track") !== null) return state;
     const fee = terrainFeeDue(state.terrain_fees_paid, q, r, terrainBuildFeeAt);
     /* ==================================================================
        DESIGN NOTE 891: THE GROUND HAS TO BE PAID FOR, NOT MERELY BILLED
@@ -3259,9 +3255,6 @@ function applyOneAction(
     /* Record the slot ONLY when city_index is in the message -- declining to write down information the app was given is not restraint. Both arrays written in the same order and the same breath.
        See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #560 */
     const { protocol_id, q, r } = msg.PlaceStationToken;
-    /* Design note #1182: a token for a corporation that is not the one operating. Refused rather than placed
-       -- a station on the map is the least reversible thing an Operating Round does. */
-    if (wrongCorporationRefusal(state, protocol_id, "place a station token") !== null) return state;
     const placedCityIndex =
       typeof msg.PlaceStationToken.city_index === "number"
         ? msg.PlaceStationToken.city_index
@@ -3304,9 +3297,6 @@ function applyOneAction(
     // Running a route RECORDS; declaring pays. payout_strategy is deliberately not read here.
     // See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #192
     const { protocol_id, path } = msg.RunManualRoute;
-    /* Design note #1182: the reported log ran two routes for a corporation the board was not operating, and
-       the revenue landed. Refused here, which is also what stops the revenue from being declared later. */
-    if (wrongCorporationRefusal(state, protocol_id, "run routes") !== null) return state;
     // The flat nominal is now only the FALLBACK. With a map to read, the
     // figure comes from the stops the player actually selected, so building
     // a longer route through richer cities visibly pays more -- which is the
@@ -3551,6 +3541,28 @@ function applyOneAction(
 
   if ("RunMultipleRoutes" in msg) {
     const { protocol_id, routes, trains, train_indices } = msg.RunMultipleRoutes;
+    /* ==================================================================
+        DESIGN NOTE 1183: ONE TURN, ONE RUN
+       ==================================================================
+       FROM THE EXPORTED LOG: indices 318 and 319 are the same two routes for the same corporation, six
+       seconds apart, both stamped revenue_turn "7.1.7". Index 320 then declared dividends on $540, which is
+       $270 twice. `seedAlreadyRolled` exists to catch exactly this and searches the RAW log, which in a room
+       does not hold the first run until its snapshot returns -- so the second click outran it.
+       THE KEY IS IN THE MESSAGE, so this compares two things the log controls: `revenue_turn` travels with
+       the run, and the field it is checked against is rebuilt by the replay. Every client refuses the
+       duplicate at the same index.
+       AN UNDO STILL RE-RUNS. Reverting drops the first run from the effective history, so the rebuild never
+       records its key and the honest re-dispatch is accepted -- which is why #1051 minted this key at all.
+       ABSENT IS NOT A VALUE (#232): a run from before #1051 carries no key, and two of those must not
+       collide on `undefined`. */
+    const runTurnKey = msg.RunMultipleRoutes.revenue_turn;
+    if (
+      typeof runTurnKey === "string" &&
+      runTurnKey !== "" &&
+      state.last_run_turn_key === runTurnKey
+    ) {
+      return state;
+    }
     const variants = resolveVariants(state.variants);
     const priced = routes.map((path) =>
       ctx?.mapGrid
@@ -3617,6 +3629,10 @@ function applyOneAction(
           ? {
               ...entry,
               last_route_revenue: String(running),
+              // Design note #1183: the turn this run belongs to, so a second copy of it is refused above.
+              ...(typeof runTurnKey === "string" && runTurnKey !== ""
+                ? { last_run_turn_key: runTurnKey }
+                : {}),
               printed_route_revenue: String(printedTotal),
               // Design note #1031: only when the log named the trains; otherwise the field keeps whatever it
               // held, because "this message could not say" is not "the previous answer was wrong".

@@ -53,39 +53,33 @@ export function operatingCorporationId(state: GameStateResponse): number | null 
 }
 
 /* ==================================================================
-    DESIGN NOTE 1182: THE CHECK DIVIDENDS ALREADY MADE, FOR THE REST OF THE TURN
+    DESIGN NOTE 1182: WRITTEN, SHIPPED, AND REVERTED WITHIN A DAY
    ==================================================================
-   REPORTED, with the log: an Operating Round in which one client laid a tile, ran two routes and tried to
-   declare dividends for B&O while the board had C&O operating -- and then did it again a turn later with NNH
-   against NYC. Every action APPLIED except the last, which printed "Only the operating corporation declares
-   dividends" and left the board unchanged.
-   THAT ASYMMETRY IS THE DAMAGE, and it is this file's fault in the mildest way: `dividendRefusal` below has
-   asked "is this corporation the one operating" since #748, and nothing else ever did. So a client whose
-   operating queue disagreed with the board silently rewrote the map and the treasuries, and was stopped only
-   at the one arm that happened to check.
-   WHY THE QUEUES DISAGREE IS A DIFFERENT NOTE. `buildOperatingOrder` filters on floated-with-a-president and
-   sorts on three keys read from the client-local market chart, so any divergence in that chart (#1177) or in
-   who has floated reorders the turn. This does not fix that; it makes the consequence a refusal instead of a
-   corruption.
-   IT IS NOT #1174. That check compared the log entry's ACTOR -- a client identity, resolved through the seat
-   cursor -- and #549 forbids the reducer to read the cursor at all. This compares the corporation carried IN
-   THE MESSAGE against the corporation the state says is operating: both sides are functions of the log, every
-   client reaches the same verdict from the same prefix, and `dividendRefusal` has been doing exactly this in
-   this file the whole time without ever being a divergence source.
-   A REASON, NOT A BOOLEAN, so the log can say which rule fired -- #619 and #712's rule, and the reason the
-   reported line was legible enough to diagnose from. */
-export function wrongCorporationRefusal(
-  state: GameStateResponse,
-  companyId: number,
-  what: string,
-): string | null {
-  const acting = operatingCorporationId(state);
-  /* `null` MEANS THE QUEUE CANNOT ANSWER -- outside an Operating Round, or with an empty order -- and a
-     refusal there would block the auction and the Stock Round, where these messages also travel. Silence is
-     the honest answer to a question this state cannot be asked. */
-  if (acting === null || acting === companyId) return null;
-  return `Only the operating corporation may ${what}.`;
-}
+   REPORTED, from the log: an Operating Round in which one client laid a tile, ran routes and declared
+   dividends for a corporation the board was not operating. Everything applied except the declaration, which
+   `dividendRefusal` below refused. I extended that same check to the tile lay, the route run and the station
+   token so a divergent client would be refused everywhere rather than only at the last step.
+   THE NEXT REPORT WAS "my corporation's station tokens only show on my screen; all anyone else sees is my
+   home station token." Home stations arrive as `PlaceHomeStation`, which I had not touched; placed tokens
+   arrive as `PlaceStationToken`, which I had. The unguarded arm rendered on every screen and the guarded one
+   rendered only where the check happened to pass.
+   MY JUSTIFICATION WAS WRONG, and this is the part worth keeping. I argued the check was safe because "both
+   sides come out of the log" -- the corporation travels in the message, and the cursor is rebuilt by the
+   replay. The second half is false. `active_corporation_index` is only meaningful against
+   `active_operating_order`, which `buildOperatingOrder` sorts on three keys read from the CLIENT-LOCAL market
+   chart. So the comparison silently depended on the one value this room had already proved can differ between
+   clients, and a refusal keyed on it makes a board's CONTENTS depend on that disagreement.
+   WHICH IS #1174's MISTAKE IN A DIFFERENT HAT. That one read `active_player_index` and #549 caught it in the
+   suite; this one read `active_corporation_index` and no test caught it, because the divergence it depends on
+   cannot be reproduced by replaying one log in one process. The lesson is not "do not read the cursor" -- it
+   is that a refusal may only compare things that are IDENTICAL ON EVERY CLIENT BY CONSTRUCTION, and the
+   operating queue is not one of them until it is derived from the log alone.
+   `dividendRefusal` BELOW IS LEFT EXACTLY AS IT WAS. It has the same weakness in principle and it has been
+   shipping since #748 without producing a report -- the difference is that a refused declaration is a visible
+   failure the table can talk about, while a refused tile or token is a board that quietly differs. Removing
+   it is the audit's call, not a patch's.
+   THE REAL FIX IS UPSTREAM: make the operating order a function of the log rather than of each client's
+   chart. Until then, a divergent queue is a bug to fix at the source, not a thing to refuse actions over. */
 
 /** Why this dividend declaration must not be applied, or `null` if it may be.
  *

@@ -248,11 +248,26 @@ describe("the room is the page, and the text carries its own ground", () => {
        than as a stacking fix, and #1137 deleted the override wholesale.
        THE MARK SURVIVED AND THE WORDS DID NOT, which is the detail that identifies the cause: `mix-blend-mode`
        promotes the mark to its own compositing layer and plain text has no such trick.
-       ON THE BASE STYLE NOW, so the next "one footer, no overrides" sweep cannot take it again. */
+       ON THE BASE STYLE NOW, so the next "one footer, no overrides" sweep cannot take it again.
+
+       ==================================================================
+        DESIGN NOTE 1170: AND THE Z-INDEX HALF OF IT WAS TOO MUCH
+       ==================================================================
+       The paragraph above is right about the cause and wrong about one word. "A footer with no z-index of its
+       own goes under the photograph" should read "a footer that is not POSITIONED goes under the photograph":
+       Appendix E step 8 paints `z-index: auto` and `z-index: 0` positioned boxes together in tree order, and
+       this footer is the lobby root's last child. Positioning alone lifts it.
+       THE NUMBER COST THE MARK ITS BACKDROP. A positioned box with a `z-index` other than `auto` IS a
+       stacking context, which cut `NetaMark`'s `screen` off from the photograph and put the black rectangle
+       back -- the same box #1132 removed, reported again. My own sentence about the mark surviving "because
+       mix-blend-mode promotes it to its own compositing layer" was the near miss: it survived because the
+       footer was still unpositioned and the blend could still reach the room.
+       SO THE ASSERTION INVERTS on the second half, and `blendIsolation.test.ts` now holds the general rule
+       this pair of notes kept rediscovering one element at a time. */
     const footer = APP_STYLES.slice(APP_STYLES.indexOf("appFooter: {"));
     const body = footer.slice(0, footer.indexOf("},"));
     expect(body).toContain('position: "relative"');
-    expect(body).toContain("zIndex: 1");
+    expect(body).not.toContain("zIndex");
   });
 
   it("does not answer a size complaint by un-sharing the size", () => {

@@ -345,9 +345,36 @@ export const styles: Record<string, React.CSSProperties> = {
        been labelled as anything but part of the strip. The mark survived because `mix-blend-mode` promotes it
        to its own compositing layer; the words, having no such trick, simply went under.
        SO IT LIVES ON THE BASE STYLE NOW, where it costs nothing on a flat shell and is not something a future
-       "one footer, no overrides" sweep can quietly remove. */
+       "one footer, no overrides" sweep can quietly remove.
+
+       ==================================================================
+        DESIGN NOTE 1170: THE Z-INDEX CAME BACK ONE NOTCH TOO STRONG
+       ==================================================================
+       REPORTED: "the animated Neta DAO logo on the Lobby and Waiting Room is back to rendering with a black
+       box around it." BACK TO, because this is #1132's black box returning by the door #1132 nailed shut:
+
+         "NOTHING between a blended element and its backdrop may create a stacking context -- not `transform`,
+          not `opacity` below 1, not `filter`, NOT A `Z-INDEX` ON A POSITIONED ANCESTOR."
+
+       `position: relative` PLUS `z-index: 1` IS THE FOURTH ITEM ON THAT LIST. The footer became an isolated
+       group, so `NetaMark`'s `screen` had only the footer's own (transparent) ground to key against instead
+       of the photograph two levels up -- and the clip, being bright-on-black h264 with no alpha, drew its
+       black. #1140 was right about the disease and reached one notch too far for the cure; it even recorded
+       the symptom without recognising it, in "the mark survived because `mix-blend-mode` promotes it to its
+       own compositing layer". The mark survived because the footer was still UNPOSITIONED and the blend could
+       still reach the picture. Raising the footer saved the words by cutting the mark off.
+       `POSITION` WITHOUT `Z-INDEX` IS THE WHOLE FIX, and it is enough for exactly the reason #1140 gives.
+       The problem was never a stacking ORDER, it was a stacking LAYER: a positioned element paints above an
+       unpositioned in-flow sibling, so the footer needed to be positioned at all. Once it is, `z-index: auto`
+       puts it in the same painting step as `sceneClip`'s `z-index: 0` -- CSS 2.1 Appendix E step 8, "all
+       positioned descendants with 'z-index: auto' or 'z-index: 0'", IN TREE ORDER -- and the footer is the
+       last child of the lobby root while the scene is near the first. Later sibling, same layer, so the words
+       still paint over the photograph. And `z-index: auto` on a positioned element creates no stacking
+       context, so the mark can see the room again.
+       NOT COPIED FROM `utilityRow`. That row and `content` keep `zIndex: 1` and should: they carry no blend,
+       and an explicit number is clearer where nothing depends on its absence. This footer is the one element
+       in the shell where the absence is load-bearing, which is why it says so here. */
     position: "relative",
-    zIndex: 1,
     display: "flex",
     /* Design note #1140: BACK TO CENTRE. Flush right was #1137's answer to a footer that looked wrong beside
        everything else, and the wrongness turned out to be the missing half of the lockup rather than its

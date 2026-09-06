@@ -38,62 +38,11 @@ import { UI_SCALE } from "../styles/appStyles";
  *  the variant SFX they belong to, and this is not a sound effect. */
 export const GAME_INTRO_SRC = `${process.env.PUBLIC_URL ?? ""}/video/game-intro.mp4`;
 
-/* ==================================================================
-    DESIGN NOTE 1166: THE CLIP'S OWN SHAPE, MEASURED RATHER THAN GUESSED
-   ==================================================================
-   The timings below place DOM over a pre-rendered video, so every one of them is an assertion about what is
-   on screen at that second -- and a wrong one puts a title card over the shot it was meant to introduce. They
-   were read off the file: 10.006s long, sampled at nine points.
-     0.0 - ~1.3   the locomotive schematic DRAWS ITSELF, cream on black
-     ~1.3 - ~4.0  it holds, complete
-     ~4.5 - ~6.5  the map: a gold network over the north-east
-     ~7.5 - ~9.0  the Neta mark drawing itself in outline
-     ~9.5 - end   the completed mark, solid, with its gradient bar
-   THE OPENING IS THE DARKEST BED IN THE CLIP, which is what decides where the title goes: over the earliest
-   line work, gone before the locomotive resolves. The report offered "over it, then out before the transition
-   to the map" as the alternative, and the finished locomotive is the one thing worth not covering.
-   THESE ARE CONSTANTS SO THEY CAN BE RETUNED after watching, which is the honest state of any number placed
-   over art by someone reading frames rather than watching the cut.
-
-   ==================================================================
-    DESIGN NOTE 1166c: THE DRAWING IS MUCH FASTER THAN I FIRST READ IT
-   ==================================================================
-   REPORTED: "there is something a little off about how long it stays on-screen. It's barely two words and
-   could fade out sooner, right now it's covering the schematic drawing too long."
-   AND THE TIMELINE ABOVE WAS WRONG ABOUT THE ONE SEGMENT THAT MATTERED. #1166 sampled nine stills and read
-   "the locomotive draws and holds, ~1.0 to ~4.0" -- but a still at 3s cannot tell DRAWING from HOLDING, and
-   both look identical in a single frame. Measuring the LIT AREA settles it: 4.6% of the frame at 0.6s, 15.0%
-   at 1.0s, 20.7% at 1.5s, and only 22.7% at 2.2s. The line work is essentially complete by about 1.3s, and
-   everything after that is a hold.
-   SO THE CARD WAS SITTING OVER A FINISHED DRAWING FOR ABOUT A SECOND, which is what the report describes and
-   is worse than covering one in progress: there was nothing left to reveal, only something to be in front of.
-   RETIMED TO CLEAR AS THE LOCOMOTIVE COMPLETES -- in at 150ms, held to 900ms, gone by 1250ms. About 750ms at
-   full opacity, which is generous for two words, and roughly 950ms earlier than before.
-   THE LESSON IS ABOUT THE MEASUREMENT, NOT THE NUMBER. Nine stills told me what was on screen and could not
-   tell me what was still moving; one cheap scalar per frame could, and should have been the first thing
-   asked of a clip whose whole subject is things being drawn.
-
-   ==================================================================
-    DESIGN NOTE 1166d: A BEAT OF ITS OWN, INSTEAD OF A BETTER OVERLAP
-   ==================================================================
-   ASKED: "it might be worth adding a half-second black screen to the start of the video to display Project
-   18XX and have it fade out almost as soon as the drawing starts."
-   WHICH DISSOLVES THE PROBLEM RATHER THAN TUNING IT. Every version of this so far has been a search for the
-   least-bad moment to sit ON TOP of the artwork -- #1166 put the card over the opening, #1166c pulled it back
-   to clear the locomotive -- and all of them cover something. A title with its own half second covers
-   nothing, and the retiming above stops being a compromise.
-   NO EDIT TO THE VIDEO, AND NO DELAYED `play()`. The obvious reading is to hold playback for 500ms, and that
-   would put a programmatic `play()` inside a timer: fine on a muted element, and a gamble on an unmuted one,
-   because the clip runs unmuted whenever effects are on and would then be relying on user activation still
-   being live. An OPAQUE layer over a clip that is already playing has neither problem.
-   THE COST IS THE FIRST HALF SECOND OF THE CLIP, and it is measurably almost nothing: 4.6% of the frame is
-   lit at 0.6s. What the cover hides is black.
-   THE TITLE FADES WITH ITS GROUND, as one element rather than two. The card IS the black screen -- so there is
-   no moment where a title floats over a half-faded backdrop, which is what two layers on two clocks produces
-   the first time one of them is retuned. */
-const TITLE_FADE_IN_MS = 150;
-const TITLE_HOLD_UNTIL_MS = 500;
-const TITLE_FADE_MS = 350;
+/* Design note #1186: `TITLE_FADE_IN_MS`, `TITLE_HOLD_UNTIL_MS` and `TITLE_FADE_MS` are GONE with the card
+   they timed. #1166's long note measured the footage frame by frame to choose them -- which half second was
+   darkest, how soon the card had to clear the locomotive -- and none of that applies to a film that opens on
+   its own title. Recorded rather than silently deleted, so a reader meeting those names in an older note
+   learns where they went. */
 
 /** Design note #1166: the extra beat on the finished mark, asked for as "1-2 seconds". The video element
  *  holds its last frame when it ends, so this is a delay before `finish`, not a second render. */
@@ -104,7 +53,10 @@ const LOGO_HOLD_MS = 1600;
  *  Generous rather than exact, so a slow start is not cut short.
  *  Design note #1166: it must now also clear the clip PLUS the hold -- 10.0s + 1.6s -- or the backstop would
  *  cut the credit off mid-fade on a machine where `onEnded` is late rather than absent. */
-const INTRO_BACKSTOP_MS = 14000;
+/* Design note #1186: 13.042s of film plus #1166's 1.6s hold is 14.7s, so the old 14000 would cut the credit
+   off mid-fade on a machine where `onEnded` is late rather than absent. Generous rather than exact, as
+   before -- the backstop is for a decode failure, not for timing. */
+const INTRO_BACKSTOP_MS = 18000;
 
 /* ==================================================================
     DESIGN NOTE 1166a: "POWERED BY", BECAUSE THREE SURFACES ALREADY SAY IT
@@ -143,7 +95,17 @@ const CREDIT_WORD_STAGGER_MS = 140;
    reading it rather than to waiting for it.
    `ended` REMAINS A FALLBACK. An engine that never fires `timeupdate` still gets the credit, one beat late,
    which is exactly the behaviour #1166 shipped. A cue that can only fail closed. */
-const CREDIT_CUE_SECONDS = 8.6;
+/* ==================================================================
+    DESIGN NOTE 1186: THE CUE MOVES BY THE PREPEND, NOT BY A NEW MEASUREMENT
+   ==================================================================
+   The film is the wordmark (4.011s) cross-faded over 1.000s into the original (10.006s), so the original's
+   own timeline begins at output t=3.011 and the whole runs 13.042s. Every frame #1166a measured is still
+   there, in the same order, three seconds later.
+   SO THE OFFSET IS ADDED RATHER THAN RE-DERIVED. 8.6 + 3.011 = 11.611, rounded to 11.6 because the cue is a
+   `timeupdate` threshold and the event does not fire on millisecond boundaries. #1166a's reasoning carries
+   verbatim: four words at 140ms plus a 320ms fade finish about 740ms after the cue, landing on the mark as
+   it resolves. Re-measuring would risk choosing a different frame of a picture that has not changed. */
+const CREDIT_CUE_SECONDS = 11.6;
 
 /** How long before the skip offers itself. Long enough that the opening is not competing with a control,
  *  short enough that nobody feels held. */
@@ -178,18 +140,6 @@ const SKIP_FADE_CSS = `
   from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: translateY(0); }
 }
-.app-intro-title {
-  animation: app-intro-title-fade ${TITLE_FADE_IN_MS}ms ease-out both,
-             app-intro-title-out ${TITLE_FADE_MS}ms ease-in ${TITLE_HOLD_UNTIL_MS}ms both;
-}
-@keyframes app-intro-title-fade {
-  from { opacity: 0; }
-  to   { opacity: 1; }
-}
-@keyframes app-intro-title-out {
-  from { opacity: 1; }
-  to   { opacity: 0; }
-}
 /* Design note #1166: each word arrives on its own delay, which is the "fading in from left to right" the
    report describes. The delay is supplied per span by the call site -- CSS cannot count siblings and produce
    a number from the count, and nth-child rules would have to be written out one per word.
@@ -200,10 +150,9 @@ const SKIP_FADE_CSS = `
 .app-intro-word { animation: app-intro-word-in 320ms ease-out both; }
 @media (prefers-reduced-motion: reduce) {
   .app-intro-skip { animation: none !important; }
-  /* The title still has to LEAVE, or it would sit over the locomotive for the rest of the clip -- so this one
-     keeps its fade rather than being switched off. #606's rule is that the information survives, and here the
-     information is that the card is temporary. */
-  .app-intro-title { animation: app-intro-title-out ${TITLE_FADE_MS}ms linear ${TITLE_HOLD_UNTIL_MS}ms both; }
+  /* Design note #1186: the title arm is gone with the card. It was the one animation this file refused to
+     disable, because #606's rule is that the INFORMATION survives and the information was that the card is
+     temporary. A title inside the footage cannot outstay its welcome, so there is nothing left to guarantee. */
   .app-intro-word { animation: none !important; opacity: 1 !important; transform: none !important; }
 }
 `;
@@ -295,28 +244,19 @@ export function GameIntroOverlay({ onDone, sfxEnabled }: GameIntroOverlayProps) 
         onError={finish}
       />
       {/* ==================================================================
-            DESIGN NOTE 1166: THE TITLE CARD, ON THE ONE DARK BED THE CLIP HAS
+            DESIGN NOTE 1186: THE TITLE CARD IS IN THE FILM NOW
           ==================================================================
-          ASKED: "incorporate the Project 18XX title image into the cinematic intro sequence ... appear right
-          at the start ... fading out before the train schematic drawing starts."
-          THE SAME ASSET THE LOBBY USES, deliberately: a second rendering of the title would be a second thing
-          to keep in step, and #1131 already established this file as the one that carries it.
-          `mix-blend-mode: screen` KEYS IT OFF ITS OWN BLACK, which is how the lobby draws it and what lets a
-          rectangular JPEG sit over moving footage without a visible box. #1131 also records the trap that
-          comes with it: a transform or an opacity on an ANCESTOR makes a stacking context and the blend stops
-          working -- so the animation is on this element and the wrapper is a plain flex box.
-          NOT RENDERED AT ALL ONCE IT HAS GONE, rather than left at zero opacity: an element over the video is
-          an element the pointer can meet, and #1111's skip is the only thing on this layer meant to be. */}
-      {!holding && (
-        <div className="app-intro-title" style={styles.titleCard}>
-        <img
-          style={styles.titleArt}
-          src={`${process.env.PUBLIC_URL ?? ""}/images/title-project18xx.jpg`}
-          alt=""
-          aria-hidden="true"
-        />
-        </div>
-      )}
+          REPORTED: the cinematic was too short. A supplied clip of the wordmark under a travelling light is
+          prepended and cross-faded in, replacing the card #1166 built.
+          #1166's CARD EXISTED BECAUSE THE CLIP HAD NO TITLE. Its note is explicit -- "the opening is the
+          darkest bed in the clip, which is what decides where the title goes". The film opens ON the title
+          now, so a card would be a second Project 18XX over the first, which #1166's own note warns against
+          from the other direction: "a second rendering of the title would be a second thing to keep in step".
+          EVERYTHING THAT SERVED IT GOES TOO: three timing constants, two keyframe pairs, the `screen` blend
+          with #1131's stacking-context warning, and the reduced-motion arm that existed only to guarantee the
+          card still LEFT. A title that is part of the footage cannot overstay.
+          THE HOLD SURVIVES. `holding` still governs the delay before `finish` (#1166's "1-2 seconds" on the
+          finished mark); it simply no longer has a card to remove as well. */}
 
       {/* Design note #1166: the credit, one word at a time, in the window the hold opens. */}
       {creditVisible && (
@@ -375,9 +315,6 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     justifyContent: "center",
   },
-  /* Design note #1166: the title card. `position: absolute` over the video rather than in flow, `screen` to
-     key it off its own black ground (the lobby's own treatment, #1131), and no pointer events -- the skip is
-     the only thing on this layer a click should ever find. */
   /* ==================================================================
       DESIGN NOTE 1166b: A STAGE THAT IS THE PICTURE, NOT THE SCREEN
      ==================================================================
@@ -402,30 +339,9 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     justifyContent: "center",
   },
-  /* Design note #1166d: the card IS the opening black screen. Opaque and filling the stage, so the clip's
-     first half second is covered rather than competed with -- and the title and its ground fade as one. */
-  titleCard: {
-    position: "absolute",
-    inset: 0,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#000000",
-    pointerEvents: "none",
-  },
-  /* Design note #1166b: centred by the flex parent rather than by a transform -- see the keyframes for why
-     this element must not own one. */
-  titleArt: {
-    /* Design note #1166c: 70% of the 62% #1166b settled on. Asked for as a proportion of what was already on
-       screen, so it is recorded as one -- 62 x 0.7 -- rather than as a fresh number with no lineage. */
-    width: "43%",
-    height: "auto",
-    /* Design note #1166d: kept even on an opaque black ground, because the asset is white-on-black and
-       `screen` over black is the asset itself -- so this stays identical to the lobby's treatment rather than
-       becoming a second way of drawing one image. */
-    mixBlendMode: "screen",
-    pointerEvents: "none",
-  },
+  /* Design note #1186: `titleCard` and `titleArt` are gone with the element they dressed. Their note carried
+     #1131's warning that an ancestor transform or opacity kills a `screen` blend; that lesson is not lost, it
+     is stated where it still applies -- on the Lobby's own wordmark and in `blendIsolation.test.ts`. */
   /* Design note #1166: under the finished mark. The mark sits centred and occupies roughly the middle third,
      so this clears it rather than guessing at a gap -- and it is `position: absolute` for the same reason the
      title is, so neither can shift the video's own centring. */

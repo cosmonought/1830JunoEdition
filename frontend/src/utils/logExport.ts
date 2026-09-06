@@ -41,7 +41,28 @@ export interface SandboxLogExport {
     actor: string;
     derived: boolean;
     at?: number;
-    /** Parsed where it parses, so the export is readable; the raw string is kept when it does not. */
+    /* ==================================================================
+        DESIGN NOTE 1188: THE EXACT BYTES, BECAUSE SETTLEMENT WILL HASH THEM
+       ==================================================================
+       ADDED, and `msg` is deliberately left exactly as it was beside it.
+       THIS EXPORT USED TO CARRY ONLY THE PARSED FORM, and the headless replay harness found what that costs:
+       every consumer that reads an entry the way the app reads one -- `revertTargetOf`, `seedAlreadyRolled`,
+       the replay itself -- looks for `payload` and got `undefined`. They do not throw on that; they quietly
+       do nothing. The `RevertTo` at index 20 of `JUNO-3XD` replayed as a no-op until the harness noticed.
+       AND IT MATTERS FAR BEYOND A HARNESS. `SandboxAction.payload` is JSON TEXT rather than a nested map
+       (`sandboxRoom.ts` #1: Firestore rejects nested arrays and `RunManualRoute.path` is one), which means
+       the bytes are stringified ONCE by the dispatching client and distributed verbatim to everyone. That
+       accident is what makes an append-only log hashable without a canonicalisation scheme -- there is no
+       re-serialisation anywhere in the system, so there is no key-ordering or number-formatting drift to
+       guard against.
+       THE SETTLEMENT COMMITMENT IS TAKEN OVER THESE STRINGS. So an export that dropped them left a player
+       unable to recompute the hash from the artefact they were handed, which is the entire purpose of
+       letting them export one. `JSON.stringify` of a reparsed object is USUALLY identical and is not
+       guaranteed to be, and "usually" is the failure that surfaces on one browser months later.
+       AUTHORITATIVE, WITH `msg` AS THE COURTESY. When the two disagree, `payload` is the game. */
+    payload: string;
+    /** Parsed where it parses, so the export is readable; the raw string is kept when it does not.
+     *  DERIVED FROM `payload` AND NEVER ALONGSIDE IT -- see #1188 above. A convenience for human eyes. */
     msg: unknown;
   }>;
 }
@@ -85,6 +106,9 @@ export function buildSandboxLogExport(
           actor: action.actor,
           derived: action.derived,
           ...(action.at === undefined ? {} : { at: action.at }),
+          /* #1188: VERBATIM, and never rebuilt from `msg`. The whole value of this field is that nothing
+             between the dispatching client and the reader has re-encoded it. */
+          payload: action.payload,
           msg,
         };
       }),

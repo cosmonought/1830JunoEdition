@@ -24,7 +24,8 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { WalletProvider, useWallet, CONTRACT_ADDRESS } from "./context/WalletContext";
 import { CosmWasmClient } from "@cosmjs/cosmwasm-stargate";
 
-import { JUNO_RPC_ENDPOINT } from "./config";
+import { CLIENT_BUILD_ID, GAME_SERVER_URL, JUNO_RPC_ENDPOINT } from "./config";
+import { connectServerLink, type ServerLink } from "./utils/serverLink";
 import { GameSessionProvider, useGameSession } from "./context/GameSessionContext";
 import HexGridRenderer, {
   type RouteOverlay,
@@ -400,7 +401,6 @@ import type { HauntingComposite } from "./components/YellowSignOverlay";
 // Design note #1018: the auto-skip acts on a definite refusal, never on an unsettled one.
 import { earnableRevenueVerdict, skipReasonFor } from "./utils/earnableRevenue";
 import {
-  placeParMark,
   // Design note #688: the invariant that replaced the par-mark edge detector.
   reconcileParMarks,
   sandboxInitialMarketPrices,
@@ -414,7 +414,6 @@ import {
   sandboxMarketPositions,
   sandboxWaterfallState,
   // Design note #746b: a rise is an arrival, stamped like every other landing (#646).
-  withArrival,
 } from "./utils/sandboxState";
 import { availableCash, escrowedBids } from "./utils/auctionEscrow";
 import { privateHexFor } from "./utils/privateReservations";
@@ -2333,6 +2332,27 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   /* Design note #725: the D&H's two halves and the order between them. Derived rather than remembered: the
      forfeit depends on whether anybody has built on F16, which is a fact about the board, and `usedPrivateAbilities`
      supplies the rest. */
+  /* ==================================================================
+      DESIGN NOTE 1204: THE POWER'S SPENT-NESS COMES OFF THE BOARD
+     ==================================================================
+     `usedPrivateAbilities` IS A `useState<Set<string>>` IN THIS FILE, which is precisely what #1044 forbids:
+     "anything not derivable from that log is a fact one browser knows and the others do not." A player who
+     reloaded lost whether the D&H's lay had been spent; one who joined late never had it. And it is not
+     cosmetic -- `dhPowerState` computes `forfeited = hexBuilt && !layUsed`, so two clients disagreeing about
+     `layUsed` disagree about whether a power still EXISTS, and that answer feeds the Tokens auto-skip.
+     `used_private_abilities` IS ON THE BOARD NOW, written by the reducer from `PlaceHomeStation`'s
+     `kind: "dh"` and from `LayTile`'s `ability_key`.
+     THE LOCAL SET REMAINS AS A FALLBACK, and deliberately so: a log written before #1204 carries no
+     `ability_key`, and #232 says absent means "this build did not say" rather than "no power was used". Such
+     a room would otherwise have its spent powers come back to life on the next reload. The union is the
+     honest reading during the changeover -- once a power is recorded EITHER way it stays recorded -- and the
+     fallback comes out when no live room predates the field. */
+  const abilitySpent = useCallback(
+    (key: string): boolean =>
+      (gameState?.used_private_abilities ?? []).includes(key) || usedPrivateAbilities.has(key),
+    [gameState, usedPrivateAbilities],
+  );
+
   const dhPower = useMemo(() => {
     const hex = privateHexFor(DH_PRIVATE_ID);
     const hexBuilt = hex
@@ -2340,10 +2360,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       : false;
     return dhPowerState({
       hexBuilt,
-      layUsed: usedPrivateAbilities.has("dh-tile"),
-      tokenUsed: usedPrivateAbilities.has("dh-token"),
+      layUsed: abilitySpent("dh-tile"),
+      tokenUsed: abilitySpent("dh-token"),
     });
-  }, [mapGrid, usedPrivateAbilities]);
+  }, [mapGrid, abilitySpent]);
 
   /* Design note #726: the C&SL's single half, same shape. */
   const cslPower = useMemo(() => {
@@ -2351,8 +2371,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     const hexBuilt = hex
       ? mapGrid.tiles.some((tile) => tile.q === hex.q && tile.r === hex.r)
       : false;
-    return cslPowerState({ hexBuilt, layUsed: usedPrivateAbilities.has("csl-tile") });
-  }, [mapGrid, usedPrivateAbilities]);
+    return cslPowerState({ hexBuilt, layUsed: abilitySpent("csl-tile") });
+  }, [mapGrid, abilitySpent]);
 
   /* ==================================================================
      DESIGN NOTE 832 IS WITHDRAWN BY #834: `trackLaysThisTurn` IS GONE
@@ -3207,6 +3227,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   /** The next LOG index to append at -- the log's own length, which never
    *  shrinks even when the game is rewound. */
   const appliedIndexRef = useRef(0);
+  /** #1213: the server transport when one is configured, `null` on the Firestore path.
+   *
+   *  A REF RATHER THAN STATE, for the reason every other atom in this file has one (#265/#537a): the dispatch
+   *  reads it inside an awaited call, and a closure over committed state would be a render behind. */
+  const serverLinkRef = useRef<ServerLink | null>(null);
   /* Two counters: appliedIndexRef is where the next append goes, appliedCountRef is how much live history has run. Undo separates them.
      See docs/ai_architecture/firebase_middleware.md - App.tsx #591 */
   const appliedCountRef = useRef(0);
@@ -4870,20 +4895,51 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           const appendAt = appliedIndexRef.current;
           // Design note #1173a, whose reasoning is on `pendingAppendIndex`.
           if (options?.automatic !== true) setPendingAppendIndex(appendAt);
-          const allocated = await appendSandboxAction(
-            roomCode,
-            appendAt,
-            options?.automatic === true
-              ? actingAddressRef.current ?? authorId
-              : authorId,
-            msg,
-            /* Design note #668: recorded ON the entry. The client that
-               dispatched it is the only one that knows, and every other client
-               has to be able to answer "was this a decision?" from the log
-               alone -- Undo lands on the same action for everybody or the
-               table disagrees about what was taken back. */
-            options?.derived === true,
-          ).catch(() => null);
+
+          /* ==================================================================
+              DESIGN NOTE 1213: THE GAME'S OWN ACTIONS ARE NOT THIS CLIENT'S TO SEND
+             ==================================================================
+             THE TRAP IN THE CUTOVER, and it would have doubled every automatic action in the game.
+             ON FIRESTORE, THIS CLIENT GENERATES THEM. `autoSkipReason` fires an `AdvanceOperatingSubPhase`,
+             the forced withhold fires a `DeclareDividends`, and #774's `isMyTurn` guard is what stops all
+             four browsers appending their own copy.
+             ON THE SERVER, THE SERVER GENERATES THEM (#1203) -- `RoomSession.submit` loops
+             `nextDerivedAction` until the game owes nothing, and that IS the settle point. A client that also
+             sent one would have it applied as a PLAYER action, and the server would then generate its own on
+             top. Two forced withholds, which is #774's two-cells-rather-than-one wearing the new
+             architecture's clothes.
+             SO ON THE SERVER PATH THE SHELL SIMPLY DOES NOT SEND THEM. The effects still run and still decide
+             -- they are harmless and they will be deleted with the rest of the shell's authority -- but the
+             dispatch stops here, and the action arrives from the server like any other. */
+          const link = serverLinkRef.current;
+          if (link && options?.derived === true) {
+            setPendingAppendIndex(null);
+            return;
+          }
+
+          const allocated = link
+            /* THE CAST IS #1189's FINDING ARRIVING AGAIN, and it is worth naming rather than hiding.
+               `SandboxLogMsg` is wider than `GameplayExecuteMsg`: the log carries `SetupGame`,
+               `OpenStockRound` and the rest of `isSandboxOnlyMsg` alongside gameplay (#530 -- "both are
+               single-key objects and both round-trip as JSON, so widening changes nothing about how an entry
+               is written"). The reducer casts here too. The honest fix is a `LoggedMsg` union spanning both,
+               which is a type change of its own and is recorded in the migration plan rather than smuggled
+               into a transport commit. */
+            ? await link.submit(msg as Parameters<typeof link.submit>[0])
+            : await appendSandboxAction(
+                roomCode,
+                appendAt,
+                options?.automatic === true
+                  ? actingAddressRef.current ?? authorId
+                  : authorId,
+                msg,
+                /* Design note #668: recorded ON the entry. The client that
+                   dispatched it is the only one that knows, and every other client
+                   has to be able to answer "was this a decision?" from the log
+                   alone -- Undo lands on the same action for everybody or the
+                   table disagrees about what was taken back. */
+                options?.derived === true,
+              ).catch(() => null);
           /* ==================================================================
              DESIGN NOTE 1026: `null` IS THE FAILURE, AND `0` IS NOT
              ==================================================================
@@ -5002,11 +5058,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           const par = Number(parValue);
           const bo = granted.public_companies.find((c) => c.ticker === BO_TICKER);
           if (bo && Number.isFinite(par) && par > 0) {
-            const marked = placeParMark(sandboxMarketRef.current, bo.company_id, par, parBoxCellFor);
-            if (marked !== sandboxMarketRef.current) {
-              sandboxMarketRef.current = marked;
-              setSandboxMarket(marked);
-            }
+            /* #1211: THE RECONCILE IS THE REDUCER'S. `applySandboxActionInner` runs `reconcileParMarks`
+               after every action (#1193), so a corporation parred by this one has its token before anything
+               reads the chart -- and this file no longer keeps a second place where that can be forgotten.
+               Deliberately not replaced with nothing-at-all in silence: the mark still happens, one layer
+               down, and #461's "the Par Tray and the matrix cannot disagree" is what guarantees it. */
           }
           /* Design note #565: the prompt closes wherever the answer lands,
              not only on the browser that gave it. `handleConfirmBoPar`
@@ -5678,10 +5734,22 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             );
           },
         });
-        if (marketResult.prices !== sandboxMarketRef.current) {
-          sandboxMarketRef.current = marketResult.prices;
-          setSandboxMarket(marketResult.prices);
-        }
+        /* ==================================================================
+            DESIGN NOTE 1211: THE CHART'S POSITIONS ARE THE REDUCER'S NOW
+           ==================================================================
+           INCREMENT 3 OF PHASE 1, and the line that used to be here is the one that made §5a possible: it
+           wrote the chart into a REF this client owned privately, and `buildOperatingOrder` then sorted the
+           operating queue on it. Two browsers whose refs had drifted built two turn orders from one log --
+           indices 310/311 of `JUNO-3XD`.
+           `market_positions` IS ON THE STATE (#1196) AND THE REDUCER MOVES IT (#1197). So this dispatch hands
+           the chart in with the board and takes it back out again, and the ref below is a MIRROR for
+           rendering rather than an authority anybody sorts on.
+           THE CALL ABOVE SURVIVES FOR ITS REPORT AND NOT ITS RESULT. `marketResult.moved` is what the
+           Activity Log's sentence is built from -- which mover it was, and the two prices -- and a position
+           diff cannot say WHY a token moved. It is the same pure function on the same input the reducer will
+           use, so the two cannot disagree; what it costs is one extra evaluation per action, and what it buys
+           is that the narration below is untouched by this change. Folding the reason onto the state is the
+           tidier end state and is deliberately not attempted in the same commit as the authority move. */
         if (marketResult.moved) {
           const { companyId, from, to, reason } = marketResult.moved;
           const ticker =
@@ -5746,20 +5814,51 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
            knows a TURN has run. */
 
         if (after) {
+          /* #1211: the chart goes in WITH the board. From here the reducer performs the whole two-atom
+             sequence itself (#1197) -- advance the chart, price the trade, settle, reconcile par marks,
+             commit any sold-out rise -- and every one of those was a step this file had to remember. */
+          after = { ...after, market_positions: sandboxMarketRef.current };
           after = applySandboxAction(after, msg, {
             // Design note #549: the log's author, so a replayed purchase is
             // credited to the player who made it rather than to whoever this
             // browser's cursor happens to point at.
             actor: options?.actor,
+            /* #1197: the ladder's SHAPE, handed in once. The reducer holds the positions; this is geometry,
+               static and identical in every browser -- and `dividendRefused`/`saleRefused` are no longer
+               accepted here at all, because the reducer asks them of the state itself. */
+            marketContext: {
+              projectSale: (from, blocks) => projectShareSaleMove(from, blocks),
+              projectBloodPrice: (from) => projectBloodPriceMove(from),
+              projectDividend: (from, choice) => {
+                const declaring =
+                  "DeclareDividends" in msg
+                    ? before?.public_companies.find(
+                        (entry) => entry.company_id === msg.DeclareDividends.protocol_id,
+                      )
+                    : undefined;
+                const payout = Number(declaring?.last_route_revenue ?? 0) || 0;
+                const steps = dividendStepsFor(
+                  payout,
+                  marketPriceForCompany(declaring?.company_id ?? -1),
+                  resolveVariants(before?.variants),
+                  choice,
+                );
+                return projectDividendCellMove(from, choice, steps);
+              },
+              isCarcosanSale: (sellerId, modelType) =>
+                before ? isCarcosanTransfer(before, sellerId, modelType) : false,
+            },
+            // #1193/#415: so a corporation parred BY this action has its token before the next queue is built.
+            parCellFor: parBoxCellFor,
             // Only `RunManualRoute` reads this, to total the printed value of
             // the stops the player picked instead of paying a flat nominal
             // for every route regardless of length.
             mapGrid,
             // Design note #492a: likewise read only by `RunManualRoute`.
             era: ERA_FOR_PHASE_TINT[currentPhase?.tint ?? "yellow"],
-            // Design note #273: what the chart says this share is worth, so
-            // the wallet and the market agree about one trade.
-            sharePrice: marketResult.tradePrice ?? undefined,
+            /* #1197: `sharePrice` is GONE. The reducer prices the trade itself now, so the wallet and the
+               chart cannot be handed two different figures for one trade -- which was #273's whole point,
+               previously guaranteed by this file passing the same number to both. */
             /* Read the market ref the block above has just refreshed, so the queue reflects a move this dispatch caused.
                See docs/ai_architecture/stock_market.md - App.tsx #411 */
             marketPriceFor: marketPriceForCompany,
@@ -5792,6 +5891,22 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             // Design note #757: the same refusal the tile grid applies, so the fee and the cursor agree.
             layRefused,
           });
+
+          /* ==================================================================
+              DESIGN NOTE 1211: THE MIRROR, WRITTEN FROM THE BOARD
+             ==================================================================
+             THE REF IS NOT AN AUTHORITY ANY MORE, and this is the line that demotes it. It used to be
+             written from `applySandboxMarketAction`'s result and then SORTED ON by `buildOperatingOrder`
+             through an injected resolver -- a private copy of the chart deciding the turn order, which is
+             §5a in one sentence.
+             NOW IT IS A RENDER MIRROR. The reducer moved the positions; this copies them out so the ~30
+             components that read `sandboxMarket` are untouched by the change. Ref first, then the setter,
+             for #767's reason: the synchronous write is the one a replay burst reads, and the setter only
+             has to agree with it afterwards. */
+          if (after.market_positions && after.market_positions !== sandboxMarketRef.current) {
+            sandboxMarketRef.current = after.market_positions;
+            setSandboxMarket(after.market_positions);
+          }
 
           /* ==================================================================
            *  DESIGN NOTE 750: EVERY TREASURY MOVEMENT, NAMED OR FLAGGED
@@ -5838,23 +5953,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
               markFor: marketMarkForCompany,
               projectRise: (from) => projectRiseMove(from),
             });
-            if (rises.length > 0) {
-              let chart = sandboxMarketRef.current;
-              for (const rise of rises) {
-                chart = {
-                  ...chart,
-                  // Design note #646: a rise is an arrival like any other, so it is stamped like one.
-                  [rise.companyId]: withArrival(chart, rise.companyId, {
-                    price: rise.to,
-                    x: rise.x,
-                    y: rise.y,
-                  }),
-                };
-                logInfo("Market Move", describeSoldOutRise(rise));
-              }
-              sandboxMarketRef.current = chart;
-              setSandboxMarket(chart);
-            }
+            /* #1211: THE COMMIT MOVED TO THE REDUCER and only the sentence is left here. #746b put the
+               token-walking in this file because "the market atom is not part of `GameStateResponse`" --
+               which stopped being true at #1196, so the half of this rule that was stranded in the shell
+               now sits beside the half that was always in `applySandboxActionInner`.
+               THE LOG LINE STAYS, because narration is the shell's job (#704) and always was. `soldOutRises`
+               is pure and is asked the same question twice, once to move and once to describe; what it must
+               never again do is move the chart from two places. */
+            for (const rise of rises) logInfo("Market Move", describeSoldOutRise(rise));
           }
 
           /* ==================================================================
@@ -9400,6 +9506,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       /** Design note #880: where EVERY token on this hex goes -- `[company_id, city_index]`, derived from
        *  connectivity. Supersedes `tokenCity`, which could only say one thing to all of them. */
       tokenCities?: ReadonlyArray<[number, number]>,
+      /** Design note #1204: which private power this lay SPENDS, if any. The hex cannot answer it -- a
+       *  corporation may lay on F16 using the D&H's power or in spite of it, with opposite consequences --
+       *  so the caller resolves it with `errandClaimsLay` and it travels on the message. */
+      abilityKey?: string,
     ) => {
       /* The board write lives inside runGameplayAction's sandbox branch - outside it, a replayed lay charged the treasury and left the board blank.
          See docs/ai_architecture/canvas_rendering.md - App.tsx #522 */
@@ -9415,6 +9525,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
              alone. Omitted when false rather than sent as `false`: an ordinary lay's entry must look exactly
              like the ones written before this field existed. */
           ...(bonusLay ? { bonus_lay: true } : {}),
+          /* #1204: OMITTED WHEN ABSENT, per #776's rule stated one field over -- an ordinary lay's entry must
+             look exactly like the ones written before this field existed, and #232 keeps "did not say" apart
+             from "no power was used". */
+          ...(abilityKey ? { ability_key: abilityKey } : {}),
           /* Design note #824: ON the message for #776's reason, said again because it is the same reason --
              every client's reducer must reach the same answer from the log alone, and a choice the log does
              not carry is a choice that does not survive a replay. */
@@ -10184,13 +10298,55 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       }
     };
 
-    const unsubscribe = subscribeSandboxLog(
-      sandboxRoomCode,
-      (actions) => {
-        void drain(actions);
-      },
-      (message) => setSandboxRoomError(message),
-    );
+    /* ==================================================================
+        DESIGN NOTE 1213: TWO TRANSPORTS, ONE DRAIN
+       ==================================================================
+       `subscribeSandboxLog` HANDS BACK THE WHOLE LOG on every snapshot, and `drain` is written against that:
+       it works out what is new for itself, which is what makes a refresh and a single append the same code
+       path (#522). The server sends only what it appended.
+       SO THE ADAPTER ACCUMULATES, rather than `drain` learning a second shape. The whole point of shaping
+       `serverLink` like `appendSandboxAction` (#1212) was to keep this file's diff small, and teaching the
+       one function every client's board depends on to accept a new kind of input would have thrown that away
+       at the last step.
+       THE CLIENT STILL APPLIES EVERYTHING ITSELF. It is not a thin renderer of server state -- it runs the
+       same reducer over the same entries, which is what keeps the divergence check alive (#1207) and what
+       has found most of this migration's bugs. */
+    const unsubscribe = GAME_SERVER_URL
+      ? (() => {
+          const accumulated: SandboxAction[] = [];
+          const link = connectServerLink({
+            url: GAME_SERVER_URL,
+            room: sandboxRoomCode,
+            build: CLIENT_BUILD_ID,
+            /* #1210: what this client SAYS it is. The server decides whether to believe it -- and on
+               anything with money in it, `trustClaimedIdentity` is not what will be answering. */
+            claim: localPlayerId(),
+            onEntries: (entries) => {
+              for (const entry of entries) accumulated.push(entry as SandboxAction);
+              void drain([...accumulated]);
+            },
+            onRefused: (reason) => setSandboxRoomError(reason),
+            onBuildSkew: (clientBuild, serverBuild) =>
+              /* #1206: NOT a desync, and saying so is the point. A client that reported this as a divergence
+                 would send somebody hunting a bug that is a deploy. */
+              setSandboxRoomError(
+                `This tab is running build ${clientBuild} and the server is on ${serverBuild}. Reload to catch up.`,
+              ),
+            onError: (message) => setSandboxRoomError(message),
+          });
+          serverLinkRef.current = link;
+          return () => {
+            serverLinkRef.current = null;
+            link.close();
+          };
+        })()
+      : subscribeSandboxLog(
+          sandboxRoomCode,
+          (actions) => {
+            void drain(actions);
+          },
+          (message) => setSandboxRoomError(message),
+        );
     return () => {
       live = false;
       unsubscribe();
@@ -10527,8 +10683,33 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
        the same derivation on the same inputs -- and a second call is a second chance to disagree with the
        ghost the player is looking at. The lay now sends exactly what was drawn. */
     const tokenCities = previewTile.tokenCities ?? [];
+    /* ==================================================================
+        DESIGN NOTE 1204: THE POWER THIS LAY SPENDS, RESOLVED BEFORE IT IS SENT
+       ==================================================================
+       `errandClaimsLay` is asked here rather than only below, because the ANSWER HAS TO TRAVEL. Until now it
+       was computed after the dispatch and written into `usedPrivateAbilities` -- a `useState<Set>` in this
+       shell, which is exactly what #1044 forbids: "anything not derivable from that log is a fact one
+       browser knows and the others do not." A player who reloaded lost whether the D&H's lay was its own.
+       THE HEX CANNOT ANSWER THIS AND NEVER COULD. A corporation may lay on F16 using the power or in spite of
+       it, and the two have opposite consequences -- `dhPowerState` computes `forfeited = hexBuilt &&
+       !layUsed`. #817 is the report from inferring it: "I placed a tile that was not the F16 one, and it
+       seems the DH power was consumed." Intent is a choice, and #550 puts choices in the log. */
+    /* `?? undefined` BECAUSE `abilityKey` IS NULLABLE AND THE FIELD IS OPTIONAL. #232 again: a `null` on the
+       wire would be a build saying "no power", which is a different claim from saying nothing. */
+    const spentAbility = errandClaimsLay(homeStationPlacement, q, r)
+      ? homeStationPlacement?.abilityKey ?? undefined
+      : undefined;
     if (sandbox) {
-      handleSandboxLayTile(q, r, tileId, orientation, bonusLay, previewTile.tokenCity, tokenCities);
+      handleSandboxLayTile(
+        q,
+        r,
+        tileId,
+        orientation,
+        bonusLay,
+        previewTile.tokenCity,
+        tokenCities,
+        spentAbility,
+      );
     } else {
       runGameplayAction("LayTile", {
         LayTile: {
@@ -10539,6 +10720,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           tile_id: tileId,
           orientation,
           ...(bonusLay ? { bonus_lay: true } : {}),
+          // #1204: the power this lay spends, when it spends one.
+          ...(spentAbility ? { ability_key: spentAbility } : {}),
           /* Design note #824: and where the token goes, when the president had a say. Omitted otherwise, so
              every ordinary lay is byte-identical to what this app has always sent -- the containment #808's
              `bypass` has, for the same reason. */

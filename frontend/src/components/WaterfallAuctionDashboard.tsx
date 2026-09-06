@@ -17,7 +17,13 @@ import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { privateClosureTier } from "../utils/purchaseWarnings";
 import { PRIVATE_COMPANY_CATALOG } from "../utils/privateCatalog";
 import { SpecialPowerBlock, CARD_SECTION_CAPTION } from "./SpecialPowerBlock";
-import { auctionFunds, bidRejectionReason, type PlayerAuctionFunds } from "../utils/auctionEscrow";
+import {
+  auctionFunds,
+  bidRejectionReason,
+  minimumBidFor,
+  MIN_BID_INCREMENT,
+  type PlayerAuctionFunds,
+} from "../utils/auctionEscrow";
 import {
   CARD_ACCENT,
   CARD_BORDER,
@@ -45,11 +51,10 @@ import type {
   WaterfallStateResponse,
 } from "../utils/gameState";
 
-/** Hand-kept mirror of `auction::MIN_BID_INCREMENT`. Every bid must beat
- *  the standing one by at least this much, which is also why two players
- *  can never hold an equal bid -- see the "competing", never "tied",
- *  terminology throughout this file. */
-const MIN_BID_INCREMENT = 5;
+/* Design note #1184: the increment and the minimum moved to `auctionEscrow`, where the reducer can also
+   reach them. This file used to hold both under a comment calling itself a "hand-kept mirror" of the
+   contract constant -- which is exactly the arrangement that lets a rule be true in the button and absent
+   everywhere else. Imported now rather than restated. */
 
 /* Design note #391: the catalog moved to `utils/privateCatalog.ts` so
    the stock card can quote the same text. Same table, same values --
@@ -403,8 +408,8 @@ function PrivateCard({
      the lowest offer can be bought outright for, so it offers the seller nothing and the bidder no
      advantage -- the same rule applied twice rather than two rules. */
   const standingHigh = priv.bids.reduce((max, b) => Math.max(max, Number(b.bid_amount)), 0);
-  const minimumBid =
-    (standingHigh > 0 ? standingHigh : Number(priv.face_value)) + MIN_BID_INCREMENT;
+  // Design note #1184: one arithmetic, in a module the board can read too.
+  const minimumBid = minimumBidFor({ faceValue: priv.face_value, bids: priv.bids });
   const minimumRaise = miniAuction ? Number(miniAuction.high_bid) + MIN_BID_INCREMENT : 0;
 
   /* Design note #23: auto-scroll to the turn player. The bid table caps at ~3.5 rows (#21), so with six
@@ -615,7 +620,30 @@ function PrivateCard({
           twice. "Buy outright at face value" keeps its second half because that is a different fact -- the
           lowest offer can be taken at face value, which is an affordance rather than an absence. */}
       <div style={styles.bidSection}>
-        <span style={styles.bidSectionCaption}>Standing bids</span>
+        {/* ==================================================================
+             DESIGN NOTE 1185: THE HIGH BID, BACK ON THE CARD
+            ==================================================================
+            ASKED FOR, alongside the report that everyone was registering the same bid: "it seems connected to
+            stripping out the Highest Bidder information."
+            IT WAS NOT MINE TO STRIP -- `git log -S` puts the removal in `d86bf95`, the project's second
+            commit, and #1171 deleted only the orphaned STYLE that had outlived it. But the instinct behind
+            the report is right, and it is the reason to restore rather than to argue: the bid input DEFAULTS
+            to the legal minimum, so a player whose card is a round trip stale is shown a number that looks
+            authoritative and is not. A stated high bid is the one thing on this card that would contradict
+            it.
+            ON THE CAPTION LINE, not as a row of its own. It answers "what must I beat", which is the
+            question the caption's list is about -- and #1140 spent a note establishing that a figure needing
+            its own row is usually a figure in the wrong place.
+            THE TABLE STILL SORTS DESCENDING, so this restates its top row. That is the trade #1185 makes
+            knowingly: one line of redundancy against a stale default that costs a player their bid. */}
+        <span style={styles.bidSectionCaption}>
+          Standing bids
+          {standingHigh > 0 && (
+            <span style={styles.bidSectionHigh}>
+              {" \u00b7 high "}${standingHigh}
+            </span>
+          )}
+        </span>
         <div style={styles.privateCardBids} ref={bidListRef}>
           {priv.bids.length === 0 ? (
             <span style={styles.noBidsText}>
@@ -1151,6 +1179,16 @@ const styles: Record<string, React.CSSProperties> = {
     minHeight: 0,
   },
   bidSectionCaption: { ...CARD_SECTION_CAPTION, color: CARD_CAPTION_GOLD },
+  /* Design note #1185: the figure rides the caption, so it inherits the caption's size and letter-spacing and
+     differs only in ink and weight -- a second colour would make it a second heading rather than a fact
+     appended to one. `tabular-nums` because it sits above a column of figures that are already lined up. */
+  bidSectionHigh: {
+    color: CARD_INK,
+    fontWeight: 800,
+    fontVariantNumeric: "tabular-nums",
+    textTransform: "none",
+    letterSpacing: "normal",
+  },
   privateCardBids: {
     maxHeight: "104px",
     overflowY: "auto",

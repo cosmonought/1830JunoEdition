@@ -93,6 +93,40 @@ export const JUNO_CHAIN_ID = readOptional(process.env.REACT_APP_CHAIN_ID);
 /** RPC endpoint both signing clients connect to. */
 export const JUNO_RPC_ENDPOINT = readOptional(process.env.REACT_APP_RPC_ENDPOINT);
 
+/** ==================================================================
+ *   DESIGN NOTE 1213: THE CUTOVER IS A SETTING, NOT A REWRITE
+ *  ==================================================================
+ *
+ * WHERE THE AUTHORITATIVE GAME SERVER LIVES, or `undefined` for the Firestore path this app has always used.
+ *
+ * ABSENT IS THE OLD BEHAVIOUR, EXACTLY. Every live room today appends to Firestore and reads it back
+ * (#1026's transactional allocation, #522's "the log is the game"). That path is untouched while this is
+ * unset, which is what makes the cutover something to try rather than something to bet on -- there is no way
+ * to verify a browser transport from a test suite, and the honest response to that is a switch rather than
+ * confidence.
+ *
+ * SET, AND THE ROOM ROUTES THROUGH THE SERVER: intents in, log entries out, the server allocating indices
+ * and generating the game's own actions (#1209). The client still applies everything locally, because that
+ * is what keeps the divergence check alive (#1207) -- it is not a thin renderer, it is a second opinion.
+ *
+ * A `ws://` OR `wss://` URL. `wss://` in anything public: the frames carry moves, and a room whose transport
+ * can be read can be tampered with. */
+export const GAME_SERVER_URL = readOptional(process.env.REACT_APP_GAME_SERVER_URL);
+
+/** What build this client is, for #1206's skew check.
+ *
+ *  THE DIGEST COVERS THE WHOLE STATE, so a client one field behind the server disagrees about something that
+ *  is not a divergence at all. Without a build on the wire that arrives as a phantom desync -- the exact
+ *  thing this migration exists to stop people chasing.
+ *
+ *  FALLS BACK TO A CONSTANT rather than to a timestamp or a random value: two clients from one deploy must
+ *  agree, and a value that changed per load would report skew against itself. Vercel sets
+ *  `REACT_APP_VERCEL_GIT_COMMIT_SHA` when it is available. */
+export const CLIENT_BUILD_ID =
+  readOptional(process.env.REACT_APP_BUILD_ID) ??
+  readOptional(process.env.REACT_APP_VERCEL_GIT_COMMIT_SHA) ??
+  "dev";
+
 /* ------------------------------------------------------------------ */
 /* Required accessors. These throw, at the point of USE.                */
 /* ------------------------------------------------------------------ */

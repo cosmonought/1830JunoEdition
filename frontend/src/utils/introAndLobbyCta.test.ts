@@ -82,22 +82,34 @@ describe("the intro sequence gains a beginning and an end", () => {
        new hold together it would cut the credit off mid-fade on a machine where the event is merely LATE. */
     const backstop = Number((RAW_INTRO.match(/const INTRO_BACKSTOP_MS = (\d+);/) ?? [])[1]);
     const hold = Number((RAW_INTRO.match(/const LOGO_HOLD_MS = (\d+);/) ?? [])[1]);
-    expect(backstop).toBeGreaterThan(10006 + hold);
+    /* Design note #1186: 13042, not 10006 -- the film is the wordmark (4.011s) cross-faded over 1.000s into
+       the original (10.006s). Same claim, longer film. */
+    expect(backstop).toBeGreaterThan(13042 + hold);
   });
 
-  it("opens on a black screen the clip has to come out from behind", () => {
+  it("no longer draws a title card, because the film carries the title", () => {
     /* ==================================================================
-        DESIGN NOTE 1166d: THE CARD STOPPED COMPETING WITH THE ARTWORK
+        DESIGN NOTE 1186: SEVEN CASES RETIRED WITH THE ELEMENT THEY GUARDED
        ==================================================================
-       Every earlier version placed the title ON the drawing and looked for the least-bad moment to do it. An
-       opaque half second covers nothing -- and the cost is measurable and tiny: 4.6% of the frame is lit at
-       0.6s, so what the cover hides is black.
-       ASSERTED AS OPACITY AND EXTENT. A transparent card over the same seconds is the old arrangement wearing
-       the new note. */
-    const card = sliceBetween(INTRO, "titleCard: {", "\n  },");
-    expect(card).toContain('backgroundColor: "#000000"');
-    expect(card).toContain("inset: 0");
-    expect(INTRO).toContain('<div className="app-intro-title" style={styles.titleCard}>');
+       #1166 through #1166d spent seven cases and a great deal of frame-by-frame measurement deciding where a
+       Project 18XX card could sit over footage that had no title of its own: which half second was darkest,
+       how long it could hold before competing with the locomotive, whether a transparent card was the old
+       arrangement wearing the new note.
+       THE SUPPLIED CLIP ANSWERS ALL OF IT BY OPENING ON THE TITLE. So the card, its constants, its keyframes,
+       its `screen` blend and its reduced-motion arm are gone -- and the cases that pinned them go too, rather
+       than being loosened into assertions that no longer mean anything.
+       ONE TRIPWIRE REPLACES THEM, and it is #1166's own warning read from the other direction: "a second
+       rendering of the title would be a second thing to keep in step." */
+    expect(INTRO).not.toContain("styles.titleCard");
+    expect(INTRO).not.toContain("styles.titleArt");
+    expect(INTRO).not.toContain("app-intro-title");
+    /* AGAINST THE STRIPPED SOURCE, NOT THE RAW FILE: the note above the deleted constants NAMES them, which
+       is that note's whole job. Asserting on `RAW_INTRO` would forbid the prose from describing its own
+       removal -- the `readStripped` / `readSource` distinction pointing the other way for once. */
+    expect(INTRO).not.toContain("TITLE_FADE_MS");
+    /* The ASSET stays. The Lobby still draws it (#1131), and deleting a file two surfaces share to tidy one
+       of them is how the other breaks. */
+    expect(readStripped("components/Lobby.tsx")).toContain("title-project18xx.jpg");
   });
 
   it("does not gamble on a delayed play()", () => {
@@ -106,76 +118,6 @@ describe("the intro sequence gains a beginning and an end", () => {
        a clip that is already playing has neither problem. */
     expect(INTRO).toContain("autoPlay");
     expect(INTRO).not.toContain(".play()");
-  });
-
-  it("fades the title and its ground as one element", () => {
-    /* Two layers on two clocks produce a title floating over a half-faded backdrop the first time either is
-       retuned. The card is the black screen, so there is only one clock. */
-    expect(INTRO).toContain("styles.titleArt");
-    const art = sliceBetween(INTRO, "titleArt: {", "\n  },");
-    expect(art).not.toContain("position:");
-    expect(art).toContain('mixBlendMode: "screen"');
-  });
-
-  it("clears the title as the drawing gets going, not a second after", () => {
-    /* ==================================================================
-        DESIGN NOTE 1166c TIGHTENS THIS FROM 3000ms TO THE MEASURED FIGURE
-       ==================================================================
-       IT ALLOWED ANYTHING UNDER 3s, on #1166's reading that the locomotive "draws and holds, ~1.0 to ~4.0" --
-       so it passed comfortably on a card that sat over a FINISHED drawing for about a second, which is what
-       was then reported. A still at 3s cannot distinguish drawing from holding; measuring the lit area can,
-       and puts completion at about 1.3s (4.6% of the frame at 0.6s, 15.0% at 1.0s, 20.7% at 1.5s, 22.7% at
-       2.2s -- the curve is flat well before 2s).
-       BOUNDED ON THE REAL EVENT NOW. A bound that cannot fail on the thing it is named for is not a bound. */
-    const holdUntil = Number((RAW_INTRO.match(/const TITLE_HOLD_UNTIL_MS = (\d+);/) ?? [])[1]);
-    const fade = Number((RAW_INTRO.match(/const TITLE_FADE_MS = (\d+);/) ?? [])[1]);
-    const fadeIn = Number((RAW_INTRO.match(/const TITLE_FADE_IN_MS = (\d+);/) ?? [])[1]);
-    /* Design note #1166d: the bound is tighter again now that the card owns its own beat -- it must be gone
-       while the drawing is still early, which is the whole point of giving it a half second of its own. */
-    expect(holdUntil + fade).toBeLessThanOrEqual(900);
-    /* And still long enough to READ. Two words on a black screen need less than two words competing with
-       artwork did, but not nothing. */
-    expect(holdUntil - fadeIn).toBeGreaterThanOrEqual(350);
-  });
-
-  it("scales the card to the proportion that was asked for", () => {
-    /* "Scaled down a little, like to 70% its current size." Recorded as the arithmetic on #1166b's 62% rather
-       than as a fresh number, so the lineage survives the next adjustment. */
-    const art = sliceBetween(INTRO, "titleArt: {", "\n  },");
-    const width = Number((art.match(/width: "(\d+)%"/) ?? [])[1]);
-    expect(width).toBe(Math.round(62 * 0.7));
-  });
-
-  it("uses the lobby's own title asset rather than a second copy", () => {
-    expect(INTRO).toContain("/images/title-project18xx.jpg");
-    expect(sliceBetween(INTRO, "titleArt: {", "\n  },")).toContain('mixBlendMode: "screen"');
-  });
-
-  it("centres the title without a transform, because the keyframes own that", () => {
-    /* ==================================================================
-        DESIGN NOTE 1166b: ONE PROPERTY, TWO OWNERS
-       ==================================================================
-       REPORTED: "I only see like the top left quarter-ish of the Project 18XX title."
-       THE CARD WAS CENTRED WITH `translate(-50%, -50%)` AND ANIMATED ON `transform`, with fill mode `both` --
-       so the keyframe's value replaced the centring permanently. The element's top-left corner sat at the
-       middle of the screen and the picture ran off to the right and down, which shows exactly the top-left
-       quarter of it.
-       ASSERTED AS THE ABSENCE OF A TRANSFORM ON THE ELEMENT and the absence of one in its keyframes, because
-       either alone reintroduces the bug -- and a transform here would also isolate the element and break the
-       `screen` blend the asset depends on (#1131's trap, one level in). */
-    /* Design note #1166d moved the CENTRING to the card's flex box -- the image is a flex child now rather
-       than an absolutely-positioned one, so `inset`/`margin: auto` are the parent's business. The CLAIM is
-       unchanged and is the only thing worth pinning: neither the element nor its keyframes may own a
-       transform, because the animation would clobber it and because a transform isolates the element and
-       kills the `screen` blend. */
-    const art = sliceBetween(INTRO, "titleArt: {", "\n  },");
-    expect(art).not.toContain("transform");
-    const card = sliceBetween(INTRO, "titleCard: {", "\n  },");
-    expect(card).not.toContain("transform");
-    expect(card).toContain('alignItems: "center"');
-    expect(card).toContain('justifyContent: "center"');
-    const fade = sliceBetween(RAW_INTRO, "@keyframes app-intro-title-fade {", "}");
-    expect(fade).not.toContain("transform");
   });
 
   it("positions the overlays against the picture, not the window", () => {
@@ -194,12 +136,6 @@ describe("the intro sequence gains a beginning and an end", () => {
     const credit = sliceBetween(INTRO, "credit: {", "\n  },");
     const top = Number((credit.match(/top: "(\d+)%"/) ?? [])[1]);
     expect(top).toBeGreaterThan(72);
-  });
-
-  it("unmounts the card rather than leaving it at zero opacity", () => {
-    /* An element over the video is an element the pointer can meet, and the skip is the only thing on this
-       layer meant to be clickable. */
-    expect(INTRO).toContain("{!holding && (");
   });
 
   it("reveals the credit a word at a time, left to right", () => {
@@ -231,8 +167,11 @@ describe("the intro sequence gains a beginning and an end", () => {
     const cue = Number((RAW_INTRO.match(/const CREDIT_CUE_SECONDS = ([\d.]+);/) ?? [])[1]) * 1000;
     const stagger = Number((RAW_INTRO.match(/const CREDIT_WORD_STAGGER_MS = (\d+);/) ?? [])[1]);
     const finishes = cue + stagger * (CREDIT_WORDS.length - 1) + 320;
-    expect(cue).toBeGreaterThan(7500);
-    expect(finishes).toBeLessThan(9600);
+    /* Design note #1186: the window moved three seconds later with the footage it describes -- the prepend is
+       4.011s cross-faded over 1.000s, so the original's timeline starts at output t=3.011. The mark still
+       draws from ~10.5s and resolves by ~12.5s; only its arrival time changed. */
+    expect(cue).toBeGreaterThan(10500);
+    expect(finishes).toBeLessThan(12600);
   });
 
   it("still shows the credit if the engine never fires timeupdate", () => {
@@ -241,15 +180,6 @@ describe("the intro sequence gains a beginning and an end", () => {
     expect(INTRO).toContain("{creditVisible && (");
     const hold = sliceBetween(INTRO, "const holdEnded = React.useCallback(() => {", "}, [finish]);");
     expect(hold).toContain("setCreditVisible(true)");
-  });
-
-  it("still lets a reduced-motion reader out of the title card", () => {
-    /* #606's rule is that the INFORMATION survives, not the movement -- and here the information is that the
-       card is temporary. Switching its animation off entirely would park the title over the locomotive for
-       the rest of the clip. */
-    const reduced = RAW_INTRO.slice(RAW_INTRO.indexOf("@media (prefers-reduced-motion: reduce)"));
-    expect(reduced).toContain("app-intro-title { animation: app-intro-title-out");
-    expect(reduced).toContain(".app-intro-word { animation: none !important;");
   });
 
   it("can still be skipped through the hold", () => {

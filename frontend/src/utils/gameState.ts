@@ -464,6 +464,83 @@ export interface GameStateResponse {
   player_cash: PlayerCashEntry[];
   public_companies: PublicCompanyState[];
   private_companies: PrivateCompanyState[];
+  /** ==================================================================
+   *   DESIGN NOTE 1196: THE CHART'S POSITIONS COME ONTO THE STATE
+   *  ==================================================================
+   *
+   * PHASE 1 OF THE SERVER MIGRATION, and the fix for the handoff's oldest open root cause (§5a).
+   *
+   * THE CHART IS TWO THINGS WEARING ONE NAME. Its GEOMETRY -- the price ladder, `cellAt`, the four
+   * projections -- is a static board definition, identical in every browser and no more dangerous to inject
+   * than `hexTileCatalog`, which `sandboxSession.ts` has imported from `components/` for as long as it has
+   * existed. Its POSITIONS are mutable state, and until now every client maintained its own copy in a React
+   * ref that no rule could see.
+   *
+   * THAT IS WHAT MADE TWO BROWSERS DISAGREE. `buildOperatingOrder` filters on floated-with-a-president and
+   * sorts on price, column and arrival -- all three read through injected resolvers backed by that per-client
+   * ref. Two charts that differ produce two turn orders, which is exactly indices 310/311 of `JUNO-3XD`, and
+   * exactly what #1174 and #1182 both tried and failed to paper over from the wrong end.
+   *
+   * SO THE POSITIONS MOVE HERE, where the reducer writes them and the log determines them. Once the queue
+   * sorts on a field of this response, it is a function of the log by construction -- and §5b's "stamp a seat
+   * on the log entry" question stops needing an answer, because the cursor stops being a place two clients
+   * can differ.
+   *
+   * OPTIONAL, AND #232'S RULE APPLIES. `undefined` means "this build does not carry positions" -- which is
+   * every log written before this note, and the shell until increment 2 -- and the resolvers stay as the
+   * fallback for exactly those. It is NOT "the chart is empty"; an empty chart is `{}`.
+   *
+   * ALREADY REPLAY-SAFE. `enteredAt` is an arrival ORDINAL derived from the marks already present (#646),
+   * never a clock, so a replay reproduces the same numbers rather than continuing from wherever a browser's
+   * session had reached. The tie-break the operating order depends on needed no redesign to come here. */
+  market_positions?: Readonly<Record<number, MarketPositionMark | null>>;
+  /** ==================================================================
+   *   DESIGN NOTE 1204: THE PRIVATE POWERS COME OFF THE SHELL TOO
+   *  ==================================================================
+   *
+   * `usedPrivateAbilities` was a `useState<ReadonlySet<string>>` in `App.tsx` -- three keys, `dh-tile`,
+   * `dh-token` and `csl-tile` -- and it is the same fault as the market chart one private power over.
+   *
+   * #1044 STATES THE RULE THIS BREAKS, in its own words: "this app has no server and no mutable game state:
+   * every client rebuilds the board by replaying one append-only log, and anything not derivable from that
+   * log is a fact one browser knows and the others do not." A player who reloads loses whether the D&H's
+   * lay has been spent; a player who joins late never had it. And it is not cosmetic -- `dhPowerState`
+   * computes `forfeited = hexBuilt && !layUsed`, so two clients disagreeing about `layUsed` disagree about
+   * whether a power still exists.
+   *
+   * IT ALSO REACHES THE REDUCER. `stationPlacementBlockReason` asks whether the free station is still
+   * available, and that answer decides whether the Tokens step is auto-skipped -- so a shell-held flag was
+   * feeding a decision that takes a player's turn away.
+   *
+   * HALF OF IT IS DERIVABLE FROM THE LOG AS IT STANDS. `dh-token` is spent by a `PlaceHomeStation` carrying
+   * `kind: "dh"`, which the log already records -- index 115 of `JUNO-3XD` is one. The reducer records that
+   * for itself.
+   *
+   * THE OTHER HALF NEEDS THE MESSAGE TO SAY SO, and this is the interesting part. `dh-tile` and `csl-tile`
+   * are spent by laying a tile ON A PARTICULAR HEX -- but a corporation may also lay there NORMALLY, which
+   * forfeits the power rather than using it. #817 is the report: "I placed a tile that was not the F16 one,
+   * and it seems the DH power was consumed." The hex alone cannot tell the two apart; only the player's
+   * intent can, and intent is a CHOICE, which #550 says belongs in the log. So `LayTile` carries an optional
+   * `ability_key`, exactly as `PlaceHomeStation` already carries `kind: "dh"`.
+   *
+   * OPTIONAL, AND #232'S RULE APPLIES: absent means "this build did not say", which is every log written
+   * before this note. Such a log cannot answer whether the D&H's lay was its own, and no amount of
+   * inspection will make it -- which is the honest reading rather than a heuristic that guesses wrong on
+   * #817's exact case. */
+  used_private_abilities?: readonly string[];
+}
+
+/** One corporation's token on the stock market chart.
+ *
+ *  DECLARED HERE RATHER THAN IMPORTED, because `sandboxState.ts` imports this module and the edge must stay
+ *  one-way. `SandboxMarketMark` is an alias of this, so there is one definition and not two that can drift --
+ *  which is #1184's failure mode and has now cost this project time three separate ways. */
+export interface MarketPositionMark {
+  price: number;
+  x: number;
+  y: number;
+  /** Design note #646: an arrival ORDINAL, not a clock. */
+  enteredAt?: number;
 }
 
 /** The seat that should be holding the controls right now, given the phase. Two pointers answer "who acts

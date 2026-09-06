@@ -26,7 +26,7 @@ import {
 } from "./actionReceipt";
 import { GAMEPLAY_MESSAGE_KEYS } from "./sessionKey";
 // Design note #886: a slice that THROWS on a missing anchor, so a case cannot empty itself silently.
-import { sliceBetween } from "./sourceScan";
+import { readStripped, sliceBetween } from "./sourceScan";
 
 /** A dispatch of one message key, shaped as `runGameplayAction` sees it. */
 function msg(key: string): Record<string, unknown> {
@@ -277,8 +277,26 @@ describe("every toast is mounted behind a rule", () => {
        nothing under it." FOUND BY SWEEPING every App anchor in every suite for resolution, not by reading.
        RE-ANCHORED ON `sliceBetween`, which THROWS on a missing anchor and names it. A case that cannot
        silently empty itself is the fix; re-pointing the strings alone would leave the same trap armed. */
+    /* ==================================================================
+        DESIGN NOTE 1214: MEASURE THE CODE, NOT THE COMMENTARY
+       ==================================================================
+       #1173b RAISED THIS BOUND FROM 2000 TO 3000 and wrote down why: at 2000 it "had stopped being the guard
+       its note describes and had become 'nothing may be added here', which is a rule nobody chose and one a
+       comment would have tripped." A comment tripped it. #1213 added a design note inside this branch --
+       explaining why the shell must not send the game's own actions on the server path -- and the RAW slice
+       went to 4592.
+       SO THE MEASUREMENT WAS WRONG, NOT THE NUMBER. Read stripped, this branch is ~1074 characters: SMALLER
+       than the ~1930 #1173b measured before it, because the transport swap replaced a call with a ternary.
+       The code did not run away; the prose grew. Raising the bound a second time would have recorded the
+       opposite of what happened and left the same trap armed for the next note somebody writes here.
+       THE GUARANTEE IS UNCHANGED AND SHARPER. What this catches is a loose end anchor swallowing the file --
+       the 42,000-character slice the note above records. Stripped, that failure is still enormous and 3000
+       still catches it by a factor of forty. And `not.toContain("showActionToast(")` gets stronger for free:
+       it can no longer be satisfied or broken by a comment that merely mentions the call.
+       THIS IS #887's LESSON, ONE TURN LATER. "Source-scan tests pin what they are shown" -- and what this one
+       was shown included every word anybody had written about the code, which is not what it meant to guard. */
     const appendBranch = sliceBetween(
-      APP,
+      readStripped("App.tsx"),
       "const appendAt = appliedIndexRef.current;",
       "appliedIndexRef.current = appendAt + 1;",
     );

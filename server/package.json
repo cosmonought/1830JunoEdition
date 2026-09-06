@@ -1,0 +1,18 @@
+{
+  "name": "eighteen-cosmos-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Authoritative game server. Hosts RoomSession over WebSocket; decides nothing itself (design note #1210).",
+  "scripts": {
+    "build": "../frontend/node_modules/.bin/tsc -p tsconfig.json",
+    "start": "node dist/server/src/start.js",
+    "smoke": "node dist/server/src/smokeTest.js",
+    "replay": "node dist/server/src/replayCli.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.12"
+  }
+}

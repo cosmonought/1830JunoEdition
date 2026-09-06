@@ -43,6 +43,24 @@ describe("the export is the log, in the order the app replays it", () => {
     expect(out.actionCount).toBe(1);
   });
 
+  it("carries payload byte-for-byte, never re-encoded from the parsed form", () => {
+    /* ==================================================================
+        DESIGN NOTE 1188: THE FIELD THE SETTLEMENT HASH WILL BE TAKEN OVER
+       ==================================================================
+       PINNED BEFORE ANYTHING DEPENDS ON IT, which was the whole recommendation: the log commitment is a hash
+       of these strings in `(index, id)` order, and it is safe ONLY because nothing in this system ever
+       re-serialises an entry. The bytes are minted once by the dispatching client and passed along.
+       THE PAYLOAD BELOW IS DELIBERATELY NOT WHAT `JSON.stringify` WOULD PRODUCE -- odd spacing, and keys in
+       an order a rebuild would not choose. A re-encoded export would silently normalise both and still look
+       correct to a reader; only an equality against the original bytes catches it.
+       AND `msg` MUST STILL DECODE, so the courtesy copy is checked against the same entry: the two are one
+       value in two forms, never two values. */
+    const odd = '{ "BuyStock":{"quantity":1,   "protocol_id":4} }';
+    const out = buildSandboxLogExport([entry(0, "a", null, { payload: odd })], "ROOM");
+    expect(out.actions[0].payload).toBe(odd);
+    expect(out.actions[0].msg).toEqual({ BuyStock: { quantity: 1, protocol_id: 4 } });
+  });
+
   it("keeps the fields an investigation needs and invents none", () => {
     const out = buildSandboxLogExport(
       [entry(4, "id4", { DeclareDividends: { protocol_id: 1, distribute: true } }, { derived: true, at: 9 })],
@@ -54,6 +72,8 @@ describe("the export is the log, in the order the app replays it", () => {
       actor: "p1",
       derived: true,
       at: 9,
+      // Design note #1188: the exact bytes, beside the parsed courtesy copy.
+      payload: JSON.stringify({ DeclareDividends: { protocol_id: 1, distribute: true } }),
       msg: { DeclareDividends: { protocol_id: 1, distribute: true } },
     });
     expect(out.roomCode).toBe("ROOM");

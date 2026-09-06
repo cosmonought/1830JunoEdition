@@ -59,10 +59,18 @@ export function operatingCorporationId(state: GameStateResponse): number | null 
    dividends for a corporation the board was not operating. Everything applied except the declaration, which
    `dividendRefusal` below refused. I extended that same check to the tile lay, the route run and the station
    token so a divergent client would be refused everywhere rather than only at the last step.
-   THE NEXT REPORT WAS "my corporation's station tokens only show on my screen; all anyone else sees is my
-   home station token." Home stations arrive as `PlaceHomeStation`, which I had not touched; placed tokens
-   arrive as `PlaceStationToken`, which I had. The unguarded arm rendered on every screen and the guarded one
-   rendered only where the check happened to pass.
+   THREE REPORTS FOLLOWED, AND EVERY ONE IS A THING THAT VANISHED RATHER THAN A THING THAT WAS WRONG:
+     "my corporation's station tokens only show on my screen; all anyone else sees is my home station token"
+        -- home stations arrive as `PlaceHomeStation`, which I had not touched; placed ones arrive as
+        `PlaceStationToken`, which I had. The unguarded arm rendered everywhere, the guarded one only where
+        the check happened to pass.
+     "on the Run Routes subphase of other players' corporations, the train chips are not displaying the value
+        of their runs" -- the watcher's chips read `last_run_breakdown`, which the refused `RunMultipleRoutes`
+        arm never wrote. Presence carries a live figure only while the president is plotting, so a watcher
+        looking at a finished run had nothing to fall back on.
+   THAT IS THE SIGNATURE OF THIS CLASS OF MISTAKE. A refusal keyed on a diverging value does not announce
+   itself; it deletes things from some screens and not others, and each deletion looks like its own bug in its
+   own subsystem. Three reports, three subsystems, one line of reasoning.
    MY JUSTIFICATION WAS WRONG, and this is the part worth keeping. I argued the check was safe because "both
    sides come out of the log" -- the corporation travels in the message, and the cursor is rebuilt by the
    replay. The second half is false. `active_corporation_index` is only meaningful against

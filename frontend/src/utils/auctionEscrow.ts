@@ -110,3 +110,44 @@ export function bidRejectionReason(
   }
   return null;
 }
+
+/* ==================================================================
+    DESIGN NOTE 1184: THE INCREMENT WAS A DISPLAY CONSTANT
+   ==================================================================
+   REPORTED: "clicking Bid on a private company is registering everyone with the same bid, but players have to
+   bid $5 more than the highest current bid."
+   AND THE BOARD NEVER ASKED. `MIN_BID_INCREMENT` lived in `WaterfallAuctionDashboard`, under a comment
+   calling itself a "hand-kept mirror of `auction::MIN_BID_INCREMENT`" -- so the button computed the legal
+   minimum, greyed itself correctly, and the reducer's `WaterfallBidHigher` arm took whatever amount arrived,
+   replaced the bidder's standing bid and sorted. Nothing compared the two.
+   IT ONLY SHOWS UNDER LATENCY, which is why it has survived. Two players who can both see the standing high
+   compute different minimums and bid different amounts. Two players whose clients have not yet received each
+   other's bid both compute `face + 5`, both submit it, and both are accepted -- everyone registering the same
+   bid, exactly as reported.
+   THIS IS #712's SHAPE AND #1172's: a rule written where the control lives and never where the state moves.
+   The third instance found in this codebase, and the second this week.
+   SAFE IN A REPLAY, unlike #1182. Both sides come out of the log -- the amount travels in the message, the
+   standing bids are rebuilt from the same prefix on every client -- so every client reaches the same verdict
+   at the same index. Nothing here reads a cursor or a chart.
+   THE OPENING BID IS FACE PLUS THE INCREMENT, not face, for design note #22's reason: a bid at face value is
+   worth what the lowest offer can be bought outright for, so it offers the seller nothing. */
+
+/** Every bid must beat the standing one by at least this much. */
+export const MIN_BID_INCREMENT = 5;
+
+/** The lowest legal bid on this private, from its own face value and the bids standing against it.
+ *
+ *  THE ACTOR'S OWN BID COUNTS TOWARD THE HIGH. A player raising is still raising ABOVE the table's highest
+ *  figure, and excluding their own would let the leader re-bid at their current amount -- which is what the
+ *  dashboard has always computed, and this is that arithmetic in a place the reducer can reach. */
+export function minimumBidFor(input: {
+  faceValue: number | string;
+  bids: ReadonlyArray<{ bid_amount: number | string }>;
+}): number {
+  const standingHigh = input.bids.reduce(
+    (max, bid) => Math.max(max, Number(bid.bid_amount) || 0),
+    0,
+  );
+  const floor = standingHigh > 0 ? standingHigh : Number(input.faceValue) || 0;
+  return floor + MIN_BID_INCREMENT;
+}

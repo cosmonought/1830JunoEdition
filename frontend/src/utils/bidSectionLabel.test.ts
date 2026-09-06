@@ -29,7 +29,34 @@ const BLOCK = readStripped("components/SpecialPowerBlock.tsx");
 
 describe("the bid list says what it is", () => {
   it("captions the section", () => {
-    expect(AUCTION).toContain("<span style={styles.bidSectionCaption}>Standing bids</span>");
+    /* Design note #1185 split this element across lines to hang the high bid off it, so the caption and its
+       text are asserted separately -- pinning the one-line form would fail on formatting rather than on the
+       claim, which is that the section is captioned at all. */
+    expect(AUCTION).toContain("<span style={styles.bidSectionCaption}>");
+    expect(AUCTION).toContain("Standing bids");
+  });
+
+  it("states the high bid the input is defaulting against", () => {
+    /* ==================================================================
+        DESIGN NOTE 1185: THE READOUT THAT WOULD HAVE CAUGHT #1184
+       ==================================================================
+       REPORTED: "clicking Bid is registering everyone with the same bid ... it seems connected to stripping
+       out the Highest Bidder information."
+       THE REMOVAL WAS NOT #1171's. `git log -S styles.highestBidderLine` puts it in `d86bf95`, the project's
+       second commit; #1171 deleted only the orphaned style that had outlived the markup by months. The
+       instinct was right anyway: the bid input DEFAULTS to the legal minimum, so a card a round trip stale
+       shows an authoritative-looking number that is wrong, and a stated high bid is the only thing on the
+       card that contradicts it. */
+    expect(AUCTION).toContain("styles.bidSectionHigh");
+    expect(AUCTION).toContain("{standingHigh > 0 && (");
+  });
+
+  it("hides the figure rather than printing a zero when nothing is bid", () => {
+    /* #232: absent is not a value. "high $0" on an unbid private states a fact that is not true -- the floor
+       there is the face value, not zero. */
+    const at = AUCTION.indexOf("{standingHigh > 0 && (");
+    expect(at).toBeGreaterThan(-1);
+    expect(AUCTION.indexOf("styles.bidSectionCaption")).toBeLessThan(at);
   });
 
   it("puts the caption OUTSIDE the scroller, so it cannot scroll away from its own rows", () => {
@@ -118,5 +145,60 @@ describe("nothing on the card says the caption twice", () => {
     /* Declared, rendered by nothing since the card's first version. Left in place it would be a fourth answer
        to "how does this card label a section" for somebody to pick up. */
     expect(AUCTION).not.toContain("highestBidderLine");
+  });
+});
+
+
+describe("the bid minimum is one rule, read by the button and the board", () => {
+  /* ==================================================================
+      DESIGN NOTE 1184: A RULE THAT LIVED IN THE CONTROL
+     ==================================================================
+     `MIN_BID_INCREMENT` sat in `WaterfallAuctionDashboard` under a comment calling itself a "hand-kept mirror
+     of `auction::MIN_BID_INCREMENT`" -- so the button computed the legal minimum and the reducer took
+     whatever arrived. Invisible in ordinary play; two clients that have not seen each other's bid both
+     compute `face + 5`, both submit it, and both are accepted.
+     THE THIRD TIME THIS CODEBASE HAS FOUND THIS SHAPE: #712's zone rules, #1172's purchase count, and now
+     this. Each was a rule encoded where the control lives and never where the state moves. */
+  const ESCROW = readStripped("utils/auctionEscrow.ts");
+  const REDUCER = readStripped("utils/sandboxSession.ts");
+
+  it("keeps the increment in one module", () => {
+    expect(ESCROW).toContain("export const MIN_BID_INCREMENT = 5;");
+    expect(AUCTION).not.toContain("const MIN_BID_INCREMENT = 5;");
+  });
+
+  it("has the button read it rather than restate it", () => {
+    expect(AUCTION).toContain("const minimumBid = minimumBidFor({ faceValue: priv.face_value, bids: priv.bids });");
+  });
+
+  it("has the board ask the same question", () => {
+    expect(REDUCER).toContain(
+      "minimumBidFor({ faceValue: bidOnEntry.face_value, bids: bidOnEntry.bids })",
+    );
+  });
+
+  it("refuses by leaving the auction unchanged, so a replay never halts", () => {
+    /* #712's rule, and the reason a retroactive rule is survivable at all: an entry the log already contains
+       must not be able to stop a rebuild. */
+    const at = REDUCER.indexOf("minimumBidFor({ faceValue: bidOnEntry.face_value");
+    expect(REDUCER.slice(at, at + 200)).toContain("return unchanged;");
+  });
+
+  it("opens at face value plus the increment, not at face value", () => {
+    /* Design note #22: a bid at face is worth what the lowest offer can be bought outright for, so it offers
+       the seller nothing. Asserted as arithmetic rather than as source. */
+    const { minimumBidFor, MIN_BID_INCREMENT } =
+      require("./auctionEscrow") as typeof import("./auctionEscrow");
+    expect(minimumBidFor({ faceValue: 100, bids: [] })).toBe(100 + MIN_BID_INCREMENT);
+    expect(minimumBidFor({ faceValue: 100, bids: [{ bid_amount: "165" }] })).toBe(
+      165 + MIN_BID_INCREMENT,
+    );
+  });
+
+  it("counts the leader's own bid toward the high", () => {
+    /* Excluding it would let whoever holds the high bid re-submit their current amount -- which is the
+       reported symptom seen from one seat instead of two. */
+    const { minimumBidFor } = require("./auctionEscrow") as typeof import("./auctionEscrow");
+    expect(minimumBidFor({ faceValue: 20, bids: [{ bid_amount: "45" }, { bid_amount: "40" }] })).toBe(50);
   });
 });

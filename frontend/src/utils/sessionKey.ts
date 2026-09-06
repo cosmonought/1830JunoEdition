@@ -250,6 +250,17 @@ export type GameplayExecuteMsg =
         r: number;
         tile_id: number;
         orientation: number;
+        /** Design note #1204: WHICH PRIVATE POWER THIS LAY SPENT, if any -- `"dh-tile"` or `"csl-tile"`.
+         *
+         *  THE HEX CANNOT ANSWER THIS. A corporation may lay on F16 using the D&H's power or in spite of it,
+         *  and the two have opposite consequences: one spends the power, the other FORFEITS it
+         *  (`dhPowerState`: `forfeited = hexBuilt && !layUsed`). #817 is the report from getting it wrong --
+         *  "I placed a tile that was not the F16 one, and it seems the DH power was consumed."
+         *  SO IT IS A CHOICE, AND #550 PUTS CHOICES IN THE LOG. `PlaceHomeStation` already carries
+         *  `kind: "dh"` for the same reason; this is its twin on the lay.
+         *  OPTIONAL, per #232: absent means "this build did not say", which is every log written before the
+         *  note -- not "no power was used". */
+        ability_key?: string;
         /** Design note #824: WHERE THE TOKEN GOES, and A FIELD THE CONTRACT DOES NOT HAVE YET.
          *
          *  `tokenMigration.ts` #1 declared the destination un-sendable and preserved the index instead: "a UI

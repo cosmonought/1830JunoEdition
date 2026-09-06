@@ -18,6 +18,7 @@ import { STATION_HOME_HEXES } from "../components/hexContractTypes";
 import type { TileColorTier } from "../components/hexTileCatalog";
 import type {
   GameStateResponse,
+  MarketPositionMark,
   PublicCompanyState,
   PrivateCompanyState,
   RoundType,
@@ -241,14 +242,14 @@ export function sandboxMarketPositions(marks: SandboxMarketPrices): SandboxMarke
 
 /** The mark carries the CELL as well as the price: this chart repeats prices across rows, so re-deriving would jump a token sideways. GetMarketGrid returns (x, y) for the same reason.
  *  See docs/ai_architecture/sandbox_reducer.md - sandboxState.ts #272 */
-export interface SandboxMarketMark {
-  price: number;
-  x: number;
-  y: number;
-  /* An arrival ORDINAL derived from the marks already on the chart, not a clock -- a replay applies the whole log in one burst. Stamped only when the cell actually changes.
-     See docs/ai_architecture/sandbox_reducer.md - sandboxState.ts #646 */
-  enteredAt?: number;
-}
+/* Design note #1196: AN ALIAS NOW, not a second declaration. The shape moved to `gameState.ts` when the
+   positions became part of the state response, and the edge between the two modules is one-way -- so this
+   name survives for its ~40 call sites while there is exactly one definition behind it. Two copies of one
+   shape is #1184's failure, and this project has paid for that three times.
+   An arrival ORDINAL derived from the marks already on the chart, not a clock -- a replay applies the whole
+   log in one burst. Stamped only when the cell actually changes.
+   See docs/ai_architecture/sandbox_reducer.md - sandboxState.ts #646 */
+export type SandboxMarketMark = MarketPositionMark;
 
 /** The next arrival ordinal for a chart. One past the highest already on it,
  *  so it is monotonic without a counter to keep -- and derived, so a replay

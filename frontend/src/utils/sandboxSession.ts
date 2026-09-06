@@ -41,6 +41,23 @@ import { trimToTrainLimit } from "./trainLimit";
 import type { GameplayExecuteMsg } from "./sessionKey";
 // Design note #1100: numerals name tiers, words count trains.
 import { namedTrains as sayTrains } from "./trainPhrasing";
+/* Design note #1189: the lifecycle messages the shell used to own. `gameSetup.ts` imports nothing from this
+   module, so the edge is one-way and there is no cycle to introduce. */
+import {
+  dealSandboxGame,
+  isAnswerPrivatePurchaseMsg,
+  isAnswerTrainPurchaseMsg,
+  isCloseRoomMsg,
+  isExchangePrivateMsg,
+  isOpenStockRoundMsg,
+  isPlaceHomeStationMsg,
+  isProposePrivatePurchaseMsg,
+  isProposeTrainPurchaseMsg,
+  isSetBoParMsg,
+  isSetupGameMsg,
+} from "./gameSetup";
+import { BO_TICKER } from "./gameConstants";
+import { applyPrivateExchange } from "./privateExchange";
 import type { MapGridResponse, MapTileEntry } from "../components/hexContractTypes";
 import { TILE_CATALOG_BY_ID, type TileColorTier } from "../components/hexTileCatalog";
 import { archetypeForHex, hexValueForEra } from "../components/hexGeometry";
@@ -48,12 +65,14 @@ import { depotInventory, derivePhase, TIER_ORDER, trainTier, type GamePhase } fr
 // Design note #712: the market-zone purchase rules, shared with the Stock Round panel.
 import { sharePurchaseBlock, type PriceZone } from "./sharePurchase";
 import { hasActedThisTurn } from "./turnAction";
+// Design note #1184: the bid minimum, in one place the button and the board both read.
+import { minimumBidFor } from "./auctionEscrow";
 import { roundEndSoldOutRises } from "./soldOutRise";
 import { shareSaleBlock } from "./shareSale";
 import { metFloatThreshold, FULL_CAPITALISATION_MULTIPLE } from "./floatThreshold";
 // Design note #763: a float is not finished until its home token is on the board.
 import { homeTokenBlock } from "./homeTokenGate";
-import { dividendRefusal } from "./dividendGate";
+import { dividendRefusal, dividendRefused } from "./dividendGate";
 // Design note #1019: the purchase gate the reducer never had.
 import { trainPurchaseRefusal } from "./trainPurchaseGate";
 import { dividendSplit } from "./dividendSplit";
@@ -73,7 +92,8 @@ import { settlePresidencies } from "./presidencyTransfer";
 import type { SandboxMarketMark, SandboxMarketPrices } from "./sandboxState";
 // Design note #646: every marker landing is stamped with its arrival here,
 // so the operating-order tie-break has a history to read.
-import { withArrival } from "./sandboxState";
+import { reconcileParMarks, withArrival } from "./sandboxState";
+import { soldOutRises } from "./soldOutRise";
 import {
   OFFBOARD_LABELS,
   OFFBOARD_REVENUE,
@@ -191,10 +211,30 @@ export function buildOperatingOrder(
 ): number[] {
   /* Fall back to PAR, never zero, and coerce NaN: a comparator that returns NaN yields an order that is not total, which puts the cursor back on a corporation that already operated.
      See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #468 */
+  /* ==================================================================
+      DESIGN NOTE 1196: THE QUEUE READS THE STATE FIRST, AND THE RESOLVERS SECOND
+     ==================================================================
+     THIS IS THE LINE §5a WAS ABOUT. The three sort keys below -- price, column, arrival -- have always come
+     from resolvers backed by a React ref that each client maintained privately, so two clients whose charts
+     had drifted produced two different turn orders from one log. Indices 310/311 of `JUNO-3XD` are that
+     happening to real players.
+     `state.market_positions` IS THE SAME FIGURES, WRITTEN BY THE REDUCER AND DETERMINED BY THE LOG. Prefer
+     it wherever it exists and the queue becomes a function of the log by construction -- which is the
+     property #1174 and #1182 both tried to enforce from the wrong end, by refusing actions on a cursor
+     rather than by making the cursor agree.
+     THE RESOLVERS REMAIN THE FALLBACK, and #232's rule says why: `undefined` means "this caller carries no
+     positions", which is every log written before this note and the shell until increment 2. It does not
+     mean an empty chart -- that is `{}`, and it correctly yields par-priced companies with no column. */
+    const positions = state.market_positions;
+    const positionFor = (companyId: number) =>
+      positions ? positions[companyId] ?? null : markFor?.(companyId) ?? null;
+    const resolvedPriceFor = (companyId: number): number | null =>
+      positions ? positions[companyId]?.price ?? null : priceFor?.(companyId) ?? null;
+
   const priced = state.public_companies
     .filter((company) => company.is_floated && !!company.president)
     .map((company) => {
-      const fromMarket = priceFor?.(company.company_id);
+      const fromMarket = resolvedPriceFor(company.company_id);
       const fromPar = Number(company.par_value ?? 0);
       const price = Number.isFinite(fromMarket as number)
         ? (fromMarket as number)
@@ -203,7 +243,7 @@ export function buildOperatingOrder(
           : 0;
       /* Infinity for an unrecorded arrival sorts it after every recorded one rather than inventing a turn order.
          See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #646 */
-      const mark = markFor?.(company.company_id) ?? null;
+      const mark = positionFor(company.company_id);
       const arrival = mark?.enteredAt;
       return {
         companyId: company.company_id,
@@ -571,6 +611,22 @@ export interface SandboxActionContext {
   /* The author travels WITH the action. Resolving it from the local turn cursor made the reducer a function of local state rather than of the log -- a silent per-client divergence.
      See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #549 */
   actor?: string | null;
+  /* ==================================================================
+      DESIGN NOTE 1197: THE CHART'S GEOMETRY, AND ONLY ITS GEOMETRY
+     ==================================================================
+     THE DISTINCTION PHASE 1 TURNS ON. What arrives here is the price ladder's SHAPE -- where a token lands
+     when it steps -- which is a static board definition identical in every browser, no more dangerous to
+     inject than `hexTileCatalog`. What no longer arrives is where the tokens ARE: that is
+     `state.market_positions` now (#1196), because positions are the half two clients could disagree about.
+     `dividendRefused` AND `saleRefused` ARE DELIBERATELY NOT ACCEPTED. #748a and #774 asked for them because
+     the chart atom ran outside the reducer and had to be TOLD what the board would refuse; in here the
+     reducer already holds the state those predicates read, so it asks for itself. A caller that could still
+     supply them could still supply the wrong ones, which is exactly how #1194 rearranged an operating order
+     and cost half a day finding it. */
+  marketContext?: Omit<SandboxMarketContext, "dividendRefused" | "saleRefused">;
+  /** #1193/#415: the par box resolver, so a corporation parred BY this action has its token before the next
+   *  queue is built. Geometry, like the projections beside it. */
+  parCellFor?: (parPrice: number) => { x: number; y: number } | null;
   mapGrid?: MapGridResponse;
   /* `resetRouteRevenue` REMOVED by design note #777, and it is worth recording WHY rather than deleting
      quietly: it was a dispatch-time option meant to zero `last_route_revenue` on a turn's first route
@@ -1687,6 +1743,31 @@ export function applySandboxWaterfallAction(
   if ("WaterfallBidHigher" in msg) {
     const { private_id, bid_amount } = msg.WaterfallBidHigher;
     const amount = Number(bid_amount) || 0;
+    /* ==================================================================
+        DESIGN NOTE 1184: THE INCREMENT, ASKED WHERE THE STATE MOVES
+       ==================================================================
+       REPORTED: "clicking Bid on a private company is registering everyone with the same bid, but players
+       have to bid $5 more than the highest current bid."
+       THE BUTTON HAS ALWAYS ENFORCED THIS and the board never has. `minimumBidFor` was arithmetic inside
+       `WaterfallAuctionDashboard`, under a comment describing itself as a mirror of the contract constant --
+       so the input defaulted correctly, `bidRejectionReason` blocked anything short, and this arm took
+       whatever arrived. In ordinary play that is invisible; two clients that have not yet seen each other's
+       bid both compute `face + 5`, both submit it, and both are accepted.
+       SAFE IN A REPLAY, unlike #1182 above it. Both sides come out of the log: the amount travels in the
+       message and the standing bids are rebuilt from the same prefix on every client. No cursor, no chart,
+       no value that can differ between two browsers replaying one log.
+       IT DOES CHANGE HOW EXISTING LOGS REPLAY, which was the owner's call to make and was made knowingly: a
+       bid the button let through while stale is dropped on the next rebuild, and an auction's outcome can
+       shift. Recorded here because a silent retroactive rule is the thing that makes an old game
+       unreproducible.
+       A REFUSAL LEAVES THE STATE UNCHANGED (#712), so a replay never halts on it. */
+    const bidOnEntry = waterfall.privates.find((entry) => entry.private_id === private_id) ?? null;
+    if (
+      bidOnEntry !== null &&
+      amount < minimumBidFor({ faceValue: bidOnEntry.face_value, bids: bidOnEntry.bids })
+    ) {
+      return unchanged;
+    }
     return {
       waterfall: {
         ...waterfall,
@@ -2086,6 +2167,113 @@ export function applySandboxMarketAction(
 /* settleRoundTransitions -- the round machine belongs to the reducer. The shell used to perform transitions, so a replay rebuilt corporations correctly and left the round wherever the last live dispatch had put it.
    See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #642 */
 export function applySandboxAction(
+  state: GameStateResponse,
+  msg: GameplayExecuteMsg,
+  ctx?: SandboxActionContext,
+): GameStateResponse {
+  /* ==================================================================
+      DESIGN NOTE 1197: THE CHART STEP COMES INSIDE, SO NO CALLER CAN FORGET IT
+     ==================================================================
+     INCREMENT 2 OF PHASE 1. #1196 put the chart's POSITIONS on the state; this puts the MOVE that produces
+     them inside the reducer, which is the half that stops a caller being able to get it wrong.
+     AND A CALLER DID GET IT WRONG, twice, in one afternoon. The replay harness omitted `reconcileParMarks`
+     (#1193) and then wrote its own `marketContext` from the shape of the types rather than transcribing the
+     shell's (#1194) -- and each omission silently rearranged the operating order, because the chart moved
+     differently from the board. Every consumer of this reducer has to perform the same two-atom dance in the
+     same order (#272/#273: the chart advances FIRST, because the board needs the price it reports), and
+     "every consumer must remember" is the property this migration exists to delete.
+     GATED ON `market_positions`, exactly as #1196's read is. A caller carrying no positions keeps the old
+     arrangement untouched -- which is `App.tsx` until increment 3, still driving the atom itself. A caller
+     that carries them hands the whole job here and stops calling `applySandboxMarketAction` at all.
+     THE REFUSALS ARE NO LONGER INJECTED. #748a and #774 asked the shell to hand in `dividendRefused` and
+     `saleRefused` so the chart could refuse whatever the board refuses; in here the reducer holds the state
+     those predicates read, so it simply asks them. Two fewer injections, and the specific gap that cost
+     #1194 a day cannot be reopened.
+     `tradePrice` IS USED DIRECTLY rather than travelling back through `ctx.sharePrice`, so the wallet and
+     the chart cannot be handed two different figures for one trade (#273's whole point). */
+  if (state.market_positions) {
+    const priced = applySandboxMarketAction(state.market_positions, msg, {
+      ...ctx?.marketContext,
+      dividendRefused: (companyId: number) => dividendRefused(state, companyId),
+      saleRefused: (companyId: number, percentage: number) => {
+        const seller = ctx?.actor ?? null;
+        if (!seller) return false;
+        return shareSaleBlock({ state, seller, companyId, percentage }) !== null;
+      },
+    });
+    const settled: GameStateResponse = { ...state, market_positions: priced.prices };
+    return applySandboxActionInner(
+      settled,
+      msg,
+      priced.tradePrice === null
+        ? ctx
+        : { ...ctx, sharePrice: priced.tradePrice },
+      /* #1193: a par set BY this action lands a token the NEXT queue must see, so the reconcile runs after
+         the board settles -- the same order `App.tsx` runs it in. */
+      ctx?.parCellFor,
+    );
+  }
+
+  return applySandboxActionInner(state, msg, ctx);
+}
+
+function applySandboxActionInner(
+  state: GameStateResponse,
+  msg: GameplayExecuteMsg,
+  ctx?: SandboxActionContext,
+  parCellFor?: (parPrice: number) => { x: number; y: number } | null,
+): GameStateResponse {
+  const settledBoard = applySandboxActionCore(state, msg, ctx);
+  if (!settledBoard.market_positions) return settledBoard;
+
+  /* ==================================================================
+      DESIGN NOTE 746b, ANSWERED: THE RISE IS COMMITTED HERE NOW
+     ==================================================================
+     #746b's own sentence was the reason it lived in the shell: "the reducer has already USED these rises --
+     #746a overlays them so the operating queue sorts on post-rise prices -- but THE MARKET ATOM IS NOT PART
+     OF `GameStateResponse`, so the tokens themselves still have to be moved here."
+     THAT PREMISE STOPPED BEING TRUE AT #1196. The positions are on the state, so the half of this rule that
+     was stranded in `App.tsx` comes home to sit beside the half that was always here -- and the two can no
+     longer disagree about a price, which is the whole shape of §5a.
+     AFTER THE BOARD SETTLES, exactly as #746b explains and for its reason: a dividend or a sale is a move the
+     MESSAGE determines, so the state needs the price it produced; a rise is a move the RESULTING BOARD
+     determines -- who is sold out, and whether the round just closed -- and neither fact exists until the
+     reducer has run.
+     THE SAME `soldOutRises` CALL, with the marks read off the state rather than through an injected resolver.
+     Transcribed, not reimplemented: #1194 is what happens when this file writes its own version of something
+     `App.tsx` already does. */
+  const risen = ctx?.projectRise
+    ? soldOutRises({
+        before: state,
+        after: settledBoard,
+        markFor: (companyId) => settledBoard.market_positions?.[companyId] ?? null,
+        projectRise: ctx.projectRise,
+      })
+    : [];
+
+  let positions = settledBoard.market_positions;
+  for (const rise of risen) {
+    // #646: a rise is an arrival like any other, so it is stamped like one.
+    positions = {
+      ...positions,
+      [rise.companyId]: withArrival(positions, rise.companyId, {
+        price: rise.to,
+        x: rise.x,
+        y: rise.y,
+      }),
+    };
+  }
+
+  if (parCellFor) {
+    positions = reconcileParMarks(positions, settledBoard.public_companies, parCellFor);
+  }
+
+  return positions === settledBoard.market_positions
+    ? settledBoard
+    : { ...settledBoard, market_positions: positions };
+}
+
+function applySandboxActionCore(
   state: GameStateResponse,
   msg: GameplayExecuteMsg,
   ctx?: SandboxActionContext,
@@ -2747,11 +2935,270 @@ function settleRoundTransitions(
   return state;
 }
 
+/** Which private ability, if any, this message spends. `null` for the overwhelming majority.
+ *
+ *  TWO SOURCES, AND THEY ARE NOT SYMMETRIC (#1204).
+ *
+ *  `PlaceHomeStation` ALREADY SAYS SO. `kind: "dh"` distinguishes the D&H's free station from an ordinary
+ *  home placement and has done since #560 -- index 115 of `JUNO-3XD` is one. Nothing new was needed; the log
+ *  has been carrying this answer all along and nobody was reading it.
+ *
+ *  `LayTile` HAS TO BE TOLD. The same hex can be laid by the power or in spite of it, with opposite
+ *  consequences, and #817 is what getting that wrong looked like to a player. So the message carries an
+ *  explicit `ability_key` and this reads it rather than inferring from coordinates -- an inference is exactly
+ *  the heuristic that produced the report. */
+function abilitySpentBy(msg: GameplayExecuteMsg): string | null {
+  if (isPlaceHomeStationMsg(msg)) {
+    return msg.PlaceHomeStation.kind === "dh" ? "dh-token" : null;
+  }
+  if ("LayTile" in msg) {
+    const key = (msg.LayTile as { ability_key?: unknown }).ability_key;
+    return typeof key === "string" && key !== "" ? key : null;
+  }
+  return null;
+}
+
 function applyOneAction(
   state: GameStateResponse,
   msg: GameplayExecuteMsg,
   ctx?: SandboxActionContext,
 ): GameStateResponse {
+  /* ==================================================================
+      DESIGN NOTE 1189: THE LIFECYCLE MESSAGES COME HOME
+     ==================================================================
+     FOUND BY THE HEADLESS HARNESS (`replayLog.ts`), which replayed all 322 entries of `JUNO-3XD` and ended
+     with the game still in the opening auction: nothing floated, an empty operating order, no Operating
+     Round ever begun. The reducer was behaving correctly on the game it was handed. It was handed a game
+     that never started.
+
+     BECAUSE `isSandboxOnlyMsg` (`gameSetup.ts` #546) ENUMERATES TEN MESSAGES THE CHAIN NEVER KNEW ABOUT, and
+     `App.tsx` has been handling every one of them itself. That was correct while a browser was the only
+     thing that ever replayed a log. It stops being correct the moment anything else has to -- a test, a
+     diagnostic, or the authoritative server this is being extracted for. A SERVER HAS NO SHELL.
+
+     THESE TWO FIRST, because they are the ones that make a game a game: `SetupGame` deals it and
+     `OpenStockRound` ends the auction. Without the pair, no corporation can float and no Operating Round can
+     open, so every rule downstream is unreachable and untestable from the log alone. The remaining seven
+     (`SetBoPar`, `PlaceHomeStation`, `ExchangePrivate`, the two negotiation pairs, `CloseRoom`) follow.
+     `RevertTo` is NOT among them and never will be -- #1026: a revert is an instruction ABOUT the log, and
+     `effectiveActions` resolves it before the reducer sees any history at all.
+
+     THE SHELL KEEPS ITS NARRATION AND LOSES ITS ARITHMETIC, which is this project's standing division (#704:
+     "the reducer settles, the shell narrates"). `App.tsx` still writes the round line and the nicknames; it
+     no longer computes the state, because two writers of one fact is how they come to disagree. */
+  if (isSetupGameMsg(msg)) {
+    /* #902: THE VARIANTS COME OFF THE MESSAGE, never off a local selection. The host chose them, every client
+       deals from this action, and a replay must find the same answer the live game did. */
+    const dealt = dealSandboxGame({
+      players: msg.SetupGame.players,
+      variants: msg.SetupGame.variants,
+    });
+    /* A ROSTER THAT CANNOT BE DEALT LEAVES THE STATE ALONE (#712's rule: a refusal never halts a replay).
+       The shell says so to the player; the board simply does not move. */
+    if (!dealt) return state;
+    return {
+      ...state,
+      player_addresses: dealt.playerAddresses,
+      player_cash: dealt.playerCash,
+      virtual_bank_vgp: String(dealt.bankRemaining),
+      /* #902: what THIS game started with, not the printed constant -- a short game's ledger has to read
+         $4,500 or the bank gauge measures against a pool that was never there. */
+      virtual_bank_start: String(dealt.bankStart),
+      /* #902: recorded on state so the reducer can read it -- Unpredictable Revenue asks it on every run,
+         and a replay must find the same answer the live game did. */
+      variants: dealt.variants,
+      max_players: dealt.playerAddresses.length,
+      active_player_index: 0,
+      priority_deal_index: 0,
+      /* #535: a room starts UNOWNED. The fixture's mock presidents and private owners are cut, because no
+         `canAct` would ever match them. The board itself survives. */
+      public_companies: state.public_companies.map((company) => ({
+        ...company,
+        president: null,
+        player_holdings: [],
+        is_floated: false,
+      })),
+      private_companies: state.private_companies.map((entry) => ({
+        ...entry,
+        owner: null,
+        owner_protocol_id: null,
+      })),
+    };
+  }
+
+  if (isOpenStockRoundMsg(msg)) {
+    /* #546: the round turns over for everyone, because every client replays this. IDEMPOTENT -- a second copy
+       sets the same values, so the guard is an optimisation rather than a correctness requirement. */
+    if (state.current_round_type !== "WaterfallAuction") return state;
+    /* #905: THE ONE EVENT THAT CLOSES THE AUCTION, WHENEVER IT RAN -- at the top of a standard game, and
+       mid-game under the delayed variant. `private_auction_complete` is what unlocks the B&O (#904a), and two
+       events that both had to remember to set it is precisely how one of them comes not to.
+       #909: `openingStockRoundReset` is the one place that names what a Stock Round opening invalidates --
+       the sell-then-buy lock (#744) among them, which under the delayed variant would otherwise be carried
+       into Stock Round 3 and refuse a legal buy-back for the rest of the game. */
+    return {
+      ...state,
+      current_round_type: "StockRound",
+      private_auction_complete: true,
+      ...openingStockRoundReset(state),
+    };
+  }
+
+  if (isSetBoParMsg(msg)) {
+    /* #550: applied on every client, FROM THE LOG. The winner travels in the message rather than being
+       inferred from the turn cursor -- which is #549's rule, and the reason `SetBoParMsg` carries a `player`
+       at all.
+       #904b: THE REFUSAL IS ASKED FIRST so the shell can name the actual cause. It was once a bare identity
+       check that swallowed the whole event, and a player who had just paid for the B&O private got no
+       certificate, no par and no line anywhere.
+       THE PAR MARK IS NOT WRITTEN HERE. `placeParMark` moves the CHART, which is a separate atom this
+       reducer must not reach into (#273/#411) -- the shell still does it, and Phase 1 folds it in with the
+       rest of the chart. Recorded so the omission reads as a boundary rather than as a gap. */
+    const { player, par_value: parValue } = msg.SetBoPar;
+    if (boPresidencyRefusal(state, BO_TICKER) !== null) return state;
+    return grantBOPresidency(state, player, parValue, BO_TICKER);
+  }
+
+  /* ==================================================================
+      DESIGN NOTE 1198: THE LAST FIVE, AND THE LINE THEY DRAW
+     ==================================================================
+     THE REMAINDER OF `isSandboxOnlyMsg` (#1189): both negotiation pairs and the room closure. None of them
+     appears in `JUNO-3XD`, so unlike the first five these are NOT covered by the replay harness -- they are
+     covered by `shellMessageArms.test.ts`, written case by case, and that difference is worth stating rather
+     than discovering.
+     THE OFFER MESSAGES ARE PURE STATE and nothing else: propose writes the offer, answer clears it. What
+     they must NOT do is the thing the shell does next.
+     BECAUSE AN ACCEPTED OFFER DISPATCHES A NEW LOG ACTION -- an ordinary `BuyPrivateCompany` or
+     `BuyTrainFromCorporation`, so consent and legality run through the same code as every other purchase
+     (#662, #701). THAT IS AN EFFECT, NOT A STATE CHANGE, and it stays in the shell for #576's reason stated
+     in as many words there: "a consequence is DERIVED by every client, not appended by each of them --
+     appending inside a replay is how one win issued two certificates." A reducer that appended would do it
+     once per client and again on every rebuild.
+     SO THE DIVISION IS EXACT: the reducer settles what the offer DID to the board; the shell decides what to
+     SEND next. Same rule as #704's "the reducer settles, the shell narrates", one category over. */
+  if (isProposePrivatePurchaseMsg(msg)) {
+    const { private_id, private_name, owner, buyer_protocol_id, buyer_ticker, price } =
+      msg.ProposePrivatePurchase;
+    return {
+      ...state,
+      private_purchase_offer: {
+        private_id,
+        private_name,
+        owner,
+        buyer_protocol_id,
+        buyer_ticker,
+        price,
+      },
+    };
+  }
+
+  if (isAnswerPrivatePurchaseMsg(msg)) {
+    /* #662: answering an offer that is no longer there is NOT an error -- the first answer settles it and
+       the second finds nothing. A replayed duplicate takes this arm and changes nothing. */
+    const offer = state.private_purchase_offer ?? null;
+    if (!offer || offer.private_id !== msg.AnswerPrivatePurchase.private_id) return state;
+    return { ...state, private_purchase_offer: null };
+  }
+
+  if (isProposeTrainPurchaseMsg(msg)) {
+    const {
+      seller_protocol_id,
+      seller_ticker,
+      seller_president,
+      buyer_protocol_id,
+      buyer_ticker,
+      model_type,
+      price,
+    } = msg.ProposeTrainPurchase;
+    return {
+      ...state,
+      train_purchase_offer: {
+        seller_protocol_id,
+        seller_ticker,
+        seller_president,
+        buyer_protocol_id,
+        buyer_ticker,
+        model_type,
+        price,
+      },
+    };
+  }
+
+  if (isAnswerTrainPurchaseMsg(msg)) {
+    // #701: the same guard as #662's, for the same reason.
+    const offer = state.train_purchase_offer ?? null;
+    if (!offer || offer.seller_protocol_id !== msg.AnswerTrainPurchase.seller_protocol_id) {
+      return state;
+    }
+    return { ...state, train_purchase_offer: null };
+  }
+
+  if (isCloseRoomMsg(msg)) {
+    /* #899: THE FIRST CLOSE WINS AND THE REST ARE NOT ERRORS. Every client runs its own countdown and any
+       player may press the button, so this arm is reached several times for one closure -- by design. Both
+       guards refuse SILENTLY: a player whose timer lost the race has done nothing wrong.
+       THE PAYOUT IS NOT FIRED HERE. `room_closed` already true means this is a duplicate or a replay, and
+       the settlement is the shell's to dispatch once on the transition -- an effect, like the accepts above,
+       and the contract still owes a real guard of its own (`closeRoomPayout.ts` #899). */
+    if (state.room_closed === true) return state;
+    if (state.current_round_type !== "GameEnd") return state;
+    return { ...state, room_closed: true };
+  }
+
+  if (isExchangePrivateMsg(msg)) {
+    /* #573: THE RESOLVED GRANT, APPLIED EVERYWHERE. The legality question was answered once, by the acting
+       client, before this was ever appended -- so this arm applies a decision rather than re-deriving one,
+       and `ExchangePrivateMsg` carries every field that decision produced.
+       `applyPrivateExchange` REFUSES A CLOSED OR MISSING PRIVATE by returning the state it was handed, which
+       is what makes a replayed duplicate safe. */
+    const { private_id, company_id, player, source, keep_open } = msg.ExchangePrivate;
+    return applyPrivateExchange(state, {
+      ok: true,
+      privateId: private_id,
+      companyId: company_id,
+      ticker: state.public_companies.find((c) => c.company_id === company_id)?.ticker ?? "",
+      player,
+      source,
+      // Design note #576: the B&O's grant leaves its private OPEN; every other exchange closes it.
+      keepOpen: keep_open === true,
+    });
+  }
+
+  /* ==================================================================
+      DESIGN NOTE 1204: THE PRIVATE POWERS ARE RECORDED ON THE BOARD
+     ==================================================================
+     BEFORE EVERY OTHER ARM, and deliberately not inside them. Spending a power is a fact about the log
+     rather than about any one message's effect -- the lay still lays and the station still places -- so
+     recording it beside the arms would mean two arms remembering, which is how one of them comes not to
+     (#905's exact lesson, one file over).
+     ADDITIVE AND IDEMPOTENT. A replayed duplicate re-adds a key the list already holds and changes nothing;
+     the list is a set spelled as an array so it survives the wire without a `Set` on the other side. */
+  const spent = abilitySpentBy(msg);
+  if (spent !== null && !(state.used_private_abilities ?? []).includes(spent)) {
+    state = {
+      ...state,
+      used_private_abilities: [...(state.used_private_abilities ?? []), spent],
+    };
+  }
+
+  if (isPlaceHomeStationMsg(msg)) {
+    /* #550: a placement is a choice about a shared board, so it travels in the log and every client applies
+       it identically.
+       WITHOUT THE BOARD'S OWN LABEL TABLE THIS CANNOT BE DONE HONESTLY. `homeHexToAxial` is #363's
+       injection -- the map's `label -> (q, r)` table, so a corporation that floats gets its token on the hex
+       the board actually draws rather than on a coordinate this reducer guessed. A caller with no table gets
+       the state back unchanged rather than a token somewhere invented, which is the same answer
+       `buildOperatingOrder` gives when its price resolver is absent. */
+    if (!ctx?.homeHexToAxial) return state;
+    const {
+      company_id: companyId,
+      q,
+      r,
+      city_index: cityIndex,
+    } = msg.PlaceHomeStation;
+    return placeHomeStationToken(state, companyId, q, r, cityIndex, ctx.homeHexToAxial);
+  }
+
   /* Three cases, each saying one thing: undefined means solo (cursor is the actor), a seated author is used, anything else is null. `??` would reinstate the nondeterminism #549 removed.
      See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #549 */
   const logged = ctx?.actor;

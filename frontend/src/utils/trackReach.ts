@@ -30,8 +30,9 @@ import {
   evaluateHexForTileLaying,
 } from "../components/hexGeometry";
 import type { MapGridResponse } from "../components/hexContractTypes";
+import { TILE_CATALOG_BY_ID } from "../components/hexTileCatalog";
 import { neighbourAcross, traversalsFrom } from "./trackSegments";
-import { STATIC_BOARD_HEXES } from "../components/hexBoardData";
+import { STATIC_BOARD_HEXES, boardMemo, heraldHexFor } from "../components/hexBoardData";
 
 /** `"q,r"` -- the key every consumer of this module indexes by. */
 export function hexKey(q: number, r: number): string {
@@ -53,8 +54,8 @@ export function portKey(q: number, r: number, edge: number): string {
   return `${q},${r}:${edge}`;
 }
 
-const BOARD_KEYS: ReadonlySet<string> = new Set(
-  STATIC_BOARD_HEXES.map((hex) => hexKey(hex.q, hex.r)),
+const boardKeys = boardMemo(
+  (board): ReadonlySet<string> => new Set(board.hexes.map((hex) => hexKey(hex.q, hex.r))),
 );
 
 /* `connectedNeighbours` is GONE with design note #4. It answered "which hexes does this one carry rail toward",
@@ -82,7 +83,7 @@ function extensionAcross(
   if (!offset) return null;
   const nq = q + offset[0];
   const nr = r + offset[1];
-  if (!BOARD_KEYS.has(hexKey(nq, nr))) return null;
+  if (!boardKeys().has(hexKey(nq, nr))) return null;
   return { q: nq, r: nr };
 }
 
@@ -236,6 +237,45 @@ export function cityForArrival(
  * THIS IS THAT CONVERSION, and it lives beside `cityForArrival` so both walks reach the city index through
  * one function. That is the whole of the report's second item: the router and the validator now share the
  * resolver, rather than sharing a rule they apply to different granularities. */
+/* ==================================================================
+    DESIGN NOTE 1319: WHICH STOP A RAIL ARRIVES AT
+   ==================================================================
+   RULED: "a city can only ever be visited once by a train", and a route may run through one city of a hex and
+   then another city of the SAME hex, collecting both. Both rules need one answer: given the edge a train
+   arrives by, which stop on the hex does it reach? `cityForArrival` answers for hexes whose cities are
+   distinguished by `cityGroups`. This widens it to the double TOWNS, whose two stops are two separate rails
+   with no groups -- the stop is the authored path that carries the arrival edge -- so a train may visit both
+   towns of #1 or #630 and is refused a second visit to either. Everything else is one stop: index 0. */
+export function stopForArrival(
+  mapGrid: MapGridResponse,
+  q: number,
+  r: number,
+  edge: number,
+): number | null {
+  const laid = mapGrid.tiles.find((tile) => tile.q === q && tile.r === r);
+  const entry = laid ? TILE_CATALOG_BY_ID.get(laid.tile_id) : undefined;
+  if (laid && entry && entry.terrain === "DoubleTown" && entry.paths) {
+    const rot = ((laid.orientation % 6) + 6) % 6;
+    const at = entry.paths.findIndex(([a, b]) => (a + rot) % 6 === edge || (b + rot) % 6 === edge);
+    return at < 0 ? null : at;
+  }
+  return cityForArrival(mapGrid, q, r, edge);
+}
+
+/** `stopForArrival`, given the neighbour the train came from rather than the edge. `null` when the two hexes
+ *  are not adjacent or the edge carries no rail into any stop. */
+export function stopEnteredFrom(
+  mapGrid: MapGridResponse,
+  hex: { q: number; r: number },
+  from: { q: number; r: number },
+): number | null {
+  const arrivalEdge = HEX_NEIGHBOR_OFFSETS.findIndex(
+    (offset) => hex.q + offset[0] === from.q && hex.r + offset[1] === from.r,
+  );
+  if (arrivalEdge < 0) return null;
+  return stopForArrival(mapGrid, hex.q, hex.r, arrivalEdge);
+}
+
 export function cityEnteredFrom(
   mapGrid: MapGridResponse,
   hex: { q: number; r: number },
@@ -303,7 +343,7 @@ export function reachableTrack(
 
   for (const token of stationHexes) {
     const [q, r] = token;
-    if (!BOARD_KEYS.has(hexKey(q, r))) continue;
+    if (!boardKeys().has(hexKey(q, r))) continue;
     hexes.add(hexKey(q, r));
     /* `null` arrival: a station is entered from inside. Design note #686: from
        inside ONE CITY, though -- which is the part "every rail on it" got
@@ -388,7 +428,13 @@ export function reachableTrack(
       at.arrivalEdge !== null && blocksThrough
         ? (() => {
             const city = cityForArrival(mapGrid, at.q, at.r, at.arrivalEdge);
-            return city !== null && blocksThrough(at.q, at.r, city) ? city : null;
+            /* Design note #1323: A TOWN CAN BE BARRED TOO. `cityForArrival` is `null` where there is no city
+               to enter, and the predicate was never asked -- right while every block was a full city, wrong
+               the moment a hex could be shut on its own account (Coal River, unlicensed). Asked with city 0:
+               `cityBlocksThrough` answers a town's zero slots with `false`, so nothing changes for an ordinary
+               town, and a barred hex answers before slots are consulted. */
+            if (city === null) return blocksThrough(at.q, at.r, 0) ? 0 : null;
+            return blocksThrough(at.q, at.r, city) ? city : null;
           })()
         : null;
 
@@ -462,18 +508,34 @@ export function reachableNetwork(
 export function stationTokensOf(company: {
   station_token_hexes: ReadonlyArray<readonly [number, number]>;
   station_tokens?: ReadonlyArray<readonly [number, number, number]> | null;
+  /** Design note #1302: named so the herald can be found. Optional because older callers pass token lists. */
+  company_id?: number;
 }): StationToken[] {
   const recorded = company.station_tokens ?? [];
-  return company.station_token_hexes.map((hex) => {
+  const tokens: StationToken[] = company.station_token_hexes.map((hex) => {
     const match = recorded.find(([q, r]) => q === hex[0] && r === hex[1]);
     return match ?? hex;
   });
+  /* ==================================================================
+      DESIGN NOTE 1302: THE HERALD IS A ROOT, NOT A TOKEN
+     ==================================================================
+     1830+ prints PRR's herald on H12, a hex with no city. "PRR alone can (and must in its first turns) count
+     this as its home station." Every question that begins "where does this corporation's network start" --
+     the tile-lay veil, the station-placement reach, the route tracer's roots, the "can it run at all" check
+     -- comes through THIS reader (#686's whole point), so the herald is added here, once, and every one of
+     them sees a home without learning a rule. It is appended, not placed: `station_token_hexes` is untouched,
+     so token counts, token drawing and city blocking do not see a token that does not exist. */
+  const herald = company.company_id === undefined ? null : heraldHexFor(company.company_id);
+  if (herald && !tokens.some(([q, r]) => q === herald.q && r === herald.r)) {
+    tokens.push([herald.q, herald.r]);
+  }
+  return tokens;
 }
 
 export function layableHexes(input: LayableHexInput): LayableHexResult {
   const { mapGrid, stationHexes } = input;
 
-  const roots = stationHexes.filter(([q, r]) => BOARD_KEYS.has(hexKey(q, r)));
+  const roots = stationHexes.filter(([q, r]) => boardKeys().has(hexKey(q, r)));
   if (roots.length === 0) {
     return {
       hexes: new Set(),

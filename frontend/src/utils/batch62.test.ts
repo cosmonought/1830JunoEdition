@@ -104,7 +104,9 @@ describe("every ephemeral signal the shell holds has a way home", () => {
     for (const clear of [
       "setRevenueFlash(null)",
       "setActionToast(null)",
-      "setDividendPayout(null)",
+      /* Design note #1291: the machines are queued now; "clear" is shifting the head off the queue. */
+      "setDividendQueue((queue) => queue.slice(1))",
+      "setTreasuryQueue((queue) => queue.slice(1))",
       "setPrivatePayoutPhase(null)",
       "setHaunting(null)",
     ]) {

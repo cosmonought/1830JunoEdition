@@ -155,7 +155,9 @@ describe("the shell announces it once, when it lands", () => {
     /* Design note #1096: STILL DERIVED, from a different pair of states. `derivePhase` on `before` and
        `after` is the same claim the old `currentPhase` read made -- the era is a function of the highest
        train in play -- asked of the two states the dispatch already has rather than of render state. */
-    expect(CODE).toContain("const to = eraAfter ? tierEra(eraAfter) : null;");
+    // #1312: still derived from `after`'s own phase; `eraForPhase` adds the table's variants so a
+    // tile-set game's first Diesel announces brown -> gray.
+    expect(CODE).toContain("const to = eraAfter ? eraForPhase(derivePhase(after), tableVariants) : null;");
     expect(CODE).not.toContain("const eraNow = currentPhase");
   });
 

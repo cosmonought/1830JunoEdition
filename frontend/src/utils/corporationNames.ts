@@ -26,6 +26,9 @@ const CORPORATION_FULL_NAMES: Readonly<Record<string, string>> = {
   NYNH: "New York, New Haven & Hartford",
   "B&M": "Boston & Maine",
   CPR: "Canadian Pacific",
+  // Design note #1320: the Level Playing Field's two.
+  PMQ: "Pere Marquette",
+  "N&W": "Norfolk & Western",
 };
 
 /** Spellings this codebase already uses that are not the canonical key.
@@ -76,8 +79,10 @@ export const CORPORATION_DISPLAY_ORDER: readonly string[] = [
   "C&O",
   "CPR",
   "ERIE",
+  "N&W",
   "NYC",
   "NYNH",
+  "PMQ",
   "PRR",
 ];
 

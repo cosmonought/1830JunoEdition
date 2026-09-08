@@ -59,7 +59,8 @@ describe("the tile catalog can name every city it prints", () => {
       .filter((tile) => (tile.cityGroups?.length ?? 0) >= 2)
       .map((tile) => tile.tileId)
       .sort((a, b) => a - b);
-    expect(multi).toEqual([54, 59, 62, 64, 65, 66, 67, 68]);
+    // #1311: the standard eight, and the Project 18XX+ set's five two-city tiles.
+    expect(multi).toEqual([35, 36, 54, 59, 62, 64, 65, 66, 67, 68, 167, 626, 810, 882, 984]);
   });
 
   it("leaves no double-CITY tile ungrouped", () => {

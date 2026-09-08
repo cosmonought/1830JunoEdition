@@ -38,13 +38,16 @@ describe("the variant blurbs have one home (design note #961)", () => {
     }
   });
 
-  it("covers all four variants", () => {
+  it("covers all seven variants", () => {
     /* A blurb missing from the record is a toggle with no description at all -- and the components read by
        key, so the failure is `undefined` rendered as empty rather than an error. */
     expect(Object.keys(VARIANT_COPY).sort()).toEqual([
       "delayedAuction",
       "dynamicStockMarket",
+      "expandedMap",
       "gentleRust",
+      "levelPlayingField",
+      "plusTiles",
       "unpredictableRevenue",
     ]);
     for (const entry of Object.values(VARIANT_COPY)) {

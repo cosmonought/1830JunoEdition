@@ -8,28 +8,28 @@
 // two separated sections, with the corporate half COLLAPSED by default because the bank is the ordinary
 // case and a trade is the exception.
 //
-// Design note #1: the quantity field is a convenience, not a batch -- `BuyHardwareFromPool` carries no
-// quantity, so "buy 3" is three sequential messages. ONE TIER PER SUBMISSION, because 1830's depot is a
-// strict queue and a player wanting a 3 and a 4 is describing two situations separated by a phase change.
+// Design note #1: ONE TIER PER SUBMISSION, because 1830's depot is a strict queue and a player wanting a 3
+// and a 4 is describing two situations separated by a phase change.
+// Design note #1255: AND ONE TRAIN PER PRESS. The quantity selector (#1, #247, #696, #719) let a president buy
+// up to four in one press by dispatching that many `BuyHardwareFromPool` messages in a loop; it bought two of
+// three, charged for two and printed three (triage §2.1). The owner's ruling: "most players just click the Buy
+// button multiple times because it's the most clearly marked 'click me' action" -- delete it. Three presses
+// are three purchases, each through the reducer, each with its own line; there is nothing left to keep in
+// step. Subtractions do not come back.
 //
 // Design notes #2/#3: a train badge is the whole interaction (seller and model in one gesture), and
 // `BuyTrainFromCorporation` names one model and no count, so one train per trade.
 //
 // Design history: see `docs/ai_architecture/contract_economy.md`.
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import { ACTION_GREEN, ACTION_GREEN_BORDER, ACTION_GREEN_INK } from "../styles/palette";
 
 
 import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { corporationLabel } from "../utils/corporationNames";
 import { purchaseCeiling } from "../utils/purchaseCeiling";
-import {
-  buyableNow,
-  countableTrainCount,
-  isTrainLocked,
-  quantityOptionCount,
-} from "../utils/trainLimit";
+import { buyableNow, countableTrainCount, isTrainLocked } from "../utils/trainLimit";
 import { STICKY_OPTIONAL } from "../utils/stickyCollapse";
 // Design note #702: moved to its own file, because the train CHIPS draw it now too.
 import { TrainGlyph } from "./TrainGlyph";
@@ -40,6 +40,7 @@ import type { DepotTier, PhaseTint } from "../utils/gamePhase";
 // there be exactly one answer, not that any particular answer is correct.
 import { tierTint, trainTierName, trainTierNamePlural } from "../utils/gamePhase";
 import { stationTickerColor } from "./hexContractTypes";
+import { DIESEL_EXCHANGE_COST } from "../utils/dieselExchange";
 
 /** The subset of a corporation both sections need. */
 export interface TrainPurchaseCompany {
@@ -110,8 +111,12 @@ export interface TrainPurchasePanelProps {
   /** Why a new offer cannot be composed right now (one is already
    *  outstanding), or `null`. Stated rather than left as a dead button. */
   blockedReason: string | null;
-  /** `quantity` sequential `BuyHardwareFromPool` messages -- design note #1. */
-  onBuyFromBank: (tier: string, quantity: number) => void;
+  /** One `BuyHardwareFromPool` -- design note #1255: one train per press. */
+  onBuyFromBank: (tier: string) => void;
+  /** Design note #1326: THE OPEN SHELF. The rows a corporation may buy from right now -- one in the printed
+   *  game, the 6/7/D shelf under the Level Playing Field once a 6 is owned. Absent means "derive the queue
+   *  head from `depot`", which is every caller written before the shelf existed. */
+  openTiers?: readonly DepotTier[];
   /** ==================================================================
    *   DESIGN NOTE 1101: WHETHER FILLING THE LIMIT ALSO ENDS THE TURN
    *  ==================================================================
@@ -131,6 +136,16 @@ export interface TrainPurchasePanelProps {
   /** Whether the corporation is actually short -- computed by the caller, which is the only place that
    *  knows both the obligation and the depot. */
   emergencyAvailable?: boolean;
+  /** Design note #1303: THE D-TRAIN EXCHANGE (Project 18XX+). `null` when the table does not play it or the
+   *  Diesel is not yet for sale -- the controls do not render at all then, because a control for a rule that
+   *  is not in force is a question the player cannot answer. Present, `models` lists the buyer's tradeable
+   *  trains (one entry per train, roster order) and `problem` is the gate's sentence for a dead button. */
+  dieselExchange?: { models: readonly string[]; problem: string | null } | null;
+  onExchangeForDiesel?: (modelType: string) => void;
+  /** Design note #1314: TRAINS TRADED IN FOR A DIESEL AND BACK IN THE DEPOT, one line each with its own
+   *  "Pay $X". `problem` is the gate's sentence for a dead button, per train. Empty means no line. */
+  returnedTrains?: ReadonlyArray<{ model: string; cost: number; problem: string | null }>;
+  onBuyReturnedTrain?: (modelType: string) => void;
   /** Raises a proposal. Dispatches nothing itself: whether this completes
    *  immediately or waits on the seller is the caller's decision, because
    *  only the caller knows who is signing. */
@@ -171,9 +186,14 @@ export function TrainPurchasePanel({
   canAct,
   blockedReason,
   onBuyFromBank,
+  openTiers,
   endsTurnAtLimit = false,
   onEmergencyPurchase,
   emergencyAvailable,
+  dieselExchange = null,
+  onExchangeForDiesel,
+  returnedTrains = [],
+  onBuyReturnedTrain,
   onProposeTrade,
   labelForAddress,
   colorForAddress,
@@ -181,7 +201,13 @@ export function TrainPurchasePanel({
   condensed = false,
 }: TrainPurchasePanelProps) {
   /* ---- Bank section state ---- */
-  const [quantityText, setQuantityText] = useState("1");
+  /* Design note #1303: which of the buyer's trains goes back. Indexed rather than by model because a
+     corporation can hold two 4-trains; the first tradeable train is the default so the button is live the
+     moment the row appears. An index past the end (the roster shrank) falls back to the last chip. */
+  const [exchangeIndex, setExchangeIndex] = useState(0);
+  const exchangeModels = dieselExchange?.models ?? [];
+  const exchangeChosenIndex = Math.min(exchangeIndex, Math.max(0, exchangeModels.length - 1));
+  const exchangeChoice = exchangeModels[exchangeChosenIndex] ?? null;
 
   /* ---- Corporate section state ---- */
   const [corporateOpen, setCorporateOpen] = useState(defaultCorporateOpen);
@@ -245,9 +271,18 @@ export function TrainPurchasePanel({
   // Design note #182 (App.tsx): the depot sells the cheapest tier it still
   // holds, and only that one. `depotInventory` already applies the queue
   // rule, so this is a `find` rather than a second derivation.
+  /* Design note #1326: the shelf the buyer picks from. `openTiers` is the reducer's own answer
+     (`openDepotTiers`); without it the queue head is derived exactly as before. The chosen tier is local
+     state that falls back to the first row whenever the shelf changes under it. */
+  const shelf = useMemo(
+    () =>
+      openTiers ?? depot.filter((row) => row.remaining === null || row.remaining > 0).slice(0, 1),
+    [openTiers, depot],
+  );
+  const [chosenTier, setChosenTier] = useState<string | null>(null);
   const nextTier = useMemo(
-    () => depot.find((row) => row.remaining === null || row.remaining > 0) ?? null,
-    [depot],
+    () => shelf.find((row) => row.tier === chosenTier) ?? shelf[0] ?? null,
+    [shelf, chosenTier],
   );
 
   const depotSupply = nextTier === null ? 0 : (nextTier.remaining ?? 99);
@@ -381,27 +416,8 @@ export function TrainPurchasePanel({
     [ownedTrainCount, currentTrainLimit, depotSupply, limitDropsOnPurchase, limitAfterPurchase],
   );
 
-  /* Design note #719: the row shows the PHASE's limit and greys what this corporation cannot reach; the rule
-     and the reasoning live in `trainLimit.ts` beside `buyableNow`, which supplies the greying threshold. */
-  const optionCount = useMemo(
-    () => quantityOptionCount(currentTrainLimit, supplyCap),
-    [currentTrainLimit, supplyCap],
-  );
-
-  /* Design note #219: THE CAP MOVES WHILE THE FIELD IS SITTING THERE. Supply is derived from what every
-     corporation owns, so it drops when ANY of them buys -- including on a poll while this panel is open.
-     The submit guard catches that, but a field showing a number the player cannot buy next to a button that
-     refuses it reads as the UI being broken rather than as the depot having moved.
-     DOWNWARD ONLY. A supply that grows must not silently raise a quantity the player typed -- that would be
-     the UI buying more than they asked for. */
-  useEffect(() => {
-    const cap = Math.max(1, supplyCap);
-    setQuantityText((current) => {
-      const parsed = Number(current);
-      if (!Number.isFinite(parsed) || parsed <= cap) return current;
-      return String(cap);
-    });
-  }, [supplyCap]);
+  /* #1255: `optionCount` (#719) and the downward clamp on the typed quantity (#219) went with the selector.
+     `supplyCap` still says whether ONE purchase is legal, which is all the button asks now. */
 
   /* Design note #247 named which of two ceilings bound; #700 moved the rule into `purchaseCeiling` and split
      its answer by MOOD -- a caption volunteered permanently, a reason asked for by hovering a dead option.
@@ -417,15 +433,12 @@ export function TrainPurchasePanel({
     limitAfterPurchase,
   });
 
-  const quantity = Number(quantityText);
-  const quantityValid =
-    Number.isInteger(quantity) && quantity >= 1 && quantity <= Math.max(1, supplyCap);
   const treasury = Number(buyer?.treasury ?? 0) || 0;
-  const bankTotal = nextTier && quantityValid ? nextTier.cost * quantity : 0;
+  // #1255: one train, so the bank total IS the tier's price.
+  const bankTotal = nextTier ? nextTier.cost : 0;
   /** Design note #1101: whether THIS purchase takes the fleet to its ceiling. `limitHeadroom` is the
-   *  phase-aware walk (#296), so this and the quantity selector measure the same limit -- and `>=` rather
-   *  than `===` because a headroom of zero is already there and a quantity capped above it still fills it. */
-  const fillsTrainLimit = quantityValid && limitHeadroom > 0 && quantity >= limitHeadroom;
+   *  phase-aware walk (#296). #1255: one train per press, so it fills the limit exactly when one slot is left. */
+  const fillsTrainLimit = limitHeadroom === 1;
   /** ==================================================================
    *   DESIGN NOTE 1104: THE LABEL IS A NAMED VALUE, NOT AN EXPRESSION IN THE MARKUP
    *  ==================================================================
@@ -467,11 +480,9 @@ export function TrainPurchasePanel({
              a prohibition 1830 does not contain, and the only message on this panel that could fire while the
              corporation was legally under its limit. */
           `Train limit reached — ${buyer?.ticker ?? "this corporation"} already holds ${ownedTrainCount} of a maximum ${trainLimit} for this phase.`
-        : !quantityValid
-          ? `Enter a whole number between 1 and ${Math.max(1, supplyCap)}.`
-          : bankTotal > treasury
-            ? `${buyer?.ticker ?? "This corporation"}'s treasury holds $${treasury} — it cannot pay $${bankTotal}.`
-            : null;
+        : bankTotal > treasury
+          ? `${buyer?.ticker ?? "This corporation"}'s treasury holds $${treasury} — it cannot pay $${bankTotal}.`
+          : null;
 
   /* Design note #281: THE LIMIT IS A LIMIT ON HOLDINGS, NOT ON THE BANK. #230 had enforced the cap on the
      BANK section thoroughly, and the corporate section shared none of it -- because the cap had been reasoned
@@ -651,82 +662,42 @@ export function TrainPurchasePanel({
                   "Buy from bank" left the digits' subject unstated; that stays. What goes is the trailing
                   "from the Bank", which the section title now says once -- "Buy Trains from the Bank Depot"
                   -- rather than every buy line repeating it. */}
-              <span style={styles.quantityLabel}>Buy</span>
-              {/* Design note #247: A DROPDOWN THAT LISTS WHAT IS BUYABLE. Two things were true at once and it was not one
-                 bug. IT WAS NOT A DROPDOWN -- it was `<input type="number">` that silently CLAMPED, so typing 2 against a
-                 ceiling of 1 rewrote the field mid-keystroke, indistinguishable from the control refusing the digit. A
-                 clamp is the right behaviour and the wrong affordance: it enforces a rule the player cannot see by
-                 undoing their input.
-                 AND THE CEILING WAS OFTEN THE TRAIN LIMIT, NOT THE DEPOT -- `min(depot, limit - owned)` -- so the panel
-                 showed the depot's 2 and enforced the limit's 1 without ever mentioning the limit.
-                 A `<select>` fixes the first; `ceilingCaption`/`ceilingReason` name which rule set the ceiling and fix
-                 the second. */}
-              {/* Design note #696: A SEGMENTED ROW, NOT A DROPDOWN.
-                 REPORTED: "since players can only ever buy at most 4 trains in one purchase, the drop-down
-                 selector is a little over-the-top ... this would only need to show a maximum of 4 until the
-                 train limit drops to 3 and then 2, so it could shrink as the phases change. Players only need
-                 to click one to change the number instead of once to open a drop-down and once to select."
-                 EVERY WORD OF #247 SURVIVES -- it is the CONTROL that changes, not the reasoning. A `<select>`
-                 was the fix for an `<input type="number">` that silently clamped, and the property that made it
-                 right is that the options ARE the buyable set. A row of buttons has that property just as
-                 exactly, in one click instead of two, and it is the same shape as the sell-size and par
-                 selectors a player has already used twice by the time they reach this step.
-                 IT SHRINKS ON ITS OWN, which is the part that makes a row viable where it would not be for an
-                 open-ended count: `supplyCap` is already `min(depot stock, limit headroom)`, so the row is at
-                 most four and narrows as the phase turns -- no new rule, and nothing to keep in step. */}
-              <div
-                style={styles.quantityRow}
-                role="group"
-                aria-label={`How many ${nextTier.tier}-trains to buy from the Bank`}
-              >
-                {Array.from({ length: optionCount }, (_, index) => index + 1).map(
-                  (option, index) => {
-                    const selected = String(option) === quantityText;
-                    /* Design note #719: BEYOND THE CAP, NOT OFF THE ROW. The option is drawn, dead, and says
-                       why on hover -- `ceilingReason` already names whether it was the depot or the limit that
-                       bound, which is the sentence #700 wrote for exactly this hover and which the old row
-                       could only ever show on a control that had no dead options left to hover. */
-                    const beyondCap = option > supplyCap;
-                    const unavailable =
-                      !sessionReady || !canAct || atTrainLimit || supplyCap < 1 || beyondCap;
-                    return (
-                      <React.Fragment key={option}>
-                        {/* Design note #19 in `StockRoundPanel`: the separators are `aria-hidden`, so a
-                            screen reader hears four options rather than "1 slash 2 slash 3". */}
-                        {index > 0 && (
-                          <span style={styles.quantitySeparator} aria-hidden="true">
-                            /
-                          </span>
-                        )}
-                        <button
-                          type="button"
-                          aria-pressed={selected}
-                          disabled={unavailable}
-                          onClick={() => setQuantityText(String(option))}
-                          style={{
-                            ...styles.quantityOption,
-                            ...(selected ? styles.quantityOptionActive : {}),
-                            // Design note #681/#687: it passes `disabled`, so it computes a
-                            // disabled look. `Lobby.tsx` #3 -- inline styles cannot express
-                            // `:disabled`.
-                            ...(unavailable ? styles.quantityOptionDisabled : {}),
-                          }}
-                          title={
-                            unavailable
-                              ? (ceilingReason ?? "No trains can be bought right now.")
-                              : `Buy ${option} ${option === 1 ? "train" : "trains"}.`
-                          }
-                        >
-                          {option}
-                        </button>
-                      </React.Fragment>
-                    );
-                  },
-                )}
-              </div>
-              <span style={styles.quantityLabel}>
-                {nextTier.tier}-train{quantity === 1 ? "" : "s"}
-              </span>
+              {/* #1255: THE SELECTOR IS GONE. #247's dropdown, #696's segmented row and #719's "drawn and dead"
+                  options all sized a control whose whole job was to let one press buy several trains -- and
+                  that loop is what triage §2.1 caught buying two of three. One press, one train, named as
+                  such; a president who wants three presses three times, and reads three lines. */}
+              <span style={styles.quantityLabel}>Buy one {nextTier.tier}-train</span>
+              {/* Design note #1326: WHICH TIER, when the shelf offers more than one. The Level Playing Field
+                  opens 6s, 7s and Diesels together after the first 6; the printed game never shows this row,
+                  because its shelf is one tier long. The same slash-separated group the sell-size and par
+                  selectors use, so a player meets one control rather than a new one. */}
+              {shelf.length > 1 && (
+                <span style={styles.quantityRow} role="group" aria-label="Which train to buy">
+                  {shelf.map((row, index) => (
+                    <React.Fragment key={row.tier}>
+                      {index > 0 && (
+                        <span style={styles.quantitySeparator} aria-hidden="true">
+                          /
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        aria-pressed={nextTier.tier === row.tier}
+                        style={{
+                          ...styles.quantityOption,
+                          ...(nextTier.tier === row.tier ? styles.quantityOptionActive : {}),
+                        }}
+                        onClick={() => setChosenTier(row.tier)}
+                        title={`${trainTierName(row.tier)} at $${row.cost}${
+                          row.remaining === null ? "" : ` — ${row.remaining} left`
+                        }`}
+                      >
+                        {row.tier} · ${row.cost}
+                      </button>
+                    </React.Fragment>
+                  ))}
+                </span>
+              )}
 
               {/* ==================================================================
                    DESIGN NOTE 860: THE DEPOT'S STOCK, ON THE LINE THAT SPENDS IT
@@ -751,7 +722,7 @@ export function TrainPurchasePanel({
                           nextTier.remaining === 1
                             ? trainTierName(nextTier.tier)
                             : trainTierNamePlural(nextTier.tier)
-                        }. The quantity selector cannot exceed it.`
+                        }.`
                   }
                 >
                   {/* Design note #889: "Depot Supply: X of Y". Was `In the Bank Depot  X`, which named the
@@ -813,12 +784,9 @@ export function TrainPurchasePanel({
                 disabled={bankProblem !== null || !sessionReady || !canAct}
                 onClick={() => {
                   if (bankProblem) return;
-                  onBuyFromBank(nextTier.tier, quantity);
+                  onBuyFromBank(nextTier.tier);
                 }}
-                title={
-                  bankProblem ??
-                  `${quantity} x ${nextTier.tier}-train at $${nextTier.cost} each.`
-                }
+                title={bankProblem ?? `One ${nextTier.tier}-train at $${nextTier.cost}.`}
                 /* Design note #722: THE VISIBLE LABEL IS A PRICE; THE ACCESSIBLE NAME IS A SENTENCE.
                    A button reading "$600" is unambiguous BESIDE the sentence that sets it up, and a screen
                    reader does not get the sentence -- it announces the button alone, out of order and out of
@@ -827,9 +795,7 @@ export function TrainPurchasePanel({
                 aria-label={
                   atTrainLimit
                     ? "Train limit reached — no train can be bought."
-                    : `Buy ${quantity} ${nextTier.tier}-train${quantity === 1 ? "" : "s"} from the Bank for $${
-                        bankTotal || nextTier.cost
-                      }.`
+                    : `Buy one ${nextTier.tier}-train from the Bank for $${bankTotal || nextTier.cost}.`
                 }
               >
                 {/* Design note #722: THE COST ALONE.
@@ -936,6 +902,103 @@ export function TrainPurchasePanel({
                looking for the remedy has been told half a thing.
                AND IT DOES NOT REPLACE THE DISABLED BUY. #619's rule: the dead control carries the
                explanation, so removing it would remove the reason. */}
+            {/* ==================================================================
+                 DESIGN NOTE 1303: EXCHANGE AND PAY $800, UNDER THE PAY BUTTON
+                ==================================================================
+               RULED: "modify the Buy Trains from Bank subpanel to include a selector for a corporation's
+               train chips and an 'Exchange and Pay $800' button below the usual 'Pay' button when D-trains
+               become available."
+               THE ROW READS LIKE THE BUY LINE ABOVE IT: a lead, the choice, the one control that performs the
+               transaction, then the treasury projection in the house format (#913). The chips are the
+               corporation's own trains, one per train, so a fleet of two 4-trains offers two chips -- pressing
+               either trades one 4-train, and the roster shows which is left.
+               DEAD WITH ITS REASON (#619): the gate's sentence is the button's title and the line under it. */}
+            {dieselExchange && onExchangeForDiesel && exchangeModels.length > 0 && (
+              <div style={styles.exchangeRow}>
+                <span style={styles.exchangeLead}>Trade in</span>
+                <div style={styles.exchangeChips} role="radiogroup" aria-label="Train to trade in for a D-train">
+                  {exchangeModels.map((model, index) => {
+                    const chosen = index === exchangeChosenIndex;
+                    return (
+                      <button
+                        key={`${model}-${index}`}
+                        type="button"
+                        role="radio"
+                        aria-checked={chosen}
+                        style={{ ...styles.exchangeChip, ...(chosen ? styles.exchangeChipChosen : {}) }}
+                        onClick={() => setExchangeIndex(index)}
+                        title={`Trade this ${model}-train in for a D-train.`}
+                      >
+                        {model}
+                      </button>
+                    );
+                  })}
+                </div>
+                <button
+                  type="button"
+                  style={{
+                    ...styles.primaryButton,
+                    ...(dieselExchange.problem || !sessionReady || !canAct || !exchangeChoice
+                      ? styles.buttonDisabled
+                      : {}),
+                  }}
+                  disabled={dieselExchange.problem !== null || !sessionReady || !canAct || !exchangeChoice}
+                  onClick={() => {
+                    if (dieselExchange.problem || !exchangeChoice) return;
+                    onExchangeForDiesel(exchangeChoice);
+                  }}
+                  title={
+                    dieselExchange.problem ??
+                    `Trade one ${exchangeChoice}-train in and pay $${DIESEL_EXCHANGE_COST} for a D-train.`
+                  }
+                  aria-label={`Exchange one ${exchangeChoice ?? ""}-train and pay $${DIESEL_EXCHANGE_COST} for a D-train.`}
+                >
+                  Exchange and Pay ${DIESEL_EXCHANGE_COST}
+                </button>
+                {dieselExchange.problem === null && (
+                  <span style={styles.treasuryProjection}>
+                    Treasury: ${treasury} &gt; ${treasury - DIESEL_EXCHANGE_COST}
+                  </span>
+                )}
+                {dieselExchange.problem && <p style={styles.problem}>{dieselExchange.problem}</p>}
+              </div>
+            )}
+            {/* ==================================================================
+                 DESIGN NOTE 1314: ONE LINE PER RETURNED TRAIN, EACH WITH ITS OWN PAY
+                ==================================================================
+               RULED: a train traded in for a Diesel goes back to the depot at face value, and the subpanel
+               lists "each available train, with 'Pay $X' at the end of each one". The same shape as the buy
+               line above -- the sentence names the train, the button carries the price -- because it IS the
+               same transaction with a different source. Two returned 5-trains are two lines; pressing either
+               buys one. */}
+            {onBuyReturnedTrain &&
+              returnedTrains.map((train, index) => (
+                <div key={`${train.model}-${index}`} style={styles.buyRow}>
+                  <span style={styles.quantityLabel}>Buy a returned {train.model}-train</span>
+                  <button
+                    type="button"
+                    style={{
+                      ...styles.primaryButton,
+                      ...(train.problem || !sessionReady || !canAct ? styles.buttonDisabled : {}),
+                    }}
+                    disabled={train.problem !== null || !sessionReady || !canAct}
+                    onClick={() => {
+                      if (train.problem) return;
+                      onBuyReturnedTrain(train.model);
+                    }}
+                    title={train.problem ?? `One returned ${train.model}-train at its printed $${train.cost}.`}
+                    aria-label={`Buy one returned ${train.model}-train from the Bank for $${train.cost}.`}
+                  >
+                    Pay ${train.cost}
+                  </button>
+                  {train.problem === null && (
+                    <span style={styles.treasuryProjection}>
+                      Treasury: ${treasury} &gt; ${treasury - train.cost}
+                    </span>
+                  )}
+                  {train.problem && <p style={styles.problem}>{train.problem}</p>}
+                </div>
+              ))}
             {onEmergencyPurchase && emergencyAvailable && (
               <button
                 type="button"
@@ -1980,6 +2043,32 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#8a8a86",
     whiteSpace: "nowrap",
     alignSelf: "center",
+  },
+  /* Design note #1303: the exchange row, laid out like the buy line -- lead, choice, control, projection. */
+  exchangeRow: {
+    display: "flex",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: 8,
+  },
+  exchangeLead: { fontSize: FONT_SIZE.small, color: "#c9c4b8" },
+  exchangeChips: { display: "flex", gap: 4 },
+  exchangeChip: {
+    minWidth: 30,
+    padding: "4px 8px",
+    borderRadius: RADIUS.card,
+    border: "1px solid #5c6a52",
+    backgroundColor: "#2a2f27",
+    color: "#e6e2d6",
+    fontSize: FONT_SIZE.control,
+    fontWeight: 700,
+    fontFamily: "inherit",
+    cursor: "pointer",
+  },
+  exchangeChipChosen: {
+    border: "1px solid #4ade80",
+    backgroundColor: "#1f3a2a",
+    color: "#ffffff",
   },
   problem: { margin: 0, fontSize: FONT_SIZE.small, color: "#fb7185", lineHeight: 1.45 },
   note: { margin: 0, fontSize: FONT_SIZE.small, lineHeight: 1.5, color: "#8a8a86" },

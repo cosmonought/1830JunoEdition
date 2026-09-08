@@ -35,6 +35,9 @@ import type { MapGridResponse } from "../components/hexContractTypes";
 
 const APP = readStripped("App.tsx");
 const MACHINE = readStripped("components/DividendMoneyMachine.tsx");
+/* Design note #1291: the panel both machines draw. Cases about what is DRAWN moved here; cases about the
+   schedule and the sound stay on the machine. */
+const PANEL = readStripped("components/MoneyMachinePanel.tsx");
 const LOG = readStripped("utils/actionLog.ts");
 const FLASH = readStripped("components/RevenueModifierFlash.tsx");
 
@@ -109,16 +112,21 @@ describe("a train leaving the depot is news for everybody", () => {
        report's own framing ("update the websocket/event emission logic") would send the next reader looking
        for something this app does not have. */
     const gate = sliceBetween(APP, "deservesActionReceipt(msg) &&", "showActionToast(");
-    expect(gate).toContain("globallyBroadcast !== null ||");
+    /* Design note #1272: `|| actor` is gone with the buyer's toast; the depot line alone gates this. */
+    expect(gate).toContain("globallyBroadcast !== null");
   });
 
-  it("keeps the narrow scope for every other receipt", () => {
-    /* #718's RULE SURVIVES WHERE IT WAS AIMED. "'Did it go through' is a question about a button you
-       pressed" is still true of the emergency purchase's siblings, so the actor comparison is still in the
-       expression -- widened by an OR, not deleted. A change that dropped it outright would toast every
-       player for every receipt, which is the report #718 exists to answer. */
+  it("raises only the depot line here; the buyer's receipt is the treasury machine", () => {
+    /* #718's RULE SURVIVES WHERE IT WAS AIMED -- "'did it go through' is a question about a button you
+       pressed" -- and DESIGN NOTE 1272 moved the answer. The train-purchase toast "was not registering with
+       players", so the buyer's receipt is now the treasury sliding out under the action bar, read off the
+       state diff (`treasuryMovements`) rather than raised per message. What is left of this gate is the
+       depot-supply line, which #1063 made everybody's; the actor comparison went with the receipt it
+       scoped. */
     const gate = sliceBetween(APP, "deservesActionReceipt(msg) &&", "showActionToast(");
-    expect(gate).toContain("(options?.actor ?? viewerAddressRef.current) === viewerAddressRef.current");
+    expect(gate).not.toContain("(options?.actor ?? viewerAddressRef.current) === viewerAddressRef.current");
+    expect(APP).toContain("treasuryMovements(before, after)");
+    expect(APP).toContain("<TreasuryMoneyMachine\n        event={treasuryMovement}");
   });
 
   it("is still silent during a replay", () => {
@@ -205,7 +213,8 @@ describe("the toast says the short form and the log says the long one", () => {
   it("is built beside the sentence it shortens", () => {
     // #891: a depot count worded in two files is two files that can disagree about it.
     expect(LOG).toContain("export function trainPurchaseToastLine");
-    expect(APP).toContain("trainPurchaseToastLine(msg, {");
+    // #1230: passed as `gameplay` since `SetupGame` fell through un-narrowed; the call is the anchor, not its argument.
+    expect(APP).toContain("trainPurchaseToastLine(gameplay, {");
   });
 });
 
@@ -255,7 +264,8 @@ describe("the dividend arrives instead of being described", () => {
   it("restarts for a second payout rather than inheriting a finished one", () => {
     // #697's token, for #697's reason: two dividends can pay one viewer the same amount from one corporation.
     expect(APP).toContain("moneyMachineTokenRef.current += 1;");
-    expect(MACHINE).toContain("key={event.token}");
+    expect(MACHINE).toContain("token={event.token}");
+    expect(PANEL).toContain("key={token}");
   });
 });
 
@@ -267,8 +277,8 @@ describe("the merge is animated, and the figures do not depend on it", () => {
     /* Design note #1082 ADDED A PHASE IN FRONT OF `falling`, so the expression flipped to name the phases
        that show the OLD figure. Pinning the old string would have been satisfied only by the version that
        makes the panel arrive already showing the sum -- which defeats the pause this batch added. */
-    expect(MACHINE).toContain(
-      'const shown = phase === "holding" || phase === "falling" ? event.cashBefore : event.cashAfter;',
+    expect(PANEL).toContain(
+      'const shown = phase === "holding" || phase === "falling" ? holder.before : holder.after;',
     );
   });
 
@@ -312,9 +322,13 @@ describe("the merge is animated, and the figures do not depend on it", () => {
        turning motion off costs a player a figure.
        SO THE REDUCED PATH IS THE SAME FACTS WITHOUT THE TRAVEL -- the panel appears merged, and because the
        total is React state rather than a keyframe there is nothing to lose by not animating. */
-    expect(MACHINE).toContain("@media (prefers-reduced-motion: reduce)");
-    const reduced = sliceBetween(MACHINE, "@media (prefers-reduced-motion: reduce) {", "}\n`");
-    expect(reduced).toContain(".app-money-machine-fall { animation: none;");
+    /* Design note #1291: the flight is a Web Animation started only in the `falling` phase, which a
+       reduced-motion reader never enters (the machine starts them at `merged`); the figure then stays put
+       as a static statement, because `landed` is true only after a flight. */
+    expect(MACHINE).toContain('setPhase(quiet ? "merged" : "holding")');
+    expect(PANEL).toContain('if (phase === "falling") flewRef.current = true;');
+    expect(PANEL).toContain('setLanded(flewRef.current && (phase === "merged" || phase === "leaving"));');
+    expect(PANEL).toContain("@media (prefers-reduced-motion: reduce)");
   });
 
   it("animates only the two properties that do not re-lay the panel out", () => {
@@ -325,17 +339,21 @@ describe("the merge is animated, and the figures do not depend on it", () => {
        slice. An implementation that animated `height` on the way down would have passed. `sliceBetween`
        throws on a MISSING anchor and says nothing about a loose one, which is the trap the last batch found
        the hard way. */
-    const css = sliceBetween(MACHINE, "@keyframes app-money-machine-drop", ".app-money-machine {");
-    expect(css).toContain("translateY");
-    expect(css).toContain("opacity");
-    expect(css).not.toContain("height");
-    expect(css).not.toContain("margin");
+    /* Design note #1291: the drop keyframes are gone; the amount FLIES to the total under a Web Animation
+       on `left`/`top`/`opacity` (#1289: never a transform under the chrome zoom). The panel's own box never
+       changes size -- that reflow was the report. */
+    const flight = sliceBetween(PANEL, "flightRef.current = amount.animate(", ");");
+    expect(flight).toContain("left:");
+    expect(flight).toContain("top:");
+    expect(flight).toContain("opacity");
+    expect(flight).not.toContain("transform");
+    expect(flight).not.toContain("height");
   });
 
   it("reports without receiving, over a board that must stay clickable", () => {
     // `ActionToast`'s standing rule, and it matters more here: this sits over the map, where a swallowed
     // click is a lost tile lay.
-    expect(MACHINE).toContain('pointerEvents: "none"');
+    expect(PANEL).toContain('pointerEvents: "none"');
   });
 
   it("puts a distinct ground under its ink, which is the stated requirement", () => {
@@ -352,7 +370,7 @@ describe("the merge is animated, and the figures do not depend on it", () => {
        engine can show, so asserting it would be asserting a no-op.
        WHAT IS ASSERTED NOW IS THE PROPERTY: the ground is opaque, and its ink clears the contrast floor
        against it. `batch63` owns the palette arithmetic. */
-    const panel = sliceBetween(MACHINE, "panel: {", "},");
+    const panel = sliceBetween(PANEL, "panel: {", "},");
     expect(panel).toContain("backgroundColor: CARD_SURFACE");
     /* NOT `not.toContain("rgba(")`, which was my first draft and was wrong for the reason this suite keeps
        relearning: it pins more than the claim. The panel's DROP SHADOW is legitimately `rgba(0,0,0,0.55)`,
@@ -366,11 +384,11 @@ describe("the merge is animated, and the figures do not depend on it", () => {
 describe("the till slides in and out", () => {
   it("arrives from the right edge and leaves the same way", () => {
     // "Slides in from the right edge of the screen (`translateX(100%)` to `0`)" and back out.
-    const arrive = sliceBetween(MACHINE, "@keyframes app-money-machine-in", "@keyframes");
-    expect(arrive).toContain("translateX(100%)");
-    expect(arrive).toContain("translateX(0)");
-    const leave = sliceBetween(MACHINE, ".app-money-machine-out {", "}");
-    expect(leave).toContain("translateX(100%)");
+    /* Design note #1291: on `right`, not a transform (#1289), from off the edge to the corner. */
+    const arrive = sliceBetween(PANEL, "@keyframes app-money-panel-in", "}\n.app-money-panel {");
+    expect(arrive).toContain("right: -280px");
+    expect(arrive).toContain("right: 24px");
+    expect(PANEL).toContain(".app-money-panel-out {");
   });
 
   it("lingers a full second on the merged total", () => {
@@ -435,11 +453,13 @@ describe("reduced motion is a different schedule, not just a stilled one", () =>
        WHICH MAKES THIS CASE'S CLAIM BIGGER, NOT SMALLER. A reduced-motion reader keeps the figure on screen
        as a static statement -- and a figure that kept its opacity while losing its track would be visible
        with nowhere to be. So the override has to restore BOTH, and both are asserted. */
-    const reduced = sliceBetween(MACHINE, "@media (prefers-reduced-motion: reduce) {", "}\n`");
-    expect(reduced).toContain(".app-money-machine-landed { opacity: 1;");
-    expect(reduced).toContain("grid-template-rows: 1fr;");
-    expect(reduced).toContain(".app-money-machine { animation: none; }");
-    expect(reduced).toContain(".app-money-machine-out { transition: none;");
+    /* Design note #1291: no media override is needed for the figure any more -- `landed` (which hides the
+       amount) is only ever true after a flight, and a reduced-motion machine never flies. The slide-in and
+       slide-out are still stilled in the media block. */
+    expect(PANEL).toContain("setLanded(flewRef.current && (phase === \"merged\" || phase === \"leaving\"));");
+    const reduced = sliceBetween(PANEL, "@media (prefers-reduced-motion: reduce) {", "}\n`");
+    expect(reduced).toContain(".app-money-panel { animation: none; }");
+    expect(reduced).toContain(".app-money-panel-out { transition: none;");
   });
 });
 

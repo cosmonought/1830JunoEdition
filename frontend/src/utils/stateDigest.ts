@@ -135,3 +135,48 @@ export function digestOf(canonical: string): string {
 export function stateDigest(state: GameStateResponse): string {
   return digestOf(canonicalJson(state));
 }
+
+/* ==================================================================
+    DESIGN NOTE 1225: A HASH SAYS "DIFFERENT". IT DOES NOT SAY "WHERE".
+   ==================================================================
+   #1223's alarm works -- it caught a real divergence two actions into a game -- and then hands over two
+   sixteen-character strings and no way to act on them. Finding the field meant reconstructing both boards by
+   hand, which is exactly the archaeology the digest was supposed to replace.
+
+   ONE DIGEST PER TOP-LEVEL FIELD, over the SAME canonical form. Comparing two of these maps names the field
+   in one step, and the field is nearly always enough: `market_positions` was #1224, and knowing that took the
+   diagnosis from a search of the codebase to a single line of reasoning.
+
+   TOP-LEVEL ONLY, DELIBERATELY. A recursive per-path digest would name the exact cell, and would also be a
+   map of thousands of entries printed into a console -- unreadable, and slow enough to matter on every settle
+   point. The field narrows it to one array; the array is small enough to read.
+
+   THE SAME `canonicalJson` AS THE WHOLE-STATE DIGEST, so the two agree by construction: a state whose fields
+   all match has a matching digest, and a mismatch is always locatable here. A second serialisation would be
+   #1184's shape in the diagnostic itself -- a tool that disagrees with the thing it is explaining. */
+export function fieldDigests(state: GameStateResponse): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const key of Object.keys(state).sort()) {
+    out[key] = digestOf(canonicalJson((state as unknown as Record<string, unknown>)[key]));
+  }
+  return out;
+}
+
+/** The field names whose digests differ, sorted. A field on one side and absent on the other counts.
+ *
+ *  NAMES, NOT VALUES. The caller has one of the two boards in front of it and can print whatever the named
+ *  field holds; carrying values here would put a whole board through a console line to say one word. */
+export function divergentFields(
+  left: Record<string, string>,
+  right: Record<string, string>,
+): string[] {
+  const keys = Object.keys(left).concat(Object.keys(right));
+  const seen: Record<string, true> = {};
+  const union: string[] = [];
+  for (const key of keys) {
+    if (seen[key]) continue;
+    seen[key] = true;
+    union.push(key);
+  }
+  return union.filter((key) => left[key] !== right[key]).sort();
+}

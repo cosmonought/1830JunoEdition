@@ -35,12 +35,13 @@ function boardWith(tileIds: number[]): MapGridResponse {
 }
 
 describe("the mirrored tray counts", () => {
-  it("carries a real printed count for all 46 tiles", () => {
+  it("carries a real printed count for all 46 standard tiles (and the 28 of the tile set)", () => {
     /* Design note #626: `UNLIMITED_TILE_SUPPLY` (u32::MAX) is deliberately
        not modelled because nothing uses it. If the backend ever does, this
        is the assertion that says so before anyone renders "4294967295
        left". */
-    expect(TILE_CATALOG).toHaveLength(46);
+    expect(TILE_CATALOG).toHaveLength(76); // #1311/#1317: 46 standard + 30 Project 18XX+
+    expect(TILE_CATALOG.filter((entry) => entry.plusOnly !== true)).toHaveLength(46);
     for (const entry of TILE_CATALOG) {
       expect(Number.isInteger(entry.quantity)).toBe(true);
       expect(entry.quantity).toBeGreaterThan(0);
@@ -53,10 +54,16 @@ describe("the mirrored tray counts", () => {
        ONLY yellow city tile in this catalog, and eight corporations need a
        home station. */
     const yellowCities = TILE_CATALOG.filter(
-      (entry) => entry.color === "Yellow" && entry.terrain === "MajorCityHub",
+      (entry) => entry.color === "Yellow" && entry.terrain === "MajorCityHub" && entry.plusOnly !== true,
     );
     expect(yellowCities.map((entry) => entry.tileId)).toEqual([57]);
     expect(yellowCities[0].quantity).toBe(4);
+    // #1311: the tile set adds two more yellow cities, in ITS tray only.
+    expect(
+      TILE_CATALOG.filter((entry) => entry.color === "Yellow" && entry.terrain === "MajorCityHub")
+        .map((entry) => entry.tileId)
+        .sort((a, b) => a - b),
+    ).toEqual([5, 6, 57]);
 
     // Every yellow double-town is a single physical copy.
     for (const id of [1, 2, 55, 56, 69]) {
@@ -119,7 +126,7 @@ describe("tileStock", () => {
 });
 
 describe("tileStockTable", () => {
-  it("covers every catalog entry", () => {
+  it("covers every entry in the tray in effect -- the standard 46 here", () => {
     const table = tileStockTable(boardWith([57, 8]));
     expect(table.size).toBe(46);
     expect(table.get(57)?.remaining).toBe(3);

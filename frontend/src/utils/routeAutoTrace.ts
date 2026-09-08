@@ -35,7 +35,7 @@ import {
   liveEdgesForHex,
 } from "../components/hexGeometry";
 import type { MapGridResponse } from "../components/hexContractTypes";
-import { STATIC_BOARD_HEXES } from "../components/hexBoardData";
+import { STATIC_BOARD_HEXES, boardMemo, heraldAt } from "../components/hexBoardData";
 import type { TileColorTier } from "../components/hexTileCatalog";
 import { isRouteTerminusHex, sandboxRouteBreakdown } from "./sandboxSession";
 // Design note #730: which city an arrival lands in -- shared with the network walk so both ask one question.
@@ -66,12 +66,13 @@ export interface TracedHex {
   bypass?: boolean;
 }
 
-const LABEL_BY_COORD: ReadonlyMap<string, string> = new Map(
-  STATIC_BOARD_HEXES.map((hex) => [`${hex.q},${hex.r}`, hex.label]),
+const labelByCoord = boardMemo(
+  (board): ReadonlyMap<string, string> =>
+    new Map(board.hexes.map((hex) => [`${hex.q},${hex.r}`, hex.label])),
 );
 
 function labelFor(q: number, r: number): string | null {
-  return LABEL_BY_COORD.get(`${q},${r}`) ?? null;
+  return labelByCoord().get(`${q},${r}`) ?? null;
 }
 
 /* `connectedNeighbours` is GONE with design note #9 -- it was this file's last hex-as-a-node walker, and the
@@ -478,6 +479,8 @@ function candidatePathsFrom(
    *  parameters -- the whole of the reported bug was them sharing one constant. */
   maxPathHexes: number = MAX_PATH_HEXES,
   maxExpansions: number = MAX_EXPANSIONS,
+  /** Design note #1302: the corporation running, so its printed herald prices and may be declined. */
+  forCompanyId?: number,
 ): SearchResult[] {
   const found: SearchResult[] = [];
   let expansions = 0;
@@ -534,6 +537,7 @@ function candidatePathsFrom(
       // Design note #737: the bypass flag travels into the pricing.
       path.map((point) => ({ hex: point.hexLabel, bypass: point.bypass })),
       era,
+      forCompanyId,
     );
 
     /* A route needs two paying stops to be a route at all -- 1830's two-revenue-centre minimum, which the
@@ -543,7 +547,7 @@ function candidatePathsFrom(
       path.length >= 2 &&
       breakdown.centres >= 2 &&
       breakdown.centres <= maxCentres &&
-      isRouteTerminusHex(mapGrid, at.hexLabel)
+      isRouteTerminusHex(mapGrid, at.hexLabel, forCompanyId)
     ) {
       /* Recomputed rather than copied from `used`: that set holds the TRANSITS taken so far, and a route also holds
          the rails it STARTS and STOPS on. A terminus is not a transit -- it is discovered at the moment the route
@@ -649,7 +653,7 @@ function candidatePathsFrom(
       /* Design note #737: typed as `HexTraversal[]` so the start branch and the transit branch are one shape.
          Left as an inferred literal, the start's `{exitEdge, segments}` widened the union and the variant
          fields became unreachable on both. */
-      const exits: HexTraversal[] =
+      const rawExits: HexTraversal[] =
         arrivalEdge === null
           ? /* Design note #852: THE TOKEN'S CITY, NOT THE HEX. `cityExitEdges` returns every live edge when
                `startCity` is `null` -- one city, or a caller that did not say -- so the ordinary board is
@@ -659,6 +663,21 @@ function candidatePathsFrom(
               segments: [] as readonly SegmentKey[],
             }))
           : traversalsFrom(mapGrid, at.q, at.r, arrivalEdge);
+      /* Design note #1302: THE OWNER MAY PASS ITS HERALD WITHOUT COUNTING IT. Crossing the herald hex, every
+         way through is offered twice -- once stopping (the $10, one centre) and once as a bypass, which the
+         pricing already reads as "passed, not counted" (#737). The search then finds for itself whether the
+         stop is worth a centre of a short train's budget. Only when arriving: a route that STARTS here is
+         starting from its home, and a home is counted. */
+      const heraldHere =
+        arrivalEdge !== null &&
+        forCompanyId !== undefined &&
+        heraldAt(at.hexLabel)?.companyId === forCompanyId;
+      const exits: HexTraversal[] = heraldHere
+        ? rawExits.flatMap((transit) => [
+            { ...transit, bypass: false },
+            { ...transit, bypass: true },
+          ])
+        : rawExits;
 
       for (const transit of exits) {
         /* Design note #808: THE REFUSAL, PER ARM. A city full of other corporations' tokens says nothing
@@ -757,6 +776,8 @@ export interface AutoTraceInput {
    *  for the same reason the network walk's copy is: the slot counts and the token owners live in places this
    *  module may not read. Omitted means no blocking, which reproduces every pre-#730 caller. */
   blocksThrough?: BlocksThrough;
+  /** Design note #1302: the corporation running. Only a board that prints a herald reads it. */
+  companyId?: number;
 }
 
 export interface AutoTraceResult {
@@ -825,6 +846,7 @@ function candidateRoutes(input: AutoTraceInput): SearchResult[] {
       input.blocksThrough,
       MAX_PATH_HEXES,
       expansionLimit,
+      input.companyId,
     );
     all.push(...oneArm);
 
@@ -847,6 +869,7 @@ function candidateRoutes(input: AutoTraceInput): SearchResult[] {
         input.blocksThrough,
         MAX_PATH_HEXES,
         expansionLimit,
+        input.companyId,
       );
       for (const armB of armsB) {
         if (armB.path.length < 2) continue;
@@ -858,6 +881,7 @@ function candidateRoutes(input: AutoTraceInput): SearchResult[] {
           mapGrid,
           joined.map((point) => ({ hex: point.hexLabel, bypass: point.bypass })),
           era,
+          input.companyId,
         );
         if (breakdown.centres > cap) continue;
         // Re-priced whole rather than summing the two arms: the token hex
@@ -928,6 +952,8 @@ export interface RouteSetInput {
   trains: readonly RouteSetTrain[];
   /** Design note #730: threaded to every train's search, so a corporation's whole draft respects the walls. */
   blocksThrough?: BlocksThrough;
+  /** Design note #1302: the corporation running, for its herald. */
+  companyId?: number;
 }
 
 export interface RouteSetResult {
@@ -960,6 +986,7 @@ export function assignRouteSet(input: RouteSetInput): RouteSetResult {
       excludeSegments: occupied,
       // Design note #730: every train in the set walks the same walls.
       blocksThrough,
+      companyId: input.companyId,
     });
 
   /* STRATEGY A: sequential, in a given train order. This is the OLD algorithm, kept deliberately -- see design

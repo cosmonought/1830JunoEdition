@@ -23,7 +23,8 @@ import type { GameStateResponse, PlayerNetWorthResponse, QueryCapableClient } fr
 // Design note #497: the local valuation, for when there is no chain to ask.
 import { estimatePlayerNetWorth, sharePriceFor } from "../utils/gameState";
 import { PRIORITY_DEAL_TOOLTIP } from "../utils/gameState";
-import { FONT_SIZE, RADIUS } from "../styles/typography";
+import { resolveVariants } from "../utils/gameVariants";
+import { FONT_SIZE, RADIUS, VIEWPORT_RADIUS } from "../styles/typography";
 // `ContextualSubPanel` design note #170: a name beats a truncated hash, and this returns `null` for a real
 // wallet so live rooms are unchanged.
 // Design note #559: the ROOM-AWARE resolver. Importing it from `sandboxState` got the fixture's Alice/Bob
@@ -55,7 +56,7 @@ import { CapacityPill, LastRoutePayout, TrainChips } from "./TrainBadges";
 // Design note #710: the Liquidity column, from the same rules the emergency-purchase plan reads.
 import { playerLiquidity } from "../utils/endgame";
 import { marketZoneForPrice, type MarketGridResponse } from "./StockMarketRenderer";
-import { DEPOT_SCHEDULE, rustLabel } from "../utils/depotSchedule";
+import { DEPOT_SCHEDULE, firstPurchaseEffects, rustLabel } from "../utils/depotSchedule";
 import { showsCurseBesideName } from "../utils/carcosaCurse";
 import CarcosaMark from "./CarcosaMark";
 import {
@@ -216,6 +217,8 @@ function DepotInventoryTable({ gameState }: { gameState: GameStateResponse }) {
   const phase = derivePhase(gameState);
   const outlook = rustOutlook(gameState);
   const tiers = depotInventory(gameState);
+  // #1312: whether this table's Diesel era is Gray.
+  const plusTiles = resolveVariants(gameState?.variants).plusTiles;
 
   return (
     <>
@@ -303,22 +306,22 @@ function DepotInventoryTable({ gameState }: { gameState: GameStateResponse }) {
                       this row has -- a header cannot, because it is the same for every row. */}
                   <td style={styles.tdTight}>
                     <span style={styles.depotTiles}>
-                      {tileErasAt(row.tier as TrainTier).map((era) => (
+                      {tileErasAt(row.tier as TrainTier, plusTiles).map((era) => (
                         <EraHex key={era} tone={era} size={11} />
                       ))}
                       <span style={styles.srOnly}>
-                        {`Tiles available: ${tileErasAt(row.tier as TrainTier).join(", ")}.`}
+                        {`Tiles available: ${tileErasAt(row.tier as TrainTier, plusTiles).join(", ")}.`}
                       </span>
                     </span>
                   </td>
                   <td style={styles.td}>
                     {/* Design note #735: a LIST, because Phase 5 genuinely does two things. Semicolon-joined
                        prose was how the second one came to look like a footnote to the first. */}
-                    {(DEPOT_SCHEDULE[row.tier]?.onFirstPurchase ?? []).length === 0 ? (
+                    {firstPurchaseEffects(row.tier, plusTiles).length === 0 ? (
                       <span style={styles.depotNone}>—</span>
                     ) : (
                       <ul style={styles.depotEffects}>
-                        {DEPOT_SCHEDULE[row.tier].onFirstPurchase.map((effect) => (
+                        {firstPurchaseEffects(row.tier, plusTiles).map((effect) => (
                           <li key={effect}>{effect}</li>
                         ))}
                       </ul>
@@ -1007,7 +1010,8 @@ const styles: Record<string, React.CSSProperties> = {
     margin: "0 20px 20px",
     backgroundColor: INK_VIEWPORT,
     border: "1px solid #2a2a2a",
-    borderRadius: RADIUS.card,
+    // Design note #1257: square on top, where the tab strip attaches.
+    borderRadius: VIEWPORT_RADIUS,
     display: "flex",
     flexDirection: "column",
     gap: "20px",

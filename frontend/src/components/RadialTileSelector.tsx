@@ -24,7 +24,8 @@ import { ACTION_GREEN, ACTION_GREEN_BORDER, ACTION_GREEN_INK } from "../styles/p
 import { TilePreviewThumbnail, type StationPreviewMarker } from "./HexGridRenderer";
 import type { LegalTilePlacement } from "./hexContractTypes";
 import { FONT_SIZE, RADIUS } from "../styles/typography";
-import { UI_SCALE } from "../styles/appStyles";
+/* Design note #1294: the chrome scale, live, for the counter-zoom. */
+import { useUiScale } from "../utils/useUiScale";
 
 export interface RadialTileSelectorProps {
   /** The click's offset INSIDE the canvas -- design note #1. Board-relative,
@@ -306,6 +307,8 @@ export function RadialConfirmRing({
   onDismiss,
   children,
 }: RadialConfirmRingProps) {
+  /* Design note #1294: the chrome scale, live, for the counter-zoom. */
+  const uiScale = useUiScale();
   // Design note #1: the screen position, recomputed rather than remembered.
   const [screen, setScreen] = useState<{ x: number; y: number } | null>(null);
   useEffect(() => {
@@ -371,7 +374,7 @@ export function RadialConfirmRing({
        is what an IN-SITU picker requires. Dismissal moved to the three places that can answer honestly: the X
        button, a click on a DIFFERENT hex (a new selection rather than a dismissal), and the outside-pointerdown
        listener for a click off the board entirely. */
-    <div style={styles.backdrop} role="presentation" ref={rootRef}>
+    <div style={{ ...styles.backdrop, zoom: 1 / uiScale }} role="presentation" ref={rootRef}>
       <div
         style={{
           ...styles.anchor,
@@ -821,7 +824,7 @@ const styles: Record<string, React.CSSProperties> = {
        the tile it encircles.
        SO IT OPTS OUT, exactly as `boardPane` does. This is the general rule and it is worth stating once: a
        layer positioned in MEASURED pixels must be drawn at the scale those pixels were measured at. */
-    zoom: 1 / UI_SCALE,
+    /* Design note #1294: `zoom` is written per render as `1 / useUiScale()`. */
     position: "fixed",
     inset: 0,
     zIndex: 60,

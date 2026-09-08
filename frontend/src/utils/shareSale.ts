@@ -41,6 +41,7 @@ import {
   SHARE_BLOCK_PERCENT,
 } from "./endgame";
 import type { GameStateResponse } from "./gameState";
+import { doubleSaleRefusal } from "./doubleCertificate";
 
 export interface ShareSaleInput {
   state: GameStateResponse;
@@ -65,6 +66,10 @@ export function shareSaleBlock(input: ShareSaleInput): string | null {
   }
 
   /* ---- The bank pool's 50% ceiling ------------------------------------------------------------- */
+  /* Design note #1324: a sale that reaches the seller's 20% certificate must be able to move it -- as a block,
+     or as the half-sale when the pool has a 10% card to exchange. */
+  const doubleRefusal = doubleSaleRefusal(company, seller, percentage);
+  if (doubleRefusal !== null) return doubleRefusal;
   const poolRoom = Math.max(0, BANK_POOL_CAP_PERCENT - company.bank_pool_percentage);
   if (percentage > poolRoom) {
     return `The Bank Pool is at ${company.bank_pool_percentage}% and caps at ${BANK_POOL_CAP_PERCENT}% — only ${poolRoom}% more can be sold into it.`;

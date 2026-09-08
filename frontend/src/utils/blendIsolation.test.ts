@@ -35,6 +35,7 @@ const SOURCES: Record<string, string> = {
   NetaMark: readStripped("components/NetaMark.tsx"),
   AppFooter: readStripped("components/AppFooter.tsx"),
   SandboxWaitingRoom: readStripped("components/SandboxWaitingRoom.tsx"),
+  YellowSignOverlay: readStripped("components/YellowSignOverlay.tsx"),
 };
 
 /** The style object literal named `name` in `file`, comments already stripped. */
@@ -114,7 +115,17 @@ describe("the footer mark can still see the room it keys against", () => {
        simplifying this away would not see the mark break until they looked at it. */
     const root = styleBlock("SandboxWaitingRoom", "root");
     expect(root).toContain('backgroundColor: "#0f0f0f"');
-    expect(root).toContain("waiting-room.jpg");
+    /* Design note #1266: the photograph moved to `sceneLayer`, a fixed child at `z-index: -1`, so a growing
+       roster cannot re-fit it (that re-fit was reported as the screen "zooming" on Ready). The root is now
+       the stacking context that holds both the layer and the footer -- the PAINTER's group, #1170a -- so
+       the mark still keys against the picture. Pinned: the layer paints the room, the root isolates, and
+       the layer renders in both the room and its hold. */
+    const scene = styleBlock("SandboxWaitingRoom", "sceneLayer");
+    expect(scene).toContain("waiting-room.jpg");
+    expect(scene).toContain('position: "fixed"');
+    expect(scene).toContain("zIndex: -1");
+    expect(root).toContain('isolation: "isolate"');
+    expect(SOURCES.SandboxWaitingRoom.split("styles.sceneLayer").length - 1).toBe(2);
     expect(SOURCES.SandboxWaitingRoom).toContain('<AppFooter surface="meta" />');
   });
 
@@ -169,6 +180,38 @@ describe("the lobby wordmark keeps the clearance #1132 won for it", () => {
     const clip = styleBlock("Lobby", "sceneClip");
     expect(clip).toContain('position: "absolute"');
     expect(clip).toContain("zIndex: 0");
-    expect(SOURCES.Lobby).toContain("<div style={styles.scene}>");
+    // Design note #1294: the scene's cover arithmetic is spread per render from the live scale.
+    expect(SOURCES.Lobby).toContain("<div style={{ ...styles.scene, ...sceneSizeFor(uiScale) }}>");
+  });
+});
+
+describe("the haunting keys against the board, not against its own box", () => {
+  /* ==================================================================
+      DESIGN NOTE 1260 (harness): THE RULE, BROKEN A THIRD TIME -- AND IT PREDATES THE RULE
+     ==================================================================
+     REPORTED: "Yellow Sign video has a black box", "Carcosa Awaits video has a black box", and from the seat
+     that did not act: "the black box but no video". #1043 put `mix-blend-mode: screen` on the `<video>` and
+     wrapped it in a `position: fixed` container with a `z-index` -- which is #1140's pair exactly, an
+     intermediary that isolates. The clip screened against the empty container and stayed black.
+     THE CHAIN: shell root (`appRoot` + chrome zoom) -> <div container, fixed, z-index> -> <video>. The
+     container is the group, so the blend goes ON it (#1170a's distinction), and only the root above it has
+     to stay clear. */
+  it("puts the blend on the group, not on the clip inside it", () => {
+    expect(styleBlock("YellowSignOverlay", "containerScreened")).toContain('mixBlendMode: "screen"');
+    expect(styleBlock("YellowSignOverlay", "videoScreened")).not.toContain("mixBlendMode");
+    expect(SOURCES.YellowSignOverlay).toContain("feathered ? null : styles.containerScreened");
+  });
+
+  it("keeps the shell root out of the blend's way", () => {
+    /* `zoom` is not on the isolator list and does not create a stacking context. */
+    expectTransparentToBlending("appStyles", "appRoot");
+  });
+
+  it("does not paint a frame it has not decoded", () => {
+    /* The other half of "black box but no video": a rejected unmuted `play()` retries muted, and nothing
+       is visible until the element reports `playing`. */
+    expect(SOURCES.YellowSignOverlay).toContain("video.muted = true;");
+    expect(SOURCES.YellowSignOverlay).toContain("onPlaying={() => setPlaying(true)}");
+    expect(SOURCES.YellowSignOverlay).toContain('visibility: playing ? "visible" : "hidden"');
   });
 });

@@ -96,6 +96,8 @@ import {
 } from "../styles/palette";
 // Design note #1050: the same per-seat ink choice the player card's own stripe makes.
 import { bestContrastTextColor } from "../styles/corporationLivery";
+/* Design note #1290: the chrome scale, so a viewport unit inside it can be divided back out. */
+import { useUiScale } from "../utils/useUiScale";
 
 /** One of the viewer's privates, already formatted. The display shape #984 established, plus #1052's number. */
 export interface PrivateRevenueLine {
@@ -130,6 +132,11 @@ export interface PrivateRevenueOther {
    * `null` WHEN THE STATE DID NOT REPORT IT, and the row then shows the payout alone rather than inventing a
    * balance (#232, and #562's rule that a missing figure and a zero are different facts). */
   cashAfter: number | null;
+  /** Design note #1270: the other end of the movement, READ from the pre-payout state for #1052's reason --
+   *  the collapsed row prints `$before -> $after` and a subtraction would be right until it was not. */
+  cashBefore: number | null;
+  /** Design note #1270: this collector's privates and what each paid, for the expanded row. */
+  lines: readonly PrivateRevenueLine[];
 }
 
 export interface PrivateRevenueModalProps {
@@ -163,6 +170,7 @@ export interface PrivateRevenueModalProps {
 }
 
 export function PrivateRevenueModal({ round, roundLabel, onAcknowledge }: PrivateRevenueModalProps) {
+  const uiScale = useUiScale();
   /* ==================================================================
       DESIGN NOTE 1052: ONE EXIT, AND #1049 ARGUED THE OPPOSITE
      ==================================================================
@@ -193,18 +201,19 @@ export function PrivateRevenueModal({ round, roundLabel, onAcknowledge }: Privat
        same comment `FleetLossModal` carries -- every other modal in this app closes on a backdrop click, so a
        later tidy-up would otherwise "restore" it for consistency and reintroduce the mis-click. */
     <div style={styles.backdrop} role="dialog" aria-modal="true" aria-label="Private company payouts">
-      <div style={styles.card}>
+      <div style={{ ...styles.card, maxHeight: `${84 / uiScale}vh` }}>
         {/* ---- The phase, named ---- */}
         <div style={styles.phaseRow}>
           <span style={styles.phaseName}>Private Company Payouts</span>
           {roundLabel && <span style={styles.phaseRound}>{roundLabel}</span>}
         </div>
-        {/* Design note #1049: THE RULE, IN ONE LINE. The complaint was that the process had been "minimized or
-            obscured", and a panel that shows the money without naming when it happens obscures it a second
-            way. This is the sentence a player would hear at a physical table. */}
-        <p style={styles.phaseCaption}>
-          Paid from the bank at the start of every Operating Round, before any corporation acts.
-        </p>
+        {/* ==================================================================
+             DESIGN NOTE 1270: THE RULE LINE IS GONE
+            ==================================================================
+            #1049 put "Paid from the bank at the start of every Operating Round, before any corporation acts"
+            here so the phase would not be "minimized or obscured". RULED (7 September, 4.3b): drop it -- the
+            modal appears at the moment the rule fires, which says when it happens better than a sentence
+            does. The phase name and the round stamp above still name it. */}
 
         {/* ---- The viewer's own stripe, borrowed from their player card ---- */}
         <div style={styles.mine}>
@@ -226,6 +235,21 @@ export function PrivateRevenueModal({ round, roundLabel, onAcknowledge }: Privat
                 name means; the player card's header carries no figure either. The figure was my addition to a
                 borrowed component, and it is the part that did not belong. */}
             <span style={styles.stripeName}>{round.viewerName}</span>
+            {/* ==================================================================
+                 DESIGN NOTE 1290: THE MOVEMENT RIDES THE STRIPE, LIKE THE OTHER PLAYERS'
+                ==================================================================
+                ASKED (8c): "I like how in 'Also collected' the cash consequence is printed on the right on
+                the player color stripe... that could be done on the active player's card so there is a fast
+                way to scan the effect. Then remove the Cash line altogether, which looks strange anyway
+                having two sums below the line." So the stripe carries `$before -> $after` in its own ink,
+                and the Cash row under the column is gone -- one movement per player, all in one place.
+                (#1052's "the stripe is identity and nothing else" gave way to a better rule: every stripe
+                on this panel says the same two things, who and what it came to.) */}
+            {round.cashBefore !== null && round.cashAfter !== null && (
+              <span style={styles.stripeMovement}>
+                ${round.cashBefore} → ${round.cashAfter}
+              </span>
+            )}
           </header>
 
           {/* Design note #984's two-column grid, unchanged in substance: names flush left, figures right in
@@ -253,22 +277,7 @@ export function PrivateRevenueModal({ round, roundLabel, onAcknowledge }: Privat
                 <span style={styles.totalValue}>${round.total}</span>
               </>
             )}
-            {round.cashBefore !== null && round.cashAfter !== null && (
-              /* ==================================================================
-                  DESIGN NOTE 1052: WHERE THE MONEY LEFT YOU
-                 ==================================================================
-                 ASKED: "on payouts, we usually include $before > $after somewhere." It is #670's rule and
-                 #682's block: money moving is two facts, and this panel was reporting only the arrival.
-                 INSIDE THE SAME GRID as the rows above, so the arrow column lines up with the figures rather
-                 than sitting in a block of its own with its own spacing -- which is precisely the drift #951
-                 fixed when the Stock Round's price move was built beside the cash row instead of inside it. */
-              <>
-                <span style={styles.cashLabel}>Cash</span>
-                <span style={styles.cashValue}>
-                  ${round.cashBefore} → ${round.cashAfter}
-                </span>
-              </>
-            )}
+            {/* Design note #1290: the Cash row is gone -- the movement is on the stripe above. */}
           </div>
         </div>
 
@@ -279,30 +288,23 @@ export function PrivateRevenueModal({ round, roundLabel, onAcknowledge }: Privat
                 these are. #967's objection was to an undifferentiated total; a named block of named rows is
                 the answer to it rather than an instance of it. */}
             <span style={styles.othersLabel}>Also collected</span>
+            {/* ==================================================================
+                 DESIGN NOTE 1270: THE OTHER ROWS ARE STRIPES, AND THEY OPEN
+                ==================================================================
+                RULED (7 September, 4.3a and 4.3d). THE SWATCH IS GONE: each row is drawn in its player's own
+                stripe -- the same band the viewer's card wears above -- with the name in the stripe's ink,
+                which is the "names in their player colours" the report asks for without the legibility
+                problem #1050 found in tinting a label on a dark ground. Collapsed, a row is the name and the
+                cash consequence, nothing else. Expanded, it lists that player's privates and what each paid,
+                in the same two-column grid the viewer's own card uses.
+                THIS SUPERSEDES THE "FULL CARD PER COLLECTOR" IDEA. The attraction was real -- private
+                ownership is otherwise buried at the bottom of the screen -- but full cards would flood the
+                modal. An expandable row gets the same information without the clutter, and the collapsed
+                state stays scannable. Rows open independently; a `<button>` with `aria-expanded`, so a
+                keyboard reader can open one too. */}
             <div style={styles.othersRows}>
               {round.others.map((other) => (
-                <div key={other.name} style={styles.otherRow}>
-                  {/* The swatch, not a coloured name: at this size a tinted label is the subtlety #1050 is
-                      correcting, and a solid block reads at a glance. `aria-hidden` because the name beside
-                      it already identifies the row. */}
-                  <span
-                    aria-hidden="true"
-                    style={{
-                      ...styles.swatch,
-                      ...(other.seatColor
-                        ? { backgroundColor: other.seatColor }
-                        : styles.swatchUnknown),
-                    }}
-                  />
-                  <span style={styles.otherName}>{other.name}</span>
-                  {/* Design note #1052: what arrived, then what it arrived AT. The `+` is on the payout so the
-                      two figures cannot be read as one before/after pair -- without it, "$20 → $455" claims a
-                      seat went from twenty dollars to four hundred. */}
-                  <span style={styles.otherPaid}>+${other.total}</span>
-                  {other.cashAfter !== null && (
-                    <span style={styles.otherHeld}>→ ${other.cashAfter}</span>
-                  )}
-                </div>
+                <OtherCollectorRow key={other.name} other={other} />
               ))}
             </div>
           </div>
@@ -319,6 +321,58 @@ export function PrivateRevenueModal({ round, roundLabel, onAcknowledge }: Privat
 }
 
 export default PrivateRevenueModal;
+
+/* Design note #1270: one other collector, folded. Its own component so each row owns its open state. */
+function OtherCollectorRow({ other }: { other: PrivateRevenueOther }) {
+  const [open, setOpen] = React.useState(false);
+  const stripe = other.seatColor;
+  const stripeInk = stripe ? bestContrastTextColor(stripe) : CARD_INK;
+  /* Design note #1052's `+` survives in the fallback: a payout alone must not read as a balance. */
+  const movement =
+    other.cashBefore !== null && other.cashAfter !== null
+      ? `$${other.cashBefore} → $${other.cashAfter}`
+      : other.cashAfter !== null
+        ? `→ $${other.cashAfter}`
+        : `+$${other.total}`;
+  return (
+    <div style={styles.otherCard}>
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+        title={open ? "Hide their privates" : "Show their privates and what each paid"}
+        style={{
+          ...styles.otherRow,
+          ...(stripe ? { backgroundColor: stripe, color: stripeInk } : styles.stripeUnknown),
+        }}
+      >
+        <span style={styles.otherChevron} aria-hidden="true">
+          {open ? "▾" : "▸"}
+        </span>
+        <span style={styles.otherName}>{other.name}</span>
+        <span style={styles.otherMovement}>{movement}</span>
+      </button>
+      {open && (
+        <div style={styles.lines}>
+          {other.lines.map((line) => (
+            <React.Fragment key={line.label}>
+              <span style={styles.lineLabel}>
+                <span style={styles.lineNumber}>{line.privateId}.</span> {line.label}
+              </span>
+              <span style={styles.lineValue}>{line.value}</span>
+            </React.Fragment>
+          ))}
+          {other.lines.length > 1 && (
+            <>
+              <span style={styles.totalLabel}>Total</span>
+              <span style={styles.totalValue}>+${other.total}</span>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 const styles: Record<string, React.CSSProperties> = {
   backdrop: {
@@ -346,7 +400,16 @@ const styles: Record<string, React.CSSProperties> = {
      were bought from. */
   card: {
     width: "min(440px, 100%)",
-    maxHeight: "84vh",
+    /* ==================================================================
+        DESIGN NOTE 1290: 84vh INSIDE THE CHROME ZOOM IS NOT 84% OF THE WINDOW
+       ==================================================================
+       REPORTED (8): "when expanding an 'Also collected' entity, the player's information gets partially
+       covered up instead of the entire modal expanding." The card is inside `zoom: UI_SCALE`, and #1144
+       measured what that does to a viewport unit: `84vh` resolves to 84% of a viewport that is itself
+       scaled, so the card capped at roughly half the window and started SCROLLING the moment a row opened
+       -- the viewer's card slid up under the header, which is what "covered" looked like. Divided back out,
+       as `CHROME_ZOOM.minHeight` is (#1144), so the cap is the 84% of the window it was written to be. */
+    /* Design note #1294: `maxHeight` is written per render from `useUiScale()`. */
     overflowY: "auto",
     display: "flex",
     flexDirection: "column",
@@ -386,7 +449,7 @@ const styles: Record<string, React.CSSProperties> = {
     color: CARD_INK_FAINT,
     flex: "none",
   },
-  phaseCaption: { margin: 0, fontSize: FONT_SIZE.micro, color: CARD_INK_MUTED, lineHeight: 1.45 },
+  /* Design note #1270: `phaseCaption` is gone with the rule line it set. */
   /* Design note #1162: the card names its own surface now. Inheriting was the whole fault -- an object that
      does not declare a ground cannot be distinguished from the one it sits on, and it silently followed the
      panel every time that changed. The border steps up from `CARD_DIVIDER` to `CARD_BORDER` to match the
@@ -394,7 +457,7 @@ const styles: Record<string, React.CSSProperties> = {
   mine: {
     display: "flex",
     flexDirection: "column",
-    borderRadius: RADIUS.card,
+    borderRadius: 0, // #1291a: a player surface is square
     border: `1px solid ${CARD_BORDER}`,
     backgroundColor: CARD_SURFACE,
     boxShadow: "0 1px 3px rgba(8, 8, 8, 0.18)",
@@ -439,7 +502,9 @@ const styles: Record<string, React.CSSProperties> = {
   lineValue: {
     color: CARD_INK_POSITIVE,
     textAlign: "right",
-    fontWeight: 700,
+    /* Design note #1270 stepped this to 600; #1290 keeps every figure on the panel at one size and one
+       weight -- "the bolded numbers are harder to read", "keep it all the same size". */
+    fontWeight: 600,
     fontVariantNumeric: "tabular-nums",
   },
   totalLabel: {
@@ -462,7 +527,7 @@ const styles: Record<string, React.CSSProperties> = {
   totalValue: {
     color: CARD_INK_POSITIVE,
     textAlign: "right",
-    fontWeight: 800,
+    fontWeight: 600, // #1290: one weight for every figure
     fontVariantNumeric: "tabular-nums",
     borderTop: `1px solid ${CARD_DIVIDER}`,
     paddingTop: "4px",
@@ -472,14 +537,12 @@ const styles: Record<string, React.CSSProperties> = {
      figure being checked against the column; this is where it landed, which is context rather than the claim.
      MONOSPACED FOR THE ARROW, matching #738's treatment of the same before/after on the dividend receipt --
      "a pair of figures rather than a sentence" -- so two panels reporting one kind of fact look alike. */
-  cashLabel: { color: CARD_INK_MUTED, textAlign: "left", paddingTop: "2px" },
-  cashValue: {
-    color: CARD_INK_POSITIVE,
-    textAlign: "right",
-    fontWeight: 700,
-    paddingTop: "2px",
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+  /* Design note #1290: `cashLabel`/`cashValue` are gone with the Cash row; the movement is `stripeMovement`. */
+  stripeMovement: {
+    flex: "none",
+    fontWeight: 600,
     fontVariantNumeric: "tabular-nums",
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
   },
   others: { display: "flex", flexDirection: "column", gap: "5px", marginTop: "2px" },
   othersLabel: {
@@ -488,30 +551,44 @@ const styles: Record<string, React.CSSProperties> = {
     letterSpacing: "0.06em",
     color: CARD_INK_FAINT,
   },
-  othersRows: { display: "flex", flexDirection: "column", gap: "3px" },
-  otherRow: { display: "flex", alignItems: "center", gap: "8px", fontSize: FONT_SIZE.small },
-  swatch: { width: "10px", height: "10px", borderRadius: RADIUS.control, flex: "none" },
-  swatchUnknown: { backgroundColor: CARD_DIVIDER },
+  othersRows: { display: "flex", flexDirection: "column", gap: "4px" },
+  /* Design note #1270: one collector -- a stripe that opens onto their rows. Same paper as `mine`. */
+  otherCard: {
+    display: "flex",
+    flexDirection: "column",
+    borderRadius: 0, // #1291a: a player surface is square
+    border: `1px solid ${CARD_BORDER}`,
+    backgroundColor: CARD_SURFACE,
+    overflow: "hidden",
+  },
+  /* Design note #1270: the row IS the stripe, and it is a button. `font: inherit` and no border so it draws
+     as the band and not as a control; the chevron and `aria-expanded` carry the affordance. */
+  otherRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+    padding: "5px 10px",
+    font: "inherit",
+    fontSize: FONT_SIZE.small,
+    border: "none",
+    textAlign: "left",
+    cursor: "pointer",
+    minWidth: 0,
+    width: "100%",
+  },
+  otherChevron: { flex: "none", fontSize: FONT_SIZE.micro, opacity: 0.8 },
   otherName: {
-    color: CARD_INK_MUTED,
+    fontWeight: 800,
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
     flex: "1 1 auto",
     minWidth: 0,
   },
-  /* Design note #1052: what arrived, in the income green the viewer's own rows use -- it is the same kind of
-     fact about a different seat, and using a second colour for it would say otherwise. */
-  otherPaid: {
-    color: CARD_INK_POSITIVE,
-    fontWeight: 700,
-    fontVariantNumeric: "tabular-nums",
-    flex: "none",
-  },
-  /* And where it landed, quieter: a rival's standing is context. Monospaced with the arrow, matching the
-     viewer's own cash line so the two read as one kind of statement at two levels of detail. */
-  otherHeld: {
-    color: CARD_INK_MUTED,
+  /* Design note #1270: the cash consequence, in the stripe's own ink -- the collapsed row's only figure. */
+  otherMovement: {
+    /* Design note #1290: 600, the same as every other figure. */
+    fontWeight: 600,
     fontVariantNumeric: "tabular-nums",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     flex: "none",

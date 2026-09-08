@@ -31,8 +31,14 @@ export type TerrainType =
   | "MajorCityHub"
   | "DoubleCityHub"
   | "BostonHub"
-  | "NewYorkHub";
-export type TileColorTier = "Yellow" | "Green" | "Brown";
+  | "NewYorkHub"
+  /** Design note #1317: the Project 18XX+ set's Toronto tiles (#810, #882) -- two cities, a "TO" letter code,
+   *  legal only on the hex printed TO (D10 on the expanded board). */
+  | "TorontoHub";
+/** Design note #1312: `Gray` is the Project 18XX+ tile set's fourth tier, reached with the first D-train
+ *  under that variant only. The standard game never sees a Gray tile: none is in its tray (`tileTray.ts`)
+ *  and its Diesel era stays Brown (`ERA_FOR_TIER`, sandboxSession.ts). */
+export type TileColorTier = "Yellow" | "Green" | "Brown" | "Gray";
 
 export interface TileCatalogEntry {
   tileId: number;
@@ -83,6 +89,9 @@ export interface TileCatalogEntry {
    *  PRECEDENCE: the chain's `MapTileEntry.revenue` wins where there is one, then this, then the bucket. Never the
    *  other way round -- this is a mirror of the backend catalog, and the chain is the backend catalog. */
   revenue?: number;
+  /** Design note #1311: in the Project 18XX+ tray only. `quantity` is then that tray's count; the standard
+   *  tray (`STANDARD_TRAY`) leaves the tile out entirely. */
+  plusOnly?: true;
 }
 
 /** Hand-kept mirror of `hexmap::TILE_CATALOG` -- keep this in exact sync with that Rust array any time it
@@ -505,13 +514,329 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     quantity: 1,
     paths: [[0, 1], [0, 2], [1, 3], [2, 3]],
   },
+
+  /* ---- Project 18XX+ tile set (design note #1311). Edges are the board's own numbering, translated from
+     the request's (0 NE, clockwise) by `edge()` in hexBoardDataPlus.ts: code = (1 - spec) mod 6. ---- */
+
+  /* ---- Yellow ---- */
+  {
+    tileId: 6,
+    connections: 0b100_010,
+    terrain: "MajorCityHub",
+    color: "Yellow",
+    quantity: 2,
+    paths: [[1, 5]],
+    revenue: 20,
+    plusOnly: true,
+  },
+  {
+    tileId: 5,
+    connections: 0b000_011,
+    terrain: "MajorCityHub",
+    color: "Yellow",
+    quantity: 2,
+    paths: [[0, 1]],
+    revenue: 20,
+    plusOnly: true,
+  },
+  {
+    tileId: 630,
+    connections: 0b011_101,
+    terrain: "DoubleTown",
+    color: "Yellow",
+    quantity: 1,
+    paths: [[2, 3], [0, 4]],
+    revenue: 10,
+    plusOnly: true,
+  },
+  {
+    tileId: 631,
+    connections: 0b010_111,
+    terrain: "DoubleTown",
+    color: "Yellow",
+    quantity: 1,
+    paths: [[0, 1], [2, 4]],
+    revenue: 10,
+    plusOnly: true,
+  },
+  {
+    tileId: 632,
+    connections: 0b111_100,
+    terrain: "DoubleTown",
+    color: "Yellow",
+    quantity: 1,
+    paths: [[2, 3], [4, 5]],
+    revenue: 10,
+    plusOnly: true,
+  },
+  {
+    tileId: 633,
+    connections: 0b101_101,
+    terrain: "DoubleTown",
+    color: "Yellow",
+    quantity: 1,
+    paths: [[2, 3], [0, 5]],
+    revenue: 10,
+    plusOnly: true,
+  },
+  /* ---- Green ---- */
+  {
+    tileId: 592,
+    connections: 0b010_101,
+    terrain: "BostonHub",
+    color: "Green",
+    quantity: 2,
+    paths: [[0, 2], [0, 4], [2, 4]],
+    revenue: 50,
+    plusOnly: true,
+  },
+  {
+    tileId: 17,
+    connections: 0b110_110,
+    terrain: "Plain",
+    color: "Green",
+    quantity: 1,
+    paths: [[1, 5], [2, 4]],
+    plusOnly: true,
+  },
+  {
+    tileId: 141,
+    connections: 0b011_010,
+    terrain: "SmallTown",
+    color: "Green",
+    quantity: 1,
+    paths: [[1, 3], [1, 4], [3, 4]],
+    revenue: 10,
+    plusOnly: true,
+  },
+  {
+    tileId: 142,
+    connections: 0b110_010,
+    terrain: "SmallTown",
+    color: "Green",
+    quantity: 1,
+    paths: [[1, 4], [1, 5], [4, 5]],
+    revenue: 10,
+    plusOnly: true,
+  },
+  {
+    tileId: 143,
+    connections: 0b100_011,
+    terrain: "SmallTown",
+    color: "Green",
+    quantity: 1,
+    paths: [[0, 1], [0, 5], [1, 5]],
+    revenue: 10,
+    plusOnly: true,
+  },
+  {
+    tileId: 144,
+    connections: 0b101_010,
+    terrain: "SmallTown",
+    color: "Green",
+    quantity: 1,
+    paths: [[1, 3], [1, 5], [3, 5]],
+    revenue: 10,
+    plusOnly: true,
+  },
+  {
+    tileId: 88,
+    connections: 0b011_011,
+    terrain: "SmallTown",
+    color: "Green",
+    quantity: 1,
+    paths: [[0, 1], [0, 3], [0, 4], [1, 3], [1, 4], [3, 4]],
+    revenue: 10,
+    plusOnly: true,
+  },
+  {
+    tileId: 204,
+    connections: 0b111_010,
+    terrain: "SmallTown",
+    color: "Green",
+    quantity: 1,
+    paths: [[1, 3], [1, 4], [1, 5], [3, 4], [3, 5], [4, 5]],
+    revenue: 10,
+    plusOnly: true,
+  },
+  {
+    tileId: 87,
+    connections: 0b110_011,
+    terrain: "SmallTown",
+    color: "Green",
+    quantity: 1,
+    paths: [[0, 1], [0, 4], [0, 5], [1, 4], [1, 5], [4, 5]],
+    revenue: 10,
+    plusOnly: true,
+  },
+  {
+    tileId: 619,
+    connections: 0b111_010,
+    terrain: "MajorCityHub",
+    color: "Green",
+    quantity: 1,
+    paths: [[1, 3], [1, 4], [1, 5], [3, 4], [3, 5], [4, 5]],
+    revenue: 30,
+    plusOnly: true,
+  },
+  {
+    tileId: 626,
+    connections: 0b011_011,
+    terrain: "DoubleCityHub",
+    color: "Green",
+    quantity: 1,
+    cityGroups: [[0, 1], [3, 4]],
+    paths: [[0, 1], [3, 4]],
+    revenue: 40,
+    plusOnly: true,
+  },
+  /* ---- Brown ---- */
+  {
+    tileId: 884,
+    connections: 0b111_010,
+    terrain: "MajorCityHub",
+    color: "Brown",
+    quantity: 1,
+    paths: [[1, 3], [1, 4], [1, 5], [3, 4], [3, 5], [4, 5]],
+    revenue: 40,
+    plusOnly: true,
+  },
+  {
+    tileId: 997,
+    connections: 0b111_010,
+    terrain: "MajorCityHub",
+    color: "Brown",
+    quantity: 1,
+    paths: [[1, 3], [1, 4], [1, 5], [3, 4], [3, 5], [4, 5]],
+    revenue: 40,
+    plusOnly: true,
+  },
+  {
+    tileId: 883,
+    connections: 0b110_011,
+    terrain: "NewYorkHub",
+    color: "Brown",
+    quantity: 1,
+    paths: [[0, 1], [0, 4], [0, 5], [1, 4], [1, 5], [4, 5]],
+    revenue: 90,
+    plusOnly: true,
+  },
+  {
+    tileId: 145,
+    connections: 0b011_011,
+    terrain: "SmallTown",
+    color: "Brown",
+    quantity: 1,
+    paths: [[0, 1], [0, 3], [0, 4], [1, 3], [1, 4], [3, 4]],
+    revenue: 20,
+    plusOnly: true,
+  },
+  {
+    tileId: 147,
+    connections: 0b110_011,
+    terrain: "SmallTown",
+    color: "Brown",
+    quantity: 1,
+    paths: [[0, 1], [0, 4], [0, 5], [1, 4], [1, 5], [4, 5]],
+    revenue: 20,
+    plusOnly: true,
+  },
+  {
+    tileId: 146,
+    connections: 0b111_010,
+    terrain: "SmallTown",
+    color: "Brown",
+    quantity: 1,
+    paths: [[1, 3], [1, 4], [1, 5], [3, 4], [3, 5], [4, 5]],
+    revenue: 20,
+    plusOnly: true,
+  },
+  {
+    tileId: 36,
+    connections: 0b110_110,
+    terrain: "DoubleCityHub",
+    color: "Brown",
+    quantity: 1,
+    cityGroups: [[1, 5], [2, 4]],
+    paths: [[1, 5], [2, 4]],
+    revenue: 50,
+    plusOnly: true,
+  },
+  {
+    tileId: 35,
+    connections: 0b110_011,
+    terrain: "DoubleCityHub",
+    color: "Brown",
+    quantity: 1,
+    cityGroups: [[1, 5], [0, 4]],
+    paths: [[1, 5], [0, 4]],
+    revenue: 50,
+    plusOnly: true,
+  },
+  {
+    tileId: 984,
+    connections: 0b110_011,
+    terrain: "DoubleCityHub",
+    color: "Brown",
+    quantity: 1,
+    cityGroups: [[0, 1], [4, 5]],
+    paths: [[0, 1], [4, 5]],
+    revenue: 50,
+    plusOnly: true,
+  },
+  /* ---- Toronto (design note #1317): a single- and a double-station city on #810, two doubles on #882 ---- */
+  {
+    tileId: 810,
+    connections: 0b111_111,
+    terrain: "TorontoHub",
+    color: "Green",
+    quantity: 1,
+    cityGroups: [[0, 1, 5], [2, 3, 4]],
+    paths: [[0, 1], [0, 5], [1, 5], [2, 3], [2, 4], [3, 4]],
+    revenue: 50,
+    plusOnly: true,
+  },
+  {
+    tileId: 882,
+    connections: 0b111_111,
+    terrain: "TorontoHub",
+    color: "Brown",
+    quantity: 1,
+    cityGroups: [[0, 1, 5], [2, 3, 4]],
+    paths: [[0, 1], [0, 5], [1, 5], [2, 3], [2, 4], [3, 4]],
+    revenue: 70,
+    plusOnly: true,
+  },
+  /* ---- Gray (design note #1312) ---- */
+  {
+    tileId: 167,
+    connections: 0b111_111,
+    terrain: "DoubleCityHub",
+    color: "Gray",
+    quantity: 1,
+    cityGroups: [[0, 1, 4], [2, 3, 5]],
+    paths: [[0, 1], [0, 4], [1, 4], [2, 3], [2, 5], [3, 5]],
+    revenue: 70,
+    plusOnly: true,
+  },
+  {
+    tileId: 513,
+    connections: 0b111_111,
+    terrain: "MajorCityHub",
+    color: "Gray",
+    quantity: 1,
+    paths: [[0, 1], [0, 2], [0, 3], [0, 4], [0, 5], [1, 2], [1, 3], [1, 4], [1, 5], [2, 3], [2, 4], [2, 5], [3, 4], [3, 5], [4, 5]],
+    revenue: 60,
+    plusOnly: true,
+  },
 ];
 
 /** How many entries `hexmap::TILE_CATALOG` holds after Audit G-5's full
  *  1830 manifest expansion. Asserted against at module load (below) purely
  *  as a drift tripwire on this hand-kept mirror -- see design note #2 on why
  *  a mirror that silently falls behind is this file's standing hazard. */
-export const TILE_CATALOG_SIZE = 46;
+/** 46 standard tiles and the 30 of the Project 18XX+ tile set (#1311, #1317). */
+export const TILE_CATALOG_SIZE = 76;
 
 export const TILE_CATALOG_BY_ID: ReadonlyMap<number, TileCatalogEntry> = new Map(
   TILE_CATALOG.map((entry) => [entry.tileId, entry]),

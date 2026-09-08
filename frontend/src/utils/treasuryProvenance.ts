@@ -37,6 +37,7 @@ const TREASURY_MOVERS: readonly string[] = [
   "PlaceStationToken",
   "BuyHardwareFromPool",
   "EmergencyBuyHardware",
+  "ExchangeTrainForDiesel", // #1303
   "BuyTrainFromCorporation",
   "BuyPrivateCompany",
   // Credits

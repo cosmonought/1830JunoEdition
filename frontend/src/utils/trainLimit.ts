@@ -298,11 +298,5 @@ export function trimToTrainLimit(input: TrimInput): TrimResult {
   return { owned: keptOwned, reprieved, discarded };
 }
 
-export function quantityOptionCount(currentLimit: number | null, buyable: number): number {
-  const floor = Math.max(1, buyable);
-  if (currentLimit === null || !Number.isFinite(currentLimit)) return floor;
-  /* Never SHORTER than what the player can buy. With a finite limit `buyableNow` cannot exceed it, so this is
-     unreachable today -- and it is the guard that keeps a future rule (a private power, a variant) from
-     producing a row too short to select a legal quantity. */
-  return Math.max(floor, Math.max(1, Math.floor(currentLimit)));
-}
+/* `quantityOptionCount` IS GONE WITH THE SELECTOR IT SIZED (#1255). One train per press; `buyableNow` above
+   still answers whether that one press is legal. */

@@ -425,10 +425,17 @@ export const styles: Record<string, React.CSSProperties> = {
     paddingTop: "12px",
     alignItems: "start",
   },
+  /* ==================================================================
+      DESIGN NOTE 1291a: A PLAYER'S SURFACE HAS SQUARE CORNERS; A CORPORATION'S HAS ROUND ONES
+     ==================================================================
+     RULED (17): the two money slide-outs share one corner and need an unmistakable cue, and one of the three
+     cues is SHAPE -- square for a player, rounded for a corporation -- which only works as a cue if every
+     player surface and every corporation surface in the app obeys it. So the player card is square now, as
+     are the payout modal's player cards and the cash slide-out; the corporation cards keep `RADIUS.card`. */
   card: {
     display: "flex",
     flexDirection: "column",
-    borderRadius: RADIUS.card,
+    borderRadius: 0, // #1291a: a player surface
     border: "1px solid #2a2a2a",
     backgroundColor: "#f4f1e8",
     color: "#1c1c1c",

@@ -60,7 +60,12 @@ describe("a badge in the margin wears no ring", () => {
        set #43 used to decide the POSITION, so the outline and the position now answer one question instead of
        contradicting each other. */
     expect(RENDERER).toContain("const inMargin = YELLOW_OO_HEXES.has(home.label);");
-    expect(RENDERER).toContain("!inMargin,");
+    /* Design note #1283: the margin is gone -- an OO reservation sits ON BOTH circles now, ringed, and the
+       ringless badge is the UNENFORCED home (C&O's Cleveland, #1325) drawn in the hex centre. The flag and
+       the position still answer one question; the question is "is this a claim on a slot". */
+    expect(RENDERER).toContain("!optional,");
+    expect(RENDERER).toContain("const optional = home.enforced === false;");
+    expect(RENDERER).toContain("? twoNodePositions(homeCenter, hexSize)");
   });
 
   it("keeps the ring on a reservation that IS in a city", () => {
@@ -105,13 +110,12 @@ describe("the position and the outline now agree", () => {
        "misleadingly", so the phrase a reader sees is not a string the file contains. Fifth time this pass
        that source text has read as contiguous and was not -- a JSX `$`, a `+`-joined tutorial line, a
        wrapped block comment, a template literal's doubled `$`, and now a wrapped line comment. */
-    expect(read("components/HexGridRenderer.tsx")).toContain(
-      "misleadingly imply that slot is already committed",
-    );
+    /* Design note #1283 supersedes #43: both circles carry the badge, so neither is misrepresented. */
+    expect(RENDERER).toContain("? twoNodePositions(homeCenter, hexSize)");
   });
 
-  it("still puts ERIE's badge on its own vertex", () => {
-    // #106: straight down overlapped the bottom city marker, so E11 takes vertex 2 at the same magnitude.
-    expect(RENDERER).toContain("const erieVertex2 = hexSlotDirection(9);");
+  it("no longer parks ERIE's badge on a vertex", () => {
+    // #106's vertex placement went with the margin (#1283).
+    expect(RENDERER).not.toContain("const erieVertex2 = hexSlotDirection(9);");
   });
 });

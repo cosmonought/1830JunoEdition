@@ -46,6 +46,7 @@ import {
 } from "../../frontend/src/utils/sandboxState";
 import { waterfallForRoster, withEmptyRoster } from "../../frontend/src/utils/gameSetup";
 import { derivePhase } from "../../frontend/src/utils/gamePhase";
+import { logHash } from "../../frontend/src/utils/logHash";
 
 interface RawLog {
   roomCode?: string;
@@ -78,11 +79,24 @@ function main(): void {
   });
 
   const { state } = result;
+  /* Design note #1278: `--json` prints the board's `public_companies` in full, in the exact shape the client's
+     divergence line prints its own (#1226), so the two can be put side by side. The summary below is for a
+     human; this is for the diff. Written to stdout after the summary, so a redirect captures both. */
+  const fullDump = process.argv.includes("--json");
   console.log(
     JSON.stringify(
       {
         room: raw.roomCode ?? null,
         entries: entries.length,
+        /* #1251: the commitment over this log, so a file and a checkpoint can be compared by eye. `null` for
+           a log the hash refuses (a duplicate index), which the export also flags. */
+        logHash: (() => {
+          try {
+            return logHash(entries);
+          } catch {
+            return null;
+          }
+        })(),
         applied: result.applied,
         droppedByRevert: result.dropped,
         unparseable: result.unparseable,
@@ -110,6 +124,9 @@ function main(): void {
       2,
     ),
   );
+  if (fullDump) {
+    console.log(JSON.stringify({ public_companies: state.public_companies }, null, 2));
+  }
 }
 
 main();

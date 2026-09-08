@@ -15,23 +15,33 @@ import React, { useState } from "react";
 import {
   BANK_SIZE_BY_LENGTH,
   GAME_LENGTH_BLURB,
+  GAME_MODE_COPY,
+  GAME_TYPE_COPY,
+  GAME_TYPE_ORDER,
   STANDARD_VARIANTS,
   type GameLength,
+  type GameMode,
+  type GameType,
   type GameVariants,
   VARIANT_COPY,
   type VariantCopyKey,
+  gameTypeOf,
+  withGameType,
 } from "../utils/gameVariants";
 
 import { FONT_FAMILY, FONT_SIZE, LINE_HEIGHT, RADIUS } from "../styles/typography";
 import { waitingRoomBlock, waitingRoomNotice, type SandboxRoomDoc } from "../utils/sandboxRoom";
-import { MAX_PLAYERS, MIN_PLAYERS, certLimitForPlayers, startingCashForPlayers } from "../utils/gameSetup";
+import { MIN_PLAYERS, certLimitForPlayers, maxPlayersFor, startingCashForPlayers } from "../utils/gameSetup";
 import { SEAT_COLORS, SEAT_COLOR_NAMES } from "../utils/playerLabels";
 import { type AudioControlsProps } from "./AudioControls";
 /* Design note #1138: the shell's own bar, mounted here so the audio controls stop moving between the
    anteroom and the table. */
 import TopBar from "./TopBar";
 import AppFooter from "./AppFooter";
-import { CHROME_ZOOM } from "../styles/appStyles";
+import { setSkipIntroPreferred, skipIntroPreferred } from "../utils/introPreference";
+import { chromeZoomFor } from "../styles/appStyles";
+/* Design note #1294: the chrome scale, live. */
+import { useUiScale } from "../utils/useUiScale";
 /* Design note #1122: the sandbox signal ladder. */
 import {
   SANDBOX_TITLE,
@@ -51,12 +61,24 @@ import {
    `Object.keys`: the sequence a host reads the toggles in is a presentation decision, and the record is a
    dictionary rather than a running order. Typed as `VariantCopyKey`, so a renamed flag is a compile error
    here rather than a toggle that silently stops binding. */
+/* Design note #1271: `expandedMap` and `levelPlayingField` are NOT toggles any more -- they are the Game
+   Type drop-down, one choice with its illegal combinations removed (see `gameVariants` #1271). `plusTiles`
+   stays a toggle because it is the one independent choice, and the render below shows it only under 18XX+.
+   `GAME_TYPE_FLAGS` names the two the drop-down owns, so `variantWiring.test.ts` can still ask that every
+   boolean flag reaches a control. */
+export const GAME_TYPE_FLAGS = ["expandedMap", "levelPlayingField"] as const;
 const VARIANT_TOGGLES: ReadonlyArray<{
   key: VariantCopyKey;
   label: string;
   blurb: string;
 }> = (
-  ["unpredictableRevenue", "dynamicStockMarket", "gentleRust", "delayedAuction"] as const
+  [
+    "unpredictableRevenue",
+    "dynamicStockMarket",
+    "gentleRust",
+    "delayedAuction",
+    "plusTiles",
+  ] as const
 ).map((key) => ({ key, ...VARIANT_COPY[key] }));
 
 export interface SandboxWaitingRoomProps {
@@ -115,6 +137,8 @@ export function SandboxWaitingRoom({
   onSetVariants,
   audio,
 }: SandboxWaitingRoomProps) {
+  /* Design note #1294: the chrome scale, live. */
+  const uiScale = useUiScale();
   const players = room?.players ?? [];
   const me = players.find((player) => player.id === localPlayerId) ?? null;
   const isHost = room?.hostId === localPlayerId;
@@ -131,6 +155,7 @@ export function SandboxWaitingRoom({
      same shape -- a control drawn from data that had not arrived yet.
      SEEDED ONCE, AND NEVER OVER TYPING. `touched` is what separates "has not been filled in yet" from "is
      deliberately empty because I am clearing it", which a `!nicknameText` test would run together. */
+  const [skipIntro, setSkipIntro] = useState(() => skipIntroPreferred());
   const [nicknameText, setNicknameText] = useState(me?.nickname ?? "");
   const [nicknameTouched, setNicknameTouched] = useState(false);
   const knownNickname = me?.nickname ?? "";
@@ -153,15 +178,20 @@ export function SandboxWaitingRoom({
   /* Design note #529: the numbers this room WOULD be dealt, shown live as people
      arrive. They are the whole consequence of the player count, and a lobby that
      hides them makes the count feel cosmetic. `null` off the printed table. */
-  const cash = startingCashForPlayers(players.length);
-  const certs = certLimitForPlayers(players.length);
+  /* #1320: the Level Playing Field has its own tables and a seventh seat, so the figures read the room's
+     variants -- the same object the toggles below edit, so they move the moment the host ticks the box. */
+  const cash = startingCashForPlayers(players.length, variants);
+  const certs = certLimitForPlayers(players.length, variants);
+  const maxPlayers = maxPlayersFor(variants);
 
   /* Design note #1144: the same 70% the shell and the lobby draw at. This screen is the one the report named
      first -- "did the Waiting Room panel become huge at some point?" -- and #1137 answered the half of that
      question that was about the ROOT. This is the other half: the panel really is drawn larger than the
      player has been reading it at, because they have been reading everything at 70%. */
   return (
-    <div style={{ ...styles.root, ...CHROME_ZOOM }}>
+    <div style={{ ...styles.root, ...chromeZoomFor(uiScale) }}>
+      {/* Design note #1266: the photograph, on its own fixed layer. */}
+      <div style={styles.sceneLayer} aria-hidden="true" />
       {/* ==================================================================
            DESIGN NOTE 1138: THE ANTEROOM GETS THE SHELL'S OWN TITLE BAR
           ==================================================================
@@ -295,7 +325,7 @@ export function SandboxWaitingRoom({
             </span>
           ) : (
             <span style={styles.note}>
-              Project 18XX is dealt for {MIN_PLAYERS}–{MAX_PLAYERS} players. Waiting for more.
+              Project 18XX is dealt for {MIN_PLAYERS}–{maxPlayers} players. Waiting for more.
             </span>
           )}
         </div>
@@ -335,6 +365,49 @@ export function SandboxWaitingRoom({
           </label>
           <span style={styles.variantNote}>{GAME_LENGTH_BLURB[variants.length]}</span>
 
+          {/* #1256: how the table plays. Not a house rule -- it changes no rule of 1830 -- but it is a term
+              every timer reads, so it is chosen here with the others and fixed at the deal like them. Shown to
+              guests too, for #910's reason: they are agreeing to it. */}
+          <label style={styles.variantRow}>
+            <span style={styles.variantLabel}>Pace</span>
+            <select
+              value={variants.mode}
+              disabled={!canEditVariants}
+              onChange={(event) =>
+                onSetVariants?.({ ...variants, mode: event.target.value as GameMode })
+              }
+              style={styles.variantSelect}
+            >
+              {(Object.keys(GAME_MODE_COPY) as GameMode[]).map((option) => (
+                <option key={option} value={option}>
+                  {GAME_MODE_COPY[option].label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <span style={styles.variantNote}>{GAME_MODE_COPY[variants.mode].blurb}</span>
+
+          {/* Design note #1271: the Game Type, one drop-down for what used to be three interlocked boxes.
+              Shown to guests read-only like the two selects above it -- it is the biggest term on the table. */}
+          <label style={styles.variantRow}>
+            <span style={styles.variantLabel}>Game type</span>
+            <select
+              value={gameTypeOf(variants)}
+              disabled={!canEditVariants}
+              onChange={(event) =>
+                onSetVariants?.(withGameType(variants, event.target.value as GameType))
+              }
+              style={styles.variantSelect}
+            >
+              {GAME_TYPE_ORDER.map((option) => (
+                <option key={option} value={option}>
+                  {GAME_TYPE_COPY[option].label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <span style={styles.variantNote}>{GAME_TYPE_COPY[gameTypeOf(variants)].blurb}</span>
+
           {/* ==================================================================
                DESIGN NOTE 924: A GUEST READS THE TERMS, NOT THE MENU
               ==================================================================
@@ -347,14 +420,29 @@ export function SandboxWaitingRoom({
               list of rules that will actually apply, and an unticked box is not one of them.
               THE HOST STILL SEES ALL FIVE, because the host is choosing rather than agreeing. Same panel, two
               audiences, and the difference is which question they are answering. */}
-          {VARIANT_TOGGLES.filter((toggle) => canEditVariants || variants[toggle.key]).map((toggle) => (
+          {/* Design note #1271: THE TILE SET IS OFFERED ONLY WHERE IT IS A CHOICE. Under 18XX it has no map
+              (#1310); under the Level Playing Field it is forced on (#1320) and the drop-down's blurb says
+              so. Under 18XX+ it is the checkbox the request asked for, directly below the drop-down. A guest
+              sees it when it is on, as with every other term (#924). */}
+          {VARIANT_TOGGLES.filter((toggle) =>
+            toggle.key === "plusTiles"
+              ? canEditVariants
+                ? gameTypeOf(variants) === "plus"
+                : variants.plusTiles
+              : canEditVariants || variants[toggle.key],
+          ).map((toggle) => (
             <label key={toggle.key} style={styles.variantToggle}>
               <input
                 type="checkbox"
                 checked={variants[toggle.key]}
+                /* Design note #1310/#1320: the two lock rules that used to live here are the drop-down's now
+                   (`withGameType`); a box that is shown is a box that may be ticked. */
                 disabled={!canEditVariants}
                 onChange={(event) =>
-                  onSetVariants?.({ ...variants, [toggle.key]: event.target.checked })
+                  onSetVariants?.({
+                    ...variants,
+                    [toggle.key]: event.target.checked,
+                  })
                 }
               />
               <span style={styles.variantToggleText}>
@@ -366,7 +454,9 @@ export function SandboxWaitingRoom({
 
           {!canEditVariants && (
             <span style={styles.variantNote}>
-              {VARIANT_TOGGLES.some((toggle) => variants[toggle.key])
+              {VARIANT_TOGGLES.some((toggle) => variants[toggle.key]) ||
+              /* Design note #1271: a bigger map is a variant too, even with every box unticked. */
+              gameTypeOf(variants) !== "standard"
                 ? "Only the host can change these. You are agreeing to them when you press Ready."
                 : /* Design note #924: SILENCE WOULD READ AS A LOADING STATE. With every toggle off the list
                      above renders nothing, and a heading with an empty body looks broken rather than
@@ -377,6 +467,25 @@ export function SandboxWaitingRoom({
             </span>
           )}
         </div>
+
+        {/* Design note #1239 (`introPreference.ts`): THIS browser's choice, not a term of the game -- so it sits
+            outside the variants panel, is never disabled for guests, and is not written to the room. */}
+        <label style={styles.variantToggle}>
+          <input
+            type="checkbox"
+            checked={skipIntro}
+            onChange={(event) => {
+              setSkipIntroPreferred(event.target.checked);
+              setSkipIntro(event.target.checked);
+            }}
+          />
+          <span style={styles.variantToggleText}>
+            <span style={styles.variantToggleLabel}>Skip the opening titles</span>
+            <span style={styles.variantNote}>
+              On this browser only. Other players still see them unless they tick this too.
+            </span>
+          </span>
+        </label>
 
         <div style={styles.actionRow}>
           <button
@@ -434,6 +543,62 @@ export function SandboxWaitingRoom({
 }
 
 export default SandboxWaitingRoom;
+
+/* ==================================================================
+    DESIGN NOTE 1258: THE HOLD IS DRAWN IN THE ROOM IT IS HOLDING FOR
+   ==================================================================
+   REPORTED: "screen flash on Host Game."
+   THE FLASH WAS A THIRD SCREEN. Pressing Host unmounts the lobby -- the boardroom photograph -- and the
+   shell's first render is #764's hold: a small card on the bare app ground, no photograph, no title bar,
+   for exactly the one round trip it takes the room document to arrive. Then THIS screen mounts, with its
+   own photograph and its own bar. Two full-bleed scenes with a dark card between them is a flash however
+   short the middle frame is, and the host sees it on every single game.
+   #764 WAS RIGHT THAT THERE MUST BE A HOLD -- the board is not a safe default -- and wrong only about what
+   it looks like. The hold now renders in this component's own root, bar and panel, so the frame between
+   the lobby and the waiting room IS the waiting room, with a sentence where the roster will be. One
+   transition rather than two, and the photograph is already decoded when the roster lands.
+   `roomCode` IS SHOWN IMMEDIATELY. It is known before the document is -- `hostSandboxRoom` returns it --
+   and it is the one thing a host wants to start reading aloud. */
+export function SandboxWaitingRoomHold({
+  roomCode,
+  onLeave,
+  audio,
+}: Pick<SandboxWaitingRoomProps, "roomCode" | "onLeave" | "audio">) {
+  const uiScale = useUiScale();
+  return (
+    <div style={{ ...styles.root, ...chromeZoomFor(uiScale) }}>
+      <div style={styles.sceneLayer} aria-hidden="true" />
+      <TopBar roomName={roomCode} onLeaveGame={onLeave} audio={audio} />
+      <div style={styles.panelWrap}>
+        <div style={styles.panel}>
+          <div style={styles.headerRow}>
+            <span style={styles.title}>Sandbox waiting room</span>
+          </div>
+          <div style={styles.codeBlock}>
+            <span style={styles.codeLabel}>Room code</span>
+            <code style={styles.code}>{roomCode}</code>
+            <span style={styles.note}>Fetching the room…</span>
+          </div>
+          <div style={styles.actionRow}>
+            <button type="button" style={styles.button} onClick={onLeave}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      </div>
+      <AppFooter surface="meta" />
+    </div>
+  );
+}
+
+/* Design note #1258: the same photograph the root paints, fetched while the player is still in the lobby
+   so it is in the cache before the hold needs it. A `link rel=preload` would want the document head; an
+   `Image` is the same request from here. Idempotent -- the browser dedupes a URL it already holds. */
+export function preloadWaitingRoomScene(): void {
+  if (typeof Image === "undefined") return;
+  const img = new Image();
+  img.src = `${process.env.PUBLIC_URL ?? ""}/images/waiting-room.jpg`;
+}
 
 const styles: Record<string, React.CSSProperties> = {
   /* ==================================================================
@@ -499,17 +664,41 @@ const styles: Record<string, React.CSSProperties> = {
     padding: 0,
     minHeight: "100vh",
     backgroundColor: "#0f0f0f",
+    /* ==================================================================
+        DESIGN NOTE 1266: THE PHOTOGRAPH WAS SIZED TO THE PAGE, AND THE PAGE GREW
+       ==================================================================
+       REPORTED: "clicking Ready in the waiting room causes the screen to zoom in a bit?"
+       IT DOES, AND IT IS THE PICTURE. The photograph was a `cover` background on THIS box, and this box is as
+       tall as its content once the roster outgrows `100vh` (#1137 records that it does). Pressing Ready adds
+       #857's notice line under the button, the panel grows by one line, the root grows with it, and `cover`
+       re-fits the photograph to a taller box -- so every pixel of the room scales up by a few percent, at
+       once, behind a panel that did not move. That is a zoom, however it was produced. The same thing happens
+       on every reflow: a player joining, a name being set, an error line.
+       THE PICTURE MOVES TO A FIXED LAYER sized to the window, where nothing the roster does can reach it.
+       `sceneLayer` below; `backgroundColor` stays here as the fallback #1100 argued for. The root becomes a
+       stacking context (`isolation`) so the layer's negative `z-index` sits above this fill and below the
+       content -- and the footer's mark still keys against the photograph, because the root is the PAINTER's
+       group, which #1170a allows. `blendIsolation.test.ts` pins the chain. */
+    position: "relative",
+    isolation: "isolate",
+    color: "#f2f0eb",
+    fontFamily: FONT_FAMILY,
+    boxSizing: "border-box",
+  },
+  /* Design note #1266: the room, on a layer the size of the window. `fixed` inside the chrome zoom still
+     measures the full window (#1144's measurement), and `cover` against a box that never changes size is a
+     picture that never changes size. Inert to the pointer; it is scenery. */
+  sceneLayer: {
+    position: "fixed",
+    inset: 0,
+    zIndex: -1,
+    pointerEvents: "none",
     backgroundImage:
       "linear-gradient(rgba(8, 8, 8, 0.24), rgba(8, 8, 8, 0.38)), " +
       `url("${process.env.PUBLIC_URL ?? ""}/images/waiting-room.jpg")`,
     backgroundSize: "cover",
     backgroundPosition: "center",
     backgroundRepeat: "no-repeat",
-    /* The colour stays under the image so a slow or failed load is the ordinary dark screen rather than
-       white -- #1100's point, kept rather than replaced. */
-    color: "#f2f0eb",
-    fontFamily: FONT_FAMILY,
-    boxSizing: "border-box",
   },
   /* Design note #1138: what the root's padding used to be, on the element that wants it. `alignItems` keeps
      the panel centred horizontally now that the root is no longer doing it for the bar as well. */

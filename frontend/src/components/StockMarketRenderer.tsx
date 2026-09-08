@@ -18,7 +18,7 @@
 // around a ring instead of a diagonal cascade, shrinking by `1.15 / sqrt(count)`.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { FONT_SIZE, RADIUS } from "../styles/typography";
+import { FONT_SIZE, RADIUS, VIEWPORT_RADIUS } from "../styles/typography";
 import { corporationLabel } from "../utils/corporationNames";
 import { bestContrastTextColor, corporationLiveryColor } from "../styles/corporationLivery";
 import { CorporateLogo } from "./CorporateLogo";
@@ -26,6 +26,8 @@ import { MarketToken } from "./MarketToken";
 import { stackOffset, stackOrder } from "../utils/marketStack";
 /* Design note #1117: the one viewport ground, shared rather than retyped. */
 import { INK_VIEWPORT } from "../styles/palette";
+/* Design note #1263: the chrome's scale, so the tray can step back into it. */
+import { useUiScale } from "../utils/useUiScale";
 import {
   PAY_DOUBLE_JUMP_MULTIPLE,
   WITHHOLD_DOUBLE_DROP_MULTIPLE,
@@ -941,6 +943,9 @@ function ParIpoTray({ markersByPrice }: { markersByPrice: ReadonlyMap<number, Pa
 export interface StockMarketRendererProps {
   /** `QueryMsg::GetMarketGrid`'s response, verbatim. */
   marketGrid: MarketGridResponse;
+  /** Design note #1296: the corporations that have ALREADY operated this Operating Round -- derived by the
+   *  shell from `active_operating_order` and the cursor, never logged. Their tokens flip to the barred side. */
+  operatedCompanyIds?: ReadonlySet<number>;
   /** Design note #24: every corporation with a PAR PRICE SET, floated or not. Par is fixed when the
    *  President's Certificate is bought; floating is a later, separate 60% event, so the old
    *  watch-the-grid cache could never show a parred-but-unfloated company.
@@ -959,6 +964,7 @@ export interface StockMarketRendererProps {
 /** Fallback/default cell size, used only until the `ResizeObserver` below
  *  reports a real measurement (see design note #19 -- the same viewport-
  *  maximization item this mirrors in `HexGridRenderer.tsx`). */
+const EMPTY_OPERATED: ReadonlySet<number> = new Set();
 const CELL_SIZE_PX = 40;
 const MIN_CELL_SIZE_PX = 22;
 // Raised 72 -> 120 (design note #19/item 3): with the header-row legend
@@ -1032,6 +1038,14 @@ const MARKET_TOKEN_SCATTER_CSS = `
 .market-token-cluster .market-token {
   transition: transform 140ms ease, box-shadow 140ms ease;
 }
+.market-token-cluster .market-token-operated::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: linear-gradient(135deg, transparent 43%, #e5484d 43%, #e5484d 57%, transparent 57%);
+  pointer-events: none;
+}
 .market-token-cluster .market-token:hover,
 .market-token-cluster .market-token:focus-visible {
   transform: translateY(calc(var(--stack-lift, 6px) * -1)) scale(1.18);
@@ -1051,7 +1065,12 @@ const MIN_LOGO_TOKEN_DIAMETER_PX = 26;
 const PAR_TRAY_LOGO_PX = 17;
 function deriveTokenDiameterPx(cellSize: number, occupantCount: number): number {
   const single = Math.max(MIN_TOKEN_DIAMETER_PX, Math.min(MAX_TOKEN_DIAMETER_PX, Math.round(cellSize * 0.62)));
-  return Math.max(Math.round(MIN_TOKEN_DIAMETER_PX * 0.85), Math.round(single * tokenCountScale(occupantCount)));
+  const scaled = Math.max(Math.round(MIN_TOKEN_DIAMETER_PX * 0.85), Math.round(single * tokenCountScale(occupantCount)));
+  /* Design note #1296: and never taller than the room under the price. The row sits on the cell's bottom
+     edge (2px), the price text occupies the top ~14px, so a disc taller than `cellSize - 16` would reach it.
+     REPORTED: "B&O on $126 covers up the bottom half of 2 and 6". Small cells get small discs (the acronym
+     takes over below #430's threshold); the value stays legible at every size. */
+  return Math.max(12, Math.min(scaled, cellSize - 16));
 }
 
 /** Station-token ticker-label font size, scaled off the token's own live
@@ -1143,10 +1162,13 @@ interface CellOccupantGroup {
 
 export function StockMarketRenderer({
   marketGrid,
+  operatedCompanyIds = EMPTY_OPERATED,
   parredCompanies,
   className,
   variants,
 }: StockMarketRendererProps) {
+  /* Design note #1294: the chrome scale, live, for the tray's step back into it (#1263). */
+  const uiScale = useUiScale();
   // Viewport maximization (design note #19), un-clamped from HEIGHT by #21/item 3: a `ResizeObserver`
   // measures available WIDTH and derives the largest cell size that fits every column. A CSS grid needs
   // no explicit pixel height -- its content-driven height cascades up `App.tsx`'s unclamped flex chain.
@@ -1380,35 +1402,68 @@ export function StockMarketRenderer({
                     THE ORDER IS THE OPERATING CURSOR'S, taken from `stackOrder` so this cannot become a
                     second opinion about turn order (#891). Earliest arrival on top: it operates first, and a
                     new entrant slides underneath exactly as the cardboard does. */}
-                {stackOrder(group.occupants).map((occupant, index) => {
-                  const offset = {
-                    x: 0,
-                    y: stackOffset(index, occupantCount, tokenDiameterPx),
-                  };
-                  return (
-                    /* Design note #1155: the DISC is `MarketToken`'s now -- livery, computed ink, and #430's
-                       herald-or-acronym threshold -- and everything left here is PLACEMENT. That seam is what
-                       lets the mini-camera draw the same object without inheriting this chart's scatter. */
-                    <MarketToken
-                      key={occupant.company_id}
-                      className="market-token"
-                      companyId={occupant.company_id}
-                      ticker={occupant.ticker}
-                      diameterPx={tokenDiameterPx}
-                      fontSizePx={tokenFontSizePx}
-                      title={`${corporationLabel(occupant.ticker)} — $${occupant.price ?? "?"}`}
-                      style={{
-                        position: "absolute",
-                        pointerEvents: "auto",
-                        top: `calc(50% + ${offset.y}px - ${tokenDiameterPx / 2}px)`,
-                        left: `calc(50% + ${offset.x}px - ${tokenDiameterPx / 2}px)`,
-                        /* Design note #1159: earliest arrival on TOP, so the z-order runs the opposite way
-                           to the paint order -- the token that operates first is the one the eye reaches. */
-                        zIndex: 10 + (occupantCount - index),
-                      }}
-                    />
-                  );
-                })}
+                {/* ==================================================================
+                      DESIGN NOTE 1267: THE PILE RUNS ACROSS THE CELL, NOT DOWN IT
+                    ==================================================================
+                    REPORTED: "splay corporation tokens horizontally, not vertically. They stop covering the
+                    cell value, and hovering currently lifts a token UNDERNEATH the one above it."
+                    BOTH ARE THE SAME AXIS. A vertical pile climbs from the cell's centre toward its top-left
+                    corner, which is where `priceText` sits, so three tokens hid the one number the chart is
+                    for. And the hover lifts a token UP (`--stack-lift`), so in a vertical pile "up" was
+                    straight into the neighbour above -- the lifted disc slid under it, which is the opposite
+                    of "lift it out of the stack". Across, the lift is perpendicular to the pile: a token
+                    rises clear of both neighbours, and the price stays readable above the whole row.
+                    ANCHORED TO THE CELL'S LOWER HALF for the same reason -- the value is top-left, so the
+                    row keeps its distance. #1159's order is untouched: earliest arrival first, so it is the
+                    leftmost, which is where a reader's eye starts. */}
+                {/* ==================================================================
+                      DESIGN NOTE 1296: ONE ROW, TWO STACKS -- THE STILL-TO-OPERATE AND THE OPERATED
+                    ==================================================================
+                    RULED (19/19a/19b): "One row, but two stacks within it: the 'top' stack is the
+                    active/still-to-play corporations, the 'bottom' is the already-operated corporations
+                    flipped to their barred side ... rightmost spot is the top." So the row reads, left to
+                    right: the operated stack, then the active stack, each rightmost-first splayed left -- the
+                    row's rightmost token is the next to operate, and a token that has run drops into the
+                    left stack, barred and desaturated (`market-token-operated`). All flip back when the
+                    Operating Round ends, because "operated" is derived from the cursor and the cursor resets.
+                    #1159's ORDER IS UNCHANGED within each stack: `stackOrder` gives earliest arrival first,
+                    and earliest-first drawn rightmost-first is the same list read from the other end.
+                    AND THE VALUE IS NEVER COVERED (19): the row is anchored to the cell's BOTTOM edge and the
+                    disc is capped so its top clears the price text in the top-left corner, whatever the count. */}
+                {(() => {
+                  const active = stackOrder(group.occupants.filter((o) => !operatedCompanyIds.has(o.company_id)));
+                  const operated = stackOrder(group.occupants.filter((o) => operatedCompanyIds.has(o.company_id)));
+                  // Left to right: operated (rightmost-first), then active (rightmost-first).
+                  const row = [...[...operated].reverse(), ...[...active].reverse()];
+                  const gapBetweenStacks = operated.length > 0 && active.length > 0 ? tokenDiameterPx * 0.3 : 0;
+                  return row.map((occupant, index) => {
+                    const isOperated = operatedCompanyIds.has(occupant.company_id);
+                    const extra = isOperated ? -gapBetweenStacks / 2 : gapBetweenStacks / 2;
+                    const x = stackOffset(index, row.length, tokenDiameterPx) + extra;
+                    return (
+                      <MarketToken
+                        key={occupant.company_id}
+                        className={isOperated ? "market-token market-token-operated" : "market-token"}
+                        companyId={occupant.company_id}
+                        ticker={occupant.ticker}
+                        diameterPx={tokenDiameterPx}
+                        fontSizePx={tokenFontSizePx}
+                        title={`${corporationLabel(occupant.ticker)} — $${occupant.price ?? "?"}${
+                          isOperated ? " (has operated this round)" : ""
+                        }`}
+                        style={{
+                          position: "absolute",
+                          pointerEvents: "auto",
+                          bottom: "2px",
+                          left: `calc(50% + ${x}px - ${tokenDiameterPx / 2}px)`,
+                          /* The rightmost token is the next to operate, and it is on top. */
+                          zIndex: 10 + index,
+                          ...(isOperated ? { filter: "saturate(0.35) brightness(0.9)" } : null),
+                        }}
+                      />
+                    );
+                  });
+                })()}
               </div>
             );
           })}
@@ -1424,7 +1479,7 @@ export function StockMarketRenderer({
       <style>{MARKET_TOKEN_SCATTER_CSS}</style>
       {/* Design note #747: the tray and the rose share one column, and the rose lands in the pocket the
           tray's six rows leave under it beside an eleven-row matrix -- so it costs no height at all. */}
-      <div style={styles.traySlot}>
+      <div style={{ ...styles.traySlot, zoom: uiScale }}>
         <ParIpoTray markersByPrice={parMarkersByPrice} />
         <MarketCompassRose variants={variants} />
       </div>
@@ -1486,7 +1541,8 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "16px",
     // Design note #1117: the one viewport ground, shared by every tab.
     backgroundColor: INK_VIEWPORT,
-    borderRadius: RADIUS.card,
+    // Design note #1257: square on top, where the tab strip attaches.
+    borderRadius: VIEWPORT_RADIUS,
     color: "#f2f0eb",
     fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif",
     // Design note #21/item 3: `overflow: "auto"` and `height: "100%"` both removed -- the inner scrollbar
@@ -1596,6 +1652,19 @@ const styles: Record<string, React.CSSProperties> = {
      `parTray` -- inside a column the basis would size the tray's HEIGHT, which is not what #26 meant by it.
      The tray keeps its own look and simply fills the width it is given. */
   traySlot: {
+    /* ==================================================================
+        DESIGN NOTE 1263: THE TRAY IS CHROME, AND IT WAS DRAWN AS A BOARD
+       ==================================================================
+       REPORTED: "Par/IPO tray gigantic."
+       #1144 put `zoom: UI_SCALE` (0.7) on the shell and `boardPane` divides it back out, because the two
+       canvases size themselves to the viewport and must not be scaled twice. This whole renderer sits inside
+       that pane -- and this column is not a canvas. It is a list of prices and pills, HTML like every other
+       panel, and it was being drawn at 1/0.7 of the scale everything around it uses: 168px became 240 on
+       screen, its type twice the size of the action bar's. That is the "gigantic".
+       ZOOMED BACK TO THE CHROME'S SCALE HERE, on the slot, so the tray and the rose under it read at the same
+       size as the panels beside the matrix. The matrix keeps the pane's exemption, which is what it needs.
+       `168px` is now 168 chrome pixels, which is what #25 meant by it. */
+    /* Design note #1294: `zoom` is written per render from `useUiScale()`. */
     display: "flex",
     flexDirection: "column",
     gap: "12px",

@@ -19,13 +19,44 @@
 // Design notes #4-#8/#612/#632: see `docs/ai_architecture/utils_layer.md`.
 
 import type { GameStateResponse } from "./gameState";
+// Design note #1326: the roster and the open shelf depend on the table's variants.
+import { resolveVariants } from "./gameVariants";
 
 /** Phase tiers in ascending order. `"D"` sorts last deliberately. */
-export type TrainTier = "2" | "3" | "4" | "5" | "6" | "D";
+export type TrainTier = "2" | "3" | "4" | "5" | "6" | "7" | "D";
 
 /** Design note #905: exported so the delayed-auction trigger can ask "is the phase at or past 3" against
- *  the same ordering everything else uses, rather than restating it. */
+ *  the same ordering everything else uses, rather than restating it.
+ *  Design note #1326: THE PRINTED SIX. The 7-train exists only in the Level Playing Field, so it is not in
+ *  this list -- a standard game must never show a 7-train row, count toward one, or name one as the tier that
+ *  rusts anything. `tierOrderFor(state)` is the list a game actually plays with. */
 export const TIER_ORDER: readonly TrainTier[] = ["2", "3", "4", "5", "6", "D"];
+
+/** Design note #1326: the Level Playing Field's roster -- a 7-train between the 6 and the Diesel. */
+export const LPF_TIER_ORDER: readonly TrainTier[] = ["2", "3", "4", "5", "6", "7", "D"];
+
+/** Every tier any variant prints, for parsing a model string. */
+const ALL_TIERS: readonly TrainTier[] = LPF_TIER_ORDER;
+
+/** The tiers this game plays with, in depot order. */
+export function tierOrderFor(state: GameStateResponse | null): readonly TrainTier[] {
+  return resolveVariants(state?.variants).levelPlayingField ? LPF_TIER_ORDER : TIER_ORDER;
+}
+
+/* ==================================================================
+ *  DESIGN NOTE 1326: THREE TIERS OPEN AT ONCE
+ * ==================================================================
+ * RULED: "Both the 7-Trains and the D-Trains become available for purchase the moment the first 6-Train is
+ * purchased (they unlock simultaneously with 6-Trains) ... the 7-train has no effect, but the D-train still
+ * rusts all 4-trains." So under the Level Playing Field the depot is a strict queue up to the 6 and an OPEN
+ * SHELF from there: once any 6 is owned, 6s, 7s and Diesels are all for sale, none sells the others out, and
+ * the phase is still "the highest tier anybody owns" -- which is what makes the first Diesel rust the 4s
+ * exactly as it always has. The standard queue (#4) is untouched: `openDepotTiers` answers one tier there. */
+const LPF_OPEN_SHELF: readonly TrainTier[] = ["6", "7", "D"];
+
+function onOpenShelf(state: GameStateResponse | null, tier: TrainTier): boolean {
+  return resolveVariants(state?.variants).levelPlayingField && LPF_OPEN_SHELF.includes(tier);
+}
 
 /** What the app calls a train of this tier -- `"3-Train"`, `"D-Train"`. No tier is a special case.
  *
@@ -95,6 +126,7 @@ const DEPOT_TOTALS: Readonly<Record<TrainTier, number | null>> = {
   "4": 4,
   "5": 3,
   "6": 2,
+  "7": 2, // #1326: Level Playing Field only -- `tierOrderFor` keeps it out of every other game.
   D: null,
 };
 
@@ -110,6 +142,9 @@ interface TierPresentation {
   /** Trains one corporation may hold during this phase. Drops as the game
    *  advances: 4 through Phases 2-3, 3 in Phase 4, 2 from Phase 5 on. */
   trainLimit: number;
+  /** Design note #1326: the phase number the badge prints when it is not the tier's own (the 7-train is
+   *  Phase 6 with a bigger train). Absent means the tier's own. */
+  phaseNumber?: string;
 }
 
 const TIER_PRESENTATION: Readonly<Record<TrainTier, TierPresentation>> = {
@@ -118,6 +153,8 @@ const TIER_PRESENTATION: Readonly<Record<TrainTier, TierPresentation>> = {
   "4": { era: "Green", tint: "green", trainLimit: 3 },
   "5": { era: "Brown", tint: "brown", trainLimit: 2 },
   "6": { era: "Brown", tint: "brown", trainLimit: 2 },
+  // #1326: "the 7-train has no effect" -- the 6's phase, with the 6's number on the badge (`phaseNumber`).
+  "7": { era: "Brown", tint: "brown", trainLimit: 2, phaseNumber: "6" },
   D: { era: "Brown", tint: "brown", trainLimit: 2 },
 };
 
@@ -166,7 +203,7 @@ export function tierEra(tier: TrainTier): string {
  *
  * THE ORDER IS THE PROGRESSION, so a caller can render the list straight out and get Yellow, Green, Brown
  * left to right without sorting it. */
-export const TILE_ERA_ORDER: readonly string[] = ["Yellow", "Green", "Brown"];
+export const TILE_ERA_ORDER: readonly string[] = ["Yellow", "Green", "Brown", "Gray"]; // #1312: Gray is the tile set's
 
 /** Every colour legal once `era` is the highest one reached.
  *
@@ -190,8 +227,9 @@ export function tileErasUpTo(era: string): readonly string[] {
 }
 
 /** Every tile colour legal in the phase `tier` opens. */
-export function tileErasAt(tier: TrainTier): readonly string[] {
-  return tileErasUpTo(tierEra(tier));
+export function tileErasAt(tier: TrainTier, plusTiles = false): readonly string[] {
+  // #1312: under the Project 18XX+ tile set the Diesel era is Gray, one colour past the badge's own Brown.
+  return tileErasUpTo(tier === "D" && plusTiles ? "Gray" : tierEra(tier));
 }
 
 /* Design note #5: ONE COUNTDOWN, NOT TWO. The phase badge and the train chips disagreed and the badge was
@@ -259,6 +297,8 @@ export interface GamePhase {
    *  out the rest of the current tier does not itself rust anything -- the rust fires on the FIRST purchase of the
    *  next tier -- so the count is "empty the depot, then buy one more". */
   purchasesUntilRust: number | null;
+  /** Design note #1326: how many of each tier the corporations hold, for the open shelf's per-tier count. */
+  ownedByTier: Readonly<Partial<Record<TrainTier, number>>>;
 }
 
 /* Design note #4: THE FULL DEPOT TABLE IS EXACT -- BUT NOT BY SUBTRACTION. #2 warns that `TOTAL - owned` is
@@ -314,8 +354,18 @@ export const DEPOT_COST: Readonly<Record<TrainTier, number>> = {
   "4": 300,
   "5": 450,
   "6": 630,
+  "7": 710, // #1326
   D: 1_100,
 };
+
+/** Design note #1326: the Level Playing Field's Diesel is $900 outright ($750 traded in -- `dieselExchange`). */
+export const LPF_DIESEL_COST = 900;
+
+/** What `tier` costs from the depot in this game. */
+export function depotCostFor(state: GameStateResponse | null, tier: TrainTier): number {
+  if (tier === "D" && resolveVariants(state?.variants).levelPlayingField) return LPF_DIESEL_COST;
+  return DEPOT_COST[tier];
+}
 
 /** The tier whose first purchase destroys this one -- the inverse of
  *  `RUSTS_WHEN_NEXT_TIER_ARRIVES`. 5s, 6s and Diesels are permanent and so
@@ -330,13 +380,17 @@ const RUSTED_BY: Readonly<Partial<Record<TrainTier, TrainTier>>> = {
  *  figure here is exact rather than an estimate. */
 export function depotInventory(state: GameStateResponse | null): DepotTier[] {
   const phase = derivePhase(state);
-  const currentIndex = phase ? TIER_ORDER.indexOf(phase.tier) : 0;
+  const order = tierOrderFor(state);
+  const currentIndex = phase ? order.indexOf(phase.tier) : 0;
 
-  return TIER_ORDER.map((tier, index) => {
+  return order.map((tier, index) => {
     const total = DEPOT_TOTALS[tier];
     let remaining: number | null;
     if (total === null) {
       remaining = null; // Diesel: no ceiling.
+    } else if (onOpenShelf(state, tier) && phase && onOpenShelf(state, phase.tier)) {
+      // #1326: on the open shelf nothing sells a lower tier out; each counts its own.
+      remaining = Math.max(0, total - (phase.ownedByTier[tier] ?? 0));
     } else if (index < currentIndex) {
       remaining = 0; // Design note #4: the queue rule.
     } else if (index === currentIndex) {
@@ -348,7 +402,7 @@ export function depotInventory(state: GameStateResponse | null): DepotTier[] {
     const rustedByTier = RUSTED_BY[tier];
     return {
       tier,
-      cost: DEPOT_COST[tier],
+      cost: depotCostFor(state, tier),
       total,
       remaining,
       trainLimit: TIER_PRESENTATION[tier].trainLimit,
@@ -358,7 +412,7 @@ export function depotInventory(state: GameStateResponse | null): DepotTier[] {
         phase != null &&
         phase.known &&
         rustedByTier !== undefined &&
-        currentIndex >= TIER_ORDER.indexOf(rustedByTier),
+        currentIndex >= order.indexOf(rustedByTier),
       // Design note #8: carried, so the card and the countdown cannot
       // disagree about which purchase kills this tier.
       rustedBy: rustedByTier ?? null,
@@ -369,9 +423,25 @@ export function depotInventory(state: GameStateResponse | null): DepotTier[] {
       rustPhaseLabel:
         rustedByTier === undefined
           ? null
-          : (PHASE_SHIFT_TARGET[TIER_ORDER[TIER_ORDER.indexOf(rustedByTier) - 1]]?.phase ?? null),
+          : (PHASE_SHIFT_TARGET[TIER_ORDER[TIER_ORDER.indexOf(rustedByTier) - 1]]?.phase ?? null), // the printed ladder names the phase
     };
   });
+}
+
+/** Design note #1326: THE TIERS FOR SALE RIGHT NOW. One row in the printed game -- the cheapest with stock,
+ *  which is the queue rule (#4) as a purchase question -- and, under the Level Playing Field once a 6 is
+ *  owned, every open-shelf tier with stock. The reducer's `buyDepotTrain` and the Buy Trains panel both ask
+ *  this, so the button and the arm cannot disagree about what may be bought. */
+export function openDepotTiers(state: GameStateResponse | null): DepotTier[] {
+  const inventory = depotInventory(state);
+  const first = inventory.find((row) => row.remaining === null || row.remaining > 0);
+  if (!first) return [];
+  const phase = derivePhase(state);
+  const shelfOpen = phase !== null && phase.known && onOpenShelf(state, phase.tier);
+  if (!shelfOpen) return [first];
+  return inventory.filter(
+    (row) => onOpenShelf(state, row.tier) && (row.remaining === null || row.remaining > 0),
+  );
 }
 
 /* Design note #6: EVERY TIER CAN COUNT, NOT JUST THE CURRENT ONE. A chip for a 2-train wants an answer during
@@ -399,10 +469,11 @@ export function rustOutlook(
   const inventory = depotInventory(state);
   const remainingByTier = new Map(inventory.map((row) => [row.tier, row.remaining]));
   const rustedByTierFlag = new Map(inventory.map((row) => [row.tier, row.rusted]));
-  const currentIndex = phase ? TIER_ORDER.indexOf(phase.tier) : 0;
+  const order = tierOrderFor(state);
+  const currentIndex = phase ? order.indexOf(phase.tier) : 0;
 
   const out = {} as Record<TrainTier, TierRustOutlook>;
-  for (const tier of TIER_ORDER) {
+  for (const tier of order) {
     const trigger = RUSTED_BY[tier] ?? null;
     if (trigger == null) {
       out[tier] = { rustedBy: null, purchasesAway: null, rusted: false };
@@ -416,8 +487,8 @@ export function rustOutlook(
     // Sum the depot from wherever we are up to the tier BELOW the trigger,
     // then one more purchase for the trigger train itself.
     let purchases = 1;
-    for (let i = currentIndex; i < TIER_ORDER.indexOf(trigger); i += 1) {
-      purchases += remainingByTier.get(TIER_ORDER[i]) ?? 0;
+    for (let i = currentIndex; i < order.indexOf(trigger); i += 1) {
+      purchases += remainingByTier.get(order[i]) ?? 0;
     }
     out[tier] = { rustedBy: trigger, purchasesAway: purchases, rusted: false };
   }
@@ -452,12 +523,13 @@ export function phaseAlertLevel(phase: GamePhase | null): PhaseAlertLevel | null
 export function trainTier(model: string | null | undefined): TrainTier | null {
   if (!model) return null;
   const head = model.trim().toUpperCase().split(/[^0-9A-Z]/)[0];
-  return (TIER_ORDER as readonly string[]).includes(head) ? (head as TrainTier) : null;
+  return (ALL_TIERS as readonly string[]).includes(head) ? (head as TrainTier) : null;
 }
 
 /** The room's current phase, derived per design notes #1 and #2. */
 export function derivePhase(gameState: GameStateResponse | null): GamePhase | null {
   if (!gameState) return null;
+  const order = tierOrderFor(gameState);
 
   let known = false;
   let highest = 0;
@@ -496,7 +568,7 @@ export function derivePhase(gameState: GameStateResponse | null): GamePhase | nu
     for (const model of trains) {
       const tier = trainTier(model);
       if (!tier) continue;
-      highest = Math.max(highest, TIER_ORDER.indexOf(tier));
+      highest = Math.max(highest, order.indexOf(tier));
       const ghostAt = ghosts.indexOf(model);
       if (ghostAt >= 0) {
         ghosts.splice(ghostAt, 1);
@@ -506,11 +578,14 @@ export function derivePhase(gameState: GameStateResponse | null): GamePhase | nu
     }
   }
 
-  const tier = TIER_ORDER[highest];
+  const tier = order[highest] ?? order[0];
   const total = DEPOT_TOTALS[tier];
   const depotRemaining = total === null ? null : Math.max(0, total - (ownedByTier.get(tier) ?? 0));
   const presentation = TIER_PRESENTATION[tier];
-  const shiftImminent = known && depotRemaining !== null && depotRemaining <= 1;
+  /* #1326: on the open shelf a Diesel may be bought at any moment, so there is no countdown to warn of. */
+  const shelf = onOpenShelf(gameState, tier);
+  const shiftImminent = !shelf && known && depotRemaining !== null && depotRemaining <= 1;
+  const phaseNumber = presentation.phaseNumber ?? tier;
 
   return {
     tier,
@@ -525,7 +600,7 @@ export function derivePhase(gameState: GameStateResponse | null): GamePhase | nu
        would state a fact this function does not have. The colour survives because the board's tile colour is
        separately known. */
     label: known
-      ? `Phase: ${tier} (${presentation.era})`
+      ? `Phase: ${phaseNumber} (${presentation.era})`
       : // Design note #3: no phase number we cannot stand behind.
         `Phase: ${presentation.era}`,
     tint: presentation.tint,
@@ -536,7 +611,8 @@ export function derivePhase(gameState: GameStateResponse | null): GamePhase | nu
     known,
     trainLimit: presentation.trainLimit,
     // Design note #5: both messages count from the same figure.
-    purchasesUntilPhaseChange: known && depotRemaining !== null ? depotRemaining + 1 : null,
+    purchasesUntilPhaseChange: !shelf && known && depotRemaining !== null ? depotRemaining + 1 : null,
+    ownedByTier: Object.fromEntries(ownedByTier.entries()) as Partial<Record<TrainTier, number>>,
     shiftWarning:
       shiftImminent && depotRemaining !== null
         ? phaseShiftWarning(tier, depotRemaining + 1)

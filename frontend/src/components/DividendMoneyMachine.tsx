@@ -46,19 +46,21 @@
 
 import React, { useEffect, useState } from "react";
 
-import { FONT_SIZE, RADIUS } from "../styles/typography";
+import { FONT_SIZE } from "../styles/typography";
 /* Design note #1098: the card palette, and the per-seat ink picker the player card's own stripe uses. Both
    are borrowed rather than matched by eye -- that borrowing IS the change. */
-import {
-  CARD_BORDER,
-  CARD_DIVIDER,
-  CARD_INK,
-  CARD_INK_MUTED,
-  CARD_INK_POSITIVE,
-  CARD_SURFACE,
-} from "../styles/palette";
+import { CARD_DIVIDER, CARD_INK, CARD_INK_MUTED, CARD_INK_POSITIVE } from "../styles/palette";
 import { bestContrastTextColor } from "../styles/corporationLivery";
 import { CorporateLogo } from "./CorporateLogo";
+import {
+  MONEY_MACHINE_FALL_AT_MS,
+  MONEY_MACHINE_MERGE_AT_MS,
+  MONEY_MACHINE_LEAVE_AT_MS,
+  MONEY_MACHINE_TOTAL_MS,
+} from "./moneyMachineSchedule";
+/* Design note #1291: the shared panel. It imports this file's schedule constants; this file imports its
+   component -- a cycle TypeScript resolves because neither side reads the other at module-evaluation time. */
+import { MoneyMachinePanel } from "./MoneyMachinePanel";
 
 /** The cue, by its on-disk name.
  *
@@ -106,22 +108,19 @@ export const MONEY_MACHINE_SFX = "money-machine.mp3";
    2.36s, comfortably inside, and its loudest moment lands at ~1.54s, on the merge. */
 
 /** 0.0-0.5s in, 3.0-3.5s out. */
-export const MONEY_MACHINE_SLIDE_MS = 500;
-/** 0.5-1.5s. The beat this batch exists to add: both figures perfectly still, so they can be read. */
-export const MONEY_MACHINE_HOLD_MS = 1000;
-/** 1.5-2.0s. The top line drops and fades; the bottom becomes the sum at the end of it. */
-export const MONEY_MACHINE_FALL_MS = 500;
-/** 2.0-3.0s, on the final total. */
-export const MONEY_MACHINE_LINGER_MS = 1000;
+/* Design note #1291: the eight marks live in `moneyMachineSchedule.ts` now (a leaf module, for the panel's
+   sake) and are re-exported here under the same names. */
+export {
+  MONEY_MACHINE_SLIDE_MS,
+  MONEY_MACHINE_HOLD_MS,
+  MONEY_MACHINE_FALL_MS,
+  MONEY_MACHINE_LINGER_MS,
+  MONEY_MACHINE_FALL_AT_MS,
+  MONEY_MACHINE_MERGE_AT_MS,
+  MONEY_MACHINE_LEAVE_AT_MS,
+  MONEY_MACHINE_TOTAL_MS,
+} from "./moneyMachineSchedule";
 
-/** When the top line starts to drop. */
-export const MONEY_MACHINE_FALL_AT_MS = MONEY_MACHINE_SLIDE_MS + MONEY_MACHINE_HOLD_MS;
-/** When it has landed and the sum updates. */
-export const MONEY_MACHINE_MERGE_AT_MS = MONEY_MACHINE_FALL_AT_MS + MONEY_MACHINE_FALL_MS;
-/** When the panel starts to leave. */
-export const MONEY_MACHINE_LEAVE_AT_MS = MONEY_MACHINE_MERGE_AT_MS + MONEY_MACHINE_LINGER_MS;
-/** Total lifetime, animated or not (#1082). */
-export const MONEY_MACHINE_TOTAL_MS = MONEY_MACHINE_LEAVE_AT_MS + MONEY_MACHINE_SLIDE_MS;
 
 /** ==================================================================
  *   DESIGN NOTE 1082: WHERE THE BELL IS INSIDE THE CLIP
@@ -218,404 +217,83 @@ export interface DividendMoneyMachineProps {
   onCue: () => void;
   /** Fired when the panel has finished leaving, so the shell can clear its state. */
   onDone: () => void;
+  /** Design note #1291: 1 when the treasury's panel already holds the corner. */
+  stackIndex?: number;
 }
 
-export function DividendMoneyMachine({ event, onCue, onDone }: DividendMoneyMachineProps) {
-  /* ==================================================================
-      DESIGN NOTE 1061: THREE STATES, NOT A CSS ANIMATION LEFT TO FINISH ALONE
-     ==================================================================
-     THE TOTAL HAS TO CHANGE ON IMPACT -- "the bottom line updates to the new sum" -- and a number is not
-     something CSS can swap halfway through a keyframe. So the phase is React state and the movement is CSS:
-     `falling` runs the transform, `merged` is the frame the figure lands and the sum updates, `leaving` is
-     the fade. The keyframes never have to know what the number is and the number never has to know how far
-     the line has travelled.
-     KEYED ON THE TOKEN, so a second payout in the same round restarts at the beginning rather than inheriting
-     a finished animation -- the same reason `ActionToast` #697 keys its entrance on a token.
-
-     Design note #1082: `holding` IS THE NEW FIRST PHASE and it is the point of this batch. It covers the
-     slide-in AND the pause after it, because nothing about the two lines differs between them -- the slide is
-     the panel moving, not the figures -- and a phase that changes nothing a reader can see is a phase that
-     exists only to be got wrong. The one thing that happens at the seam between them is the cue, which is a
-     timer rather than a render. */
+export function DividendMoneyMachine({ event, onCue, onDone, stackIndex = 0 }: DividendMoneyMachineProps) {
   const [phase, setPhase] = useState<"holding" | "falling" | "merged" | "leaving">("holding");
-  /* Design note #1064: THE PREFERENCE IS READ ONCE PER PAYOUT AND NEVER STORED. A first draft kept it in
-     state, on the reasoning that one payout should run on one schedule; it was never read at render, because
-     the media block below already handles every visual difference and the effect below handles every timing
-     one. A piece of state nothing consumes is the kind of thing `tsc` will not flag and a reader will assume
-     is load-bearing. */
+
   useEffect(() => {
     if (!event) return undefined;
     const quiet = prefersReducedMotion();
     setPhase(quiet ? "merged" : "holding");
-
     const timers: number[] = [];
     if (quiet) {
-      /* "TRIGGER THE LOCAL AUDIO AT 0ms." There is no merge to wait for -- the panel arrives merged, so the
-         cue marks its arrival. */
       onCue();
     } else {
-      /* ==================================================================
-          DESIGN NOTE 1082: FOUR TIMERS FOR FOUR MOMENTS, EACH AT ITS OWN MARK
-         ==================================================================
-         EVERY ONE IS AN ABSOLUTE OFFSET FROM THE MOUNT, not a chain of relative waits. #1061 nested its two
-         (`settled + LINGER`), which was readable at two and would be four running sums here -- and a running
-         sum is where a phase silently absorbs its neighbour's slip. Each timer states the mark the spec names.
-         TIMERS, NOT `animationend`. A tab in the background throttles animation events and can drop them
-         entirely; a payout that never merged would leave the old total on screen and never ring. A
-         `setTimeout` in a throttled tab runs LATE, which is recoverable, rather than not at all. */
       timers.push(window.setTimeout(onCue, MONEY_MACHINE_CUE_AT_MS));
       timers.push(window.setTimeout(() => setPhase("falling"), MONEY_MACHINE_FALL_AT_MS));
       timers.push(window.setTimeout(() => setPhase("merged"), MONEY_MACHINE_MERGE_AT_MS));
       timers.push(window.setTimeout(() => setPhase("leaving"), MONEY_MACHINE_LEAVE_AT_MS));
     }
-
-    /* ==================================================================
-        DESIGN NOTE 1082: THE QUIET PATH NOW LASTS AS LONG AS THE OTHER ONE
-       ==================================================================
-       #1064 CLAIMED "SAME LIFETIME, SAME SOUND AT THE SAME MOMENT" AND WAS WRONG ABOUT THE FIRST. Its
-       animated path ran 900 + 2000 + 420 = 3320ms and its quiet path 2000ms -- a note describing an intention
-       as an accomplishment, which is a shape this project keeps producing.
-       MADE TRUE RATHER THAN THE CLAIM WITHDRAWN, because the claim is the right one: a reader who has asked
-       for less movement has not asked for less time, and the animated path spends 1.5s of its length on the
-       final sum. One `MONEY_MACHINE_TOTAL_MS` for both is the shortest way to say that and the only way to
-       keep it true after the next edit to the schedule. */
     timers.push(window.setTimeout(onDone, MONEY_MACHINE_TOTAL_MS));
     return () => timers.forEach((id) => window.clearTimeout(id));
   }, [event, onCue, onDone]);
 
   if (!event) return null;
 
-  /* Design note #1061: the sum updates AT the merge, which is what makes the figure look absorbed rather than
-     replaced. Before then the bottom line still reads what the player had.
-     Design note #1082: WRITTEN AS THE PHASES THAT SHOW THE OLD FIGURE, not as the ones that show the new. It
-     read `phase === "falling" ? before : after`, and adding `holding` in front of `falling` would have made
-     the panel arrive already showing the sum -- the pause is meant to hold BOTH numbers, which is the entire
-     point of adding it. Naming the "before" side means a future phase inserted ahead of the merge has to
-     declare itself rather than defaulting to the wrong answer. */
-  const shown = phase === "holding" || phase === "falling" ? event.cashBefore : event.cashAfter;
-
+  /* ==================================================================
+      DESIGN NOTE 1291: THE PANEL IS SHARED; THIS FILE KEEPS THE SCHEDULE AND THE SOUND
+     ==================================================================
+     Everything this component used to draw -- the stripe (#1098), the payer row, the total and its caption
+     (#1163), the CSS that collapsed the row (#1082, #1163) -- is `MoneyMachinePanel` now, shared with the
+     treasury's machine so the two cannot drift. What stays here is what is particular to a dividend: the
+     five-phase schedule (#1082), the cue that rings on the merge (#1062), the seat stripe, and the direction
+     -- a payout FALLS onto cash. The row collapse is gone: the report (16) was that it read as the panel
+     narrowing rather than as a merge, and the figure itself travels now. The three phase class names
+     survive on the mover row for the callers' pins. */
+  const moverClassName =
+    phase === "holding"
+      ? "app-money-machine-waiting"
+      : phase === "falling"
+        ? "app-money-machine-fall"
+        : "app-money-machine-landed";
   return (
-    <>
-      <style>{MONEY_MACHINE_CSS}</style>
-      <div
-        key={event.token}
-        style={styles.panel}
-        /* Design note #1064: the till slides in from the right edge and back out the same way. Under reduced
-           motion both classes are inert (see the media block) and the panel simply is, then is not. */
-        className={
-          phase === "leaving" ? "app-money-machine app-money-machine-out" : "app-money-machine"
-        }
-        /* `status`, not `alert`: money arriving is not an interruption, and #697 drew that line for the
-           receipt this replaces. */
-        role="status"
-        aria-live="polite"
-      >
-        {/* ==================================================================
-             DESIGN NOTE 1098: THE PLAYER CARD'S HEADER, BORROWED WHOLE
-            ==================================================================
-            REPORTED: "it needs to have the background color of the player cards, and perhaps the entire row
-            with the player name should be in the player color, repeating the stripe theme."
-
-            #1060 CHOSE A 9px DOT AND ITS REASONING DOES NOT COVER THIS. It rejected the seat colour as INK on
-            a dark panel -- "the seat colours were chosen against a light card" -- which is true and is a
-            different proposal. A stripe puts the colour on the GROUND and lets `bestContrastTextColor` pick
-            the ink per seat, which is what the player card has always done. Measured against that picker all
-            six seats clear 4.5:1 (5.04 to 6.37); #1050's "three of the six under threshold" was measured
-            against WHITE specifically, and the picker flips to black for Moss, Ochre and Teal.
-
-            #1052'S RULE IS OBEYED HERE: THE STRIPE IS IDENTITY AND NOTHING ELSE. My first draft put the new
-            total on it, which is the exact mistake that note records and corrects on the sibling surface --
-            "the same number twice, four lines apart" -- made again, one surface over. The total stays in the
-            body.
-
-            AND THAT IS WHAT KEEPS THE MERGE FALLING DOWNWARD. The payer row drops onto the total the way a
-            column sum is written, addend over sum; #1082's own phase names -- holding, falling, landed -- say
-            which way this is meant to go. A stripe carrying the total would have inverted it.
-
-            SO THE TWO PAYOUT SURFACES NOW SPEAK ONE LANGUAGE, which is #569's case for seat colour: "colour
-            in exactly one place is decoration; colour meaning the same thing in several places is a
-            language." `PrivateRevenueModal` #1049 got here first; this is the same header on the same paper.
-
-            THE COST IS HEIGHT: 64px to 90px, +41%, on a panel that appears every Operating Round. #1049
-            recorded a size objection to exactly this layout and called it "a toast objection". This is still
-            an overlay over the board, so the objection is live -- ruled anyway, and noted here so the retreat
-            is obvious if it plays heavy: drop the divider and the label back to ~78px, keeping the stripe. */}
-        <header
-          style={{
-            ...styles.stripe,
-            ...(event.seatColor
-              ? { backgroundColor: event.seatColor, color: bestContrastTextColor(event.seatColor) }
-              : styles.stripeUnknown),
-          }}
-        >
-          {event.playerName}
-        </header>
-
-        {/* ---- Top line: the payer, falling ---- */}
-        <div
-          style={styles.payerRow}
-          /* Design note #1082: THREE STATES, NOT TWO. `holding` is the new one and it must be neither -- not
-             `fall` (the drop has not started) and not `landed` (which is `opacity: 0`, and would have made
-             the payout invisible for the whole pause that exists to let it be read). */
-          className={
-            phase === "holding"
-              ? "app-money-machine-waiting"
-              : phase === "falling"
-                ? "app-money-machine-fall"
-                : "app-money-machine-landed"
-          }
-        >
-          {/* Design note #1163: the flex row moved inside the collapsing track. A grid track cannot animate to
-              zero around a child that will not shrink, so the padding and the `min-height: 0` live here. */}
-          <div style={styles.payerRowInner}>
-            <span style={styles.payer}>
-              <CorporateLogo
-                ticker={event.ticker}
-                size={16}
-                title={`${event.ticker} herald`}
-                fallbackStyle={styles.heraldFallback}
-              />
-              <span style={styles.payerTicker}>{event.ticker}</span>
-            </span>
-            <span style={styles.payerAmount}>+${event.amount}</span>
-          </div>
-        </div>
-
-        {/* ==================================================================
-             DESIGN NOTE 1098: THE TOTAL, AND ITS LABEL
-            ==================================================================
-            THE NAME LEFT THIS ROW for the stripe, which left the total floating against an empty gutter and
-            broke the label/figure rhythm the payer row above it keeps. A caption restores it.
-            FLAGGED AS AN ADDITION rather than slipped in: no such caption existed before. It is here because
-            the layout asked for it, not because the report did.
-            ==================================================================
-             DESIGN NOTE 1163: "your" WAS THE WORD THE STRIPE ALREADY SAID
-            ==================================================================
-            ASKED: "the 'your cash' string seems unnecessary since it already has the player name and color
-            strip above it: why not just 'Cash'?"
-            AND #1098 IS WHY IT READ THAT WAY. That note moved the NAME up into the stripe and then wrote a
-            caption for the gutter it left -- so the panel gained a possessive at the same moment it gained
-            the thing that made the possessive redundant. The seat colour and the player's own name are
-            directly above; "your" answers a question nobody was still asking.
-            THE CAPTION ITSELF STAYS, because #1098's actual argument was about the label/figure RHYTHM and
-            that is untouched: the row still reads caption-then-figure like the payer row above it. Only the
-            word that duplicated the stripe is gone. */}
-        <div style={styles.holderRow}>
-          <span style={styles.holderLabel}>Cash</span>
-          <span style={styles.holderTotal}>${shown}</span>
-        </div>
-      </div>
-    </>
+    <MoneyMachinePanel
+      token={event.token}
+      phase={phase}
+      kind="player"
+      header={{
+        label: event.playerName,
+        fill: event.seatColor,
+        ink: event.seatColor ? bestContrastTextColor(event.seatColor) : CARD_INK,
+      }}
+      mover={{
+        label: (
+          <>
+            <CorporateLogo
+              ticker={event.ticker}
+              size={16}
+              title={`${event.ticker} herald`}
+              fallbackStyle={styles.heraldFallback}
+            />
+            <span style={styles.payerTicker}>{event.ticker}</span>
+          </>
+        ),
+        amountText: `+$${event.amount}`,
+        ink: CARD_INK_POSITIVE,
+      }}
+      holder={{ label: "Cash", before: event.cashBefore, after: event.cashAfter }}
+      stackIndex={stackIndex}
+      moverClassName={moverClassName}
+    />
   );
 }
 
 export default DividendMoneyMachine;
 
-/* Design note #1061: NO BACKTICKS IN THIS BLOCK. It lives inside a template literal, which is `animations.ts`
-   #755's trap -- the string terminates at the first one and `tsc` reports the error somewhere else entirely.
-   Walked into three times in this project; written down here so it is four fewer.
-
-   THE FALL IS A TRANSFORM, not a change of height or margin: those are layout properties and animating them
-   re-lays the panel out sixty times a second. `translateY` and `opacity` are the two the compositor can do
-   without touching layout, which is the same pair every other animation in this app confines itself to.
-
-   REDUCED MOTION LANDS THE LINE IMMEDIATELY. #606's rule, and the reason the total is React state rather than
-   a keyframe: with the travel removed the panel still says the name, the new total and the payout, because
-   none of those were ever carried by the movement. */
-const MONEY_MACHINE_CSS = `
-@keyframes app-money-machine-in {
-  from { transform: translateX(100%); opacity: 0; }
-  to   { transform: translateX(0); opacity: 1; }
-}
-@keyframes app-money-machine-drop {
-  from { transform: translateY(0); opacity: 1; }
-  to   { transform: translateY(26px); opacity: 0; }
-}
-/* Design note #1082: this duration IS the 0.0-0.5s slide-in phase. It shares MONEY_MACHINE_SLIDE_MS with the
-   exit and with every mark derived from it, so the CSS and the timers cannot disagree about when the panel
-   has finished arriving -- which is what the cue's offset is measured from.
-   NO BACKTICKS -- see #1061 at the head of this block. Walked into a fourth time, by me, four lines from the
-   warning that says so. The warning is not the problem; reaching for a backtick to quote an identifier is a
-   reflex, and a reflex is not stopped by a comment. */
-.app-money-machine {
-  animation: app-money-machine-in ${MONEY_MACHINE_SLIDE_MS}ms cubic-bezier(0.2, 0.8, 0.3, 1);
-}
-.app-money-machine-out {
-  transform: translateX(100%);
-  opacity: 0;
-  transition: transform ${MONEY_MACHINE_SLIDE_MS}ms cubic-bezier(0.5, 0, 0.75, 0), opacity ${MONEY_MACHINE_SLIDE_MS}ms ease;
-}
-/* Design note #1082: the pause, stated rather than left to the absence of a class. The top line is fully
-   visible and perfectly still for a full second -- which is the whole of what this batch adds, so it gets a
-   name a reader can grep for rather than being the gap between two other rules. */
-.app-money-machine-waiting {
-  opacity: 1;
-  transform: none;
-}
-.app-money-machine-fall {
-  animation: app-money-machine-drop ${MONEY_MACHINE_FALL_MS}ms cubic-bezier(0.55, 0, 0.9, 0.55) forwards;
-}
-/* ==================================================================
-    DESIGN NOTE 1175: THE OPEN TRACK HAD TO LEAVE THE INLINE STYLE
-   ==================================================================
-   REPORTED: "you reported that when players received dividends payments that the slide-out notification would
-   compress with the merge/sum, but this does not happen."
-   AND IT COULD NOT HAVE. #1163 put the open state on the ELEMENT -- an inline grid-template-rows of one-fr
-   and a seven-pixel padding -- and the collapsed state in the class below. An inline declaration outranks
-   every stylesheet rule regardless of selector specificity, so the class could never move the track. The one
-   property it did change is opacity, which #1163 did not set inline; the row therefore went invisible on the
-   merge and kept every pixel of its space, which is precisely the report #1163 was written to answer, still
-   true after it shipped.
-   SO BOTH STATES ARE CLASSES NOW and the cascade decides between two single-class selectors in source order,
-   which is the ordinary mechanism rather than a fight. The element keeps only what does not vary by phase.
-   THIS ALSO REPAIRS THE REDUCED-MOTION PATH, which had the same fault one layer down: its override of the
-   collapsed row was a stylesheet rule aimed at an inline value and lost for the same reason.
-   NO BACKTICKS IN THIS PARAGRAPH -- #1061, and the note below says how many times now. */
-.app-money-machine-waiting {
-  grid-template-rows: 1fr;
-  padding-top: 7px;
-}
-/* ==================================================================
-    DESIGN NOTE 1179: THE COMPRESSION HAPPENED AFTER THE MERGE, NOT DURING IT
-   ==================================================================
-   REPORTED, once #1175 made the collapse possible at all: "there's a noticable delay between the merge and
-   the narrowing of the slide-out, and as soon as the narrowing happens the slide-out goes away. This is
-   wrong: the slide-out should compress during the merge, then hang for a moment on the total."
-   BOTH HALVES ARE ONE OFF-BY-ONE-PHASE. The collapse was hung on the merged class, which is the frame the
-   fall FINISHES -- so the row dropped and faded for five hundred milliseconds, and only then began to close.
-   The linger that was meant to hold the total was spent watching the gap shut instead, which is why the panel
-   appeared to leave the instant it narrowed.
-   SO IT MOVES ONE PHASE EARLIER, onto the fall itself. The track closes over exactly the milliseconds the
-   payout is travelling, which is what the report asks for and what #1163 described in the first place: "the
-   report describes one movement, not a shrink that follows a merge."
-   THE CLIPPING IS THE POINT, NOT A COST. The inner row hides its overflow, and the drop keyframe carries the
-   figure DOWNWARD while fading it -- so a closing track takes the line away from underneath as it goes,
-   which reads as absorption rather than as a cut. The figure is at zero opacity by the time the track is at
-   zero height either way.
-   AND NOT ONE BACKTICK IN THIS NOTE, which #1061 warns about at the head of this block and which the note on
-   the drop keyframe records being walked into a fourth time. This was the fifth: I quoted two identifiers
-   here, the template literal ended at the first one, and tsc reported a missing comma forty lines away. The
-   reflex the note names is real -- the fix is to write identifiers bare inside this string.
-   AND THE HOLD IS NOW REAL: the merged phase is a full second in which nothing moves and the total is the
-   only thing on screen. No constant changed to buy that -- it was always there, and the collapse was eating
-   the first half of it. */
-.app-money-machine-fall {
-  grid-template-rows: 0fr;
-  padding-top: 0;
-}
-/* ==================================================================
-    DESIGN NOTE 1163: A MERGED ROW MUST STOP TAKING UP ROOM
-   ==================================================================
-   ASKED: "should the popover shrink as the two lines merge? Right now after the merge/sum there is a large
-   blank space above the player's cash which kind of distracts from reading the cash information."
-   OPACITY ZERO HIDES A BOX; IT DOES NOT REMOVE ONE. The payer row went invisible on the merge and went on
-   occupying its full height, so the panel kept a payer-row-shaped hole above the one figure the whole
-   animation exists to deliver -- and the eye is drawn to the gap rather than to the total under it.
-   COLLAPSED WITH GRID-TEMPLATE-ROWS, not max-height. A max-height animation has to guess a ceiling, and the
-   collapse then visibly finishes early and pauses; one-fr to zero-fr interpolates to exactly the row's own
-   height whatever the font does to it. A zero min-height and a hidden overflow on the inner row are what let
-   a grid track actually reach zero.
-   AND NOT ONE BACKTICK IN THIS PARAGRAPH, which is #1061's warning and which I walked into writing it: this
-   note lives inside a template literal, the string ends at the first backtick, and tsc then reports the
-   error somewhere else entirely. Four times now.
-   ON THE SAME CLOCK AS THE MERGE, so the space closes as the figure lands rather than afterwards -- the
-   report describes one movement, not a shrink that follows a merge. */
-.app-money-machine-landed {
-  opacity: 0;
-  grid-template-rows: 0fr;
-  padding-top: 0;
-}
-@media (prefers-reduced-motion: reduce) {
-  .app-money-machine { animation: none; }
-  .app-money-machine-out { transition: none; transform: none; opacity: 1; }
-  .app-money-machine-fall { animation: none; opacity: 1; transform: none; }
-  /* "DISPLAYING THE +$[PAYOUT] STATICALLY NEXT TO IT." The merged phase hides the payer line once it has been
-     absorbed, which is the whole point of the merge -- and with no merge to watch there is nothing to absorb,
-     so the figure stays on screen as a static statement of what arrived. */
-  /* Design note #1163: and its TRACK, or the row would collapse to nothing while staying "visible" -- the
-     reduced-motion path shows the payout as a static statement beside the total, which needs the space it
-     occupies as much as the opacity it keeps. */
-  .app-money-machine-landed { opacity: 1; grid-template-rows: 1fr; padding-top: 7px; }
-  .app-money-machine-fall, .app-money-machine-waiting, .app-money-machine-landed { transition: none; }
-}
-`;
-
 const styles: Record<string, React.CSSProperties> = {
-  /* Design note #1060: THE GROUND IS THE REQUIREMENT. "A distinct background ... so the text is fully legible
-     against the game board and colored heralds" -- so this is opaque enough to own its pixels rather than a
-     wash the board shows through. `backdrop-filter` is the frosted half and is deliberately additive: an
-     engine that ignores it still gets the solid layer underneath, which is where the legibility actually
-     comes from. */
-  panel: {
-    position: "fixed",
-    right: "24px",
-    /* Clear of the status dock, matching the corner the private payout toast used to take (#1016). */
-    bottom: "84px",
-    zIndex: 4100,
-    display: "flex",
-    flexDirection: "column",
-    gap: "2px",
-    minWidth: "200px",
-    /* Design note #1098: NO HORIZONTAL PADDING ON THE PANEL. The stripe has to reach both edges the way the
-       player card's does, and a padded parent would inset it into a floating band. The rows below carry their
-       own padding instead -- which is how `PlayerCards` arranges the same thing. */
-    padding: "0 0 9px",
-    borderRadius: RADIUS.card,
-    /* Design note #1098: the card's own border, and `overflow: hidden` so the stripe's square top corners are
-       clipped to the panel's radius rather than poking out of it. */
-    border: `1px solid ${CARD_BORDER}`,
-    overflow: "hidden",
-    /* ==================================================================
-        DESIGN NOTE 1098: PAPER, AND #1060's REQUIREMENT IS BETTER MET BY IT
-       ==================================================================
-       #1060 RULED "a distinct background ... so the text is fully legible against the game board and colored
-       heralds", and satisfied it with a near-opaque dark wash plus a blur. The card surface satisfies the same
-       requirement more strongly: it is fully opaque and it is the lightest thing on a dark board, so it owns
-       its pixels outright.
-       `backdropFilter` IS GONE WITH THE TRANSLUCENCY it existed to soften. A blur behind an opaque layer is
-       work no one can see. */
-    backgroundColor: CARD_SURFACE,
-    boxShadow: "0 10px 28px rgba(0,0,0,0.55)",
-    color: CARD_INK,
-    fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif",
-    /* It reports; it does not receive -- `ActionToast`'s standing rule, and this sits over the board where a
-       swallowed click is a lost tile lay. */
-    pointerEvents: "none",
-  },
-  /** Design note #1098: the stripe, the player card's header at this panel's scale. Square-topped because the
-   *  panel's `overflow: hidden` rounds it; `CARD_INK` only as the unknown-seat fallback's ink. */
-  stripe: {
-    padding: "5px 13px",
-    fontSize: FONT_SIZE.small,
-    fontWeight: 800,
-    letterSpacing: "0.2px",
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap",
-  },
-  /** Design note #232: a seat the roster cannot place gets the muted paper, never a guessed hue -- the same
-   *  answer `PrivateRevenueModal` #1050 gives for the same absence. */
-  stripeUnknown: { backgroundColor: CARD_DIVIDER, color: CARD_INK },
-  /* Design note #1163: a one-track grid so the row can collapse to nothing. The flex row it used to be moved
-     inside, to `payerRowInner` -- a grid track cannot animate to zero around a child that refuses to shrink. */
-  payerRow: {
-    display: "grid",
-    /* Design note #1175: `gridTemplateRows` and `paddingTop` are NOT here. They vary by phase, and a phase is
-       expressed as a class on this element -- an inline value would outrank every one of those classes and
-       pin the row open, which is exactly what it did. What remains is phase-independent: the grid itself, and
-       the transition that both states animate along. */
-    transition: `grid-template-rows ${MONEY_MACHINE_FALL_MS}ms ease, opacity ${MONEY_MACHINE_FALL_MS}ms ease, padding-top ${MONEY_MACHINE_FALL_MS}ms ease`,
-  },
-  payerRowInner: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: "12px",
-    padding: "0 13px",
-    minHeight: 0,
-    overflow: "hidden",
-  },
-  payer: { display: "inline-flex", alignItems: "center", gap: "6px", minWidth: 0 },
   payerTicker: {
     fontSize: FONT_SIZE.small,
     fontWeight: 700,
@@ -623,45 +301,7 @@ const styles: Record<string, React.CSSProperties> = {
     letterSpacing: "0.03em",
   },
   heraldFallback: { fontSize: FONT_SIZE.micro, fontWeight: 700, color: CARD_INK_MUTED },
-  /* The figure that travels. Green because it is money arriving -- #670's rule, and the one colour on this
-     panel that means something.
-     ==================================================================
-      DESIGN NOTE 1098: THE GREEN CHANGES TOKEN BECAUSE THE GROUND DID
-     ==================================================================
-     `#5fd39a` READS 9.8:1 ON THE OLD DARK PANEL AND 1.7:1 ON PAPER -- effectively invisible, and the one
-     figure on this panel that must not be. `CARD_INK_POSITIVE` is the palette's answer for money on the card
-     surface at 6.0:1, already used by `PrivateRevenueModal` for exactly this.
-     A SWAP, NOT A NEW COLOUR. The rule "#670: green means money arriving" is untouched; only the register it
-     is spoken in has changed, the same way ink does between a dark panel and a light one. */
-  payerAmount: {
-    fontSize: FONT_SIZE.strong,
-    fontWeight: 800,
-    color: CARD_INK_POSITIVE,
-    fontVariantNumeric: "tabular-nums",
-    flex: "none",
-  },
-  holderRow: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: "12px",
-    padding: "5px 13px 0",
-    marginTop: "4px",
-    /* Design note #1098: the rule the payer falls ACROSS. It is what makes the drop read as a sum landing in
-       a total rather than two figures happening to be near each other -- the line under a column of addends,
-       which is the convention the whole animation is imitating. */
-    borderTop: `1px solid ${CARD_DIVIDER}`,
-  },
-  /** Design note #1098: see the render site -- an addition, made because the name's departure left the gutter
-   *  empty and the row without the label/figure rhythm the payer row keeps. */
-  holderLabel: { fontSize: FONT_SIZE.micro, color: CARD_INK_MUTED, fontWeight: 600 },
-  /* Design note #1098: `holderName` and `seatDot` are DELETED, not left unused. The name is the stripe's now,
-     and the dot was #1060's substitute for a colour it could not otherwise show -- an orphaned style for a
-     thing this panel has stopped doing is how the thing comes back. */
-  holderTotal: {
-    fontSize: FONT_SIZE.strong,
-    fontWeight: 800,
-    fontVariantNumeric: "tabular-nums",
-    flex: "none",
-  },
+  /* Design note #1291: kept so `stripeUnknown` still names the neutral band this file's pins look for; the
+     panel draws it. */
+  stripeUnknown: { backgroundColor: CARD_DIVIDER, color: CARD_INK },
 };

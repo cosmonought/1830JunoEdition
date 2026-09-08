@@ -151,11 +151,15 @@ describe("the float holds the seat", () => {
 
   it("is wired that way in the shell", () => {
     /* The structural half: the release only happens if the caller passes the lookup, so an omission here
-       would leave the seat held for ever with every behavioural test still green. */
-    const fs = require("fs") as typeof import("fs");
-    const path = require("path") as typeof import("path");
-    const app = fs.readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8");
-    expect(app).toContain("placeHomeStationToken(base, companyId, q, r, cityIndex, homeHexToAxial)");
+       would leave the seat held for ever with every behavioural test still green.
+       #1244: the shell no longer calls `placeHomeStationToken` itself -- the reducer's arm does, through the
+       `homeHexToAxial` the shell hands it in `ctx`. So the wiring to pin is the ctx field, and the ABSENCE of
+       a second caller. */
+    const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
+    const app = readStripped("App.tsx");
+    expect(app).toMatch(/\n\s*homeHexToAxial,\n\s*layRefused,/);
+    expect(app).not.toContain("placeHomeStationToken(");
+    expect(app).not.toContain("isPlaceHomeStationMsg(msg)");
   });
 
   it("advances normally on a purchase that floats nothing", () => {

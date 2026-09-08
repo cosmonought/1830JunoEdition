@@ -107,6 +107,36 @@ describe("the forced withhold, #292/#414", () => {
     });
   });
 
+  it("forces the withhold when a corporation with trains ran nothing (design note #1275)", () => {
+    /* JUNO-CV4 108-109: C&O had a 3-train and a station, skipped Routes, and Dividends waited on a hand-sent
+       "$0 withheld". Can-earn is the Routes question; at Dividends with nothing run there is nothing to
+       declare, so the declaration is forced. */
+    const ran = withCompany(operating({ operating_sub_phase: "Dividends" }), {
+      owned_trains: ["3"],
+      station_token_hexes: [[0, 0]],
+      routes_run_this_turn: 0,
+      last_route_revenue: "0",
+    });
+    expect(ask(ran)?.kind).toBe("forced-withhold");
+    expect(ask(ran)?.reason).toBe("it ran no routes this turn");
+    /* #232: a log without the counter is not forced -- absent is "did not say", never zero. */
+    const older = withCompany(operating({ operating_sub_phase: "Dividends" }), {
+      owned_trains: ["3"],
+      station_token_hexes: [[0, 0]],
+      routes_run_this_turn: undefined,
+      last_route_revenue: "0",
+    });
+    expect(ask(older)?.kind).not.toBe("forced-withhold");
+    /* And a corporation that DID run is left to choose. */
+    const chose = withCompany(operating({ operating_sub_phase: "Dividends" }), {
+      owned_trains: ["3"],
+      station_token_hexes: [[0, 0]],
+      routes_run_this_turn: 1,
+      last_route_revenue: "90",
+    });
+    expect(ask(chose)?.kind).not.toBe("forced-withhold");
+  });
+
   it("claims the Dividends case before the skip can, and the order is load-bearing", () => {
     /* `autoSkipReason` returns null for Dividends-with-no-revenue precisely because the withhold above has
        already taken it. Reversing the two would skip the one step whose whole job is to move the price. */
@@ -181,5 +211,69 @@ describe("the Routes step, and the two ways of earning nothing", () => {
       station_token_hexes: ["H12"],
     });
     expect(maxRouteRevenueFor(state, 1, MOCK_MAP_GRID)).toBe(0);
+  });
+});
+
+describe("the Tokens step is skipped when there is nowhere to place, #1237", () => {
+  /* REPORTED FOUR TIMES AS "LAY TRACK DID NOT ADVANCE". The log of the fourth showed the truth: the lay moved the
+     step to Tokens, the engine owed nothing, and forty-eight seconds later the player clicked Skip. The cause was
+     `extraStationAvailable` defaulting to `true`, which `stationPlacementBlockReason` reads as "a placement
+     exists" before it checks reachability -- so the server never skipped Tokens for anyone.
+     THE TWO CASES BELOW ARE THE LINE #414 DREW: a corporation with a reachable free slot is waited for (skipping
+     would take its move away); one with nowhere to place is moved on. Both are asserted, because a rule that
+     skips everyone passes the second and breaks the game. */
+  const { dhFreeStationAvailableFor, DH_PRIVATE_ID } = require("./dhPower") as typeof import("./dhPower");
+
+  it("owes an advance for a corporation at Tokens whose network reaches no free slot", () => {
+    /* Company 1 on the mock grid with its home token placed and no track laid: the only city it reaches is its
+       own, already tokened. Nowhere to go. */
+    const state = withCompany(operating({ operating_sub_phase: "Tokens" }), {
+      is_floated: true,
+      president: "p-a",
+      treasury: "500",
+      station_token_hexes: [[0, 0]],
+      station_token_limit: 4,
+    });
+    const next = ask(state);
+    expect(next).not.toBeNull();
+    expect(next?.msg).toHaveProperty("AdvanceOperatingSubPhase");
+  });
+
+  it("does not skip when the caller says the D&H's free station is still available", () => {
+    /* The explicit flag still wins -- a corporation whose only legal placement is the D&H's unconnected station
+       must be waited for, which is the whole reason the parameter exists (#781). */
+    const state = withCompany(operating({ operating_sub_phase: "Tokens" }), {
+      is_floated: true,
+      president: "p-a",
+      treasury: "500",
+      station_token_hexes: [[0, 0]],
+      station_token_limit: 4,
+    });
+    const held = nextDerivedAction({ state, mapGrid: MOCK_MAP_GRID, emitted: new Set(), extraStationAvailable: true });
+    expect(held).toBeNull();
+  });
+
+  describe("dhFreeStationAvailableFor, the shell's rule shared with the engine", () => {
+    const privates = (owner: number | null, closed = false) => [
+      { private_id: DH_PRIVATE_ID, owner_protocol_id: owner, closed },
+    ];
+    it("is available only to the corporation that owns the D&H, after its lay and before its token", () => {
+      expect(dhFreeStationAvailableFor({ companyId: 1, privates: privates(1), usedAbilities: ["dh-tile"], dhHexBuilt: true })).toBe(true);
+    });
+    it("is not available to a rival, whatever the ability's state", () => {
+      // #781: a rival mid-turn must not have its Tokens step held open by somebody else's private.
+      expect(dhFreeStationAvailableFor({ companyId: 2, privates: privates(1), usedAbilities: ["dh-tile"], dhHexBuilt: true })).toBe(false);
+    });
+    it("is not available while the D&H is still a player's, unassigned to any corporation", () => {
+      // `owner_protocol_id` is null until a corporation buys the private; a player cannot lend the power.
+      expect(dhFreeStationAvailableFor({ companyId: 1, privates: privates(null), usedAbilities: ["dh-tile"], dhHexBuilt: true })).toBe(false);
+    });
+    it("is spent once the token has been placed, and gone if the private has closed", () => {
+      expect(dhFreeStationAvailableFor({ companyId: 1, privates: privates(1), usedAbilities: ["dh-tile", "dh-token"], dhHexBuilt: true })).toBe(false);
+      expect(dhFreeStationAvailableFor({ companyId: 1, privates: privates(1, true), usedAbilities: ["dh-tile"], dhHexBuilt: true })).toBe(false);
+    });
+    it("is not available before the D&H's own lay, which is the order the power comes in", () => {
+      expect(dhFreeStationAvailableFor({ companyId: 1, privates: privates(1), usedAbilities: [], dhHexBuilt: false })).toBe(false);
+    });
   });
 });

@@ -42,6 +42,9 @@ import { dividendRefusal } from "./dividendGate";
 // Design note #1019: the purchase gate, asked here on the same state the reducer asked it on.
 import { trainPurchaseRefusal } from "./trainPurchaseGate";
 import { depotInventory } from "./gamePhase";
+import { boPresidencyRefusal, returnedTrainRefusal } from "./sandboxSession";
+import { BO_TICKER } from "./gameConstants";
+import { dieselExchangeRefusal } from "./dieselExchange";
 
 /** Messages that legitimately leave sandbox state untouched, so an unchanged board is not a refusal.
  *  Kept as an explicit list for the reason in the note: an exemption should be a decision. */
@@ -59,12 +62,29 @@ export const NO_OP_MESSAGE_KEYS: readonly string[] = [
   "Chat",
   // The contract's own round driver; the sandbox settles transitions itself.
   "ExecuteOperatingRound",
+  /* #1248: every client's countdown and any player's button all send this, and the reducer lets the first
+     one win (#899). The second through fourth are the design working, not a rule declining anything. */
+  "CloseRoom",
 ];
 
 /** Whether this message is one that may do nothing without it meaning anything went wrong. */
 export function mayLegitimatelyDoNothing(msg: unknown): boolean {
   if (typeof msg !== "object" || msg === null) return true;
   return NO_OP_MESSAGE_KEYS.some((key) => key in msg);
+}
+
+/** #1248: whether a message that changed nothing should print NOTHING -- not a success line, not a refusal.
+ *
+ *  Narrower than `mayLegitimatelyDoNothing` on purpose. That list says "an unchanged board is not a refusal";
+ *  most of its members still earn their line (an undo, a chat). These are the ones #899 wanted silent: "a
+ *  player whose timer lost the race has done nothing wrong, and logging it would put four identical scare
+ *  lines in the Activity Log of a finished game." The shell's branch used to `return` before the log for
+ *  them; with the branch gone (#1248) the quiet has to be a rule the general path can ask. */
+const SILENT_WHEN_UNCHANGED: readonly string[] = ["CloseRoom"];
+export function silentWhenUnchanged(msg: unknown, before: unknown, after: unknown): boolean {
+  if (typeof msg !== "object" || msg === null) return false;
+  if (before === null || before === undefined || before !== after) return false;
+  return SILENT_WHEN_UNCHANGED.some((key) => key in msg);
 }
 
 /** Whether the reducer declined this action.
@@ -181,6 +201,14 @@ export function refusalReasonFor(
      it has already covered the shortfall by the time the reducer charges -- so it is asked with
      `requireFunds: false` here for the same reason it is there: a reason that named a shortfall the president
      had just paid would be a false accusation. */
+  // Design note #1314: a purchase naming a returned train has its own gate.
+  if ("BuyHardwareFromPool" in msg) {
+    const buy = (msg as { BuyHardwareFromPool: { protocol_id: number; returned_model_type?: string } })
+      .BuyHardwareFromPool;
+    if (buy.returned_model_type !== undefined) {
+      return returnedTrainRefusal(before, buy.protocol_id, buy.returned_model_type);
+    }
+  }
   const purchase =
     "BuyHardwareFromPool" in msg
       ? { companyId: (msg as { BuyHardwareFromPool: { protocol_id: number } }).BuyHardwareFromPool.protocol_id, requireFunds: true }
@@ -196,6 +224,28 @@ export function refusalReasonFor(
       trainLimit: tier?.trainLimit ?? null,
       requireFunds: purchase.requireFunds,
     });
+  }
+
+  // Design note #1303: the same gate the reducer asked, on the same `before` state.
+  if ("ExchangeTrainForDiesel" in msg) {
+    const { protocol_id, model_type } = (
+      msg as { ExchangeTrainForDiesel: { protocol_id: number; model_type: string } }
+    ).ExchangeTrainForDiesel;
+    return dieselExchangeRefusal(before, protocol_id, model_type);
+  }
+
+  /* #1246: the B&O grant's own refusal (#904b), the same call the reducer's arm makes on the same state. The
+     shell used to print this sentence itself before falling through; now the REFUSED line carries it. */
+  if ("SetBoPar" in msg) return boPresidencyRefusal(before, BO_TICKER);
+
+  /* #1247: a second answer finds the question settled (#662). The arm returns the state unchanged, which the
+     drain reads as a refusal -- and it is one, of the harmless kind, so the line says which. */
+  if ("AnswerPrivatePurchase" in msg || "AnswerTrainPurchase" in msg) {
+    const offer =
+      "AnswerPrivatePurchase" in msg ? before.private_purchase_offer : before.train_purchase_offer;
+    return !offer || offer.accepted
+      ? "That offer had already been answered."
+      : "That answer did not match the offer on the table.";
   }
 
   return null;

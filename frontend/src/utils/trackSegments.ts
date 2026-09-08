@@ -24,7 +24,7 @@ import {
   isBoardHex,
   liveEdgesForHex,
 } from "../components/hexGeometry";
-import { STATIC_BOARD_HEXES } from "../components/hexBoardData";
+import { STATIC_BOARD_HEXES, boardMemo } from "../components/hexBoardData";
 import {
   TILE_GRAPHICS_CATALOG,
   artworkPathsForTraversal,
@@ -40,8 +40,9 @@ export function hexKey(q: number, r: number): string {
   return `${q},${r}`;
 }
 
-const LABEL_BY_COORD: ReadonlyMap<string, string> = new Map(
-  STATIC_BOARD_HEXES.map((hex) => [hexKey(hex.q, hex.r), hex.label]),
+const labelByCoord = boardMemo(
+  (board): ReadonlyMap<string, string> =>
+    new Map(board.hexes.map((hex) => [hexKey(hex.q, hex.r), hex.label])),
 );
 
 /* Design note #484: A RED OFF-BOARD AREA IS A TERMINUS, NOT A JUNCTION. Off-board track is a bare edge list
@@ -59,16 +60,23 @@ const LABEL_BY_COORD: ReadonlyMap<string, string> = new Map(
    as a destination. What it no longer does is hand out the hexes behind it.
    DERIVED FROM `type: "RedOffboard"`, the same discriminator `evaluateHexForTileLaying` gates on, so the two
    tables cannot drift into disagreeing about which hexes are red. */
-const OFFBOARD_TERMINAL_COORDS: ReadonlySet<string> = new Set(
-  STATIC_BOARD_HEXES.filter((hex) => hex.type === "RedOffboard").map((hex) =>
-    hexKey(hex.q, hex.r),
-  ),
+/* Design note #1320: A WAREHOUSE IS A RED AREA A ROUTE PASSES THROUGH. The Level Playing Field's five
+   warehouses keep `type: "RedOffboard"` (unbuildable, red, priced as a red area) but are towns whose stubs
+   meet at the centre -- so they are excluded here and fall through to the printed-artwork branch below, where
+   their spokes join at a hub exactly as Montreal's or Norfolk's do. */
+const offboardTerminalCoords = boardMemo(
+  (board): ReadonlySet<string> =>
+    new Set(
+      board.hexes
+        .filter((hex) => hex.type === "RedOffboard" && hex.warehouse !== true)
+        .map((hex) => hexKey(hex.q, hex.r)),
+    ),
 );
 
 /** True when `(q, r)` is a red off-board revenue terminal -- a hex a route
  *  may END at but never pass through. See design note #484. */
 export function isOffboardTerminal(q: number, r: number): boolean {
-  return OFFBOARD_TERMINAL_COORDS.has(hexKey(q, r));
+  return offboardTerminalCoords().has(hexKey(q, r));
 }
 
 /* `isBoardHex` lives in `hexGeometry` -- it is a question about board
@@ -77,7 +85,7 @@ export function isOffboardTerminal(q: number, r: number): boolean {
 export { isBoardHex };
 
 export function boardLabelAt(q: number, r: number): string | undefined {
-  return LABEL_BY_COORD.get(hexKey(q, r));
+  return labelByCoord().get(hexKey(q, r));
 }
 
 /** A single, board-wide identity for one piece of rail -- design note #3.
@@ -245,7 +253,7 @@ export function traversalSegments(
     return indices.length === 0 ? null : stubsForTransit(q, r, indices, entryEdge, exitEdge);
   }
 
-  const label = LABEL_BY_COORD.get(hexKey(q, r));
+  const label = labelByCoord().get(hexKey(q, r));
   if (label !== undefined && printedArtwork(label) !== undefined) {
     // Design note #737: the chosen way through, defaulting to the authored first.
     const variants = printedTraversalVariants(label, entryEdge, exitEdge);
@@ -282,7 +290,7 @@ export function traversalsFrom(
   entryEdge: number,
 ): HexTraversal[] {
   const out: HexTraversal[] = [];
-  const label = LABEL_BY_COORD.get(hexKey(q, r));
+  const label = labelByCoord().get(hexKey(q, r));
   for (const exitEdge of liveEdgesForHex(mapGrid, q, r)) {
     if (exitEdge === entryEdge) continue;
 

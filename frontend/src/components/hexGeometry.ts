@@ -23,6 +23,7 @@ import {
   OFFBOARD_REVENUE,
   OFFBOARD_TRACKS,
   STATIC_BOARD_HEXES,
+  boardMemo,
   YELLOW_OO_HEXES,
   offboardValueForEra,
   terrainBuildFeeAt,
@@ -30,6 +31,7 @@ import {
 import { corporationLabel } from "../utils/corporationNames";
 import { TILE_CATALOG, TILE_CATALOG_BY_ID } from "./hexTileCatalog";
 import type { TerrainType, TileColorTier } from "./hexTileCatalog";
+import { trayEntries } from "./tileTray";
 // Design note #724: "is there a token here" asked by name, off the required list.
 import { hasStationTokenAt } from "./hexContractTypes";
 import type {
@@ -226,6 +228,8 @@ export function nextTileColorTier(tier: TileColorTier): TileColorTier | null {
     case "Green":
       return "Brown";
     case "Brown":
+      return "Gray"; // #1312: the tier exists; whether THIS game holds a gray tile is the tray's question below.
+    case "Gray":
       return null;
   }
 }
@@ -235,7 +239,9 @@ export function nextTileColorTier(tier: TileColorTier): TileColorTier | null {
 function catalogHasTierAbove(tier: TileColorTier): boolean {
   const next = nextTileColorTier(tier);
   if (next === null) return false;
-  return TILE_CATALOG.some((entry) => entry.color === next);
+  // #1311: THE TRAY, not the catalog. The catalog now knows the Gray tier for every game; only the Project
+  // 18XX+ tray holds one, and a standard brown hex must still read as the top of its ladder.
+  return trayEntries().some((entry) => entry.color === next);
 }
 
 /** Pure and synchronous -- every input is static board data plus the already-fetched grid. A stale or empty grid can only make this MORE permissive, which is the correct direction to fail.
@@ -267,11 +273,15 @@ export function evaluateHexForTileLaying(
 
   // Both tables are consulted because they were populated in separate passes, and requiring only one to be right would make the gate depend on which pass a hex was added in.
   // See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #141
-  if (boardHex.printedColor === "Gray" || GRAY_HEXES[hexLabel] !== undefined) {
+  if (boardHex.printedColor === "Gray" || boardHex.printedColor === "Coal" || GRAY_HEXES[hexLabel] !== undefined) {
     return {
       eligible: false,
       reason: "gray-immutable",
-      message: `${hexLabel} is a preprinted gray hex. Gray hexes are permanently fixed — their track can never be replaced or upgraded.`,
+      // #1320: Coal River is printed in its own colour but is fixed for the same reason a gray hex is.
+      message:
+        boardHex.printedColor === "Coal"
+          ? `${hexLabel} is a preprinted hex. Its track is permanently fixed — it can never be replaced or upgraded.`
+          : `${hexLabel} is a preprinted gray hex. Gray hexes are permanently fixed — their track can never be replaced or upgraded.`,
       hexLabel,
     };
   }
@@ -313,6 +323,7 @@ export function archetypeForTerrain(terrain: TerrainType): HexArchetype {
       return "SingleCity";
     case "DoubleCityHub":
     case "NewYorkHub":
+    case "TorontoHub": // #1317: two cities, like the OO family it replaces on D10
       return "DoubleCity";
     case "SmallTown":
       return "SingleTown";
@@ -809,14 +820,14 @@ export function singleNodeNameplateAnchor(
 
 /** THE DISPLAY NAME IS NOT THE HEX'S IDENTITY. A human string looks correct in every message it appears in while failing every lookup and wire payload -- which is exactly what priced a whole manual route at $0 and would have been rejected on chain. Anything that INDEXES, COMPARES or TRAVELS uses the identifier.
  *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #242 */
-const BOARD_COORD_KEYS: ReadonlySet<string> = new Set(
-  STATIC_BOARD_HEXES.map((hex) => `${hex.q},${hex.r}`),
+const boardCoordKeys = boardMemo(
+  (board): ReadonlySet<string> => new Set(board.hexes.map((hex) => `${hex.q},${hex.r}`)),
 );
 
 /** The red off-board hexes COUNT as on the board: they are real drawn entries at real coordinates where routes terminate. Lives here because it is a question about geometry, and both the routing layer and the tile-legality filter ask it.
  *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #6 */
 export function isBoardHex(q: number, r: number): boolean {
-  return BOARD_COORD_KEYS.has(`${q},${r}`);
+  return boardCoordKeys().has(`${q},${r}`);
 }
 
 export function boardHexLabel(q: number, r: number): string | null {
@@ -925,6 +936,8 @@ export function terrainBaseValue(terrain: TerrainType): number {
       return 20;
     case "NewYorkHub": // design note #49, mirrors hexmap::terrain_base_value's NewYorkHub => 40 -- same flat per-station bucket as DoubleCityHub
       return 40;
+    case "TorontoHub": // #1317: per-station like the other two-city families; both tiles carry an explicit revenue anyway
+      return 40;
   }
 }
 
@@ -951,6 +964,8 @@ export function hexRouteValue(q: number, r: number, mapGrid: MapGridResponse): n
   }
 
   if (boardHex) {
+    // #1320: Coal River's printed figure, at its Yellow rung; `hexValueForEra` is the era-aware reader.
+    if (boardHex.revenueTiers) return boardHex.revenueTiers.yellow;
     if (OFFBOARD_LABELS[boardHex.label]) return null;
     const grayTrack = GRAY_HEXES[boardHex.label];
     if (grayTrack) {
@@ -1014,6 +1029,9 @@ export function hexValueForEra(
       if (tiers) return offboardValueForEra(tiers, era);
     }
   }
+  /* Design note #1320: a printed hex with its own era ladder (Coal River). Same value system as a red area,
+     on a hex that is not one -- and never tiled, so it is asked before the laid-tile rung on principle. */
+  if (boardHex?.revenueTiers) return offboardValueForEra(boardHex.revenueTiers, era);
 
   const laid = mapGrid.tiles.find((tile) => tile.q === q && tile.r === r);
   if (laid) {

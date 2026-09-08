@@ -32,7 +32,8 @@ import React from "react";
 import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { duckRadio, DUCK_FOR_VIDEO } from "../utils/audio";
 // Design note #1144: the chrome's scale, so this layer can divide back out of it.
-import { UI_SCALE } from "../styles/appStyles";
+/* Design note #1294: the chrome scale, live, for the counter-zoom. */
+import { useUiScale } from "../utils/useUiScale";
 
 /** Served from `public/`, like the haunting clips. `video/` rather than `audio/`: those three live beside
  *  the variant SFX they belong to, and this is not a sound effect. */
@@ -45,8 +46,11 @@ export const GAME_INTRO_SRC = `${process.env.PUBLIC_URL ?? ""}/video/game-intro.
    learns where they went. */
 
 /** Design note #1166: the extra beat on the finished mark, asked for as "1-2 seconds". The video element
- *  holds its last frame when it ends, so this is a delay before `finish`, not a second render. */
-const LOGO_HOLD_MS = 1600;
+ *  holds its last frame when it ends, so this is a delay before `finish`, not a second render.
+ *  Design note #1259: REPORTED "about 20% too long" after a few games. 1600 -> 1280, which is the report's
+ *  number applied rather than rounded to something tidier -- still inside #1166's "1-2 seconds" and still
+ *  clear of the credit's last word (four words at 140ms stagger land by ~0.6s into the hold). */
+const LOGO_HOLD_MS = 1280;
 
 /** The clip's own length. The overlay does not depend on it -- `onEnded` is the real signal -- but a timer
  *  this long is the backstop for an engine that never fires it (a decode failure, a tab suspended mid-clip).
@@ -165,6 +169,8 @@ export interface GameIntroOverlayProps {
 }
 
 export function GameIntroOverlay({ onDone, sfxEnabled }: GameIntroOverlayProps) {
+  /* Design note #1294: the chrome scale, live. */
+  const uiScale = useUiScale();
   const [skipVisible, setSkipVisible] = React.useState(false);
 
   /* ONE `onDone`, HOWEVER IT ENDS. Four things can finish this -- the clip, the button, Escape, the backstop
@@ -225,7 +231,7 @@ export function GameIntroOverlay({ onDone, sfxEnabled }: GameIntroOverlayProps) 
   }, [finish]);
 
   return (
-    <div style={styles.backdrop} role="dialog" aria-modal="true" aria-label="Opening titles">
+    <div style={{ ...styles.backdrop, zoom: 1 / uiScale }} role="dialog" aria-modal="true" aria-label="Opening titles">
       <style>{SKIP_FADE_CSS}</style>
       {/* Design note #1166b: the stage is the rectangle the video paints into, so the two overlays below are
           positioned in the PICTURE's coordinates rather than the window's. The skip stays outside it -- that
@@ -306,7 +312,7 @@ const styles: Record<string, React.CSSProperties> = {
        reader.
        THE MODALS ARE DELIBERATELY NOT DOING THIS. A confirm dialog is chrome and should shrink with the rest
        of it; only the surfaces that are pictures at viewport size are exempt. */
-    zoom: 1 / UI_SCALE,
+    /* Design note #1294: `zoom` is written per render as `1 / useUiScale()`. */
     position: "fixed",
     inset: 0,
     zIndex: 40000,

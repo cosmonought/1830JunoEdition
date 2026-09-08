@@ -25,121 +25,51 @@ const MACHINE = readStripped("components/DividendMoneyMachine.tsx");
 const BAR = readStripped("panels/ContextualActionBar.tsx");
 const APP = readStripped("App.tsx");
 
-describe("the payout panel closes the gap it opens", () => {
-  it("collapses the merged row's track rather than only hiding it", () => {
-    /* `opacity: 0` WAS THE WHOLE OF THE OLD MERGE. The row vanished and its box stayed, which is the reported
-       "large blank space above the player's cash". */
-    const raw = require("fs").readFileSync(
-      require("path").join(__dirname, "..", "components", "DividendMoneyMachine.tsx"),
-      "utf8",
-    ) as string;
-    expect(raw).toContain("grid-template-rows: 0fr;");
-    expect(raw).toContain("padding-top: 0;");
+describe("the payout panel merges the figure rather than closing a gap (design note #1291)", () => {
+  /* ==================================================================
+      DESIGN NOTE 1163's DESCRIBE, RETIRED
+     ==================================================================
+     This block pinned the row COLLAPSE -- `grid-template-rows: 0fr`, the transition on the track, the
+     phase classes carrying every property, the reduced-motion override restoring the row. REPORTED (16):
+     "instead of merging-summing into the value below it, it simply slides out and the panel narrows to the
+     updated value." The collapse was the narrowing. #1291 replaced it: the AMOUNT flies to the total and
+     the panel's box never changes size. What survives of #1163's claims is asserted below in the new shape;
+     what was the collapse is asserted gone. */
+  const PANEL = readStripped("components/MoneyMachinePanel.tsx");
+
+  it("never changes the panel's height: there is no track to collapse", () => {
+    expect(PANEL).not.toContain("grid-template-rows");
+    expect(PANEL).not.toContain("gridTemplateRows");
+    expect(MACHINE).not.toContain("grid-template-rows");
   });
 
-  it("uses a track rather than a guessed ceiling", () => {
-    /* A `max-height` collapse has to pick a number larger than the row, so the animation finishes early and
-       then pauses at nothing -- visible as a stutter on a 500ms move. `1fr` to `0fr` resolves to the row's own
-       height whatever the font does to it. */
-    const row = sliceBetween(MACHINE, "payerRow: {", "\n  },");
-    expect(row).toContain("transition:");
-    expect(row).not.toContain("maxHeight");
+  it("flies the amount to the total over the fall, on layout properties", () => {
+    /* `left`/`top`/`opacity` under a Web Animation, from the amount's rectangle to the total's (#1289: no
+       transform under the chrome zoom). Measured in screen pixels, divided back into layout pixels. */
+    const flight = sliceBetween(PANEL, "const from = amount.getBoundingClientRect();", "fill: \"forwards\"");
+    expect(flight).toContain("const to = total.getBoundingClientRect();");
+    expect(flight).toContain("/ scale"); // #1294: the live scale at the moment of measurement
+    expect(flight).toContain("duration: MONEY_MACHINE_FALL_MS");
+    expect(flight).not.toContain("transform");
   });
 
-  it("keeps every phase-varying property OUT of the inline style", () => {
-    /* ==================================================================
-        DESIGN NOTE 1175: THE ASSERTION THAT WAS TRUE AND PROVED NOTHING
-       ==================================================================
-       REPORTED: the compression "does not happen" -- after #1163 shipped, and after this file went green.
-       THIS TEST PASSED BECAUSE IT CHECKED THE TWO HALVES SEPARATELY. One case asserted the class carries
-       `grid-template-rows: 0fr`; another asserted the element carries `gridTemplateRows: "1fr"`. Both were
-       true. Together they are the bug: an inline declaration outranks any stylesheet rule whatever its
-       specificity, so the class could never win and the row never collapsed.
-       SO THE PROPERTY IS THE RELATIONSHIP, not either half. Anything a phase class sets must not also be set
-       on the element, and that is checkable directly -- which is what this now does, for every property the
-       three phase classes name rather than only for the two that were reported. */
-    const raw = require("fs").readFileSync(
-      require("path").join(__dirname, "..", "components", "DividendMoneyMachine.tsx"),
-      "utf8",
-    ) as string;
-    const row = sliceBetween(MACHINE, "payerRow: {", "\n  },");
-    /* The properties the phase classes fight over, named once. `opacity` is included even though it was never
-       inline: it is the one that DID work, and the reason the row went invisible while keeping its space. */
-    for (const [css, inline] of [
-      ["grid-template-rows", "gridTemplateRows"],
-      ["padding-top", "paddingTop"],
-      ["opacity", "opacity"],
-    ] as const) {
-      expect([css, raw.includes(css + ":")]).toEqual([css, true]);
-      expect([inline, row.includes(inline + ":")]).toEqual([inline, false]);
-    }
-  });
-
-  it("closes the track on the FALL, so the compression happens during the merge", () => {
-    /* ==================================================================
-        DESIGN NOTE 1179: THIS CASE PINNED THE WRONG PHASE
-       ==================================================================
-       #1175 asserted that `-waiting` and `-fall` shared one rule holding the track OPEN, which was true and
-       was the bug #1179 then found: with the collapse hung on `-landed`, the row dropped and faded for a full
-       five hundred milliseconds and only then began to close. REPORTED as "a noticable delay between the
-       merge and the narrowing ... the slide-out should compress during the merge, then hang for a moment on
-       the total."
-       SO THE THREE PHASES NOW DIFFER, and which one closes the track is the whole of the fix -- exactly the
-       kind of thing a later edit could undo while leaving every other assertion in this file green. The order
-       below is the timeline: open, closing, closed. */
-    const raw = require("fs").readFileSync(
-      require("path").join(__dirname, "..", "components", "DividendMoneyMachine.tsx"),
-      "utf8",
-    ) as string;
-    /* Open while the payout is being read. */
-    expect(raw).toContain(".app-money-machine-waiting {\n  grid-template-rows: 1fr;\n  padding-top: 7px;\n}");
-    /* Closing on the same clock as the drop -- the compression IS the merge. */
-    expect(raw).toContain(".app-money-machine-fall {\n  grid-template-rows: 0fr;\n  padding-top: 0;\n}");
-    /* Still closed once it lands, which is what leaves a full linger holding the total. */
-    expect(raw).toContain("grid-template-rows: 0fr;\n  padding-top: 0;\n}");
-    /* AND THE DROP ANIMATION IS ON THAT SAME CLASS, which is what makes "during" true rather than merely
-       earlier: one class, one moment, two things moving together. */
-    expect(raw).toContain(".app-money-machine-fall {\n  animation: app-money-machine-drop");
-  });
-
-  it("leaves the linger holding a settled total rather than a closing gap", () => {
-    /* The hold was always a second long; the collapse was eating the first half of it. Pinned as the ARITHMETIC
-       rather than as a number, so a retune of the fall or the linger keeps the property or fails loudly. */
-    const machine = require("../components/DividendMoneyMachine") as typeof import("../components/DividendMoneyMachine");
-    expect(machine.MONEY_MACHINE_MERGE_AT_MS).toBe(
-      machine.MONEY_MACHINE_FALL_AT_MS + machine.MONEY_MACHINE_FALL_MS,
+  it("flips the total on impact and hides the landed amount without moving the row", () => {
+    expect(PANEL).toContain(
+      'const shown = phase === "holding" || phase === "falling" ? holder.before : holder.after;',
     );
-    expect(machine.MONEY_MACHINE_LEAVE_AT_MS - machine.MONEY_MACHINE_MERGE_AT_MS).toBe(
-      machine.MONEY_MACHINE_LINGER_MS,
-    );
-    expect(machine.MONEY_MACHINE_LINGER_MS).toBeGreaterThanOrEqual(machine.MONEY_MACHINE_FALL_MS);
+    expect(PANEL).toContain("amountLanded: { opacity: 0 }");
   });
 
-  it("gives the inner row what a collapsing track needs", () => {
-    /* A grid track cannot reach zero around a child that refuses to shrink: `min-height: 0` is what allows it
-       and `overflow: hidden` is what stops the content spilling while it does. */
-    const inner = sliceBetween(MACHINE, "payerRowInner: {", "\n  },");
-    expect(inner).toContain("minHeight: 0");
-    expect(inner).toContain('overflow: "hidden"');
-  });
-
-  it("keeps the row for a reader who asked for less motion", () => {
-    /* THE REDUCED-MOTION PATH SHOWS THE PAYOUT STATICALLY beside the total -- it needs the space as much as it
-       needs the opacity, so the override has to restore BOTH or the figure it keeps visible would have
-       nowhere to be. */
-    const raw = require("fs").readFileSync(
-      require("path").join(__dirname, "..", "components", "DividendMoneyMachine.tsx"),
-      "utf8",
-    ) as string;
-    const reduced = raw.slice(raw.indexOf("@media (prefers-reduced-motion: reduce)"));
-    expect(reduced).toContain("opacity: 1; grid-template-rows: 1fr;");
-    expect(reduced).toContain("transition: none;");
+  it("keeps the figure for a reader who asked for less motion", () => {
+    /* #606's rule, kept: no flight means no landing, so the amount stays as a static statement. */
+    expect(PANEL).toContain('if (phase === "falling") flewRef.current = true;');
+    expect(PANEL).toContain('setLanded(flewRef.current && (phase === "merged" || phase === "leaving"));');
   });
 
   it("drops the word the stripe above it already said", () => {
     /* The seat colour and the player's own name are directly above the caption. "your" answered a question
        nobody was still asking; the caption itself stays, because #1098's argument was about RHYTHM. */
-    expect(MACHINE).toContain(">Cash</span>");
+    expect(MACHINE).toContain('label: "Cash"');
     expect(MACHINE).not.toContain("your cash");
   });
 });

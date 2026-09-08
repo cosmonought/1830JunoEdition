@@ -11,7 +11,10 @@
 // where the filename is the warning.
 
 import type { PhaseTint } from "./gamePhase";
+import { derivePhase } from "./gamePhase";
 import type { TileColorTier } from "../components/hexTileCatalog";
+import type { GameStateResponse } from "./gameState";
+import { resolveVariants, type GameVariants } from "./gameVariants";
 
 /* Design note #354: the two identifiers tying the B&O private to the B&O
    corporation. Named constants rather than inline literals because they are a
@@ -45,6 +48,29 @@ export const ERA_FOR_PHASE_TINT: Readonly<Record<PhaseTint, TileColorTier>> = {
   green: "Green",
   brown: "Brown",
 };
+
+/* ==================================================================
+    DESIGN NOTE 1312: THE ERA IS A FUNCTION OF THE PHASE AND THE TABLE'S RULES
+   ==================================================================
+   `ERA_FOR_PHASE_TINT[phase.tint]` was the whole answer while every game had three eras. The Project 18XX+
+   tile set adds a fourth: "Phase D (Gray)", opened by the first D-train, in which brown tiles upgrade to
+   gray. So the era is asked of the phase AND the variants, in one place, and the twelve call sites that
+   used to index the table by tint ask this instead -- a call site that still indexed the table would put a
+   tile-set game in Brown for its whole Diesel era, and nothing would look wrong until a gray tile was
+   refused. The tint itself stays three-valued: it colours the phase badge, and a gray-tinted badge for the
+   Diesel era is a separate decision nobody has asked for. */
+export function eraForPhase(
+  phase: { tier: string; tint: PhaseTint } | null | undefined,
+  variants: Pick<GameVariants, "plusTiles">,
+): TileColorTier {
+  if (phase?.tier === "D" && variants.plusTiles) return "Gray";
+  return ERA_FOR_PHASE_TINT[phase?.tint ?? "yellow"];
+}
+
+/** The tile era this state is in -- `eraForPhase` over the state's own phase and variants. */
+export function tileEraFor(state: GameStateResponse | null | undefined): TileColorTier {
+  return eraForPhase(derivePhase(state ?? null), resolveVariants(state?.variants));
+}
 
 /** The corporation a `BuyStock` message is about, or `null` for any other
  *  message.

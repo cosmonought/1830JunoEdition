@@ -90,6 +90,17 @@ describe("the config a game with no config reads as (design note #902)", () => {
     expect(hasAnyVariant({ ...STANDARD_VARIANTS, gentleRust: true })).toBe(true);
     expect(hasAnyVariant({ ...STANDARD_VARIANTS, delayedAuction: true })).toBe(true);
   });
+
+  it("carries the pace as a term, not as a house rule (#1256)", () => {
+    /* Live or Async changes no rule of 1830, so the badge does not light for it -- but it travels with the
+       terms, defaults to live, and an unknown value reads as live for the same reason an unknown length reads
+       as standard. */
+    expect(STANDARD_VARIANTS.mode).toBe("live");
+    expect(resolveVariants({}).mode).toBe("live");
+    expect(resolveVariants({ mode: "async" }).mode).toBe("async");
+    expect(resolveVariants({ mode: "turbo" } as unknown as Partial<GameVariants>).mode).toBe("live");
+    expect(hasAnyVariant({ ...STANDARD_VARIANTS, mode: "async" })).toBe(false);
+  });
 });
 
 describe("the bank is the clock (design note #902)", () => {

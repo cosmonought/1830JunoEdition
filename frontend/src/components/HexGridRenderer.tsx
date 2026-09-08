@@ -18,6 +18,7 @@ import {
   tileCityAnchors,
   tileCitySlotCounts,
   tileCitySlotPoints,
+  printedCitySlotPoints,
   tileCityTokenRadius,
 } from "./TileGraphics";
 // Imported here AND re-exported below: the re-export keeps App.tsx's and
@@ -30,12 +31,15 @@ import {
 import {
   BOARD_HEX_FILL,
   BOARD_HEX_STROKE,
-  CANADIAN_WEST_HIDDEN_EDGE,
   COLOR_TIER_STROKE,
   ERA_TILE_FILL,
   GRAY_HEXES,
-  GULF_HIDDEN_EDGE,
+  OFFBOARD_HIDDEN_EDGES,
+  TO_HEXES,
+  boardInEffect,
+  heraldAt,
   HEX_START_VALUE_OVERRIDE,
+  PLATE_LAYOUT,
   IMPASSABLE_BORDER_EDGES,
   LAY_TRACK_DIM_ALPHA,
   LAY_TRACK_FOCUS_DIM_ALPHA,
@@ -61,7 +65,8 @@ import {
   stationTickerLabel,
   hasStationTokenAt,
   tokenCityIndex,
-  STATION_HOME_HEXES,
+  homeReservationStands,
+  stationHomeHexes,
   type HexClickQueryState,
   type LegalTilePlacementsResponse,
   type MapGridResponse,
@@ -83,6 +88,8 @@ import { PRIVATE_POWER_GLOW_STOPS } from "../utils/privatePowerGlow";
 import type { PrivateCompanyState } from "../utils/gameState";
 /* Design note #1117: the one viewport ground, shared rather than retyped. */
 import { INK_VIEWPORT } from "../styles/palette";
+/* Design note #1281: whether this table's tray has a Gray tier, for the off-board tooltip's rows. */
+import { trayInEffect } from "./tileTray";
 import {
   cityIndexAtPoint,
   cityNodePoints,
@@ -100,10 +107,12 @@ import {
   describeHex,
   describeHexDesignationForLog,
   describeHexWithValue,
+  edgeAngleRad,
   evaluateHexForTileLaying,
   hexBlockedSlots,
   hexHasLaidTile,
   hexSlotDirection,
+  hexSlotPoint,
   liveEdges,
   liveEdgesForHex,
   localCatalogPlacements,
@@ -143,6 +152,7 @@ import {
   drawStackedNameLabel,
   drawStationCircle,
   drawStationTokenMarker,
+  drawValueBadgeAt,
   drawTerrainCompoundBadge,
   drawTerrainIcon,
   drawTrackPath,
@@ -413,6 +423,13 @@ export interface HexGridRendererProps {
   /** The live public_companies, driving the station-token pass. Defaults to an empty array -- the same fallback pattern currentEra establishes.
    *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #36 */
   publicCompanies?: StationTokenCompany[];
+  /** Design note #1286: whether the ACTING corporation holds a Kanawha Licence, for the Coalfields' border --
+   *  dashed red while it is barred to the corporation operating, solid and neutral once it may run there.
+   *  `undefined` off the variant. */
+  coalfieldsLicensed?: boolean;
+  /** Design note #1299: a click on the Coalfields opens the licence modal instead of the tile picker. Absent
+   *  off the variant, in which case the hex takes the ordinary path (and is refused as any off-board is). */
+  onCoalfieldsClick?: () => void;
 }
 
 interface ViewTransform {
@@ -583,6 +600,8 @@ export function HexGridRenderer({
   previewTile,
   currentEra = "Yellow",
   publicCompanies = EMPTY_PUBLIC_COMPANIES,
+  coalfieldsLicensed,
+  onCoalfieldsClick,
   routeOverlays = EMPTY_ROUTE_OVERLAYS,
   highlightedTrainIndex = null,
   onHighlightRoute,
@@ -635,6 +654,11 @@ export function HexGridRenderer({
 
   // Memoised on hexSize ALONE, not on mapGrid.tiles -- the fittable area is the physical board, not what is laid on it. Moved above the height derivation (#27), which reads it.
   // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #8
+  /* Design note #1300: which board the tables below describe, read once per render. The shell activates the
+     game's board before this component renders; this is the dependency that makes a memo over the tables
+     recompute when a different game -- on the other board -- is shown through the same mounted renderer. */
+  const boardId = boardInEffect().id;
+
   const boardContentBounds = useMemo<BoardContentBounds>(() => {
     const points = [
       ...STATIC_BOARD_HEXES.map((h) => axialToPixel(h.q, h.r, hexSize)),
@@ -649,7 +673,8 @@ export function HexGridRenderer({
       minY: Math.min(...points.map((p) => p.y)) - hexEdgePadding,
       maxY: Math.max(...points.map((p) => p.y)) + hexEdgePadding,
     };
-  }, [hexSize]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- boardId stands for the live board tables (#1300).
+  }, [hexSize, boardId]);
 
   const width = widthProp ?? measuredSize.width;
   /** height is DERIVED from the board's aspect ratio at the measured width, not measured -- a height:auto box just mirrors back what this renders. #30: a shorter canvas does not letterbox, it shows LESS of the board.
@@ -832,6 +857,19 @@ export function HexGridRenderer({
     ctx.save();
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, width, height);
+    /* Design note #1288: a slot's drawing point -- inset from the raw slot so a badge or a line of text at a
+       vertex stays inside the hex (the corner is 1.0 out; the drawn edge midpoint is 0.866). */
+    const plateSlotPoint = (center: { x: number; y: number }, slot: number, insetPx = 0) => {
+      const raw = hexSlotPoint(center, hexSize * (slot >= 7 ? 0.6 : 0.64), slot);
+      if (insetPx === 0) return raw;
+      const dx = raw.x - center.x;
+      const dy = raw.y - center.y;
+      const length = Math.hypot(dx, dy) || 1;
+      // Toward the centre by `insetPx` SCREEN pixels, whatever the board's zoom.
+      const pull = insetPx / view.zoom;
+      return { x: raw.x - (dx / length) * pull, y: raw.y - (dy / length) * pull };
+    };
+
     // Neutral dark charcoal workspace background -- see design note #18.
     // Everything outside the authentic 93-hex footprint (including the real
     // A13/A15 gap) simply shows this solid fill; no decorative hex fills any
@@ -870,7 +908,7 @@ export function HexGridRenderer({
       ctx.lineWidth = 1;
       // Gulf (I1/J2) and Canadian West (A9/A11) suppress their one shared interior edge so each reads as a single merged region.
       // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #26
-      const hiddenEdge = GULF_HIDDEN_EDGE[hex.label] ?? CANADIAN_WEST_HIDDEN_EDGE[hex.label];
+      const hiddenEdge = OFFBOARD_HIDDEN_EDGES[hex.label];
       if (hiddenEdge !== undefined) {
         drawHexEdges(ctx, center, hexSize, new Set([hiddenEdge]));
       } else {
@@ -964,6 +1002,10 @@ export function HexGridRenderer({
     for (const hex of STATIC_BOARD_HEXES) {
       const edges = OFFBOARD_TRACKS[hex.label];
       if (!edges) continue;
+      /* Design note #1320: a warehouse's stubs are spokes meeting at a town, authored as printed artwork and
+         drawn by the gray-hex pass below. Arrowheads on top of them would say "a route ends here", which is
+         exactly what a warehouse is not. */
+      if (hex.warehouse) continue;
       const center = axialToPixel(hex.q, hex.r, hexSize);
       // Rail Map Overhaul (design note #42): Hex Boundary Clipping Mask.
       withHexClip(ctx, center, hexSize, () => {
@@ -1082,7 +1124,7 @@ export function HexGridRenderer({
         companiesById.set(company.company_id, company);
       }
 
-      for (const home of STATION_HOME_HEXES) {
+      for (const home of stationHomeHexes()) {
         const company = companiesById.get(home.companyId);
         /* The test is the TOKEN, not is_floated. Between floating and placing, is_floated is already true and no token exists -- so the badge was skipped and the pass below had nothing to draw, blanking exactly the hex the Place Home Station prompt is about.
            See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #608 */
@@ -1091,8 +1133,51 @@ export function HexGridRenderer({
            know" rather than "no tokens" -- so the badge survived the placement it was reserving for and
            reappeared as a second marker the moment an upgrade gave the city a second slot. `station_token_hexes`
            is the required list and the one the real-token pass below already walks. */
+        /* Design note #1280: the two releases below now come AFTER the herald block -- see there. */
+        /* ==================================================================
+            DESIGN NOTE 1302: THE HERALD IS PRINTED, SO IT IS NEVER MUTED AND NEVER PLACED
+           ==================================================================
+           1830+ prints PRR's herald above H12's track with its $10. It is not a reservation waiting for a
+           token -- no token ever goes here -- so it draws in full livery from the first frame, ringless
+           because it is not in a city slot (#826), and with the figure beside it the way a printed city
+           carries its value. Above the straight W-E rail, clear of the W-SE curve below it. */
+        const herald = heraldAt(home.label);
+        if (herald && herald.companyId === home.companyId) {
+          const heraldCenter = axialToPixel(home.q, home.r, hexSize);
+          const badge = { x: heraldCenter.x - hexSize * 0.12, y: heraldCenter.y - hexSize * 0.5 };
+          withHexClip(ctx, heraldCenter, hexSize, () => {
+            drawStationTokenMarker(
+              ctx,
+              badge,
+              hexSize,
+              company?.ticker || stationTickerLabel(home.companyId),
+              stationTickerColor(home.companyId),
+              false,
+              undefined,
+              false,
+            );
+            drawValueBadgeAt(
+              ctx,
+              { x: badge.x + hexSize * 0.42, y: badge.y },
+              hexSize,
+              "MajorCityHub",
+              herald.revenue,
+            );
+          });
+          continue;
+        }
+        /* ==================================================================
+            DESIGN NOTE 1280: THE HERALD OUTLIVES THE RESERVATION IT WAS DRAWN BESIDE
+           ==================================================================
+           REPORTED: "The PRR herald and $10 'station' last for the whole game, and need to be reprinted on
+           any upgraded tile." The herald block above used to sit BELOW these two releases, so the moment PRR
+           held a token anywhere (`homeReservationStands`, #1325) the herald stopped drawing -- which
+           coincides with the upgrade that usually earns PRR its first token, hence "disappears on upgrade".
+           A herald is printed, not reserved (#1302); it is answered before either release now. */
         const homePlaced = company ? hasStationTokenAt(company, home.q, home.r) : false;
         if (homePlaced) continue; // the real token is drawn by the pass below instead
+        // Design note #1325: a two-home corporation's OTHER marker is forfeited the moment it sits anywhere.
+        if (company && !homeReservationStands(company, home)) continue;
         // Station Token Badges (design note #43): a RESERVED (not-yet-
         // floated) marker on a `YELLOW_OO_HEXES` home hex (today, only
         // ERIE/E11) is drawn in neutral hex-margin space below both station
@@ -1109,7 +1194,7 @@ export function HexGridRenderer({
         const homeCenter = axialToPixel(home.q, home.r, hexSize);
         // E11 only: the reserved marker's straight-down point overlapped the bottom city marker, moved to Vertex 2 at the SAME magnitude. The other three OO hexes were not reported and are unchanged.
         // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #106
-        const erieVertex2 = hexSlotDirection(9);
+        /* Design note #1283: `erieVertex2` (#106) is gone with the margin placement it served. */
         /* Design note #724a: THE BADGE FOLLOWS THE TILE, like the token it stands in for. This passed no
            `laidTile`, so it took `stationMarkerPoint`'s tile-less fallback and sat wherever the bare hex put
            it -- while the real token, once a tile exists, uses that tile's own city anchor. The two agree only
@@ -1126,29 +1211,39 @@ export function HexGridRenderer({
            marks the city its token will occupy. That difference is what decides whether a RING belongs --
            see `drawStationTokenMarker`'s `ringed`. */
         const inMargin = YELLOW_OO_HEXES.has(home.label);
-        const point =
-          home.label === "E11"
-            ? { x: homeCenter.x + erieVertex2.x * hexSize * 0.46, y: homeCenter.y + erieVertex2.y * hexSize * 0.46 }
-            : inMargin
-              ? { x: homeCenter.x, y: homeCenter.y + hexSize * 0.46 }
-              : stationMarkerPoint(home.q, home.r, hexSize, homeLaidTile);
-        // Design note #55: Strict Hex Boundary Clipping, extended to
-        // station token markers -- previously only track/text calls were
-        // wrapped.
+        /* ==================================================================
+            DESIGN NOTE 1283: THE OO RESERVATION SITS ON BOTH CIRCLES
+           ==================================================================
+           REPORTED: "the ERIE and PMQ station reservation markers need to be moved. Since both cities on
+           those OO hexes are legal, perhaps we should put the home station reservation markers on the two
+           cities on their respective hexes?" #43 parked the badge in the margin so as not to lie about which
+           circle the President will choose; the report's answer is better -- draw it on BOTH, which is
+           exactly what "either slot is reserved" means. Ringed, since each now sits in a real slot (#826).
+           The same tuple `drawOOCityMarkers` draws from, so the badges land on the circles.
+           AND THE OPTIONAL HOME SITS IN THE CENTRE (item 7). C&O's Cleveland is #1325's UNENFORCED home --
+           another corporation may token it first -- and a marker on the city circle reads everywhere else as
+           "reserved". So an unenforced reservation draws in the hex's centre, ringless, which is the one
+           place on a hex that is not a slot: present, and plainly not a claim on one. */
+        const optional = home.enforced === false;
+        const points: ReadonlyArray<{ x: number; y: number }> =
+          inMargin && !hexHasLaidTile(mapGrid, home.q, home.r)
+            ? twoNodePositions(homeCenter, hexSize)
+            : optional
+              ? [homeCenter]
+              : [stationMarkerPoint(home.q, home.r, hexSize, homeLaidTile)];
         withHexClip(ctx, homeCenter, hexSize, () => {
-          drawStationTokenMarker(
-            ctx,
-            point,
-            hexSize,
-            // Prefer the live ticker, fall back to the static table -- never an empty string, so every reserved badge draws its acronym regardless of query timing.
-            // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #45
-            company?.ticker || stationTickerLabel(home.companyId),
-            stationTickerColor(home.companyId),
-            true,
-            undefined,
-            // Design note #826: no ring on a badge that is not in a city.
-            !inMargin,
-          );
+          for (const point of points) {
+            drawStationTokenMarker(
+              ctx,
+              point,
+              hexSize,
+              company?.ticker || stationTickerLabel(home.companyId),
+              stationTickerColor(home.companyId),
+              true,
+              undefined,
+              !optional,
+            );
+          }
         });
       }
 
@@ -1257,6 +1352,16 @@ export function HexGridRenderer({
             // Design note #699: the CITY's radius, not the tile's -- a tile can carry a shared city beside an
             // unshared one, and only the shared one owes the pill's inset.
             if (point) dockRadius = tileCityTokenRadius(laidTile.tile_id, hexSize, resolvedCity);
+          } else if (!laidTile) {
+            /* #1302: a printed two-slot pill (1830+'s Montreal, Norfolk) docks tokens along its axis, exactly
+               as a laid pill does above; a printed circle answers one point and falls through unchanged. */
+            const label = STATIC_BOARD_HEXES.find((hex) => hex.q === q && hex.r === r)?.label;
+            const slotPoints = label ? printedCitySlotPoints(label, tokenCenter, hexSize) : [];
+            if (slotPoints.length > 1) {
+              const bucket = occupantsByCity.get(`${q},${r},${chainCity ?? 0}`) ?? [];
+              const slot = bucket.findIndex((entry) => entry.company_id === company.company_id);
+              point = slotPoints[Math.min(Math.max(slot, 0), slotPoints.length - 1)];
+            }
           }
 
           // The city travels to the fallback too: on an UNLAID preprinted OO hex there is no artwork to anchor to, so without it a token in the north-east city was drawn in the south-west one.
@@ -1351,11 +1456,32 @@ export function HexGridRenderer({
       );
       // Every hex this pass reaches resolves to SingleCity or SingleTown, both sharing the upper-left wedge anchor. #70: now dynamically slot-aware.
       // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #55
-      const anchor = singleNodeNameplateAnchor(center, hexSize, mapGrid, hex.q, hex.r, claimedHexSlots);
+      /* Design note #1288: the board may place the name (the Coalfields' goes to the top point) or stack
+         it ("Atlantic City", I19, was clipping on one line). */
+      const layout = PLATE_LAYOUT[hex.label];
+      const anchor =
+        layout?.name !== undefined
+          ? plateSlotPoint(center, layout.name, layout.nameInset ?? 0)
+          : singleNodeNameplateAnchor(center, hexSize, mapGrid, hex.q, hex.r, claimedHexSlots);
       // Design note #53: Hex Boundary Clipping Mask, extended to nameplate
       // text -- see the landmark pass above for the full reasoning.
       withHexClip(ctx, center, hexSize, () => {
-        drawSingleNodeNameplate(ctx, name, anchor, hexFlatWidth * 0.92, isHovered);
+        const words = name.split(" ");
+        /* Design note #1288: a turned name (the Coalfields', laid along its lower-left edge) draws about its
+           anchor under a rotation; everything else draws where it always did. */
+        const turn = layout?.nameRotateDeg ?? 0;
+        if (turn !== 0) {
+          ctx.save();
+          ctx.translate(anchor.x, anchor.y);
+          ctx.rotate((turn * Math.PI) / 180);
+        }
+        const at = turn !== 0 ? { x: 0, y: 0 } : anchor;
+        if (layout?.stack && words.length === 2) {
+          drawStackedNameLabel(ctx, [words[0], words[1]], at, hexFlatWidth * 0.85, isHovered);
+        } else {
+          drawSingleNodeNameplate(ctx, name, at, hexFlatWidth * 0.92, isHovered);
+        }
+        if (turn !== 0) ctx.restore();
       });
     }
 
@@ -1417,6 +1543,8 @@ export function HexGridRenderer({
       center: { x: number; y: number },
       offboardName: string,
       isHovered: boolean,
+      /** Design note #1288: the hex's own placement, when the board gives one. */
+      layout?: { badge?: number; name?: number; nameInset?: number },
     ) => {
       // Wraps onto two lines ONLY for "Maritime Provinces" -- the one named exception. Every other zone name stays single-line, reversing #47's "every multi-word name wraps".
       // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #83
@@ -1449,7 +1577,10 @@ export function HexGridRenderer({
 
       if (tiers) {
         // Centered at the TOP of the combined block.
-        const badgeCenter = { x: center.x, y: blockTop + badgeRadius };
+        const badgeCenter =
+          layout?.badge !== undefined
+            ? plateSlotPoint(center, layout.badge)
+            : { x: center.x, y: blockTop + badgeRadius };
 
         // Design note #62: solid white square badge, dark-navy stroke --
         // off-board revenue is grouped with city hub revenue under this
@@ -1466,12 +1597,16 @@ export function HexGridRenderer({
 
       // A two-line name draws through drawStackedNameLabel for ONE shared shield -- two independent 0.55-alpha boxes composited into a visibly darker seam.
       // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #84
+      /* Design note #1288: with a placed name, the block arithmetic above no longer applies -- the lines sit
+         on their slot, and the badge on its own. */
+      const nameAt =
+        layout?.name !== undefined ? plateSlotPoint(center, layout.name, layout.nameInset ?? 0) : null;
       if (nameLines.length === 2) {
         const linesCenterY = nameBlockStart + NAMEPLATE_LINE_HEIGHT_PX;
-        drawStackedNameLabel(ctx, [nameLines[0], nameLines[1]], { x: center.x, y: linesCenterY }, hexFlatWidth * 0.92, isHovered);
+        drawStackedNameLabel(ctx, [nameLines[0], nameLines[1]], nameAt ?? { x: center.x, y: linesCenterY }, hexFlatWidth * 0.92, isHovered);
       } else if (nameLines.length === 1) {
         const lineCenterY = nameBlockStart + NAMEPLATE_LINE_HEIGHT_PX * 0.5;
-        drawHexNameLabel(ctx, nameLines[0], { x: center.x, y: lineCenterY }, hexFlatWidth * 0.92, isHovered);
+        drawHexNameLabel(ctx, nameLines[0], nameAt ?? { x: center.x, y: lineCenterY }, hexFlatWidth * 0.92, isHovered);
       }
     };
 
@@ -1481,25 +1616,52 @@ export function HexGridRenderer({
       // Design note #26/item 3 / item 9: I1/J2 (Gulf) and A9/A11 (Canadian
       // West) are each drawn with ONE shared nameplate below instead of one
       // each here.
-      if (GULF_HIDDEN_EDGE[hex.label] !== undefined) continue;
-      if (CANADIAN_WEST_HIDDEN_EDGE[hex.label] !== undefined) continue;
+      if (OFFBOARD_HIDDEN_EDGES[hex.label] !== undefined) continue;
       const center = axialToPixel(hex.q, hex.r, hexSize);
       const isHovered = Boolean(
         hoveredHexCoord && hoveredHexCoord.q === hex.q && hoveredHexCoord.r === hex.r,
       );
+      /* Design note #1320: A WAREHOUSE HAS A TOWN AT ITS CENTRE, where this block would otherwise sit. The
+         name and badge move away from the stubs -- opposite the mean direction of the printed track, which
+         is the side of the hex the spokes leave empty -- so the dit and the spokes stay readable. Every
+         other red area keeps the centred block it has always had. */
+      const plateCenter = (() => {
+        const stubs = hex.warehouse ? OFFBOARD_TRACKS[hex.label] ?? [] : [];
+        if (stubs.length === 0) return center;
+        let dx = 0;
+        let dy = 0;
+        for (const stub of stubs) {
+          dx += Math.cos(edgeAngleRad(stub));
+          dy += Math.sin(edgeAngleRad(stub));
+        }
+        const length = Math.hypot(dx, dy) || 1;
+        const push = hexSize * 0.42;
+        return { x: center.x - (dx / length) * push, y: center.y - (dy / length) * push };
+      })();
       // Design note #55: Strict Hex Boundary Clipping, extended to
       // off-board nameplates -- previously unclipped.
       withHexClip(ctx, center, hexSize, () => {
-        drawOffboardNameplate(center, offboardName, isHovered);
+        /* Design note #1288: a placed plate draws from the hex CENTRE by slot; the warehouse push (#1321) is
+           the fallback for a board that has not placed one. */
+        const layout = PLATE_LAYOUT[hex.label];
+        drawOffboardNameplate(layout ? center : plateCenter, offboardName, isHovered, layout);
       });
     }
 
     // Gulf's and Canadian West's merged nameplates draw once at the two hexes' midpoint. Deliberately NOT withHexClip'd: the midpoint sits ON the shared border, and clipping to either hex would slice the text in half.
     // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #26
-    for (const [labelA, labelB, name] of [
-      ["I1", "J2", "Gulf"],
-      ["A9", "A11", "Canadian West"],
-    ] as const) {
+    /* #1300: THE PAIRS COME FROM THE HIDDEN-EDGE TABLE, not from a list of names. A two-hex red zone is exactly
+       a pair of hexes that hide a shared edge, and the expansion moves the Gulf to K1/L2 as Chattanooga --
+       a hard-coded `["I1", "J2", "Gulf"]` would have drawn nothing there and a stray plate at I1. */
+    const mergedZones = new Map<string, string[]>();
+    for (const label of Object.keys(OFFBOARD_HIDDEN_EDGES)) {
+      const name = OFFBOARD_LABELS[label];
+      if (!name) continue;
+      mergedZones.set(name, [...(mergedZones.get(name) ?? []), label]);
+    }
+    for (const [name, labels] of Array.from(mergedZones.entries())) {
+      if (labels.length !== 2) continue;
+      const [labelA, labelB] = labels;
       const hexA = STATIC_BOARD_HEXES.find((h) => h.label === labelA);
       const hexB = STATIC_BOARD_HEXES.find((h) => h.label === labelB);
       if (hexA && hexB) {
@@ -1633,7 +1795,54 @@ export function HexGridRenderer({
     for (const hex of STATIC_BOARD_HEXES) {
       const override = HEX_START_VALUE_OVERRIDE[hex.label];
       const grayTrack = GRAY_HEXES[hex.label];
-      if (grayTrack && grayTrack.marker !== "none") {
+      /* ==================================================================
+          DESIGN NOTE 1281: A RED AREA'S VALUE IS ITS NAMEPLATE'S, NOT A TOWN'S
+         ==================================================================
+         REPORTED (LPF): "all of the red off-board areas have a $10 revenue value printing on them", and
+         "the nameplates on all of the red off-board areas are being clipped ... also on the preprinted gray
+         Atlantic City hex, I19." #1320 listed the warehouses in `GRAY_HEXES` with a `town` marker so their
+         printed track and dot would draw -- and this pass reads that same table and stamps a small-town $10
+         on anything with a marker. The nameplate pass had already drawn the tiered figure, so each area
+         carried two values, and the extra badge took the height the name lines needed. Coal River had the
+         same double. A hex whose value is TIERED (`revenueTiers`, or a red area with a nameplate) prints its
+         value there and nowhere else. */
+      const valueIsTiered = !!OFFBOARD_LABELS[hex.label] || hex.revenueTiers !== undefined;
+      /* Design note #1282: a tiered hex that is NOT a red area (the Coalfields) has no nameplate badge, so its
+         value draws here -- top right, as ruled ("move the revenue badge to the top right corner"), clear of
+         the pickaxe in the centre and the name below. The era-aware reader, so the D-phase shows the Brown
+         figure (#1312). */
+      const ownTiers = hex.revenueTiers;
+      if (ownTiers !== undefined && !OFFBOARD_LABELS[hex.label]) {
+        const center = axialToPixel(hex.q, hex.r, hexSize);
+        /* Design note #1286: THE COALFIELDS ARE BORDERED. "Put a border around L8, both to indicate it's
+           interactive and to show that it's blocked." Licences are per corporation, so the border cannot
+           simply vanish: it is dashed red while the corporation operating has none, and solid neutral on its
+           turn once it does. Drawn just inside the edge so the neighbours' outlines are untouched. */
+        if (coalfieldsLicensed !== undefined) {
+          ctx.save();
+          drawHexPath(ctx, center, hexSize * 0.94);
+          ctx.setLineDash(coalfieldsLicensed ? [] : [hexSize * 0.16, hexSize * 0.1]);
+          ctx.strokeStyle = coalfieldsLicensed ? "#f2efe6" : "#e5484d";
+          ctx.lineWidth = Math.max(2, hexSize * 0.05);
+          ctx.stroke();
+          ctx.restore();
+        }
+        withHexClip(ctx, center, hexSize, () => {
+          const badgeSlot = PLATE_LAYOUT[hex.label]?.badge;
+          drawValueBadgeAt(
+            ctx,
+            /* Design note #1288: the board's slot when it names one; top right otherwise (#1282). */
+            badgeSlot !== undefined
+              ? plateSlotPoint(center, badgeSlot)
+              : { x: center.x + hexSize * 0.42, y: center.y - hexSize * 0.5 },
+            hexSize,
+            "MajorCityHub",
+            offboardValueForEra(ownTiers, currentEra),
+          );
+        });
+        continue;
+      }
+      if (grayTrack && grayTrack.marker !== "none" && !valueIsTiered) {
         if (override !== 0) {
           const center = axialToPixel(hex.q, hex.r, hexSize);
           withHexClip(ctx, center, hexSize, () => {
@@ -1733,7 +1942,18 @@ export function HexGridRenderer({
       if (!YELLOW_OO_HEXES.has(hex.label)) continue;
       const center = axialToPixel(hex.q, hex.r, hexSize);
       withHexClip(ctx, center, hexSize, () => {
-        drawRestrictionBadge(ctx, center, hexSize, "OO", "DoubleCity", mapGrid, hex.q, hex.r, claimedHexSlots);
+        // #1317: Toronto on the expanded board prints TO where the standard board prints OO.
+        drawRestrictionBadge(
+          ctx,
+          center,
+          hexSize,
+          TO_HEXES.has(hex.label) ? "TO" : "OO",
+          "DoubleCity",
+          mapGrid,
+          hex.q,
+          hex.r,
+          claimedHexSlots,
+        );
       });
     }
 
@@ -1973,8 +2193,12 @@ export function HexGridRenderer({
       const hex = STATIC_BOARD_HEXES.find(
         (h) => h.q === hoveredOffboardHex.q && h.r === hoveredOffboardHex.r,
       );
-      const offboardName = hex ? OFFBOARD_LABELS[hex.label] : undefined;
-      const tiers = offboardName ? OFFBOARD_REVENUE[offboardName] : undefined;
+      /* Design note #1281: the name and tiers come from the red-area tables OR from the hex itself. */
+      const offboardName = hex ? OFFBOARD_LABELS[hex.label] ?? NAMED_HEX_LABELS[hex.label] : undefined;
+      const tiers = hex
+        ? (OFFBOARD_LABELS[hex.label] ? OFFBOARD_REVENUE[OFFBOARD_LABELS[hex.label]] : undefined) ??
+          hex.revenueTiers
+        : undefined;
       if (hex && offboardName && tiers) {
         const center = axialToPixel(hex.q, hex.r, hexSize);
         // Point the card back toward the board's interior rather than always up-right, so zones near the top/right edge get room instead of clipping.
@@ -1992,6 +2216,9 @@ export function HexGridRenderer({
           currentEra,
           preferLeft,
           preferBelow,
+          /* Design note #1281: the Gray row exists only where the Gray era does -- the tray in effect says
+             (#1312: the standard tray has no Gray tier). */
+          trayInEffect().id !== "standard",
         );
       }
     }
@@ -2009,6 +2236,7 @@ export function HexGridRenderer({
        advertising a price that has already been settled, which is the exact failure #150 removed the badge
        after a build to prevent. */
     terrainFeesPaid,
+    coalfieldsLicensed, // #1286
     // Design note #223: the veil is part of the picture, so a change to the
     // reachable set has to repaint. Omitted, the board would keep the
     // dimming from whichever corporation was acting when it was last drawn.
@@ -2025,6 +2253,7 @@ export function HexGridRenderer({
     hoveredOffboardHex,
     hoveredHexCoord,
     boardContentBounds,
+    boardId, // #1300: a different board is a different picture.
     publicCompanies,
     // Design note #318: a private closing must repaint the board -- the
     // badge's whole job is to disappear when the reservation lifts.
@@ -2146,7 +2375,11 @@ export function HexGridRenderer({
       const contentY = (cssY - view.panY) / view.zoom;
       const { q: hoverQ, r: hoverR } = pixelToAxial(contentX, contentY, hexSize);
       const hoveredBoardHex = STATIC_BOARD_HEXES.find((h) => h.q === hoverQ && h.r === hoverR);
-      const isOffboardHover = !!(hoveredBoardHex && OFFBOARD_LABELS[hoveredBoardHex.label]);
+      /* Design note #1281: a tiered hex that is not a red area (Coal River) gets the same tooltip. */
+      const isOffboardHover = !!(
+        hoveredBoardHex &&
+        (OFFBOARD_LABELS[hoveredBoardHex.label] || hoveredBoardHex.revenueTiers !== undefined)
+      );
 
       // Item 7 ("Muted Base Text with Hover Glow") -- tracked unconditionally,
       // unlike `hoveredOffboardHex` just below, since every labeled hex type
@@ -2298,6 +2531,14 @@ export function HexGridRenderer({
     }) => {
       const { q, r, clientX, clientY, cityIndexAtPoint2 } = params;
       const hexLabel = describeHex(q, r);
+      /* Design note #1299: the Coalfields are a door, not a hex to lay on. */
+      if (onCoalfieldsClick) {
+        const coal = STATIC_BOARD_HEXES.find((hex) => hex.q === q && hex.r === r);
+        if (coal?.revenueTiers !== undefined && !OFFBOARD_LABELS[coal.label]) {
+          onCoalfieldsClick();
+          return;
+        }
+      }
 
       // Click-time log: the hex's coordinate and preprinted terrain are known synchronously.
       // The legal tile_ids cannot be logged here -- they do not exist until the query resolves.
@@ -2540,6 +2781,7 @@ export function HexGridRenderer({
       protocolId,
       onHexClick,
       onHexClickQuery,
+      onCoalfieldsClick, // #1299: the Coalfields intercept
       // Gate 3 reads the laid tile out of mapGrid, so a stale closure would keep judging a hex by whatever was on it when the handler was built.
       // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #141
       mapGrid,

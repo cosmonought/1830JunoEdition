@@ -162,7 +162,11 @@ describe("a toast marks a move, not a catch-up (design note #825)", () => {
   it("takes the answer from the drain's own predicate", () => {
     // Not a second definition of "is this a replay" -- #670's `isOrdinaryPlay`, published.
     expect(APP).toContain("replayingHistory = !isOrdinaryPlay;");
-    expect(APP).toContain("const isOrdinaryPlay = !rewound && pending === 1;");
+    /* Design note #1238: the predicate now reads the frame kind on the server path and keeps Firestore's
+       `pending === 1` proxy where there is no frame kind to read. Anchored on both halves. */
+    expect(APP).toContain("const isOrdinaryPlay =");
+    expect(APP).toContain("? pending >= 1 && !serverBatchIsHistoryRef.current");
+    expect(APP).toContain(": pending === 1);");
   });
 
   it("clears the flag even when a dispatch throws", () => {
@@ -252,7 +256,12 @@ describe("every toast is mounted behind a rule", () => {
        one (`showActionToast(globallyBroadcast ?? label)`), so the literal moved. Re-anchored on the CALL,
        which is what the ordering is about -- pinning the argument list again would break on the next caller
        that passes something else, which is the mistake this file has now recorded twice. */
-    const rebuilt = APP.indexOf("describeGameplayAction(msg, {");
+    /* #1230: AND IT MOVED A THIRD TIME, for the reason this note predicted. `SetupGame` now falls through to
+       the general path, so the message reaches this call un-narrowed and is passed as `gameplay`, the one
+       cast the engine also takes (#1189). The anchor had pinned the argument name after all. THE LAST CALL
+       IN THE FILE is the rebuild -- the earlier one at the top of the dispatch is the pre-label -- so it is
+       found by position rather than by what it is handed, and no future rename of the argument can move it. */
+    const rebuilt = APP.lastIndexOf("describeGameplayAction(");
     /* Design note #1072: the call went multi-line when the depot toast gained its own duration, so the
        argument is no longer adjacent to the name. Anchored on the CALL, which is what the ordering is
        about -- and which no reformat can move. */
@@ -326,7 +335,12 @@ describe("every toast is mounted behind a rule", () => {
     /* The drain runs on every client, so the actor test does the job #697's placement used to. It is #786's
        comparison inverted, which is what makes the receipt and the payout notice mutually exclusive rather
        than two notices for one event. */
-    expect(APP).toContain(
+    /* Design note #1272: the buyer's receipt is the treasury slide-out now, fed by the state diff and shown
+       to every seat, so the actor comparison left this gate with the toast it scoped. What remains here is
+       the depot line, which #1063 had already made everybody's. The mutual exclusion #786 wanted survives:
+       a purchase moves a treasury, a payout moves cash, and the two machines are two panels. */
+    expect(APP).toContain("treasuryMovements(before, after)");
+    expect(APP).not.toContain(
       "(options?.actor ?? viewerAddressRef.current) === viewerAddressRef.current",
     );
   });

@@ -44,6 +44,13 @@ export const CORPORATION_LIVERY_COLORS: Readonly<Record<number, string>> = {
   6: "#f5cd3a", // ERIE -- yellow
   7: "#ee7c22", // NNH  -- orange
   8: "#1e7a45", // B&M  -- green
+  // Design note #1320: the Level Playing Field's two. Purple, and a DARK neutral gray for the N&W: its home
+  // is Norfolk, a preprinted gray hex (#8a8f94), and the gray tiles are #A9AEB4, so a mid gray token would
+  // vanish into exactly the ground it most often stands on. Dark enough to read against both and against a
+  // white station circle, neutral rather than the blue-slate of `CORPORATION_LIVERY_FALLBACK`, and well
+  // short of NYC's near-black. White ink, ~8.6:1.
+  9: "#6b2fa0", // PMQ  -- purple
+  10: "#4c5056", // N&W  -- dark gray
 };
 
 /** For a `company_id` outside the core eight -- a slate that is visibly not

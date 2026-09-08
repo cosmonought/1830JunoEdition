@@ -14,7 +14,7 @@
 // See docs/ai_architecture/sandbox_reducer.md - sandboxState.ts #0, #1
 
 import { STATIC_BOARD_HEXES } from "../components/hexBoardData";
-import { STATION_HOME_HEXES } from "../components/hexContractTypes";
+import { stationHomeHexes } from "../components/hexContractTypes";
 import type { TileColorTier } from "../components/hexTileCatalog";
 import type {
   GameStateResponse,
@@ -30,7 +30,7 @@ import type {
  *  every core corporation has a home, so a miss here is a typo in the
  *  fixture and not a state the game can be in. */
 function homeHexFor(companyId: number): string {
-  const home = STATION_HOME_HEXES.find((entry) => entry.companyId === companyId);
+  const home = stationHomeHexes().find((entry) => entry.companyId === companyId);
   if (!home) throw new Error(`No preprinted home hex for company_id ${companyId}`);
   return home.label;
 }

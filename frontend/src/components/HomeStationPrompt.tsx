@@ -26,6 +26,8 @@ export interface HomeStationPromptProps {
     hexLabel: string;
     q: number;
     r: number;
+    /** Design note #1325: more than one entry and the president chooses. */
+    options?: ReadonlyArray<{ hexLabel: string; q: number; r: number }>;
   } | null;
   /** The president's display name, for the heading. `null` when the
    *  presidency is not on record -- the copy drops to the corporation. */
@@ -36,8 +38,14 @@ export interface HomeStationPromptProps {
   /** Ink that contrasts with `liveryColor`, computed by the caller with the
    *  same helper every other corporate surface uses. */
   liveryInk: string;
-  /** Places the token. The caller dispatches; this only asks. */
-  onPlace: (companyId: number, q: number, r: number) => void;
+  /** Places the token. The caller dispatches; this only asks. Design note #1331: `options` carries every
+   *  legal home when there is more than one, so the map -- not this card -- takes the choice. */
+  onPlace: (
+    companyId: number,
+    q: number,
+    r: number,
+    options?: ReadonlyArray<{ hexLabel: string; q: number; r: number }>,
+  ) => void;
   /** Design note #783: WHETHER THIS VIEWER IS THE ONE BEING ASKED.
    *
    *  REPORTED: "when another player buys the share that floats your corporation, the screen just hangs on
@@ -65,6 +73,10 @@ export function HomeStationPrompt({
   if (!pending) return null;
 
   const fullName = corporationFullName(pending.ticker);
+  const choices =
+    pending.options && pending.options.length > 0
+      ? pending.options
+      : [{ hexLabel: pending.hexLabel, q: pending.q, r: pending.r }];
 
   return (
     <div
@@ -122,8 +134,8 @@ export function HomeStationPrompt({
             asked to act on. Naming it is what makes a confirmation an
             adequate substitute for hunting the map for it. */}
         <div style={styles.hexRow}>
-          <span style={styles.hexLabelCaption}>Home hex</span>
-          <span style={styles.hexLabel}>{pending.hexLabel}</span>
+          <span style={styles.hexLabelCaption}>{choices.length > 1 ? "Home hexes" : "Home hex"}</span>
+          <span style={styles.hexLabel}>{choices.map((option) => option.hexLabel).join(" or ")}</span>
         </div>
 
         {/* Design note #440: the route sentence is GONE. It read "Every route it runs
@@ -145,8 +157,9 @@ export function HomeStationPrompt({
             Two different conditions for "is this mine to do" is how the two come apart. */}
         {viewerIsPresident && (
           <span style={styles.consequence}>
-            Printed on the board and fixed by the rules — the {pending.ticker} has no other
-            legal home.
+            {choices.length > 1
+              ? `Printed on the board and fixed by the rules — the ${pending.ticker} may sit in either, and its herald reserves both until it does.`
+              : `Printed on the board and fixed by the rules — the ${pending.ticker} has no other legal home.`}
           </span>
         )}
 
@@ -156,13 +169,19 @@ export function HomeStationPrompt({
             player's own click on the board it belongs to. */}
         {/* Design note #783: NO BUTTON FOR A WATCHER. A disabled control would invite the click this modal
            exists to explain away, and #763's gate would refuse it silently -- confusion on top of confusion. */}
+        {/* Design note #1325 put ONE BUTTON PER HOME here. Design note #1331 (15) takes it back to ONE BUTTON:
+           "Place Home Station on K13 or L14", and the map lights both -- the choice is made where the hexes
+           are, by the same click a single-home corporation already makes. The card names them; the board
+           takes the answer. */}
         {viewerIsPresident && (
           <button
             type="button"
             style={styles.confirm}
-            onClick={() => onPlace(pending.companyId, pending.q, pending.r)}
+            onClick={() =>
+              onPlace(pending.companyId, choices[0].q, choices[0].r, choices.length > 1 ? choices : undefined)
+            }
           >
-            Place the {pending.ticker} station on {pending.hexLabel} &#8250;
+            Place Home Station on {choices.map((option) => option.hexLabel).join(" or ")} &#8250;
           </button>
         )}
       </div>

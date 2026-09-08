@@ -41,7 +41,7 @@ describe("the sweep", () => {
   it("covers the whole tray", () => {
     const graph = tileUpgradeGraph();
     expect(graph.successors.size).toBe(TILE_CATALOG_BY_ID.size);
-    expect(TILE_CATALOG_BY_ID.size).toBe(46);
+    expect(TILE_CATALOG_BY_ID.size).toBe(76); // #1311/#1317: the catalog knows both trays' tiles
   });
 
   it("is cached, so a second ask is free", () => {
@@ -53,7 +53,7 @@ describe("the sweep", () => {
     /* THE INVARIANT UNDER EVERYTHING ELSE. Rule 4 is "exactly one step", so any
        edge spanning two tiers means the sweep laid a tile on a board the game
        could not have been in. */
-    const rank = { Yellow: 0, Green: 1, Brown: 2 } as const;
+    const rank = { Yellow: 0, Green: 1, Brown: 2, Gray: 3 } as const;
     tileUpgradeGraph().successors.forEach((targets, from) => {
       const source = TILE_CATALOG_BY_ID.get(from);
       if (!source) return;
@@ -78,7 +78,9 @@ describe("the sweep", () => {
       brown.push(tileId);
       if (tileUpgradeTargets(tileId).length > 0) withSuccessors.push(tileId);
     });
-    expect(brown.length).toBe(18);
+    // 18 standard browns, 9 in the Project 18XX+ set -- and at a STANDARD table none of them goes anywhere,
+    // because no Gray tile is in that tray (#1311/#1312).
+    expect(brown.length).toBe(28); // + #882
     expect(withSuccessors).toEqual([]);
   });
 });

@@ -85,10 +85,11 @@ const CENTRE = { x: 50, y: 50 };
 const SIZE = 40;
 
 describe("design note 486: one restriction label per tile", () => {
-  it("finds the ten restricted tiles", () => {
+  it("finds the nineteen restricted tiles -- ten standard, nine from the tile set", () => {
     // If the catalog filter ever returned nothing, every count below would
     // be vacuously true -- so the set is pinned by identity, not just size.
-    expect(RESTRICTED_TILE_IDS).toEqual([53, 54, 59, 61, 62, 64, 65, 66, 67, 68]);
+    // #1311: the standard ten, and the Project 18XX+ set's seven lettered tiles (B 592, NY 883, OO 626/36/35/984/167).
+    expect(RESTRICTED_TILE_IDS).toEqual([35, 36, 53, 54, 59, 61, 62, 64, 65, 66, 67, 68, 167, 592, 626, 810, 882, 883, 984]);
   });
 
   it("paints the label exactly once when it is enabled", () => {

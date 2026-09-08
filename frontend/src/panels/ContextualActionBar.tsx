@@ -90,7 +90,9 @@ import { dividendDeclaration, marketMoveDirection } from "../utils/dividendStep"
 // Design note #494: the per-train route ink, so the collapsed chips match
 // the lines on the map.
 import { routeTrainColor } from "../styles/routeLivery";
-import { styles, PHASE_TINT_STYLES, UI_SCALE } from "../styles/appStyles";
+import { styles, PHASE_TINT_STYLES } from "../styles/appStyles";
+/* Design note #1294: the chrome scale at the moment of each measurement. */
+import { getUiScale } from "../utils/uiScale";
 // Design note #975: the chip's own type scale and the x-height ratio, so its star can be derived from the
 // text beside it rather than typed as a pixel count.
 import { FONT_SIZE, X_HEIGHT_RATIO } from "../styles/typography";
@@ -103,6 +105,8 @@ import {
 } from "../utils/dividendProjection";
 import CarcosaMark from "../components/CarcosaMark";
 import { PrivatePowerStar } from "../components/privatePowerStar";
+// Design note #1323: the Kanawha Licence's pickaxe, on the corporation badge and the button that buys one.
+import { KanawhaLicenseBadge, PickaxeIcon } from "../components/KanawhaBadge";
 
 /* ------------------------------------------------------------------ */
 /* Contextual Top Action Bar -- see design note #8/item 5              */
@@ -459,7 +463,7 @@ function MarketMoveLine({
 export const LAY_TRACK_HINT = "Click a hex on the Rail Map to lay track.";
 
 function measuredStickyTop(node: HTMLElement): number {
-  return stickyTopOffset(window.getComputedStyle(node).top) * UI_SCALE;
+  return stickyTopOffset(window.getComputedStyle(node).top) * getUiScale();
 }
 
 function useCondensedWhenPinned(): [React.RefObject<HTMLDivElement>, boolean, boolean, number] {
@@ -785,6 +789,7 @@ export default function ContextualActionBar({
   sessionReady,
   onPassTurn,
   autoPass,
+  autoBuy,
   passDisabledReason,
   turnActionTaken,
   onPlaceStationTokenHint,
@@ -803,6 +808,7 @@ export default function ContextualActionBar({
   onShowMap,
   onSayWhereToClick,
   powerOffers = [],
+  kanawhaLicense = null,
   onUsePowerOffer,
   privatePurchase,
   onOpenPrivateTrade,
@@ -885,6 +891,13 @@ export default function ContextualActionBar({
     onOpenSettings: () => void;
     onDisarm: () => void;
   } | null;
+  /** Design note #1240: the standing-buy control, a debug tool with Auto-Pass's shape and gates. */
+  autoBuy?: {
+    armed: boolean;
+    canArm: boolean;
+    onOpenSettings: () => void;
+    onDisarm: () => void;
+  } | null;
   /** Design note #31: why passing is currently illegal, or `null`. The
    *  waterfall forbids it while no private holds a standing bid
    *  (`waterfall.rs` doc comment #1) -- a fact only the caller has. */
@@ -938,6 +951,18 @@ export default function ContextualActionBar({
     carcosanTrains: readonly string[];
     /** Design note #1089: the permanent curse, which outlives the train itself. */
     isCarcosan: boolean;
+    /** Design note #1323: Kanawha Licences held (Level Playing Field). Absent or zero draws no badge. */
+    kanawhaLicenses?: number;
+  } | null;
+  /** Design note #1323: the "Buy Kanawha Licence" control for the Lay Track step. Absent when the variant is
+   *  off or the corporation already holds one -- "once a license is purchased, the button can be removed for
+   *  that corporation" -- and present-but-disabled with the reason otherwise, per #725's "greyed with a
+   *  reason rather than hidden". */
+  kanawhaLicense?: {
+    cost: number;
+    remaining: number;
+    disabledReason: string | null;
+    onBuy: () => void;
   } | null;
   /** Design note #673: the tile lay currently being previewed, or `null` when
    *  none is or when it is free.
@@ -1135,7 +1160,9 @@ export default function ContextualActionBar({
     companies: readonly TrainPurchaseCompany[];
     canAct: boolean;
     blockedReason: string | null;
-    onBuyFromBank: (tier: string, quantity: number) => void;
+    onBuyFromBank: (tier: string) => void; // #1255: one train per press
+    /** Design note #1326: the tiers for sale now; the panel derives the queue head when absent. */
+    openTiers?: readonly DepotTier[];
     /** Design note #1101: whether filling the train limit also ends the turn. Resolved by the shell from
      *  `autoSkipExit` and the live step list; this bar only forwards it. */
     endsTurnAtLimit: boolean;
@@ -1143,6 +1170,12 @@ export default function ContextualActionBar({
      *  Passed straight through -- the bar is a conduit, not a decider. */
     onEmergencyPurchase?: () => void;
     emergencyAvailable?: boolean;
+    /** Design note #1303: the D-train exchange, resolved by the shell; the bar forwards it. */
+    dieselExchange?: { models: readonly string[]; problem: string | null } | null;
+    onExchangeForDiesel?: (modelType: string) => void;
+    /** Design note #1314: the returned trains, resolved by the shell; the bar forwards them. */
+    returnedTrains?: ReadonlyArray<{ model: string; cost: number; problem: string | null }>;
+    onBuyReturnedTrain?: (modelType: string) => void;
     onProposeTrade: (proposal: TrainTradeProposal) => void;
     labelForAddress: (address: string) => string;
     /** Design note #914: the seller roster paints each president in their own seat colour. Conduit only --
@@ -1411,7 +1444,7 @@ export default function ContextualActionBar({
          LAYOUT length, written on a node inside the shell's `zoom: 0.7`. Passed through unconverted it would
          reserve seven-tenths of the bar's height, and #810's whole point -- "the Action Bar covers the actual
          Buy Trains subpanel" -- would come back as a thinner version of itself. */
-      node.style.scrollMarginTop = `${clearance / UI_SCALE}px`;
+      node.style.scrollMarginTop = `${clearance / getUiScale()}px`;
       if (typeof IntersectionObserver === "undefined") return undefined;
       const observer = new IntersectionObserver(
         ([entry]) => {
@@ -1770,6 +1803,8 @@ export default function ContextualActionBar({
             disabled: false,
             title: "Switches to the Rail Map tab. Click a hex there to lay track.",
           },
+          /* Design note #1323 put the licence button here, beside the lay; design note #1298 moves it to the
+             private-power rail on the right -- see `powerChips`. */
         ];
         break;
       case "BuyPrivate":
@@ -2121,7 +2156,30 @@ export default function ContextualActionBar({
      AN ARRAY OF ELEMENTS RATHER THAN A COMPONENT, because the two placements are mutually exclusive by round
      -- only one rail is mounted at a time -- so there is no second instance for React to reconcile and a
      component would add a name and a props interface to carry nothing. */
-  const powerChipNodes = powerChips.map((chip) => (
+  /* ==================================================================
+      DESIGN NOTE 1298: THE LICENCE IS A CHIP IN THE POWER RAIL
+     ==================================================================
+     RULED (4b): keep the button, but "changed to '[pickaxe icon] Buy License' and listed where Private Power
+     buttons get listed, flush right. The pickaxe icon is also way too small on this button, it is
+     illegible: 2.25x its current size." So it leaves the Lay Track row (#1323) and joins `powerChips`: same
+     chip styling, same rail, the pickaxe at 2.25x the star's height. `kanawhaLicense` is `null` outside the
+     variant and outside the Lay Track step, which is what keeps the chip to the moment it means something. */
+  const licenceChips: ActionBarButton[] = kanawhaLicense
+    ? [
+        {
+          key: "buy-kanawha-license",
+          label: "Buy License",
+          icon: <PickaxeIcon height={Math.round(POWER_CHIP_STAR_PX * 2.25 * 10) / 10} />,
+          onClick: kanawhaLicense.onBuy,
+          disabled: kanawhaLicense.disabledReason !== null,
+          title:
+            kanawhaLicense.disabledReason ??
+            `$${kanawhaLicense.cost} from the Bank. Lets this corporation's trains run to or through the Coalfields (L8). ${kanawhaLicense.remaining} of 4 left. Does not use the tile lay.`,
+        },
+      ]
+    : [];
+
+  const powerChipNodes = [...powerChips, ...licenceChips].map((chip) => (
     <button
       key={chip.key}
       type="button"
@@ -2711,6 +2769,11 @@ export default function ContextualActionBar({
                       color={corporationBarInk.ink}
                       title={activeCorporation.fullName ?? activeCorporation.ticker}
                       fallbackStyle={styles.orContextTicker}
+                    />
+                    {/* Design note #1323: the licence rides beside the herald, in the bar's own ink. */}
+                    <KanawhaLicenseBadge
+                      count={activeCorporation.kanawhaLicenses ?? 0}
+                      color={corporationBarInk.ink}
                     />
                     {/* Design note #465: BESIDE, not instead. The herald keeps its recognisability and the acronym rides next
                        to it as the readable handle. The logo's own text fallback would double this when a file is missing --
@@ -4026,6 +4089,29 @@ export default function ContextualActionBar({
               {autoPass.armed ? "Auto-Pass: On" : "Auto-Pass"}
             </button>
           )}
+          {/* Design note #1240: Auto-Buy beside Auto-Pass, same two states, same #728 rule that the off switch
+              is reachable whenever it is on. A debug tool for running a Stock Round without the clicks. */}
+          {autoBuy && (autoBuy.armed || roundType === "StockRound") && (
+            <button
+              type="button"
+              style={{
+                ...styles.actionBarButton,
+                ...(autoBuy.armed ? styles.autoPassArmed : {}),
+                ...(!autoBuy.armed && !autoBuy.canArm ? styles.actionBarButtonDisabled : {}),
+              }}
+              onClick={autoBuy.armed ? autoBuy.onDisarm : autoBuy.onOpenSettings}
+              disabled={!autoBuy.armed && !autoBuy.canArm}
+              title={
+                autoBuy.armed
+                  ? "Auto-Buy is on for this Stock Round. Click to turn it off."
+                  : autoBuy.canArm
+                    ? "Debug tool: buy one share of a chosen corporation on each of your turns, up to a cap, until the Stock Round ends."
+                    : "Auto-Buy needs a live connection to the room."
+              }
+            >
+              {autoBuy.armed ? "Auto-Buy: On" : "Auto-Buy"}
+            </button>
+          )}
           {/* Design note #540: A DIVIDER NEEDS SOMETHING ON BOTH SIDES. Reported as two bars between Pass Turn and
              Undo -- these two, with nothing between them. The pair frames `contextualButtons`, which is EMPTY in
              several real states: an auction round, a Stock Round with no corporation selected, and a room whose game
@@ -4250,12 +4336,17 @@ export default function ContextualActionBar({
           canAct={trainPurchase.canAct}
           blockedReason={trainPurchase.blockedReason}
           onBuyFromBank={trainPurchase.onBuyFromBank}
+          openTiers={trainPurchase.openTiers}
           /* Design note #1101: resolved by the shell, which owns the step list -- see the panel's prop.
              A `{...}` comment is JSX CHILDREN syntax and is a parse error inside an attribute list; the
              plain block form is what the neighbouring props already use. */
           endsTurnAtLimit={trainPurchase.endsTurnAtLimit}
           onEmergencyPurchase={trainPurchase.onEmergencyPurchase}
           emergencyAvailable={trainPurchase.emergencyAvailable}
+          dieselExchange={trainPurchase.dieselExchange}
+          onExchangeForDiesel={trainPurchase.onExchangeForDiesel}
+          returnedTrains={trainPurchase.returnedTrains}
+          onBuyReturnedTrain={trainPurchase.onBuyReturnedTrain}
           onProposeTrade={trainPurchase.onProposeTrade}
           labelForAddress={trainPurchase.labelForAddress}
           colorForAddress={trainPurchase.colorForAddress}

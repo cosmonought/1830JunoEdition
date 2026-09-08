@@ -39,6 +39,7 @@ import { BO_TICKER } from "./gameConstants";
 // Design note #759: the expiry of #7 and #712's zone exemptions.
 import { divestmentDebt, divestmentRefusal } from "./forcedDivestment";
 import { PLAYER_HOLDING_CAP_PERCENT } from "./privateExchange";
+import { DOUBLE_CERTIFICATE_PERCENT, doublePurchaseRefusal, ordinaryPurchaseRefusal } from "./doubleCertificate";
 
 /** A 10% certificate. The president's is 20%, and is handled where it is bought. */
 export const SHARE_PERCENT = 10;
@@ -62,6 +63,8 @@ export interface SharePurchaseInput {
   zoneForPrice?: (price: number | null | undefined) => string | null;
   /** Certificates this player has already bought this stock-round turn. */
   boughtThisTurn?: number;
+  /** Design note #1324: the 20% standard certificate, bought whole. */
+  certificate?: "double";
 }
 
 /** Whether `buyer` has sold any of `companyId` in the CURRENT Stock Round.
@@ -94,6 +97,7 @@ export function sharePurchaseBlock(input: SharePurchaseInput): string | null {
     marketPrices,
     zoneForPrice,
     boughtThisTurn = 0,
+    certificate,
   } = input;
 
   const company = state.public_companies.find((entry) => entry.company_id === companyId);
@@ -111,7 +115,20 @@ export function sharePurchaseBlock(input: SharePurchaseInput): string | null {
     return BO_LOCKED_REASON;
   }
 
-  const taking = Math.max(1, Math.floor(quantity)) * SHARE_PERCENT;
+  /* Design note #1324: the double is one certificate of twenty. Asked FIRST whether it is where the buyer
+     says it is, and an ordinary buy is asked whether the pool has any ordinary certificates left -- a pool
+     holding only the double has nothing else to sell. */
+  const wantsDouble = certificate === "double";
+  if (wantsDouble) {
+    const refusal = doublePurchaseRefusal(company, source);
+    if (refusal !== null) return refusal;
+  } else {
+    const refusal = ordinaryPurchaseRefusal(company, source, Math.max(1, Math.floor(quantity)));
+    if (refusal !== null) return refusal;
+  }
+  const taking = wantsDouble
+    ? DOUBLE_CERTIFICATE_PERCENT
+    : Math.max(1, Math.floor(quantity)) * SHARE_PERCENT;
 
   /* ---- 1. The 60% cap, waived in Orange and Brown --------------------------------------------- */
   const held =
@@ -128,7 +145,7 @@ export function sharePurchaseBlock(input: SharePurchaseInput): string | null {
     /* ONLY A NON-EXEMPT PURCHASE COUNTS. A share bought into a Yellow-or-better corporation is exempt the
        moment it is held, so it cannot push anybody over -- which is the whole point of the exemption and the
        reason this test is on the ZONE rather than on the total. */
-    const after = certs.counted + Math.max(1, Math.floor(quantity));
+    const after = certs.counted + (wantsDouble ? 1 : Math.max(1, Math.floor(quantity)));
     if (after > certs.limit) {
       return `That would put you at ${after} certificates against a limit of ${certs.limit}. Shares priced in the Yellow, Orange or Brown zones do not count.`;
     }

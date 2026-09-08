@@ -15,6 +15,9 @@
 // Shares the rail-map `#N` namespace -- see `docs/ai_architecture/hex_tile_math.md`.
 
 import { corporationLiveryColor } from "../styles/corporationLivery";
+// Design note #1320: the board in effect adds home stations of its own. `hexBoardData` is a leaf that does not
+// import this file, so the direction holds.
+import { boardMemo } from "./hexBoardData";
 
 /** Mirrors `msg.rs`'s `MapTileEntry` exactly -- one laid hex tile. */
 export interface MapTileEntry {
@@ -22,6 +25,9 @@ export interface MapTileEntry {
   r: number;
   tile_id: number;
   orientation: number;
+  /** Design note #1301: printed on the board rather than laid from the tray -- seeded into the initial grid
+   *  by `initialGridFor`. The tray does not count it; everything else treats it as the tile it is. */
+  printed?: boolean;
   /** Design note #119: this tile's DISCRETE track segments as BASE (pre-rotation) edge pairs, resolved
    *  contract-side through `hexmap::effective_base_tile_paths`. Each `[a, b]` is one continuous run between
    *  edges `a` and `b`; `a === b` is a terminal spur that enters at `a` and dead-ends. Apply `orientation`
@@ -172,6 +178,54 @@ export const STATION_HOME_HEXES: ReadonlyArray<{
   { companyId: 8, q: 9, r: 4, label: "E23" }, // B&M -> Boston
 ];
 
+/** Design note #1320: THE HOME STATIONS IN EFFECT -- the eight printed ones plus whatever the board in effect
+ *  adds (the Level Playing Field's PMQ at E5 and N&W at L16). A reader that walks reservations or draws
+ *  home badges asks this rather than the constant, so a standard game never reserves a slot for a
+ *  corporation it does not have. The constant survives for the eight it has always named. */
+export interface HomeStationEntry {
+  companyId: number;
+  q: number;
+  r: number;
+  label: string;
+  /** Design note #1325: `false` when the reservation does not hold the slot against other corporations. */
+  enforced?: boolean;
+}
+
+export function stationHomeHexes(): ReadonlyArray<HomeStationEntry> {
+  return homeHexesInEffect();
+}
+
+/* Design note #1325: a board entry with a printed entry's company and label REPLACES the printed one, which is
+   how the Level Playing Field loosens C&O's Cleveland reservation without a second table of the eight. */
+const homeHexesInEffect = boardMemo((board): ReadonlyArray<HomeStationEntry> => {
+  const merged = new Map<string, HomeStationEntry>();
+  for (const entry of [...STATION_HOME_HEXES, ...(board.homeStations ?? [])]) {
+    merged.set(`${entry.companyId}:${entry.label}`, entry);
+  }
+  return Array.from(merged.values());
+});
+
+/** Every home hex reserved for `companyId` on the board in effect -- one for the printed eight, two for the
+ *  Level Playing Field's C&O. */
+export function homeHexesFor(companyId: number): ReadonlyArray<HomeStationEntry> {
+  return stationHomeHexes().filter((entry) => entry.companyId === companyId);
+}
+
+/** Design note #1325: WHETHER A RESERVATION IS STILL OPEN. A reservation is released by USE, not by floating
+ *  (#463's rule): the owner sitting on that hex is occupying it, not reserving it. For a corporation with more
+ *  than one home, sitting on EITHER releases both -- "the reservation marker on the other hex is forfeited" --
+ *  so the test is "does the owner hold any token at all", and for a single-home corporation the two tests
+ *  agree, because its first token is its home. */
+export function homeReservationStands(
+  owner: { station_token_hexes: ReadonlyArray<readonly [number, number]> } | null | undefined,
+  home: HomeStationEntry,
+): boolean {
+  if (!owner) return true; // no record of the company at all: treat the reservation as standing
+  if (owner.station_token_hexes.some(([q, r]) => q === home.q && r === home.r)) return false;
+  if (homeHexesFor(home.companyId).length > 1) return owner.station_token_hexes.length === 0;
+  return true;
+}
+
 /* Design note #428: RE-EXPORTED, NOT DEFINED. The table lives in `styles/corporationLivery.ts` -- see that
    module for the palette and #408's audit.
    THESE NAMES SURVIVE AS ALIASES, deliberately: they have eight-plus call sites across the app plus notes
@@ -289,6 +343,9 @@ export const STATION_TICKER_LABELS: Readonly<Record<number, string>> = {
   6: "ERIE",
   7: "NNH",
   8: "B&M",
+  // Design note #1320: the Level Playing Field's two, ids continuing the printed eight.
+  9: "PMQ",
+  10: "N&W",
 };
 
 export function stationTickerLabel(companyId: number): string {

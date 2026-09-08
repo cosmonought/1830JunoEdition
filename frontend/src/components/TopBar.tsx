@@ -16,6 +16,10 @@ import { truncateAddress } from "../utils/address";
 import { styles } from "../styles/appStyles";
 // Design note #1075: the volume, the off switch, and which effects play -- one panel, two buttons.
 import AudioControls from "./AudioControls";
+/* Design note #1273: the text-size picker's steps and store. */
+import { styles as appStyles } from "../styles/appStyles";
+import { UI_SCALE_STEPS, setUiScale, snapUiScale } from "../utils/uiScale";
+import { useUiScale } from "../utils/useUiScale";
 import { type AudioCategoryToggle } from "./AudioControlPopover";
 
 /* ------------------------------------------------------------------ */
@@ -89,6 +93,48 @@ function statusDotColor(
    row and two more pills pushed the wallet cluster onto a second line, undoing
    #34. It lives at the far right of the Contextual Action Bar, which already
    says what round it is. */
+/** Design note #1273: `<| 100% |>`, stored per browser, applied by reload. */
+function UiScalePicker() {
+  /* Design note #1294: live. The store re-renders every surface that draws with the scale; no reload, and
+     the radio keeps playing. */
+  const scale = useUiScale();
+  const at = UI_SCALE_STEPS.indexOf(snapUiScale(scale));
+  const choose = (index: number) => {
+    setUiScale(UI_SCALE_STEPS[Math.min(UI_SCALE_STEPS.length - 1, Math.max(0, index))]);
+  };
+  const percent = `${Math.round(scale * 100)}%`;
+  return (
+    <span style={appStyles.topBarAudioGroup} role="group" aria-label="Text size">
+      <button
+        type="button"
+        style={{ ...appStyles.topBarStationStep, ...(at <= 0 ? appStyles.topBarStationStepDisabled : {}) }}
+        onClick={() => choose(at - 1)}
+        disabled={at <= 0}
+        title="Draw the game smaller."
+        aria-label="Smaller text"
+      >
+        −
+      </button>
+      <span style={appStyles.topBarScaleReadout} title={`Text size ${percent}. Stored for this browser.`}>
+        {percent}
+      </span>
+      <button
+        type="button"
+        style={{
+          ...appStyles.topBarStationStep,
+          ...(at >= UI_SCALE_STEPS.length - 1 ? appStyles.topBarStationStepDisabled : {}),
+        }}
+        onClick={() => choose(at + 1)}
+        disabled={at >= UI_SCALE_STEPS.length - 1}
+        title="Draw the game larger."
+        aria-label="Larger text"
+      >
+        +
+      </button>
+    </span>
+  );
+}
+
 export default function TopBar({
   roomContext,
   roomName = null,
@@ -212,6 +258,20 @@ export default function TopBar({
           TITLES SAY WHAT THE CLICK WILL DO, not what the state is. "Music: on" leaves a player working out
           whether pressing it turns it off; "Stop the radio stream" is the answer they were after. */}
       {audio && <AudioControls audio={audio} />}
+
+      {/* ==================================================================
+           DESIGN NOTE 1273: THE TEXT-SIZE PICKER, WHICH #1149 SAID A THIRD READING WOULD EARN
+          ==================================================================
+          REPORTED: "everything is way too small" -- one player at 250% browser zoom, on a screen where
+          #1149's 0.63 draws body text at eight pixels. The scale is a per-reader preference now
+          (`utils/uiScale.ts`); this is where a reader sets it.
+          BESIDE THE AUDIO PAIR, for #1009's ordering: it changes what the player SEES and nothing else, so it
+          belongs with the control that changes what they hear, furthest from the cluster that can cost
+          money. Two 18px steppers around a readout, the tuner's own vocabulary (#1134) at the tuner's size,
+          so it does not widen the row the audio note says wraps first.
+          IT RELOADS. The scale is baked into style tables at module load, and the log makes a reload
+          survivable (#1250, #1253); a control pressed once per browser does not need to be live. */}
+      <UiScalePicker />
 
       {/* ==================================================================
            DESIGN NOTE 1119: THE ENV VAR WAS THE PART ONLY A DEVELOPER COULD USE

@@ -80,7 +80,8 @@
 
 import React from "react";
 // Design note #1144: the chrome's scale, so this layer can divide back out of it.
-import { UI_SCALE } from "../styles/appStyles";
+/* Design note #1294: the chrome scale, live, for the counter-zoom. */
+import { useUiScale } from "../utils/useUiScale";
 
 /** Which of the two treatments a clip needs. Design note #1093: a property of how the clip was shot. */
 export type HauntingComposite = "screen" | "feather";
@@ -104,31 +105,115 @@ export interface YellowSignOverlayProps {
    *  hard-coded because the two treatments already have different durations (10000 and 6042) and a third
    *  clip would have a third. */
   ms: number;
+  /** ==================================================================
+   *   DESIGN NOTE 1260: A LATE VIEWER JOINS THE HAUNTING WHERE IT IS
+   *  ==================================================================
+   *  RULED (2.4 of the 7 September plan): the clip plays on the Rail Map viewport only, for whoever is
+   *  looking at it. So the overlay can now MOUNT PART-WAY through the caller's window -- a player who
+   *  switches to the map five seconds in. `startedAt` is the caller's `performance.now()` at dispatch; the
+   *  clip seeks to the elapsed offset on mount, so it ends when the window ends rather than being cut off
+   *  at the caller's timer with the figure half-drawn. Optional: absent means "start from the top". */
+  startedAt?: number;
 }
 
-export function YellowSignOverlay({ src, sfxEnabled, composite, ms }: YellowSignOverlayProps) {
+export function YellowSignOverlay({ src, sfxEnabled, composite, ms, startedAt }: YellowSignOverlayProps) {
+  const uiScale = useUiScale();
   if (!src) return null;
   const feathered = composite === "feather";
+  /* Design note #1260: a negative delay starts the fog's fade part-way through, matching the seek. */
+  const elapsedMs = startedAt === undefined ? 0 : Math.max(0, performance.now() - startedAt);
   return (
-    <div style={styles.container} aria-hidden="true">
+    <div
+      style={{ ...styles.container, zoom: 1 / uiScale, ...(feathered ? null : styles.containerScreened) }}
+      aria-hidden="true"
+    >
       {feathered ? <style>{FOG_CSS}</style> : null}
-      <video
+      <HauntingVideo
+        key={src}
         className={feathered ? "app-haunting-feather" : undefined}
         style={{
           ...styles.video,
           ...(feathered ? styles.videoFeathered : styles.videoScreened),
-          ...(feathered ? { animationDuration: `${ms}ms` } : null),
+          ...(feathered
+            ? { animationDuration: `${ms}ms`, animationDelay: `-${Math.round(elapsedMs)}ms` }
+            : null),
         }}
         src={src}
-        autoPlay
         muted={!sfxEnabled}
-        playsInline
-        /* NOT LOOPED. The caller owns the ten seconds (#1040's `videoMs`); a clip that looped would keep
-           going if that timer were ever missed, and a clip shorter than the window simply ends early and
-           leaves the overlay transparent -- which is the harmless direction. */
-        loop={false}
+        startedAt={startedAt}
       />
     </div>
+  );
+}
+
+/* ==================================================================
+    DESIGN NOTE 1260: THE BOX WAS THE BLEND NOT HAPPENING, AND THE EMPTY BOX WAS AUTOPLAY
+   ==================================================================
+   REPORTED THREE TIMES: "Yellow Sign video has a black box" (22a), "Carcosa Awaits video has a black box"
+   (22d), and from the other seat: "their screen showed the black box but no video."
+   THE CLIPS ARE INNOCENT. Both are pure black at the corners -- sampled with ffmpeg, (0,0,3) and (1,0,2) --
+   so `screen` would key them out perfectly IF IT WERE BLENDING AGAINST THE BOARD. It was not. #1043 put the
+   blend on the `<video>` and the container is `position: fixed` with a `z-index`, which makes the container
+   a STACKING CONTEXT -- and an element blends only with the content of the stacking context it belongs to.
+   Inside the container there is nothing under the video, so it screened against transparency, which is the
+   identity: the black stayed black. A rectangle of the clip's own background, exactly as reported.
+   THE BLEND MOVES TO THE CONTAINER. A blended stacking context is composited as a group against ITS parent's
+   backdrop, which is the page -- board, panels, whatever tab is up. #1043's worry about "blending its own
+   (absent) background" is the reason it is safe rather than a reason against: an absent background is
+   transparent, and transparent screened over anything is that thing.
+   THE EMPTY BOX IS A SEPARATE FAULT. #1045 unmutes the clip and #1043's own note names the risk: unmuted
+   autoplay wants user activation, and the seat that did NOT just click Submit may not have it. Chrome then
+   rejects `play()` and leaves the element on its poster -- a black frame, now un-keyed by the fault above.
+   The fix #1043 described ("gets a silent video rather than a throw") was never written; it is now:
+   `play()` is called by hand, and a rejection retries muted. The film is the effect; its dialogue is a
+   bonus that a browser policy may withhold from one seat.
+   AND NOTHING PAINTS BEFORE THE FIRST FRAME. `visibility: hidden` until `playing`, so a slow fetch on a
+   client that has never seen the file shows the board rather than a placeholder. `visibility` rather than
+   `opacity`, because the fog clip's fade animates `opacity` and an inline value would fight it. */
+function HauntingVideo({
+  startedAt,
+  muted,
+  style,
+  ...rest
+}: React.VideoHTMLAttributes<HTMLVideoElement> & { startedAt?: number }) {
+  const ref = React.useRef<HTMLVideoElement | null>(null);
+  const [playing, setPlaying] = React.useState(false);
+
+  React.useEffect(() => {
+    const video = ref.current;
+    if (!video) return;
+    if (startedAt !== undefined) {
+      const elapsed = Math.max(0, performance.now() - startedAt) / 1000;
+      if (elapsed > 0.05) video.currentTime = elapsed;
+    }
+    let cancelled = false;
+    const attempt = video.play();
+    if (attempt && typeof attempt.catch === "function") {
+      attempt.catch(() => {
+        if (cancelled) return;
+        video.muted = true;
+        video.play().catch(() => undefined);
+      });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [startedAt]);
+
+  return (
+    <video
+      ref={ref}
+      style={{ ...style, visibility: playing ? "visible" : "hidden" }}
+      muted={muted}
+      playsInline
+      /* `autoPlay` is gone: the effect above calls `play()` so the rejection is observable. */
+      onPlaying={() => setPlaying(true)}
+      /* NOT LOOPED. The caller owns the ten seconds (#1040's `videoMs`); a clip that looped would keep
+         going if that timer were ever missed, and a clip shorter than the window simply ends early and
+         leaves the overlay transparent -- which is the harmless direction. */
+      loop={false}
+      {...rest}
+    />
   );
 }
 
@@ -187,7 +272,7 @@ const styles: Record<string, React.CSSProperties> = {
        reader.
        THE MODALS ARE DELIBERATELY NOT DOING THIS. A confirm dialog is chrome and should shrink with the rest
        of it; only the surfaces that are pictures at viewport size are exempt. */
-    zoom: 1 / UI_SCALE,
+    /* Design note #1294: `zoom` is written per render as `1 / useUiScale()`. */
     position: "fixed",
     inset: 0,
     display: "flex",
@@ -200,6 +285,11 @@ const styles: Record<string, React.CSSProperties> = {
        should still be reachable, and it would be at a higher layer. */
     zIndex: 9000,
   },
+  /* Design note #1260: THE OTHER RULED PROPERTY, on the container now -- see the note on `HauntingVideo`.
+     The container is the stacking context, so this is the only place the blend reaches the board. */
+  containerScreened: {
+    mixBlendMode: "screen",
+  },
   video: {
     // Inherited rather than assumed: the container is already inert, and a nested element can re-enable it.
     pointerEvents: "none",
@@ -207,9 +297,6 @@ const styles: Record<string, React.CSSProperties> = {
   videoScreened: {
     maxWidth: "72vw",
     maxHeight: "72vh",
-    /* THE OTHER RULED PROPERTY. Black becomes transparent, so the board shows through the clip rather than
-       being covered by a rectangle. */
-    mixBlendMode: "screen",
   },
   videoFeathered: {
     /* Design note #1093: larger than the hauntings, because this one is not keyed and therefore reads as a

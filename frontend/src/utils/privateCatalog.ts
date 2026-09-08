@@ -239,4 +239,22 @@ export const PRIVATE_COMPANY_CATALOG: Readonly<Record<number, PrivateCatalogEntr
     ability:
       "Its owner takes the B&O president\u2019s certificate free on purchase and sets the corporation\u2019s par price immediately. It can never be sold to a corporation, and it stays with its owner even if they later lose the B&O presidency. It closes the moment the B&O buys its first train.",
   },
+  /* Design note #1320: THE LEVEL PLAYING FIELD'S SEVENTH PRIVATE. Id 7 continues the printed six; its place in
+     the auction is by FACE VALUE ($120, between the M&H and the C&A), which `LPF_PRIVATE_COMPANIES` in
+     `levelPlayingField.ts` fixes by array position.
+     Design note #1276: THE CARD CAUGHT UP WITH THE REDUCER. Both powers had been wired since `kanawhaLicense.ts`
+     -- the half-price lay beside Coal River (`jkTileRefusal`, `jkHalfFee`, `ability_key: "jk-tile"`) and the
+     free Licence on a corporation's purchase (`jk_license_granted`) -- while this card still said "to be
+     added". REPORTED, rightly, as the power being missing. Stated as the two facts the board enforces. */
+  7: {
+    acronym: "JK",
+    revenue: 20,
+    faceValue: 120,
+    abilityBullets: [
+      "Owning corporation lays one tile beside Coal River (L8) at half the terrain cost, on its own turn.",
+      "The corporation that buys it receives a Kanawha Licence free.",
+    ],
+    ability:
+      "The James River & Kanawha Company. Once a corporation owns it, that corporation may lay one tile on a hex adjacent to Coal River (L8) for half the printed terrain cost, as part of its regular Lay Track step; the power is spent by that lay. The corporation that buys the JK from a player also receives one Kanawha Licence at no cost, which lets its trains run to or through the Coalfields.",
+  },
 };

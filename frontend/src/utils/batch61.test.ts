@@ -94,7 +94,9 @@ describe("which tile colours a phase permits", () => {
       expect(count).toBeGreaterThanOrEqual(previous);
       previous = count;
     }
-    expect(previous).toBe(TILE_ERA_ORDER.length);
+    // #1312: Gray is the ORDER's last colour but a standard table never reaches it; the tile set does.
+    expect(previous).toBe(TILE_ERA_ORDER.length - 1);
+    expect(tileErasAt("D", true)).toEqual(TILE_ERA_ORDER);
   });
 
   it("agrees with the phase badge about the highest colour", () => {
@@ -148,7 +150,7 @@ describe("which tile colours a phase permits", () => {
        INVERTED RATHER THAN DELETED, so the file still records that a choice was made here twice. */
     const tilesCell = sliceBetween(LEDGER, ">Available Tiles</th>", "</thead>");
     expect(tilesCell).toBeTruthy();
-    expect(LEDGER).toContain("tileErasAt(row.tier as TrainTier)");
+    expect(LEDGER).toContain("tileErasAt(row.tier as TrainTier, plusTiles)"); // #1312
     expect(LEDGER).toContain("<EraHex");
     /* THE PHASE CELL IS NOW JUST THE PHASE. Anchored the same way the old case was, from the other side:
        the hexes must have LEFT it, or the column was added without moving anything into it. */
@@ -173,7 +175,7 @@ describe("one answer to what colour Green is", () => {
   it("is shared by the toast and the table", () => {
     /* #891 IS THIS PROJECT'S MOST EXPENSIVE RECURRING BUG and a second hand-rolled hex would have been it.
        The toast keeps drawing them; it just no longer owns the fills. */
-    expect(Object.keys(ERA_HEX_FILL).sort()).toEqual(["Brown", "Green", "Yellow"]);
+    expect(Object.keys(ERA_HEX_FILL).sort()).toEqual(["Brown", "Gray", "Green", "Yellow"]); // #1312: Gray joins the one palette
     expect(TOAST).toContain('import { EraHex } from "./EraHex";');
     expect(TOAST).not.toContain("const ERA_HEX_FILL");
     expect(LEDGER).toContain('import { EraHex } from "./EraHex";');

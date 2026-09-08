@@ -62,6 +62,10 @@ export interface CityBlockingInput {
   slotsAt: (q: number, r: number, cityIndex: number) => number;
   /** Which city on `(q, r)` holds a given company's token, when the chain has said. */
   cityOf: (company: TokenHolder, q: number, r: number) => number | undefined;
+  /** Design note #1323: `"q,r"` keys of hexes the acting corporation may not cross at all, whatever stands on
+   *  them -- Coal River for a corporation without a Kanawha Licence. Absent means none. Folded in here rather
+   *  than given a walk of its own, because every walk already asks this predicate. */
+  barredHexes?: ReadonlySet<string>;
 }
 
 /** Whether `actingCompanyId` is barred from running THROUGH city `cityIndex` on `(q, r)`.
@@ -76,6 +80,8 @@ export function cityBlocksThrough(
   r: number,
   cityIndex: number,
 ): boolean {
+  // #1323: a barred hex is shut for every city index, including the `0` a town is asked with.
+  if (input.barredHexes?.has(`${q},${r}`)) return true;
   const slots = input.slotsAt(q, r, cityIndex);
   // Rule 3: no slots means no city. Zero is "nothing to fill", not "full".
   if (!Number.isFinite(slots) || slots <= 0) return false;

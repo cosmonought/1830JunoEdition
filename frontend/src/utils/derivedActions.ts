@@ -42,11 +42,13 @@
 //   fact one browser knows and the others do not". A player who reloads loses it; a player who joins late
 //   never had it.
 //
-//   SO IT ARRIVES AS A PARAMETER AND DEFAULTS TO "STILL AVAILABLE". Guessing "spent" would auto-skip the
-//   Tokens step for a corporation whose only legal placement is the D&H's, taking a player's turn away --
-//   and #414 settled which of those two mistakes is the worse one. Recorded here so the gap is visible;
-//   putting the ability's spent-ness on the board is its own change, and it belongs with the audit rather
-//   than inside a lift-and-shift.
+//   IT ARRIVED AS A PARAMETER AND DEFAULTED TO "STILL AVAILABLE" -- and #1237 records what that default cost:
+//   `stationPlacementBlockReason` treats the flag as "a placement exists" and stops looking, so on the server
+//   the Tokens step was never auto-skipped for ANY corporation, and every playtest reported it as "Lay Track
+//   did not advance". #1204 has since put the spent-ness on the board (`used_private_abilities`), so the
+//   default is now COMPUTED from the state by the shell's own rule (`dhFreeStationAvailableFor`), scoped to
+//   the corporation whose president owns the D&H. #414's ordering of the two mistakes still stands; it is
+//   just no longer a reason to guess.
 
 import type { GameStateResponse } from "./gameState";
 import type { GameplayExecuteMsg } from "./sessionKey";
@@ -54,6 +56,8 @@ import type { MapGridResponse } from "../components/hexContractTypes";
 import type { OperatingSubPhase } from "../components/OperatingSubPhaseStepper";
 
 import { autoSkipExit } from "./autoSkipExit";
+import { DH_PRIVATE_ID, dhFreeStationAvailableFor } from "./dhPower";
+import { privateHexFor } from "./privateReservations";
 import { earnableRevenueVerdict, skipReasonFor } from "./earnableRevenue";
 import { operatingCorporationId } from "./dividendGate";
 import { stepsFor } from "./operatingCursor";
@@ -64,8 +68,9 @@ import { stationTokensOf } from "./trackReach";
 import { reachForDrafting } from "./trainReach";
 import { assignRouteSet } from "./routeAutoTrace";
 import { cityBlockerFor } from "./cityBlocking";
+import { barredHexesFor } from "./kanawhaLicense";
 import { MOCK_TRAIN_CATALOG } from "./mockFixtures";
-import { ERA_FOR_PHASE_TINT } from "./gameConstants";
+import { tileEraFor } from "./gameConstants";
 import { depotInventory, derivePhase } from "./gamePhase";
 import { tokenCityIndex } from "../components/hexContractTypes";
 import { STATIC_BOARD_HEXES } from "../components/hexBoardData";
@@ -79,7 +84,7 @@ export interface DerivedAction {
   /** Why, for the caller's log line. #1057: a step where nothing happened earns no line, but an auto-withheld
    *  dividend MOVES THE SHARE PRICE, so that one still prints. The dividing line is the consequence. */
   reason: string;
-  kind: "skip" | "end-turn" | "forced-withhold";
+  kind: "skip" | "end-turn" | "forced-withhold" | "accepted-offer";
 }
 
 export interface DerivedActionInput {
@@ -100,7 +105,78 @@ export interface DerivedActionInput {
  *  would mean deciding the second answer against a board that does not exist yet, which is #766's
  *  "a snapshot, not a reorder" in a different costume. */
 export function nextDerivedAction(input: DerivedActionInput): DerivedAction | null {
-  const { state, mapGrid, emitted, extraStationAvailable = true } = input;
+  /* #1237: WHEN THE CALLER DOES NOT SAY, THE BOARD SAYS. The old default was `true` -- "still available" --
+     which made `stationPlacementBlockReason` return "possible" for every corporation before it looked at
+     reachability, so the Tokens step was never auto-skipped on the server. The answer is on the state now
+     (#1204), and `dhFreeStationAvailableFor` is the shell's own rule, shared. A caller that knows better may
+     still say so; nobody has to. */
+  const { state, mapGrid, emitted } = input;
+  const extraStationAvailable =
+    input.extraStationAvailable ??
+    (() => {
+      const companyId = operatingCorporationId(state);
+      if (companyId === null) return false;
+      const dhHex = privateHexFor(DH_PRIVATE_ID);
+      return dhFreeStationAvailableFor({
+        companyId,
+        privates: state.private_companies,
+        usedAbilities: state.used_private_abilities ?? [],
+        dhHexBuilt: dhHex ? mapGrid.tiles.some((tile) => tile.q === dhHex.q && tile.r === dhHex.r) : false,
+      });
+    })();
+
+  /* ==================================================================
+      DESIGN NOTE 1247: AN ACCEPTED OFFER IS A PURCHASE THE BOARD OWES
+     ==================================================================
+     The reducer's answer arms record a yes as `accepted: true` on the offer and nothing else; the purchase
+     that follows is generated here, once, by whoever settles the board (the server on the server path, the
+     on-turn client on Firestore) and applied by every client from the log -- the same route as an auto-skip,
+     for the same reason (#576: derived by every client, appended by one). ASKED FIRST, before the round and
+     the step, because an accepted offer is owed whatever else the board is doing.
+     THE KEY NEEDS NO TURN. `emitted` guards a restarted server against re-sending what the log already
+     holds, and the purchase arms clear the offer they settle, so a rebuilt board that already bought owes
+     nothing and never reaches this branch. The key is still unique per settlement -- a private is bought once;
+     a train key counts the buyer's fleet, which grows by one with each trade -- so two trades of the same
+     model in one turn are two keys. */
+  const privateOffer = state.private_purchase_offer ?? null;
+  if (privateOffer?.accepted === true && !emitted.has(`offer:private:${privateOffer.private_id}`)) {
+    return {
+      msg: {
+        BuyPrivateCompany: {
+          game_id: 0,
+          protocol_id: privateOffer.buyer_protocol_id,
+          private_id: privateOffer.private_id,
+          price: String(privateOffer.price),
+        },
+      } as GameplayExecuteMsg,
+      key: `offer:private:${privateOffer.private_id}`,
+      reason: "the owner accepted the offer",
+      kind: "accepted-offer",
+    };
+  }
+  const trainOffer = state.train_purchase_offer ?? null;
+  if (trainOffer?.accepted === true) {
+    const fleet =
+      state.public_companies.find((entry) => entry.company_id === trainOffer.buyer_protocol_id)
+        ?.owned_trains?.length ?? 0;
+    const key = `offer:train:${trainOffer.seller_protocol_id}:${trainOffer.model_type}:${trainOffer.buyer_protocol_id}:${fleet}`;
+    if (!emitted.has(key)) {
+      return {
+        msg: {
+          BuyTrainFromCorporation: {
+            game_id: 0,
+            buyer_protocol_id: trainOffer.buyer_protocol_id,
+            seller_protocol_id: trainOffer.seller_protocol_id,
+            model_type: trainOffer.model_type,
+            price: trainOffer.price,
+          },
+        } as GameplayExecuteMsg,
+        key,
+        reason: "the seller accepted the offer",
+        kind: "accepted-offer",
+      };
+    }
+  }
 
   if (state.current_round_type !== "OperatingRound") return null;
 
@@ -124,11 +200,33 @@ export function nextDerivedAction(input: DerivedActionInput): DerivedAction | nu
      the same computation arriving far less often. */
   const earnable = earnableRevenueVerdict({
     ownedTrains: company.owned_trains,
-    stationTokenCount: company.station_token_hexes?.length,
+    /* Design note #1277: counted through the reader that knows about heralds. PRR on 1830+ has a network
+       before it has a token (#1302), and `station_token_hexes.length` answered 0 -- so JUNO-CV4 87-89 skipped
+       PRR's Routes step and forced a withhold on a corporation that could have run from H12. */
+    stationTokenCount:
+      company.station_token_hexes == null ? undefined : stationTokensOf(company).length,
     mapGrid,
     searchRevenue: () => maxRouteRevenueFor(state, company.company_id, mapGrid),
   });
-  const noEarnableRevenue = skipReasonFor(earnable);
+  /* ==================================================================
+      DESIGN NOTE 1275: NOTHING RAN, SO THERE IS NOTHING TO DECLARE
+     ==================================================================
+     REPORTED (JUNO-CV4, 108-109): C&O held a 3-train and a station, skipped Routes without running, and
+     Dividends then waited on the president with "Withhold $0" -- index 109 is a hand-sent declaration of
+     nothing. `earnableRevenueVerdict` had answered "can earn", which is the right question at ROUTES and the
+     wrong one here: once the Routes step is behind the corporation with nothing run, the only legal
+     declaration is $0 withheld, and #292's reasoning applies -- that is an action with a consequence (the
+     marker steps left), not a choice. So it is forced, exactly as the trainless case below is.
+     `routes_run_this_turn` IS THE FACT, and #232's rule reads its absence as "this build did not say" rather
+     than as zero -- a log from before the counter existed does not get a forced withhold it never had. The
+     revenue is checked beside it so a run that was recorded without the counter (none exist, but the guard
+     is cheap) still declares itself. */
+  const nothingRan =
+    step === "Dividends" &&
+    company.routes_run_this_turn === 0 &&
+    Number(company.last_route_revenue ?? 0) === 0;
+  const noEarnableRevenue =
+    skipReasonFor(earnable) ?? (nothingRan ? "it ran no routes this turn" : null);
 
   /* #292/#414: A TRAINLESS CORPORATION DECLARES $0 WITHHELD RATHER THAN SKIPPING. 1830 has no third option,
      and the declaration is what steps the marker left -- so this is an action with a consequence, not an
@@ -208,7 +306,7 @@ function autoSkipReasonFor(input: {
       company,
       allCompanies: state.public_companies,
       boardHexes: STATIC_BOARD_HEXES.map((hex) => [hex.q, hex.r] as const),
-      // See the file header: not log-derived yet, so the caller decides and the default does not skip.
+      // #1237: log-derived now -- computed from the board above unless the caller knows better.
       extraTokenAvailable: extraStationAvailable,
     });
   }
@@ -291,13 +389,16 @@ export function maxRouteRevenueFor(
     companies: state.public_companies,
     slotsAt: (q: number, r: number, cityIndex: number) => citySlotCount(mapGrid, q, r, cityIndex),
     cityOf: (company_, q, r) => tokenCityIndex(company_ as never, q, r),
+    barredHexes: barredHexesFor(state, companyId), // #1323: Coal River, unlicensed
   });
 
   const result = assignRouteSet({
     blocksThrough,
     mapGrid,
-    era: ERA_FOR_PHASE_TINT[derivePhase(state)?.tint ?? "yellow"],
+    era: tileEraFor(state), // #1312
     startHexes,
+    companyId: company.company_id, // #1302
+
     trains: roster.map((train) => ({
       trainIndex: train.trainIndex,
       /* #881: THE SIXTH SITE, found by the harness's own "no bare 999 / no `?? 4`" assertion -- which is the

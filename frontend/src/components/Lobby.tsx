@@ -35,6 +35,7 @@ import {
 } from "../config";
 import { isFirebaseConfigured, firebaseConfigError } from "../config/firebase";
 import ChatBox from "./ChatBox";
+import { preloadWaitingRoomScene } from "./SandboxWaitingRoom";
 import {
   CARD_SURFACE,
   INK,
@@ -47,7 +48,9 @@ import {
   SANDBOX_TITLE,
 } from "../styles/palette";
 import AppFooter from "./AppFooter";
-import { CHROME_ZOOM, UI_SCALE } from "../styles/appStyles";
+import { chromeZoomFor } from "../styles/appStyles";
+/* Design note #1294: the chrome scale, live, for the root's zoom and the scene's viewport arithmetic. */
+import { useUiScale } from "../utils/useUiScale";
 // Design note #524: the Firebase sandbox lobby lives on this screen now.
 import SandboxRoomBar from "./SandboxRoomBar";
 import {
@@ -59,9 +62,9 @@ import {
 } from "../utils/sandboxRoom";
 import { CONTROL_PADDING, FONT_FAMILY, FONT_FAMILY_MONO, FONT_SIZE, LINE_HEIGHT, RADIUS } from "../styles/typography";
 import {
-  MAX_PLAYERS,
   MIN_PLAYERS,
   bindChainGameId,
+  maxPlayersForVariants,
   claimSeat,
   createStagingRoom,
   loadDisplayName,
@@ -203,12 +206,28 @@ export function parseGameIdFromExecuteResult(result: ExecuteResult): number | nu
    so turning it back on is a one-character change rather than a revert somebody has to reconstruct. */
 const WEB3_LOBBY_ENABLED = false;
 
+/** Design note #1144's cover arithmetic (see `scene`), as a function of the live scale (#1294): every viewport
+ *  term is divided by the zoom, so both sides of each `max()` are in layout space. */
+function sceneSizeFor(scale: number): React.CSSProperties {
+  return {
+    width: `max(100%, calc(${100 / scale}vh * 1920 / 1072))`,
+    height: `max(${100 / scale}vh, calc(${100 / scale}vw * 1072 / 1920))`,
+  };
+}
+
 export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProps) {
+  /* Design note #1294: the chrome scale, live. */
+  const uiScale = useUiScale();
   /* Design note #524: the sandbox room handlers. Local to this screen -- the
      code is handed straight to `onEnterSandbox` and this component unmounts,
      so there is nothing to keep. */
   const [sandboxRoomError, setSandboxRoomError] = useState<string | null>(null);
   const [sandboxRoomBusy, setSandboxRoomBusy] = useState(false);
+
+  /* Design note #1258: the next screen's photograph, fetched while this one is up. */
+  useEffect(() => {
+    preloadWaitingRoomScene();
+  }, []);
 
   const handleHostSandboxRoom = useCallback(async () => {
     setSandboxRoomBusy(true);
@@ -567,7 +586,7 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
   /* ---------------- Render ---------------- */
 
   return (
-    <div style={{ ...styles.root, ...CHROME_ZOOM }}>
+    <div style={{ ...styles.root, ...chromeZoomFor(uiScale) }}>
       {/* Design note #46 is the standing exception and this is the case it exists for: neither a keyframe nor
           a media query can be expressed as an inline style object.
           Design note #1130: #1123's 860px breakpoint is GONE WITH ITS GRID -- one centred column needs no
@@ -686,7 +705,7 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
           `pointerEvents: none` ON THE SCENE, `auto` ON THE CONTROLS, because the scene is a full-bleed layer
           sitting over the page and would otherwise swallow every click on the footer beneath it. */}
       <div style={styles.sceneClip} aria-hidden={false}>
-        <div style={styles.scene}>
+        <div style={{ ...styles.scene, ...sceneSizeFor(uiScale) }}>
           {/* Design note #1131: BOTTOM-ANCHORED at 40%, which is the constraint as it was given -- "at the
               lowest" is a bottom edge, and pinning the bottom keeps it true whatever the artwork's aspect
               becomes. The width is what sets the size: 20% of the scene puts the top edge up among the
@@ -997,7 +1016,11 @@ function RoomBrowser({
             onChange={(event) => setMaxPlayers(Number(event.target.value))}
             style={styles.input}
           >
-            {Array.from({ length: MAX_PLAYERS - MIN_PLAYERS + 1 }, (_, index) => MIN_PLAYERS + index).map(
+            {/* #1320: a seventh seat appears when the Level Playing Field is ticked below. */}
+            {Array.from(
+              { length: maxPlayersForVariants(variants) - MIN_PLAYERS + 1 },
+              (_, index) => MIN_PLAYERS + index,
+            ).map(
               (count) => (
                 <option key={count} value={count}>
                   {count} players
@@ -1098,6 +1121,65 @@ function RoomBrowser({
           <span>
             <strong>{VARIANT_COPY.delayedAuction.label}</strong>
             <span style={styles.variantNote}>{VARIANT_COPY.delayedAuction.blurb}</span>
+          </span>
+        </label>
+
+        <label style={styles.variantRow}>
+          <input
+            type="checkbox"
+            checked={variants.expandedMap}
+            // Design note #1320: locked on while the Level Playing Field is chosen -- it is that map.
+            disabled={variants.levelPlayingField}
+            onChange={(event) =>
+              setVariants((current) => ({
+                ...current,
+                expandedMap: event.target.checked,
+                // #1310: the tray leaves with the map.
+                plusTiles: event.target.checked && current.plusTiles,
+              }))
+            }
+          />
+          <span>
+            <strong>{VARIANT_COPY.expandedMap.label}</strong>
+            <span style={styles.variantNote}>{VARIANT_COPY.expandedMap.blurb}</span>
+          </span>
+        </label>
+
+        <label style={styles.variantRow}>
+          <input
+            type="checkbox"
+            checked={variants.plusTiles}
+            // Design note #1310: the tile set needs the map. #1320: and the Level Playing Field needs the set.
+            disabled={!variants.expandedMap || variants.levelPlayingField}
+            onChange={(event) =>
+              setVariants((current) => ({ ...current, plusTiles: event.target.checked }))
+            }
+          />
+          <span>
+            <strong>{VARIANT_COPY.plusTiles.label}</strong>
+            <span style={styles.variantNote}>{VARIANT_COPY.plusTiles.blurb}</span>
+          </span>
+        </label>
+
+        <label style={styles.variantRow}>
+          <input
+            type="checkbox"
+            checked={variants.levelPlayingField}
+            onChange={(event) => {
+              const on = event.target.checked;
+              setVariants((current) => ({
+                ...current,
+                levelPlayingField: on,
+                // #1320: ticking it brings the map and the tile set; unticking leaves them as they were.
+                ...(on ? { expandedMap: true, plusTiles: true } : {}),
+              }));
+              // And a table of seven cannot survive the variant going away.
+              if (!on) setMaxPlayers((count) => Math.min(count, maxPlayersForVariants(null)));
+            }}
+          />
+          <span>
+            <strong>{VARIANT_COPY.levelPlayingField.label}</strong>
+            <span style={styles.variantNote}>{VARIANT_COPY.levelPlayingField.blurb}</span>
           </span>
         </label>
 
@@ -1658,8 +1740,7 @@ const styles: Record<string, React.CSSProperties> = {
        the photograph on every screen" -- rests on this box being exactly `cover` and nothing else.
        DIVIDING THE VIEWPORT TERMS PUTS BOTH SIDES IN LAYOUT SPACE, where the `max()` means what it meant
        before the zoom existed. The ratios are untouched: this is a change of units, not of framing. */
-    width: `max(100%, calc(${100 / UI_SCALE}vh * 1920 / 1072))`,
-    height: `max(${100 / UI_SCALE}vh, calc(${100 / UI_SCALE}vw * 1072 / 1920))`,
+    /* Design note #1294: `width` and `height` are written per render from `sceneSizeFor(uiScale)`. */
     backgroundImage:
       "linear-gradient(rgba(8, 8, 8, 0.48), rgba(8, 8, 8, 0.48)), " +
       `url("${process.env.PUBLIC_URL ?? ""}/images/lobby-boardroom.jpg")`,

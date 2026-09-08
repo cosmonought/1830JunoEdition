@@ -114,11 +114,11 @@ describe("the palette is one table", () => {
     expect(suspects).toEqual([path.join("styles", "corporationLivery.ts")]);
   });
 
-  it("holds all eight liveries in that one table", () => {
+  it("holds all eight liveries in that one table, plus the Level Playing Field's two", () => {
     // Pairs with the guard above: it proves nothing ELSE has three or more,
     // and this proves the canonical file has all eight rather than having
-    // been thinned out while the mirrors survived.
-    expect(Object.keys(CORPORATION_LIVERY_COLORS).map(Number)).toEqual(IDS);
+    // been thinned out while the mirrors survived. #1320 adds PMQ (9) and N&W (10).
+    expect(Object.keys(CORPORATION_LIVERY_COLORS).map(Number)).toEqual([...IDS, 9, 10]);
   });
 });
 

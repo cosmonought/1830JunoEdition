@@ -37,7 +37,14 @@ import path from "path";
 
 /** The files this invariant covers. A control anywhere else is not exempt; it
  *  simply has not been swept yet, and adding it here is how it gets swept. */
-const COVERED = ["StockRoundPanel.tsx"] as const;
+const COVERED = ["StockRoundPanel.tsx", "WaterfallAuctionDashboard.tsx"] as const;
+/** How many disableable controls each covered file is known to hold -- the floor the "finds the controls"
+ *  case checks against, so a rename cannot empty the sweep. Design note #1262: the auction dashboard joins
+ *  the roster with its four card-face controls, which is where "siblings look clickable" came from. */
+const KNOWN_CONTROLS: Record<(typeof COVERED)[number], number> = {
+  "StockRoundPanel.tsx": 5,
+  "WaterfallAuctionDashboard.tsx": 4,
+};
 
 /** Any style whose name says "this control is unavailable". Membership is
  *  deliberately loose: what matters is that a look was CHOSEN, not which. */
@@ -160,7 +167,7 @@ describe("the scanner", () => {
     // would pass against nothing.
     for (const file of COVERED) {
       const withDisabled = controlsIn(file).filter((tag) => /\bdisabled=/.test(tag));
-      expect(withDisabled.length).toBeGreaterThanOrEqual(5);
+      expect(withDisabled.length).toBeGreaterThanOrEqual(KNOWN_CONTROLS[file]);
     }
   });
 

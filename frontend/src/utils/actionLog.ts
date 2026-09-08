@@ -12,7 +12,7 @@
 //
 // See docs/ai_architecture/ui_shell_layout.md - actionLog.ts #0, #1
 
-import type { GameStateResponse } from "./gameState";
+import { actingAddress, type GameStateResponse, type WaterfallStateResponse } from "./gameState";
 import { dividendSplit } from "./dividendSplit";
 import type { GameplayExecuteMsg } from "./sessionKey";
 import type { MapGridResponse } from "../components/hexContractTypes";
@@ -22,7 +22,9 @@ import type { OperatingSubPhase } from "../components/OperatingSubPhaseStepper";
 import { depotInventory } from "./gamePhase";
 import { hasActedThisTurn } from "./turnAction";
 import { sandboxRouteBreakdown } from "./sandboxSession";
-import { stationTokenPrice } from "./stationTokens";
+import { hasHeraldHome, stationTokenPrice } from "./stationTokens";
+import { dieselExchangeCostFor } from "./dieselExchange";
+import { KANAWHA_LICENSE_COST } from "./kanawhaLicense";
 
 export interface ActionLogContext {
   /** The board and room as they stand BEFORE this action -- design note #1. */
@@ -34,6 +36,10 @@ export interface ActionLogContext {
   era: TileColorTier;
   /** Renders a wallet as a readable name. */
   labelForAddress: (address: string) => string;
+  /** #1232: the auction atom as it stands BEFORE this action, so a mini-auction line can name the bidder the
+   *  contest was actually waiting for. Optional because the live chain and older callers do not carry it; the
+   *  seat answers when it is absent, exactly as before. */
+  waterfall?: WaterfallStateResponse | null;
   /** Current market price by `company_id`, for the dividend line's
    *  before/after. `undefined` when the chart is not available, and the line
    *  then omits the price move rather than inventing one. */
@@ -94,7 +100,16 @@ function corp(state: GameStateResponse | null, companyId: number): string {
  *  player-driven message, none of which carry an address of their own. */
 function actingPlayer(context: ActionLogContext): string {
   const state = context.gameState;
-  const address = state?.player_addresses[state.active_player_index];
+  if (!state) return "A player";
+  /* #1232: DURING THE AUCTION, ASK THE AUCTION. This read the seat, and the seat is a mirror of the auction's
+     cursor that a mini-auction pass had pushed one step ahead -- so the line said "sandbox passed in the
+     mini-auction" about a pass Host made. `actingAddress` is the one function that knows a contest is live and
+     whose turn the contest says it is; naming the actor from anything else is a second answer to the same
+     question, which is how this line came to be wrong. Other rounds keep the seat, as they always did. */
+  const address =
+    state.current_round_type === "WaterfallAuction"
+      ? actingAddress(state, context.waterfall ?? null)
+      : state.player_addresses[state.active_player_index];
   return address ? context.labelForAddress(address) : "A player";
 }
 
@@ -181,6 +196,15 @@ function treasurySuffix(context: ActionLogContext, companyId: number): string {
   return ` Treasury $${before} → $${after}.`;
 }
 
+/** "$A → $B" for a corporation whose treasury moved, or null -- the figure inside `treasurySuffix`, for the
+ *  one sentence (#1245) that states two corporations' movements in one line. Unwrapped from the suffix rather
+ *  than recomputed, so there is one authority on when a movement is worth stating (#1146, #891). */
+const TREASURY_SUFFIX_HEAD = " Treasury ";
+function treasuryTransition(context: ActionLogContext, companyId: number): string | null {
+  const suffix = treasurySuffix(context, companyId);
+  return suffix === "" ? null : suffix.slice(TREASURY_SUFFIX_HEAD.length, -1);
+}
+
 function treasuryIn(
   state: ActionLogContext["afterState"],
   companyId: number,
@@ -238,6 +262,8 @@ export function trainPurchaseToastLine(
   context: ActionLogContext,
 ): string | null {
   if (!("BuyHardwareFromPool" in msg) && !("EmergencyBuyHardware" in msg)) return null;
+  // #1314: a returned train leaving the depot moves no phase clock, so it earns no broadcast.
+  if ("BuyHardwareFromPool" in msg && msg.BuyHardwareFromPool.returned_model_type !== undefined) return null;
   const protocolId =
     "BuyHardwareFromPool" in msg
       ? msg.BuyHardwareFromPool.protocol_id
@@ -334,7 +360,12 @@ export function sentenceStatesTreasury(msg: GameplayExecuteMsg): boolean {
     "LayTile" in msg ||
     "PlaceStationToken" in msg ||
     "BuyHardwareFromPool" in msg ||
-    "EmergencyBuyHardware" in msg
+    "EmergencyBuyHardware" in msg ||
+    "ExchangeTrainForDiesel" in msg || // #1303
+    "BuyKanawhaLicense" in msg || // #1323
+    // #1245: the two purchases that were still printing the diagnostic beside their own sentence.
+    "BuyPrivateCompany" in msg ||
+    "BuyTrainFromCorporation" in msg
   );
 }
 
@@ -401,10 +432,119 @@ export function describeGameplayAction(
     );
     // Design note #1: priced from the BEFORE state, so this is what the
     // token about to be placed costs -- not what the next one will.
-    const cost = stationTokenPrice(company?.station_token_hexes.length ?? 0);
+    const cost = stationTokenPrice(company?.station_token_hexes.length ?? 0, hasHeraldHome(company));
     return (
       `${corp(gameState, protocol_id)} placed a station on ${hexName(mapGrid, q, r)} for $${cost}.` +
       treasurySuffix(context, protocol_id)
+    );
+  }
+
+  if ("PlaceHomeStation" in msg) {
+    /* #1244 took the shell's `PlaceHomeStation` branch away, and its sentence went with it: the message then
+       reached the general path with no arm here and printed the drain's fallback -- "Sandbox room" -- as the
+       whole line (reported). The sentence lives here now, where every other message's does, so the local
+       dispatch and the replayed entry read the same. `hex_label` travels in the message (#550); the board's
+       own table is the fallback for an entry written without it. */
+    const { company_id, q, r, kind, hex_label } = msg.PlaceHomeStation as {
+      company_id: number;
+      q: number;
+      r: number;
+      kind?: string;
+      hex_label?: string;
+    };
+    const where = hex_label ?? hexName(mapGrid, q, r);
+    return kind === "dh"
+      ? `${corp(gameState, company_id)} placed a free station token on ${where} using the Delaware & Hudson.`
+      : `${corp(gameState, company_id)} placed its home station token on ${where}.`;
+  }
+
+  /* ==================================================================
+      DESIGN NOTE 1246: THE RETIRED SHELL MESSAGES NARRATE HERE, LIKE EVERYTHING ELSE
+     ==================================================================
+     Each shell retirement (#1230, #1234, #1236, #1244) kept the branch's SENTENCE in `App.tsx` as a `logInfo`
+     and let the state fall through -- and the general path then printed its own entry for the same message,
+     which on the server path is every entry, labelled with the drain's fallback: "Sandbox room". #1245 saw
+     it for the home station; `SetBoPar` and `OpenStockRound` had been printing the same two words beside
+     their narration since they came off the shell. ONE LINE, FROM ONE PLACE: the sentence moves here, the
+     shell's `logInfo` goes, and the local dispatch and the replayed entry read identically -- which is #794's
+     property, and the reason this function exists. `SetupGame` is the exception and stays one (#1230): its
+     sentence needs the roster the shell names. */
+  if ("SetBoPar" in msg) {
+    const { player, par_value } = msg.SetBoPar as { player: string; par_value: string };
+    return `${context.labelForAddress(player)} receives the B&O President's Certificate and pars it at $${par_value}.`;
+  }
+
+  if ("OpenStockRound" in msg) {
+    /* Narrated only from the auction, as the shell did: a duplicate against an open round is a no-op the
+       reducer ignores (#546), and a sentence for it would announce a round that did not begin. */
+    if (gameState?.current_round_type !== "WaterfallAuction") return null;
+    const opening = gameState.macro_round_number ?? 1;
+    return opening > 1
+      ? `The delayed private auction is complete — Stock Round ${opening} begins, and the B&O is now open for trading.`
+      : "The Waterfall Auction is complete — Stock Round 1 begins.";
+  }
+
+  if ("ExchangePrivate" in msg) {
+    const { private_id, company_id, player, keep_open } = msg.ExchangePrivate as {
+      private_id: number;
+      company_id: number;
+      player: string;
+      keep_open?: boolean;
+    };
+    const who = context.labelForAddress(player);
+    const priv = gameState?.private_companies.find((row) => row.private_id === private_id)?.name ?? "private company";
+    const ticker = corp(gameState, company_id);
+    return keep_open === true
+      ? `${who} receives a free 10% share of ${ticker} with the ${priv}, which stays open.`
+      : `${who} exchanged the ${priv} for a 10% share of ${ticker}. The private company closes.`;
+  }
+
+  /* #1248: the closure. One sentence for the close that won; the ones that lost the race print nothing at all
+     (`silentWhenUnchanged`), and the payout's own line follows from the shell's transition hook. */
+  if ("CloseRoom" in msg) return "The room is closed.";
+
+  /* #1247: the negotiation pairs, off the shell. The answers read the offer off the BEFORE state, which is
+     the one that still holds it; the purchase an accepted answer owes is its own derived entry with its own
+     sentence (`BuyPrivateCompany`, `BuyTrainFromCorporation` above), so the yes says only that it was said. */
+  if ("ProposePrivatePurchase" in msg) {
+    const { buyer_ticker, price, private_name, owner } = msg.ProposePrivatePurchase as {
+      buyer_ticker: string;
+      price: number;
+      private_name: string;
+      owner: string;
+    };
+    return `${buyer_ticker} offers $${price} for ${private_name}. ${context.labelForAddress(owner)} must answer.`;
+  }
+
+  if ("AnswerPrivatePurchase" in msg) {
+    const offer = gameState?.private_purchase_offer ?? null;
+    if (!offer) return null;
+    const { accept } = msg.AnswerPrivatePurchase as { accept: boolean };
+    return `${context.labelForAddress(offer.owner)} ${accept ? "accepted" : "declined"} $${offer.price} for ${offer.private_name}.`;
+  }
+
+  if ("ProposeTrainPurchase" in msg) {
+    const { buyer_ticker, price, seller_ticker, model_type, seller_president } =
+      msg.ProposeTrainPurchase as {
+        buyer_ticker: string;
+        price: string;
+        seller_ticker: string;
+        model_type: string;
+        seller_president: string | null;
+      };
+    return (
+      `${buyer_ticker} offers $${price} for one of ${seller_ticker}'s ${model_type}-trains. ` +
+      `${context.labelForAddress(seller_president ?? "")} must answer.`
+    );
+  }
+
+  if ("AnswerTrainPurchase" in msg) {
+    const offer = gameState?.train_purchase_offer ?? null;
+    if (!offer) return null;
+    const { accept } = msg.AnswerTrainPurchase as { accept: boolean };
+    return (
+      `${context.labelForAddress(offer.seller_president ?? "")} ${accept ? "accepted" : "declined"} ` +
+      `$${offer.price} for ${offer.seller_ticker}'s ${offer.model_type}-train.`
     );
   }
 
@@ -445,7 +585,7 @@ export function describeGameplayAction(
         .filter((hex, index, all) => all.indexOf(hex) === index);
       return {
         train: trains?.[at] ?? null,
-        value: sandboxRouteBreakdown(mapGrid, path, era).revenue,
+        value: sandboxRouteBreakdown(mapGrid, path, era, protocol_id).revenue, // #1302
         stops: stops.join(" -> "),
       };
     });
@@ -484,7 +624,7 @@ export function describeGameplayAction(
 
   if ("RunManualRoute" in msg) {
     const { protocol_id, path } = msg.RunManualRoute;
-    const breakdown = sandboxRouteBreakdown(mapGrid, path, era);
+    const breakdown = sandboxRouteBreakdown(mapGrid, path, era, protocol_id); // #1302
     const company = gameState?.public_companies.find(
       (entry) => entry.company_id === protocol_id,
     );
@@ -590,6 +730,16 @@ export function describeGameplayAction(
     );
   }
 
+  // Design note #1314: a returned train, bought back at face value, gets its own sentence.
+  if ("BuyHardwareFromPool" in msg && msg.BuyHardwareFromPool.returned_model_type !== undefined) {
+    const { protocol_id, returned_model_type: model_type } = msg.BuyHardwareFromPool;
+    const cost = depotInventory(gameState).find((row) => row.tier === model_type)?.cost ?? 0;
+    return (
+      `${corp(gameState, protocol_id)} bought a returned ${model_type}-train from the Bank for $${cost}.` +
+      treasurySuffix(context, protocol_id)
+    );
+  }
+
   if ("BuyHardwareFromPool" in msg || "EmergencyBuyHardware" in msg) {
     const protocolId =
       "BuyHardwareFromPool" in msg
@@ -628,12 +778,62 @@ export function describeGameplayAction(
     );
   }
 
+  /* Design note #1323: the licence purchase, narrated like every other treasury movement. */
+  if ("BuyKanawhaLicense" in msg) {
+    const { protocol_id } = (msg as { BuyKanawhaLicense: { protocol_id: number } }).BuyKanawhaLicense;
+    return (
+      `${corp(gameState, protocol_id)} bought a Kanawha Licence for $${KANAWHA_LICENSE_COST} — its routes may now cross Coal River (L8).` +
+      treasurySuffix(context, protocol_id)
+    );
+  }
+
+  if ("ExchangeTrainForDiesel" in msg) {
+    // Design note #1303: one sentence, the figures in it, the transition beside it -- #1053's shape.
+    const { protocol_id, model_type } = msg.ExchangeTrainForDiesel;
+    /* #1314: where the traded train went. Read off `afterState`, because the reducer decides: back in the
+       depot at face value, or -- a 4-train traded for the very first Diesel -- rusted on the way in. */
+    const returnedNow = (context.afterState?.returned_trains ?? []).filter((m) => m === model_type).length;
+    const returnedBefore = (gameState?.returned_trains ?? []).filter((m) => m === model_type).length;
+    const fate =
+      context.afterState === undefined || context.afterState === null
+        ? ""
+        : returnedNow > returnedBefore
+          ? ` The ${model_type}-train is back in the Bank Depot at $${
+              depotInventory(gameState).find((row) => row.tier === model_type)?.cost ?? 0
+            }.`
+          : ` The ${model_type}-train rusted as it reached the Depot.`;
+    return (
+      `${corp(gameState, protocol_id)} traded in a ${model_type}-train and paid $${dieselExchangeCostFor(gameState)} for a D-train.` +
+      fate +
+      treasurySuffix(context, protocol_id)
+    );
+  }
+
   if ("BuyTrainFromCorporation" in msg) {
+    /* ==================================================================
+        DESIGN NOTE 1245: THE TRADE IS A PURCHASE, AND IT STATES BOTH TREASURIES
+       ==================================================================
+       REPORTED (§2.3): five lines for one trade, wanted "PRR purchased a 2-train from B&O for $80."
+       THIS MESSAGE IS THE EXECUTED TRANSFER, not the offer. #662 routes an accepted offer through the ordinary
+       `BuyTrainFromCorporation` so the trade and its legality share one code path -- and the offer itself
+       already has its own line ("Train Offer -- ... must answer") from `ProposeTrainPurchase`. So "offered"
+       here narrated the wrong step, and the two `Treasury --` lines under it were #750's diagnostic saying
+       what this sentence should have said (#1053's rule: the sentence carries the figures, the diagnostic
+       goes quiet). TWO TREASURIES MOVE, so the suffix names both; `treasurySuffix` is one corporation's
+       transition and would leave the seller's out. */
     const { buyer_protocol_id, seller_protocol_id, model_type, price } =
       msg.BuyTrainFromCorporation;
+    const buyer = corp(gameState, buyer_protocol_id);
+    const seller = corp(gameState, seller_protocol_id);
+    const moves = [
+      [buyer, treasuryTransition(context, buyer_protocol_id)],
+      [seller, treasuryTransition(context, seller_protocol_id)],
+    ]
+      .filter((pair): pair is [string, string] => pair[1] !== null)
+      .map(([ticker, move]) => `${ticker} treasury ${move}`);
     return (
-      `${corp(gameState, buyer_protocol_id)} offered $${price} to ` +
-      `${corp(gameState, seller_protocol_id)} for a ${model_type}-train.`
+      `${buyer} bought a ${model_type}-train from ${seller} for $${price}.` +
+      (moves.length > 0 ? ` ${moves.join("; ")}.` : "")
     );
   }
 
@@ -656,9 +856,12 @@ export function describeGameplayAction(
       (entry) => entry.private_id === private_id,
     );
     const seller = target?.owner ? context.labelForAddress(target.owner) : "its owner";
+    /* #1245: the treasury rides on the sentence, as it does for a tile, a token and a depot train (#1053).
+       Reported as two lines -- the purchase, then "Treasury -- C&O spent $70 -- treasury $1000 -> $930." */
     return (
       `${corp(gameState, protocol_id)} bought ${namePrivate(private_id)} ` +
-      `from ${seller} for $${price}.`
+      `from ${seller} for $${price}.` +
+      treasurySuffix(context, protocol_id)
     );
   }
 

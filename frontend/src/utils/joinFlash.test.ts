@@ -49,7 +49,9 @@ describe("joining holds until the room answers", () => {
 
   it("shows a joining screen while unresolved", () => {
     expect(CODE).toContain("if (sandbox && sandboxRoomCode && !sandboxRoomResolved) {");
-    expect(CODE).toContain("Joining {sandboxRoomCode}");
+    /* Design note #1258: the hold is drawn as the waiting room itself, so Host is one transition. */
+    expect(CODE).toContain("<SandboxWaitingRoomHold");
+    expect(CODE).not.toContain("Joining {sandboxRoomCode}");
   });
 
   it("puts that gate BEFORE the waiting-room gate", () => {

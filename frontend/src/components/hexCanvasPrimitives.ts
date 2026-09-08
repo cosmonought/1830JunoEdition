@@ -67,15 +67,20 @@ import {
   SLOT_RING_RATIO,
   STATION_RADIUS_RATIO,
   markerSizeFor,
+  slotClusterRadius,
+  slotOffsets,
   stationTokenRadius,
   tileCityTokenRadius,
   TILE_GRAPHICS_CATALOG,
   printedMarkersFor,
   artworkPathsForEdge,
   artworkPathsForTraversal,
-  newYorkPrintedPaths,
+  newYorkPrintedDrawing,
   printedArtwork,
+  printedArtworkDrawing,
   printedArtworkPaths,
+  tileArtworkDrawing,
+  type TrackDrawing,
   OFFBOARD_STUB_TIP_FRACTION,
   OFFBOARD_STUB_SHAFT_END_FRACTION,
   printedPathsForEdge,
@@ -148,6 +153,92 @@ export const EMPTY_ROUTE_OVERLAYS: readonly RouteOverlay[] = [];
 /* Drawing helpers                                                    */
 /* ------------------------------------------------------------------ */
 
+/* ==================================================================
+ *  DESIGN NOTE 1330: EVERY RAIL WEARS A WHITE OUTLINE
+ * ==================================================================
+ *
+ * ASKED FOR: "the 18xxMaker style, where all black tracks have a crisp white outline/border", drawn as two
+ * strokes -- a wider white one under the ordinary black one -- with a strict order on tiles whose rails
+ * cross without meeting, so the upper rail's outline cuts a gap in the lower one.
+ *
+ * ONE PRIMITIVE, FOUR CALLERS. Laid tiles, gray printed hexes, New York's stubs and the red off-board arrows
+ * all stroke through `strokeTrackLayers`, so the pen, the outline and the layer order cannot disagree between
+ * a tile and the hex beside it -- the seam between them is exactly where a player's eye runs along a route.
+ *
+ * THE OUTLINE IS BUTT-CAPPED, THE INK IS ROUND-CAPPED. A rail ends square on the hex edge; a round white cap
+ * there would poke a white crescent into the neighbouring hex (the board clips each hex, a tray thumbnail
+ * does not). The black cap stays round, as it always was, so a rail meeting its neighbour across the seam is
+ * one continuous line and a spoke ending under a station has no square corner showing past the ring.
+ *
+ * WHAT GOES OVER WHAT is the artwork's business, not this file's: `TileGraphics.trackLayersFor`. */
+
+/** The outline's colour. */
+export const TRACK_OUTLINE_INK = "#ffffff";
+/** How much wider than the rail the outline pen is, in board pixels -- split between the two sides. Was 4,
+ *  "far too large"; then 1.5. Design note #1297: 0.7, as asked ("adjust the white stroke on the tracks to
+ *  0.7px"), then 1.1 on the next look -- 0.55px of white each side of the rail. */
+export const TRACK_OUTLINE_EXTRA_PX = 1.1;
+
+/** The one on-screen rail width every track in this file draws at. */
+export function trackPenWidth(size: number): number {
+  return Math.max(3, size * 0.12);
+}
+
+/** Strokes a drawing's layers bottom to top, then its overpasses. Each layer: every path in white at
+ *  `penWidth + outlineExtra`, then every path in `ink` at `penWidth` -- so rails that merge share one
+ *  outline with no white inside the merge, and a layer above cuts its own gap in the layer below. Each
+ *  overpass: clipped to a disc around the crossing, the upper rail again, white then ink, so the gap is cut
+ *  there and the rail's shared border at its fork is left alone. Widths are in the CURRENT transform's
+ *  units: a caller drawing in unit-hex space divides both by `size`, exactly as it always divided the pen. */
+export function strokeTrackLayers(
+  ctx: CanvasRenderingContext2D,
+  drawing: TrackDrawing,
+  penWidth: number,
+  outlineExtra: number,
+  ink: string,
+): void {
+  ctx.lineJoin = "round";
+  const outlinePass = (paths: readonly Path2D[]) => {
+    ctx.lineCap = "butt";
+    ctx.strokeStyle = TRACK_OUTLINE_INK;
+    ctx.lineWidth = penWidth + outlineExtra;
+    for (const path of paths) ctx.stroke(path);
+  };
+  const inkPass = (paths: readonly Path2D[]) => {
+    /* ==================================================================
+        DESIGN NOTE 1284: THE RAIL IS BUTT-CAPPED, LIKE ITS OUTLINE
+       ==================================================================
+       REPORTED: "with the white borders we added to their rendering, it's now obvious that the track sticks
+       out into unlaid hexes." The outline pass above is butt-capped and stops at the hex edge; the ink was
+       round-capped, so every rail ended in a black half-disc that reached `penWidth / 2` past the white
+       into the neighbour. One cap for both passes, and the two ends coincide. Joins stay round -- that is
+       what keeps a curve's inner edge smooth -- and an end that meets a city or town is under its marker. */
+    ctx.lineCap = "butt";
+    ctx.strokeStyle = ink;
+    ctx.lineWidth = penWidth;
+    for (const path of paths) ctx.stroke(path);
+  };
+  for (const layer of drawing.layers) {
+    outlinePass(layer);
+    inkPass(layer);
+  }
+  for (const crossing of drawing.crossings) {
+    /* The disc must hold the whole overlap: along the upper rail, the lower rail's outlined width spans
+       `(pen + extra) / sin` either side of the point, and the upper rail's own half-width sits beyond that.
+       A shallow crossing gets a longer disc; a right angle the shortest. Capped so a very shallow one cannot
+       reach the rails' fork. */
+    const across = (penWidth + outlineExtra) / Math.max(crossing.sinAngle, 0.25);
+    const radius = across + penWidth;
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(crossing.x, crossing.y, radius, 0, Math.PI * 2);
+    ctx.clip();
+    outlinePass([crossing.over]);
+    inkPass([crossing.over]);
+    ctx.restore();
+  }
+}
+
 /** Traces (but doesn't fill/stroke) the six-cornered hex outline centered
  *  at `center`, ready for the caller to `ctx.fill()`/`ctx.stroke()`. */
 export function drawHexPath(
@@ -200,18 +291,48 @@ export function bezierTrackSegment(
   toNormal: { x: number; y: number } | null,
   controlFraction = 0.3,
 ): void {
+  const { cp1, cp2 } = bezierTrackControls(from, to, hexSize, fromNormal, toNormal, controlFraction);
+  ctx.beginPath();
+  ctx.moveTo(from.x, from.y);
+  ctx.bezierCurveTo(cp1.x, cp1.y, cp2.x, cp2.y, to.x, to.y);
+  ctx.stroke();
+}
+
+/** The same curve as `bezierTrackSegment`, as a `Path2D` the caller can stroke more than once (#1330). */
+export function bezierTrackPath(
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  hexSize: number,
+  fromNormal: { x: number; y: number } | null,
+  toNormal: { x: number; y: number } | null,
+  controlFraction = 0.3,
+): Path2D {
+  const { cp1, cp2 } = bezierTrackControls(from, to, hexSize, fromNormal, toNormal, controlFraction);
+  const path = new Path2D();
+  path.moveTo(from.x, from.y);
+  path.bezierCurveTo(cp1.x, cp1.y, cp2.x, cp2.y, to.x, to.y);
+  return path;
+}
+
+/** One construction for both of the above, so a stroked segment and its `Path2D` twin cannot bend apart. */
+function bezierTrackControls(
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  hexSize: number,
+  fromNormal: { x: number; y: number } | null,
+  toNormal: { x: number; y: number } | null,
+  controlFraction: number,
+): { cp1: { x: number; y: number }; cp2: { x: number; y: number } } {
   const reach = hexSize * controlFraction;
   const dx = to.x - from.x;
   const dy = to.y - from.y;
   const len = Math.hypot(dx, dy) || 1;
   const n1 = fromNormal ?? { x: dx / len, y: dy / len };
   const n2 = toNormal ?? { x: -dx / len, y: -dy / len };
-  const cp1 = { x: from.x + n1.x * reach, y: from.y + n1.y * reach };
-  const cp2 = { x: to.x + n2.x * reach, y: to.y + n2.y * reach };
-  ctx.beginPath();
-  ctx.moveTo(from.x, from.y);
-  ctx.bezierCurveTo(cp1.x, cp1.y, cp2.x, cp2.y, to.x, to.y);
-  ctx.stroke();
+  return {
+    cp1: { x: from.x + n1.x * reach, y: from.y + n1.y * reach },
+    cp2: { x: to.x + n2.x * reach, y: to.y + n2.y * reach },
+  };
 }
 
 /** Strokes only SOME of a hex's six borders, each its own 2-point subpath -- unlike drawHexPath's single closed all-or-nothing path -- so a caller can omit one shared seam.
@@ -310,6 +431,23 @@ export const DOUBLE_TOWN_ROUTES: Readonly<Record<number, readonly DoubleTownRout
   69: [
     { edges: [0, 3], ditAt: 0.38 },
     { edges: [2, 4], ditAt: 0.20 },
+  ],
+  // Project 18XX+ tile set (design note #1311): the four new double towns.
+  630: [
+    { edges: [2, 3], ditAt: 0.50 },
+    { edges: [0, 4], ditAt: 0.50 },
+  ],
+  631: [
+    { edges: [0, 1], ditAt: 0.50 },
+    { edges: [2, 4], ditAt: 0.50 },
+  ],
+  632: [
+    { edges: [2, 3], ditAt: 0.50 },
+    { edges: [4, 5], ditAt: 0.50 },
+  ],
+  633: [
+    { edges: [2, 3], ditAt: 0.50 },
+    { edges: [0, 5], ditAt: 0.50 },
   ],
 };
 
@@ -427,9 +565,9 @@ export function drawHardcodedTileArtwork(
    *  as before rather than being forced to guess one. */
   ink: string = DEFAULT_TRACK_INK,
 ): boolean {
-  const paths = tileArtworkPaths(tileId);
+  const drawing = tileArtworkDrawing(tileId);
   const art = TILE_GRAPHICS_CATALOG[tileId];
-  if (!paths || !art) return false;
+  if (!drawing || !art) return false;
 
   const rot = ((orientation % 6) + 6) % 6;
 
@@ -437,16 +575,11 @@ export function drawHardcodedTileArtwork(
   ctx.translate(center.x, center.y);
   ctx.rotate((-60 * rot * Math.PI) / 180);
   ctx.scale(size, size);
-  ctx.strokeStyle = ink;
   // The catalog is authored in unit-hex space, so the transform scales the
   // pen too -- divide back out to land on the SAME on-screen stroke width
-  // (`max(3, size * 0.12)`) every other track in this file uses.
-  ctx.lineWidth = Math.max(3, size * 0.12) / size;
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
-  for (const path of paths) {
-    ctx.stroke(path);
-  }
+  // (`trackPenWidth`) every other track in this file uses. #1330: the white
+  // outline under every rail, and the layer order, both come from here.
+  strokeTrackLayers(ctx, drawing, trackPenWidth(size) / size, TRACK_OUTLINE_EXTRA_PX / size, ink);
   ctx.restore();
 
   /* Markers, in board pixels, at their own explicit per-tile coordinates.
@@ -469,7 +602,7 @@ export function drawHardcodedTileArtwork(
     if (slots > 1) {
       // The tile's rotation is folded into the pill axis HERE, because the marker pass runs in unrotated board pixels -- so the pill turns with the track it sits on.
       // See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #133
-      drawStationPill(ctx, point, markerSize, slots, (marker.angle ?? 0) - 60 * rot);
+      drawStationPill(ctx, point, markerSize, slots, (marker.angle ?? 0) - 60 * rot, marker.layout);
     } else {
       drawStationCircle(ctx, point, markerSize);
     }
@@ -554,6 +687,18 @@ function cityMasksForHex(
         const point = points[index];
         if (!point || marker.kind !== "city") return;
         const slots = marker.slots ?? 1;
+        if (marker.layout === "triangle" || marker.layout === "square") {
+          /* #1316: a cluster is masked as ONE circle reaching its farthest slot -- the clip below is an
+             even-odd path, and overlapping circles per slot would cut holes where they cross. */
+          masks.push({
+            cx: point.x,
+            cy: point.y,
+            radius: radius + slotClusterRadius(slots, marker.layout, PILL_SLOT_SPACING * (markerSize * 0.22)),
+            span: 0,
+            angleRad: 0,
+          });
+          return;
+        }
         masks.push({
           cx: point.x,
           cy: point.y,
@@ -935,9 +1080,15 @@ export function drawStationPill(
   size: number,
   slots: number,
   angleDeg: number,
+  /** Design note #1316: `triangle` and `square` draw a cluster; anything else is the row this always drew. */
+  layout: "pill" | "triangle" | "square" = "pill",
 ): void {
   const radius = size * 0.22;
   const spacing = PILL_SLOT_SPACING * radius;
+  if (layout === "triangle" || layout === "square") {
+    drawStationCluster(ctx, point, size, slots, angleDeg, layout);
+    return;
+  }
   const span = spacing * (slots - 1);
 
   ctx.save();
@@ -976,6 +1127,66 @@ export function drawStationPill(
 
 /** A plain solid black dot, no stroke, no station-container styling: a town sits on the track as a mark, never a buildable hub. Radius settled at the same magnitude used before #59's rewrite.
  *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #61 */
+/* ==================================================================
+    DESIGN NOTE 1316: A STATION CLUSTER IS A FATTENED POLYGON
+   ==================================================================
+   The Project 18XX+ set prints its three-station cities as a triangle and its four-station New York as a
+   two-by-two square -- the way the physical tiles read, and the only way three or four rings fit on a hex.
+   Built the way the pill is: the slot centres come from `slotOffsets`, so the drawn rings and the points a
+   token docks at are one geometry. The outline is the polygon through the slot centres stroked with a round
+   join at the ring's diameter -- which IS the union of the circles plus the space between them -- drawn
+   first in the rim ink and then again, narrower, in white, so the rim reads as the same stroke the pill has. */
+function drawStationCluster(
+  ctx: CanvasRenderingContext2D,
+  point: { x: number; y: number },
+  size: number,
+  slots: number,
+  angleDeg: number,
+  layout: "triangle" | "square",
+): void {
+  const radius = size * 0.22;
+  const spacing = PILL_SLOT_SPACING * radius;
+  const rim = Math.max(2, size * 0.06);
+  const centres = slotOffsets(slots, layout, spacing, angleDeg).map((offset) => ({
+    x: point.x + offset.x,
+    y: point.y + offset.y,
+  }));
+
+  const outline = () => {
+    ctx.beginPath();
+    centres.forEach((centre, index) => {
+      if (index === 0) ctx.moveTo(centre.x, centre.y);
+      else ctx.lineTo(centre.x, centre.y);
+    });
+    ctx.closePath();
+  };
+
+  ctx.save();
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  outline();
+  ctx.strokeStyle = "#2b2b2b";
+  ctx.lineWidth = radius * 2 + rim;
+  ctx.stroke();
+  ctx.fillStyle = "#2b2b2b";
+  ctx.fill();
+  outline();
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = radius * 2 - rim;
+  ctx.stroke();
+  ctx.fillStyle = "#ffffff";
+  ctx.fill();
+
+  ctx.strokeStyle = "#2b2b2b";
+  ctx.lineWidth = Math.max(1, size * 0.03);
+  for (const centre of centres) {
+    ctx.beginPath();
+    ctx.arc(centre.x, centre.y, radius * SLOT_RING_RATIO, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 export function drawDitMarker(
   ctx: CanvasRenderingContext2D,
   point: { x: number; y: number },
@@ -1195,6 +1406,7 @@ export function valueBadgeTerrainFor(
       return "MajorCityHub";
     case "DoubleCityHub":
     case "NewYorkHub":
+    case "TorontoHub": // #1317
       return "DoubleCityHub";
     default:
       return null;
@@ -1203,7 +1415,7 @@ export function valueBadgeTerrainFor(
 
 /** Derived from terrain rather than stored as a catalog column, because here the two are the same fact -- a label column would be a second copy free to drift. #57/#63/#45 carry NO label; labelling them would say something untrue about where they may be laid.
  *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #127 */
-export function restrictionLabelFor(terrain: TerrainType): "B" | "NY" | "OO" | null {
+export function restrictionLabelFor(terrain: TerrainType): "B" | "NY" | "OO" | "TO" | null {
   switch (terrain) {
     case "BostonHub":
       return "B";
@@ -1211,6 +1423,8 @@ export function restrictionLabelFor(terrain: TerrainType): "B" | "NY" | "OO" | n
       return "NY";
     case "DoubleCityHub":
       return "OO";
+    case "TorontoHub": // #1317: the letter stays on the tile, so an upgraded Toronto still reads TO
+      return "TO";
     default:
       return null;
   }
@@ -1229,7 +1443,7 @@ export function drawRestrictionBadge(
   ctx: CanvasRenderingContext2D,
   center: { x: number; y: number },
   size: number,
-  text: "B" | "NY" | "OO",
+  text: "B" | "NY" | "OO" | "TO",
   archetype: HexArchetype,
   mapGrid: MapGridResponse,
   q: number,
@@ -1270,7 +1484,7 @@ export function drawRestrictionBadgeAt(
   ctx: CanvasRenderingContext2D,
   badgeCenter: { x: number; y: number },
   size: number,
-  text: "B" | "NY" | "OO",
+  text: "B" | "NY" | "OO" | "TO",
 ): void {
   ctx.font = fitFontSize(ctx, text, 9, size * 0.5, 8, "bold");
   ctx.textAlign = "center";
@@ -1430,16 +1644,11 @@ export function drawLandmarkTrack(
   // Boston (E23) and Baltimore (I15) are in the ordinary printed catalog.
   if (label !== "G19") return drawPrintedTrack(ctx, center, size, label);
 
-  const paths = newYorkPrintedPaths();
-
   ctx.save();
   ctx.translate(center.x, center.y);
   ctx.scale(size, size);
-  ctx.strokeStyle = DEFAULT_TRACK_INK;
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
-  ctx.lineWidth = Math.max(3, size * 0.12) / size;
-  for (const path of paths) ctx.stroke(path);
+  // #1330: outlined like every other rail.
+  strokeTrackLayers(ctx, newYorkPrintedDrawing(), trackPenWidth(size) / size, TRACK_OUTLINE_EXTRA_PX / size, DEFAULT_TRACK_INK);
   ctx.restore();
 
   // Design note #699: third statement of the shrink, this one a bare literal. G19's two printed cities are
@@ -1467,11 +1676,7 @@ export function drawOffboardTrack(
   const apothem = size * (Math.sqrt(3) / 2);
   const edgePoint = (edgeIndex: number) => pointOnCircle(center, apothem, edgeAngleRad(edgeIndex));
 
-  const lineWidth = Math.max(3, size * 0.12);
-  ctx.strokeStyle = STANDARD_TRACK_INK;
-  ctx.fillStyle = STANDARD_TRACK_INK;
-  ctx.lineWidth = lineWidth;
-  ctx.lineCap = "round";
+  const lineWidth = trackPenWidth(size);
 
   /* How far in the stub runs, and how much of that the head occupies. The
      shaft stops where the head begins so the round cap is never visible
@@ -1483,8 +1688,14 @@ export function drawOffboardTrack(
   const TIP_FRACTION = OFFBOARD_STUB_TIP_FRACTION;
   const HEAD_LENGTH = size * (OFFBOARD_STUB_SHAFT_END_FRACTION - TIP_FRACTION) * (Math.sqrt(3) / 2);
 
+  /* #1330: the geometry is built first, as `Path2D`s in board pixels, so it can be stroked twice -- once in
+     white under everything, once in ink -- like every other rail. The stubs of one hex are ONE layer: they
+     aim at the same centre, and where two heads touch they should merge, not gap. */
+  const shafts: Path2D[] = [];
+  const heads: Path2D[] = [];
+
   // Rail Map Overhaul (design note #42): each stub is a
-  // perpendicular-entering Bezier curve (`bezierTrackSegment`) rather than a
+  // perpendicular-entering Bezier curve (`bezierTrackSegment`'s own construction) rather than a
   // straight `lineTo`, matching every other track-drawing function here.
   for (const edge of edges) {
     const edgeEnd = edgePoint(edge);
@@ -1507,19 +1718,41 @@ export function drawOffboardTrack(
       x: tip.x - ux * HEAD_LENGTH,
       y: tip.y - uy * HEAD_LENGTH,
     };
-    bezierTrackSegment(ctx, edgeEnd, shaftEnd, size, edgeInwardNormal(edge), null);
+    shafts.push(bezierTrackPath(edgeEnd, shaftEnd, size, edgeInwardNormal(edge), null));
 
     /* The head. Half-width matches the shaft so the taper starts flush with
        it rather than stepping out -- an arrow wider than its own track
        reads as a separate glyph sitting on the end. */
     const half = lineWidth * 0.95;
-    ctx.beginPath();
-    ctx.moveTo(tip.x, tip.y);
-    ctx.lineTo(shaftEnd.x - uy * half, shaftEnd.y + ux * half);
-    ctx.lineTo(shaftEnd.x + uy * half, shaftEnd.y - ux * half);
-    ctx.closePath();
-    ctx.fill();
+    const head = new Path2D();
+    head.moveTo(tip.x, tip.y);
+    head.lineTo(shaftEnd.x - uy * half, shaftEnd.y + ux * half);
+    head.lineTo(shaftEnd.x + uy * half, shaftEnd.y - ux * half);
+    head.closePath();
+    heads.push(head);
   }
+
+  ctx.save();
+  // The outline: white shafts, and each head grown by the same margin -- a stroke around its own outline.
+  ctx.lineJoin = "round";
+  ctx.lineCap = "butt";
+  ctx.strokeStyle = TRACK_OUTLINE_INK;
+  ctx.fillStyle = TRACK_OUTLINE_INK;
+  ctx.lineWidth = lineWidth + TRACK_OUTLINE_EXTRA_PX;
+  for (const shaft of shafts) ctx.stroke(shaft);
+  ctx.lineWidth = TRACK_OUTLINE_EXTRA_PX;
+  for (const head of heads) {
+    ctx.stroke(head);
+    ctx.fill(head);
+  }
+  // The ink. Design note #1284: butt-capped, so the shaft ends where its outline ends.
+  ctx.lineCap = "butt";
+  ctx.strokeStyle = STANDARD_TRACK_INK;
+  ctx.fillStyle = STANDARD_TRACK_INK;
+  ctx.lineWidth = lineWidth;
+  for (const shaft of shafts) ctx.stroke(shaft);
+  for (const head of heads) ctx.fill(head);
+  ctx.restore();
 }
 
 /* Preprinted track is DRAWN, not derived. The old construction degenerated: both control points sat on the straight edge-to-centre line, so Cleveland's 60-degree pair rendered as a hard V. A gray hex and a laid tile connecting the same edges now draw the SAME shape.
@@ -1533,21 +1766,17 @@ export function drawPrintedTrack(
   label: string,
 ): boolean {
   const art = printedArtwork(label);
-  const paths = printedArtworkPaths(label);
-  if (!art || !paths) return false;
+  const drawing = printedArtworkDrawing(label);
+  if (!art || !drawing) return false;
 
   ctx.save();
   ctx.translate(center.x, center.y);
   ctx.scale(size, size);
-  ctx.strokeStyle = DEFAULT_TRACK_INK;
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
   // The catalog is authored in unit-hex space, so the transform scales the
   // pen too -- divide back out to land on the SAME on-screen stroke width
   // every other track in this file uses. Identical to
-  // `drawHardcodedTileArtwork`'s own handling, for the same reason.
-  ctx.lineWidth = Math.max(3, size * 0.12) / size;
-  for (const path of paths) ctx.stroke(path);
+  // `drawHardcodedTileArtwork`'s own handling, for the same reason (#1330).
+  strokeTrackLayers(ctx, drawing, trackPenWidth(size) / size, TRACK_OUTLINE_EXTRA_PX / size, DEFAULT_TRACK_INK);
   ctx.restore();
 
   if (art.marker) {
@@ -1555,12 +1784,109 @@ export function drawPrintedTrack(
       x: center.x + size * art.marker.at.x,
       y: center.y + size * art.marker.at.y,
     };
-    if (art.marker.kind === "city") drawStationCircle(ctx, point, size);
+    if (art.emblem?.kind === "coal") drawCoalEmblem(ctx, point, size);
+    else if (art.emblem?.kind === "crate") drawCrateEmblem(ctx, point, size);
+    else if (art.marker.kind === "city") drawStationCircle(ctx, point, size);
     // Item 8 ("Distinct Dark Small Towns"): dark dit marker, not a white
     // circle -- see `drawDitMarker`'s own doc comment.
     else drawDitMarker(ctx, point, size);
   }
   return true;
+}
+
+/** Design note #1320: Coal River's centre art -- a city-sized white circle holding a pickaxe, with the
+ *  licence-fee box beneath it. Drawn IN PLACE OF the town dit; the hex is still a town to every rule, and
+ *  the large circle is the request's own description ("a 'Large City' circle containing a pickaxe icon").
+ *  The circle deliberately does not use `drawStationCircle`: no token can ever land here, and a station
+ *  circle is the board's promise that one can. */
+export function drawCoalEmblem(
+  ctx: CanvasRenderingContext2D,
+  point: { x: number; y: number },
+  size: number,
+): void {
+  const radius = size * 0.22;
+  ctx.save();
+  // The circle.
+  ctx.beginPath();
+  ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
+  ctx.fillStyle = "#f2efe6";
+  ctx.fill();
+  ctx.strokeStyle = "#1a1a1a";
+  ctx.lineWidth = Math.max(2, size * 0.06);
+  ctx.stroke();
+
+  // The pickaxe: a handle from lower-left to upper-right, a curved head across the top of it.
+  const s = radius * 0.62;
+  ctx.strokeStyle = "#1a1a1a";
+  ctx.lineCap = "round";
+  ctx.lineWidth = Math.max(1.5, size * 0.045);
+  ctx.beginPath();
+  ctx.moveTo(point.x - s * 0.75, point.y + s * 0.85);
+  ctx.lineTo(point.x + s * 0.45, point.y - s * 0.35);
+  ctx.stroke();
+  ctx.lineWidth = Math.max(2, size * 0.06);
+  ctx.beginPath();
+  ctx.moveTo(point.x - s * 0.55, point.y - s * 0.55);
+  ctx.quadraticCurveTo(point.x + s * 0.45, point.y - s * 1.05, point.x + s * 1.0, point.y + s * 0.05);
+  ctx.stroke();
+
+  // The licence-fee box, below the circle.
+  /* Design note #1282: the "$120" box below the pickaxe is gone -- see `TileGraphics` `emblem`. */
+  ctx.restore();
+}
+
+/* ==================================================================
+    DESIGN NOTE 1286: A WAREHOUSE IS A CITY YOU CANNOT TOKEN, AND IT LOOKS LIKE ONE
+   ==================================================================
+   REPORTED: "We have rendered the warehouses as small towns to indicate that they cannot be tokened and that
+   they count to runs and contribute revenue, but unlike small towns the warehouses are also valid termini for
+   routes ... players are trained to regard small towns as invalid termini, maybe we should swap the warehouse
+   small town symbols for the large city circle and draw a crate in them." Ruled yes. So: the city circle at
+   the city's size, with a crate in it where a token would go -- occupied, permanently, by goods. */
+export function drawCrateEmblem(
+  ctx: CanvasRenderingContext2D,
+  point: { x: number; y: number },
+  size: number,
+): void {
+  const radius = size * 0.22;
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
+  ctx.fillStyle = "#f2efe6";
+  ctx.fill();
+  ctx.strokeStyle = "#1a1a1a";
+  ctx.lineWidth = Math.max(2, size * 0.06);
+  ctx.stroke();
+  /* The warehouse. Design note #1288: the first draft was a crate with two diagonals, and the diagonals read
+     as an X -- "which elsewhere means cancel/escape/stop". So: a smaller box, a pitched roof over it (two
+     slanted lines meeting at a ridge), and the two walls carried up to the eaves. A shed, not a stop sign. */
+  const half = radius * 0.42;
+  const eave = point.y - half * 0.55;
+  const ridge = point.y - half * 1.35;
+  ctx.strokeStyle = "#5a3d1e";
+  ctx.fillStyle = "#c9a06a";
+  ctx.lineWidth = Math.max(1.5, size * 0.04);
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  // The box.
+  ctx.beginPath();
+  ctx.rect(point.x - half, point.y - half * 0.35, half * 2, half * 1.35);
+  ctx.fill();
+  ctx.stroke();
+  // The walls, from the box up to the eaves.
+  ctx.beginPath();
+  ctx.moveTo(point.x - half, point.y - half * 0.35);
+  ctx.lineTo(point.x - half, eave);
+  ctx.moveTo(point.x + half, point.y - half * 0.35);
+  ctx.lineTo(point.x + half, eave);
+  ctx.stroke();
+  // The roof.
+  ctx.beginPath();
+  ctx.moveTo(point.x - half * 1.25, eave);
+  ctx.lineTo(point.x, ridge);
+  ctx.lineTo(point.x + half * 1.25, eave);
+  ctx.stroke();
+  ctx.restore();
 }
 
 /** Two independent station circles and NO connecting line -- the real source has no path entry for these four hexes at all, which is their signature feature.
@@ -2343,6 +2669,10 @@ export function drawOffboardTooltip(
   currentEra: TileColorTier,
   preferLeft: boolean,
   preferBelow: boolean,
+  /** Design note #1281: whether the table's tray has a Gray tier (#1312). The Gray era pays the Brown figure
+   *  (`offboardValueForEra`); without its row the card had no line to highlight once the D-trains came, which
+   *  read as "no value in the gray phase". */
+  hasGrayEra = false,
 ): void {
   // Green shares the Yellow-printed figure -- see `offboardValueForEra`'s
   // own doc comment for why there's no distinct third number.
@@ -2350,6 +2680,7 @@ export function drawOffboardTooltip(
     { label: "Yellow", value: tiers.yellow },
     { label: "Green", value: tiers.yellow },
     { label: "Brown", value: tiers.brown },
+    ...(hasGrayEra ? [{ label: "Gray" as TileColorTier, value: tiers.brown }] : []),
   ];
 
   const paddingX = 10;

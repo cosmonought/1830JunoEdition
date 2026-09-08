@@ -67,8 +67,9 @@ const RESERVATION_RULES: readonly ReservationRule[] = [
     privateId: 2,
     hexLabel: "B20",
     initials: "CSL",
-    // Slot 10 = the Bottom Point vertex.
-    slot: 10,
+    // Slot 3 = the Bottom-Right edge midpoint. Design note #1288: moved off the bottom point, where the Level
+    // Playing Field's plates now sit, to the edge beside it -- same on every board, so the badge has one home.
+    slot: 3,
     // Design note #726: connection rules named, which is the half the badge never mentioned.
     power: "its owner may lay a tile here free, ignoring connection rules, in addition to its normal lay",
   },

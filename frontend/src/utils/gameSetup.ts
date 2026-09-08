@@ -48,6 +48,36 @@ export const STARTING_CASH_BY_PLAYER_COUNT: Readonly<Record<number, number>> = {
   6: 400,
 };
 
+/* ==================================================================
+ *  DESIGN NOTE 1320: LEVEL PLAYING FIELD SEATS SEVEN AND RAISES THE CEILING
+ * ==================================================================
+ * Ten corporations and seven privates need a higher certificate limit at every count, and a seventh seat
+ * needs a starting figure the printed table never had. Both are the variant's own tables, KEYED BESIDE the
+ * printed ones rather than merged into them: a standard game must still refuse a seventh player, and the
+ * lookups below take the variants so the two tables cannot be confused at a call site. */
+export const LPF_CERT_LIMIT_BY_PLAYER_COUNT: Readonly<Record<number, number>> = {
+  2: 32,
+  3: 22,
+  4: 18,
+  5: 15,
+  6: 13,
+  7: 12,
+};
+
+/** The printed cash for two to six; the variant's own $360 for the seventh seat. */
+export const LPF_STARTING_CASH_BY_PLAYER_COUNT: Readonly<Record<number, number>> = {
+  ...STARTING_CASH_BY_PLAYER_COUNT,
+  7: 360,
+};
+
+/** The most seats the Level Playing Field variant deals. */
+export const LPF_MAX_PLAYERS = 7;
+
+/** The largest table these variants allow. */
+export function maxPlayersFor(variants: Pick<GameVariants, "levelPlayingField"> | null | undefined): number {
+  return variants?.levelPlayingField ? LPF_MAX_PLAYERS : MAX_PLAYERS;
+}
+
 /** 1830's printed bank -- $12,000 however many are playing, because the player count changes what is dealt OUT
  *  of it, not its size.
  *
@@ -64,20 +94,35 @@ export const MIN_PLAYERS = 2;
 export const MAX_PLAYERS = 6;
 
 /** `null` for a count the printed table does not cover, so a caller renders
- *  "--" rather than inventing a ceiling. */
-export function certLimitForPlayers(count: number): number | null {
-  return CERT_LIMIT_BY_PLAYER_COUNT[count] ?? null;
+ *  "--" rather than inventing a ceiling.
+ *  #1320: the variants pick the table. Absent means the printed game, which is every caller written before
+ *  the Level Playing Field existed. */
+export function certLimitForPlayers(
+  count: number,
+  variants?: Pick<GameVariants, "levelPlayingField"> | null,
+): number | null {
+  const table = variants?.levelPlayingField ? LPF_CERT_LIMIT_BY_PLAYER_COUNT : CERT_LIMIT_BY_PLAYER_COUNT;
+  return table[count] ?? null;
 }
 
 /** `null` off the table, for the same reason. A game that cannot be dealt
  *  correctly must not be dealt approximately. */
-export function startingCashForPlayers(count: number): number | null {
-  return STARTING_CASH_BY_PLAYER_COUNT[count] ?? null;
+export function startingCashForPlayers(
+  count: number,
+  variants?: Pick<GameVariants, "levelPlayingField"> | null,
+): number | null {
+  const table = variants?.levelPlayingField
+    ? LPF_STARTING_CASH_BY_PLAYER_COUNT
+    : STARTING_CASH_BY_PLAYER_COUNT;
+  return table[count] ?? null;
 }
 
-/** Whether this many people can legally start an 1830 game. */
-export function isLegalPlayerCount(count: number): boolean {
-  return Number.isInteger(count) && count >= MIN_PLAYERS && count <= MAX_PLAYERS;
+/** Whether this many people can legally start a game under these variants. */
+export function isLegalPlayerCount(
+  count: number,
+  variants?: Pick<GameVariants, "levelPlayingField"> | null,
+): boolean {
+  return Number.isInteger(count) && count >= MIN_PLAYERS && count <= maxPlayersFor(variants);
 }
 
 /** One seat at the table, as the waiting room agreed it. */
@@ -122,17 +167,19 @@ export interface DealtGame {
  *  action and the results must be identical, so it reads no clock, no random source and nothing local. */
 export function dealSandboxGame(setup: SandboxSetup): DealtGame | null {
   const count = setup.players.length;
-  if (!isLegalPlayerCount(count)) return null;
-  const startingCash = startingCashForPlayers(count);
-  const certLimit = certLimitForPlayers(count);
-  if (startingCash === null || certLimit === null) return null;
-
-  const playerAddresses = setup.players.map((player) => player.id);
   /* Design note #902: the length variant decides the bank, and the STARTING CASH IS UNCHANGED BY IT. Both are
      printed 1830 tables and only one of them is the clock -- shrinking the bank to $4,500 while also cutting
      what players are dealt would change the opening game as well as its length, which is a different variant
-     nobody asked for. Six players at $400 take $2,400, which the short bank still covers. */
+     nobody asked for. Six players at $400 take $2,400, which the short bank still covers.
+     #1320: RESOLVED FIRST, because the Level Playing Field decides whether a seventh seat is legal and which
+     cash and certificate tables apply. */
   const variants = resolveVariants(setup.variants);
+  if (!isLegalPlayerCount(count, variants)) return null;
+  const startingCash = startingCashForPlayers(count, variants);
+  const certLimit = certLimitForPlayers(count, variants);
+  if (startingCash === null || certLimit === null) return null;
+
+  const playerAddresses = setup.players.map((player) => player.id);
   const bankStart = bankStartFor(variants);
   return {
     playerAddresses,
@@ -182,6 +229,12 @@ export interface SetupGameMsg {
      *  reason the shuffled order does -- every client deals from this message, and a table's house rules held
      *  only by the host would give the other clients a different game from the same log. */
     variants?: Partial<GameVariants>;
+    /** Design note #1252: THE REDUCER THAT DEALT THIS GAME. The build id of the client that dealt -- which the
+     *  server has already checked is its own (#1206) -- recorded in the log so the room is pinned to it: a
+     *  server on any other build refuses to continue the game rather than settle it under different rules
+     *  (`RoomSession` #1252). Optional per #232: a log written before this field is unpinned, not pinned to
+     *  nothing. */
+    build?: string;
   };
 }
 
@@ -383,6 +436,14 @@ export interface ProposeTrainPurchaseMsg {
 
 /** The seller's answer. A refusal is a real event, not the absence of one: it clears the offer on every client
  *  and it belongs in the log so the Activity Log can say the sale was declined. */
+/** Design note #1323: A CORPORATION BUYS A KANAWHA LICENCE. Sandbox-only, in the log because it is a CHOICE
+ *  (#550) with a treasury movement and a supply count behind it. `kanawhaLicenseRefusal` is the gate. */
+export interface BuyKanawhaLicenseMsg {
+  BuyKanawhaLicense: {
+    protocol_id: number;
+  };
+}
+
 export interface AnswerTrainPurchaseMsg {
   AnswerTrainPurchase: {
     /** Which offer is being answered. Trains have no id of their own in the sandbox register -- there is only
@@ -409,7 +470,12 @@ export type SandboxLogMsg =
   | AnswerPrivatePurchaseMsg
   | ProposeTrainPurchaseMsg
   | AnswerTrainPurchaseMsg
+  | BuyKanawhaLicenseMsg
   | RevertToMsg;
+
+export function isBuyKanawhaLicenseMsg(msg: unknown): msg is BuyKanawhaLicenseMsg {
+  return typeof msg === "object" && msg !== null && "BuyKanawhaLicense" in msg;
+}
 
 export function isProposeTrainPurchaseMsg(msg: unknown): msg is ProposeTrainPurchaseMsg {
   return typeof msg === "object" && msg !== null && "ProposeTrainPurchase" in msg;
@@ -476,8 +542,11 @@ export function isSandboxOnlyMsg(
     // Design note #701: and the train negotiation, which is the same shape.
     | ProposeTrainPurchaseMsg
     | AnswerTrainPurchaseMsg
+    // Design note #1323: the licence purchase, which the chain has never heard of.
+    | BuyKanawhaLicenseMsg
     | RevertToMsg {
   return (
+    isBuyKanawhaLicenseMsg(msg) ||
     isSetupGameMsg(msg) ||
     isOpenStockRoundMsg(msg) ||
     isCloseRoomMsg(msg) ||
@@ -574,8 +643,21 @@ export function waterfallForRoster(
      first place. */
   base: WaterfallStateResponse | null,
   playerAddresses: readonly string[],
+  /** #1320: THE PRIVATES THE DEAL PUT IN PLAY, when the caller has them. The fixture's six are the standard
+   *  game; the Level Playing Field adds a seventh, and the auction must offer what the state holds rather
+   *  than what the fixture was booted with. Absent keeps every pre-#1320 caller exactly as it was. */
+  privateCompanies?: ReadonlyArray<Pick<GameStateResponse["private_companies"][number], "private_id" | "name" | "cost">>,
 ): WaterfallStateResponse | null {
   if (!base) return null;
+  const privates = privateCompanies
+    ? privateCompanies.map((entry, index) => ({
+        private_id: entry.private_id,
+        name: entry.name,
+        face_value: entry.cost,
+        is_lowest_offered: index === 0,
+        bids: [],
+      }))
+    : base.privates.map((entry) => ({ ...entry, bids: [] }));
   return {
     ...base,
     /* The first seat in the dealt turn order. Empty roster -> empty string,
@@ -584,6 +666,6 @@ export function waterfallForRoster(
     current_turn: playerAddresses[0] ?? "",
     consecutive_waterfall_passes: 0,
     mini_auction: null,
-    privates: base.privates.map((entry) => ({ ...entry, bids: [] })),
+    privates,
   };
 }

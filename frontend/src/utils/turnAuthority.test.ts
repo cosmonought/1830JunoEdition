@@ -173,6 +173,200 @@ describe("the exemptions, each one a move a player would otherwise lose", () => 
   });
 });
 
+describe("the shell-owned messages, #1220", () => {
+  /* ==================================================================
+      THE FAMILY IS ENUMERATED HERE ON PURPOSE
+     ==================================================================
+     Four playtests were spent fixing these ONE BUTTON AT A TIME, because each refusal looked like its own
+     bug and the class was never named. This list is the class. An eleventh member of `isSandboxOnlyMsg` that
+     is not classified below fails the last case in this block, which is the point: the next person to add a
+     shell message has to say which kind it is rather than discover it from a playtest. */
+  const NOT_A_SEAT_S_MOVE: Array<[string, unknown]> = [
+    ["OpenStockRound", { OpenStockRound: {} }],
+    ["SetBoPar", { SetBoPar: { player: BOB, par_value: 100 } }],
+    ["PlaceHomeStation", { PlaceHomeStation: { company_id: 1, q: 0, r: 0, kind: "home", city_index: 0 } }],
+    ["ExchangePrivate", { ExchangePrivate: { private_id: 5 } }],
+    ["RevertTo", { RevertTo: { index: 3 } }],
+    ["CloseRoom", { CloseRoom: {} }],
+    ["BuyKanawhaLicense", { BuyKanawhaLicense: { protocol_id: 1 } }], // #1323
+  ];
+
+  it.each(NOT_A_SEAT_S_MOVE)("does not ask the seat about %s", (_label, msg) => {
+    /* THE SEAT CURSOR POINTS AT ALICE throughout, and none of these is refused with "It is not your turn":
+       they close a phase, place a token the rules place for you, exercise a private's own off-turn right, or
+       belong to the room rather than to a seat. #1249 gives each its OWNER instead (the block below), so the
+       assertion here is only that the seat is not the judge. */
+    expect(refusal(board({ active_player_index: 0 }), BOB, msg)).not.toBe("It is not your turn.");
+  });
+
+  it("still refuses an ordinary move from the same player", () => {
+    // The guard against over-reading the exemption: it must not have opened the gate generally.
+    expect(refusal(board({ active_player_index: 0 }), BOB, PASS)).toBe("It is not your turn.");
+  });
+
+  it("refuses a second deal rather than erasing the game in progress", () => {
+    /* The one member of the family that is cheap to guard. #538: a roster is "nothing, until the log says
+       otherwise", so a non-empty one IS the record that the deal has happened. */
+    const setup = { SetupGame: { players: [], variants: {} } };
+    expect(refusal(board(), BOB, setup)).toBe("This game has already been dealt.");
+    expect(refusal(board({ player_addresses: [] }), BOB, setup)).toBeNull();
+  });
+
+  it("does not swallow the consent answers, which have real owners", () => {
+    /* ORDER IS LOAD-BEARING. The negotiation messages are in `isSandboxOnlyMsg` too, and exemption 3 runs
+       first so their owner checks stand. If this block were moved above it, every trade answer in the game
+       would be answerable by anybody -- which no test would catch, because each one would simply pass. */
+    const state = board({
+      active_player_index: 0,
+      private_purchase_offer: {
+        private_id: 3,
+        private_name: "Delaware & Hudson",
+        owner: BOB,
+        buyer_protocol_id: 7,
+        buyer_ticker: "NNH",
+        price: 70,
+      },
+    } as Partial<State>);
+    const answer = { AnswerPrivatePurchase: { private_id: 3, accept: true } };
+    expect(refusal(state, CAROL, answer)).toBe(
+      "Only the private company's owner can answer that offer.",
+    );
+  });
+
+  it("classifies every member of the family", () => {
+    /* THE LIST ABOVE PLUS THE FOUR NEGOTIATION MESSAGES PLUS `SetupGame` IS THE WHOLE PREDICATE. Counted
+       rather than described, so adding an eleventh message to `isSandboxOnlyMsg` without deciding what it is
+       fails here instead of in somebody's playtest. */
+    const classified = [
+      ...NOT_A_SEAT_S_MOVE.map(([label]) => label),
+      "SetupGame",
+      "ProposePrivatePurchase",
+      "AnswerPrivatePurchase",
+      "ProposeTrainPurchase",
+      "AnswerTrainPurchase",
+    ];
+    const source = require("fs").readFileSync(
+      require("path").join(__dirname, "gameSetup.ts"),
+      "utf8",
+    ) as string;
+    const predicate = source.slice(source.indexOf("export function isSandboxOnlyMsg"));
+    const body = predicate.slice(0, predicate.indexOf("\n}"));
+    const named = (body.match(/is([A-Z][A-Za-z]*)Msg\(msg\)/g) ?? []).map((call) =>
+      call.replace(/^is/, "").replace(/Msg\(msg\)$/, ""),
+    );
+    expect(named.slice().sort()).toEqual(classified.slice().sort());
+  });
+});
+
+describe("each room message has an owner, #1249", () => {
+  /* #1220 left these to "any player in the room ... at any time" and called it a gap. Each case here is the
+     question the shell asks before it shows the button, asked again on the server against the same board --
+     and each refusal is about OWNERSHIP, never legality, which stays the reducer's. */
+  const withOwner = (state: State, privateId: number, owner: string | null): State => ({
+    ...state,
+    private_companies: state.private_companies.map((entry) =>
+      entry.private_id === privateId ? { ...entry, owner } : entry,
+    ),
+  });
+  const withPresident = (state: State, companyId: number, president: string | null): State => ({
+    ...state,
+    public_companies: state.public_companies.map((entry) =>
+      entry.company_id === companyId ? { ...entry, president } : entry,
+    ),
+  });
+  const withHost = (state: State, actor: string | null, msg: unknown, host: string | null | undefined, log?: unknown) =>
+    turnRefusal({ state, waterfall: null, actor, msg: msg as never, host, log: log as never });
+
+  it("SetupGame: the host, on an undealt board; nobody when no host is known", () => {
+    const setup = { SetupGame: { players: [], variants: {} } };
+    const undealt = board({ player_addresses: [] });
+    expect(withHost(undealt, ALICE, setup, ALICE)).toBeNull();
+    expect(withHost(undealt, BOB, setup, ALICE)).toBe("Only the host can start the game.");
+    // No room document (a test, the CLI): the host check is skipped, not failed.
+    expect(withHost(undealt, BOB, setup, undefined)).toBeNull();
+    expect(withHost(undealt, BOB, setup, null)).toBeNull();
+  });
+
+  it("OpenStockRound: only when the auction is over, by anybody", () => {
+    const auction = board({ current_round_type: "WaterfallAuction" });
+    const sold = { privates: [] } as unknown as Waterfall;
+    const unsold = { privates: [{ private_id: 1 }, { private_id: 2 }] } as unknown as Waterfall;
+    expect(refusal(auction, BOB, { OpenStockRound: {} }, { waterfall: sold })).toBeNull();
+    expect(refusal(auction, BOB, { OpenStockRound: {} }, { waterfall: unsold })).toBe(
+      "The auction is not over yet — 2 private companies are still for sale.",
+    );
+    expect(refusal(board(), BOB, { OpenStockRound: {} }, { waterfall: sold })).toBe("The Stock Round is already open.");
+  });
+
+  it("SetBoPar: the B&O private's owner, named in the message", () => {
+    const won = withOwner(board(), 6, BOB);
+    expect(refusal(won, BOB, { SetBoPar: { player: BOB, par_value: "100" } })).toBeNull();
+    expect(refusal(won, ALICE, { SetBoPar: { player: BOB, par_value: "100" } })).toBe("Only the B&O private's owner pars the B&O.");
+    expect(refusal(won, ALICE, { SetBoPar: { player: ALICE, par_value: "100" } })).toBe("Only the B&O private's owner pars the B&O.");
+    // Whether the B&O CAN be parred is `boPresidencyRefusal`'s question, not this gate's.
+    expect(refusal(board(), BOB, { SetBoPar: { player: BOB, par_value: "100" } })).toBeNull();
+  });
+
+  it("PlaceHomeStation: the corporation's president; the D&H's owner for a D&H token", () => {
+    const presided = withPresident(board(), 1, BOB);
+    const home = { PlaceHomeStation: { company_id: 1, q: 0, r: 0, kind: "home", city_index: null, hex_label: "H12" } };
+    expect(refusal(presided, BOB, home)).toBeNull();
+    expect(refusal(presided, ALICE, home)).toBe("Only PRR's president places its station.");
+    const dh = { PlaceHomeStation: { company_id: 1, q: 0, r: 0, kind: "dh", city_index: null, hex_label: "F16" } };
+    expect(refusal(withOwner(presided, 3, ALICE), BOB, dh)).toBe("Only the Delaware & Hudson's owner can use its free station.");
+    expect(refusal(withOwner(presided, 3, BOB), BOB, dh)).toBeNull();
+  });
+
+  it("ExchangePrivate: the private's owner, named in the message", () => {
+    const held = withOwner(board(), 4, BOB);
+    const exchange = { ExchangePrivate: { private_id: 4, company_id: 2, player: BOB, source: "Ipo" } };
+    expect(refusal(held, BOB, exchange)).toBeNull();
+    expect(refusal(held, ALICE, exchange)).toMatch(/^Only the .*'s owner can exchange it\.$/);
+    expect(refusal(held, ALICE, { ExchangePrivate: { ...exchange.ExchangePrivate, player: ALICE } })).toMatch(/owner can exchange it/);
+  });
+
+  it("RevertTo: undoReachFor's rule on the server's own log", () => {
+    const entry = (index: number, actor: string, derived = false) => ({
+      index,
+      id: `e${index}`,
+      actor,
+      payload: JSON.stringify({ PassTurn: { game_id: 0 } }),
+      ...(derived ? { derived: true } : {}),
+    });
+    const log = [entry(0, ALICE), entry(1, BOB), entry(2, BOB, true)];
+    const revert = (index: number, player: string) => ({ RevertTo: { index, player, summary: "" } });
+    // Bob's own last action, with only the game's bookkeeping on top of it: Bob's to undo.
+    expect(withHost(board(), BOB, revert(1, BOB), ALICE, log)).toBeNull();
+    // Alice's action has Bob's on top of it: only the host reaches it -- and Alice IS the host here.
+    expect(withHost(board(), ALICE, revert(0, ALICE), ALICE, log)).toBeNull();
+    expect(withHost(board(), ALICE, revert(0, ALICE), CAROL, log)).toBe(
+      "Other players have acted since your last move. Only the host can undo past somebody else's turn.",
+    );
+    // Carol never acted; Bob's entry is not hers.
+    expect(withHost(board(), CAROL, revert(1, CAROL), ALICE, log)).toMatch(/Only the host can undo/);
+    expect(withHost(board(), BOB, revert(7, BOB), ALICE, log)).toBe("There is nothing at that point in the log to undo.");
+    // No log handed over: nothing to judge against, so nothing refused (the CLI, a test).
+    expect(withHost(board(), CAROL, revert(1, CAROL), ALICE, undefined)).toBeNull();
+  });
+
+  it("CloseRoom: at GameEnd, and the race's losers are still let through for #899's silence", () => {
+    expect(refusal(board(), BOB, { CloseRoom: {} })).toBe("The game is not over yet.");
+    const ended = board({ current_round_type: "GameEnd" });
+    expect(refusal(ended, BOB, { CloseRoom: {} })).toBeNull();
+    expect(refusal({ ...ended, room_closed: true }, BOB, { CloseRoom: {} })).toBeNull();
+  });
+
+  it("is wired on the server: the host from the room document, the log from the session", () => {
+    const fs = require("fs") as typeof import("fs");
+    const path = require("path") as typeof import("path");
+    const session = fs.readFileSync(path.join(__dirname, "roomSession.ts"), "utf8");
+    expect(session).toContain("host: input.host,");
+    expect(session).toContain("log: this.log,");
+    const server = fs.readFileSync(path.join(__dirname, "..", "..", "..", "server", "src", "gameServer.ts"), "utf8");
+    expect(server).toContain("host: roomDocs.get(attached.room)?.hostId ?? null,");
+  });
+});
+
 describe("an unresolvable cursor allows the action through", () => {
   it("does not refuse when the roster is empty", () => {
     /* THE SAME LINE `dividendGate` AND `trainPurchaseGate` BOTH TAKE: "an unknown cursor is allowed through,

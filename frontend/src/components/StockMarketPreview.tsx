@@ -196,6 +196,69 @@ export function StockMarketPreview({
 
   const at = !phase.atStart && projectedNode ? projectedNode : startNode;
 
+  /* ==================================================================
+      DESIGN NOTE 1268: THE SLIDE IS GIVEN BOTH ENDS, BECAUSE THE BROWSER GUESSED ONE
+     ==================================================================
+     REPORTED: "the Stock Market tab is correct. The mini view is not: a rise animates five cells right; a
+     fall from $90 to $82 teleports four right, slides one left, then teleports to $82."
+     THE SHAPE OF THAT IS A TRANSITION STARTING FROM THE WRONG PLACE. A CSS transition interpolates from the
+     element's BEFORE-CHANGE style to the new one, and the before-change value is whatever the engine
+     computed for the last frame -- which, for a `transform` under an ancestor's `zoom` (#1144's 0.7 on the
+     shell, which this dialog sits inside), is not the number that was written. #1158 wrote `translate(246px)`
+     and the engine reported something else as the starting point; the token jumped there, slid the true
+     distance from the wrong origin, and snapped back on the reset render. The arithmetic (#1158) was right
+     both times; only the transition's implicit "from" was wrong, and it was wrong in a way no source scan
+     could see.
+     SO THE "FROM" IS NOW EXPLICIT. The Web Animations API takes both keyframes as specified values, so the
+     two ends go through one pipeline and cannot disagree about units. The inline `transform` stays at the
+     START cell throughout; the animation carries the token to the destination and holds it (`fill:
+     forwards`) through #1142's hold; the snap is `cancel()`, which drops the element back onto its inline
+     transform in one frame -- still a cut, never a reverse slide.
+     `phase` IS UNCHANGED. The three legs and their timings are #1142's; only the mechanism the slide leg uses
+     moved. Reduced motion still gets the answer rather than the motion: with `animate` false and `atStart`
+     false the inline transform is the destination and nothing is scheduled. A runtime without `animate()`
+     (jsdom) takes that same static path. */
+  const tokenRef = React.useRef<HTMLSpanElement | null>(null);
+  const slideRef = React.useRef<Animation | null>(null);
+  /* ==================================================================
+      DESIGN NOTE 1289: THE TOKEN IS PLACED WITH `left`/`top`, AND NEVER WITH A TRANSFORM
+     ==================================================================
+     THIRD REPORT: "teleports 3 cells right and then slides back 1.5 cell (stopping on a cell divider)".
+     #1268 made both keyframes explicit and the symptom survived, so the fault was never the transition's
+     implicit start -- it is the PROPERTY. This dialog lives inside the chrome's `zoom` (#1144), and in
+     current Chrome a `transform: translate(px)` inside a zoomed subtree is applied in a different pixel
+     space from the layout lengths that placed the cells (the grid is 47px a column in layout pixels; the
+     translate was landing at 47 / zoom). "Stops on a divider" is the tell: no cell arithmetic produces that;
+     a scale mismatch does. `left` and `top` ARE layout lengths, so they are zoomed exactly as the cells are.
+     The Stock Market tab was never affected because it places tokens this way already (#1267).
+     THE COST: `left`/`top` animate through layout rather than on the compositor. It is one 22px span over
+     a 120-cell grid for 420ms; it is fine. */
+  const placeFor = (node: { x: number; y: number }) => ({
+    left: `${(node.x - BOARD_X.min) * (CELL + GAP) + (CELL - TOKEN) / 2}px`,
+    top: `${(BOARD_Y.max - node.y) * (CELL + GAP) + (CELL - TOKEN) / 2}px`,
+  });
+  React.useEffect(() => {
+    const element = tokenRef.current;
+    slideRef.current?.cancel();
+    slideRef.current = null;
+    if (!element || !phase.animate || !projectedNode) return undefined;
+    if (typeof element.animate !== "function") return undefined;
+    slideRef.current = element.animate(
+      [placeFor(startNode), placeFor(projectedNode)],
+      { duration: SLIDE_MS, easing: "cubic-bezier(0.22, 0.61, 0.36, 1)", fill: "forwards" },
+    );
+    return () => {
+      slideRef.current?.cancel();
+      slideRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `placeFor` closes over constants only.
+  }, [phase, projectedNode, startNode.x, startNode.y]);
+  /* The static position: the start while a slide is in flight or pending, the answer when there is no motion
+     to show (reduced motion, or no `animate()` to call). */
+  const restingNode = phase.animate ? startNode : at;
+  const canAnimate =
+    typeof HTMLElement !== "undefined" && typeof HTMLElement.prototype.animate === "function";
+
   /* The neighbours, grouped per cell in the order the chart itself stacks them -- see the note on the token
      row below for why the order is preserved rather than sorted. */
   const occupantsAt = React.useCallback(
@@ -295,8 +358,9 @@ export function StockMarketPreview({
                       title={`${other.ticker} at $${cell.price}`}
                       style={{
                         position: "absolute",
-                        left: `${(CELL - TOKEN) / 2}px`,
-                        top: `${(CELL - TOKEN) / 2 + stackOffset(index, others.length, TOKEN)}px`,
+                        /* Design note #1267: across the cell, as the chart now draws it. */
+                        left: `${(CELL - TOKEN) / 2 + stackOffset(index, others.length, TOKEN)}px`,
+                        top: `${(CELL - TOKEN) / 2}px`,
                         zIndex: 10 + (others.length - index),
                       }}
                     />
@@ -327,16 +391,17 @@ export function StockMarketPreview({
             render that returns the token to its start, so the only motion an eye sees is the real one. It
             now has an element for that to be true of. */}
         <MarketToken
+          ref={tokenRef}
           companyId={company.company_id}
           ticker={company.ticker}
           diameterPx={TOKEN}
           title={company.ticker}
           style={{
             ...styles.movingToken,
-            ...(phase.animate ? {} : styles.movingTokenInstant),
-            transform: `translate(${(at.x - BOARD_X.min) * (CELL + GAP) + (CELL - TOKEN) / 2}px, ${
-              (BOARD_Y.max - at.y) * (CELL + GAP) + (CELL - TOKEN) / 2
-            }px)`,
+            /* Design note #1268: the inline position never transitions. Where `animate()` is unavailable
+               the slide leg falls back to placing the token at the destination, which is the reduced-motion
+               answer and still correct. Design note #1289: `left`/`top`, not a transform. */
+            ...placeFor(canAnimate ? restingNode : at),
           }}
         />
       </div>
@@ -422,14 +487,15 @@ const styles: Record<string, React.CSSProperties> = {
      over 120 cells smooth. `zIndex` clears the neighbours it passes over. */
   movingToken: {
     position: "absolute",
-    top: 0,
-    left: 0,
+    /* Design note #1289: `left`/`top` are written per render from `placeFor`; no transform, ever. */
     zIndex: 5,
-    transition: "transform 420ms cubic-bezier(0.22, 0.61, 0.36, 1)",
+    /* Design note #1268: NO `transition`. The slide is a Web Animation with both ends stated; a CSS
+       transition here would race it from a starting value the engine chose. */
   },
   /* Design note #1142: the reset leg. `none` rather than `0ms` because a zero-duration transition still
      fires `transitionend` and still counts as an animation to anything watching for one. */
-  movingTokenInstant: { transition: "none" },
+  /* Design note #1268: `movingTokenInstant` is gone with the transition it switched off. The cut is
+     `Animation.cancel()` now, which needs no style to express. */
   caption: {
     margin: 0,
     /* Design note #1156: the caption wraps to the chart it captions, whatever width that now is. */

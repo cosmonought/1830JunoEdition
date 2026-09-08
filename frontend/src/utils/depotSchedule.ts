@@ -99,6 +99,14 @@ export const DEPOT_SCHEDULE: Readonly<Record<string, DepotTierSchedule>> = {
   },
 };
 
+/** Design note #1312: what a tier's first purchase does AT THIS TABLE. The schedule is 1830's; the Project
+ *  18XX+ tile set adds one effect to the Diesel's -- the Gray tier opens -- and it is added here rather than
+ *  written into the table, so the table stays the printed game and the variant stays a variant. */
+export function firstPurchaseEffects(tier: string, plusTiles: boolean): readonly string[] {
+  const printed = DEPOT_SCHEDULE[tier]?.onFirstPurchase ?? [];
+  return tier === "D" && plusTiles ? [...printed, "Unlocks Gray tiles"] : printed;
+}
+
 /** The word a permanent train gets in the Rusts column.
  *
  *  Named rather than inlined so the table and any future surface agree, and so the test can assert the

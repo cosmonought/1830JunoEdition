@@ -92,10 +92,14 @@ describe("the move repeats without ever running backwards", () => {
        THE RESET IS A CUT. `movingTokenInstant` kills the transition for exactly the render that returns the
        token to its start, so the only motion an eye ever sees is the real one.
        ASSERTED AS THE EXISTENCE OF THAT OFF-STATE, because a loop without it looks correct in source and is
-       wrong on screen -- which is the only kind of bug this preview can have. */
-    expect(PREVIEW).toContain("movingTokenInstant");
-    expect(PREVIEW).toContain('transition: "none"');
-    expect(PREVIEW).toContain("phase.animate ? {} : styles.movingTokenInstant");
+       wrong on screen -- which is the only kind of bug this preview can have.
+       DESIGN NOTE 1268: THE CUT IS `cancel()` NOW. The slide became a Web Animation with both keyframes
+       stated (the CSS transition was starting from a value the engine chose under `zoom`), and cancelling
+       it drops the token onto its inline start transform in one frame. The claim is the same -- no reverse
+       motion is ever drawn -- and the off-state is the absence of any `transition` on the token at all. */
+    expect(PREVIEW).toContain("slideRef.current?.cancel();");
+    expect(PREVIEW).not.toContain("movingTokenInstant:");
+    expect(sliceBetween(PREVIEW, "movingToken: {", "},")).not.toContain("transition");
   });
 
   it("chains its three legs rather than running one interval", () => {

@@ -74,8 +74,12 @@ export interface ActionLogEntry {
    * that re-read the CURRENT variant state would repaint every historic entry the moment a later turn rolled
    * differently.
    * ABSENT ON EVERY OTHER LINE, so the log's ordinary entries are untouched -- this marks the variant's
-   * flavour text and nothing else. */
-  tone?: "bonus" | "malus";
+   * flavour text and nothing else.
+   * Design note #1261: `sign` is the third value, for the Yellow Sign's own lines. REPORTED: "Yellow Sign
+   * log line should be yellow, not red/green." The Mark, the escalation and the fog are not a die going one
+   * way or the other -- they are the egg, and a line about the egg tinted like a bad roll told the player
+   * the wrong story about what had just happened. */
+  tone?: "bonus" | "malus" | "sign";
   /** ==================================================================
    *   DESIGN NOTE 1079: WHERE THE MATH STOPS AND THE JOKE STARTS
    *  ==================================================================
@@ -127,8 +131,8 @@ export interface FeedItem {
   logRound?: string;
   logStatus?: ActionLogStatus;
   logDetail?: string;
-  /** Design note #1042: the variant tint, carried through the merge. */
-  logTone?: "bonus" | "malus";
+  /** Design note #1042: the variant tint, carried through the merge. #1261: `sign` is the Yellow Sign's. */
+  logTone?: "bonus" | "malus" | "sign";
   /** Design note #1079: the index in `logLabel` where the flavour sentence begins. */
   logFlavourFrom?: number;
 }

@@ -13,7 +13,7 @@
 // Design notes: see `docs/ai_architecture/contract_economy.md`.
 
 import React, { useEffect, useRef, useState } from "react";
-import { FONT_SIZE, RADIUS } from "../styles/typography";
+import { FONT_SIZE, RADIUS, VIEWPORT_RADIUS } from "../styles/typography";
 import { privateClosureTier } from "../utils/purchaseWarnings";
 import { PRIVATE_COMPANY_CATALOG } from "../utils/privateCatalog";
 import { SpecialPowerBlock, CARD_SECTION_CAPTION } from "./SpecialPowerBlock";
@@ -480,13 +480,26 @@ function PrivateCard({
       // something to select -- all real styling stays inline, per this
       // file's convention.
       className={isCompetingInMiniAuction ? "waterfall-miniauction-card" : undefined}
-      style={
-        isCompetingInMiniAuction
+      style={{
+        ...(isCompetingInMiniAuction
           ? styles.privateCardMiniAuction
           : priv.is_lowest_offered
             ? styles.privateCardLowest
-            : styles.privateCard
-      }
+            : styles.privateCard),
+        /* ==================================================================
+            DESIGN NOTE 1262: THE SIBLINGS STEP BACK WHILE THE CONTEST RUNS
+           ==================================================================
+           REPORTED: "mini-auction siblings lit, look clickable." Two faults, one report.
+           THE CARDS: a live mini-auction pauses the whole waterfall on one private, and the other five drew
+           themselves exactly as before -- same surface, same buttons at full contrast -- so the eye had no
+           way to tell the one card that was in play from the five that were waiting. They recede now, the
+           way #948 drains a locked roster card, and come back the moment the contest settles.
+           THE BUTTONS: every control on this face took `disabled` with no disabled LOOK, which is #681's
+           bug -- "a control that refuses clicks at full contrast reads as broken rather than as barred" --
+           in the one file the sweep had not yet covered. `controlDisabled` answers it below, and the file
+           joins `disabledLook.test.ts`'s roster so it cannot regress. */
+        ...(miniAuction && !isCompetingInMiniAuction ? styles.privateCardSuspended : {}),
+      }}
     >
       {/* The whole header is the accordion toggle. */}
       <div style={styles.privateCardToggle}>
@@ -711,7 +724,10 @@ function PrivateCard({
               <div style={styles.inlineActionRow}>
                 <input
                   type="number"
-                  style={styles.inlineNumberInput}
+                  style={{
+                    ...styles.inlineNumberInput,
+                    ...(!sessionReady || !isMyMiniTurn ? styles.controlDisabled : {}),
+                  }}
                   min={minimumRaise}
                   step={MIN_BID_INCREMENT}
                   value={raiseAmount}
@@ -721,7 +737,10 @@ function PrivateCard({
                 />
                 <button
                   type="button"
-                  style={styles.inlineRaiseButton}
+                  style={{
+                    ...styles.inlineRaiseButton,
+                    ...(!sessionReady || !isMyMiniTurn || raiseReason !== null ? styles.controlDisabled : {}),
+                  }}
                   onClick={() => onMiniAuctionRaise(raiseAmount)}
                   disabled={!sessionReady || !isMyMiniTurn || raiseReason !== null}
                   title={
@@ -735,7 +754,10 @@ function PrivateCard({
                 </button>
                 <button
                   type="button"
-                  style={styles.inlineDropButton}
+                  style={{
+                    ...styles.inlineDropButton,
+                    ...(!sessionReady || !isMyMiniTurn ? styles.controlDisabled : {}),
+                  }}
                   onClick={onMiniAuctionPass}
                   disabled={!sessionReady || !isMyMiniTurn}
                   title="Drop out of this mini-auction. Your escrowed bid is refunded in full."
@@ -756,7 +778,10 @@ function PrivateCard({
               <span style={styles.cardActionsTitle}>Buy at face value</span>
               <button
                 type="button"
-                style={styles.primaryButton}
+                style={{
+                  ...styles.primaryButton,
+                  ...(!sessionReady || !isMyMainTurn || buyReason !== null ? styles.controlDisabled : {}),
+                }}
                 onClick={onBuyLowest}
                 disabled={!sessionReady || !isMyMainTurn || buyReason !== null}
                 title={buyReason ?? "Buys this company for face value."}
@@ -780,7 +805,10 @@ function PrivateCard({
               <div style={styles.bidRow}>
                 <input
                   type="number"
-                  style={styles.numberInput}
+                  style={{
+                    ...styles.numberInput,
+                    ...(!sessionReady || !isMyMainTurn || alreadyBidHere ? styles.controlDisabled : {}),
+                  }}
                   min={minimumBid}
                   step={MIN_BID_INCREMENT}
                   value={bidAmount}
@@ -792,7 +820,10 @@ function PrivateCard({
                 />
                 <button
                   type="button"
-                  style={styles.secondaryButton}
+                  style={{
+                    ...styles.secondaryButton,
+                    ...(!sessionReady || !isMyMainTurn || bidReason !== null ? styles.controlDisabled : {}),
+                  }}
                   onClick={() => onBidHigher(priv.private_id, bidAmount)}
                   disabled={!sessionReady || !isMyMainTurn || bidReason !== null}
                   title={
@@ -938,7 +969,8 @@ const styles: Record<string, React.CSSProperties> = {
     // Design note #1117: the one viewport ground, shared by every tab.
     backgroundColor: INK_VIEWPORT,
     border: "1px solid #2a2a2a",
-    borderRadius: RADIUS.card,
+    // Design note #1257: square on top, where the tab strip attaches.
+    borderRadius: VIEWPORT_RADIUS,
     color: "#f2f0eb",
     fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif",
     width: "100%",
@@ -1045,6 +1077,16 @@ const styles: Record<string, React.CSSProperties> = {
   },
   /** A live mini-auction on this private -- the whole waterfall is paused
    *  on it, so it gets the strongest edge treatment of the three. */
+  /* Design note #1262: a card waiting on somebody else's mini-auction. Recedes; nothing on it is in play.
+     Opacity rather than #948's grayscale, because these cards come BACK -- a drained look reads as final. */
+  privateCardSuspended: {
+    opacity: 0.55,
+  },
+  /* Design note #1262: the one disabled look for every control on this screen. #681's rule. */
+  controlDisabled: {
+    opacity: 0.4,
+    cursor: "not-allowed",
+  },
   /** Design note #28: a won private -- present but inert. */
   privateCardSold: {
     display: "flex",

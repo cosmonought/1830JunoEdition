@@ -44,6 +44,7 @@ const TIER_SORT_ORDER: Readonly<Record<TileColorTier, number>> = {
   Yellow: 0,
   Green: 1,
   Brown: 2,
+  Gray: 3, // #1312
 };
 
 /** Tier accent colours, matching `HexGridRenderer.tsx`'s own
@@ -53,6 +54,7 @@ const TIER_LABEL_COLOR: Readonly<Record<TileColorTier, string>> = {
   Yellow: "#caa42a",
   Green: "#6fcf7c",
   Brown: "#c08a5a",
+  Gray: "#b8bcc2", // #1312
 };
 
 export interface TileSelectionPopupProps {
@@ -290,7 +292,7 @@ export function TileSelectionPopup({
   const [eraFilter, setEraFilter] = useState<TileColorTier | null>(null);
   const availableEras = useMemo(() => {
     const present = new Set(allGroups.map((group) => group.tier).filter(Boolean));
-    return (["Yellow", "Green", "Brown"] as const).filter((tier) => present.has(tier));
+    return (["Yellow", "Green", "Brown", "Gray"] as const).filter((tier) => present.has(tier));
   }, [allGroups]);
   const groups = useMemo(
     () => (eraFilter ? allGroups.filter((group) => group.tier === eraFilter) : allGroups),

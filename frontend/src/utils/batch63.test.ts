@@ -37,7 +37,10 @@ const {
   CARD_INK_POSITIVE,
 } = require("../styles/palette") as typeof import("../styles/palette");
 
-const MACHINE = readStripped("components/DividendMoneyMachine.tsx");
+/* Design note #1291: the machine keeps the schedule, the sound and the seat; the shared `MoneyMachinePanel`
+   draws the stripe, the rows and the total. Claims about what is DRAWN read the panel. */
+const MACHINE_FILE = readStripped("components/DividendMoneyMachine.tsx");
+const MACHINE = readStripped("components/MoneyMachinePanel.tsx");
 const MODAL = readStripped("components/PrivateRevenueModal.tsx");
 const CARDS = readStripped("components/PlayerCards.tsx");
 
@@ -71,10 +74,11 @@ describe("the seat stripe carries identity and only identity", () => {
     /* THE PLAYER CARD'S OWN MECHANISM, borrowed rather than matched by eye -- the borrowing IS the change.
        #569: "colour in exactly one place is decoration; colour meaning the same thing in several places is a
        language." */
-    expect(MACHINE).toContain("bestContrastTextColor(event.seatColor)");
-    expect(MACHINE).toContain("{event.playerName}");
+    expect(MACHINE_FILE).toContain("bestContrastTextColor(event.seatColor)");
+    expect(MACHINE_FILE).toContain("label: event.playerName,");
+    expect(MACHINE_FILE).toContain("fill: event.seatColor,");
     const stripe = sliceBetween(MACHINE, "<header", "</header>");
-    expect(stripe).toContain("event.seatColor");
+    expect(stripe).toContain("header.fill");
   });
 
   it("carries no figure, which is the rule I broke first", () => {
@@ -87,10 +91,13 @@ describe("the seat stripe carries identity and only identity", () => {
        total on the stripe anyway.
        ASSERTED ON THE REGION, not on the absence of one string: a stripe that carried `shown`, `amount`, or a
        dollar sign at all would fail, whichever of them somebody reached for. */
+    /* Design note #1291: the panel's header carries the label and, for a corporation, the herald -- never
+       the mover's figure or the holder's total. (The `$` of a template literal for the herald's title is not
+       a figure, so the negatives name the two figures themselves.) */
     const stripe = sliceBetween(MACHINE, "<header", "</header>");
     expect(stripe).not.toContain("shown");
-    expect(stripe).not.toContain("amount");
-    expect(stripe).not.toContain("$");
+    expect(stripe).not.toContain("mover.");
+    expect(stripe).not.toContain("holder.");
   });
 
   it("matches what the other two stripes carry", () => {
@@ -107,7 +114,11 @@ describe("the seat stripe carries identity and only identity", () => {
        what follows it.
        AND THE CLAIM IS ASKED OF THE SIBLINGS so this cannot pass by all three drifting together: none of the
        three headers carries a figure, which is the rule #1052 stated and this file obeys. */
-    expect(sliceBetween(MODAL, "<header", "</header>")).not.toContain("$");
+    /* Design note #1290 OVERTURNED #1052 FOR THE MODAL: ruled, "the cash consequence printed on the right on
+       the player color stripe ... could be done on the active player's card so there is a fast way to scan
+       the effect." So the modal's stripe carries the movement now -- and the slide-out's does not, because
+       there the movement IS the body of the panel. Asserted as ruled. */
+    expect(sliceBetween(MODAL, "<header", "</header>")).toContain("styles.stripeMovement");
     const cardStripe = sliceBetween(CARDS, "styles.stripeIdentity", "styles.body");
     expect(cardStripe).toContain("styles.stripeName");
     expect(cardStripe).not.toContain("$");
@@ -175,8 +186,9 @@ describe("the panel is the card's paper now", () => {
        is 1.7:1 on paper. `CARD_INK_POSITIVE` is the palette's answer at ~6:1, already used by the sibling
        modal for exactly this -- a swap of register, not a new colour, and #670's "green means money arriving"
        is untouched. */
-    expect(MACHINE).toContain("color: CARD_INK_POSITIVE");
+    expect(MACHINE_FILE).toContain("ink: CARD_INK_POSITIVE");
     expect(MACHINE).not.toContain("#5fd39a");
+    expect(MACHINE_FILE).not.toContain("#5fd39a");
     expect(contrast(CARD_SURFACE, CARD_INK_POSITIVE)).toBeGreaterThanOrEqual(4.5);
     // And the figure it replaced would genuinely have failed, which is why this case exists.
     expect(contrast(CARD_SURFACE, "#5fd39a")).toBeLessThan(3);
@@ -217,10 +229,11 @@ describe("the payout still falls onto the total", () => {
        the one convention every reader already has.
        ASSERTED BY POSITION, which is the only form that catches it: the payer row must precede the holder
        row in the file. `anchorIndex` throws on a rotted anchor rather than comparing against -1 (#1090). */
-    expect(anchorIndex(MACHINE, "styles.payerRow")).toBeLessThan(
-      anchorIndex(MACHINE, "styles.holderRow"),
-    );
-    expect(anchorIndex(MACHINE, "<header")).toBeLessThan(anchorIndex(MACHINE, "styles.payerRow"));
+    /* Design note #1291: the panel takes both orders -- payer above the total for a player (the payout
+       falls), total above the spend for a corporation (the spend rises). The player's is asserted. */
+    expect(MACHINE).toContain("{corporation ? holderRow : moverRow}");
+    expect(MACHINE).toContain("{corporation ? moverRow : holderRow}");
+    expect(anchorIndex(MACHINE, "<header")).toBeLessThan(anchorIndex(MACHINE, "{corporation ? holderRow : moverRow}"));
   });
 
   it("leaves the three phases and their classes alone", () => {
@@ -231,7 +244,7 @@ describe("the payout still falls onto the total", () => {
       "app-money-machine-fall",
       "app-money-machine-landed",
     ]) {
-      expect(MACHINE).toContain(cls);
+      expect(MACHINE_FILE).toContain(cls);
     }
     expect(sliceBetween(MACHINE, "<header", "</header>")).not.toContain("app-money-machine");
   });
@@ -239,7 +252,8 @@ describe("the payout still falls onto the total", () => {
   it("rules the total off from the payer above it", () => {
     /* THE LINE UNDER A COLUMN OF ADDENDS. It is what makes the drop read as a sum landing in a total rather
        than two figures that happen to be adjacent -- the same convention the animation is imitating. */
-    expect(sliceBetween(MACHINE, "holderRow: {", "},")).toContain("borderTop");
+    // Design note #1291: the rule sits on whichever row is SECOND, so it stays between the two either way up.
+    expect(sliceBetween(MACHINE, "secondRow: {", "},")).toContain("borderTop");
   });
 });
 
@@ -267,7 +281,7 @@ describe("what the name's departure left behind", () => {
        one-word caption satisfies exactly as well. The word that went was the one duplicating the stripe the
        same note moved the name into.
        SO THE ASSERTION FOLLOWS THE CLAIM: there is a caption, and it is in the label's own style. */
-    expect(MACHINE).toContain(">Cash</span>");
+    expect(MACHINE_FILE).toContain('label: "Cash"');
     expect(MACHINE).toContain("styles.holderLabel");
   });
 });

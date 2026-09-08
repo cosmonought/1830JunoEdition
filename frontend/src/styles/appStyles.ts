@@ -30,6 +30,8 @@ import {
   TURN_PULSE_INK_RGB,
 } from "./palette";
 import type { GamePhase } from "../utils/gamePhase";
+/* Design note #1273: the chrome scale is this browser's preference, resolved once at load. */
+import { resolveUiScale } from "../utils/uiScale";
 /* Design note #884 imported `PRIVATE_POWER_GLOW_STOPS` here, for the chip's gradient strip.
    Design note #976: the strip is gone and so is the import -- this sheet had exactly one consumer of the
    list, and an unused import is the half of a deletion that gets left behind. The palette itself is
@@ -73,8 +75,17 @@ export const PHASE_TINT_STYLES: Readonly<Record<GamePhase["tint"], React.CSSProp
    player converging on "about right" through those stops can only land within about a tenth. Two playtests
    have now bracketed it, and 0.63 is the second reading rather than a correction of a mistake in the first.
    TWICE IS THE SIGNAL FOR THE PICKER. If a third reading moves it again, the follow-up ruled out above has
-   earned its place: this is a per-reader preference being fitted by successive approximation from here. */
-export const UI_SCALE = 0.63;
+   earned its place: this is a per-reader preference being fitted by successive approximation from here.
+
+   ==================================================================
+    DESIGN NOTE 1273: THE THIRD READING -- IT IS A PREFERENCE NOW
+   ==================================================================
+   "Everything is way too small"; one player at 250% browser zoom. The constant was right for the screen it
+   was read from and wrong for that one, which is #1149's own forecast arriving. `resolveUiScale` answers
+   with this browser's stored choice, else a guess from the window's width that lands on 0.63 exactly where
+   #1149 measured it -- see `utils/uiScale.ts`. Still ONE NUMBER at module load, so every consumer of this
+   binding is exactly as it was; the picker in `TopBar` changes it by storing and reloading. */
+export const UI_SCALE = resolveUiScale();
 
 /* ==================================================================
     DESIGN NOTE 1144: ONE ZOOM, SPREAD ON ALL THREE ROOTS
@@ -106,6 +117,15 @@ export const CHROME_ZOOM: React.CSSProperties = {
      contents and read exactly as before, one size smaller. */
   minHeight: `${100 / UI_SCALE}vh`,
 };
+
+/* ==================================================================
+    DESIGN NOTE 1294: THE SAME OBJECT, AS A FUNCTION OF THE LIVE SCALE
+   ==================================================================
+   `CHROME_ZOOM` is the value at load; the three roots draw with THIS, handed the scale `useUiScale()` returns,
+   so the picker's change lands without a reload. Same two declarations, same reasoning (#1144). */
+export function chromeZoomFor(scale: number): React.CSSProperties {
+  return { zoom: scale, minHeight: `${100 / scale}vh` };
+}
 
 export const styles: Record<string, React.CSSProperties> = {
   /* Design note #34: the single slim top bar. 6px vertical against the old header's 16px -- the point of
@@ -560,6 +580,16 @@ export const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     gap: "4px",
     flexShrink: 0,
+  },
+  /* Design note #1273: the text-size picker's two halves -- a stepper at its end, and the readout between. */
+  topBarStationStepDisabled: { opacity: 0.4, cursor: "not-allowed" },
+  topBarScaleReadout: {
+    minWidth: "34px",
+    textAlign: "center",
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 700,
+    fontVariantNumeric: "tabular-nums",
+    color: "#a8a6a0",
   },
   topBarIconButton: {
     width: "26px",
@@ -2061,12 +2091,13 @@ export const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.strong,
     color: "#e8e6e0",
   },
-  dividendAmount: { fontVariantNumeric: "tabular-nums", color: "#7ee0a1", fontWeight: 700 },
+  dividendAmount: { fontVariantNumeric: "tabular-nums", color: "#7ee0a1", fontWeight: 700, justifySelf: "end" }, // #1295
   dividendPct: { color: "#6e6c68", fontWeight: 400 },
   /* Design note #705: the money move, kept on one line of its own so the arrow never separates from the
      figures it points between. Same vocabulary as `treasuryMove` deliberately -- the Pay column and the
      Withhold column are two answers to one question and should not read as two designs. */
   dividendMoveGroup: {
+    justifySelf: "end", // #1295
     display: "inline-flex",
     flexDirection: "row",
     alignItems: "baseline",
@@ -2103,7 +2134,24 @@ export const styles: Record<string, React.CSSProperties> = {
     color: "#9ec5ff",
     whiteSpace: "nowrap",
   },
-  dividendMove: { fontSize: FONT_SIZE.strong, fontWeight: 700, color: "#9ec5ff", cursor: "pointer" },
+  /* ==================================================================
+      DESIGN NOTE 1295: THE FIGURE CELLS SAY "END" THEMSELVES
+     ==================================================================
+     REPORTED (20): "the Pay dividends 'Market Move' string is flush left and the consequence is centered ...
+     The Withhold 'Market Move' string AND its consequence seems to be flush left, but here too the
+     consequence needs to be flush right." #1180 put `justifyItems: end` on the grid and let the figure cells
+     inherit it; on the two market-move rows they did not land there in play. Rather than argue with the
+     inheritance, every figure cell now carries its own `justifySelf: "end"` and `textAlign: "right"`, which
+     is one rule stated where it applies -- and cannot be undone by whatever sits between the grid and the
+     cell. The label cells keep their `start`. */
+  dividendMove: {
+    fontSize: FONT_SIZE.strong,
+    fontWeight: 700,
+    color: "#9ec5ff",
+    cursor: "pointer",
+    justifySelf: "end",
+    textAlign: "right",
+  },
   /* Design note #1154: the label half of the widened hit area. A separate entry rather than a spread, because
      a label with no chart to open must NOT claim to be pressable -- `MarketMoveLine` picks between the two. */
   dividendMoveLabelOpens: {
@@ -2130,6 +2178,7 @@ export const styles: Record<string, React.CSSProperties> = {
      to-value -- so a player reads the two consequences of a withhold as one
      pair of before/after facts rather than as a sentence and a diagram. */
   treasuryMove: {
+    justifySelf: "end", // #1295
     display: "inline-flex",
     flexDirection: "row",
     alignItems: "center",

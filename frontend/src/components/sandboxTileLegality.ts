@@ -20,7 +20,8 @@
 // Design notes #3/#4/#6/#7/#483: see `docs/ai_architecture/hex_tile_math.md`.
 
 import { TILE_CATALOG_BY_ID, type TileColorTier, type TileCatalogEntry } from "./hexTileCatalog";
-import { IMPASSABLE_BORDER_EDGES, LANDMARK_HEXES, STATIC_BOARD_HEXES, YELLOW_OO_HEXES } from "./hexBoardData";
+import { IMPASSABLE_BORDER_EDGES, LANDMARK_HEXES, STATIC_BOARD_HEXES, TO_HEXES, YELLOW_OO_HEXES, boardMemo } from "./hexBoardData";
+import { inTray, trayCountOf } from "./tileTray";
 import {
   HEX_NEIGHBOR_OFFSETS,
   archetypeForHex,
@@ -101,7 +102,7 @@ export function hexCentres(mapGrid: MapGridResponse, q: number, r: number): Cent
 
 /** The letter code printed on a hex, restricting which artwork may upgrade
  *  it. `null` for the ordinary majority of the board. */
-export type HexLabelRestriction = "OO" | "B" | "NY";
+export type HexLabelRestriction = "OO" | "B" | "NY" | "TO";
 
 /** Which code, if any, this hex carries -- resolved STRUCTURALLY. Design note #1: this used to be two hardcoded
  *  coordinate sets. It now derives the answer the way the renderer's restriction-badge pass does -- OO
@@ -114,6 +115,8 @@ export function hexLabelRestriction(
   r: number,
 ): HexLabelRestriction | null {
   const boardHex = STATIC_BOARD_HEXES.find((hex) => hex.q === q && hex.r === r);
+  // #1317: a TO hex is an OO-shaped hex with a different letter; the letter is asked first.
+  if (boardHex && TO_HEXES.has(boardHex.label)) return "TO";
   if (boardHex && YELLOW_OO_HEXES.has(boardHex.label)) return "OO";
   const isLandmark = LANDMARK_HEXES.some((landmark) => landmark.q === q && landmark.r === r);
   if (!isLandmark) return null;
@@ -127,6 +130,7 @@ const REQUIRED_TERRAIN: Readonly<Record<HexLabelRestriction, string>> = {
   OO: "DoubleCityHub",
   B: "BostonHub",
   NY: "NewYorkHub",
+  TO: "TorontoHub", // #1317
 };
 
 /** Every terrain that is label-restricted somewhere, and therefore illegal
@@ -144,6 +148,7 @@ const TIER_RANK: Readonly<Record<TileColorTier, number>> = {
   Yellow: 0,
   Green: 1,
   Brown: 2,
+  Gray: 3, // #1312: reached only in a Project 18XX+ tile-set game's Diesel era
 };
 
 /* Design note #3: A PREPRINTED HEX IS ALREADY AT A TIER. The labelled hexes carry `printedColor: "Yellow"` --
@@ -153,10 +158,13 @@ const TIER_RANK: Readonly<Record<TileColorTier, number>> = {
    upgrade is GREEN, because a yellow tile cannot be laid on a hex that already has one; and a BROWN tile is
    not offered until a green one is down -- without the rank, a Brown-era game would have offered brown
    straight onto a still-yellow New York, which is `InvalidColorUpgrade` on chain. */
-const PREPRINTED_TIER_BY_LABEL: ReadonlyMap<string, TileColorTier> = new Map(
-  STATIC_BOARD_HEXES.flatMap((hex) =>
-    hex.printedColor === "Yellow" ? ([[hex.label, "Yellow"]] as [string, TileColorTier][]) : [],
-  ),
+const preprintedTierByLabel = boardMemo(
+  (board): ReadonlyMap<string, TileColorTier> =>
+    new Map(
+      board.hexes.flatMap((hex) =>
+        hex.printedColor === "Yellow" ? ([[hex.label, "Yellow"]] as [string, TileColorTier][]) : [],
+      ),
+    ),
 );
 
 /* ------------------------------------------------------------------ */
@@ -458,7 +466,7 @@ export function filterSandboxPlacements(
 
   // Design note #3: a laid tile wins, then the hex's printed tier, then
   // bare ground at -1.
-  const preprintedTier = boardHex ? PREPRINTED_TIER_BY_LABEL.get(boardHex.label) : undefined;
+  const preprintedTier = boardHex ? preprintedTierByLabel().get(boardHex.label) : undefined;
   const existingRank = existing
     ? TIER_RANK[existing.color]
     : preprintedTier === undefined
@@ -472,6 +480,25 @@ export function filterSandboxPlacements(
     // artwork; offering one would let a player select a tile nobody can
     // render.
     if (!entry) return false;
+
+    /* ==================================================================
+        DESIGN NOTE 1311: THE TRAY IS ASKED FIRST
+       ==================================================================
+       0a. IN THIS GAME AT ALL. The catalog now carries every tile either game can hold, so a tile that is
+       not in this table's tray -- a green town at a standard table, say -- must be refused here, before
+       any geometric rule gets to find it legal.
+       0b. AND STILL IN THE BOX. RULED: the reducer refuses a lay when the tray is empty -- it was the radial
+       selector's disabled button alone before, which was fine while a contract had the last word and is
+       not now that the Node server is the authority. The arithmetic is `tileSupply`'s own closed one: a
+       copy is on the board or in the tray, a printed tile (#1301) never left the tray, and the tile being
+       replaced by this lay goes back. A properly-played log cannot have laid past the count, so no replay
+       moves. */
+    if (!inTray(tile_id)) return false;
+    const onBoard = mapGrid.tiles.reduce(
+      (total, tile) => (tile.tile_id === tile_id && tile.printed !== true ? total + 1 : total),
+      0,
+    );
+    if (onBoard >= trayCountOf(tile_id)) return false;
 
     // 1. Era.
     if (TIER_RANK[entry.color] > eraRank) return false;

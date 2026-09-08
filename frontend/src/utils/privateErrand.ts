@@ -51,6 +51,14 @@ export interface ArmedErrand {
   kind: PrivateErrandKind;
   q: number;
   r: number;
+  /** Design note #1331: every hex this errand accepts. A two-home corporation (the Level Playing Field's
+   *  C&O) lights both and the click chooses; absent, `(q, r)` is the only one. */
+  options?: ReadonlyArray<{ q: number; r: number }>;
+}
+
+/** The hexes an errand accepts -- `options` when present, else its own. */
+export function errandHexes(errand: ArmedErrand): ReadonlyArray<{ q: number; r: number }> {
+  return errand.options && errand.options.length > 0 ? errand.options : [{ q: errand.q, r: errand.r }];
 }
 
 /** What a click on `(q, r)` means for the errand currently armed.
@@ -69,7 +77,7 @@ export function errandClickIntent(
   r: number,
 ): "complete" | "cancel" | "ignore" {
   if (!errand) return "ignore";
-  if (errand.q === q && errand.r === r) return "complete";
+  if (errandHexes(errand).some((hex) => hex.q === q && hex.r === r)) return "complete";
   // Compulsory: there is nothing to cancel and nowhere else to go.
   if (errand.kind === "home-station") return "ignore";
   return "cancel";

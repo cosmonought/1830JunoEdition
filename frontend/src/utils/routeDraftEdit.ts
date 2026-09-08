@@ -27,6 +27,7 @@ import { bridgeWaypoints } from "./routeAutoTrace";
 import { connectionForClick, segmentsUsedBy } from "./routeConnection";
 import { axialHexDistance, type RoutePoint } from "./routeWaypoints";
 import { isRevenueCentreHex, isRouteTerminusHex } from "./sandboxSession";
+import { stopEnteredFrom } from "./trackReach";
 import { isUnlimitedReach, reachForDrafting } from "./trainReach";
 import { liveEdgesForHex } from "../components/hexGeometry";
 import type { MapGridResponse } from "../components/hexContractTypes";
@@ -192,6 +193,29 @@ export function editRouteDraft(input: RouteDraftEditInput): RouteDraftEdit {
         ok: false,
         reason: `This route already runs that track through ${last.hexLabel}. A train may not run the same track twice — click ${last.hexLabel} to step back, or take the other track.`,
       };
+    }
+    /* ==================================================================
+        DESIGN NOTE 1319: RULE 5b -- A CITY IS VISITED ONCE
+       ==================================================================
+       RULED: "a city can only ever be visited once by a train", and re-entering a hex into its OTHER city is
+       legal and pays twice (#1318). Rule 5 above is about rails and lets a second rail into the same hex
+       through, which is right for the other city and wrong for the same one. So a re-entry is asked WHICH stop
+       it reaches (`stopEnteredFrom`), and refused when this route has already stood in that stop. Plain track
+       is not a stop and is not asked. */
+    if (isRevenueCentreHex(mapGrid, click.hexLabel)) {
+      const entering = stopEnteredFrom(mapGrid, click, last);
+      const visitedBefore = points.some((point, index) => {
+        if (point.q !== click.q || point.r !== click.r) return false;
+        const neighbour = index > 0 ? points[index - 1] : points[index + 1];
+        const stop = neighbour ? stopEnteredFrom(mapGrid, point, neighbour) : null;
+        return stop !== null && entering !== null && stop === entering;
+      });
+      if (visitedBefore) {
+        return {
+          ok: false,
+          reason: `This route has already stopped at that city on ${click.hexLabel}. A train visits a city once — click ${last.hexLabel} to step back, or run into the hex's other city.`,
+        };
+      }
     }
     return commit([...points, click]);
   }

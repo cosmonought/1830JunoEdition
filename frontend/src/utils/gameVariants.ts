@@ -114,7 +114,10 @@ export type VariantCopyKey =
   | "unpredictableRevenue"
   | "dynamicStockMarket"
   | "gentleRust"
-  | "delayedAuction";
+  | "delayedAuction"
+  | "expandedMap"
+  | "plusTiles"
+  | "levelPlayingField";
 
 /* ==================================================================
  *  DESIGN NOTE 961a: THE TITLES HAD DRIFTED TOO
@@ -245,11 +248,127 @@ export const VARIANT_COPY: Readonly<Record<VariantCopyKey, { label: string; blur
     blurb:
       "Delays the private company auction and B&O open to the start of Phase 3. Watch your cash carefully or your rivals might get the advantage!",
   },
+  /* ==================================================================
+   *  DESIGN NOTE 1300: THE 1830+ EXPANSION IS A VARIANT, NOT A SECOND GAME
+   * ==================================================================
+   * REQUESTED: a Waiting Room checkbox "Project 18XX+" -- "An expanded map better for higher player counts
+   * or less blocking at lower player counts." The flag selects the BOARD (`boardFor`, hexBoardData.ts) and
+   * enables the D-train exchange rule (a 4-, 5- or 6-train traded in for a D-train at $800). Both readers
+   * key on this one field so a table cannot get half the expansion. */
+  expandedMap: {
+    label: "Project 18XX+",
+    blurb: "An expanded map better for higher player counts or less blocking at lower player counts.",
+  },
+  /* Design note #1310: THE OPTIONAL TILE SET RIDES ON THE MAP. It exists only for a Project 18XX+ game --
+     the Waiting Room disables the toggle until the map is chosen and `resolveVariants` clears it when the
+     map is off, so no log can carry the tray without the board it was made for. */
+  plusTiles: {
+    label: "Project 18XX+ tile set",
+    blurb: "A larger tray with new green towns, bigger cities, and gray tiles that arrive with the first D-train.",
+  },
+  /* ==================================================================
+   *  DESIGN NOTE 1320: LEVEL PLAYING FIELD IS BUILT ON TOP OF 18XX+, NOT BESIDE IT
+   * ==================================================================
+   * The variant is the expanded board and its tray with five red areas turned into pass-through warehouse
+   * towns, the Coal River hex at L8, two more corporations (PMQ, N&W), one more private (JK), a seventh seat
+   * and a flat $100 station token. It cannot exist without the 18XX+ map, so `resolveVariants` forces both
+   * `expandedMap` and `plusTiles` on when this is -- the same shape #1310 gave the tray. */
+  levelPlayingField: {
+    label: "Level Playing Field",
+    blurb:
+      "The Project 18XX+ map and tiles, with warehouse towns at the red areas, Coal River, two more corporations, one more private, seats for seven, and $100 stations.",
+  },
 };
+
+/* ==================================================================
+ *  DESIGN NOTE 1256: LIVE OR ASYNC IS A ROOM SETTING, FIXED AT THE DEAL
+ * ==================================================================
+ *
+ * RULED (decisions of 6 September, B2): "Live and Async are room settings." The settlement audit's timers all
+ * assume async play -- a 48-hour dispute window, multi-day turn allowances, a 14-day liveness switch -- and a
+ * live evening at a table wants none of them. So the mode is chosen once, where the other terms are, and
+ * travels in `SetupGame` like they do, because every timer downstream (the clock, 2.5g; the challenge window,
+ * A5: 24 h Live / 48 h Async; the pause cap) reads it and a room that could change it mid-game could change
+ * the terms it was settled under.
+ *
+ * NOT A HOUSE RULE. It changes no rule of 1830, so `hasAnyVariant` does not count it and the "house rules"
+ * badge does not light for it. It is declared in the same record because that is where "the terms this
+ * table agreed" live, and a second record for one field is how the two would drift.
+ *
+ * `live` IS THE DEFAULT and what a log written before this field reads as (#232): every game played so far
+ * was played at a table, in one sitting. */
+export type GameMode = "live" | "async";
+
+export const GAME_MODE_COPY: Readonly<Record<GameMode, { label: string; blurb: string }>> = {
+  live: {
+    label: "Live",
+    blurb: "Everyone is at the table now. Short clocks; a game that disputes nothing pays out the same day.",
+  },
+  async: {
+    label: "Async",
+    blurb: "Turns taken over days. Long clocks, and a 48-hour window before any disputed result is paid.",
+  },
+};
+
+/* ==================================================================
+    DESIGN NOTE 1271: THE GAME TYPE IS ONE CHOICE, NOT THREE BOXES
+   ==================================================================
+   ASKED (7 September): "when hosting a game, we should add a drop-down menu for Game Type with the options
+   18XX, 18XX+, and 18XX+: Level Playing Field -- on 18XX+ selection, there should be a checkbox below it to
+   enable the Expanded Tileset."
+   THE FIELDS DO NOT CHANGE. `expandedMap` (#1300), `plusTiles` (#1310) and `levelPlayingField` (#1320) stay
+   as they are on the document and in `SetupGame`, so every log ever written reads exactly as before. What
+   changes is how a host CHOOSES them: three checkboxes with two lock rules between them (#1310 "needs the
+   map", #1320 "forces both") were a small state machine drawn as a form, and a drop-down is that state
+   machine with its illegal states removed. `plusTiles` is the one genuinely independent choice left, and it
+   is offered only where it means something -- under 18XX+, where the Level Playing Field has not already
+   answered it.
+   `gameTypeOf` READS THE THREE BOOLEANS BACK INTO THE ONE CHOICE, so a room dealt from an older build, or a
+   document written by hand, shows the type its flags amount to. `withGameType` is the other direction, and
+   it is the only place the three are written together. */
+export type GameType = "standard" | "plus" | "levelPlayingField";
+
+export const GAME_TYPE_ORDER: readonly GameType[] = ["standard", "plus", "levelPlayingField"];
+
+export const GAME_TYPE_COPY: Readonly<Record<GameType, { label: string; blurb: string }>> = {
+  standard: {
+    label: "18XX",
+    blurb: "The map and tile tray as printed.",
+  },
+  /* The sentences are #961's, read from the one record rather than written a second time. */
+  plus: { label: "18XX+", blurb: VARIANT_COPY.expandedMap.blurb },
+  levelPlayingField: {
+    label: "18XX+: Level Playing Field",
+    blurb: VARIANT_COPY.levelPlayingField.blurb,
+  },
+};
+
+/** Which of the three types a set of flags amounts to. The Level Playing Field outranks the map flag, since
+ *  it forces it; a map without the field is 18XX+; anything else is the printed game. */
+export function gameTypeOf(variants: Pick<GameVariants, "expandedMap" | "levelPlayingField">): GameType {
+  if (variants.levelPlayingField) return "levelPlayingField";
+  if (variants.expandedMap) return "plus";
+  return "standard";
+}
+
+/** The flags a type implies. `plusTiles` is kept as chosen under 18XX+, forced on under the Level Playing
+ *  Field (#1320), and off with the map it needs (#1310). */
+export function withGameType(variants: GameVariants, type: GameType): GameVariants {
+  switch (type) {
+    case "levelPlayingField":
+      return { ...variants, expandedMap: true, plusTiles: true, levelPlayingField: true };
+    case "plus":
+      return { ...variants, expandedMap: true, levelPlayingField: false };
+    default:
+      return { ...variants, expandedMap: false, plusTiles: false, levelPlayingField: false };
+  }
+}
 
 export interface GameVariants {
   /** Design note #902: the bank, and therefore the length. */
   length: GameLength;
+  /** Design note #1256: how the table plays -- in one sitting or over days. Read by every timer. */
+  mode: GameMode;
   /* ==================================================================
       DESIGN NOTE 904: THE B&O LOCK, WRITTEN DOWN BEFORE THE VARIANT EXISTS
      ==================================================================
@@ -298,6 +417,13 @@ export interface GameVariants {
   unpredictableRevenue: boolean;
   /** The share price moves by how MUCH was paid rather than by the fact of paying -- design note #908. */
   dynamicStockMarket: boolean;
+  /** Design note #1300: the 1830+ board (rows L and M, Chattanooga, Norfolk...) and the D-train exchange.
+   *  Absent on every log written before it existed, and `resolveVariants` reads absent as `false`. */
+  expandedMap: boolean;
+  /** Design note #1310: the optional 1830+ tile tray and its Gray era. Requires `expandedMap`. */
+  plusTiles: boolean;
+  /** Design note #1320: the Level Playing Field variant. Forces `expandedMap` and `plusTiles`. */
+  levelPlayingField: boolean;
 }
 
 /* ==================================================================
@@ -429,10 +555,14 @@ export function dividendStepsFor(
 /** 1830 as printed. The shape a game with no config recorded reads as. */
 export const STANDARD_VARIANTS: GameVariants = {
   length: "standard",
+  mode: "live",
   delayedAuction: false,
   gentleRust: false,
   unpredictableRevenue: false,
   dynamicStockMarket: false,
+  expandedMap: false,
+  plusTiles: false,
+  levelPlayingField: false,
 };
 
 /** Whether a table is playing anything other than the printed game -- for the badge that says so. */
@@ -442,7 +572,10 @@ export function hasAnyVariant(variants: GameVariants): boolean {
     variants.delayedAuction ||
     variants.gentleRust ||
     variants.unpredictableRevenue ||
-    variants.dynamicStockMarket
+    variants.dynamicStockMarket ||
+    variants.expandedMap ||
+    variants.plusTiles ||
+    variants.levelPlayingField
   );
 }
 
@@ -460,14 +593,26 @@ export function resolveVariants(recorded: Partial<GameVariants> | null | undefin
     recorded?.length !== undefined && recorded.length in BANK_SIZE_BY_LENGTH
       ? recorded.length
       : STANDARD_VARIANTS.length;
+  // #1256: an unknown mode reads as live, for the same reason an unknown length reads as standard.
+  const mode: GameMode = recorded?.mode === "async" ? "async" : STANDARD_VARIANTS.mode;
+  /* #1320: Level Playing Field IS the expanded map and its tray, plus more. A log that recorded the flag
+     without the other two (a host toggling only this box) still deals the board it was made for. */
+  const levelPlayingField = recorded?.levelPlayingField ?? STANDARD_VARIANTS.levelPlayingField;
+  const expandedMap = levelPlayingField || (recorded?.expandedMap ?? STANDARD_VARIANTS.expandedMap);
   return {
     length,
+    mode,
     delayedAuction: recorded?.delayedAuction ?? STANDARD_VARIANTS.delayedAuction,
     gentleRust: recorded?.gentleRust ?? STANDARD_VARIANTS.gentleRust,
     unpredictableRevenue:
       recorded?.unpredictableRevenue ?? STANDARD_VARIANTS.unpredictableRevenue,
     dynamicStockMarket:
       recorded?.dynamicStockMarket ?? STANDARD_VARIANTS.dynamicStockMarket,
+    expandedMap,
+    // #1310: the tray without its board is not a game anybody agreed to. #1320: LPF always brings it.
+    plusTiles:
+      levelPlayingField || (expandedMap && (recorded?.plusTiles ?? STANDARD_VARIANTS.plusTiles)),
+    levelPlayingField,
   };
 }
 

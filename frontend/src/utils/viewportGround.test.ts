@@ -96,7 +96,8 @@ describe("every tab stands on the same ground", () => {
     ]) {
       const source = readStripped(path);
       expect(source).toContain('border: "1px solid #2a2a2a"');
-      expect(source).toContain('borderRadius: RADIUS.card');
+      /* Design note #1257: square on top where the tab strip attaches, `card` below -- one token. */
+      expect(source).toContain("borderRadius: VIEWPORT_RADIUS");
     }
   });
 });

@@ -25,7 +25,8 @@ import {
   twoNodePositions,
 } from "../components/hexGeometry";
 import {
-  STATION_HOME_HEXES,
+  homeReservationStands,
+  stationHomeHexes,
   tokenCityIndex,
   type StationTokenCompany,
 } from "../components/hexContractTypes";
@@ -37,7 +38,14 @@ import {
   tileCitySlotCounts,
   tileCitySlotPoints,
 } from "../components/TileGraphics";
-import { LANDMARK_HEXES, STATIC_BOARD_HEXES, YELLOW_OO_HEXES } from "../components/hexBoardData";
+import {
+  LANDMARK_HEXES,
+  STATIC_BOARD_HEXES,
+  YELLOW_OO_HEXES,
+  boardInEffect,
+  heraldHexFor,
+  type StationTokenSchedule,
+} from "../components/hexBoardData";
 import { hexKey, reachableCities, reachableNetwork, stationTokensOf } from "./trackReach";
 // Design note #1006: the wall the placement gate never asked about.
 import { cityBlockerFor } from "./cityBlocking";
@@ -49,12 +57,38 @@ export const STATION_TOKEN_SECOND_COST = 40;
 /** The third and every one after it. */
 export const STATION_TOKEN_LATER_COST = 100;
 
+/** 1830's printed schedule: the home token free, the second $40, every one after $100. */
+export const STANDARD_STATION_TOKEN_SCHEDULE: StationTokenSchedule = {
+  home: STATION_TOKEN_HOME_COST,
+  second: STATION_TOKEN_SECOND_COST,
+  later: STATION_TOKEN_LATER_COST,
+};
+
+/** Design note #1320: THE SCHEDULE IS THE BOARD'S. The Level Playing Field prices every station after the
+ *  home one at $100, and the board is already the value every rule reads under `withRules` -- so the price
+ *  follows the board the same way the herald and the home hexes do, and no caller has to thread variants. */
+export function stationTokenScheduleInEffect(): StationTokenSchedule {
+  return boardInEffect().stationTokenSchedule ?? STANDARD_STATION_TOKEN_SCHEDULE;
+}
+
 /** What the token at `placedIndex` costs -- design note #0. `placedIndex` is
  *  0-based, so `0` is the home token. */
-export function stationTokenPrice(placedIndex: number): number {
-  if (placedIndex <= 0) return STATION_TOKEN_HOME_COST;
-  if (placedIndex === 1) return STATION_TOKEN_SECOND_COST;
-  return STATION_TOKEN_LATER_COST;
+export function stationTokenPrice(
+  placedIndex: number,
+  heraldHome = false,
+  schedule: StationTokenSchedule = stationTokenScheduleInEffect(),
+): number {
+  /* Design note #1302: a corporation whose home is a printed herald (1830+'s PRR) never places a free home
+     token -- the herald consumes none -- so its first placement is its SECOND station and costs $40. */
+  const index = heraldHome ? placedIndex + 1 : placedIndex;
+  if (index <= 0) return schedule.home;
+  if (index === 1) return schedule.second;
+  return schedule.later;
+}
+
+/** Whether `company`'s home is a printed herald on the board in effect (#1302). */
+export function hasHeraldHome(company: { company_id?: number } | null | undefined): boolean {
+  return company?.company_id !== undefined && heraldHexFor(company.company_id) !== null;
 }
 
 /** One circle in the token row. */
@@ -74,6 +108,8 @@ export interface StationTokenSlot {
 export interface StationTokenCompanyLike {
   station_token_hexes: ReadonlyArray<readonly [number, number]>;
   station_token_limit: number;
+  /** #1302: optional so a bare token list still prices; a herald home is only findable by id. */
+  company_id?: number;
 }
 
 /** The corporation's whole allowance, one entry per token -- design note #1. ALL of them, placed and unplaced,
@@ -88,11 +124,13 @@ export function stationTokenSlots(
   // A chain reporting more tokens than the limit is a contract bug; showing
   // a row shorter than the tokens on the board would report it as a UI one.
   const total = Math.max(company.station_token_limit, placedCount);
+  const heraldHome = hasHeraldHome(company);
   return Array.from({ length: total }, (_, index) => ({
     index,
-    cost: stationTokenPrice(index),
+    cost: stationTokenPrice(index, heraldHome),
     placed: index < placedCount,
-    isHome: index === 0,
+    // #1302: with a herald for a home, no slot in the row is the home one.
+    isHome: !heraldHome && index === 0,
     isNext: index === placedCount,
   }));
 }
@@ -105,7 +143,7 @@ export function nextStationTokenCost(
   if (!company) return null;
   const placedCount = company.station_token_hexes.length;
   if (placedCount >= company.station_token_limit) return null;
-  return stationTokenPrice(placedCount);
+  return stationTokenPrice(placedCount, hasHeraldHome(company));
 }
 
 /* ------------------------------------------------------------------ */
@@ -181,6 +219,9 @@ export interface StationPlacementInput {
    *  say", which is the veil's honest position -- it lights hexes -- and keeps the pre-#893 hex-level answer.
    *  The click knows, and passing it is what closes the OO gap. */
   cityIndex?: number | null;
+  /** Design note #1323: hexes the placing corporation's network may not cross (`"q,r"` keys). Optional so
+   *  every pre-#1323 caller keeps its answer; `barredHexesFor` supplies it. */
+  barredHexes?: ReadonlySet<string>;
 }
 
 export interface StationPlacementResult {
@@ -203,7 +244,7 @@ const NOT_REACHED: StationPlacementResult = {
 export function evaluateStationPlacement(
   input: StationPlacementInput,
 ): StationPlacementResult {
-  const { mapGrid, q, r, company, allCompanies, cityIndex } = input;
+  const { mapGrid, q, r, company, allCompanies, cityIndex, barredHexes } = input;
   const here = (hexes: ReadonlyArray<readonly [number, number]>) =>
     hexes.some(([hq, hr]) => hq === q && hr === r);
 
@@ -251,17 +292,18 @@ export function evaluateStationPlacement(
      this hex reserve a slot for somebody who has not taken it yet".
      That distinction matters on the shared OO hexes: ERIE's home is a two-city hex, so before ERIE floats another
      corporation may still take the OTHER circle -- reserving both would over-block it. */
-  const unclaimedReservations = STATION_HOME_HEXES.filter((home) => {
+  const unclaimedReservations = stationHomeHexes().filter((home) => {
     if (home.q !== q || home.r !== r) return false;
     if (home.companyId === company.company_id) return false;
+    // Design note #1325: an unenforced reservation (C&O at Cleveland) draws a marker and holds nothing.
+    if (home.enforced === false) return false;
     const owner = allCompanies.find((entry) => entry.company_id === home.companyId);
-    // No record of the company at all: treat the reservation as standing.
-    if (!owner) return true;
-    return !here(owner.station_token_hexes);
+    // #1325: released by use -- of THIS hex, or of any hex for a corporation with two homes.
+    return homeReservationStands(owner, home);
   }).length;
 
   if (occupied + unclaimedReservations >= slots) {
-    const reserver = STATION_HOME_HEXES.find(
+    const reserver = stationHomeHexes().find(
       (home) => home.q === q && home.r === r && home.companyId !== company.company_id,
     );
     return {
@@ -276,8 +318,17 @@ export function evaluateStationPlacement(
      everybody; this one is about the acting corporation, and a player who has been told "that city is full" does
      not also need to be told their track does not reach it.
      A corporation with no token yet has no network to measure, and its first placement is its home city -- which
-     the contract grants at float rather than asking for. Rather than guess, that case is allowed through. */
-  if (company.station_token_hexes.length > 0) {
+     the contract grants at float rather than asking for. Rather than guess, that case is allowed through.
+     ==================================================================
+      DESIGN NOTE 1277: A HERALD IS A NETWORK, EVEN WITH NO TOKEN DOWN
+     ==================================================================
+     REPORTED (LPF): "when PRR is prompted to place a station, every hex on the board with an open city is
+     illuminated ... it is only able to place a station where it has connectivity." PRR's home on 1830+ is
+     #1302's herald -- a root in `stationTokensOf` but never an entry in `station_token_hexes` -- so the test
+     above read "no token yet", took the allowed-through arm, and the veil lit the whole board. The exemption
+     is for a corporation with NO NETWORK, and a herald is one; so the question is asked of the reader that
+     knows about heralds, and PRR's first token is measured from H12 like everybody else's from their home. */
+  if (stationTokensOf(company).length > 0) {
     /* ==================================================================
        DESIGN NOTE 893: THE QUESTION IS ABOUT A CIRCLE, NOT ABOUT A HEX
        ==================================================================
@@ -335,6 +386,7 @@ export function evaluateStationPlacement(
       slotsAt: (bq, br, bCity) => citySlotCount(mapGrid, bq, br, bCity),
       cityOf: (holder, hq, hr) =>
         tokenCityIndex(holder as unknown as StationTokenCompany, hq, hr),
+      barredHexes, // #1323
     });
     const tokens = stationTokensOf(company);
     if (cityIndex === null || cityIndex === undefined) {

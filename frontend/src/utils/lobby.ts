@@ -68,6 +68,14 @@ export const ROOM_LIST_LIMIT = 60;
  *  choice the contract will reject; the contract still validates. */
 export const MIN_PLAYERS = 2;
 export const MAX_PLAYERS = 6;
+/** Design note #1320: the Level Playing Field seats seven. The contract's own bound is still 2-6 and is a
+ *  Phase 5 question; the room document is where a sandbox table's size lives today. */
+export const LPF_MAX_PLAYERS = 7;
+
+/** The largest table a room with these variants may be created for. */
+export function maxPlayersForVariants(variants: Pick<GameVariants, "levelPlayingField"> | null | undefined): number {
+  return variants?.levelPlayingField ? LPF_MAX_PLAYERS : MAX_PLAYERS;
+}
 
 const DISPLAY_NAME_STORAGE_KEY = "18cosmos.display_name.v1";
 const MAX_DISPLAY_NAME_LENGTH = 24;
@@ -204,8 +212,11 @@ function decodeRoom(snapshot: QueryDocumentSnapshot<DocumentData>): RoomDoc {
     name: typeof data.name === "string" && data.name.trim() ? data.name : "Untitled room",
     hostAddress: typeof data.hostAddress === "string" ? data.hostAddress : "",
     hostDisplayName: typeof data.hostDisplayName === "string" ? data.hostDisplayName : "",
+    // #1320: the ceiling depends on the room's variants, read below through the same resolver.
     maxPlayers:
-      typeof data.maxPlayers === "number" && data.maxPlayers >= MIN_PLAYERS && data.maxPlayers <= MAX_PLAYERS
+      typeof data.maxPlayers === "number" &&
+      data.maxPlayers >= MIN_PLAYERS &&
+      data.maxPlayers <= maxPlayersForVariants(resolveVariants(data.variants as Partial<GameVariants> | undefined))
         ? data.maxPlayers
         : MAX_PLAYERS,
     seatCount: typeof data.seatCount === "number" && data.seatCount >= 0 ? data.seatCount : 0,
@@ -484,7 +495,10 @@ export interface CreateRoomInput {
 export async function createStagingRoom(input: CreateRoomInput): Promise<string> {
   const db = requireDb();
 
-  const maxPlayers = Math.min(MAX_PLAYERS, Math.max(MIN_PLAYERS, Math.round(input.maxPlayers)));
+  const maxPlayers = Math.min(
+    maxPlayersForVariants(input.variants),
+    Math.max(MIN_PLAYERS, Math.round(input.maxPlayers)),
+  );
   const name = input.name.trim().slice(0, 48) || "Untitled room";
 
   const roomRef = await addDoc(collection(db, ROOMS_COLLECTION), {

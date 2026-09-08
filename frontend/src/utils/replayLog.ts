@@ -65,13 +65,18 @@ import {
   CA_BONUS_TICKER,
   CA_PRIVATE_ID,
 } from "./privateExchange";
-import { isOpenStockRoundMsg } from "./gameSetup";
+import { isOpenStockRoundMsg, isSetupGameMsg, waterfallForRoster } from "./gameSetup";
+import { boardInEffect } from "../components/hexBoardData";
+import { initialGridFor } from "./initialGrid";
+import { withRules } from "./boardSelection";
+import { resolveVariants } from "./gameVariants";
 import { nextDerivedAction } from "./derivedActions";
 import { operatingCorporationId } from "./dividendGate";
 import { turnGuardKey } from "./turnGuardKey";
 import { effectiveActions } from "./logRevert";
 import { derivePhase } from "./gamePhase";
-import { ERA_FOR_PHASE_TINT } from "./gameConstants";
+import { tileEraFor } from "./gameConstants";
+import type { TileColorTier } from "../components/hexTileCatalog";
 import type { GameStateResponse, WaterfallStateResponse } from "./gameState";
 import type { GameplayExecuteMsg } from "./sessionKey";
 import type { MapGridResponse } from "../components/hexContractTypes";
@@ -208,10 +213,10 @@ export interface ReplayProviders {
   parCellFor: (parPrice: number) => { x: number; y: number } | null;
 }
 
-type TileEra = (typeof ERA_FOR_PHASE_TINT)[keyof typeof ERA_FOR_PHASE_TINT];
+type TileEra = TileColorTier;
 
 function eraFor(state: GameStateResponse | null): TileEra {
-  return ERA_FOR_PHASE_TINT[derivePhase(state)?.tint ?? "yellow"];
+  return tileEraFor(state); // #1312: Gray in a tile-set game's Diesel era
 }
 
 export interface ReplaySeed {
@@ -321,6 +326,18 @@ export class RoomEngine {
     this.unparseable.push(entry.index);
     return;
   }
+
+  /* Design note #1300: the tile-lay legality below is judged BEFORE the reducer runs, so it has to see the
+     same board the reducer will -- the one this game's variants name (from the deal itself on `SetupGame`). */
+  const variants = isSetupGameMsg(msg) ? msg.SetupGame.variants : this.state.variants;
+  withRules(resolveVariants(variants), () => this.applyOnBoard(entry, msg, observe));
+  }
+
+  private applyOnBoard(entry: ReplayEntry, msg: GameplayExecuteMsg, observe?: ReplayObserver): void {
+  /* Design note #1301: THE DEAL OPENS THE GRID THIS BOARD PRINTS. The constructor cannot know the board -- the
+     variants arrive with `SetupGame` -- so the printed tiles land here, on the deal, before any lay. On the
+     standard board this is the same empty grid the providers seeded. */
+  if (isSetupGameMsg(msg)) this.grid = initialGridFor(boardInEffect());
 
   /* ==================================================================
       DESIGN NOTE 1189: THE SHIM THAT WAS HERE IS NOW A REDUCER ARM
@@ -492,6 +509,60 @@ export class RoomEngine {
       this.providers.layRefused(gridBefore, q, r, tileId, orientation, eraBefore),
   });
 
+  /* ==================================================================
+      DESIGN NOTE 1227: THE AUCTION NEVER HAD ANY PLAYERS IN IT
+     ==================================================================
+     FOUND BY #1226, WHICH IS THE ONLY REASON IT WAS FOUND AT ALL. The alarm named the fields
+     (`player_cash, private_companies`) and printed the client's values; the server's came from replaying the
+     same two-action log. They could not have been further apart:
+
+       CLIENT  Host pays $20, owns Schuylkill Valley           -- obviously right for "buy the lowest"
+       SERVER  nothing happens; one action later the OTHER player's move
+               awards Champlain & St. Lawrence to Host for $40 -- incoherent
+
+     `waterfallForRoster` DID NOT APPEAR IN THIS FILE. The shell's `SetupGame` handler re-seats the auction
+     atom from the dealt roster and always has; the engine was constructed with `waterfallForRoster(base, [])`
+     -- an EMPTY roster, correct before a deal -- and then never re-seated it. So `current_turn` stayed `""`,
+     which "matches nobody, so no client believes it is their turn" (#542's words, and the right answer
+     before a game exists). After the deal it is the wrong answer, and every auction action on the server was
+     judged against an auction nobody was sitting in.
+
+     THE EARLIER PLAYTESTS GOT THROUGH THE AUCTION ONLY BECAUSE THE CLIENT WAS DOING IT. The board a player
+     saw was the shell's, computed locally and correctly; the server's copy was quietly nonsense from index 1,
+     and nothing compared them until #1223. That is the whole argument for the alarm in one sentence.
+
+     THE VARIANT TRAVELS WITH IT (#905). A delayed-auction game opens on Stock Round 1 with the auction dealt
+     but not active -- "dealt now, run later" -- and the shell sets `waterfall_auction_active: false` in the
+     same breath as the re-seat. Splitting those two would give the server a live auction in a game that has
+     not reached one. */
+  if ("SetupGame" in msg) {
+    // #1320: and the dealt privates, so a Level Playing Field replay auctions the JK too.
+    const reseated = waterfallForRoster(
+      this.waterfall,
+      this.state.player_addresses ?? [],
+      this.state.private_companies,
+    );
+    /* READ FROM THE STATE THE REDUCER JUST PRODUCED, not from the message: `applyOneAction` owns `SetupGame`
+       and decides the dealt order (it shuffles), so the roster that matters is the one on the board. Reading
+       `msg.SetupGame.players` would re-seat the auction in the order the players were listed rather than the
+       order they were dealt -- a difference no test would see until two clients disagreed about who is on
+       turn. */
+    /* THE ARMING READS THE VARIANT, NOT THE ROUND TYPE, and the difference is a bug this test found on the
+       way past. The shell's `SetupGame` handler ALSO moves a delayed-auction game to `StockRound`
+       (`opensOnStockRound ? { ...seated, current_round_type: "StockRound", ... } : seated`) and the reducer
+       does not -- so a condition keyed on the round would never fire here, and the server would hold a LIVE
+       auction in a game the client had already moved past. The variant is on the message and says the same
+       thing without depending on a round transition the two halves disagree about.
+       THE ROUND-TYPE GAP ITSELF IS NOT FIXED HERE. It is one more shell-owned rule (#1220's family) and it
+       belongs in the reducer with the rest of them; it is recorded as open work rather than patched into the
+       composition layer, which is where it would rot. */
+    const delayed =
+      (msg as { SetupGame?: { variants?: { delayedAuction?: unknown } } }).SetupGame?.variants
+        ?.delayedAuction === true;
+    this.waterfall =
+      reseated && delayed ? { ...reseated, waterfall_auction_active: false } : reseated;
+  }
+
   /* #1193: AFTER the action, because a par is set BY an action -- a corporation parred by this `BuyStock`
      has no mark until the board says it is parred. Idempotent by construction (`placeParMark` no-ops on a
      company that already has one), so running it every entry costs a walk and cannot disturb a token that
@@ -550,12 +621,25 @@ export class RoomEngine {
        the shape #876 describes, where a skip fired against the last step and moved nothing. The guard set
        makes that terminate anyway; this is the second lock, and it is cheap. */
     for (let guard = 0; guard < 32; guard += 1) {
-      const next = nextDerivedAction({
-        state: this.state,
-        mapGrid: options?.mapGrid ?? this.grid,
-        emitted: this.emitted,
-        extraStationAvailable: options?.extraStationAvailable,
-      });
+      /* ==================================================================
+          DESIGN NOTE 1287: THE GAME'S OWED ACTIONS ARE DECIDED UNDER THE GAME'S RULES
+         ==================================================================
+         REPORTED (LPF): "C&O has two valid city markers where it can place stations. After laying track, it
+         autoskips to Run Routes." JUNO-CV4 104, 107 and 132 are those skips, all derived -- the SERVER's
+         verdict, which the clients apply. `apply` scopes the reducer's board with `withRules` (#1300); this
+         loop did not, so on a bare Node process, where nothing ever activates a board, `nextDerivedAction`
+         walked `STATIC_BOARD_HEXES` of the STANDARD board: C&O's LPF network reached nothing it recognised,
+         `stationPlacementBlockReason` said "nowhere to place", and the Tokens step was skipped. The route
+         search behind the Dividends verdict read the same wrong board. #1279's fault, on the other side of
+         the wire: a rule asked outside the rules it belongs to. Scoped now, per answer, like `apply`. */
+      const next = withRules(resolveVariants(this.state.variants), () =>
+        nextDerivedAction({
+          state: this.state,
+          mapGrid: options?.mapGrid ?? this.grid,
+          emitted: this.emitted,
+          extraStationAvailable: options?.extraStationAvailable,
+        }),
+      );
       if (!next) break;
       this.emitted.add(next.key);
       const minted = mint(next.msg, next.reason);

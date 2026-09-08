@@ -32,7 +32,10 @@ const { readStripped, sliceBetween } = require("./sourceScan") as typeof import(
 const APP = readStripped("App.tsx");
 
 /** The context object handed to the reducer, which is the surface this file is about. */
-const REDUCER_CTX = sliceBetween(APP, "after = applySandboxAction(after, msg, {", "homeHexToAxial,");
+/* #1230: the message reaches the general path un-narrowed now that `SetupGame` falls through, and is passed
+   as `gameplay` -- the one cast the engine also takes (#1189). The anchor is on the CALL and the receiver, which
+   is what these cases are about; the argument's name is not. */
+const REDUCER_CTX = sliceBetween(APP, "after = applySandboxAction(after, gameplay, {", "homeHexToAxial,");
 
 describe("the reducer is given one chart, from the synchronous source", () => {
   it("builds the price table from the ref rather than the memo", () => {
@@ -50,7 +53,7 @@ describe("the reducer is given one chart, from the synchronous source", () => {
   it("keeps the refusal receipt on the same chart the refusal was judged against", () => {
     /* Nothing here writes state, so this half was narration rather than divergence -- but a receipt that
        explains a refusal from a chart the reducer never saw can name the wrong rule. */
-    const receipt = sliceBetween(APP, "refusalReasonFor(before, msg, {", "})");
+    const receipt = sliceBetween(APP, "refusalReasonFor(before, gameplay, {", "})");
     expect(receipt).toContain("marketPricesByCompany: marketPricesFromRef()");
     expect(receipt).not.toContain("marketGrid");
   });
@@ -81,7 +84,7 @@ describe("no other reducer input is read from committed state", () => {
        therefore identical on every client replaying the same prefix. Asserted so that if either ever becomes
        a divergence source, this file is where the argument already lives. */
     expect(REDUCER_CTX).toContain("mapGrid,");
-    expect(REDUCER_CTX).toContain("era: ERA_FOR_PHASE_TINT");
+    expect(REDUCER_CTX).toContain("era: eraForPhase("); // #1312: the phase, plus the table's variants
     expect(APP).toContain("mapGridRef");
   });
 });

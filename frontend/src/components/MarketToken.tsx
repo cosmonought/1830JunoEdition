@@ -37,15 +37,7 @@ import { RADIUS } from "../styles/typography";
  *  a token carries its herald; below it, the acronym. Measured against the marks themselves. */
 export const MIN_LOGO_TOKEN_DIAMETER_PX = 26;
 
-export function MarketToken({
-  companyId,
-  ticker,
-  diameterPx,
-  fontSizePx,
-  title,
-  style,
-  className,
-}: {
+export interface MarketTokenProps {
   companyId: number;
   ticker: string;
   diameterPx: number;
@@ -55,12 +47,21 @@ export function MarketToken({
   /** Placement -- absolute offsets, z-index, transforms. See the note above on why it lives at the call site. */
   style?: React.CSSProperties;
   className?: string;
-}) {
+}
+
+/* Design note #1268: a forwarded ref, so the preview's slide can hand the disc to the Web Animations API.
+   Placement still lives at the call site (#1155); the ref is the one thing a caller needs that a style
+   cannot carry. */
+export const MarketToken = React.forwardRef<HTMLSpanElement, MarketTokenProps>(function MarketToken(
+  { companyId, ticker, diameterPx, fontSizePx, title, style, className },
+  ref,
+) {
   const fill = corporationLiveryColor(companyId);
   const ink = bestContrastTextColor(fill);
   const label = title ?? corporationLabel(ticker);
   return (
     <span
+      ref={ref}
       className={className}
       style={{
         ...styles.token,
@@ -88,7 +89,7 @@ export function MarketToken({
       )}
     </span>
   );
-}
+});
 
 export default MarketToken;
 

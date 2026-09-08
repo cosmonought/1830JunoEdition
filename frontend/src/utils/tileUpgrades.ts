@@ -50,13 +50,14 @@ import {
   TILE_CATALOG_BY_ID,
   type TileColorTier,
 } from "../components/hexTileCatalog";
-import { STATIC_BOARD_HEXES } from "../components/hexBoardData";
-import { filterSandboxPlacements, hexLabelRestriction } from "../components/sandboxTileLegality";
+import { STATIC_BOARD_HEXES, boardInEffect, type BoardDefinition } from "../components/hexBoardData";
+import { trayEntries, trayInEffect, type TileTray } from "../components/tileTray";
+import { filterSandboxPlacements, hexLabelRestriction, type HexLabelRestriction } from "../components/sandboxTileLegality";
 import type { LegalTilePlacement, MapGridResponse, MapTileEntry } from "../components/hexContractTypes";
 
 /** Ascending, and the only place this module states the order -- everything
  *  else asks the filter. */
-const TIERS: readonly TileColorTier[] = ["Yellow", "Green", "Brown"];
+const TIERS: readonly TileColorTier[] = ["Yellow", "Green", "Brown", "Gray"]; // #1312: Gray, when the tray has one
 
 function nextTier(tier: TileColorTier): TileColorTier | null {
   const at = TIERS.indexOf(tier);
@@ -119,13 +120,27 @@ export interface TileUpgradeGraph {
   successors: ReadonlyMap<number, readonly number[]>;
   /** What each restricted hex family's PREPRINTED yellow start upgrades into.
    *  Keyed by the letter code the board prints. */
-  printedStarts: ReadonlyMap<"OO" | "B" | "NY", readonly number[]>;
+  printedStarts: ReadonlyMap<HexLabelRestriction, readonly number[]>;
   /** Hex labels whose first tile comes off the board rather than the tray,
    *  by family -- so the panel can say which hexes a chain is even about. */
-  printedHexes: ReadonlyMap<"OO" | "B" | "NY", readonly string[]>;
+  printedHexes: ReadonlyMap<HexLabelRestriction, readonly string[]>;
 }
 
+/* Design note #1311: CACHED PER BOARD AND TRAY. The sweep walks the board in effect through the legality
+   filter, which now asks the tray -- so the graph for a Project 18XX+ tile-set game (green towns, gray
+   cities) is a different graph from the standard one, and one cache would serve whichever was built first
+   to both. Keyed on the two values so each is swept once. */
+const cachedByRules = new WeakMap<BoardDefinition, WeakMap<TileTray, TileUpgradeGraph>>();
 let cached: TileUpgradeGraph | null = null;
+
+function readCache(): TileUpgradeGraph | null {
+  return cachedByRules.get(boardInEffect())?.get(trayInEffect()) ?? null;
+}
+function writeCache(graph: TileUpgradeGraph): void {
+  const byTray = cachedByRules.get(boardInEffect()) ?? new WeakMap<TileTray, TileUpgradeGraph>();
+  byTray.set(trayInEffect(), graph);
+  cachedByRules.set(boardInEffect(), byTray);
+}
 
 /** The graph. Swept once from the real board and the real filter.
  *
@@ -135,12 +150,13 @@ let cached: TileUpgradeGraph | null = null;
  *  Sampling one hex would report that geographic accident as a rule about the
  *  tile. */
 export function tileUpgradeGraph(): TileUpgradeGraph {
+  cached = readCache();
   if (cached) return cached;
 
   const successors = new Map<number, Set<number>>();
   TILE_CATALOG_BY_ID.forEach((_entry, tileId) => successors.set(tileId, new Set()));
-  const printedStarts = new Map<"OO" | "B" | "NY", Set<number>>();
-  const printedHexes = new Map<"OO" | "B" | "NY", string[]>();
+  const printedStarts = new Map<HexLabelRestriction, Set<number>>();
+  const printedHexes = new Map<HexLabelRestriction, string[]>();
 
   /* THE WALK HAS TO BE A WALK, and the first draft was not. Asking the bare
      board what is legal "at the Green era" returns YELLOW tiles: rule 4 wants
@@ -212,6 +228,7 @@ export function tileUpgradeGraph(): TileUpgradeGraph {
       Array.from(printedHexes, ([code, labels]) => [code, [...labels].sort()]),
     ),
   };
+  writeCache(cached);
   return cached;
 }
 
@@ -238,12 +255,16 @@ export function tileUpgradeSources(tileId: number): readonly number[] {
  *  FALSE for brown, which is the top tier and ends every line by design. */
 export function isUpgradeDeadEnd(tileId: number): boolean {
   const entry = TILE_CATALOG_BY_ID.get(tileId);
-  if (!entry || entry.color === "Brown") return false;
+  if (!entry) return false;
+  // #1312: the top of THIS game's ladder is not a dead end -- Brown at a standard table, Gray under the tile set.
+  const topTier = trayEntries().some((candidate) => candidate.color === "Gray") ? "Gray" : "Brown";
+  if (entry.color === topTier) return false;
   return tileUpgradeTargets(tileId).length === 0;
 }
 
-/** Test seam: drops the cached sweep so a test can rebuild it. Never called by
+/** Test seam: drops the cached sweep for the rules in effect so a test can rebuild it. Never called by
  *  the app -- the board does not change within a session. */
 export function resetTileUpgradeGraph(): void {
   cached = null;
+  cachedByRules.delete(boardInEffect());
 }

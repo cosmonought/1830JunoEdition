@@ -41,6 +41,9 @@ const { readStripped, sliceBetween } = require("./sourceScan") as typeof import(
 
 const APP = readStripped("App.tsx");
 const MACHINE = readStripped("components/DividendMoneyMachine.tsx");
+/* Design note #1291: the schedule is a leaf module now; the drawing is the shared panel. */
+const SCHEDULE = readStripped("components/moneyMachineSchedule.ts");
+const PANEL = readStripped("components/MoneyMachinePanel.tsx");
 const SFX = readStripped("utils/variantSfx.ts");
 
 /* ------------------------------------------------------------------ */
@@ -126,8 +129,8 @@ describe("the overlay holds still long enough to be read", () => {
     expect(MONEY_MACHINE_LEAVE_AT_MS).toBe(MONEY_MACHINE_MERGE_AT_MS + MONEY_MACHINE_LINGER_MS);
     expect(MONEY_MACHINE_TOTAL_MS).toBe(MONEY_MACHINE_LEAVE_AT_MS + MONEY_MACHINE_SLIDE_MS);
     // And it is the source file doing the summing, not this test agreeing with a coincidence.
-    expect(MACHINE).toContain("MONEY_MACHINE_SLIDE_MS + MONEY_MACHINE_HOLD_MS");
-    expect(MACHINE).toContain("MONEY_MACHINE_FALL_AT_MS + MONEY_MACHINE_FALL_MS");
+    expect(SCHEDULE).toContain("MONEY_MACHINE_SLIDE_MS + MONEY_MACHINE_HOLD_MS");
+    expect(SCHEDULE).toContain("MONEY_MACHINE_FALL_AT_MS + MONEY_MACHINE_FALL_MS");
   });
 
   it("gives the pause a full second in which nothing moves", () => {
@@ -142,18 +145,17 @@ describe("the overlay holds still long enough to be read", () => {
   it("shows the old total for the whole of it", () => {
     /* THE PAUSE IS MEANT TO HOLD BOTH NUMBERS. A `holding` phase that showed the SUM would be a pause in
        which there is nothing to add up, which is the pause failing while looking like it works. */
-    expect(MACHINE).toContain(
-      'const shown = phase === "holding" || phase === "falling" ? event.cashBefore : event.cashAfter;',
+    expect(PANEL).toContain(
+      'const shown = phase === "holding" || phase === "falling" ? holder.before : holder.after;',
     );
   });
 
   it("keeps the payout figure visible while it waits", () => {
-    /* `app-money-machine-landed` IS `opacity: 0`, so reusing it for the pause would have hidden the very
-       figure the pause exists to let a player read. Three states, not two. */
-    expect(MACHINE).toContain('phase === "holding"\n              ? "app-money-machine-waiting"');
-    const waiting = sliceBetween(MACHINE, ".app-money-machine-waiting {", "}");
-    expect(waiting).toContain("opacity: 1");
-    expect(waiting.length).toBeLessThan(200);
+    /* Design note #1291: the amount is hidden only once it has LANDED -- after a flight, in `merged`. In
+       `holding` and `falling` it is on screen at full opacity, which is what the pause is for. */
+    expect(MACHINE).toContain('phase === "holding"\n      ? "app-money-machine-waiting"');
+    expect(PANEL).toContain("...(landed ? styles.amountLanded : null)");
+    expect(PANEL).toContain("amountLanded: { opacity: 0 }");
   });
 
   it("schedules each phase at an absolute mark", () => {
@@ -336,9 +338,10 @@ describe("reduced motion keeps every figure and the whole lifetime", () => {
        its track would be visible with nowhere to be. Both properties are asserted.
        THAT THIS LIVED IN THREE FILES IS ITS OWN FINDING. One rule, three harnesses, none of which knew about
        the others -- so a change to it fails three times and has to be answered three times. */
-    const reduced = sliceBetween(MACHINE, "@media (prefers-reduced-motion: reduce) {", "}\n`");
-    expect(reduced).toContain(".app-money-machine-landed { opacity: 1;");
-    expect(reduced).toContain("grid-template-rows: 1fr;");
-    expect(reduced).toContain(".app-money-machine { animation: none; }");
+    /* Design note #1291: one rule, one file now -- `landed` is true only after a flight, and a reduced-motion
+       machine never flies, so the figure stays as a static statement without a media override. */
+    expect(PANEL).toContain('setLanded(flewRef.current && (phase === "merged" || phase === "leaving"));');
+    const reduced = sliceBetween(PANEL, "@media (prefers-reduced-motion: reduce) {", "}\n`");
+    expect(reduced).toContain(".app-money-panel { animation: none; }");
   });
 });

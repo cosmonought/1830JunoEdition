@@ -424,7 +424,8 @@ describe("the log says which way the die went", () => {
   it("stamps the tone on the entry rather than deriving it at render", () => {
     /* #343's RULE. A renderer that re-read the CURRENT variant state would repaint every historic line the
        moment a later turn rolled differently. */
-    expect(readStripped("utils/feed.ts")).toContain('tone?: "bonus" | "malus";');
+    /* Design note #1261: `sign` joined the union for the Yellow Sign's own lines. */
+    expect(readStripped("utils/feed.ts")).toContain('tone?: "bonus" | "malus" | "sign";');
     expect(readStripped("utils/feed.ts")).toContain("logTone: entry.tone,");
   });
 

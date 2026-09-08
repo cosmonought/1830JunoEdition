@@ -206,7 +206,8 @@ describe("both doors, one question (design note #846)", () => {
        there is no board veil and no Lay Track step, so the two lists are disjoint by round rather than by
        filtering. `privatePowerHexKeys` -- the thing the glow actually reads -- is handed the hex list alone,
        which the next test pins. */
-    expect(APP).toContain("powerOffers={[...privatePowerOfferList, ...stockRoundPowerOffers]}");
+    // #1323: the JK's armed-lay chip rides in the same list -- a generic chip, like the M&H's, with no hex key.
+    expect(APP).toContain("powerOffers={[...privatePowerOfferList, ...stockRoundPowerOffers, ...(jkPowerOffer ? [jkPowerOffer] : [])]}");
     expect(APP).toContain("privatePowerHexKeys(privatePowerOfferList)");
   });
 

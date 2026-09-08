@@ -296,7 +296,10 @@ describe("the three effect categories gate their own cues", () => {
        category BOTH reach the whistle, ANDed rather than one replacing the other. Collapsing runs of space
        is what lets that be asserted without also asserting how prettier chose to wrap the call. */
     const flat = APP.replace(/\s+/g, " ");
-    expect(flat).toContain("useTurnWhistle( isMyTurn, sfxEnabled && sfxTurnEnabled && !introPlaying,");
+    /* Design note #1269: the first argument is `turnAnnounceable` -- `isMyTurn` ANDed with the room being
+       past its deal and no titles running -- so the whistle waits for the board rather than the fact. */
+    expect(flat).toContain("useTurnWhistle( turnAnnounceable, sfxEnabled && sfxTurnEnabled && !introPlaying,");
+    expect(flat).toContain('const turnAnnounceable = isMyTurn && (!sandbox || sandboxRoom?.status === "playing") && !introPlaying;');
   });
 
   it("reads the categories through refs at the cue sites", () => {
@@ -401,68 +404,33 @@ describe("the gutter carries the round and gives its place to the time", () => {
 });
 
 /* ------------------------------------------------------------------ */
-/* #1077 -- one button press, one line                                */
+/* #1077 -- one button press, one line; #1255 -- one press, one train */
 /* ------------------------------------------------------------------ */
 
-describe("a multi-train buy writes one line", () => {
-  it("silences the per-message entries only when a summary is coming", () => {
-    /* REPORTED: "B&O used the selector to buy two trains at once. The Activity Log printed this one at a
-       time ... if a player buys three trains one at a time, there should be three prints, but if they buy
-       three trains at once, one print."
-       THE MESSAGES STAY TWO. `BuyHardwareFromPool` carries no quantity, so buying two genuinely IS two
-       dispatches; collapsing them would be a contract change for a display problem. The flag is conditional
-       on `times > 1` because a single purchase has no summary to be covered by. */
-    const loop = sliceBetween(APP, "for (let i = 0; i < times; i += 1) {", "}\n");
-    expect(loop).toContain("times > 1 ? { silentInLog: true } : undefined");
-    expect(loop.length).toBeLessThan(900);
-  });
-
+describe("a train purchase writes one line", () => {
+  /* #1077's cases pinned a LOOP -- N `BuyHardwareFromPool` dispatches per press, silenced, with one summary
+     on top. #1255 deleted the selector and the loop with it (triage §2.1: the summary counted presses, not
+     purchases). What #1077 was protecting -- one press, one line -- now holds by construction: one press is
+     one message, and the reducer's own sentence is its line. The refusal property and the toast's
+     independence from the log gate are unchanged and still pinned. */
   it("still speaks when a dispatch was refused", () => {
-    /* THE ONE CASE THE SUMMARY CANNOT COVER. It quotes a price, a treasury transition and a depot count,
-       and every one of those assumes the purchase landed -- so a refusal has to keep its own line or #778's
-       whole point ("the log says whether it happened") goes back to the bug it was written against. */
-    expect(APP).toContain("if (!options?.silentInLog || refusalWasRefused) {");
-  });
-
-  it("does not borrow the derived flag to do it", () => {
-    /* `derived` MEANS "the game dispatched this, not the player" (#668) and it GOVERNS UNDO'S REACH.
-       Reusing it to quieten a line would make Undo step past a real purchase -- which is why this is a
-       separate flag rather than the one that was already there. */
-    const loop = sliceBetween(APP, "for (let i = 0; i < times; i += 1) {", "}\n");
-    expect(loop).not.toContain("derived: true");
+    /* #1230: `SetupGame` makes the `silentInLog` promise from inside the gate -- its narration branch IS the
+       one line -- so the condition has a second quiet case. The PROPERTY is unchanged: a refusal still
+       speaks, whatever silenced the success. Asserted on the `||` arm, which is what carries that property. */
+    expect(APP).toContain("(!options?.silentInLog && !isSetupGameMsg(msg)) || refusalWasRefused) {");
   });
 
   it("leaves the toast alone", () => {
-    /* THE DEPOT COUNT IS A GLANCE AT A NUMBER GOING DOWN and a batch of two should still produce it. The
-       suppression is scoped to the log append, so the toast path is untouched. */
-    const gate = sliceBetween(APP, "if (!options?.silentInLog || refusalWasRefused) {", "...log,");
+    /* THE DEPOT COUNT IS A GLANCE AT A NUMBER GOING DOWN. The suppression is scoped to the log append, so
+       the toast path is untouched. */
+    const gate = sliceBetween(APP, "(!options?.silentInLog && !isSetupGameMsg(msg)) || refusalWasRefused) {", "...log,");
     expect(gate).not.toContain("showActionToast");
     expect(gate).toContain("setActionLog((log) => [");
   });
 
-  it("says the price and the treasury transition the report asked for", () => {
-    /* THE SUMMARY IS THE LINE NOW, so it has to carry what the suppressed ones did: "for $80 each", and the
-       treasury movement every other action line has carried since #1053. */
-    const summary = sliceBetween(APP, "if (times > 1 && before) {", "logInfo(");
-    expect(summary).toContain("beforeTreasury");
-    expect(APP).toContain("bought ${countPhrase(times, `${tier}-train`)} for $${before.cost} each.");
-    expect(APP).toContain("Remaining depot supply: ${remaining}.");
-  });
-
-  it("reads the treasury before the loop, not after it", () => {
-    /* THE ORDERING BUG THIS AVOIDS: by the time the summary runs the state has already moved, so a "before"
-       read there would report the purchase's own result as its starting point and the transition would be
-       `$720 → $720`. */
-    const handler = sliceBetween(APP, "const handleBuyTrainsFromBank = useCallback(", "for (let i = 0");
-    expect(handler).toContain("const beforeTreasury = gameState?.public_companies.find(");
-    expect(handler.length).toBeLessThan(2500);
-  });
-
-  it("drops the aggregate's category, since there is nothing left to distinguish it from", () => {
-    /* #262's "Trains Bought" PREFIX existed to separate the summary from the per-message lines under it.
-       With one line the category is a label on a set of one, and the round stamp already files it. */
-    const summary = sliceBetween(APP, "if (times > 1 && before) {", "logInfo(");
-    expect(summary).not.toContain('"Trains Bought"');
+  it("has no loop, no summary and no aggregate category left (#1255)", () => {
+    expect(APP).not.toContain("for (let i = 0; i < times; i += 1) {");
+    expect(APP).not.toContain("if (times > 1 && before) {");
     expect(APP).not.toContain('logInfo("Trains Bought"');
   });
 });

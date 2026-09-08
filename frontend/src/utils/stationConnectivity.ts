@@ -95,12 +95,36 @@ export interface StationAnchor {
 export function fitStationsToUpgrade(
   anchors: readonly StationAnchor[],
   candidateCityEdges: readonly (readonly number[])[],
+  /** Design note #1315: station slots per candidate city, when the caller can say. Absent means unchecked. */
+  candidateCitySlots?: readonly number[],
 ): Map<number, number | null> | null {
   const landing = new Map<number, number | null>();
+  /* ==================================================================
+      DESIGN NOTE 1315: TWO CITIES MAY BECOME ONE
+     ==================================================================
+     The Project 18XX+ tile set's #883 replaces New York's brown #62 -- two two-station cities -- with ONE
+     four-station city. Every token on the hex has to land in that one city, and `fitStationToUpgrade` says
+     so already: with a single candidate whose edges are the whole tile, every anchor's edges are a subset
+     and every anchor lands at index 0. What was missing is the guarantee that they FIT. A merge that lands
+     five tokens in a four-slot city is not an upgrade the board can hold, and a rule that only ever moved
+     one token at a time never had to ask. So the landings are counted per city against the slots, and an
+     orientation that overfills a city is illegal -- refused, not silently overfilled. A free token (no
+     edges) counts against no city; the president still chooses. */
+  const singleCity = candidateCityEdges.length === 1;
   for (const anchor of anchors) {
     const fit = fitStationToUpgrade(anchor.edges, candidateCityEdges);
     if (fit.kind === "illegal") return null;
-    landing.set(anchor.companyId, fit.kind === "anchored" ? fit.cityIndex : null);
+    // With one city there is nowhere else to go: a free token lands there rather than staying undecided.
+    landing.set(anchor.companyId, fit.kind === "anchored" ? fit.cityIndex : singleCity ? 0 : null);
+  }
+  if (candidateCitySlots) {
+    const landed = new Map<number, number>();
+    landing.forEach((city) => {
+      if (city !== null) landed.set(city, (landed.get(city) ?? 0) + 1);
+    });
+    for (const [city, count] of Array.from(landed.entries())) {
+      if (count > (candidateCitySlots[city] ?? 0)) return null;
+    }
   }
   return landing;
 }

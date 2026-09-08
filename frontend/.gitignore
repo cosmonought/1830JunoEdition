@@ -22,3 +22,6 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 sandbox-log-*.json
+
+# The full test run, kept on disk so the terminal can show a readable tail of it.
+test-output.txt

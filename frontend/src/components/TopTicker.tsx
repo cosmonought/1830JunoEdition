@@ -80,6 +80,9 @@ const TONE_TINT_ALPHA = 0.32;
    colour is the same intent without the layer. */
 const TONE_BONUS_RGB = [74, 222, 128] as const; // #4ade80
 const TONE_MALUS_RGB = [244, 63, 94] as const; // #f43f5e
+/** Design note #1261: the Yellow Sign's own tint -- the par frame's `#EAB308` (`StockMarketRenderer` #22),
+ *  the one yellow this app already uses for a marked thing. Neither a bonus nor a malus: the sign. */
+const TONE_SIGN_RGB = [234, 179, 8] as const; // #eab308
 /** The expanded row's own ground, as numbers -- see `logEntry`, which paints it. */
 const LOG_ROW_RGB = [20, 28, 44] as const; // #0f0f0f
 
@@ -366,7 +369,9 @@ export function TopTicker({
                 ? styles.logToneBonus
                 : latestItem?.logTone === "malus"
                   ? styles.logToneMalus
-                  : {}),
+                  : latestItem?.logTone === "sign"
+                    ? styles.logToneSign
+                    : {}),
               ...(latestItem?.kind === "chat" ? styles.previewTextChat : {}),
             }}
           >
@@ -554,7 +559,9 @@ function LogEntry({ item }: { item: FeedItem }) {
           ? styles.logRowToneBonus
           : item.logTone === "malus"
             ? styles.logRowToneMalus
-            : {}),
+            : item.logTone === "sign"
+              ? styles.logRowToneSign
+              : {}),
       }}
       role="button"
       tabIndex={0}
@@ -947,6 +954,12 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "1px 6px",
     borderRadius: RADIUS.control,
   },
+  /* Design note #1261: the sign's wash, same shape as the two above. */
+  logToneSign: {
+    backgroundColor: toneWash(TONE_SIGN_RGB),
+    padding: "1px 6px",
+    borderRadius: RADIUS.control,
+  },
   /* ==================================================================
       DESIGN NOTE 1095: THE EXPANDED ROW'S FILL, FLATTENED
      ==================================================================
@@ -958,6 +971,7 @@ const styles: Record<string, React.CSSProperties> = {
      got #1080 withdrawn. The only thing these change is the colour of the row. */
   logRowToneBonus: { backgroundColor: toneOverRow(TONE_BONUS_RGB) },
   logRowToneMalus: { backgroundColor: toneOverRow(TONE_MALUS_RGB) },
+  logRowToneSign: { backgroundColor: toneOverRow(TONE_SIGN_RGB) },
   /* Design note #1079: the ONLY emphasis on a flavour line. Not recoloured -- ruled, and right on its own
      terms: the tint already says which direction the die went, and a second signal saying the same thing is
      how the log came to be reading in stripes.

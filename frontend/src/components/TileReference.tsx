@@ -33,8 +33,9 @@ import React, { useEffect, useMemo, useState } from "react";
 import { TilePreviewThumbnail } from "./HexGridRenderer";
 import { TILE_CATALOG_BY_ID, type TileColorTier } from "./hexTileCatalog";
 import type { MapGridResponse } from "./hexContractTypes";
-import { FONT_SIZE, RADIUS } from "../styles/typography";
+import { FONT_SIZE, RADIUS, VIEWPORT_RADIUS } from "../styles/typography";
 import { tileStockTable, type TileStock } from "../utils/tileSupply";
+import { trayEntries, trayInEffect } from "./tileTray";
 /* Design note #1117: the one viewport ground, shared rather than retyped. */
 import { INK_VIEWPORT } from "../styles/palette";
 import {
@@ -50,7 +51,7 @@ export interface TileReferenceProps {
   mapGrid: MapGridResponse | null;
 }
 
-const TIERS: readonly TileColorTier[] = ["Yellow", "Green", "Brown"];
+const TIERS: readonly TileColorTier[] = ["Yellow", "Green", "Brown", "Gray"]; // #1312: Gray renders only when the tray holds one
 
 /** Matching `HexGridRenderer`'s own `COLOR_TIER_STROKE`, so a tile's heading
  *  reads as the tier its thumbnail is outlined in. */
@@ -58,6 +59,7 @@ const TIER_INK: Readonly<Record<TileColorTier, string>> = {
   Yellow: "#caa42a",
   Green: "#6fcf7c",
   Brown: "#c08a5a",
+  Gray: "#b8bcc2", // #1312
 };
 
 /** Which restricted family a tile belongs to, by the terrain the board's own
@@ -66,12 +68,14 @@ const FAMILY_FOR_TERRAIN: Readonly<Record<string, string>> = {
   DoubleCityHub: "OO",
   BostonHub: "B",
   NewYorkHub: "NY",
+  TorontoHub: "TO", // #1317
 };
 
 const FAMILY_BLURB: Readonly<Record<string, string>> = {
   OO: "Only on an OO hex — two cities that start unconnected.",
   B: "Only on a hex printed with the B code.",
   NY: "Only on New York.",
+  TO: "Only on Toronto — the Project 18XX+ map prints it TO, and only these tiles may go there.", // #1317
 };
 
 /** Design note #693: the chip takes a size. It draws the printed-start rows at 30px and the detail panel at
@@ -126,6 +130,10 @@ const TERRAIN_LABEL: Readonly<Record<string, string>> = {
    the chrome's zoom (#1144's lesson, one file over).
    RE-MEASURED ON RESIZE, because the count changes with the window and a stale one would open the panel in
    the middle of a row. */
+/** Design note #1265: the tray thumbnail's size, and the one number the grid's minimum column is derived
+ *  from. */
+const TRAY_TILE_PX = 84;
+
 function useGridColumnCount(ref: React.RefObject<HTMLDivElement | null>): number {
   const [columns, setColumns] = useState(1);
   useEffect(() => {
@@ -303,7 +311,14 @@ function TileTray({
                     {/* Design note #692a: sized up from 44px. The artwork is the thing this tab is FOR, and at
                         44 a green city and a green crossover are two dark hexagons -- which is the reading the
                         report is describing when it says the page looks messy. */}
-                    <TilePreviewThumbnail tileId={tileId} orientation={0} size={64} />
+                    {/* Design note #1265: sized up again, 64 -> 84. REPORTED: "the tiles themselves are only
+                        slightly wider than the supply numbers below them." The supply figure is a six-character
+                        string at body size (`12 / 15`), about 50px, and a 64px hexagon over it read as a
+                        label with a small picture rather than a picture with a label. At 84 the artwork is
+                        the widest thing in the cell by a margin the eye registers. The grid's minimum column
+                        grows with it (`trayContents`) and the column count is measured, not assumed (#1152),
+                        so nothing here depends on the number. */}
+                    <TilePreviewThumbnail tileId={tileId} orientation={0} size={TRAY_TILE_PX} />
 
                     <span style={{ ...styles.tileId, color: TIER_INK[tier] }}>
                       #{tileId}
@@ -381,17 +396,26 @@ function TileReference({ mapGrid }: TileReferenceProps) {
      reached the same shape for the same reason (#396: the card "decides where the controls live"), and a
      reader who has learned it there does not have to learn it again here. */
   const [selectedTileId, setSelectedTileId] = useState<number | null>(null);
-  const graph = useMemo(() => tileUpgradeGraph(), []);
-  const stock = useMemo(() => tileStockTable(mapGrid), [mapGrid]);
+  /* Design note #1311: THE TRAY IN EFFECT, not the catalog. A standard table lists 46 tiles; a Project 18XX+
+     tile-set table lists its own, Gray section included. `trayId` is the dependency that makes the memos
+     recompute when a different game -- on the other tray -- is shown through the same mounted panel. */
+  const trayId = trayInEffect().id;
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- trayId stands for the live tray (#1311).
+  const graph = useMemo(() => tileUpgradeGraph(), [trayId]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const stock = useMemo(() => tileStockTable(mapGrid), [mapGrid, trayId]);
   const live = mapGrid !== null;
 
   const byTier = useMemo(() => {
     const out = new Map<TileColorTier, number[]>();
     for (const tier of TIERS) out.set(tier, []);
-    TILE_CATALOG_BY_ID.forEach((entry, tileId) => out.get(entry.color)?.push(tileId));
+    for (const entry of trayEntries()) out.get(entry.color)?.push(entry.tileId);
     out.forEach((ids) => ids.sort((a, b) => a - b));
+    // A tier with nothing in this tray (Gray, at a standard table) is not a heading with an empty list.
+    for (const tier of TIERS) if ((out.get(tier) ?? []).length === 0) out.delete(tier);
     return out;
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trayId]);
 
   return (
     <section style={styles.root} aria-label="Tile reference">
@@ -440,12 +464,13 @@ function TileReference({ mapGrid }: TileReferenceProps) {
          hierarchy looks like.
          SO THE TIER TAKES THE BORDER and the heading sits ON it; the tiles are loose contents. Nothing about
          the information changed -- only which level of it is drawn as an object. */}
-      {TIERS.map((tier) => (
+      {TIERS.filter((tier) => byTier.has(tier)).map((tier, index, present) => (
         <TileTray
           key={tier}
           tier={tier}
           ids={byTier.get(tier) ?? []}
-          isTopTier={tier === TIERS[TIERS.length - 1]}
+          // #1312: the top of THIS game's ladder -- Brown at a standard table, Gray under the tile set.
+          isTopTier={index === present.length - 1}
           stock={stock}
           live={live}
           graph={graph}
@@ -475,7 +500,8 @@ const styles: Record<string, React.CSSProperties> = {
     margin: "0 20px 20px",
     backgroundColor: INK_VIEWPORT,
     border: "1px solid #2a2a2a",
-    borderRadius: RADIUS.card,
+    // Design note #1257: square on top, where the tab strip attaches.
+    borderRadius: VIEWPORT_RADIUS,
     display: "flex",
     flexDirection: "column",
     gap: "18px",
@@ -556,7 +582,9 @@ const styles: Record<string, React.CSSProperties> = {
   detailRow: { gridColumn: "1 / -1" },
   trayContents: {
     display: "grid",
-    gridTemplateColumns: "repeat(auto-fill, minmax(132px, 1fr))",
+    /* Design note #1265: the column is the tile plus the room #692a's 64px had -- 132 was 64 + 68, so this
+       is 84 + 68, written as arithmetic so the two move together. */
+    gridTemplateColumns: `repeat(auto-fill, minmax(${TRAY_TILE_PX + 68}px, 1fr))`,
     gap: "16px 12px",
   },
   /* Design note #692: contents, not cards. No border, no fill -- the hexagon is already a bounded shape. */
@@ -632,7 +660,9 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     gap: "5px",
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-    fontSize: FONT_SIZE.body,
+    /* Design note #1265: "nudge the size of their names up as well" -- one step, body to strong, so the id
+       keeps pace with the larger artwork without outweighing the supply figure under it. */
+    fontSize: FONT_SIZE.strong,
     fontWeight: 700,
   },
   upgradeRow: {

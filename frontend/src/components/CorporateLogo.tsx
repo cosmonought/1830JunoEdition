@@ -23,8 +23,15 @@ export const LOGO_EXTENSION = "webp";
 /** The URL for one corporation's logo. Pure and exported so the encoding can be
  *  tested without a DOM -- a regression here is invisible on a case-insensitive
  *  dev machine. */
+/** Design note #1320: the one logo that did not arrive as WebP. Keyed by ticker so the file in `Logos/` is
+ *  used as supplied rather than renamed. */
+export const LOGO_EXTENSION_BY_TICKER: Readonly<Record<string, string>> = {
+  PMQ: "jpeg",
+};
+
 export function logoSrcFor(ticker: string): string {
-  return `${LOGO_BASE_PATH}/${encodeURIComponent(ticker)}.${LOGO_EXTENSION}`;
+  const extension = LOGO_EXTENSION_BY_TICKER[ticker.toUpperCase()] ?? LOGO_EXTENSION;
+  return `${LOGO_BASE_PATH}/${encodeURIComponent(ticker)}.${extension}`;
 }
 
 export interface CorporateLogoProps {

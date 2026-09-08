@@ -138,18 +138,19 @@ describe("the face value's new home (design note #843)", () => {
     });
   });
 
-  it("covers all six", () => {
+  it("covers all six, plus the Level Playing Field's seventh", () => {
     // A loop over a list proves nothing about entries the list omits.
-    expect(Object.keys(PRIVATE_COMPANY_CATALOG)).toHaveLength(6);
+    // #1320: the catalog carries the JK (id 7); the sandbox fixture stays at the printed six.
+    expect(Object.keys(PRIVATE_COMPANY_CATALOG)).toHaveLength(7);
     expect(SANDBOX_PRIVATES).toHaveLength(6);
   });
 
   it("carries the canonical 1830 face values", () => {
     /* THE ONE PLACE A LITERAL IS RIGHT. The two tables above could agree with each other and both be wrong;
-       these are the printed values from the box. */
+       these are the printed values from the box. #1320: the JK's $120 sits between the M&H and the C&A. */
     expect(
       Object.values(PRIVATE_COMPANY_CATALOG).map((entry) => entry.faceValue).sort((a, b) => a - b),
-    ).toEqual([20, 40, 70, 110, 160, 220]);
+    ).toEqual([20, 40, 70, 110, 120, 160, 220]);
   });
 
   it("renders the table from the catalog rather than a second list", () => {

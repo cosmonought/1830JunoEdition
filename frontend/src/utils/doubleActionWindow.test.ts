@@ -171,8 +171,25 @@ describe("the one-purchase-per-turn rule can finally fire", () => {
 describe("the controls go quiet while a press is in flight", () => {
   it("latches before the await, which is where the second click lands", () => {
     /* A latch set from the resolved index would be set after the damage: the double-click happens DURING the
-       Firestore write. */
-    const dispatch = sliceBetween(APP, "const appendAt = appliedIndexRef.current;", "const allocated = await");
+       Firestore write.
+
+       ==================================================================
+        THE END ANCHOR WAS POINTING AT A DIFFERENT FUNCTION (#1222)
+       ==================================================================
+       IT READ `"const allocated = await"`, AND THE DISPATCH STOPPED SAYING THAT AT #1213 -- the transport
+       swap made it `const allocated = link ? await link.submit(...) : await appendSandboxAction(...)`. The
+       anchor did not fail then, because `handleStartSandboxGame` HUNDREDS OF LINES LOWER still opened with
+       `const allocated = await appendSandboxAction(`, and `indexOf` found that one instead.
+
+       SO THE SLICE SILENTLY GREW to span two unrelated functions, and the assertion below kept passing on a
+       window that included most of the file. A source scan whose anchors drift outward gets MORE permissive
+       without anyone noticing -- the opposite of how a test should fail. It only broke when #1217 taught the
+       deal to prefer the link too, removing the last copy of the stale anchor.
+
+       ANCHORED ON THE DISPATCH'S OWN LINE NOW, which is what the case was always about: the window between
+       taking the index and sending anything. `const allocated = link` appears in both functions, and
+       `indexOf` takes the first after the start -- which is this one. */
+    const dispatch = sliceBetween(APP, "const appendAt = appliedIndexRef.current;", "const allocated = link");
     expect(dispatch).toContain("if (options?.automatic !== true) setPendingAppendIndex(appendAt);");
   });
 

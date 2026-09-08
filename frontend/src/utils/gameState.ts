@@ -19,6 +19,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 // Design note #526: the one printed-limits table.
 import { certLimitForPlayers } from "./gameSetup";
+import { certificateCardsHeld } from "./doubleCertificate";
 import type { OperatingSubPhase } from "../components/OperatingSubPhaseStepper";
 import type { GameVariants } from "./gameVariants";
 
@@ -31,7 +32,7 @@ import type { GameVariants } from "./gameVariants";
  *  what happens when a tooltip string is retyped per call site. */
 export const PRIORITY_DEAL_TOOLTIP = "Priority Deal: Starts the next Stock Round.";
 
-export type TileColor = "Yellow" | "Green" | "Brown";
+export type TileColor = "Yellow" | "Green" | "Brown" | "Gray"; // #1312: Gray only under the Project 18XX+ tile set
 /** Pre-Game Waterfall Auction (`waterfall.rs`): every room genesis-starts here, before `"StockRound"` is
  *  ever reachable. Mirrors `state.rs`'s `RoundType` exactly. */
 /** Design note #898: `GameEnd` is a ROUND, and putting it here is what makes the ending survive a replay.
@@ -170,6 +171,15 @@ export interface PublicCompanyState {
    *  `hexmap::station_token_limit`. Mirrors `msg.rs::PublicCompanyState.
    *  station_token_limit` exactly. */
   station_token_limit: number;
+  /** Design note #1323: Kanawha Licences held (Level Playing Field). Non-transferable, so nothing moves them;
+   *  absent means none. A licence is what lets this corporation's routes and network cross Coal River (L8). */
+  kanawha_licenses?: number;
+  /** Design note #1324: WHERE THE 20% STANDARD CERTIFICATE IS, for the two corporations that have one (ERIE
+   *  and N&W under the Level Playing Field). `"Ipo"`, `"Bank"` or a player address. Absent means the
+   *  corporation has no such certificate, which is every corporation in every other game. Holdings stay
+   *  percentages; this is the one extra fact the percentage cannot carry -- which 20% of a holder's stake is
+   *  one card rather than two. */
+  double_certificate?: { at: string } | null;
   /** Audit G-15c: the MODEL of every train this corporation owns, e.g. `["2", "2", "4"]` -- duplicates are
    *  meaningful. OPTIONAL, and the optionality carries meaning the UI must respect: `undefined` means a
    *  contract predating the field, i.e. UNKNOWN, not "owns nothing". Conflating the two would grey out every
@@ -293,6 +303,10 @@ export interface PrivatePurchaseOffer {
   buyer_protocol_id: number;
   buyer_ticker: string;
   price: number;
+  /** Design note #1247: the owner said yes and the purchase is OWED. Set by the reducer's `AnswerPrivatePurchase`
+   *  arm on an accept; cleared -- with the whole offer -- by the `BuyPrivateCompany` that settles it, which
+   *  `nextDerivedAction` generates from this flag. Absent means "awaiting an answer", as it always did. */
+  accepted?: true;
 }
 
 /** Design note #701: the train-trade offer awaiting the seller president's answer. The train equivalent of
@@ -310,6 +324,8 @@ export interface TrainPurchaseOffer {
   model_type: string;
   /** String, matching the contract's `Uint128` -- see `ProposeTrainPurchaseMsg`. */
   price: string;
+  /** Design note #1247: the seller's president said yes and the trade is OWED -- see `PrivatePurchaseOffer`. */
+  accepted?: true;
 }
 
 export interface GameStateResponse {
@@ -433,6 +449,13 @@ export interface GameStateResponse {
    * SELF-SCOPING, so nothing clears it: a different turn mints a different key. That is why this is a key
    * rather than the counter #1172 needed. */
   last_run_turn_key?: string | null;
+  /** Design note #1314: TRAINS TRADED IN FOR A DIESEL AND BACK IN THE BANK'S DEPOT (Project 18XX+). RULED:
+   *  "the traded-in train is not removed from the game. It must be returned to the Bank's Supply Depot, where
+   *  it becomes available for any corporation to purchase at face value (provided it hasn't rusted)." One
+   *  entry per train, by model. A returned model rusts in the depot when its tier rusts, exactly as it would
+   *  have on a corporation. Absent on every log written before the rule (#232), and the standard game never
+   *  writes it. */
+  returned_trains?: readonly string[];
   /** ==================================================================
    *   DESIGN NOTE 1172: THE COUNT RULE 4 WAS ALWAYS WAITING FOR
    *  ==================================================================
@@ -528,6 +551,16 @@ export interface GameStateResponse {
    * inspection will make it -- which is the honest reading rather than a heuristic that guesses wrong on
    * #817's exact case. */
   used_private_abilities?: readonly string[];
+  /* ==================================================================
+      DESIGN NOTE 1323: THE LEVEL PLAYING FIELD'S GAME-WIDE COUNTERS
+     ==================================================================
+     Three facts that belong to the game rather than to any corporation, all optional per #232 -- absent is
+     "this log predates the variant", never zero -- and all written only by reducer arms so a replay rebuilds
+     them. `kanawhaLicense.ts` and `levelPlayingField.ts` are their only readers. */
+  /** How many of the four purchasable Kanawha Licences the Bank has sold. The JK's free grant is not one. */
+  kanawha_licenses_sold?: number;
+  /** Whether the JK's one-time free licence has been handed to the first corporation to buy it. */
+  jk_license_granted?: boolean;
 }
 
 /** One corporation's token on the stock market chart.
@@ -586,6 +619,36 @@ export function actingAddress(
   const contest =
     state.current_round_type === "WaterfallAuction" ? waterfall?.mini_auction : null;
   if (contest) return contest.current_turn || null;
+
+  /* ==================================================================
+      DESIGN NOTE 1232: DURING THE AUCTION, THE AUCTION SAYS WHOSE TURN IT IS
+     ==================================================================
+     THE SEAT WAS A MIRROR OF THE AUCTION'S CURSOR, AND THE MIRROR DRIFTED. #544 reads the seat here because
+     "that field is right about the WATERFALL" -- which held only while every arm that moved one moved the
+     other. A mini-auction pass advanced the seat and not the cursor (`sandboxSession.ts` #1232), and this
+     function then named a player the auction was not waiting for. The game locked with a turn indicator
+     pointing at somebody whose every click was refused.
+
+     `applySandboxWaterfallAction` ALREADY DECIDES THE ACTOR FROM `waterfall.current_turn`, not from the seat
+     and not from the message. So a gate or an authority that reads the seat is judging by a different cursor
+     than the one the reducer will apply the action under -- #1174's two-judge problem, inside one process.
+     Reading the auction's own cursor here makes the question and the answer come from the same place.
+
+     THE SEAT REMAINS THE FALLBACK, for #232's reason: before the deal `current_turn` is `""` ("matches nobody",
+     #542), and a waterfall that is absent or unseated has said nothing about the turn. Both read as "no
+     opinion", and the seat -- which the reducer still keeps in step for the ordinary waterfall actions --
+     answers as it always did. */
+  if (
+    state.current_round_type === "WaterfallAuction" &&
+    waterfall?.current_turn &&
+    /* ONLY A CURSOR THAT NAMES A SEATED PLAYER IS BELIEVED. A room before its deal (#538) has an empty roster
+       and must answer `null` -- a bare `""` would equal a spectator's missing address and hand them the turn.
+       And an atom whose cursor names somebody the board does not seat is stale or foreign, not authoritative;
+       the seat answers as before. */
+    state.player_addresses.includes(waterfall.current_turn)
+  ) {
+    return waterfall.current_turn;
+  }
 
   const seat = actingSeatIndex(state);
   if (seat === null) return null;
@@ -656,20 +719,12 @@ export function certificateCount(playerAddress: string, state: GameStateResponse
     if (priv.owner === playerAddress) count += 1;
   }
   for (const pub of state.public_companies) {
-    const holding = pub.player_holdings.find((h) => h.player === playerAddress);
-    if (holding && holding.percentage > 0) {
-      if (pub.president === playerAddress) {
-        // The president's 20% certificate is a single physical card and
-        // counts as exactly 1 certificate -- see design note #3. Anything
-        // held beyond that 20% is ordinary 10% certificates, each still
-        // counting as 1.
-        const presidentCertificate = 1;
-        const remainderPercentage = Math.max(0, holding.percentage - 20);
-        count += presidentCertificate + Math.ceil(remainderPercentage / 10);
-      } else {
-        count += Math.max(1, Math.ceil(holding.percentage / 10));
-      }
-    }
+    // The president's 20% certificate is a single physical card and counts as exactly 1 certificate -- see
+    // design note #3. Anything held beyond that 20% is ordinary 10% certificates, each still counting as 1.
+    // Design note #1324: and the 20% standard certificate (ERIE, N&W under the Level Playing Field) is one
+    // card too. `certificateCardsHeld` is the one place that arithmetic lives; `certificateBreakdown` below
+    // asks it as well, so the two counts cannot drift.
+    count += certificateCardsHeld(pub, playerAddress);
   }
   return count;
 }
@@ -730,12 +785,9 @@ export function certificateBreakdown(
     const holding = pub.player_holdings.find((h) => h.player === playerAddress);
     if (!holding || holding.percentage <= 0) continue;
 
-    // Same physical-card arithmetic as `certificateCount` -- the
-    // president's 20% is ONE card, the rest are 10% cards.
-    const cards =
-      pub.president === playerAddress
-        ? 1 + Math.ceil(Math.max(0, holding.percentage - 20) / 10)
-        : Math.max(1, Math.ceil(holding.percentage / 10));
+    // Same physical-card arithmetic as `certificateCount` -- the president's 20% is ONE card, the 20%
+    // standard certificate (#1324) is one card, the rest are 10% cards.
+    const cards = certificateCardsHeld(pub, playerAddress);
 
     const zone =
       marketPrices && zoneForPrice ? zoneForPrice(marketPrices[pub.company_id]) : null;

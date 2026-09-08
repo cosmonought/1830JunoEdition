@@ -243,11 +243,12 @@ describe("the Pay button warns that this buy ends the turn", () => {
     expect(PANEL).toContain('? "Train Limit Reached"');
   });
 
-  it("measures the limit with the same walk the quantity selector uses", () => {
+  it("measures the limit with the phase-aware walk, not a subtraction", () => {
     /* NOT A SUBTRACTION. `limitHeadroom` is `buyableNow`'s phase-aware walk (#296) -- with a phase change in
        the middle, `currentLimit - owned` overcounts, and a button that promised the ending on a purchase
-       which did not reach the limit would be the reconciliation failure #247 exists to prevent. */
-    expect(PANEL).toContain("quantity >= limitHeadroom");
+       which did not reach the limit would be the reconciliation failure #247 exists to prevent.
+       #1255: one train per press, so "this purchase fills the limit" is "exactly one slot is left". */
+    expect(PANEL).toContain("const fillsTrainLimit = limitHeadroom === 1;");
     expect(PANEL).not.toContain("currentTrainLimit - ownedTrainCount");
   });
 
@@ -356,13 +357,19 @@ describe("a replayed tile lay is judged against the reducer's phase", () => {
        inputs, in the function whose own note names the fault.
        SNAPSHOTTED BESIDE THE GRID per #766 ("a snapshot, not a reorder"), so both halves judge one instant. */
     expect(APP).toContain("const phaseBeforeAction = derivePhase(sandboxStateRef.current);");
-    expect(APP).toContain("era: ERA_FOR_PHASE_TINT[phaseBeforeAction?.tint ?? \"yellow\"]");
+    // #1312: through `eraForPhase` (the table's variants beside the phase), still off the snapshot.
+    // Design note #1279: the variants are read ONCE into `rulesBeforeAction`, which also scopes the board and
+    // tray for the check (`withRules`) -- same snapshot, one read, both consumers.
+    expect(APP).toContain("const rulesBeforeAction = resolveVariants(sandboxStateRef.current?.variants);");
+    expect(APP).toContain("era: eraForPhase(phaseBeforeAction, rulesBeforeAction),");
+    expect(APP).toContain("withRules(\n            rulesBeforeAction,");
   });
 
   it("no longer asks render state for it", () => {
     /* THE NEGATIVE THAT MATTERS: `currentPhase` is still right for everything that renders, and wrong only
        inside a dispatch. Asserted on the predicate's own region so a render-time use elsewhere is untouched. */
-    const predicate = sliceBetween(APP, "const gridBeforeAction = mapGridRef.current;", ").length === 0;");
+    // Design note #1279: the predicate now closes inside a `withRules(...)` call, so its last line is `.length === 0,`.
+    const predicate = sliceBetween(APP, "const gridBeforeAction = mapGridRef.current;", ").length === 0,");
     expect(predicate).not.toContain("currentPhase");
     expect(predicate).toContain("phaseBeforeAction");
   });

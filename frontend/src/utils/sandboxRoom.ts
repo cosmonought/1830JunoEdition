@@ -35,6 +35,8 @@ import {
 } from "firebase/firestore";
 
 import { resolveVariants, STANDARD_VARIANTS, type GameVariants } from "./gameVariants";
+// Design note #1215: the waiting room's second backend. The branch is in this file so no caller has one.
+import { roomDocOnServer, subscribeRoomDoc, writeRoomDoc } from "./roomDocLink";
 
 import { getFirestoreDb } from "../config/firebase";
 /* Design note #530: `GameplayExecuteMsg` is no longer imported here --
@@ -182,6 +184,21 @@ function toAction(snapshot: QueryDocumentSnapshot<DocumentData>): SandboxAction 
  *  `config/firebase.ts`: the sandbox runs with no backend at all), so the
  *  caller reports it rather than this throwing. */
 export async function hostSandboxRoom(hostId: string, nickname: string): Promise<string | null> {
+  /* ==================================================================
+      DESIGN NOTE 1215: SIX FUNCTIONS THAT NOW ANSWER TO TWO BACKENDS
+     ==================================================================
+     THE BRANCH IS HERE RATHER THAN AT THE CALL SITES, and that is the whole design. These six have callers in
+     `Lobby.tsx` and in five places in `App.tsx` -- an effect, a join handler, and three waiting-room controls
+     -- and routing at each of them would have meant a dozen edits to the file this migration exists to stop
+     editing. #1213 made the same choice for the log: `serverLink` was shaped like `appendSandboxAction` so
+     the shell could not tell them apart.
+     THE CODE IS MINTED LOCALLY ON THE SERVER PATH. There is nothing to ask for: a room code is a name, not an
+     allocation, and a round trip to learn one would be a round trip that can fail. */
+  if (roomDocOnServer()) {
+    const code = generateRoomCode();
+    writeRoomDoc(code, hostId, { op: "host", hostId, nickname, variants: STANDARD_VARIANTS });
+    return code;
+  }
   const db = getFirestoreDb();
   if (!db) return null;
   const code = generateRoomCode();
@@ -290,6 +307,12 @@ export async function appendSandboxAction(
 /** Reads the whole log once. Used to decide whether a joined room exists and
  *  what its length is before the live subscription opens. */
 export async function readSandboxLog(roomCode: string): Promise<SandboxAction[]> {
+  /* #1215. THE JOIN PATH AWAITS THIS, which is what made routing it necessary rather than tidy: with
+     Firestore unreachable the read never settles and "Join game" hangs with no error, exactly as hosting did.
+     EMPTY IS THE HONEST ANSWER on the server path -- the log lives on the server and the shell's own listener
+     is what fetches it (#1213). This call was only ever a courtesy: it exists so a mistyped code is refused
+     at the door instead of opening an empty board, and that courtesy is worth less than a working join. */
+  if (roomDocOnServer()) return [];
   const db = getFirestoreDb();
   if (!db) return [];
   const snapshot = await getDocs(
@@ -423,6 +446,8 @@ export function subscribeSandboxRoom(
   onRoom: (room: SandboxRoomDoc | null) => void,
   onError?: (message: string) => void,
 ): () => void {
+  // #1215. The server's frame is already this shape, so there is nothing to translate.
+  if (roomDocOnServer()) return subscribeRoomDoc(roomCode, localPlayerId(), onRoom, onError);
   const db = getFirestoreDb();
   if (!db) return () => undefined;
   return onSnapshot(
@@ -438,6 +463,13 @@ export async function upsertSandboxPlayer(
   roomCode: string,
   player: SandboxRoomPlayer,
 ): Promise<boolean> {
+  /* #1215. The transaction's reason does not survive the move: it existed because SEVERAL BROWSERS wrote
+     this array, and the server is one writer applying one op at a time. The in-place rule (#541) does
+     survive, and lives in `applyRoomWrite`. */
+  if (roomDocOnServer()) {
+    writeRoomDoc(roomCode, player.id, { op: "upsert-player", player });
+    return true;
+  }
   const db = getFirestoreDb();
   if (!db) return false;
   const ref = doc(db, SANDBOX_ROOMS_COLLECTION, roomCode);
@@ -472,6 +504,10 @@ export async function setSandboxRoomVariants(
   roomCode: string,
   variants: GameVariants,
 ): Promise<void> {
+  if (roomDocOnServer()) {
+    writeRoomDoc(roomCode, localPlayerId(), { op: "variants", variants });
+    return;
+  }
   const db = getFirestoreDb();
   if (!db) return;
   await updateDoc(doc(db, SANDBOX_ROOMS_COLLECTION, roomCode), { variants });
@@ -483,12 +519,20 @@ export async function setSandboxForcedSign(
   roomCode: string,
   stage: ForcedSignStage | null,
 ): Promise<void> {
+  if (roomDocOnServer()) {
+    writeRoomDoc(roomCode, localPlayerId(), { op: "forced-sign", stage });
+    return;
+  }
   const db = getFirestoreDb();
   if (!db) return;
   await updateDoc(doc(db, SANDBOX_ROOMS_COLLECTION, roomCode), { forcedSign: stage });
 }
 
 export async function markSandboxRoomPlaying(roomCode: string): Promise<void> {
+  if (roomDocOnServer()) {
+    writeRoomDoc(roomCode, localPlayerId(), { op: "status", status: "playing" });
+    return;
+  }
   const db = getFirestoreDb();
   if (!db) return;
   await updateDoc(doc(db, SANDBOX_ROOMS_COLLECTION, roomCode), { status: "playing" });

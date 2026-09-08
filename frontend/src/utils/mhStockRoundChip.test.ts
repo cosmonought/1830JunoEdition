@@ -40,7 +40,8 @@ describe("the offer is built where ownership is known", () => {
     /* `privatePowerOffer.ts` says its list "can never hold more than two entries" and feeds
        `privatePowerHexKeys`, which the board's glow reads. A power with no hex in that list would hand the
        map a key it cannot resolve, so the two are joined only where the bar takes a generic chip. */
-    expect(APP).toContain("powerOffers={[...privatePowerOfferList, ...stockRoundPowerOffers]}");
+    // #1323: the JK's armed-lay chip rides in the same list -- a generic chip, like the M&H's, with no hex key.
+    expect(APP).toContain("powerOffers={[...privatePowerOfferList, ...stockRoundPowerOffers, ...(jkPowerOffer ? [jkPowerOffer] : [])]}");
     const offers = stripComments(readSource("utils/privatePowerOffer.ts"));
     expect(offers).not.toContain("mh-exchange");
     expect(offers).toContain('export type PowerAbilityKey = "csl-tile" | "dh-tile";');

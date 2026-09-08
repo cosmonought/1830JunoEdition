@@ -36,6 +36,9 @@ export {};
 const { readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
 const { UI_SCALE, CHROME_ZOOM, styles } =
   require("../styles/appStyles") as typeof import("../styles/appStyles");
+/* Design note #1273: the preference behind the constant. */
+const { UI_SCALE_DESIGN, UI_SCALE_STEPS, defaultUiScaleFor, snapUiScale } =
+  require("./uiScale") as typeof import("./uiScale");
 
 const APP = readStripped("App.tsx");
 const APPSTYLES = readStripped("styles/appStyles.ts");
@@ -58,8 +61,33 @@ describe("the scale is one number", () => {
        lands at `F * s * b` and the board at `W - F * s * b`, so any pair with the same `s * b` is the same
        layout), 0.7 x 0.9 is exactly what the player is looking at rather than an approximation of it.
        ASSERTED AS THE PRODUCT, not as the literal, so the arithmetic is stated where it can be checked. */
+    /* Design note #1273: THE THIRD READING MADE IT A PREFERENCE. `UI_SCALE` now resolves through
+       `utils/uiScale.ts` -- this browser's stored choice, else a guess from the window's width. Outside a
+       browser (this file runs in node) that resolves to the design figure, which is still #1149's product,
+       and the guess still lands on it at the widths #1149 measured. */
     expect(UI_SCALE).toBeCloseTo(0.7 * 0.9, 10);
     expect(UI_SCALE).toBe(0.63);
+    expect(UI_SCALE_DESIGN).toBe(0.63);
+    expect(defaultUiScaleFor(1920)).toBe(0.63);
+    expect(defaultUiScaleFor(1200)).toBe(1);
+    expect(defaultUiScaleFor(1500)).toBeGreaterThan(0.63);
+    expect(defaultUiScaleFor(NaN)).toBe(0.63);
+    expect(UI_SCALE_STEPS).toContain(0.63);
+    expect(UI_SCALE_STEPS).toContain(1);
+    expect(snapUiScale(0.97)).toBe(1);
+    expect(APPSTYLES).toContain("export const UI_SCALE = resolveUiScale();");
+  });
+
+  it("offers a picker in the bar, which changes the scale live (design note #1294)", () => {
+    /* #1149: "TWICE IS THE SIGNAL FOR THE PICKER." #1273 reloaded on change; REPORTED as a black flash that
+       cut the radio, and rejected. The scale is a store now: the picker writes it, every surface that draws
+       with it reads it through `useUiScale()`, nothing reloads. */
+    const TOPBAR = readStripped("components/TopBar.tsx");
+    expect(TOPBAR).toContain("<UiScalePicker />");
+    expect(TOPBAR).toContain("setUiScale(UI_SCALE_STEPS[");
+    expect(TOPBAR).not.toContain("window.location.reload()");
+    expect(readStripped("utils/uiScale.ts")).toContain('"1830juno.ui_scale.v1"');
+    expect(readStripped("utils/useUiScale.ts")).toContain("useSyncExternalStore(subscribeUiScale, getUiScale, getUiScale)");
   });
 
   it("is never spelled out again as a literal", () => {
@@ -92,10 +120,13 @@ describe("all three screens draw at the same scale", () => {
      A zoom on the shell alone would have left the game room at 70% between two screens at 100%, and the batch
      immediately before this one spent its length making the footer read the same on all three. */
   it("spreads the same object on each root rather than repeating a declaration", () => {
-    expect(APP).toContain("...styles.appChromeZoom");
-    expect(APPSTYLES).toContain("appChromeZoom: CHROME_ZOOM");
-    expect(LOBBY).toContain("...styles.root, ...CHROME_ZOOM");
-    expect(WAITING).toContain("...styles.root, ...CHROME_ZOOM");
+    /* Design note #1294: the same FUNCTION of the live scale on each root -- `chromeZoomFor(uiScale)`, the
+       two declarations `CHROME_ZOOM` carries, computed per render. */
+    expect(APPSTYLES).toContain("export function chromeZoomFor(scale: number): React.CSSProperties {");
+    expect(APP).toContain("...chromeZoomFor(uiScale),");
+    expect(LOBBY).toContain("...styles.root, ...chromeZoomFor(uiScale)");
+    expect(WAITING).toContain("...styles.root, ...chromeZoomFor(uiScale)");
+    expect(WAITING.split("...chromeZoomFor(uiScale)").length - 1).toBe(2);
   });
 
   it("carries the viewport-unit correction with the zoom that causes it", () => {
@@ -111,12 +142,15 @@ describe("all three screens draw at the same scale", () => {
        zoomed box against an unscaled viewport unit; the comparison stops meaning anything, and #1131's claim
        that "children positioned at 40% or 70% land on the same part of the photograph" rests on this box being
        exactly `cover`. A leftover bare `100vh` here is the bug, so that is what is asserted. */
-    const scene = sliceBetween(LOBBY, "scene: {", "\n  },");
-    expect(scene).toContain("${100 / UI_SCALE}vh");
-    expect(scene).toContain("${100 / UI_SCALE}vw");
+    /* Design note #1294: the arithmetic moved into `sceneSizeFor(scale)`, applied per render with the live
+       scale; the claim is the same and is asked of that function. */
+    const scene = sliceBetween(LOBBY, "function sceneSizeFor(scale: number)", "\n}");
+    expect(scene).toContain("${100 / scale}vh");
+    expect(scene).toContain("${100 / scale}vw");
     expect(scene).not.toContain("(100vh");
     expect(scene).not.toContain("(100vw");
     expect(scene).not.toContain("max(100vh");
+    expect(LOBBY).toContain("...styles.scene, ...sceneSizeFor(uiScale)");
   });
 });
 
@@ -125,7 +159,7 @@ describe("a measured pixel is converted before it is written back as a length", 
     /* `getBoundingClientRect().height` is VISUAL; this padding is LAYOUT, and it is written inside the zoom.
        Unconverted it reserves seven-tenths of the dock's real height and the dock covers the last of the log
        -- which is #599's original report, returning through a door nobody was watching. */
-    expect(APP).toContain("paddingBottom: `${statusDockHeight / UI_SCALE + 12}px`");
+    expect(APP).toContain("paddingBottom: `${statusDockHeight / uiScale + 12}px`");
     expect(APP).not.toContain("paddingBottom: `${statusDockHeight + 12}px`");
   });
 
@@ -133,7 +167,8 @@ describe("a measured pixel is converted before it is written back as a length", 
     /* Same crossing, same direction: #810 hands `scrollMarginTop` a height measured off a rect so an
        auto-scrolled panel clears the bar. At 70% of itself the bar covers the top of the panel again, which is
        the exact complaint #810 exists to answer. */
-    expect(BAR).toContain("node.style.scrollMarginTop = `${clearance / UI_SCALE}px`");
+    // Design note #1294: the scale at the moment of measurement, from the store.
+    expect(BAR).toContain("node.style.scrollMarginTop = `${clearance / getUiScale()}px`");
   });
 
   it("leaves the observer's root margin alone, which is the same number in the other space", () => {
@@ -153,7 +188,7 @@ describe("a measured pixel is converted before it is written back as a length", 
        against rect tops, which are visual. The bar is `top: 0` today and zero is zero in both spaces -- so
        this guards a rule rather than a symptom, which is the only moment it can be guarded at all.
        ASSERTED AS A SINGLE READ PATH: two call sites, one helper, so the pair cannot drift. */
-    expect(BAR).toContain("stickyTopOffset(window.getComputedStyle(node).top) * UI_SCALE");
+    expect(BAR).toContain("stickyTopOffset(window.getComputedStyle(node).top) * getUiScale()");
     const reads = BAR.split("stickyTopOffset(window.getComputedStyle").length - 1;
     expect(reads).toBe(1);
     expect(BAR.split("measuredStickyTop(").length - 1).toBeGreaterThanOrEqual(3);
@@ -171,8 +206,9 @@ describe("what is exempt, and why each one is", () => {
     /* ART AT VIEWPORT SIZE IS NOT CHROME. The cinematic and the sign are pictures sized to the window, with
        controls and type authored to the picture; the modals are chrome and shrink with the rest, which is why
        they are deliberately absent from this list. */
-    expect(INTRO).toContain("zoom: 1 / UI_SCALE");
-    expect(SIGN).toContain("zoom: 1 / UI_SCALE");
+    // Design note #1294: written per render from the live scale.
+    expect(INTRO).toContain("zoom: 1 / uiScale");
+    expect(SIGN).toContain("zoom: 1 / uiScale");
     expect(readStripped("components/MarketPeekModal.tsx")).not.toContain("UI_SCALE");
     expect(readStripped("components/AutoPassModal.tsx")).not.toContain("UI_SCALE");
   });
@@ -184,8 +220,8 @@ describe("what is exempt, and why each one is", () => {
        the hex it belongs to: a plausible-looking offset on a small board, plainly wrong on a large one.
        THE RULE, STATED ONCE: a layer positioned in MEASURED pixels must be drawn at the scale those pixels
        were measured at. */
-    const backdrop = sliceBetween(RADIAL, "backdrop: {", "\n  },");
-    expect(backdrop).toContain("zoom: 1 / UI_SCALE");
+    // Design note #1294: the counter-zoom is written per render on the backdrop from the live scale.
+    expect(RADIAL).toContain("{ ...styles.backdrop, zoom: 1 / uiScale }");
     expect(RADIAL).toContain("left: screen?.x ?? 0");
   });
 
@@ -195,5 +231,7 @@ describe("what is exempt, and why each one is", () => {
        above name may carry a counter-zoom. */
     const counterZooms = APPSTYLES.split("zoom: 1 / UI_SCALE").length - 1;
     expect(counterZooms).toBe(1);
+    // Design note #1294: and the shell overrides that one per render with the live scale, nowhere else.
+    expect(APP.split("zoom: 1 / uiScale").length - 1).toBe(1);
   });
 });

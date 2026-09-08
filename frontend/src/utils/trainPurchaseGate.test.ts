@@ -332,7 +332,7 @@ describe("only an explicit confirm dispatches a purchase", () => {
 
   it("binds that place to a button's onClick", () => {
     const button = sliceBetween(PANEL, "onClick={() => {", "}}");
-    expect(button).toContain("onBuyFromBank(nextTier.tier, quantity);");
+    expect(button).toContain("onBuyFromBank(nextTier.tier);"); // #1255: one train per press
     expect(button).toContain("if (bankProblem) return;");
   });
 
@@ -348,12 +348,13 @@ describe("only an explicit confirm dispatches a purchase", () => {
     expect(PANEL).toContain("bankTotal > treasury");
   });
 
-  it("opens panels and picks quantities without dispatching", () => {
+  it("opens panels without dispatching", () => {
     /* THE REPORT'S OWN WORDS -- "merely to view information". Every other control in this panel writes local
-       state; asserted by name so a later edit that hangs a dispatch on one of them fails here. */
+       state; asserted by name so a later edit that hangs a dispatch on one of them fails here. #1255: the
+       quantity buttons are gone, so there is one fewer control to fence. */
     expect(PANEL).toContain("onClick={() => setLaterTrainsOpen((open) => !open)}");
     expect(PANEL).toContain("onClick={() => setCorporateOpen((open) => !open)}");
-    expect(PANEL).toContain("onClick={() => setQuantityText(String(option))}");
+    expect(PANEL).not.toContain("setQuantityText");
     expect(PANEL).toContain("onClick={onEmergencyPurchase}");
   });
 });

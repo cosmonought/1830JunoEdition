@@ -40,7 +40,10 @@ describe("the shell owns the audio state", () => {
     /* Design note #1143: the call is multi-line now (a third argument, for the one-render-late gate), so
        this matches the collapsed form. The claim is unchanged and is the reason the fragment is this short:
        the whistle asks the same `isMyTurn` the flash and the glow ask. */
-    expect(APP.replace(/\s+/g, " ")).toContain("useTurnWhistle( isMyTurn,");
+    /* Design note #1269: `turnAnnounceable` is `isMyTurn` with two more terms; the whistle still asks the
+       same turn the flash and the glow ask, one line up. */
+    expect(APP.replace(/\s+/g, " ")).toContain("useTurnWhistle( turnAnnounceable,");
+    expect(APP).toContain("const turnAnnounceable =\n    isMyTurn &&");
     // And the mute still reaches it, whatever else has been ANDed alongside.
     expect(APP).toContain("sfxEnabled && sfxTurnEnabled");
   });

@@ -47,6 +47,7 @@ import {
   dealSandboxGame,
   isAnswerPrivatePurchaseMsg,
   isAnswerTrainPurchaseMsg,
+  isBuyKanawhaLicenseMsg,
   isCloseRoomMsg,
   isExchangePrivateMsg,
   isOpenStockRoundMsg,
@@ -56,12 +57,14 @@ import {
   isSetBoParMsg,
   isSetupGameMsg,
 } from "./gameSetup";
-import { BO_TICKER } from "./gameConstants";
+import { BO_TICKER, eraForPhase } from "./gameConstants";
 import { applyPrivateExchange } from "./privateExchange";
 import type { MapGridResponse, MapTileEntry } from "../components/hexContractTypes";
+// Design note #1325: a corporation's home hexes on the board in effect (two for the LPF's C&O).
+import { homeHexesFor } from "../components/hexContractTypes";
 import { TILE_CATALOG_BY_ID, type TileColorTier } from "../components/hexTileCatalog";
 import { archetypeForHex, hexValueForEra } from "../components/hexGeometry";
-import { depotInventory, derivePhase, TIER_ORDER, trainTier, type GamePhase } from "./gamePhase";
+import { depotInventory, derivePhase, openDepotTiers, TIER_ORDER, trainTier, type GamePhase } from "./gamePhase";
 // Design note #712: the market-zone purchase rules, shared with the Stock Round panel.
 import { sharePurchaseBlock, type PriceZone } from "./sharePurchase";
 import { hasActedThisTurn } from "./turnAction";
@@ -98,9 +101,37 @@ import {
   OFFBOARD_LABELS,
   OFFBOARD_REVENUE,
   STATIC_BOARD_HEXES,
+  boardMemo,
+  heraldAt,
+  heraldHexFor,
   offboardValueForEra,
   terrainBuildFeeAt,
 } from "../components/hexBoardData";
+import { withRules } from "./boardSelection";
+import { stopEnteredFrom } from "./trackReach";
+// Design note #1324: the 20% standard certificate.
+import {
+  DOUBLE_CERTIFICATE_PERCENT,
+  doublePurchaseRefusal,
+  doubleSaleEffect,
+  withDoubleAt,
+} from "./doubleCertificate";
+// Design note #1320: the Level Playing Field's entities, applied by the `SetupGame` arm.
+import { JK_PRIVATE_ID, withLevelPlayingFieldEntities } from "./levelPlayingField";
+// Design note #1323: the Kanawha Licence -- its purchase, its grant and the hex it unlocks.
+import {
+  JK_TILE_ABILITY_KEY,
+  KANAWHA_LICENSE_COST,
+  jkHalfFee,
+  jkTileRefusal,
+  kanawhaLicenseRefusal,
+  kanawhaLicensesInPlay,
+  licensesHeldBy,
+  mayCrossCoalRiver,
+  routeCrossesCoalRiver,
+} from "./kanawhaLicense";
+import { tileCitySlotCounts } from "../components/TileGraphics";
+import { DIESEL_TIER, dieselExchangeCostFor, dieselExchangeRefusal } from "./dieselExchange";
 
 /** A nominal share price, applied so a `BuyStock`/`SellStock` visibly moves
  *  the cash column. NOT a computed price -- see design note 0. The real
@@ -480,8 +511,9 @@ function recordPass(state: GameStateResponse): GameStateResponse {
 
 /** Applies one message; unknown variants fall through to the turn-advancing default. Route revenue TOTALS printed stop values -- it checks no connectivity, distance or token rule.
  *  See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #0 */
-const HEX_COORDS_BY_LABEL: ReadonlyMap<string, { q: number; r: number }> = new Map(
-  STATIC_BOARD_HEXES.map((hex) => [hex.label, { q: hex.q, r: hex.r }]),
+const hexCoordsByLabel = boardMemo(
+  (board): ReadonlyMap<string, { q: number; r: number }> =>
+    new Map(board.hexes.map((hex) => [hex.label, { q: hex.q, r: hex.r }])),
 );
 
 /* Price a hex through hexGeometry.hexRouteValue, the board's own answer. A third private copy scored preprinted gray hexes at $0 and let revenue:"0" short-circuit the printed value.
@@ -489,17 +521,46 @@ const HEX_COORDS_BY_LABEL: ReadonlyMap<string, { q: number; r: number }> = new M
 
 /** A route runs between two CITIES (or off-board reds); towns are passed through. archetypeForHex asks what the hex IS rather than what it pays.
  *  See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #264 */
-export function isRevenueCentreHex(mapGrid: MapGridResponse, hexLabel: string): boolean {
+/* ==================================================================
+    DESIGN NOTE 1302: A HERALD IS A CENTRE FOR ONE CORPORATION
+   ==================================================================
+   1830+ prints PRR's herald on H12 at $10. For PRR it is a revenue centre and a place a route may end; for
+   every other corporation the hex is the plain green tile it carries. So the three questions below take the
+   corporation asking (`forCompanyId`), and answer the herald only to its owner. Absent means "no corporation
+   in particular", which is every pre-#1302 caller and every hex without a herald -- unchanged.
+   THE OWNER MAY DECLINE IT: "on subsequent rounds PRR can opt not to include it". A waypoint carrying
+   `bypass: true` is already how a route says "passed, not counted" (#737), and it means exactly that here. */
+function heraldValueFor(hexLabel: string, forCompanyId: number | undefined): number | null {
+  if (forCompanyId === undefined) return null;
+  const herald = heraldAt(hexLabel);
+  return herald && herald.companyId === forCompanyId ? herald.revenue : null;
+}
+
+export function isRevenueCentreHex(
+  mapGrid: MapGridResponse,
+  hexLabel: string,
+  forCompanyId?: number,
+): boolean {
   if (OFFBOARD_LABELS[hexLabel]) return true;
-  const coords = HEX_COORDS_BY_LABEL.get(hexLabel);
+  if (heraldValueFor(hexLabel, forCompanyId) !== null) return true;
+  const coords = hexCoordsByLabel().get(hexLabel);
   if (!coords) return false;
   const archetype = archetypeForHex(mapGrid, coords.q, coords.r);
   return archetype !== "Plain";
 }
 
-export function isRouteTerminusHex(mapGrid: MapGridResponse, hexLabel: string): boolean {
+export function isRouteTerminusHex(
+  mapGrid: MapGridResponse,
+  hexLabel: string,
+  forCompanyId?: number,
+): boolean {
+  /* Design note #1320 said a warehouse is "a revenue centre, never a terminus". RULED OTHERWISE (design note
+     #1286): "unlike small towns the warehouses are also valid termini for routes" -- and they must count as
+     such. A warehouse can be run TO and run THROUGH (`isOffboardTerminal` excludes it, so passing stays
+     legal); what it can never be is tokened. So every red area is a terminus, warehouse or not. */
   if (OFFBOARD_LABELS[hexLabel]) return true;
-  const coords = HEX_COORDS_BY_LABEL.get(hexLabel);
+  if (heraldValueFor(hexLabel, forCompanyId) !== null) return true;
+  const coords = hexCoordsByLabel().get(hexLabel);
   if (!coords) return false;
   const archetype = archetypeForHex(mapGrid, coords.q, coords.r);
   return archetype === "SingleCity" || archetype === "DoubleCity";
@@ -517,7 +578,7 @@ export function hexStopValue(
      tooltip can reach it: this file imports FROM `components/`, so the tooltip could never have imported from
      here without a cycle. What is left is the label-to-coordinate lookup, which is this module's own concern.
      ONE FUNCTION, ONE ANSWER -- the specific failure this codebase keeps finding, closed for hex values. */
-  const coords = HEX_COORDS_BY_LABEL.get(hexLabel);
+  const coords = hexCoordsByLabel().get(hexLabel);
   if (!coords) {
     /* An unknown label may still be an off-board terminal: those are keyed by NAME in `OFFBOARD_REVENUE` and
        need no coordinates. Asked here rather than inside the ladder so the ladder can stay coordinate-based. */
@@ -550,16 +611,33 @@ export function sandboxRouteBreakdown(
   mapGrid: MapGridResponse,
   path: readonly { hex: string; city_node?: number; bypass?: boolean }[],
   era: TileColorTier,
+  /** Design note #1302: the corporation running, so its herald (if the board prints one) pays. */
+  forCompanyId?: number,
 ): SandboxRouteBreakdown {
-  // Deduplicated by hex: 1830 prices a hex once per pass however many times
-  // a route touches it, which is the same single-visit rule `hexmap.rs`'s
-  // `terrain_base_value` note gives for double towns and double cities.
-  const seen = new Set<string>();
+  /* ==================================================================
+      DESIGN NOTE 1318: REVENUE IS PER CITY -- NOT PER STATION, AND NOT PER HEX
+     ==================================================================
+     RULED: "the rule for revenue is not per station, it's per city, and cities can have multiple stations. So
+     a route that runs through one double-station city ... does not receive 2x revenue. However, if a route
+     runs through one city and then another city on the same hex, it does collect the revenue twice."
+     THE FIRST HALF WAS ALREADY TRUE and is asserted rather than assumed: a tile's `revenue` is one figure,
+     and nothing here has ever multiplied it by slots. THE SECOND HALF WAS NOT. This walk deduplicated by hex
+     label, so a route that left an OO, NY or TO hex and came back into its OTHER city -- legal, and exactly
+     what `routeDraftEdit`'s rail-level rule 5 permits -- was paid once for two cities. So the key is the
+     CITY VISITED: the waypoint's own `city_node` when the router said, otherwise the city the route entered by
+     (`cityEnteredFrom`, from the neighbouring waypoint), and city 0 where a hex has only one -- which is every
+     ordinary hex, and keeps the old once-per-hex behaviour there byte for byte. Two visits to the SAME city are
+     still one payment. */
+  const seenHexes = new Set<string>();
+  const seenCities = new Set<string>();
   const stops: { hex: string; value: number }[] = [];
   let revenue = 0;
-  for (const stop of path) {
-    if (seen.has(stop.hex)) continue;
-    seen.add(stop.hex);
+  for (let index = 0; index < path.length; index += 1) {
+    const stop = path[index];
+    seenHexes.add(stop.hex);
+    const visitKey = `${stop.hex}:${cityVisitedAt(mapGrid, path, index)}`;
+    if (seenCities.has(visitKey)) continue;
+    seenCities.add(visitKey);
 
     /* ==================================================================
      *  DESIGN NOTE 737: A BYPASS PAYS NOTHING AND COSTS NO STOP
@@ -586,13 +664,40 @@ export function sandboxRouteBreakdown(
        that has lost the inputs is how a second, disagreeing answer gets invented. */
     if (stop.bypass === true) continue;
 
+    // #1302: the running corporation's own herald pays its printed figure and counts as a centre.
+    const heraldValue = heraldValueFor(stop.hex, forCompanyId);
+    if (heraldValue !== null) {
+      revenue += heraldValue;
+      stops.push({ hex: stop.hex, value: heraldValue });
+      continue;
+    }
+
     revenue += hexStopValue(mapGrid, stop.hex, era);
     /* Count the ARCHETYPE, not the value: fourteen printed cities and seven towns pay $0 until a tile is laid, and a $0 city still costs a train a stop.
        See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #289 */
     const centre = isRevenueCentreHex(mapGrid, stop.hex);
     if (centre) stops.push({ hex: stop.hex, value: hexStopValue(mapGrid, stop.hex, era) });
   }
-  return { revenue, centres: stops.length, hexes: seen.size, stops };
+  return { revenue, centres: stops.length, hexes: seenHexes.size, stops };
+}
+
+/** Design note #1318: which city of its hex the route's `index`-th waypoint stands in. The router's own
+ *  `city_node` wins; otherwise the city entered from the previous waypoint (or, for the first, left toward
+ *  the next); `0` for a hex with one city, no neighbour, or no track between the two. */
+function cityVisitedAt(
+  mapGrid: MapGridResponse,
+  path: readonly { hex: string; city_node?: number }[],
+  index: number,
+): number {
+  const stop = path[index];
+  if (stop.city_node !== undefined) return stop.city_node;
+  const here = hexCoordsByLabel().get(stop.hex);
+  if (!here) return 0;
+  const neighbourLabel = path[index - 1]?.hex ?? path[index + 1]?.hex;
+  const neighbour = neighbourLabel === undefined ? undefined : hexCoordsByLabel().get(neighbourLabel);
+  if (!neighbour) return 0;
+  // #1319: the STOP the rail arrives at -- a city by its group, or a town by its own rail on a double town.
+  return stopEnteredFrom(mapGrid, here, neighbour) ?? 0;
 }
 
 /** Total the selected stops. Exported for the route value readout, which
@@ -601,8 +706,9 @@ export function sandboxRouteRevenue(
   mapGrid: MapGridResponse,
   path: readonly { hex: string; city_node?: number }[],
   era: TileColorTier,
+  forCompanyId?: number,
 ): number {
-  return sandboxRouteBreakdown(mapGrid, path, era).revenue;
+  return sandboxRouteBreakdown(mapGrid, path, era, forCompanyId).revenue;
 }
 
 /** Optional board context. Only RunManualRoute reads it, and only to total printed stop values.
@@ -1108,11 +1214,21 @@ export function applyPhaseChange(
     privatesChanged = privates.some((priv, at) => priv !== knownPrivates[at]);
   }
 
-  if (!changed && !privatesChanged) return state;
+  /* Design note #1314: A RETURNED TRAIN RUSTS IN THE DEPOT TOO. "provided it hasn't rusted" -- a traded-in
+     4-train sitting in the bank when the first Diesel arrives is scrapped like every other 4-train. No
+     reprieve: Gentle Rust is a final run, and a train in the depot has nobody to run it. Absent stays
+     absent (#232); an emptied list is written as empty, because "was here, now gone" is a fact. */
+  const returnedBefore = state.returned_trains;
+  const returnedAfter =
+    returnedBefore && doomed.size > 0 ? returnedBefore.filter((model) => !doomed.has(model)) : returnedBefore;
+  const returnedChanged = returnedAfter !== returnedBefore && returnedAfter?.length !== returnedBefore?.length;
+
+  if (!changed && !privatesChanged && !returnedChanged) return state;
   return {
     ...state,
     ...(changed ? { public_companies: companies } : {}),
     ...(privatesChanged ? { private_companies: privates } : {}),
+    ...(returnedChanged ? { returned_trains: returnedAfter } : {}),
   };
 }
 
@@ -1299,9 +1415,37 @@ export function describeReprieveExpiries(
 export function describeFleetLosses(
   before: GameStateResponse,
   after: GameStateResponse,
+  /* ==================================================================
+      DESIGN NOTE 1245: A TRAIN THAT WAS SOLD DID NOT LEAVE TO MEET THE LIMIT
+     ==================================================================
+     REPORTED (§2.3): after a corporation-to-corporation trade, "Phase Change -- B&O: its 2-train was
+     discarded to meet the new limit of 4." B&O SOLD that train. This function reads the fleet DIFF on every
+     action, and a sale empties the seller's fleet by one exactly as a trim does -- #1099's shape again (an
+     expiry is not a discard), for the one other message that legitimately takes a train off a chip.
+     THE MESSAGE IS OPTIONAL so every existing caller and test stands; the shell passes it. Removed by
+     multiset, as #1099 does, so a seller that also lost a train to a phase change in the same action --
+     which cannot happen today, since the trade is not a depot purchase -- would still get that sentence. */
+  msg?: unknown,
 ): FleetLoss[] {
   const arrivingTier = derivePhase(after)?.tier ?? null;
   const losses: FleetLoss[] = [];
+  const sold =
+    typeof msg === "object" && msg !== null && "BuyTrainFromCorporation" in msg
+      ? (msg as { BuyTrainFromCorporation: { seller_protocol_id: number; model_type: string } })
+          .BuyTrainFromCorporation
+      : null;
+  /* ==================================================================
+      DESIGN NOTE 1264: A TRAIN THE SIGN TOOK DID NOT LEAVE TO MEET THE LIMIT
+     ==================================================================
+     REPORTED (22b, the narration half): the Mark takes a train and the president gets a Train Limit modal
+     about it. #1245's shape exactly -- this diff runs on every action, the `YellowSignEvent` empties the fleet
+     by one, and a corporation that has just LOST a train cannot be over the limit. The event narrates
+     itself (#1046's appendix and the mechanical line), so the model it names comes out of `lost` before it
+     can be read as a discard. Both stages that remove a train carry `model` (#902, #1092). */
+  const taken =
+    typeof msg === "object" && msg !== null && "YellowSignEvent" in msg
+      ? (msg as { YellowSignEvent: { protocol_id: number; model?: string | null } }).YellowSignEvent
+      : null;
 
   /* Design note #897: THE THIRD FUNCTION IN THE SAME BLOCK, GUARDED FOR THE SAME REASON. `App.tsx` runs
      `describeFleetLosses`, `describeFleetLoss` and `describePrivateClosures` back to back on the state
@@ -1326,6 +1470,16 @@ export function describeFleetLosses(
       const at = remaining.indexOf(model);
       if (at >= 0) remaining.splice(at, 1);
       else lost.push(model);
+    }
+    // #1245: the sold train comes out of `lost` before it can be read as a discard.
+    if (sold !== null && sold.seller_protocol_id === company.company_id) {
+      const at = lost.indexOf(sold.model_type);
+      if (at >= 0) lost.splice(at, 1);
+    }
+    // #1264: so does the one the Yellow Sign took.
+    if (taken !== null && taken.protocol_id === company.company_id && taken.model) {
+      const at = lost.indexOf(taken.model);
+      if (at >= 0) lost.splice(at, 1);
     }
     /* ==================================================================
         DESIGN NOTE 979: UNDER GENTLE RUST, RUST TAKES NOTHING -- SO THE DIFF CANNOT SEE IT
@@ -1433,10 +1587,18 @@ function buyDepotTrain(
   companyId: number,
   /** Design note #1019: `false` only for the emergency purchase, which has already funded the treasury. */
   requireFunds = true,
+  /** Design note #1314: a RETURNED model to buy at face value, instead of the tier for sale. */
+  modelType?: string,
+  /** #1326: the shelf tier the buyer chose, when the shelf offers more than one. */
+  tierChoice?: string,
 ): GameStateResponse {
-  const tier = depotInventory(state).find(
-    (row) => row.remaining === null || row.remaining > 0,
-  );
+  if (modelType !== undefined) return buyReturnedTrain(state, companyId, modelType, requireFunds);
+  /* Design note #1326: THE SHELF, NOT THE QUEUE HEAD. `openDepotTiers` is one row in the printed game and
+     the 6/7/D shelf under the Level Playing Field; a named `tier` picks from it and an unnamed purchase takes
+     the first, which is what every message written before the field meant. A name that is not on the shelf
+     is refused -- a Diesel asked for before the first 6 is bought buys nothing. */
+  const open = openDepotTiers(state);
+  const tier = tierChoice === undefined ? open[0] : open.find((row) => row.tier === tierChoice);
   // An empty depot is not an error to throw at a sandbox tester; it is a
   // purchase with nothing to buy, so nothing moves.
   if (!tier) return state;
@@ -1463,6 +1625,48 @@ function buyDepotTrain(
   /* Fires only on the purchase that CHANGES the phase. Applying it to every purchase deadlocked the sandbox, because trimming a fleet returns trains to a depot derived from what is owned.
      See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #284 */
   return after !== null && after !== before ? applyPhaseChange(delivered, after) : delivered;
+}
+
+/* ==================================================================
+    DESIGN NOTE 1314: BUYING A RETURNED TRAIN
+   ==================================================================
+   A train traded in for a Diesel sits in `returned_trains` at its printed price. It is a purchase like any
+   other -- the same round, step, actor, limit and funds gate, the same treasury-to-bank movement -- with two
+   differences: it comes off the returned list rather than the printed count, and it can never turn the
+   phase, because the phase is the HIGHEST train in play and a returned train is by construction below the
+   Diesel that displaced it. The gate is the one `refusedAction` asks (`returnedTrainRefusal`). */
+export function returnedTrainRefusal(
+  state: GameStateResponse,
+  companyId: number,
+  modelType: string,
+): string | null {
+  if (!(state.returned_trains ?? []).includes(modelType)) {
+    return `The Bank Depot holds no returned ${modelType}-train.`;
+  }
+  const tier = depotInventory(state).find((row) => row.tier === modelType);
+  const limitRow = depotInventory(state).find((row) => row.remaining === null || row.remaining > 0);
+  return trainPurchaseRefusal(state, companyId, {
+    cost: tier?.cost ?? null,
+    // The limit is the CURRENT phase's, which is the tier for sale, not the returned train's own.
+    trainLimit: limitRow?.trainLimit ?? tier?.trainLimit ?? null,
+    requireFunds: true,
+  });
+}
+
+function buyReturnedTrain(
+  state: GameStateResponse,
+  companyId: number,
+  modelType: string,
+  requireFunds: boolean,
+): GameStateResponse {
+  if (!requireFunds) return state; // an emergency purchase buys from the printed depot, never the returned list
+  if (returnedTrainRefusal(state, companyId, modelType) !== null) return state;
+  const cost = depotInventory(state).find((row) => row.tier === modelType)?.cost ?? 0;
+  const returned = [...(state.returned_trains ?? [])];
+  returned.splice(returned.indexOf(modelType), 1);
+  const charged = adjustTreasury({ ...state, returned_trains: returned }, companyId, -cost);
+  const banked = adjustBank(charged, cost);
+  return withTrains(banked, companyId, (trains) => [...trains, modelType]);
 }
 
 /** Moves one train and the price the other way. Exported so the consent flow settles a trade the same way the reducer does. Absent model is a no-op, not a throw.
@@ -2171,6 +2375,19 @@ export function applySandboxAction(
   msg: GameplayExecuteMsg,
   ctx?: SandboxActionContext,
 ): GameStateResponse {
+  /* Design note #1300: THE BOARD COMES FROM THE STATE, and it is put in effect here -- the one entry every
+     consumer (shell, replay engine, server) goes through -- so no caller can run an arm against the wrong
+     board. `SetupGame` is the exception that proves it: the state has no variants until that arm writes
+     them, so the deal is judged on the board the message names. */
+  const variants = isSetupGameMsg(msg) ? msg.SetupGame.variants : state.variants;
+  return withRules(resolveVariants(variants), () => applySandboxActionOnBoard(state, msg, ctx));
+}
+
+function applySandboxActionOnBoard(
+  state: GameStateResponse,
+  msg: GameplayExecuteMsg,
+  ctx?: SandboxActionContext,
+): GameStateResponse {
   /* ==================================================================
       DESIGN NOTE 1197: THE CHART STEP COMES INSIDE, SO NO CALLER CAN FORGET IT
      ==================================================================
@@ -2348,16 +2565,28 @@ function applySandboxActionCore(
      THE FUNDS CHECK IS WAIVED FOR THE EMERGENCY MESSAGE, and only that check: `EmergencyBuyHardware` reads a
      shortfall from a treasury it has not funded yet, so asking about funds here -- before its own arm tops
      the treasury up -- would refuse the one flow built for exactly this situation. */
+  /* Design note #1314: a purchase that names a returned model is gated by that model's own gate, here, for
+     the same identity reason as the exchange below. */
+  if ("BuyHardwareFromPool" in msg && msg.BuyHardwareFromPool.returned_model_type !== undefined) {
+    const { protocol_id, returned_model_type } = msg.BuyHardwareFromPool;
+    if (returnedTrainRefusal(state, protocol_id, returned_model_type) !== null) return state;
+  }
   const depotPurchase =
-    "BuyHardwareFromPool" in msg
+    "BuyHardwareFromPool" in msg && msg.BuyHardwareFromPool.returned_model_type === undefined
       ? { companyId: msg.BuyHardwareFromPool.protocol_id, requireFunds: true }
       : "EmergencyBuyHardware" in msg
         ? { companyId: msg.EmergencyBuyHardware.protocol_id, requireFunds: false }
         : null;
   if (depotPurchase) {
-    const tier = depotInventory(state).find(
-      (row) => row.remaining === null || row.remaining > 0,
-    );
+    /* Design note #1326: THE SHELF TIER, WHEN NAMED. A named tier that is not for sale refuses here, before
+       any stage runs, for #1019's reason; an unnamed purchase is the queue head, as it always was. The gate
+       prices the tier the arm will actually deliver, so a $900 Diesel is judged at $900 and not at the 6's
+       $630. */
+    const named =
+      "BuyHardwareFromPool" in msg ? msg.BuyHardwareFromPool.model_type : undefined;
+    const open = openDepotTiers(state);
+    const tier = named === undefined ? open[0] : open.find((row) => row.tier === named);
+    if (named !== undefined && !tier) return state;
     if (
       trainPurchaseRefusal(state, depotPurchase.companyId, {
         cost: tier?.cost ?? null,
@@ -2367,6 +2596,15 @@ function applySandboxActionCore(
     ) {
       return state;
     }
+  }
+
+  /* Design note #1303: THE EXCHANGE IS GATED HERE TOO, FOR THE SAME REASON THE DEPOT PURCHASES ARE. A refusal
+     has to return the state it was handed (#778 detects one by identity), and a gate inside the arm is not
+     enough: the settle chain below the arm stamps `current_global_era` on a state that never carried one, and
+     a refused exchange came back as a new object. Same gate as the arm and the REFUSED line ask. */
+  if ("ExchangeTrainForDiesel" in msg) {
+    const { protocol_id, model_type } = msg.ExchangeTrainForDiesel;
+    if (dieselExchangeRefusal(state, protocol_id, model_type) !== null) return state;
   }
 
   /* Design note #763: NOTHING HAPPENS WHILE A HOME TOKEN IS OWED. Floating a corporation and placing its
@@ -2379,6 +2617,46 @@ function applySandboxActionCore(
      bad state into an unrecoverable one. */
   if (ctx?.homeHexToAxial) {
     if (homeTokenBlock({ state, homeHexToAxial: ctx.homeHexToAxial, msg }) !== null) return state;
+  }
+
+  /* ==================================================================
+      DESIGN NOTE 1323/1324: THE LEVEL PLAYING FIELD'S REFUSALS, GATED HERE FOR #1019's REASON
+     ==================================================================
+     Each of these is ALSO refused in its arm, and #1019 records why that is not enough: the arm is the first
+     of five stages, and a refusal down there still lets `settleOperatingCursor` end the turn -- a run that
+     never ran would still move the step to Dividends. So the same predicates are asked before any stage
+     runs, and the state comes back by identity, which is what `actionWasRefused` (#778) detects. */
+  /* Spelled as one condition so `oneRunPerTurn.test.ts`'s anchor -- the arm's own `if ("RunMultipleRoutes"
+     in msg) {` -- still finds the arm and not this gate. */
+  if (
+    "RunMultipleRoutes" in msg &&
+    !mayCrossCoalRiver(state, msg.RunMultipleRoutes.protocol_id) &&
+    msg.RunMultipleRoutes.routes.some((path) => routeCrossesCoalRiver(path))
+  ) {
+    return state;
+  }
+  if (
+    "RunManualRoute" in msg &&
+    !mayCrossCoalRiver(state, msg.RunManualRoute.protocol_id) &&
+    routeCrossesCoalRiver(msg.RunManualRoute.path)
+  ) {
+    return state;
+  }
+  if ("LayTile" in msg) {
+    const { protocol_id, q, r } = msg.LayTile;
+    const key = (msg.LayTile as { ability_key?: unknown }).ability_key;
+    if (key === JK_TILE_ABILITY_KEY && jkTileRefusal(state, protocol_id, q, r) !== null) return state;
+  }
+  if ("SellStock" in msg && ctx?.actor) {
+    const company = state.public_companies.find((entry) => entry.company_id === msg.SellStock.protocol_id);
+    if (company && doubleSaleEffect(company, ctx.actor, msg.SellStock.percentage).kind === "refused") {
+      return state;
+    }
+  }
+  if ("BuyStock" in msg && msg.BuyStock.certificate === "double") {
+    const company = state.public_companies.find((entry) => entry.company_id === msg.BuyStock.protocol_id);
+    const pool = msg.BuyStock.source === "Bank" ? "Bank" : "Ipo";
+    if (!company || doublePurchaseRefusal(company, pool) !== null) return state;
   }
 
   return settleOperatingCursor(
@@ -2401,21 +2679,14 @@ function settleEra(state: GameStateResponse): GameStateResponse {
      one, and overwriting a seeded scenario's era (`sandboxState.ts` starts
      one in "Green") with a guess would be worse than saying nothing. */
   if (!phase?.known) return state;
-  const era = ERA_FOR_TIER[phase.tier];
-  if (era === undefined || era === state.current_global_era) return state;
+  // #1312: the Diesel era is Gray under the Project 18XX+ tile set and Brown otherwise.
+  const era = eraForPhase(phase, resolveVariants(state.variants));
+  if (era === state.current_global_era) return state;
   return { ...state, current_global_era: era };
 }
 
-/** 1830's phase table, written out rather than read from TIER_PRESENTATION -- a rule must not be read out of a presentation table.
- *  See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #657 */
-const ERA_FOR_TIER: Readonly<Record<string, TileColor>> = {
-  "2": "Yellow",
-  "3": "Green",
-  "4": "Green",
-  "5": "Brown",
-  "6": "Brown",
-  D: "Brown",
-};
+/* #657's `ERA_FOR_TIER` table is gone: `eraForPhase` (gameConstants.ts #1312) is the one statement of
+   which era a phase opens, and it takes the table's variants into account. */
 
 /* The OR sub-phase cursor moves HERE, not in an App effect keyed on the era. One place with a stated default (hold) rather than a write in twelve message arms; a turn change beats every step rule.
    See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #656 */
@@ -2996,8 +3267,41 @@ function applyOneAction(
     /* A ROSTER THAT CANNOT BE DEALT LEAVES THE STATE ALONE (#712's rule: a refusal never halts a replay).
        The shell says so to the player; the board simply does not move. */
     if (!dealt) return state;
-    return {
+
+    /* ==================================================================
+        DESIGN NOTE 1228: THE DELAYED AUCTION OPENED ON STOCK ROUND 1 -- IN THE SHELL ONLY
+       ==================================================================
+       FOUND BY THE #1227 HARNESS ON ITS FIRST DRAFT. A case asserted `current_round_type === "StockRound"`
+       after a `delayedAuction` deal, because that is what a client shows -- and it failed here, because the
+       client shows it for a reason that has nothing to do with this arm. `App.tsx` computed it:
+       `opensOnStockRound ? { ...seated, current_round_type: "StockRound", private_auction_complete: false,
+       macro_round_number: 1 } : seated`. The reducer dealt the same game and left it in the auction.
+
+       SO A DELAYED-AUCTION GAME DIVERGED AT INDEX 0. Not a drift -- a different opening position, on the
+       server and on every replay, for every game that used the variant. It went unnoticed because nothing
+       compared the two until #1223, and because the variant is not the default.
+
+       #905's RULE, WHERE IT BELONGS. "Straight to SR1; no privates exist yet; corporations must float on share
+       capital alone for two Stock Rounds." The three fields are one decision: the round opens as a Stock Round,
+       the auction is MOVED rather than skipped (`private_auction_complete` stays FALSE, which keeps the B&O
+       locked per #904a and tells `settleRoundTransitions` an auction is still owed before Stock Round 3),
+       and the macro round is 1. Setting two of the three would produce a game no rule was written for.
+
+       THE SHELL'S COPY IS LEFT STANDING FOR NOW AND IS NOW REDUNDANT. On the client the shell's `SetupGame`
+       branch returns before this arm runs, so the two do not compose -- each side runs exactly one of them,
+       and they now agree. Removing the shell's copy is the §3.1 work and is done there, message by message,
+       under the alarm; this change is what makes that removal a no-op rather than a behaviour change. */
+    const opensOnStockRound = dealt.variants.delayedAuction === true;
+
+    const dealtState: GameStateResponse = {
       ...state,
+      ...(opensOnStockRound
+        ? {
+            current_round_type: "StockRound" as const,
+            private_auction_complete: false,
+            macro_round_number: 1,
+          }
+        : {}),
       player_addresses: dealt.playerAddresses,
       player_cash: dealt.playerCash,
       virtual_bank_vgp: String(dealt.bankRemaining),
@@ -3024,6 +3328,9 @@ function applyOneAction(
         owner_protocol_id: null,
       })),
     };
+    /* #1320 / #1322: the Level Playing Field's two corporations and its seventh private join HERE, on the
+       deal, so every client and the server hold the same roster from index 0. The fixture never carries them. */
+    return dealt.variants.levelPlayingField ? withLevelPlayingFieldEntities(dealtState) : dealtState;
   }
 
   if (isOpenStockRoundMsg(msg)) {
@@ -3036,11 +3343,44 @@ function applyOneAction(
        #909: `openingStockRoundReset` is the one place that names what a Stock Round opening invalidates --
        the sell-then-buy lock (#744) among them, which under the delayed variant would otherwise be carried
        into Stock Round 3 and refuse a legal buy-back for the rest of the game. */
+    /* ==================================================================
+        DESIGN NOTE 1235: THE STOCK ROUND OPENS TO THE LEFT OF THE LAST PLAYER WHO ACTED
+       ==================================================================
+       REPORTED: "Host received BO private company -- the last action of the Auction Round -- then also
+       started the Stock Round. That is wrong. In the physical board game, play passes to the last active
+       player's left."
+
+       `openingStockRoundReset` SEATS `priority_deal_index`, AND NOTHING IN THE AUCTION EVER TOUCHED IT. The
+       field is written in three places in the whole codebase: `SetupGame` (to 0), the Stock Round pass logic,
+       and nowhere in the auction. So Stock Round 1 always opened to seat 0. #909 recorded that as a ruling --
+       "in a standard game `priority_deal_index` is 0 at genesis, so that is the seat it always was" -- WHICH
+       IT WAS NOT. The rule was always "to the left of the last player who acted"; the code had a constant.
+
+       IT PASSED EVERY PREVIOUS PLAYTEST BY COINCIDENCE, and the coincidence is worth spelling out because it
+       is how a missing rule survives: the two answers agree whenever the last auction actor sits in the LAST
+       seat. In the golden master (three players) the B&O par was set by seat 2, so left-of-seat-2 is seat 0.
+       In the previous two-player game seat 1 set it, so left is seat 0. In this game seat 0 set it, left is
+       seat 1, and seat-0-always said seat 0 -- the first game where the constant and the rule disagreed, and
+       the first time anyone could see there was no rule. `replayJuno3XD` could not catch it either, for the
+       same reason: on that log the two answers coincide.
+
+       THE SEAT ALREADY HOLDS THE ANSWER. Every ordinary waterfall action advances the seat past its actor,
+       and #1232 keeps the seat honest through a mini-auction -- so at the moment the auction closes,
+       `active_player_index` IS the player to the left of whoever acted last. `SetBoPar` does not move it
+       (the B&O par is set BY the buyer, not a turn taken), so a game whose final auction act is the B&O
+       purchase still opens to the buyer's left. The priority deal is set from it here, once, and
+       `openingStockRoundReset` seats the holder as it always has.
+
+       APPLIED TO BOTH OPENINGS. The delayed variant (#905) closes its auction mid-game and the same rule
+       reads the same seat; #905's "priority untouched" was the same constant misread as a ruling, and one
+       rule for "who opens after an auction" is what the physical game has. */
+    const priority = state.active_player_index;
     return {
       ...state,
       current_round_type: "StockRound",
       private_auction_complete: true,
-      ...openingStockRoundReset(state),
+      priority_deal_index: priority,
+      ...openingStockRoundReset({ ...state, priority_deal_index: priority }),
     };
   }
 
@@ -3066,16 +3406,24 @@ function applyOneAction(
      appears in `JUNO-3XD`, so unlike the first five these are NOT covered by the replay harness -- they are
      covered by `shellMessageArms.test.ts`, written case by case, and that difference is worth stating rather
      than discovering.
-     THE OFFER MESSAGES ARE PURE STATE and nothing else: propose writes the offer, answer clears it. What
-     they must NOT do is the thing the shell does next.
-     BECAUSE AN ACCEPTED OFFER DISPATCHES A NEW LOG ACTION -- an ordinary `BuyPrivateCompany` or
+     THE OFFER MESSAGES ARE PURE STATE and nothing else: propose writes the offer, answer settles it. What
+     they must NOT do is append the purchase that follows.
+     BECAUSE AN ACCEPTED OFFER IS FOLLOWED BY A NEW LOG ACTION -- an ordinary `BuyPrivateCompany` or
      `BuyTrainFromCorporation`, so consent and legality run through the same code as every other purchase
-     (#662, #701). THAT IS AN EFFECT, NOT A STATE CHANGE, and it stays in the shell for #576's reason stated
-     in as many words there: "a consequence is DERIVED by every client, not appended by each of them --
-     appending inside a replay is how one win issued two certificates." A reducer that appended would do it
-     once per client and again on every rebuild.
-     SO THE DIVISION IS EXACT: the reducer settles what the offer DID to the board; the shell decides what to
-     SEND next. Same rule as #704's "the reducer settles, the shell narrates", one category over. */
+     (#662, #701). #576's rule: "a consequence is DERIVED by every client, not appended by each of them --
+     appending inside a replay is how one win issued two certificates."
+     ==================================================================
+      DESIGN NOTE 1247: THE PURCHASE IS OWED BY THE BOARD, NOT SENT BY THE SHELL
+     ==================================================================
+     #1198 left the follow-up dispatch in the shell's drain branch -- and the drain runs on EVERY client for
+     every entry, so an accepted offer had every seated browser dispatch the purchase: the buyer's went
+     through, the seller's died at the client's turn gate with "It is not your turn" on the seller's screen,
+     and a reload of the buyer's client re-dispatched it from history. That is the exact fault #576 names, on
+     the message that quoted #576 as its reason for staying in the shell.
+     SO THE ANSWER ARM RECORDS THE ACCEPTANCE (`accepted: true` on the offer) and the purchase becomes a
+     DERIVED action (#1203): `nextDerivedAction` generates it from that flag, the server appends it once, and
+     every client applies it from the log. The purchase arm clears the offer it settles, so a rebuilt board
+     owes nothing. Same mechanism as an auto-skip: the board says what it owes, one writer writes it. */
   if (isProposePrivatePurchaseMsg(msg)) {
     const { private_id, private_name, owner, buyer_protocol_id, buyer_ticker, price } =
       msg.ProposePrivatePurchase;
@@ -3096,8 +3444,13 @@ function applyOneAction(
     /* #662: answering an offer that is no longer there is NOT an error -- the first answer settles it and
        the second finds nothing. A replayed duplicate takes this arm and changes nothing. */
     const offer = state.private_purchase_offer ?? null;
-    if (!offer || offer.private_id !== msg.AnswerPrivatePurchase.private_id) return state;
-    return { ...state, private_purchase_offer: null };
+    if (!offer || offer.accepted || offer.private_id !== msg.AnswerPrivatePurchase.private_id) {
+      return state;
+    }
+    // #1247: a yes is recorded, not acted on; the purchase it owes is derived. A no clears the question.
+    return msg.AnswerPrivatePurchase.accept
+      ? { ...state, private_purchase_offer: { ...offer, accepted: true } }
+      : { ...state, private_purchase_offer: null };
   }
 
   if (isProposeTrainPurchaseMsg(msg)) {
@@ -3127,10 +3480,40 @@ function applyOneAction(
   if (isAnswerTrainPurchaseMsg(msg)) {
     // #701: the same guard as #662's, for the same reason.
     const offer = state.train_purchase_offer ?? null;
-    if (!offer || offer.seller_protocol_id !== msg.AnswerTrainPurchase.seller_protocol_id) {
+    if (
+      !offer ||
+      offer.accepted ||
+      offer.seller_protocol_id !== msg.AnswerTrainPurchase.seller_protocol_id
+    ) {
       return state;
     }
-    return { ...state, train_purchase_offer: null };
+    // #1247: as for the private -- recorded on a yes, cleared on a no.
+    return msg.AnswerTrainPurchase.accept
+      ? { ...state, train_purchase_offer: { ...offer, accepted: true } }
+      : { ...state, train_purchase_offer: null };
+  }
+
+  /* ==================================================================
+      DESIGN NOTE 1323: THE LICENCE PURCHASE
+     ==================================================================
+     RULED: "During a corporation's Lay Track action step, it may purchase a Kanawha License from the Bank for
+     $120. This is an optional extra action that does not replace the normal track lay." So this arm touches
+     the treasury, the bank, the corporation's licence count and the game's sale counter -- and nothing about
+     the sub-phase or the lay-used flag, which is what "extra" means. Gated by `kanawhaLicenseRefusal`, the
+     same function the action bar asks (#784's rule: one refusal, every surface). */
+  if (isBuyKanawhaLicenseMsg(msg)) {
+    const companyId = msg.BuyKanawhaLicense.protocol_id;
+    if (kanawhaLicenseRefusal(state, companyId) !== null) return state;
+    const charged = adjustBank(adjustTreasury(state, companyId, -KANAWHA_LICENSE_COST), KANAWHA_LICENSE_COST);
+    return {
+      ...charged,
+      kanawha_licenses_sold: (charged.kanawha_licenses_sold ?? 0) + 1,
+      public_companies: charged.public_companies.map((company) =>
+        company.company_id === companyId
+          ? { ...company, kanawha_licenses: licensesHeldBy(company) + 1 }
+          : company,
+      ),
+    };
   }
 
   if (isCloseRoomMsg(msg)) {
@@ -3315,12 +3698,18 @@ function applyOneAction(
             SANDBOX_SHARE_PERCENTAGE,
         )
       : 0;
-    const certificates = isPresidentBuy ? 1 : Math.max(1, Math.min(requested, inSource));
+    /* Design note #1324: THE 20% STANDARD CERTIFICATE. One card, twenty percent, twice the price -- the
+       president's arithmetic without the presidency. Legality (is the double actually in that pool) is the
+       gate's below, through `sharePurchaseBlock`; here only the figures. */
+    const buysDouble = !isPresidentBuy && msg.BuyStock.certificate === "double";
+    const certificates = isPresidentBuy || buysDouble ? 1 : Math.max(1, Math.min(requested, inSource));
 
     const percentage = isPresidentBuy
       ? SANDBOX_PRESIDENT_PERCENTAGE
-      : SANDBOX_SHARE_PERCENTAGE * certificates;
-    const charged = isPresidentBuy ? price * 2 : price * certificates;
+      : buysDouble
+        ? DOUBLE_CERTIFICATE_PERCENT
+        : SANDBOX_SHARE_PERCENTAGE * certificates;
+    const charged = isPresidentBuy || buysDouble ? price * 2 : price * certificates;
 
     /* Design note #712: THE REDUCER REFUSES TOO, and that is not belt-and-braces.
        The panel's gate is advice on one screen; this runs on every client that replays the log, so a purchase
@@ -3342,6 +3731,7 @@ function applyOneAction(
         zone: ctx.marketZoneFor(protocol_id),
         marketPrices: ctx.marketPricesByCompany ?? null,
         zoneForPrice: ctx.zoneForPrice,
+        certificate: buysDouble ? "double" : undefined, // #1324
         /* ==================================================================
             DESIGN NOTE 1172: THE ARGUMENT RULE 4 HAS BEEN WAITING FOR SINCE #712
            ==================================================================
@@ -3364,15 +3754,22 @@ function applyOneAction(
       if (blocked !== null) return state;
     }
 
+    /* Design note #1324: without the gate (no `marketZoneFor` in the context -- a bare harness), the double's
+       own placement is still checked here, so a replay cannot move a card that is not in that pool. */
+    if (buysDouble && (!target || doublePurchaseRefusal(target, source === "Bank" ? "Bank" : "Ipo") !== null)) {
+      return state;
+    }
     const spent = actor ? adjustCash(state, actor, -charged) : state;
     const banked = adjustBank(spent, charged);
-    const moved = moveShares(
+    const movedShares = moveShares(
       banked,
       protocol_id,
       actor,
       source === "Bank" ? "Bank" : "Ipo",
       percentage,
     );
+    // #1324: the card follows the twenty it names.
+    const moved = buysDouble && actor ? withDoubleAt(movedShares, protocol_id, actor) : movedShares;
 
     /* Presidency and par written together -- the panel locks its ladder on par_value !== null.
        See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #351 */
@@ -3481,13 +3878,25 @@ function applyOneAction(
     const takings = ctx?.sharePrice ?? SANDBOX_NOMINAL_SHARE_PRICE;
 
     const proceeds = actor ? adjustCash(state, actor, takings) : state;
-    const returned = moveShares(
+    const returnedShares = moveShares(
       adjustBank(proceeds, -takings),
       protocol_id,
       actor,
       "Bank",
       -sold,
     );
+    /* Design note #1324: WHICH CARD WENT. The percentages above are already right for both the block sale and
+       the half-sale (the pool nets +10 either way in the half case: the card goes in, a 10% card comes out).
+       What the percentages cannot record is that the 20% certificate is now the pool's, so that is written
+       here. A refused half-sale never reaches this arm -- `shareSaleBlock` above asks `doubleSaleRefusal`. */
+    const sellingCompany = state.public_companies.find((entry) => entry.company_id === protocol_id);
+    const doubleEffect =
+      actor && sellingCompany ? doubleSaleEffect(sellingCompany, actor, sold) : { kind: "none" as const };
+    if (doubleEffect.kind === "refused") return state;
+    const returned =
+      doubleEffect.kind === "block" || doubleEffect.kind === "half"
+        ? withDoubleAt(returnedShares, protocol_id, "Bank")
+        : returnedShares;
     // A sale moves the crown too -- selling below another holder hands them the presidency. Same function as the buy, so the two cannot disagree.
     // See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #596
     /* Design note #744: AND IT LOCKS THE BUY-BACK. Reported: a player sold and then bought the same
@@ -3515,13 +3924,34 @@ function applyOneAction(
     };
   }
 
-  if (
-    "WaterfallBuyLowest" in msg ||
-    "WaterfallBidHigher" in msg ||
-    "WaterfallMiniAuctionRaise" in msg ||
-    "WaterfallMiniAuctionPass" in msg ||
-    "BidOnPrivate" in msg
-  ) {
+  /* ==================================================================
+      DESIGN NOTE 1232: A CONTEST SUSPENDS THE ROTATION -- ON BOTH ATOMS
+     ==================================================================
+     REPORTED: "a mini-auction occurred, and then the game locked after the mini-auction concluded. It says
+     it's one person's turn but nothing they click does anything."
+
+     THE TRACE, from replaying the six-action log:
+
+       after #4 WaterfallBuyLowest        seat=0  wf.current_turn=sandbox  mini={turn: Host}  acting=Host
+       after #5 WaterfallMiniAuctionPass  seat=1  wf.current_turn=sandbox  mini=null          acting=Host
+
+     THE AUCTION ATOM DID THE RIGHT THING. #544: "while a contest is live the main rotation does not advance ...
+     the reducer has preserved `waterfall.current_turn` across a contest since #338 precisely so it can be
+     resumed untouched." So its cursor stayed on sandbox, whose turn it was when the contest began.
+     THIS ARM DID NOT. It advanced the seat on every waterfall message alike, contest actions included -- so
+     the pass moved the seat to Host while the auction still waited for sandbox. `actingAddress` reads the seat
+     when no contest is live (#544 says that field "is right about the WATERFALL", which was true only while
+     this arm kept it so). Host's clicks passed the gate and died in an auction that was not theirs; sandbox's
+     clicks died at the gate. Nobody could move.
+
+     THE MINI-AUCTION MESSAGES LEAVE THE SEAT ALONE. A raise or a pass inside a contest is a move in a
+     sub-sequence, not a step of the rotation; the rotation resumes where it was suspended, on both atoms,
+     because neither moved it. #1232 in `gameState.ts` closes the same hole from the reading side. */
+  if ("WaterfallMiniAuctionRaise" in msg || "WaterfallMiniAuctionPass" in msg) {
+    return state;
+  }
+
+  if ("WaterfallBuyLowest" in msg || "WaterfallBidHigher" in msg || "BidOnPrivate" in msg) {
     return advanceSeat(state);
   }
 
@@ -3539,8 +3969,33 @@ function applyOneAction(
        THE SET LIVES IN STATE, not on the tile grid -- `terrainFee.ts` #723 has the reasoning, and it is about
        replay: `ctx.mapGrid` does not advance action by action inside the Undo rebuild loop, so a board lookup
        here would be right live and wrong on every rebuild. */
-    const { protocol_id, q, r, token_city, token_cities } = msg.LayTile;
-    const fee = terrainFeeDue(state.terrain_fees_paid, q, r, terrainBuildFeeAt);
+    const { protocol_id, q, r, token_city, token_cities, tile_id } = msg.LayTile;
+    /* Design note #1323: THE JK'S HALF-PRICE LAY. "The corporation owning JK may choose to close the private
+       company to lay one track on any hex adjacent to L8 at half price. This counts as the corporation's
+       normal tile lay action." So the key halves the terrain fee, closes the JK, and otherwise this is an
+       ordinary lay -- connectivity and the rest are judged where they always are. A key that does not pass
+       `jkTileRefusal` refuses the whole lay rather than laying at full price, because the player chose the
+       power and a silent substitution is the kind of divergence #891 records. */
+    const abilityKey = (msg.LayTile as { ability_key?: unknown }).ability_key;
+    const jkLay = abilityKey === JK_TILE_ABILITY_KEY;
+    if (jkLay && jkTileRefusal(state, protocol_id, q, r) !== null) return state;
+    const fullFee = terrainFeeDue(state.terrain_fees_paid, q, r, terrainBuildFeeAt);
+    const fee = jkLay ? jkHalfFee(fullFee) : fullFee;
+    if (jkLay) {
+      state = {
+        ...state,
+        private_companies: state.private_companies.map((entry) =>
+          entry.private_id === JK_PRIVATE_ID ? { ...entry, closed: true } : entry,
+        ),
+      };
+    }
+    /* Design note #1315: THE TILE CANNOT HOLD A CITY INDEX IT DOES NOT HAVE. The shell's plan (`tokenMigration`)
+       lands every token, and a log written by an older client carries no `token_cities` at all -- so after
+       the map is applied, any token on this hex still pointing at a city the new tile lacks is clamped to the
+       last city it has. For #62 -> #883 that is index 1 -> 0, the merge; for every ordinary lay it is a
+       no-op, because a tile that shrinks its city count is not a legal upgrade. */
+    const cityCap = Math.max(1, tileCitySlotCounts(tile_id).length);
+    const clampCity = (city: number) => Math.min(city, cityCap - 1);
     /* ==================================================================
        DESIGN NOTE 891: THE GROUND HAS TO BE PAID FOR, NOT MERELY BILLED
        ==================================================================
@@ -3616,18 +4071,81 @@ function applyOneAction(
             station_tokens:
               company.station_tokens?.map((entry) =>
                 entry[0] === q && entry[1] === r
-                  ? ([entry[0], entry[1], city] as [number, number, number])
+                  ? ([entry[0], entry[1], clampCity(city)] as [number, number, number])
                   : entry,
               ) ?? null,
           };
         });
       })(),
     };
-    return fee > 0 ? adjustTreasury(recorded, protocol_id, -fee) : recorded;
+    /* #1315, the other half: tokens the message did not name (an older log, or a lay the shell sent without a
+       plan) are clamped too, so no token on this hex can outlive the city it stood in. */
+    const merged: GameStateResponse = {
+      ...recorded,
+      public_companies: recorded.public_companies.map((company) => {
+        const tokens = company.station_tokens;
+        if (!tokens || !tokens.some(([tq, tr, city]) => tq === q && tr === r && city > cityCap - 1)) {
+          return company;
+        }
+        return {
+          ...company,
+          station_tokens: tokens.map((entry) =>
+            entry[0] === q && entry[1] === r
+              ? ([entry[0], entry[1], clampCity(entry[2])] as [number, number, number])
+              : entry,
+          ),
+        };
+      }),
+    };
+    return fee > 0 ? adjustTreasury(merged, protocol_id, -fee) : merged;
   }
 
   if ("BuyHardwareFromPool" in msg) {
-    return buyDepotTrain(state, msg.BuyHardwareFromPool.protocol_id);
+    return buyDepotTrain(
+      state,
+      msg.BuyHardwareFromPool.protocol_id,
+      true,
+      msg.BuyHardwareFromPool.returned_model_type, // #1314: a returned train, when named
+      msg.BuyHardwareFromPool.model_type, // #1326: the shelf tier, when named
+    );
+  }
+
+  /* ==================================================================
+      DESIGN NOTE 1303: THE D-TRAIN EXCHANGE
+     ==================================================================
+     Project 18XX+: "a 4-, 5- or 6-train may be traded in to purchase a D-train for $800." One train out, one
+     Diesel in, $800 treasury to bank -- and the phase settles from the fleet as it always does, so the FIRST
+     Diesel on the board rusts every 4-train (Gentle Rust aware, through the same `applyPhaseChange`).
+     THE TRADED TRAIN LEAVES BEFORE THE PHASE TURNS, so a 4-train traded in on the first exchange is exchanged
+     rather than rusted: it is gone from `owned_trains` by the time the rust sweep looks. And a traded-in train
+     never returns to the depot -- the depot is derived from the fleet, and once the Diesel is for sale every
+     lower tier reads as sold out (#4's queue rule), so nothing can resell it.
+     GATED BY `dieselExchangeRefusal`, the same function the REFUSED line and the panel ask (#784). Refuses by
+     returning the state it was handed, which is what every gate here does and what #778 detects. */
+  if ("ExchangeTrainForDiesel" in msg) {
+    const { protocol_id, model_type } = msg.ExchangeTrainForDiesel;
+    if (dieselExchangeRefusal(state, protocol_id, model_type) !== null) return state;
+
+    const exchangeCost = dieselExchangeCostFor(state); // #1326: $750 under the Level Playing Field
+    const charged = adjustTreasury(state, protocol_id, -exchangeCost);
+    const banked = adjustBank(charged, exchangeCost);
+    const before = derivePhase(state)?.tier ?? null;
+    const exchanged = withTrains(banked, protocol_id, (trains) => {
+      const at = trains.indexOf(model_type);
+      const rest = at < 0 ? [...trains] : [...trains.slice(0, at), ...trains.slice(at + 1)];
+      return [...rest, DIESEL_TIER];
+    });
+    const after = derivePhase(exchanged)?.tier ?? null;
+    /* Design note #1314: THE TRADED TRAIN GOES BACK TO THE BANK. RULED: it "must be returned to the Bank's
+       Supply Depot, where it becomes available for any corporation to purchase at face value (provided it
+       hasn't rusted)". Returned BEFORE the phase settles, so a 4-train traded in for the very first Diesel
+       is put in the depot and then scrapped by the same rust sweep that takes every other 4 -- the depot is
+       not a place to hide a train from the phase. */
+    const returned: GameStateResponse = {
+      ...exchanged,
+      returned_trains: [...(exchanged.returned_trains ?? []), model_type],
+    };
+    return after !== null && after !== before ? applyPhaseChange(returned, after) : returned;
   }
 
   if ("EmergencyBuyHardware" in msg) {
@@ -3663,24 +4181,47 @@ function applyOneAction(
        See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #191 */
     const { buyer_protocol_id, seller_protocol_id, model_type, price } =
       msg.BuyTrainFromCorporation;
-    return settleTrainSale(state, buyer_protocol_id, seller_protocol_id, model_type, price);
+    /* #1247: THE OFFER THIS PURCHASE SETTLES COMES OFF THE BOARD FIRST, whatever the sale then does. Cleared
+       before `settleTrainSale` rather than after, because a sale that cannot be made (the train has gone)
+       must still retire the accepted offer -- otherwise `nextDerivedAction` would owe the same purchase
+       again on the next look, and again. The cost is #778's identity check reading a cleared-but-unsold
+       board as "applied"; a train that vanished between offer and answer is rarer than a loop is bad. */
+    const offer = state.train_purchase_offer ?? null;
+    const settling =
+      offer !== null &&
+      offer.seller_protocol_id === seller_protocol_id &&
+      offer.buyer_protocol_id === buyer_protocol_id &&
+      offer.model_type === model_type
+        ? { ...state, train_purchase_offer: null }
+        : state;
+    return settleTrainSale(settling, buyer_protocol_id, seller_protocol_id, model_type, price);
   }
 
   if ("BuyPrivateCompany" in msg) {
     // The private has to actually change hands. Whether the trade was PERMITTED stays with trading.rs::execute_buy_private_company.
     // See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #0
     const { protocol_id, private_id, price } = msg.BuyPrivateCompany;
+    // #1247: the offer this purchase settles comes off the board first -- see `BuyTrainFromCorporation`.
+    const pending = state.private_purchase_offer ?? null;
+    if (pending !== null && pending.private_id === private_id) {
+      state = { ...state, private_purchase_offer: null };
+    }
     /* The B&O private may never be sold to a corporation. Enforced here as well as in the offer filter, because a remote client replays MESSAGES, not button states. A no-op, not a throw.
        See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #660 */
     if (!isSellableToCorporation(private_id)) return state;
     const paid = Number(price) || 0;
     const target = state.private_companies.find((entry) => entry.private_id === private_id);
+    /* #1247: IDEMPOTENT ON THE OWNER. A replay applies and never generates (#1203), so a log written before
+       this note -- the shell's own `BuyPrivateCompany` after an accepted answer -- still buys exactly once.
+       This guard is for the other copy: a Firestore-path client that dispatched from its drain a moment after
+       the on-turn client did. The private is already this corporation's; paying for it twice is the bug. */
+    if (target?.owner_protocol_id === protocol_id) return state;
     const seller = target?.owner ?? null;
 
     const charged = adjustTreasury(state, protocol_id, -paid);
     const settled = seller ? adjustCash(charged, seller, paid) : charged;
 
-    return {
+    const owned: GameStateResponse = {
       ...settled,
       private_companies: settled.private_companies.map((entry) =>
         entry.private_id === private_id
@@ -3694,6 +4235,24 @@ function applyOneAction(
               owner_protocol_id: protocol_id,
             }
           : entry,
+      ),
+    };
+    /* Design note #1323: "The first corporation to purchase the JK private company from a player immediately
+       receives one Kanawha License for free." ONCE, game-wide -- the flag is on the state, so a second sale
+       of the JK between corporations grants nothing -- and outside the four the Bank sells. */
+    const grantsLicence =
+      kanawhaLicensesInPlay(owned) &&
+      private_id === JK_PRIVATE_ID &&
+      seller !== null &&
+      owned.jk_license_granted !== true;
+    if (!grantsLicence) return owned;
+    return {
+      ...owned,
+      jk_license_granted: true,
+      public_companies: owned.public_companies.map((company) =>
+        company.company_id === protocol_id
+          ? { ...company, kanawha_licenses: licensesHeldBy(company) + 1 }
+          : company,
       ),
     };
   }
@@ -3717,7 +4276,8 @@ function applyOneAction(
     /* The token price escalates: home free, second $40, third onward $100. stationTokenPrice is the same schedule the button quotes.
        See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #239 */
     const placedCount = owner?.station_token_hexes.length ?? 0;
-    const cost = stationTokenPrice(placedCount);
+    // #1302: a corporation whose home is a printed herald has no free home placement -- its first token is its second station.
+    const cost = stationTokenPrice(placedCount, heraldHexFor(protocol_id) !== null);
     const placed: GameStateResponse = {
       ...state,
       public_companies: state.public_companies.map((company) =>
@@ -3744,12 +4304,14 @@ function applyOneAction(
     // Running a route RECORDS; declaring pays. payout_strategy is deliberately not read here.
     // See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #192
     const { protocol_id, path } = msg.RunManualRoute;
+    // #1323: the legacy arm keeps the same licence gate as the live one.
+    if (!mayCrossCoalRiver(state, protocol_id) && routeCrossesCoalRiver(path)) return state;
     // The flat nominal is now only the FALLBACK. With a map to read, the
     // figure comes from the stops the player actually selected, so building
     // a longer route through richer cities visibly pays more -- which is the
     // entire point of a route tester. See `sandboxRouteRevenue`.
     const printed = ctx?.mapGrid
-      ? sandboxRouteRevenue(ctx.mapGrid, path, ctx.era ?? "Yellow")
+      ? sandboxRouteRevenue(ctx.mapGrid, path, ctx.era ?? "Yellow", protocol_id)
       : SANDBOX_NOMINAL_ROUTE_REVENUE;
 
     /* ==================================================================
@@ -3988,6 +4550,15 @@ function applyOneAction(
 
   if ("RunMultipleRoutes" in msg) {
     const { protocol_id, routes, trains, train_indices } = msg.RunMultipleRoutes;
+    /* Design note #1323: THE AUTHORITY BEHIND THE PLANNER'S REFUSAL. The walks refuse Coal River for an
+       unlicensed corporation (`barredHexesFor`); this is the reducer saying the same thing about a path the
+       log carries, so a client that drew the route by other means still cannot be paid for it. */
+    if (
+      !mayCrossCoalRiver(state, protocol_id) &&
+      routes.some((path) => routeCrossesCoalRiver(path))
+    ) {
+      return state;
+    }
     /* ==================================================================
         DESIGN NOTE 1183: ONE TURN, ONE RUN
        ==================================================================
@@ -4013,7 +4584,7 @@ function applyOneAction(
     const variants = resolveVariants(state.variants);
     const priced = routes.map((path) =>
       ctx?.mapGrid
-        ? sandboxRouteRevenue(ctx.mapGrid, path, ctx.era ?? "Yellow")
+        ? sandboxRouteRevenue(ctx.mapGrid, path, ctx.era ?? "Yellow", protocol_id)
         : SANDBOX_NOMINAL_ROUTE_REVENUE,
     );
     const printedThisMessage = priced.reduce((sum, value) => sum + value, 0);
@@ -4269,6 +4840,9 @@ export interface PendingHomeToken {
   q: number;
   r: number;
   president: string | null;
+  /** Design note #1325: every hex the token may go on. One entry for the printed eight; two for the Level
+   *  Playing Field's C&O, whose prompt then asks which. The first is `hexLabel`/`q`/`r`. */
+  options: ReadonlyArray<{ hexLabel: string; q: number; r: number }>;
 }
 
 /** Derived from the board, so a reload or a late poll cannot lose the prompt. Ordered by operating order; a company whose label does not resolve is absent rather than pending.
@@ -4281,11 +4855,22 @@ export function pendingHomeTokens(
 
   const pending = state.public_companies.flatMap((company) => {
     if (!company.is_floated || !company.home_hex_label) return [];
+    // Design note #1302: a home that is a printed herald owes no token -- there is no city to put one in.
+    if (heraldHexFor(company.company_id) !== null) return [];
     const axial = homeHexToAxial(company.home_hex_label);
     if (!axial) return [];
     const [q, r] = axial;
-    const already = company.station_token_hexes.some(([hq, hr]) => hq === q && hr === r);
+    /* Design note #1325: THE HOME IS PLACED WHEN THE CORPORATION HOLDS ANY TOKEN. Its first token is always
+       its home (the gate holds play until it is placed), so this and the per-hex test agree for the printed
+       eight -- and only this one is right for a corporation with two homes, which may have sat on the other. */
+    const already =
+      company.station_token_hexes.length > 0 ||
+      company.station_token_hexes.some(([hq, hr]) => hq === q && hr === r);
     if (already) return [];
+    const homeLabel = company.home_hex_label;
+    const options = homeHexesFor(company.company_id)
+      .map((home) => ({ hexLabel: home.label, q: home.q, r: home.r }))
+      .sort((a, b) => (a.hexLabel === homeLabel ? -1 : b.hexLabel === homeLabel ? 1 : 0));
     return [
       {
         companyId: company.company_id,
@@ -4294,6 +4879,7 @@ export function pendingHomeTokens(
         q,
         r,
         president: company.president,
+        options: options.length > 0 ? options : [{ hexLabel: company.home_hex_label, q, r }],
       },
     ];
   });
@@ -4323,6 +4909,11 @@ export function placeHomeStationToken(
   const company = state.public_companies.find((entry) => entry.company_id === companyId);
   if (!company || !company.is_floated) return state;
   if (company.station_token_hexes.some(([hq, hr]) => hq === q && hr === r)) return state;
+  /* Design note #1325: a two-home corporation's token goes on one of its homes and nowhere else. Checked
+     only when the board names more than one, so a log written for a single-home corporation keeps replaying
+     to wherever it recorded. */
+  const homes = homeHexesFor(companyId);
+  if (homes.length > 1 && !homes.some((home) => home.q === q && home.r === r)) return state;
 
   const placed: GameStateResponse = {
     ...state,
@@ -4520,6 +5111,7 @@ export function grantBOPresidency(
 export function describeFloat(
   previous: { is_floated: boolean; station_token_hexes?: ReadonlyArray<unknown> | null },
   company: {
+    company_id?: number;
     ticker: string;
     treasury: string;
     is_floated: boolean;
@@ -4528,6 +5120,16 @@ export function describeFloat(
   },
 ): string | null {
   if (previous.is_floated || !company.is_floated) return null;
+
+  /* Design note #1332: a home that is a printed herald owes no token (#1302), so the sentence must not ask
+     for one -- the modal that follows this line says the rest. */
+  const herald =
+    company.company_id !== undefined && company.home_hex_label
+      ? heraldHexFor(company.company_id)
+      : null;
+  if (herald) {
+    return `${company.ticker} floated with $${company.treasury}. Its home is the herald printed on ${herald.label}; no home token is placed.`;
+  }
 
   if (company.home_hex_label) {
     return `${company.ticker} floated with $${company.treasury}. Its home station on ${company.home_hex_label} must now be placed.`;
@@ -4682,8 +5284,16 @@ export function summarisePrivateRevenueForPlayer(
 export interface PrivateRevenueRound {
   /** The viewer's own privates, itemised. `null` when they collected nothing this round. */
   mine: PrivateRevenueSummary | null;
-  /** Every OTHER player who collected, in payout order, with their round total. Never itemised. */
-  others: readonly { address: string; total: number }[];
+  /** Every OTHER player who collected, in payout order, with their round total.
+   *  Design note #1270: ITEMISED AFTER ALL, but folded. #1049's "never itemised" was the concession that
+   *  kept four players by six privates off the panel; the 7 September plan asks for the rows back behind a
+   *  click -- "collapsed: player name and cash consequence; expanded: that entity's private company holdings
+   *  and each company's income." The rows are built here, once, in the same shape as the viewer's own. */
+  others: readonly {
+    address: string;
+    total: number;
+    rows: readonly { privateId: number; label: string; value: string }[];
+  }[];
 }
 
 export function summarisePrivateRevenueRound(
@@ -4694,7 +5304,11 @@ export function summarisePrivateRevenueRound(
   /* AN ARRAY OF PAIRS RATHER THAN A `Map`, so first-payment order IS the order and there is no iteration
      contract to reason about at all. 1830 has six privates, so the linear scan is not worth a second thought
      and the guarantee is worth stating in code rather than in a comment about `Map` insertion semantics. */
-  const others: { address: string; total: number }[] = [];
+  const others: {
+    address: string;
+    total: number;
+    rows: { privateId: number; label: string; value: string }[];
+  }[] = [];
   for (const payout of payouts) {
     if (!payout.toPlayer) continue;
     if (payout.toPlayer === viewerAddress) continue;
@@ -4702,9 +5316,14 @@ export function summarisePrivateRevenueRound(
        nothing, so this is belt-and-braces -- but a row reading "$0" beside a player's name asserts they were
        paid, and #562's rule is that a zero and an absence are different facts. */
     if (payout.amount <= 0) continue;
+    const row = { privateId: payout.privateId, label: payout.privateName, value: `$${payout.amount}` };
     const seen = others.find((entry) => entry.address === payout.toPlayer);
-    if (seen) seen.total += payout.amount;
-    else others.push({ address: payout.toPlayer, total: payout.amount });
+    if (seen) {
+      seen.total += payout.amount;
+      seen.rows.push(row);
+    } else {
+      others.push({ address: payout.toPlayer, total: payout.amount, rows: [row] });
+    }
   }
   return { mine, others };
 }

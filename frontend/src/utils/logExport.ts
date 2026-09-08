@@ -28,6 +28,7 @@
 // with no duplicates rules the whole family out in one glance.
 
 import type { SandboxAction } from "./sandboxRoom";
+import { logHash } from "./logHash";
 
 export interface SandboxLogExport {
   capturedAt: string;
@@ -35,6 +36,10 @@ export interface SandboxLogExport {
   /** Entries sharing an index -- empty on a healthy log. See the note above for why this is worth naming. */
   duplicateIndices: number[];
   actionCount: number;
+  /** #1251: the settlement commitment over these entries, so the holder of this file can recompute what the
+   *  server will one day sign. `null` when the log cannot be hashed -- a duplicate index (see above), which
+   *  is the one shape the commitment refuses. */
+  logHash: string | null;
   actions: ReadonlyArray<{
     index: number;
     id: string;
@@ -84,11 +89,13 @@ export function buildSandboxLogExport(
   roomCode: string | null,
   now: () => Date = () => new Date(),
 ): SandboxLogExport {
+  const duplicateIndices = duplicateIndicesIn(actions);
   return {
     capturedAt: now().toISOString(),
     roomCode,
-    duplicateIndices: duplicateIndicesIn(actions),
+    duplicateIndices,
     actionCount: actions.length,
+    logHash: duplicateIndices.length === 0 ? logHash(actions) : null,
     /* SORTED BY INDEX, THEN BY ID, which is `sortActions`' own order -- an export that presented the entries
        in a different sequence from the one the app replays would be describing a different game. */
     actions: [...actions]

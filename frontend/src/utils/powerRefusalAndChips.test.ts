@@ -185,7 +185,8 @@ describe("the chips have their own group and their own mark (design note #884)",
     /* #619's hazard: "the two forms of this bar must not disagree about whether a control is available."
        Written out twice, the mark, the disabled treatment and the `type` would be two copies to keep in
        step. Asserted as ONE `<button` inside the nodes builder plus two placements of it. */
-    expect(BAR).toContain("const powerChipNodes = powerChips.map((chip) => (");
+    // #1298: the Kanawha licence chip joins the same builder, so it is the same `<button` as every other power.
+    expect(BAR).toContain("const powerChipNodes = [...powerChips, ...licenceChips].map((chip) => (");
     expect((BAR.match(/\{powerChipNodes\}/g) ?? []).length).toBe(2);
   });
 

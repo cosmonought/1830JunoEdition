@@ -76,6 +76,9 @@ export const GAMEPLAY_MESSAGE_KEYS = [
   "BeginOperatingRound",
   "AdvanceOperatingSubPhase",
   "BuyTrainFromCorporation",
+  /* Design note #1303: the Project 18XX+ D-train exchange. Pure VGP/gameplay state like every other entry --
+     a train leaves, a Diesel arrives, $800 goes to the bank. */
+  "ExchangeTrainForDiesel",
   "AcceptTrainOffer",
   "RejectTrainOffer",
   "RescindTrainOffer",
@@ -205,6 +208,10 @@ export type GameplayExecuteMsg =
          *  OPTIONAL, and absent means one. Every existing log entry and every contract dispatch omits it, and
          *  a replay of an older room must keep meaning exactly what it meant when it was written. */
         quantity?: number;
+        /** Design note #1324: `"double"` buys the 20% standard certificate (ERIE and N&W, Level Playing
+         *  Field) at twice the share price as one certificate. Absent is an ordinary 10% buy, which is every
+         *  message written before the field. */
+        certificate?: "double";
       };
     }
   | { SellStock: { game_id: number; protocol_id: number; percentage: number } }
@@ -421,8 +428,14 @@ export type GameplayExecuteMsg =
         city_index?: number;
       };
     }
-  | { BuyHardwareFromPool: { game_id: number; protocol_id: number } }
+  /** Design note #1314: `returned_model_type`, when present, buys THAT returned train at face value
+   *  (`returned_trains`) rather than the tier for sale. ITS OWN FIELD, deliberately: logs already carry a
+   *  `model_type` on this message that the depot has always ignored (it sells cheapest-first), and reading it
+   *  would have re-routed every old purchase. Absent is the ordinary purchase, unchanged. */
+  | { BuyHardwareFromPool: { game_id: number; protocol_id: number; model_type?: string; returned_model_type?: string } }
   | { EmergencyBuyHardware: { game_id: number; protocol_id: number } }
+  /** Design note #1303: trade `model_type` (a 4, 5 or 6) in for a Diesel at $800. Variant-gated in the reducer. */
+  | { ExchangeTrainForDiesel: { game_id: number; protocol_id: number; model_type: string } }
   | { PassTurn: { game_id: number } }
   | { UndoLastAction: { game_id: number } }
   // Pre-Game Waterfall Auction (`waterfall.rs`) -- mirrors `msg.rs`'s five

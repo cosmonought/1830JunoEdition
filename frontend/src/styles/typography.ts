@@ -145,3 +145,16 @@ export const RADIUS = {
   /** Not a step either: a circle is a shape. */
   circle: "50%",
 } as const;
+
+/* ==================================================================
+    DESIGN NOTE 1257: THE VIEWPORT'S TOP CORNERS ARE SQUARE
+   ==================================================================
+   REPORTED: "the rounded leftmost tab reads as disconnected from the panel it opens."
+   #1118 closed the vertical gap between the tab strip and the panel and #1150 aligned their left edges, and
+   the two together exposed the last thing keeping them apart: the panel's own `card` radius. A tab is drawn
+   with square bottom corners so it can sit ON its panel; a panel whose top-left corner curves away from that
+   tab has a sliver of ground showing through the join, and the eye reads the tab as floating above the
+   surface rather than opening it. Same 10px, but only where nothing is attached -- the bottom edge is still a
+   card's edge. ONE TOKEN, because every tab paints its own root (#1117), and six copies of "0 0 10px 10px"
+   is six chances for one to keep the old value. */
+export const VIEWPORT_RADIUS = `0 0 ${RADIUS.card} ${RADIUS.card}`;

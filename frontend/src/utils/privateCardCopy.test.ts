@@ -156,6 +156,7 @@ describe("the catalog's other guarantees still hold", () => {
       "MH",
       "CA",
       "BO",
+      "JK", // #1320: the Level Playing Field's seventh.
     ]);
   });
 

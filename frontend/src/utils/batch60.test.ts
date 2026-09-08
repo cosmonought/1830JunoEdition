@@ -344,8 +344,14 @@ describe("the overlay implements both treatments and the shell picks one", () =>
     /* #1043 CALLED `mix-blend-mode: screen` THE RULED PROPERTY and it still is -- for the clips it was ruled
        about. Anchored inside each style block so a blend mode leaking onto the feathered one fails here
        rather than in play, where it would look like a bug in the clip. */
-    const screened = sliceBetween(OVERLAY, "videoScreened:", "videoFeathered:");
+    /* Design note #1260: the blend lives on the CONTAINER now, applied only for the screened composite --
+       the container is a stacking context, and a blend on the video inside it never reached the board.
+       `blendIsolation.test.ts` carries the rule; this case keeps the treatment where it belongs. */
+    const screened = sliceBetween(OVERLAY, "containerScreened:", "video:");
     expect(screened).toContain('mixBlendMode: "screen"');
+    expect(OVERLAY).toContain("feathered ? null : styles.containerScreened");
+    const video = sliceBetween(OVERLAY, "videoScreened:", "};");
+    expect(video).not.toContain("mixBlendMode");
     const feathered = sliceBetween(OVERLAY, "videoFeathered:", "};");
     expect(feathered).not.toContain("mixBlendMode");
   });

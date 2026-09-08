@@ -24,7 +24,7 @@
    Orientation is a rigid rotation. Revenue is chain data, not artwork.
    See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #131 */
 
-import { OFFBOARD_TRACKS } from "./hexBoardData";
+import { boardInEffect, boardMemo, type BoardDefinition } from "./hexBoardData";
 
 /** A revenue centre printed on a tile, in unit-hex coordinates. */
 export interface TileArtworkMarker {
@@ -42,7 +42,18 @@ export interface TileArtworkMarker {
   /** The pill's long axis in base tile space. On a curve it is that curve's TANGENT so the pill lies along the track; on a radial hub there is no single tangent, so it bisects the widest gap between spokes and sits BETWEEN the arms.
    *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #133 */
   angle?: number;
+  /** Design note #1316: HOW THE SLOTS ARE ARRANGED. `pill` (the default) is a row along `angle`, which is how
+   *  every two-station city in 1830 is printed. The Project 18XX+ set prints its three-station cities as a
+   *  TRIANGLE -- one station on top, two below -- and its four-station New York as a two-by-two SQUARE, and
+   *  a row of three or four would be both wrong and too long for a hex. `angle` still turns the cluster. */
+  layout?: "pill" | "triangle" | "square";
 }
+
+/** Design note #1330: the tracks of one tile as DRAW LAYERS -- lists of indices into `tracks`, bottom layer
+ *  first. Every track in a layer is stroked together (one white outline pass, then one ink pass), so rails
+ *  that meet merge into one black shape; each later layer is stroked on top, so where it crosses a lower
+ *  layer's rail its white outline cuts a gap in that rail -- the overpass. See `trackLayersFor`. */
+export type TrackLayers = readonly (readonly number[])[];
 
 /** One tile's complete hand-authored artwork. */
 export interface TileArtwork {
@@ -52,6 +63,9 @@ export interface TileArtwork {
    *  `cityGroups` / backend `paths`, so `city_index` from a station-token
    *  record indexes straight in with no re-sorting. */
   markers: readonly TileArtworkMarker[];
+  /** Design note #1330: an authored z-order, when the derived one (each rail its own layer, a hub's spokes
+   *  one layer) is not the one wanted. Absent for every tile so far -- the derivation is right for all of them. */
+  layers?: TrackLayers;
 }
 
 /** ALL 46 entries -- there is no procedural fallback left for a real tile to reach. The drift tripwire is the catalog size assertion: a tile added without artwork renders as an explicit placeholder, which is loud, rather than a plausible guess, which is not.
@@ -514,6 +528,371 @@ export const TILE_GRAPHICS_CATALOG: Readonly<Record<number, TileArtwork>> = {
     ],
     markers: [],
   },
+  /* #6 -- yellow city on a gentle curve (Project 18XX+ tile set, design note #1311) */
+  6: {
+    tracks: [
+      "M 0.433013 -0.75 L 0 0",
+      "M 0.433013 0.75 L 0 0",
+    ],
+    markers: [
+      { kind: "city", at: { x: 0, y: 0 } },
+    ],
+  },
+  /* #5 -- yellow city on a sharp curve (Project 18XX+ tile set, design note #1311) */
+  5: {
+    tracks: [
+      "M 0.866025 0 L 0 0",
+      "M 0.433013 -0.75 L 0 0",
+    ],
+    markers: [
+      { kind: "city", at: { x: 0, y: 0 } },
+    ],
+  },
+  /* #630 -- two towns, one on each of two curves (Project 18XX+ tile set, design note #1311) */
+  630: {
+    tracks: [
+      "M -0.433013 -0.75 C -0.240563 -0.416667 -0.481125 0 -0.866025 0",
+      "M 0.866025 0 C 0.330129 0 -0.165065 0.2859 -0.433013 0.75",
+    ],
+    markers: [
+      { kind: "town", at: { x: -0.433013, y: -0.25 } },
+      { kind: "town", at: { x: 0.116026, y: 0.200962 } },
+    ],
+  },
+  /* #631 -- two towns, one on each of two curves (Project 18XX+ tile set, design note #1311) */
+  631: {
+    tracks: [
+      "M 0.866025 0 C 0.481125 0 0.240563 -0.416667 0.433013 -0.75",
+      "M -0.433013 -0.75 C -0.165065 -0.2859 -0.165065 0.2859 -0.433013 0.75",
+    ],
+    markers: [
+      { kind: "town", at: { x: 0.433013, y: -0.25 } },
+      { kind: "town", at: { x: -0.232052, y: 0 } },
+    ],
+  },
+  /* #632 -- two towns, one on each of two curves (Project 18XX+ tile set, design note #1311) */
+  632: {
+    tracks: [
+      "M -0.433013 -0.75 C -0.240563 -0.416667 -0.481125 0 -0.866025 0",
+      "M -0.433013 0.75 C -0.240563 0.416667 0.240563 0.416667 0.433013 0.75",
+    ],
+    markers: [
+      { kind: "town", at: { x: -0.433013, y: -0.25 } },
+      { kind: "town", at: { x: 0, y: 0.5 } },
+    ],
+  },
+  /* #633 -- two towns, one on each of two curves (Project 18XX+ tile set, design note #1311) */
+  633: {
+    tracks: [
+      "M -0.433013 -0.75 C -0.240563 -0.416667 -0.481125 0 -0.866025 0",
+      "M 0.866025 0 C 0.481125 0 0.240563 0.416667 0.433013 0.75",
+    ],
+    markers: [
+      { kind: "town", at: { x: -0.433013, y: -0.25 } },
+      { kind: "town", at: { x: 0.433013, y: 0.25 } },
+    ],
+  },
+  /* #592 -- "B" green, two stations on the #53 junction (Project 18XX+ tile set, design note #1311) */
+  592: {
+    tracks: [
+      "M 0.866025 0 L 0 0",
+      "M -0.433013 -0.75 L 0 0",
+      "M -0.433013 0.75 L 0 0",
+    ],
+    markers: [
+      { kind: "city", at: { x: 0, y: 0 }, slots: 2, angle: 90 },
+    ],
+  },
+  /* #17 -- two gentle curves (Project 18XX+ tile set, design note #1311) */
+  17: {
+    tracks: [
+      "M 0.433013 -0.75 C 0.165065 -0.2859 0.165065 0.2859 0.433013 0.75",
+      "M -0.433013 -0.75 C -0.165065 -0.2859 -0.165065 0.2859 -0.433013 0.75",
+    ],
+    markers: [
+
+    ],
+  },
+  /* #141 -- green town, 3 spokes (Project 18XX+ tile set, design note #1311) */
+  141: {
+    tracks: [
+      "M 0.433013 -0.75 L 0 0",
+      "M -0.866025 0 L 0 0",
+      "M -0.433013 0.75 L 0 0",
+    ],
+    markers: [
+      { kind: "town", at: { x: 0, y: 0 } },
+    ],
+  },
+  /* #142 -- green town, 3 spokes (Project 18XX+ tile set, design note #1311) */
+  142: {
+    tracks: [
+      "M 0.433013 -0.75 L 0 0",
+      "M -0.433013 0.75 L 0 0",
+      "M 0.433013 0.75 L 0 0",
+    ],
+    markers: [
+      { kind: "town", at: { x: 0, y: 0 } },
+    ],
+  },
+  /* #143 -- green town, 3 spokes (Project 18XX+ tile set, design note #1311) */
+  143: {
+    tracks: [
+      "M 0.866025 0 L 0 0",
+      "M 0.433013 -0.75 L 0 0",
+      "M 0.433013 0.75 L 0 0",
+    ],
+    markers: [
+      { kind: "town", at: { x: 0, y: 0 } },
+    ],
+  },
+  /* #144 -- green town, 3 spokes (Project 18XX+ tile set, design note #1311) */
+  144: {
+    tracks: [
+      "M 0.433013 -0.75 L 0 0",
+      "M -0.866025 0 L 0 0",
+      "M 0.433013 0.75 L 0 0",
+    ],
+    markers: [
+      { kind: "town", at: { x: 0, y: 0 } },
+    ],
+  },
+  /* #88 -- green town, 4 spokes (Project 18XX+ tile set, design note #1311) */
+  88: {
+    tracks: [
+      "M 0.866025 0 L 0 0",
+      "M 0.433013 -0.75 L 0 0",
+      "M -0.866025 0 L 0 0",
+      "M -0.433013 0.75 L 0 0",
+    ],
+    markers: [
+      { kind: "town", at: { x: 0, y: 0 } },
+    ],
+  },
+  /* #204 -- green town, 4 spokes (Project 18XX+ tile set, design note #1311) */
+  204: {
+    tracks: [
+      "M 0.433013 -0.75 L 0 0",
+      "M -0.866025 0 L 0 0",
+      "M -0.433013 0.75 L 0 0",
+      "M 0.433013 0.75 L 0 0",
+    ],
+    markers: [
+      { kind: "town", at: { x: 0, y: 0 } },
+    ],
+  },
+  /* #87 -- green town, 4 spokes (Project 18XX+ tile set, design note #1311) */
+  87: {
+    tracks: [
+      "M 0.866025 0 L 0 0",
+      "M 0.433013 -0.75 L 0 0",
+      "M -0.433013 0.75 L 0 0",
+      "M 0.433013 0.75 L 0 0",
+    ],
+    markers: [
+      { kind: "town", at: { x: 0, y: 0 } },
+    ],
+  },
+  /* #619 -- green two-station city on four spokes (Project 18XX+ tile set, design note #1311) */
+  619: {
+    tracks: [
+      "M 0.433013 -0.75 L 0 0",
+      "M -0.866025 0 L 0 0",
+      "M -0.433013 0.75 L 0 0",
+      "M 0.433013 0.75 L 0 0",
+    ],
+    markers: [
+      /* Design note #1285: THE PILL LIES ACROSS THE FORK'S HANDLE. Three of the spokes are consecutive edges
+         (W, SW, SE -- a fan, the tines) and the fourth (NE, at -60 degrees) stands alone: the handle. "It
+         would look better for the city pill to be drawn perpendicular to the one track coming into it", so
+         the row runs at 30 degrees -- square across the handle -- rather than the vertical it had. 884 and
+         997 sit on the same fork and take the same turn. */
+      { kind: "city", at: { x: 0, y: 0 }, slots: 2, angle: 30 },
+    ],
+  },
+  /* #626 -- "OO" green, two sharp curves, one station on each (Project 18XX+ tile set, design note #1311) */
+  626: {
+    tracks: [
+      "M 0.866025 0 C 0.481125 0 0.240563 -0.416667 0.433013 -0.75",
+      "M -0.866025 0 C -0.481125 0 -0.240563 0.416667 -0.433013 0.75",
+    ],
+    markers: [
+      { kind: "city", at: { x: 0.433013, y: -0.25 } },
+      { kind: "city", at: { x: -0.433013, y: 0.25 } },
+    ],
+  },
+  /* #884 -- brown three-station city on four spokes (Project 18XX+ tile set, design note #1311) */
+  884: {
+    tracks: [
+      "M 0.433013 -0.75 L 0 0",
+      "M -0.866025 0 L 0 0",
+      "M -0.433013 0.75 L 0 0",
+      "M 0.433013 0.75 L 0 0",
+    ],
+    markers: [
+      // #1316: three stations print as a triangle, apex up.
+      // Design note #1285: turned so the base lies square across the handle and the apex points up it.
+      { kind: "city", at: { x: 0, y: 0 }, slots: 3, angle: 30, layout: "triangle" },
+    ],
+  },
+  /* #997 -- brown two-station city on four spokes (Project 18XX+ tile set, design note #1311) */
+  997: {
+    tracks: [
+      "M 0.433013 -0.75 L 0 0",
+      "M -0.866025 0 L 0 0",
+      "M -0.433013 0.75 L 0 0",
+      "M 0.433013 0.75 L 0 0",
+    ],
+    markers: [
+      // Design note #1285: across the handle, as 619.
+      { kind: "city", at: { x: 0, y: 0 }, slots: 2, angle: 30 },
+    ],
+  },
+  /* #883 -- "NY" brown, one four-station city on four spokes (Project 18XX+ tile set, design note #1311) */
+  883: {
+    tracks: [
+      "M 0.866025 0 L 0 0",
+      "M 0.433013 -0.75 L 0 0",
+      "M -0.433013 0.75 L 0 0",
+      "M 0.433013 0.75 L 0 0",
+    ],
+    markers: [
+      // #1316: New York's four stations print two and two.
+      { kind: "city", at: { x: 0, y: 0 }, slots: 4, angle: 0, layout: "square" },
+    ],
+  },
+  /* #145 -- brown town, four spokes (Project 18XX+ tile set, design note #1311) */
+  145: {
+    tracks: [
+      "M 0.866025 0 L 0 0",
+      "M 0.433013 -0.75 L 0 0",
+      "M -0.866025 0 L 0 0",
+      "M -0.433013 0.75 L 0 0",
+    ],
+    markers: [
+      { kind: "town", at: { x: 0, y: 0 } },
+    ],
+  },
+  /* #147 -- brown town, four spokes (Project 18XX+ tile set, design note #1311) */
+  147: {
+    tracks: [
+      "M 0.866025 0 L 0 0",
+      "M 0.433013 -0.75 L 0 0",
+      "M -0.433013 0.75 L 0 0",
+      "M 0.433013 0.75 L 0 0",
+    ],
+    markers: [
+      { kind: "town", at: { x: 0, y: 0 } },
+    ],
+  },
+  /* #146 -- brown town, four spokes (Project 18XX+ tile set, design note #1311) */
+  146: {
+    tracks: [
+      "M 0.433013 -0.75 L 0 0",
+      "M -0.866025 0 L 0 0",
+      "M -0.433013 0.75 L 0 0",
+      "M 0.433013 0.75 L 0 0",
+    ],
+    markers: [
+      { kind: "town", at: { x: 0, y: 0 } },
+    ],
+  },
+  /* #36 -- "OO" brown, two gentle curves, one station on each (Project 18XX+ tile set, design note #1311) */
+  36: {
+    tracks: [
+      "M 0.433013 -0.75 C 0.165065 -0.2859 0.165065 0.2859 0.433013 0.75",
+      "M -0.433013 -0.75 C -0.165065 -0.2859 -0.165065 0.2859 -0.433013 0.75",
+    ],
+    markers: [
+      { kind: "city", at: { x: 0.232052, y: 0 } },
+      { kind: "city", at: { x: -0.232052, y: 0 } },
+    ],
+  },
+  /* #35 -- "OO" brown, two gentle curves that cross without meeting; stations slid clear of the crossing (Project 18XX+ tile set, design note #1311) */
+  35: {
+    tracks: [
+      "M 0.433013 -0.75 C 0.165065 -0.2859 0.165065 0.2859 0.433013 0.75",
+      "M 0.866025 0 C 0.330129 0 -0.165065 0.2859 -0.433013 0.75",
+    ],
+    markers: [
+      { kind: "city", at: { x: 0.295073, y: -0.43035 } },
+      { kind: "city", at: { x: -0.225157, y: 0.470715 } },
+    ],
+  },
+  /* #984 -- "OO" brown, two sharp curves, one station on each (Project 18XX+ tile set, design note #1311) */
+  984: {
+    tracks: [
+      "M 0.866025 0 C 0.481125 0 0.240563 -0.416667 0.433013 -0.75",
+      "M -0.433013 0.75 C -0.240563 0.416667 0.240563 0.416667 0.433013 0.75",
+    ],
+    markers: [
+      { kind: "city", at: { x: 0.433013, y: -0.25 } },
+      { kind: "city", at: { x: 0, y: 0.5 } },
+    ],
+  },
+  /* #167 -- "OO" gray (Project 18XX+ tile set, design notes #1311/#1316). Each station sits toward the corner
+     between its two nearby edges, reached by two short curves, and its third, opposite edge arrives on a long,
+     nearly straight curve; the two long curves cross without meeting. Authored to read like the printed tile. */
+  167: {
+    tracks: [
+      "M 0.866025 0 C 0.7 0 0.55 -0.2 0.433013 -0.25",
+      "M 0.433013 -0.75 C 0.433013 -0.55 0.433013 -0.4 0.433013 -0.25",
+      "M -0.433013 0.75 C -0.2 0.4 0.2 0.05 0.433013 -0.25",
+      "M -0.866025 0 C -0.7 0 -0.55 -0.2 -0.433013 -0.25",
+      "M -0.433013 -0.75 C -0.433013 -0.55 -0.433013 -0.4 -0.433013 -0.25",
+      "M 0.433013 0.75 C 0.2 0.4 -0.2 0.05 -0.433013 -0.25",
+    ],
+    markers: [
+      { kind: "city", at: { x: 0.433013, y: -0.25 } },
+      { kind: "city", at: { x: -0.433013, y: -0.25 } },
+    ],
+  },
+  /* #810 -- "TO" green (design note #1317): a single station on the east half fed from NE, E and SE, a double
+     station on the west half fed from NW, W and SW. */
+  810: {
+    tracks: [
+      "M 0.866025 0 L 0.4 0",
+      "M 0.433013 -0.75 L 0.4 0",
+      "M 0.433013 0.75 L 0.4 0",
+      "M -0.866025 0 L -0.4 0",
+      "M -0.433013 -0.75 L -0.4 0",
+      "M -0.433013 0.75 L -0.4 0",
+    ],
+    markers: [
+      { kind: "city", at: { x: 0.4, y: 0 } },
+      { kind: "city", at: { x: -0.4, y: 0 }, slots: 2, angle: 90 },
+    ],
+  },
+  /* #882 -- "TO" brown (design note #1317): the same track, two double stations. */
+  882: {
+    tracks: [
+      "M 0.866025 0 L 0.4 0",
+      "M 0.433013 -0.75 L 0.4 0",
+      "M 0.433013 0.75 L 0.4 0",
+      "M -0.866025 0 L -0.4 0",
+      "M -0.433013 -0.75 L -0.4 0",
+      "M -0.433013 0.75 L -0.4 0",
+    ],
+    markers: [
+      { kind: "city", at: { x: 0.4, y: 0 }, slots: 2, angle: 90 },
+      { kind: "city", at: { x: -0.4, y: 0 }, slots: 2, angle: 90 },
+    ],
+  },
+  /* #513 -- gray three-station city on six spokes (Project 18XX+ tile set, design note #1311) */
+  513: {
+    tracks: [
+      "M 0.866025 0 L 0 0",
+      "M 0.433013 -0.75 L 0 0",
+      "M -0.433013 -0.75 L 0 0",
+      "M -0.866025 0 L 0 0",
+      "M -0.433013 0.75 L 0 0",
+      "M 0.433013 0.75 L 0 0",
+    ],
+    markers: [
+      // #1316: three stations print as a triangle, apex up.
+      { kind: "city", at: { x: 0, y: 0 }, slots: 3, angle: 0, layout: "triangle" },
+    ],
+  },
 };
 
 /* THE PREPRINTED HEXES ARE ARTWORK TOO. The old half-segment construction DEGENERATES -- both control points collinear with the edge-to-centre line -- so Cleveland's 60-degree pair rendered as a sharp V. NOT ROTATABLE, which is why this is a separate table: a preprinted hex has one facing baked into the board.
@@ -527,6 +906,15 @@ export interface PrintedArtwork {
   /** The revenue centre printed on it, or `undefined` for a bare connector
    *  hex (E9, A17, D24 -- the three gray hexes with no station at all). */
   marker?: TileArtworkMarker;
+  /** Design note #1320: DECORATION OVER THE MARKER, drawn instead of the marker's plain dit. Coal River (L8)
+   *  prints a large city-sized circle holding a pickaxe and a "$120" licence box, while FUNCTIONING as a town
+   *  -- so `marker.kind` stays `"town"` for every rule and this carries the art alone. */
+  /** Design note #1282: the fee label is gone -- "we have revenue values in rectangles, so that is confusing.
+   *  The hex is quite busy already so let's remove the 120 altogether." The licence is bought from the hex's
+   *  own modal and the action bar; the pickaxe alone marks the Coalfields. */
+  /** Design note #1286: `crate` marks a warehouse -- a city-sized circle holding a crate, a stop that can be
+   *  ended at but never tokened. */
+  emblem?: { kind: "coal" | "crate" };
   /** Design note #737: indices into `tracks` that DO NOT touch `marker` -- a bypass.
    *
    *  DECLARED, NOT DERIVED. Whether a bezier passes through the marker's point is answerable by sampling the
@@ -535,6 +923,8 @@ export interface PrintedArtwork {
    *
    *  A HEX WITH NO MARKER NEEDS NO ENTRY: nothing to bypass. */
   bypassTracks?: readonly number[];
+  /** Design note #1330: authored z-order; see `TileArtwork.layers`. */
+  layers?: TrackLayers;
 }
 
 /* ==================================================================
@@ -588,8 +978,8 @@ const UNIT_EDGE_POINTS: ReadonlyArray<readonly [number, number]> = [
 
 const round = (n: number) => Number(n.toFixed(6));
 
-const OFFBOARD_STUB_ARTWORK: Readonly<Record<string, PrintedArtwork>> = Object.fromEntries(
-  Object.entries(OFFBOARD_TRACKS).map(([label, edges]) => [
+const offboardStubArtworkFor = (board: BoardDefinition): Readonly<Record<string, PrintedArtwork>> => Object.fromEntries(
+  Object.entries(board.offboardTracks).map(([label, edges]) => [
     label,
     {
       tracks: edges.map((edge) => {
@@ -603,7 +993,7 @@ const OFFBOARD_STUB_ARTWORK: Readonly<Record<string, PrintedArtwork>> = Object.f
 
 /** Every entry's edge set matches hexBoardData's own table for that label, and every marker sits on its own track's apex -- the same three rules the tile catalog's markers follow.
  *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #210 */
-export const PRINTED_GRAPHICS_CATALOG: Readonly<Record<string, PrintedArtwork>> = {
+const BASE_PRINTED_ARTWORK: Readonly<Record<string, PrintedArtwork>> = {
   /* ---- Gray preprinted hexes (`GRAY_HEXES`) ---- */
 
   /** Lansing -- sharp 0-5, city on the apex. */
@@ -771,15 +1161,33 @@ export const PRINTED_GRAPHICS_CATALOG: Readonly<Record<string, PrintedArtwork>> 
     marker: { kind: "city", at: { x: 0.116025, y: 0.200962 } },
   },
 
-  /* ---- Red off-board areas (`OFFBOARD_TRACKS`) -- design note #895 ---- */
-  ...OFFBOARD_STUB_ARTWORK,
 };
+
+/* Design note #1300: THE CATALOG IS PER BOARD. The authored art above is 1830's; a board contributes an entry
+   only for a label it still prints (a gray hex, a landmark), the red stubs are generated from ITS off-board
+   table, and `board.printedArtwork` overrides or adds whatever the expansion redraws. Keyed on the board
+   object, so the two boards' art never mixes and a lookup stays a property read. */
+const printedCatalog = boardMemo((board): Readonly<Record<string, PrintedArtwork>> => {
+  const landmarkLabels = new Set(board.landmarks.map((landmark) => landmark.label));
+  const kept = Object.fromEntries(
+    Object.entries(BASE_PRINTED_ARTWORK).filter(
+      ([label]) => board.grayHexes[label] !== undefined || landmarkLabels.has(label),
+    ),
+  );
+  return { ...kept, ...offboardStubArtworkFor(board), ...(board.printedArtwork ?? {}) };
+});
+
+/** The board in effect's printed artwork, by label. */
+export function PRINTED_GRAPHICS_CATALOG_NOW(): Readonly<Record<string, PrintedArtwork>> {
+  return printedCatalog();
+}
 
 /** New York needs its own entry because the hex carries TWO stations and the singular marker field cannot express that. Same shape as #59: two terminal spurs that never meet, each capped by its own station.
  *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #229 */
 export const NEW_YORK_PRINTED_ARTWORK: {
   tracks: readonly string[];
   markers: readonly TileArtworkMarker[];
+  layers?: TrackLayers;
 } = {
   tracks: [
     "M 0.433013 -0.75 L 0.216506 -0.375",
@@ -800,29 +1208,247 @@ const PRINTED_PATH_CACHE = new Map<string, readonly Path2D[]>();
    See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #229 */
 function printedTracksFor(label: string): readonly string[] | undefined {
   if (label === "G19") return NEW_YORK_PRINTED_ARTWORK.tracks;
-  return PRINTED_GRAPHICS_CATALOG[label]?.tracks;
+  return printedCatalog()[label]?.tracks;
 }
 
 /** The MARKER half of the same exception -- a caller wanting "the markers on this hex" should not have to know about the split. Empty for a bare connector hex, which prints track and no station.
  *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #229 */
 export function printedMarkersFor(label: string): readonly TileArtworkMarker[] {
   if (label === "G19") return NEW_YORK_PRINTED_ARTWORK.markers;
-  const marker = PRINTED_GRAPHICS_CATALOG[label]?.marker;
+  const marker = printedCatalog()[label]?.marker;
   return marker ? [marker] : [];
 }
 
 export function printedArtworkPaths(label: string): readonly Path2D[] | undefined {
-  const cached = PRINTED_PATH_CACHE.get(label);
+  // #1300: keyed on the board too -- the same label can carry different track on the two boards (A17, I19).
+  const key = `${boardInEffect().id}:${label}`;
+  const cached = PRINTED_PATH_CACHE.get(key);
   if (cached) return cached;
   const tracks = printedTracksFor(label);
   if (!tracks) return undefined;
   const built = tracks.map((d) => new Path2D(d));
-  PRINTED_PATH_CACHE.set(label, built);
+  PRINTED_PATH_CACHE.set(key, built);
   return built;
 }
 
 export function printedArtwork(label: string): PrintedArtwork | undefined {
-  return PRINTED_GRAPHICS_CATALOG[label];
+  return printedCatalog()[label];
+}
+
+/* ==================================================================
+ *  DESIGN NOTE 1330: WHICH RAILS MERGE, AND WHICH PASS OVER
+ * ==================================================================
+ *
+ * ASKED FOR: 18xxMaker's look -- every black rail wears a crisp white outline, which also settles, by
+ * drawing alone, whether two rails that touch are a JUNCTION (they merge) or an OVERPASS (one passes over
+ * the other through a gap in it). Then, on seeing it: "tracks that merge (like the preprinted green H12)
+ * should not print the white border in the merged tracks: the white should only be on borders, and tracks
+ * that are merged/merging share a border" -- while the crossings on #43-#47 and #70 keep their gaps.
+ *
+ * TWO THINGS, DRAWN TWO WAYS. A tile's rails are grouped into LAYERS: rails that share an endpoint -- the
+ * arms of a fork leaving one edge, the spokes of a hub ending at one station -- are one layer, outlined all
+ * together and then inked all together, so the merge is one black shape with one shared outline and no
+ * white inside it. Layers are drawn bottom to top, so a rail in a later layer passes over an earlier one
+ * (#17, #35, #1, #167's two cities). And where two rails of the SAME layer cross without touching -- #45's
+ * straight over its far curve, all of #70's -- the crossing is found in the artwork and drawn as a local
+ * OVERPASS: inside a small clip around the crossing point, the upper rail is stroked again, white then ink,
+ * so it cuts its gap there and nowhere else. The clip is what keeps the fork merged: the upper rail's white
+ * never reaches the edge where it shares a border with its sibling.
+ *
+ * DERIVED FROM THE ARTWORK, NOT RETYPED. Endpoints come off the `d` strings; crossings come from walking
+ * each pair of rails as polylines and finding where they intersect. Every tile in the catalog gets this
+ * from its own art, so there is no second table to keep in step with it; `layers` exists for the tile that
+ * one day wants a different z-order, and no tile uses it.
+ *
+ * Layer order is catalog order (the lowest-numbered track of each layer decides, later on top), and at a
+ * crossing the higher-numbered rail is the one on top. */
+const LAYER_EPSILON = 0.001;
+
+/** Groups `tracks` into draw layers -- see the note above. `explicit` wins when given. */
+export function trackLayersFor(tracks: readonly string[], explicit?: TrackLayers): TrackLayers {
+  if (explicit) return explicit;
+  const ends = tracks.map((d) => pathEndpoints(d));
+  const parent = tracks.map((_, index) => index);
+  const root = (index: number): number => {
+    let at = index;
+    while (parent[at] !== at) at = parent[at];
+    return at;
+  };
+  const touches = (a: { x: number; y: number }, b: { x: number; y: number }) =>
+    Math.abs(a.x - b.x) < LAYER_EPSILON && Math.abs(a.y - b.y) < LAYER_EPSILON;
+  for (let i = 0; i < tracks.length; i += 1) {
+    const ei = ends[i];
+    if (!ei) continue;
+    for (let j = i + 1; j < tracks.length; j += 1) {
+      const ej = ends[j];
+      if (!ej) continue;
+      const shared =
+        touches(ei.start, ej.start) || touches(ei.start, ej.end) || touches(ei.end, ej.start) || touches(ei.end, ej.end);
+      if (shared) parent[root(j)] = root(i);
+    }
+  }
+  const byRoot = new Map<number, number[]>();
+  for (let index = 0; index < tracks.length; index += 1) {
+    const key = root(index);
+    const layer = byRoot.get(key);
+    if (layer) layer.push(index);
+    else byRoot.set(key, [index]);
+  }
+  return Array.from(byRoot.values()).sort((a, b) => a[0] - b[0]);
+}
+
+/** Where one rail passes over another it shares a layer with. Unit-hex space. */
+export interface TrackCrossing {
+  x: number;
+  y: number;
+  /** Index into `tracks` of the rail on top. */
+  over: number;
+  /** Index into `tracks` of the rail underneath. */
+  under: number;
+  /** The sine of the angle between the two rails there -- how far along the upper rail the lower one's
+   *  width reaches. A right-angle crossing is 1; a shallow one is small and needs a longer clip. */
+  sinAngle: number;
+}
+
+/** The authored `M`/`L`/`C` path as a polyline of `steps` points per segment. */
+function samplePath(d: string, steps: number): { x: number; y: number }[] {
+  const tokens = d.match(/[MLC]|-?\d+(?:\.\d+)?/g) ?? [];
+  const points: { x: number; y: number }[] = [];
+  let at = 0;
+  let cursor = { x: 0, y: 0 };
+  const num = () => Number(tokens[at++]);
+  while (at < tokens.length) {
+    const op = tokens[at++];
+    if (op === "M") {
+      cursor = { x: num(), y: num() };
+      points.push(cursor);
+    } else if (op === "L") {
+      const to = { x: num(), y: num() };
+      for (let s = 1; s <= steps; s += 1) {
+        const t = s / steps;
+        points.push({ x: cursor.x + (to.x - cursor.x) * t, y: cursor.y + (to.y - cursor.y) * t });
+      }
+      cursor = to;
+    } else if (op === "C") {
+      const c1 = { x: num(), y: num() };
+      const c2 = { x: num(), y: num() };
+      const to = { x: num(), y: num() };
+      const from = cursor;
+      for (let s = 1; s <= steps; s += 1) {
+        const t = s / steps;
+        const u = 1 - t;
+        points.push({
+          x: u * u * u * from.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t * t * t * to.x,
+          y: u * u * u * from.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t * t * t * to.y,
+        });
+      }
+      cursor = to;
+    } else {
+      break; // a number where an op was expected: malformed, stop rather than guess
+    }
+  }
+  return points;
+}
+
+/** Where segment a1-a2 crosses b1-b2, or null. */
+function segmentsCross(
+  a1: { x: number; y: number }, a2: { x: number; y: number },
+  b1: { x: number; y: number }, b2: { x: number; y: number },
+): { x: number; y: number; sinAngle: number } | null {
+  const dax = a2.x - a1.x, day = a2.y - a1.y;
+  const dbx = b2.x - b1.x, dby = b2.y - b1.y;
+  const denom = dax * dby - day * dbx;
+  if (Math.abs(denom) < 1e-12) return null;
+  const t = ((b1.x - a1.x) * dby - (b1.y - a1.y) * dbx) / denom;
+  const u = ((b1.x - a1.x) * day - (b1.y - a1.y) * dax) / denom;
+  // Half-open, so a crossing that lands exactly on a polyline joint is counted once, not zero times.
+  if (t < 0 || t >= 1 || u < 0 || u >= 1) return null;
+  const la = Math.hypot(dax, day) || 1;
+  const lb = Math.hypot(dbx, dby) || 1;
+  return { x: a1.x + dax * t, y: a1.y + day * t, sinAngle: Math.abs(denom) / (la * lb) };
+}
+
+const CROSSING_STEPS = 24;
+/** Two crossings closer than this are one crossing found twice at a polyline joint. */
+const CROSSING_MERGE = 0.03;
+/** A crossing this close to the rails' shared edge is the fork itself, not an overpass. */
+const FORK_EXCLUSION = 0.05;
+
+/** The overpasses on one tile: every pair of rails in the same layer that cross without sharing an endpoint. */
+export function trackCrossingsFor(tracks: readonly string[], layers: TrackLayers): readonly TrackCrossing[] {
+  const polylines = tracks.map((d) => samplePath(d, CROSSING_STEPS));
+  const ends = tracks.map((d) => pathEndpoints(d));
+  const found: TrackCrossing[] = [];
+  for (const layer of layers) {
+    for (let a = 0; a < layer.length; a += 1) {
+      for (let b = a + 1; b < layer.length; b += 1) {
+        const under = Math.min(layer[a], layer[b]);
+        const over = Math.max(layer[a], layer[b]);
+        const pu = polylines[under];
+        const po = polylines[over];
+        const eu = ends[under];
+        const eo = ends[over];
+        for (let i = 1; i < pu.length; i += 1) {
+          for (let j = 1; j < po.length; j += 1) {
+            const hit = segmentsCross(pu[i - 1], pu[i], po[j - 1], po[j]);
+            if (!hit) continue;
+            const nearAnEnd = [eu?.start, eu?.end, eo?.start, eo?.end].some(
+              (end) => end && Math.hypot(end.x - hit.x, end.y - hit.y) < FORK_EXCLUSION,
+            );
+            if (nearAnEnd) continue;
+            const seen = found.some(
+              (c) => c.over === over && c.under === under && Math.hypot(c.x - hit.x, c.y - hit.y) < CROSSING_MERGE,
+            );
+            if (!seen) found.push({ x: hit.x, y: hit.y, over, under, sinAngle: hit.sinAngle });
+          }
+        }
+      }
+    }
+  }
+  return found;
+}
+
+/** Everything the renderer strokes for one piece of artwork: the layers, bottom first, and the overpasses
+ *  to draw on top of them. `Path2D`s are the same objects `tileArtworkPaths` hands out. */
+export interface TrackDrawing {
+  layers: readonly (readonly Path2D[])[];
+  crossings: readonly { x: number; y: number; sinAngle: number; over: Path2D }[];
+}
+
+const DRAWING_CACHE = new Map<string, TrackDrawing>();
+
+function drawingOf(cacheKey: string, tracks: readonly string[], paths: readonly Path2D[], explicit?: TrackLayers): TrackDrawing {
+  const cached = DRAWING_CACHE.get(cacheKey);
+  if (cached) return cached;
+  const layers = trackLayersFor(tracks, explicit);
+  const built: TrackDrawing = {
+    layers: layers.map((layer) => layer.map((index) => paths[index])),
+    crossings: trackCrossingsFor(tracks, layers).map((c) => ({ x: c.x, y: c.y, sinAngle: c.sinAngle, over: paths[c.over] })),
+  };
+  DRAWING_CACHE.set(cacheKey, built);
+  return built;
+}
+
+/** This tile's rails as the renderer draws them. Unit-hex space, like `tileArtworkPaths`. */
+export function tileArtworkDrawing(tileId: number): TrackDrawing | undefined {
+  const art = TILE_GRAPHICS_CATALOG[tileId];
+  const paths = tileArtworkPaths(tileId);
+  if (!art || !paths) return undefined;
+  return drawingOf(`tile:${tileId}`, art.tracks, paths, art.layers);
+}
+
+/** A preprinted hex's rails as the renderer draws them. */
+export function printedArtworkDrawing(label: string): TrackDrawing | undefined {
+  const tracks = printedTracksFor(label);
+  const paths = printedArtworkPaths(label);
+  if (!tracks || !paths) return undefined;
+  const explicit = label === "G19" ? NEW_YORK_PRINTED_ARTWORK.layers : printedCatalog()[label]?.layers;
+  return drawingOf(`printed:${boardInEffect().id}:${label}`, tracks, paths, explicit);
+}
+
+/** New York's stubs -- two spurs that touch nothing, so two layers and no crossing. */
+export function newYorkPrintedDrawing(): TrackDrawing {
+  return drawingOf(`printed:${NEW_YORK_CACHE_KEY}`, NEW_YORK_PRINTED_ARTWORK.tracks, newYorkPrintedPaths(), NEW_YORK_PRINTED_ARTWORK.layers);
 }
 
 /** New York's stubs as `Path2D`, cached under a key no hex label can
@@ -1051,7 +1677,7 @@ function interiorEndsForPrinted(label: string): readonly ({ x: number; y: number
   // Design note #229: `printedTracksFor`, not the catalog directly.
   const tracks = printedTracksFor(label);
   if (!tracks) return [];
-  return interiorEnds(`printed:${label}`, tracks);
+  return interiorEnds(`printed:${boardInEffect().id}:${label}`, tracks);
 }
 
 /** Shared body: tiles pass their orientation, a preprinted hex passes 0, because the board's printed track has one fixed facing and stores absolute edge numbers.
@@ -1155,7 +1781,8 @@ const PRINTED_EDGE_PAIR_CACHE = new Map<
 export function printedArtworkEdgePairs(
   label: string,
 ): readonly (readonly [number | null, number | null] | null)[] {
-  const cached = PRINTED_EDGE_PAIR_CACHE.get(label);
+  const key = `${boardInEffect().id}:${label}`; // #1300: the same label prints different track per board.
+  const cached = PRINTED_EDGE_PAIR_CACHE.get(key);
   if (cached) return cached;
   // Design note #229: `printedTracksFor`, not the catalog directly.
   const tracks = printedTracksFor(label);
@@ -1165,7 +1792,7 @@ export function printedArtworkEdgePairs(
     if (!ends) return null;
     return [edgeAtPoint(ends.start), edgeAtPoint(ends.end)] as const;
   });
-  PRINTED_EDGE_PAIR_CACHE.set(label, pairs);
+  PRINTED_EDGE_PAIR_CACHE.set(key, pairs);
   return pairs;
 }
 
@@ -1344,6 +1971,16 @@ function distanceToMarkerSpine(
   const slots = marker.slots ?? 1;
   if (slots <= 1) return Math.hypot(point.x - centre.x, point.y - centre.y);
 
+  /* #1316: a triangle or square is a blob of slot circles, not a spine -- the rail stops at whichever slot
+     it reaches first, so the distance is to the nearest slot centre. */
+  if (marker.layout === "triangle" || marker.layout === "square") {
+    const spacing = PILL_SLOT_SPACING * MARKER_UNIT_RADIUS * scale;
+    return slotOffsets(slots, marker.layout, spacing, marker.angle ?? 0).reduce(
+      (min, offset) => Math.min(min, Math.hypot(point.x - (centre.x + offset.x), point.y - (centre.y + offset.y))),
+      Number.POSITIVE_INFINITY,
+    );
+  }
+
   // `PILL_SLOT_SPACING * radius` between slot centres, along `angle` --
   // the same construction `drawStationPill` uses for its cap circles.
   const half = (PILL_SLOT_SPACING * MARKER_UNIT_RADIUS * scale * (slots - 1)) / 2;
@@ -1449,15 +2086,16 @@ export function printedTerminalRailAtEdge(label: string, edge: number): Path2D |
   const pair = printedArtworkEdgePairs(label)[index];
   const keepStart = pair ? pair[0] === edge : true;
 
-  const key = `printed:${label}:${index}:${keepStart}`;
+  const key = `printed:${boardInEffect().id}:${label}:${index}:${keepStart}`;
   const cached = TERMINAL_CACHE.get(key);
   if (cached !== undefined) return cached;
 
+  const printed = printedCatalog()[label];
   const markers =
     label === "G19"
       ? NEW_YORK_PRINTED_ARTWORK.markers
-      : PRINTED_GRAPHICS_CATALOG[label]?.marker
-        ? [PRINTED_GRAPHICS_CATALOG[label].marker!]
+      : printed?.marker
+        ? [printed.marker]
         : [];
   const built = new Path2D(railTruncatedAtMarker(tracks[index], markers, keepStart));
   TERMINAL_CACHE.set(key, built);
@@ -1543,6 +2181,78 @@ export function tileCitySlotCounts(tileId: number): number[] {
 
 /** One point per slot at the SAME spacing the pill places its cap circles, from the shared constant. Returns [] for an unknown tile or out-of-range index, NEVER a guessed point.
  *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #134 */
+/** Design note #1316: WHERE EACH SLOT SITS, relative to the marker's anchor, before the tile's own rotation.
+ *  `spacing` is the centre-to-centre distance between neighbouring slots (`PILL_SLOT_SPACING * radius`), and
+ *  the cluster is turned by `angleDeg`. One point for one slot. The pill is a row centred on the anchor; the
+ *  triangle is equilateral with `spacing` for a side, apex "up" (-y) at angle 0; the square has `spacing`
+ *  for a side. Everything that places, draws, masks or truncates against a multi-slot city asks this, so the
+ *  token can never land where the ring was not drawn. */
+export function slotOffsets(
+  slots: number,
+  layout: TileArtworkMarker["layout"],
+  spacing: number,
+  angleDeg: number,
+): { x: number; y: number }[] {
+  const base: { x: number; y: number }[] = (() => {
+    if (slots <= 1) return [{ x: 0, y: 0 }];
+    if (layout === "triangle" && slots === 3) {
+      const circumradius = spacing / Math.sqrt(3);
+      return [
+        { x: 0, y: -circumradius },
+        { x: -spacing / 2, y: circumradius / 2 },
+        { x: spacing / 2, y: circumradius / 2 },
+      ];
+    }
+    if (layout === "square" && slots === 4) {
+      const half = spacing / 2;
+      return [
+        { x: -half, y: -half },
+        { x: half, y: -half },
+        { x: -half, y: half },
+        { x: half, y: half },
+      ];
+    }
+    const span = spacing * (slots - 1);
+    return Array.from({ length: slots }, (_, slot) => ({ x: -span / 2 + spacing * slot, y: 0 }));
+  })();
+  const radians = (angleDeg * Math.PI) / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  return base.map((offset) => ({ x: offset.x * cos - offset.y * sin, y: offset.x * sin + offset.y * cos }));
+}
+
+/** Design note #1316: how far the farthest slot centre sits from the anchor -- the cluster's reach, for a
+ *  mask or a clearance that has to cover the whole shape. Zero for a single slot. */
+export function slotClusterRadius(
+  slots: number,
+  layout: TileArtworkMarker["layout"],
+  spacing: number,
+): number {
+  return slotOffsets(slots, layout, spacing, 0).reduce((max, offset) => Math.max(max, Math.hypot(offset.x, offset.y)), 0);
+}
+
+/** Design note #1302: THE SAME SLOT GEOMETRY FOR A PRINTED PILL. 1830+ prints two-station cities at Montreal
+ *  and Norfolk; without this both tokens would land on the marker's one anchor. A printed hex has no
+ *  orientation, so the pill's authored angle is board space directly. One point for a circle. */
+export function printedCitySlotPoints(
+  label: string,
+  center: { x: number; y: number },
+  size: number,
+): { x: number; y: number }[] {
+  const markers = printedMarkersFor(label);
+  const city = markers.find((marker) => marker.kind === "city");
+  if (!city) return [];
+  const anchor = { x: center.x + size * city.at.x, y: center.y + size * city.at.y };
+  const slots = city.slots ?? 1;
+  if (slots <= 1) return [anchor];
+  const radius = markerSizeFor(markers, size) * STATION_RADIUS_RATIO;
+  const spacing = PILL_SLOT_SPACING * radius;
+  return slotOffsets(slots, city.layout, spacing, city.angle ?? 0).map((offset) => ({
+    x: anchor.x + offset.x,
+    y: anchor.y + offset.y,
+  }));
+}
+
 export function tileCitySlotPoints(
   tileId: number,
   cityIndex: number,
@@ -1569,19 +2279,11 @@ export function tileCitySlotPoints(
   const markerSize = markerSizeFor(art.markers, size);
   const radius = markerSize * STATION_RADIUS_RATIO;
   const spacing = PILL_SLOT_SPACING * radius;
-  const span = spacing * (slots - 1);
 
-  // The pill's axis is authored in BASE tile space, so it turns with the
-  // tile -- the same `ROTATION` entry the artwork itself takes, applied to
-  // the axis unit vector rather than re-deriving an angle in board space.
-  const [cos, sin] = ROTATION[((orientation % 6) + 6) % 6];
-  const baseAngle = ((city.marker.angle ?? 0) * Math.PI) / 180;
-  const ax = Math.cos(baseAngle);
-  const ay = Math.sin(baseAngle);
-  const axis = { x: ax * cos - ay * sin, y: ax * sin + ay * cos };
-
-  return Array.from({ length: slots }, (_, slot) => {
-    const offset = -span / 2 + spacing * slot;
-    return { x: anchor.x + axis.x * offset, y: anchor.y + axis.y * offset };
-  });
+  // The cluster's axis is authored in BASE tile space, so it turns with the tile: -60 degrees per step, the
+  // same turn the artwork's own `ROTATION` entry applies (#1316: one rotation for pill, triangle and square).
+  const rot = ((orientation % 6) + 6) % 6;
+  return slotOffsets(slots, city.marker.layout, spacing, (city.marker.angle ?? 0) - 60 * rot).map(
+    (offset) => ({ x: anchor.x + offset.x, y: anchor.y + offset.y }),
+  );
 }

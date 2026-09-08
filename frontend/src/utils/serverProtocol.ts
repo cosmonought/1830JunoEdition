@@ -112,6 +112,10 @@ export interface AppliedResponse {
   entries: ReplayEntry[];
   /** The server's board after the whole burst. The client compares its own. */
   digest: string;
+  /** #1225: one digest per top-level field, present only when the server was started to explain divergences
+   *  (local play). A hash says "different" and not "where"; this says where in one step, and costs nothing on
+   *  a deployment that leaves it off. */
+  fields?: Record<string, string>;
   build: BuildId;
 }
 
@@ -130,6 +134,10 @@ export interface CatchUpResponse {
   kind: "catch-up";
   entries: ReplayEntry[];
   digest: string;
+  /** #1225: one digest per top-level field, present only when the server was started to explain divergences
+   *  (local play). A hash says "different" and not "where"; this says where in one step, and costs nothing on
+   *  a deployment that leaves it off. */
+  fields?: Record<string, string>;
   build: BuildId;
 }
 

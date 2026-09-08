@@ -1,2 +1,5 @@
 dist/
 node_modules/
+
+# #1250: rooms stored between restarts -- playtest history, not source
+data/

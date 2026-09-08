@@ -4,12 +4,14 @@
   "private": true,
   "description": "Authoritative game server. Hosts RoomSession over WebSocket; decides nothing itself (design note #1210).",
   "scripts": {
-    "build": "../frontend/node_modules/.bin/tsc -p tsconfig.json",
+    "_comment_build": "INVOKED THROUGH `node`, NOT THROUGH THE .bin SHIM, AND THE REASON IS WINDOWS. `.bin/tsc` is a shell script; cmd.exe reads `../frontend/...` as a command it does not have and answers `'..' is not recognized`. `node <path>/bin/tsc` is the same compiler reached in a way every shell agrees about. Same family of fault as the `FOO=1 npm start` note in src/start.ts: an instruction that works for half its readers.",
+    "build": "node ../frontend/node_modules/typescript/bin/tsc -p tsconfig.json",
     "start": "node dist/server/src/start.js",
     "smoke": "node dist/server/src/smokeTest.js",
     "replay": "node dist/server/src/replayCli.js"
   },
   "dependencies": {
+    "react": "^19.2.8",
     "ws": "^8.18.0"
   },
   "devDependencies": {

@@ -366,3 +366,47 @@ export function privateSelfLayWarning(input: {
     `use "${input.buttonLabel}" instead.`
   );
 }
+
+/* ==================================================================
+    DESIGN NOTE 1237: THE FREE STATION, ANSWERED FROM THE BOARD
+   ==================================================================
+   REPORTED, for the fourth time under four different descriptions: "C&O laid track and its Lay Track subphase
+   did not advance." The log for that game shows what actually happened -- the lay moved the step to Tokens,
+   the engine owed nothing, and forty-eight seconds later the player clicked Skip. Every previous report in
+   §2.3 has the same shape: a corporation standing at Tokens with nowhere to put one, and a game that would
+   not say so.
+
+   THE CAUSE IS A DEFAULT. `nextDerivedAction` takes `extraStationAvailable` and, when the caller does not
+   say, assumes TRUE -- and `stationPlacementBlockReason` returns "placement possible" the moment that flag is
+   set, before it has looked at whether the network reaches a free slot. The server never passes the flag. So
+   on the server the Tokens step was never auto-skipped, for any corporation, ever. A cautious default for one
+   edge case (a corporation whose only legal placement is the D&H's free, unconnected station) became a rule
+   that held every corporation at a step it could not act on.
+
+   THE DEFAULT EXISTED BECAUSE THE ANSWER WAS NOT ON THE BOARD. #1044 recorded that `usedPrivateAbilities` was
+   a `useState` in the shell -- "a fact one browser knows" -- and #1204 moved it onto the state precisely so a
+   replay, a server or a test could read it. This function is the read. It is THE SAME RULE `App.tsx` computes
+   for its own `extraTokenAvailable` -- `dhPowerState(...).tokenAvailable`, scoped to the corporation whose
+   president owns the D&H -- stated once, here, so the shell and the engine cannot disagree about it (#1184).
+
+   SCOPED TO THE OWNER, read from the roster. `dhPowerState` knows whether the ability is spent, not whose it
+   is; a rival mid-turn must not have its Tokens step held open by somebody else's private (#781). */
+export function dhFreeStationAvailableFor(input: {
+  /** The operating corporation, by protocol id. */
+  companyId: number;
+  privates: ReadonlyArray<{ private_id: number; owner_protocol_id?: number | null; closed?: boolean }>;
+  /** #1204: the abilities already spent, as the board records them. */
+  usedAbilities: ReadonlyArray<string>;
+  /** Whether the D&H's hex has been built on -- the forfeit condition, from the tile grid. */
+  dhHexBuilt: boolean;
+}): boolean {
+  const dh = input.privates.find((entry) => entry.private_id === DH_PRIVATE_ID);
+  if (!dh || dh.closed === true) return false;
+  if ((dh.owner_protocol_id ?? null) !== input.companyId) return false;
+  const power = dhPowerState({
+    hexBuilt: input.dhHexBuilt,
+    layUsed: input.usedAbilities.includes("dh-tile"),
+    tokenUsed: input.usedAbilities.includes("dh-token"),
+  });
+  return power.tokenAvailable;
+}

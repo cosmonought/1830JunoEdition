@@ -45,7 +45,7 @@
 // no content. Styles left over from the deleted view are deleted rather than left dead in the file.
 
 import React, { useEffect, useRef, useState } from "react";
-import { FONT_SIZE, RADIUS } from "../styles/typography";
+import { FONT_SIZE, RADIUS, VIEWPORT_RADIUS } from "../styles/typography";
 import { PRIVATE_COMPANY_CATALOG, abilitySummary } from "../utils/privateCatalog";
 // Design note #640: which build the browser is actually running.
 import { UI_BUILD_LABEL } from "../utils/buildStamp";
@@ -787,7 +787,8 @@ const styles: Record<string, React.CSSProperties> = {
     margin: "0 20px 20px",
     backgroundColor: INK_VIEWPORT,
     border: "1px solid #2a2a2a",
-    borderRadius: RADIUS.card,
+    // Design note #1257: square on top, where the tab strip attaches.
+    borderRadius: VIEWPORT_RADIUS,
     display: "flex",
     flexDirection: "column",
     gap: "20px",

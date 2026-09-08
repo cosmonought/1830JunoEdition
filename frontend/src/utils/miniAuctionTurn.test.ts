@@ -84,8 +84,26 @@ function waterfall(
 /* ------------------------------------------------------------------ */
 
 describe("actingAddress", () => {
-  it("follows the seat pointer when no contest is running", () => {
-    expect(actingAddress(gameState({ active_player_index: 2 }), waterfall())).toBe(CAI);
+  it("follows the auction's cursor when no contest is running, #1232", () => {
+    /* THIS CASE USED TO ASSERT THE SEAT, with a fixture in which the seat (CAI) and the auction's cursor (ADA)
+       DISAGREED -- not on purpose; `waterfall()` simply defaults `current_turn` to ADA. That accidental
+       disagreement was exactly the state that locked a live game: a mini-auction pass advanced the seat and
+       not the cursor, `actingAddress` named the seat, and the auction refused everyone.
+       THE AUCTION APPLIES ITS ACTIONS UNDER ITS OWN CURSOR (`applySandboxWaterfallAction` reads
+       `waterfall.current_turn`, never the seat), so the question "whose turn" and the answer "whose action"
+       have to come from the same field. Both halves are asserted: agreement gives the obvious answer, and
+       disagreement is resolved in the auction's favour rather than the seat's. */
+    expect(actingAddress(gameState({ active_player_index: 0 }), waterfall({ current_turn: ADA }))).toBe(ADA);
+    expect(actingAddress(gameState({ active_player_index: 2 }), waterfall({ current_turn: ADA }))).toBe(ADA);
+  });
+
+  it("falls back to the seat when the auction has no seated cursor", () => {
+    /* `""` is the pre-deal answer (#542: "matches nobody"), and a cursor naming someone the board does not
+       seat is stale or foreign. Neither is an opinion about the turn; the seat still is. */
+    expect(actingAddress(gameState({ active_player_index: 2 }), waterfall({ current_turn: "" }))).toBe(CAI);
+    expect(
+      actingAddress(gameState({ active_player_index: 2 }), waterfall({ current_turn: "player-nobody" })),
+    ).toBe(CAI);
   });
 
   it("prefers the contest cursor over the frozen seat pointer", () => {

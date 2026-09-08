@@ -100,7 +100,8 @@ describe("one token, drawn by the rule that measured it", () => {
        puts a coordinate inside `MarketToken`. */
     expect(TOKEN).not.toContain("position: \"absolute\"");
     expect(TOKEN).not.toContain("zIndex");
-    expect(CHART).toContain("stackOffset(index, occupantCount, tokenDiameterPx)");
+    // #1296: the chart lays out ONE ROW of two stacks (operated left, active right); the offset is still the shared arithmetic.
+    expect(CHART).toContain("stackOffset(index, row.length, tokenDiameterPx)");
     expect(PREVIEW).toContain("stackOffset(index, others.length, TOKEN)");
   });
 });
@@ -153,9 +154,12 @@ describe("same-cell tokens stack in the order the game plays them", () => {
   });
 
   it("puts the earliest arrival on top of the pile", () => {
-    /* "New entrants take the bottom of the stack -- play then happens top-to-bottom." So the z-order runs
-       opposite to the paint order: the token that operates first is the one the eye reaches first. */
-    expect(CHART).toContain("zIndex: 10 + (occupantCount - index)");
+    /* "New entrants take the bottom of the stack -- play then happens top-to-bottom." #1296 turned the pile
+       into a row read left to right: the row is built newest-first REVERSED, so the rightmost (next to
+       operate) is painted last and sits on top -- `zIndex: 10 + index` over a reversed order is the same
+       property, earliest arrival on top. The preview keeps the pile. */
+    expect(CHART).toContain("const row = [...[...operated].reverse(), ...[...active].reverse()];");
+    expect(CHART).toContain("zIndex: 10 + index,");
     expect(PREVIEW).toContain("zIndex: 10 + (others.length - index)");
   });
 
@@ -175,8 +179,15 @@ describe("the token slides, and the end cell is always marked", () => {
   it("lives outside the cells, which is what makes a transition possible at all", () => {
     /* THE FAULT, STATED AS THE FIX. Rendered per cell, the token was unmounted and remounted on every phase
        change -- two elements, so nothing to transition. One element, moved by transform. */
-    expect(PREVIEW).toContain("transform: `translate(");
-    expect(PREVIEW).toContain('transition: "transform 420ms');
+    /* Design note #1289: `left`/`top`, never a transform -- a transform inside the chrome zoom lands in the
+       wrong pixel space (the "stops on a divider" report). */
+    expect(PREVIEW).toContain("left: `${(node.x - BOARD_X.min) * (CELL + GAP)");
+    expect(PREVIEW).not.toContain("transform:");
+    /* Design note #1268: the slide is `element.animate(...)` with both ends given, because a CSS
+       transition's implicit "from" was the fault the mini-chart was reported for. */
+    expect(PREVIEW).toContain("element.animate(");
+    expect(PREVIEW).toContain("[placeFor(startNode), placeFor(projectedNode)]");
+    expect(PREVIEW).not.toContain("transition:");
     /* The old shape: a `holdsToken` test inside the cell loop, deciding whether THIS cell draws the token. */
     expect(PREVIEW).not.toContain("holdsToken");
   });
@@ -198,7 +209,8 @@ describe("the token slides, and the end cell is always marked", () => {
   it("still cuts rather than animates the return", () => {
     /* #1142's claim, which was written for a token that could not animate in either direction and is only now
        load-bearing: a withhold preview must never show the price rising on the way back. */
-    expect(PREVIEW).toContain("phase.animate ? {} : styles.movingTokenInstant");
-    expect(PREVIEW).toContain('movingTokenInstant: { transition: "none" }');
+    /* Design note #1268: the cut is `cancel()`; see `marketPeek.test.ts`. */
+    expect(PREVIEW).toContain("slideRef.current?.cancel();");
+    expect(PREVIEW).not.toContain("movingTokenInstant:");
   });
 });

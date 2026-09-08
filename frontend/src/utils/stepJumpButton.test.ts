@@ -199,7 +199,11 @@ describe("a jump is not an action", () => {
        lives on the hex (#716). A button that is never greyed cannot make that mistake.
        STILL ASSERTED AS A COUNT, because the failure to catch is a SECOND `disabled` arm appearing on this
        case -- a condition added later would put the channel back into use without anyone re-reading this. */
-    const mapCase = CODE.slice(CODE.indexOf('key: "go-to-map"'), CODE.indexOf('case "BuyPrivate":'));
+    /* #1323: the Lay Track case now also carries the "Buy Kanawha Licence" button, which is greyed with a
+       reason (#725) and is not a navigation control -- so the slice stops where that button begins. */
+    const trackCase = CODE.slice(CODE.indexOf('key: "go-to-map"'), CODE.indexOf('case "BuyPrivate":'));
+    const licenceAt = trackCase.indexOf('key: "buy-kanawha-license"');
+    const mapCase = licenceAt === -1 ? trackCase : trackCase.slice(0, licenceAt);
     expect(mapCase.length).toBeGreaterThan(0);
     expect(mapCase).toContain("disabled: false,");
     expect(mapCase.match(/disabled:/g)?.length).toBe(1);
@@ -541,7 +545,8 @@ describe("the purchase button says what it does (design note #796)", () => {
        That is still true of "Pay $600" and the sentence still earns its place. */
     const dollar = String.fromCharCode(36);
     expect(PANEL_CODE).toContain("aria-label={");
-    expect(PANEL).toContain("-train" + dollar + "{quantity === 1 ? \"\" : \"s\"} from the Bank for " + dollar);
+    // #1255: one train per press, so the sentence names one rather than a count.
+    expect(PANEL).toContain("Buy one " + dollar + "{nextTier.tier}-train from the Bank for " + dollar);
   });
 });
 

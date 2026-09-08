@@ -52,7 +52,7 @@
  *  Both are the reported surface: `BuyHardwareFromPool` is the Buy Trains button, and `EmergencyBuyHardware`
  *  is the same purchase forced on a president who cannot afford it -- the same panel, the same invisibility,
  *  and a moment where a player is markedly LESS sure what just happened to them. */
-const RECEIPT_MESSAGE_KEYS: readonly string[] = ["BuyHardwareFromPool", "EmergencyBuyHardware"];
+const RECEIPT_MESSAGE_KEYS: readonly string[] = ["BuyHardwareFromPool", "EmergencyBuyHardware", "ExchangeTrainForDiesel"];
 
 /** Whether this dispatch should raise a toast.
  *

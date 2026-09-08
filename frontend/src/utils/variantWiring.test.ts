@@ -72,7 +72,12 @@ describe("the setup dispatch carries them (design note #910)", () => {
        This dispatch read `SetupGame: { players: seated }`. Every client deals from that one action, so a
        config that is not IN it does not exist -- and the reducer, which handles `msg.SetupGame.variants`
        perfectly, was being handed `undefined` on every game this path started. */
-    expect(source).toContain("SetupGame: { players: seated, variants: sandboxRoom.variants }");
+    /* #1252: the deal also names the build that made it. The property here -- the variants are IN the
+       action, from the room -- is unchanged; the literal has one more field. Both dispatch sites carry it. */
+    expect(source).toContain(
+      "SetupGame: { players: seated, variants: sandboxRoom.variants, build: CLIENT_BUILD_ID }",
+    );
+    expect(source).not.toContain("SetupGame: { players: seated, variants: sandboxRoom.variants }");
   });
 
   it("takes them from the room and not from a local selection", () => {
@@ -101,9 +106,14 @@ describe("the waiting room offers every variant the schema defines (design note 
        control -- and it is asked of the ordered list rather than of the whole file, so a flag mentioned in a
        comment somewhere cannot satisfy it. */
     const order = sliceBetween(source, "const VARIANT_TOGGLES", ").map((key)");
+    /* Design note #1271: two flags are owned by the Game Type drop-down rather than by a checkbox --
+       `expandedMap` and `levelPlayingField`, listed as `GAME_TYPE_FLAGS` beside the toggle table. The rule
+       is the same: every boolean flag reaches a control. The drop-down is one. */
+    const dropdown = sliceBetween(source, "const GAME_TYPE_FLAGS", "as const");
+    expect(source).toContain("withGameType(variants, event.target.value as GameType)");
     expect(BOOLEAN_FLAGS.length).toBeGreaterThan(0);
     for (const flag of BOOLEAN_FLAGS) {
-      expect([flag, order.includes(`"${flag}"`)]).toEqual([flag, true]);
+      expect([flag, order.includes(`"${flag}"`) || dropdown.includes(`"${flag}"`)]).toEqual([flag, true]);
     }
   });
 
@@ -186,10 +196,14 @@ describe("the schema still resolves what the panel writes", () => {
        panel and the reducer disagree about the game. */
     const chosen: GameVariants = {
       length: "long",
+      mode: "async", // #1256
       delayedAuction: true,
       gentleRust: true,
       unpredictableRevenue: true,
       dynamicStockMarket: true,
+      expandedMap: true, // #1300
+      plusTiles: true, // #1310
+      levelPlayingField: true, // #1320
     };
     expect(resolveVariants(chosen)).toEqual(chosen);
   });

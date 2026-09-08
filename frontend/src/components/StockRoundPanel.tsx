@@ -24,6 +24,11 @@ import type { GamePhase, TierRustOutlook, TrainTier } from "../utils/gamePhase";
 import { TrainChips } from "./TrainBadges";
 // Design note #410: the corporate herald, shared with the action panel.
 import { CorporateLogo } from "./CorporateLogo";
+// Design note #1324: where the 20% standard certificate is, for its own buy button.
+import { doubleCertificateAt, hasDoubleCertificate } from "../utils/doubleCertificate";
+// Design note #1323: the licence badge beside the herald.
+import { KanawhaLicenseBadge } from "./KanawhaBadge";
+import { licensesHeldBy } from "../utils/kanawhaLicense";
 // Design note #682: what a buy or a sale leaves the player holding, and which
 // way it moves. The colour rule lives there because it is a claim about meaning.
 import {
@@ -60,7 +65,7 @@ import {
 } from "../utils/corporationCardOrder";
 import { StationTokenRow } from "./StationTokenRow";
 import { stationTokenSlots } from "../utils/stationTokens";
-import { FONT_SIZE, RADIUS } from "../styles/typography";
+import { FONT_SIZE, RADIUS, VIEWPORT_RADIUS } from "../styles/typography";
 // Design note #389: the same ink-on-fill helper the map's station
 // tokens use, so a corporate colour is legible on the card for the
 // same reason it is legible on the board.
@@ -109,6 +114,7 @@ export interface StockRoundPanelProps {
     companyId: number,
     source: "Ipo" | "Bank",
     quantity: number,
+    certificate?: "double", // #1324
   ) => string | null;
   /** Design note #395: the room's private companies, so each card can list
    *  the ones its corporation owns. Optional -- a caller without game state
@@ -123,6 +129,8 @@ export interface StockRoundPanelProps {
   /** `App.tsx` design note #29: the target company travels with the click. Every card renders its own
    *  Buy/Sell, so there is no shared selection for these to read. */
   onBuyShare: (protocolId: number, source: "Ipo" | "Bank", quantity: number) => void;
+  /** Design note #1324: the 20% standard certificate (ERIE, N&W under the Level Playing Field), bought whole. */
+  onBuyDoubleCertificate?: (protocolId: number, source: "Ipo" | "Bank") => void;
   onSellShares: (protocolId: number, percentage: number) => void;
   sessionReady: boolean;
   isMyTurn: boolean;
@@ -329,6 +337,7 @@ function CorporationRoster({
   parValueFor,
   onSelectParValue,
   onBuyShare,
+  onBuyDoubleCertificate,
   purchaseBlockFor,
   saleBlockFor,
   salePriceAfter,
@@ -353,6 +362,7 @@ function CorporationRoster({
     companyId: number,
     source: "Ipo" | "Bank",
     quantity: number,
+    certificate?: "double", // #1324
   ) => string | null;
   phase?: GamePhase | null;
   outlook?: Readonly<Record<TrainTier, TierRustOutlook>> | null;
@@ -383,6 +393,8 @@ function CorporationRoster({
   parValueFor: (companyId: number) => string;
   onSelectParValue: (companyId: number, value: string) => void;
   onBuyShare: (protocolId: number, source: "Ipo" | "Bank", quantity: number) => void;
+  /** Design note #1324: the 20% standard certificate (ERIE, N&W under the Level Playing Field), bought whole. */
+  onBuyDoubleCertificate?: (protocolId: number, source: "Ipo" | "Bank") => void;
   onSellShares: (protocolId: number, percentage: number) => void;
   controlsDisabled: boolean;
   /** Design note #681: why, when `controlsDisabled` is true. Threaded to the
@@ -566,6 +578,8 @@ function CorporationRoster({
                       title={corporationTitle(company.ticker)}
                       fallbackStyle={styles.rosterLiveryTicker}
                     />
+                    {/* Design note #1323: the Kanawha Licence, in the stripe's own ink. Nothing for none. */}
+                    <KanawhaLicenseBadge count={licensesHeldBy(company)} color={liveryInk} />
                     {/* Design note #465: THE ACRONYM COMES BACK, beside the herald rather than instead of it. #410 traded
                        one for the other and the trade was not even -- a herald is unmistakable once you know it and
                        unreadable until you do, and the full name is too long to serve as the quick label. "PRR" is what a
@@ -999,6 +1013,7 @@ function CorporationRoster({
               parValue={parValueFor(company.company_id)}
               onSelectParValue={onSelectParValue}
               onBuyShare={onBuyShare}
+              onBuyDoubleCertificate={onBuyDoubleCertificate}
               onSellShares={onSellShares}
               controlsDisabled={controlsDisabled}
               controlsBlockedReason={controlsBlockedReason}
@@ -1083,6 +1098,7 @@ function CompanyActions({
   parValue,
   onSelectParValue,
   onBuyShare,
+  onBuyDoubleCertificate,
   purchaseBlockFor,
   saleBlockFor,
   salePriceAfter,
@@ -1105,6 +1121,8 @@ function CompanyActions({
   parValue: string;
   onSelectParValue: (companyId: number, value: string) => void;
   onBuyShare: (protocolId: number, source: "Ipo" | "Bank", quantity: number) => void;
+  /** Design note #1324: the 20% standard certificate (ERIE, N&W under the Level Playing Field), bought whole. */
+  onBuyDoubleCertificate?: (protocolId: number, source: "Ipo" | "Bank") => void;
   /** Design note #713: why this SALE is illegal, or `null`. Resolved by `App` for the same reason
    *  `purchaseBlockFor` is -- the successor rule reads every player's holdings. */
   saleBlockFor?: (companyId: number, percentage: number) => string | null;
@@ -1117,6 +1135,7 @@ function CompanyActions({
     companyId: number,
     source: "Ipo" | "Bank",
     quantity: number,
+    certificate?: "double", // #1324
   ) => string | null;
   onSellShares: (protocolId: number, percentage: number) => void;
   controlsDisabled: boolean;
@@ -1461,6 +1480,49 @@ function CompanyActions({
               {buyLabel}
             </button>
           )}
+          {/* ==================================================================
+               DESIGN NOTE 1324: THE 20% CERTIFICATE HAS ITS OWN BUTTON
+              ==================================================================
+              ERIE's and N&W's standard 20% card (Level Playing Field) is one certificate at twice the share
+              price, and it is bought WHOLE -- so it is a second control beside the ordinary buy, shown only
+              while the card sits in the source the player has selected, and greyed with the gate's own
+              sentence otherwise. A quantity of two on the ordinary button would be two 10% cards, which is a
+              different purchase with a different certificate count. */}
+          {onBuyDoubleCertificate &&
+            !isPresidentPurchase &&
+            hasDoubleCertificate(company) &&
+            doubleCertificateAt(company) === source &&
+            (() => {
+              const doubleBlock = purchaseBlockFor?.(company.company_id, source, 1, "double") ?? null;
+              const doubleCost = priceKnown ? (unitPrice as number) * 2 : null;
+              const doubleUnaffordable =
+                playerCash != null && doubleCost != null && doubleCost > playerCash;
+              const blocked = controlsDisabled || doubleUnaffordable || doubleBlock !== null;
+              return (
+                <button
+                  type="button"
+                  onClick={() => onBuyDoubleCertificate(company.company_id, source)}
+                  style={{
+                    ...styles.actionButton,
+                    ...styles.buyButtonFill,
+                    ...(blocked ? styles.actionButtonDisabled : {}),
+                  }}
+                  disabled={blocked}
+                  title={
+                    doubleBlock
+                      ? doubleBlock
+                      : doubleUnaffordable
+                        ? `Insufficient funds — costs $${doubleCost}, you hold $${playerCash}.`
+                        : (controlsBlockedReason ??
+                          "One certificate of 20%, at twice the share price. Counts as one toward the certificate limit.")
+                  }
+                >
+                  {doubleCost === null
+                    ? "Buy 20% certificate"
+                    : `Buy 20% certificate @ $${doubleCost}`}
+                </button>
+              );
+            })()}
         </div>
 
         {/* Design note #682: #577's figure, moved out of the button row and given a shape. Its own reasoning is
@@ -1959,6 +2021,7 @@ export function StockRoundPanel({
   parValueFor,
   onSelectParValue,
   onBuyShare,
+  onBuyDoubleCertificate,
   onSellShares,
   /* Design note #799: destructured at last. These three were declared on `StockRoundPanelProps`, forwarded
      from `CorporationRoster` to `CompanyActions`, and asked for by `App` -- and never taken out of `props`
@@ -2097,6 +2160,7 @@ export function StockRoundPanel({
         parValueFor={parValueFor}
         onSelectParValue={onSelectParValue}
         onBuyShare={onBuyShare}
+        onBuyDoubleCertificate={onBuyDoubleCertificate}
         onSellShares={onSellShares}
         /* ==================================================================
            DESIGN NOTE 799: THREE INTERFACES DECLARED IT AND NOBODY PASSED IT
@@ -2811,7 +2875,8 @@ const styles: Record<string, React.CSSProperties> = {
     // Design note #1117: the one viewport ground, shared by every tab.
     backgroundColor: INK_VIEWPORT,
     border: "1px solid #2a2a2a",
-    borderRadius: RADIUS.card,
+    // Design note #1257: square on top, where the tab strip attaches.
+    borderRadius: VIEWPORT_RADIUS,
     boxSizing: "border-box",
   },
   headerRow: {

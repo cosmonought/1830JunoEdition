@@ -22,7 +22,8 @@
 //
 // See docs/ai_architecture/hex_tile_math.md, tokenMigration.ts #0 / #1.
 
-import { cityExitEdges, tileCityCount, tileCityEdges } from "../components/hexGeometry";
+import { cityExitEdges, liveEdges, rotateConnections, tileCityCount, tileCityEdges } from "../components/hexGeometry";
+import { TILE_CATALOG_BY_ID } from "../components/hexTileCatalog";
 import { fitStationsToUpgrade, type StationAnchor } from "./stationConnectivity";
 import { archetypeForHex } from "../components/hexGeometry";
 import { printedArtworkEdgePairs, tileCitySlotCounts } from "../components/TileGraphics";
@@ -315,6 +316,38 @@ export function planTokenUpgrade(
   if (here.length === 0) return { landings: [], anyFree: false };
 
   const cityCount = tileCityCount(tileId);
+  const stations = tileCitySlotCounts(tileId);
+
+  /* ==================================================================
+      DESIGN NOTE 1315: A SINGLE-CITY CANDIDATE STILL GETS A FIT
+     ==================================================================
+     The branch below this one treated "fewer than two distinguished cities" as "nothing to decide" and
+     handed back `null` destinations. True for the commonest lay -- a yellow city to a green one -- and
+     wrong for the one the Project 18XX+ tile set adds: New York's #62 (two two-station cities) to #883 (one
+     four-station city). Tokens carrying city index 1 landed on a tile with no city 1: `citySlotCount` answered
+     zero slots for them, and a zero-slot city with an occupant reads as a WALL to every other corporation's
+     routes. So a candidate with exactly one city goes through the same fit as a two-city one, with that city
+     owning every edge of the tile -- every token lands at index 0, and the fit refuses an orientation that
+     would overfill it. */
+  if (stations.length === 1 && cityCount < 2) {
+    const entry = TILE_CATALOG_BY_ID.get(tileId);
+    const everyEdge = entry ? liveEdges(rotateConnections(entry.connections, orientation)) : [];
+    const anchors: StationAnchor[] = here.map((company) => ({
+      companyId: company.company_id,
+      edges: cityExitEdges(mapGrid, q, r, tokenCityIndex(company, q, r) ?? null),
+    }));
+    const landing = fitStationsToUpgrade(anchors, [everyEdge], stations);
+    if (landing === null) return null;
+    return {
+      landings: here.map((company) => ({
+        companyId: company.company_id,
+        ticker: company.ticker,
+        fromCityIndex: tokenCityIndex(company, q, r) ?? null,
+        toCityIndex: 0,
+      })),
+      anyFree: false,
+    };
+  }
   /* A CANDIDATE THIS BUILD CANNOT DESCRIBE says nothing rather than guessing, and specifically does not
      REFUSE: a single-city upgrade distinguishes no cities, every token lands in the only one there is, and
      calling that illegal would forbid the commonest lay in the game. */
@@ -343,7 +376,7 @@ export function planTokenUpgrade(
     edges: cityExitEdges(mapGrid, q, r, tokenCityIndex(company, q, r) ?? null),
   }));
 
-  const landing = fitStationsToUpgrade(anchors, candidate);
+  const landing = fitStationsToUpgrade(anchors, candidate, stations);
   if (landing === null) return null;
 
   return {

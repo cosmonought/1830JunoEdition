@@ -164,7 +164,9 @@ describe("the drain is wired to it", () => {
        gates once rather than three times. This assertion follows the code rather than pinning the old
        inline call -- the PROPERTY being guarded is that the status is conditional at all. */
     expect(APP).toContain("status: refusalWasRefused ?");
-    expect(APP).toContain("const refusalWasRefused = actionWasRefused(before, after, msg)");
+    /* #1230: passed as `gameplay` -- the one cast the shell takes now that `SetupGame` falls through
+       un-narrowed (#1189). The receiver and the two states are the anchor; the argument's name is not. */
+    expect(APP).toContain("const refusalWasRefused = actionWasRefused(before, after, gameplay)");
   });
 
   it("leaves the CHAIN entry's success alone", () => {
@@ -178,7 +180,7 @@ describe("the drain is wired to it", () => {
   });
 
   it("compares the two states rather than trusting the message", () => {
-    expect(APP).toContain("actionWasRefused(before, after, msg)");
+    expect(APP).toContain("actionWasRefused(before, after, gameplay)");
   });
 
   it("changes the label as well as the status", () => {

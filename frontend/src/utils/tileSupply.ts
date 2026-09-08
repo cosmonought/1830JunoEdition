@@ -20,6 +20,7 @@
 // See docs/ai_architecture/hex_tile_math.md, tileSupply.ts #627.
 
 import { TILE_CATALOG_BY_ID } from "../components/hexTileCatalog";
+import { inTray, trayCountOf, trayEntries } from "../components/tileTray";
 import type { MapGridResponse } from "../components/hexContractTypes";
 
 /** What the tray holds for one tile id.
@@ -42,18 +43,23 @@ export function tileStock(
 ): TileStock | null {
   const entry = TILE_CATALOG_BY_ID.get(tileId);
   if (!entry) return null;
+  // Design note #1311: a tile the catalog can draw but this game's tray does not hold is "not in this game",
+  // which is the same honest `null` an unknown id gets -- not a zero that reads as "all of them are out".
+  if (!inTray(tileId)) return null;
+  // #1301: a tile PRINTED on the board never left the tray, so it does not count against it.
   const placed = (mapGrid?.tiles ?? []).reduce(
-    (total, tile) => (tile.tile_id === tileId ? total + 1 : total),
+    (total, tile) => (tile.tile_id === tileId && tile.printed !== true ? total + 1 : total),
     0,
   );
+  const printed = trayCountOf(tileId); // #1311: this game's tray, not the catalog's default
   return {
-    printed: entry.quantity,
+    printed,
     placed,
     // Clamped at zero. A negative would mean the board holds more copies than
     // exist, which is a data fault rather than a supply state -- and "-1
     // left" on a candidate would read as a rendering bug rather than as the
     // inconsistency it is.
-    remaining: Math.max(0, entry.quantity - placed),
+    remaining: Math.max(0, printed - placed),
   };
 }
 
@@ -63,9 +69,9 @@ export function tileStockTable(
   mapGrid: MapGridResponse | null | undefined,
 ): ReadonlyMap<number, TileStock> {
   const table = new Map<number, TileStock>();
-  TILE_CATALOG_BY_ID.forEach((_entry, tileId) => {
-    const stock = tileStock(mapGrid, tileId);
-    if (stock) table.set(tileId, stock);
-  });
+  for (const entry of trayEntries()) {
+    const stock = tileStock(mapGrid, entry.tileId);
+    if (stock) table.set(entry.tileId, stock);
+  }
   return table;
 }

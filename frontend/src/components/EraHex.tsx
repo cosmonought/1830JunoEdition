@@ -30,6 +30,7 @@ export const ERA_HEX_FILL: Readonly<Record<string, string>> = {
   Yellow: "#d9b64a",
   Green: "#4e9d5f",
   Brown: "#8a6242",
+  Gray: "#9a9ea3", // #1312: the Project 18XX+ tile set's fourth era
 };
 
 export interface EraHexProps {

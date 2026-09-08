@@ -77,7 +77,14 @@ describe("the round is itemised for the viewer and totalled for everyone else", 
       ],
       "me",
     );
-    expect(round.others).toEqual([{ address: "rival", total: 40 }]);
+    /* Design note #1270: the row carries its itemisation now, for the modal's expandable rows. */
+    expect(round.others.map(({ address, total }) => ({ address, total }))).toEqual([
+      { address: "rival", total: 40 },
+    ]);
+    expect(round.others[0].rows.map((row) => row.label)).toEqual([
+      "Camden & Amboy",
+      "Delaware & Hudson",
+    ]);
   });
 
   it("never folds a corporation's treasury into a player's row", () => {
@@ -116,7 +123,10 @@ describe("the round is itemised for the viewer and totalled for everyone else", 
        collected nothing belongs to the caller, not to this function. */
     const round = summarisePrivateRevenueRound([toPlayer("Schuylkill Valley", 5, "rival")], "me");
     expect(round.mine).toBeNull();
-    expect(round.others).toEqual([{ address: "rival", total: 5 }]);
+    /* Design note #1270: rows ride along for the expandable panel row. */
+    expect(round.others).toEqual([
+      { address: "rival", total: 5, rows: [{ privateId: "Schuylkill Valley".length, label: "Schuylkill Valley", value: "$5" }] },
+    ]);
   });
 
   it("makes no row for a private that paid nothing", () => {
@@ -296,12 +306,30 @@ describe("the seat colour goes where it can be seen", () => {
     expect(MODAL).toContain("backgroundColor: CARD_SURFACE,");
   });
 
-  it("marks the other players with a block rather than a tinted name", () => {
+  it("marks the other players with their own stripe, and the stripe opens", () => {
     /* THE SAME MISTAKE ONE SIZE DOWN. A coloured label at row size is the subtlety this batch is correcting;
        a solid swatch reads at a glance, and the name beside it carries the identity for a reader who cannot
-       use the colour at all. */
-    expect(MODAL).toContain("styles.swatch");
+       use the colour at all.
+       DESIGN NOTE 1270: THE SWATCH IS GONE, AND THE STRIPE IS THE ANSWER TO BOTH HALVES. Ruled: "print
+       player names in their player colours rather than a colour swatch" and "make the Also collected rows
+       expandable". Each row is now the player's band -- name in the band's ink, which is #1050's legibility
+       argument satisfied rather than overruled -- and a button that opens onto their privates. */
+    expect(MODAL).not.toContain("styles.swatch");
+    expect(MODAL).toContain("<OtherCollectorRow key={other.name} other={other} />");
+    expect(MODAL).toContain("aria-expanded={open}");
+    expect(MODAL).toContain("other.lines.map((line) => (");
+    expect(MODAL).toContain("...(stripe ? { backgroundColor: stripe, color: stripeInk } : styles.stripeUnknown)");
     expect(MODAL).toContain('aria-hidden="true"');
+  });
+
+  it("keeps every figure at one size and one weight, and the movement on the stripe", () => {
+    /* Design note #1270 inverted the sizes; design note #1290 REVERSED that on the next look -- "the bolded
+       numbers are harder to read ... keep it all the same size" -- and moved the viewer's movement onto the
+       stripe, dropping the Cash row. */
+    expect(MODAL).not.toContain("cashValue:");
+    expect(sliceBetween(MODAL, "lineValue: {", "},")).toContain("fontWeight: 600");
+    expect(sliceBetween(MODAL, "totalValue: {", "},")).toContain("fontWeight: 600");
+    expect(sliceBetween(MODAL, "stripeMovement: {", "},")).toContain("fontWeight: 600");
   });
 
   it("shows a total only when there is something to add up", () => {
@@ -322,11 +350,13 @@ describe("the seat colour goes where it can be seen", () => {
     expect(MODAL).toContain("{other.name}");
   });
 
-  it("names the phase and the rule, not just the money", () => {
+  it("names the phase, and no longer recites the rule", () => {
     /* THE COMPLAINT WAS THAT THE PROCESS HAD BEEN "minimized or obscured", and a panel that shows figures
-       without saying when they are paid obscures it a second way. */
+       without saying when they are paid obscures it a second way.
+       DESIGN NOTE 1270: the rule line is gone -- ruled, because the modal appears at the moment the rule
+       fires. The phase name stays. */
     expect(MODAL).toContain("Private Company Payouts");
-    expect(MODAL).toContain("before any corporation acts");
+    expect(MODAL).not.toContain("before any corporation acts");
   });
 
   it("has exactly one way out, and it is the button", () => {
@@ -350,7 +380,13 @@ describe("the seat colour goes where it can be seen", () => {
     /* ONE HANDLER IN THE WHOLE FILE, which is the property rather than a proxy for it. A first draft of this
        pinned the backdrop's opening tag by its exact whitespace -- an assertion that would break on a
        reformat and pass on a re-added handler two lines lower, which is precisely backwards. */
-    expect(MODAL.split("onClick=").length - 1).toBe(1);
+    /* Design note #1270: TWO now -- the button, and the expandable row's own toggle. Neither is on the
+       backdrop; the claim is that no click anywhere but a control closes the modal, so it is asserted as
+       the absence of a handler on the backdrop rather than as a count. */
+    expect(MODAL.split("onClick=").length - 1).toBe(2);
+    expect(MODAL).toContain("onClick={onAcknowledge}");
+    expect(MODAL).toContain("onClick={() => setOpen((current) => !current)}");
+    expect(MODAL).not.toContain("onClick={onClose}");
     /* AND THE CLICK-EATER WITH IT. `stopPropagation` existed only to stop the backdrop's handler firing when
        the player clicked inside the card; with no backdrop handler it is a guard against nothing, and leaving
        it would imply one still exists. */

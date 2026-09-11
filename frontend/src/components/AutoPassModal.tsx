@@ -15,11 +15,13 @@
 // AND EVERY LINE SAYS WHAT IT COSTS. A toggle labelled "sales" tells a player nothing about what they will
 // sleep through; the captions name the situation each switch is protecting against.
 //
-// THE PRESIDENCY GUARD IS SHOWN AND NOT OFFERED. Reported: "Auto-Pass should never allow a player to lose the
-// presidency of a corporation -- that should be something they manually choose to do." It was a third checkbox
-// in the first draft, which was a mistake of category: a checkbox asks a player to consent to an outcome the
-// rules of the feature say cannot happen. It is now stated in the same list, in the same voice, with no box --
-// so a player still LEARNS it here, which was the only thing the checkbox was doing well.
+// THE PRESIDENCY GUARD WAS SHOWN AND NOT OFFERED (#717): "Auto-Pass should never allow a player to lose the
+// presidency of a corporation". Design note #1335 (T05 20, ruled 8 September) makes it the FIRST TOGGLE, on by
+// default: a player may let a tied presidency ride if they choose to. While it is on and a presidency is
+// exposed, Start is refused and the switch is named as the way past.
+//
+// ONE SENTENCE PER LINE (8 September): "really simplify the Auto-Pass toggle descriptions to one sentence max."
+// Each caption says what wakes you, and nothing else.
 //
 // See docs/ai_architecture/state_machine.md, AutoPassModal.tsx #717.
 
@@ -28,12 +30,13 @@ import React, { useState } from "react";
 import { FONT_SIZE, RADIUS } from "../styles/typography";
 import {
   DEFAULT_AUTO_PASS_CONDITIONS,
+  guardsPresidency,
   type AutoPassConditions,
 } from "../utils/autoPass";
 
 export interface AutoPassModalProps {
   open: boolean;
-  /** Tickers whose presidency is already takeable. Non-empty means there is nothing to arm: see below. */
+  /** Tickers whose presidency is already takeable. Non-empty refuses Start while the presidency switch is on. */
   exposedPresidencies?: readonly string[];
   /** What the player chose last time, so re-arming does not re-ask from scratch. */
   initial?: AutoPassConditions;
@@ -47,30 +50,24 @@ interface Row {
   caption: string;
 }
 
-/* The wording is the feature. Each caption answers "what happens if I turn this OFF", because that is the
-   question a player is actually asking and the one a positive label cannot answer. */
+/* One sentence each: what wakes you. */
 const ROWS: readonly Row[] = [
+  {
+    key: "presidencyThreatened",
+    label: "A presidency of mine could be taken",
+    caption: "A rival is one purchase from taking a corporation you preside over.",
+  },
   {
     key: "saleInHeld",
     label: "Somebody sells a corporation I hold",
-    caption:
-      "A sale drops the price one row per share, so it costs you money whether or not you are President. Off, you will pass through other players dumping stock you own.",
+    caption: "Shares are sold into the pool of a corporation you own shares in.",
   },
   {
     key: "saleInPresided",
     label: "Somebody sells a corporation I preside over",
-    caption:
-      "The narrower half of the same idea, for a player who wants to defend their own companies without hearing about every price move. Off with the first, you will pass through a run on your own corporation.",
+    caption: "Shares are sold into the pool of a corporation you are President of.",
   },
 ];
-
-/* Not a row, because there is no choice attached to it. Rendered in the same rhythm as the toggles so it reads
-   as part of the same list rather than as small print underneath one. */
-const GUARANTEE = {
-  label: "A presidency of mine could be taken",
-  caption:
-    "Always on. Auto-Pass stops while any rival is within one purchase of overtaking you, so losing a corporation stays a thing you choose rather than something a convenience does to you.",
-};
 
 export function AutoPassModal({
   open,
@@ -79,20 +76,19 @@ export function AutoPassModal({
   onArm,
   onClose,
 }: AutoPassModalProps) {
-  const [conditions, setConditions] = useState<AutoPassConditions>(
-    initial ?? DEFAULT_AUTO_PASS_CONDITIONS,
-  );
+  const [conditions, setConditions] = useState<AutoPassConditions>({
+    ...DEFAULT_AUTO_PASS_CONDITIONS,
+    ...(initial ?? {}),
+  });
 
   if (!open) return null;
 
-  /* Design note #717: ARMING WITH BOTH TOGGLES OFF IS ALLOWED, and it is not a mistake to guard against. A
-     player who wants to pass the rest of the round and hear only about a presidency is asking for something
-     coherent -- they just get told, plainly, what they have asked for. */
-  const anyOn = ROWS.some((row) => conditions[row.key]);
+  const checked = (key: keyof AutoPassConditions) =>
+    key === "presidencyThreatened" ? guardsPresidency(conditions) : conditions[key] === true;
+  const anyOn = ROWS.some((row) => checked(row.key));
 
-  /* REFUSED RATHER THAN ARMED-AND-INSTANTLY-STOPPED. The decision would decline on the player's very next turn
-     anyway; showing that here, before the click, turns a confusing flicker into an explanation. */
-  const exposed = exposedPresidencies.length > 0;
+  /* #1335: refused only while the presidency switch is ON -- off, the player has said they will let it ride. */
+  const exposed = exposedPresidencies.length > 0 && guardsPresidency(conditions);
 
   return (
     <div
@@ -113,25 +109,15 @@ export function AutoPassModal({
         </div>
 
         <p style={styles.body}>
-          Your turns will pass automatically until one of these happens, or until the Stock Round ends.
-          Anything that wakes it also switches it off, so you keep the turn it woke you for.
+          Your turns pass automatically until one of these wakes you, or the Stock Round ends.
         </p>
 
         <div style={styles.list}>
-          <div style={styles.row}>
-            <span style={styles.always} aria-hidden="true">
-              &#10003;
-            </span>
-            <span style={styles.rowText}>
-              <span style={styles.rowLabel}>{GUARANTEE.label}</span>
-              <span style={styles.rowCaption}>{GUARANTEE.caption}</span>
-            </span>
-          </div>
           {ROWS.map((row) => (
             <label key={row.key} style={styles.row}>
               <input
                 type="checkbox"
-                checked={conditions[row.key]}
+                checked={checked(row.key)}
                 onChange={(event) =>
                   setConditions((current) => ({ ...current, [row.key]: event.target.checked }))
                 }
@@ -145,17 +131,14 @@ export function AutoPassModal({
           ))}
         </div>
 
-        {!anyOn && !exposed && (
-          <p style={styles.warning}>
-            With both toggles off, you will pass every remaining turn this Stock Round unless one of your
-            presidencies comes under threat.
-          </p>
+        {!anyOn && (
+          <p style={styles.warning}>With everything off, you will pass every remaining turn this Stock Round.</p>
         )}
 
         {exposed && (
           <p style={styles.warning}>
-            {exposedPresidencies.join(", ")} could be taken on the next purchase, so there is nothing here to
-            stand in for: play the turn yourself.
+            {exposedPresidencies.join(", ")} could be taken on the next purchase; play the turn yourself, or
+            switch off the first toggle to pass anyway.
           </p>
         )}
 
@@ -170,7 +153,7 @@ export function AutoPassModal({
             disabled={exposed}
             title={
               exposed
-                ? "A presidency of yours is one purchase from changing hands — Auto-Pass will not stand in for that turn."
+                ? "A presidency of yours is one purchase from changing hands."
                 : "Pass automatically until one of the conditions above, or the end of this Stock Round."
             }
           >
@@ -224,16 +207,6 @@ const styles: Record<string, React.CSSProperties> = {
   list: { display: "flex", flexDirection: "column", gap: "10px", marginTop: "4px" },
   row: { display: "flex", flexDirection: "row", gap: "10px", cursor: "pointer" },
   checkbox: { marginTop: "3px", flex: "none" },
-  /* Where a checkbox would be, at a checkbox's width, so the three lines share one text margin. Green and
-     inert: it is a statement of what the feature does, not a control. */
-  always: {
-    marginTop: "1px",
-    flex: "none",
-    width: "13px",
-    textAlign: "center",
-    color: "#6fbf8b",
-    fontSize: FONT_SIZE.micro,
-  },
   rowText: { display: "flex", flexDirection: "column", gap: "2px", minWidth: 0 },
   rowLabel: { fontSize: FONT_SIZE.small, fontWeight: 700 },
   /* The consequence, in the muted note ink the rest of the app uses for a reason attached to a control. */

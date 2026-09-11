@@ -8,7 +8,9 @@
 //
 // See docs/ai_architecture/stock_market.md, GameOverModal.tsx #0 / #1.
 
-import React from "react";
+import React, { useState } from "react";
+import { StockPriceChart, NetWorthChart } from "./EpilogueCharts";
+import type { GameHistory } from "../utils/gameHistory";
 
 import { FONT_SIZE, RADIUS } from "../styles/typography";
 import type { PlayerStanding } from "../utils/endgame";
@@ -64,6 +66,19 @@ export interface GameOverModalProps {
   autoCloseIn: string | null;
   /** Whether the room has already been closed and the payout dispatched. */
   roomClosed: boolean;
+  /* ==================================================================
+      DESIGN NOTE 1411: THE EPILOGUE IS PAGED -- STANDINGS, THEN THE CHARTS
+     ==================================================================
+     REQUESTED: "start with the final network and everything like it is, and then have a 'Next' button that
+     shows a chart of corporations stock price movements over the rounds (clickable to show who owned how
+     much at each round), then a final chart showing player net worth movement across the game."
+     The first page is unchanged. `history` (`utils/gameHistory.ts`, the log replayed and sampled per round)
+     feeds two further pages, and the three helpers below are the shell's naming and colouring, passed in so
+     this component still does not learn what a seat or a livery is. `null` history hides the pager. */
+  history?: GameHistory | null;
+  playerLabel?: (address: string) => string;
+  playerColor?: (address: string) => string;
+  corporationColor?: (companyId: number) => string;
 }
 
 export function GameOverModal({
@@ -77,8 +92,16 @@ export function GameOverModal({
   onCloseRoom,
   autoCloseIn,
   roomClosed,
+  history = null,
+  playerLabel = (address) => address,
+  playerColor = () => "#8a8a86",
+  corporationColor = () => "#8a8a86",
 }: GameOverModalProps) {
+  // #1411: 0 = standings, 1 = share prices, 2 = net worth. Hooks before the early return.
+  const [page, setPage] = useState(0);
   if (!reason) return null;
+  const pageCount = history && history.rounds.length > 1 ? 3 : 1;
+  const current = Math.min(page, pageCount - 1);
 
   const viewer = standings.find((row) => row.address === viewerAddress) ?? null;
   const winner = standings.find((row) => row.isWinner) ?? null;
@@ -110,6 +133,8 @@ export function GameOverModal({
         <span style={styles.kicker}>Game Over</span>
 
         {/* Design note #1: why, before who. */}
+        {current === 0 && (
+          <>
         <h2 style={styles.reasonHeading}>
           {reason === "bankruptcy"
             ? `${bankruptLabel ?? "A president"} went bankrupt.`
@@ -212,6 +237,15 @@ export function GameOverModal({
         {/* Design note #899: the closure controls, and the countdown stated as a fact rather than as a
             threat. Every client runs its own timer and any player may press the button, so this is not "you
             have fifteen minutes to act" -- it is "this will finish itself if nobody gets to it". */}
+          </>
+        )}
+        {current === 1 && history && (
+          <StockPriceChart history={history} corporationColor={corporationColor} playerLabel={playerLabel} />
+        )}
+        {current === 2 && history && (
+          <NetWorthChart history={history} playerLabel={playerLabel} playerColor={playerColor} />
+        )}
+
         <div style={styles.footer}>
           <span style={styles.footerNote}>
             {roomClosed
@@ -221,6 +255,21 @@ export function GameOverModal({
                 : "Any player may close the room to settle the payout."}
           </span>
           <span style={styles.footerButtons}>
+            {pageCount > 1 && (
+              <>
+                <button type="button" style={styles.secondaryButton} onClick={() => setPage(Math.max(0, current - 1))} disabled={current === 0}>
+                  Back
+                </button>
+                <span style={styles.pageDots} aria-label={`Page ${current + 1} of ${pageCount}`}>
+                  {Array.from({ length: pageCount }, (_, i) => (
+                    <span key={i} style={{ ...styles.pageDot, ...(i === current ? styles.pageDotOn : {}) }} />
+                  ))}
+                </span>
+                <button type="button" style={styles.secondaryButton} onClick={() => setPage(Math.min(pageCount - 1, current + 1))} disabled={current === pageCount - 1}>
+                  Next
+                </button>
+              </>
+            )}
             <button type="button" style={styles.secondaryButton} onClick={onDismiss}>
               View final board
             </button>
@@ -250,11 +299,14 @@ const styles: Record<string, React.CSSProperties> = {
   panel: {
     display: "flex",
     flexDirection: "column",
-    gap: "10px",
-    width: "min(680px, 100%)",
-    maxHeight: "88vh",
+    /* #1409: "The Game Over modal is too small, it's hard to read the table and everything compressed into
+       it." Wider, taller, and every text step up one size -- this is the one screen everybody reads at once
+       and from a distance. */
+    width: "min(960px, 100%)",
+    maxHeight: "92vh",
     overflowY: "auto",
-    padding: "22px 24px",
+    padding: "28px 32px",
+    gap: "14px",
     backgroundColor: "#0f0f0f",
     border: "1px solid #3a3a3a",
     borderTop: "3px solid #c9a227",
@@ -269,13 +321,13 @@ const styles: Record<string, React.CSSProperties> = {
     textTransform: "uppercase",
     color: "#8a8a86",
   },
-  reasonHeading: { margin: 0, fontSize: FONT_SIZE.display, fontWeight: 800, color: "#f0e2b8" },
-  reasonBody: { margin: 0, fontSize: FONT_SIZE.small, lineHeight: 1.5, color: "#c8c6c0" },
+  reasonHeading: { margin: 0, fontSize: "28px", fontWeight: 800, color: "#f0e2b8" }, // #1409
+  reasonBody: { margin: 0, fontSize: FONT_SIZE.body, lineHeight: 1.55, color: "#c8c6c0" }, // #1409
   verdict: {
     margin: "4px 0",
     padding: "10px 14px",
     borderRadius: RADIUS.card,
-    fontSize: FONT_SIZE.heading,
+    fontSize: "22px", // #1409
     fontWeight: 800,
     textAlign: "center",
     borderWidth: "1px",
@@ -286,8 +338,8 @@ const styles: Record<string, React.CSSProperties> = {
   table: {
     display: "flex",
     flexDirection: "column",
-    gap: "2px",
-    padding: "8px 10px",
+    gap: "4px", // #1409
+    padding: "12px 14px",
     backgroundColor: "#141414",
     border: "1px solid #2a2a2a",
     borderRadius: RADIUS.card,
@@ -296,14 +348,14 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     alignItems: "center",
     gap: "8px",
-    padding: "5px 6px",
+    padding: "8px 10px", // #1409
     borderRadius: RADIUS.control,
-    fontSize: FONT_SIZE.small,
+    fontSize: FONT_SIZE.strong, // #1409: was `small`
     fontVariantNumeric: "tabular-nums",
     color: "#c8c6c0",
   },
   headRow: {
-    fontSize: FONT_SIZE.micro,
+    fontSize: FONT_SIZE.small, // #1409
     fontWeight: 800,
     letterSpacing: "0.05em",
     textTransform: "uppercase",
@@ -314,10 +366,10 @@ const styles: Record<string, React.CSSProperties> = {
      should not have their own row congratulating them. */
   rowViewer: { backgroundColor: "#152436", color: "#dbe8f7" },
   rowBankrupt: { backgroundColor: "#2a1618", color: "#f0c9c9" },
-  cellRank: { flex: "0 0 22px", color: "#8a8a86" },
-  cellName: { flex: "1 1 auto", display: "flex", alignItems: "center", gap: "6px", minWidth: 0 },
-  cellNum: { flex: "0 0 78px", textAlign: "right" },
-  cellNumStrong: { flex: "0 0 88px", textAlign: "right", fontWeight: 800, color: "#f2f0eb" },
+  cellRank: { flex: "0 0 30px", color: "#8a8a86" },
+  cellName: { flex: "1 1 auto", display: "flex", alignItems: "center", gap: "8px", minWidth: 0 },
+  cellNum: { flex: "0 0 110px", textAlign: "right" }, // #1409: room for five figures at the larger size
+  cellNumStrong: { flex: "0 0 124px", textAlign: "right", fontWeight: 800, color: "#f2f0eb" },
   footer: {
     display: "flex",
     alignItems: "center",
@@ -328,7 +380,7 @@ const styles: Record<string, React.CSSProperties> = {
     paddingTop: "10px",
     borderTop: "1px solid #2a2a2a",
   },
-  footerNote: { fontSize: FONT_SIZE.micro, color: "#8a8a86", lineHeight: 1.4, flex: "1 1 220px" },
+  footerNote: { fontSize: FONT_SIZE.small, color: "#8a8a86", lineHeight: 1.4, flex: "1 1 220px" }, // #1409
   footerButtons: { display: "flex", gap: "8px", flex: "none" },
   secondaryButton: {
     padding: "7px 14px",
@@ -349,6 +401,9 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     cursor: "pointer",
   },
+  pageDots: { display: "inline-flex", alignItems: "center", gap: "5px", padding: "0 4px" },
+  pageDot: { width: "7px", height: "7px", borderRadius: RADIUS.circle, backgroundColor: "#3a3a3a", display: "inline-block" },
+  pageDotOn: { backgroundColor: "#c9a227" },
   tagYou: {
     marginLeft: "6px",
     padding: "1px 6px",

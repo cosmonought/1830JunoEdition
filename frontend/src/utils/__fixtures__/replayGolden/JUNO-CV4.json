@@ -1,0 +1,688 @@
+{
+  "applied": 141,
+  "dropped": 36,
+  "unparseable": [],
+  "state": {
+    "game_id": 0,
+    "creator": "juno1sandboxalice000000000000000000000000",
+    "is_active": true,
+    "total_juno_pool": "4000000",
+    "virtual_bank_vgp": "8266",
+    "virtual_bank_start": "12000",
+    "max_players": 2,
+    "player_addresses": [
+      "p-xj8g7vth",
+      "p-vmlqoi42"
+    ],
+    "active_player_index": 1,
+    "priority_deal_index": 0,
+    "consecutive_passes": 0,
+    "current_global_era": "Green",
+    "active_operating_order": [
+      4,
+      5,
+      1
+    ],
+    "active_corporation_index": 0,
+    "current_round_type": "OperatingRound",
+    "macro_round_number": 6,
+    "sub_round_index": 1,
+    "operating_round_sequence_length": 2,
+    "player_cash": [
+      {
+        "player": "p-xj8g7vth",
+        "cash_vgp": "613"
+      },
+      {
+        "player": "p-vmlqoi42",
+        "cash_vgp": "586"
+      }
+    ],
+    "public_companies": [
+      {
+        "company_id": 1,
+        "ticker": "PRR",
+        "is_floated": true,
+        "treasury": "560",
+        "total_shares_issued": 5,
+        "par_value": "100",
+        "last_route_revenue": "0",
+        "owned_trains": [
+          "2",
+          "2",
+          "3"
+        ],
+        "president": "p-xj8g7vth",
+        "ipo_pool_percentage": 40,
+        "bank_pool_percentage": 0,
+        "player_holdings": [
+          {
+            "player": "p-xj8g7vth",
+            "percentage": 50
+          },
+          {
+            "player": "p-vmlqoi42",
+            "percentage": 10
+          }
+        ],
+        "home_hex_label": "H12",
+        "station_token_hexes": [
+          [
+            4,
+            7
+          ]
+        ],
+        "station_token_limit": 4,
+        "station_tokens": [
+          [
+            4,
+            7,
+            0
+          ]
+        ],
+        "last_run_turn_key": "5.2.1",
+        "printed_route_revenue": "0",
+        "last_run_breakdown": [],
+        "routes_run_this_turn": 0,
+        "last_completed_run_revenue": "130"
+      },
+      {
+        "company_id": 2,
+        "ticker": "NYC",
+        "is_floated": false,
+        "treasury": "0",
+        "total_shares_issued": 0,
+        "par_value": null,
+        "last_route_revenue": "0",
+        "owned_trains": [],
+        "president": null,
+        "ipo_pool_percentage": 100,
+        "bank_pool_percentage": 0,
+        "player_holdings": [],
+        "home_hex_label": "E19",
+        "station_token_hexes": [],
+        "station_token_limit": 4,
+        "station_tokens": []
+      },
+      {
+        "company_id": 3,
+        "ticker": "CPR",
+        "is_floated": false,
+        "treasury": "0",
+        "total_shares_issued": 0,
+        "par_value": null,
+        "last_route_revenue": "0",
+        "owned_trains": [],
+        "president": null,
+        "ipo_pool_percentage": 100,
+        "bank_pool_percentage": 0,
+        "player_holdings": [],
+        "home_hex_label": "A19",
+        "station_token_hexes": [],
+        "station_token_limit": 4,
+        "station_tokens": []
+      },
+      {
+        "company_id": 4,
+        "ticker": "B&O",
+        "is_floated": true,
+        "treasury": "320",
+        "total_shares_issued": 10,
+        "par_value": "100",
+        "last_route_revenue": "0",
+        "owned_trains": [
+          "2",
+          "2",
+          "2",
+          "3"
+        ],
+        "president": "p-vmlqoi42",
+        "ipo_pool_percentage": 0,
+        "bank_pool_percentage": 0,
+        "player_holdings": [
+          {
+            "player": "p-vmlqoi42",
+            "percentage": 50
+          },
+          {
+            "player": "p-xj8g7vth",
+            "percentage": 50
+          }
+        ],
+        "home_hex_label": "I15",
+        "station_token_hexes": [
+          [
+            3,
+            8
+          ],
+          [
+            2,
+            9
+          ]
+        ],
+        "station_token_limit": 3,
+        "station_tokens": [
+          [
+            2,
+            9,
+            0
+          ]
+        ],
+        "last_run_turn_key": "5.2.4",
+        "printed_route_revenue": "0",
+        "last_run_breakdown": [],
+        "routes_run_this_turn": 0,
+        "last_completed_run_revenue": "170"
+      },
+      {
+        "company_id": 5,
+        "ticker": "C&O",
+        "is_floated": true,
+        "treasury": "660",
+        "total_shares_issued": 7,
+        "par_value": "100",
+        "last_route_revenue": "0",
+        "owned_trains": [
+          "2",
+          "3"
+        ],
+        "president": "p-vmlqoi42",
+        "ipo_pool_percentage": 30,
+        "bank_pool_percentage": 0,
+        "player_holdings": [
+          {
+            "player": "p-vmlqoi42",
+            "percentage": 50
+          },
+          {
+            "player": "p-xj8g7vth",
+            "percentage": 20
+          }
+        ],
+        "home_hex_label": "F6",
+        "station_token_hexes": [
+          [
+            0,
+            5
+          ]
+        ],
+        "station_token_limit": 3,
+        "station_tokens": [],
+        "last_run_turn_key": "5.2.5",
+        "printed_route_revenue": "0",
+        "last_run_breakdown": [],
+        "routes_run_this_turn": 0,
+        "last_completed_run_revenue": "90"
+      },
+      {
+        "company_id": 6,
+        "ticker": "ERIE",
+        "is_floated": false,
+        "treasury": "0",
+        "total_shares_issued": 0,
+        "par_value": null,
+        "last_route_revenue": "0",
+        "owned_trains": [],
+        "president": null,
+        "ipo_pool_percentage": 100,
+        "bank_pool_percentage": 0,
+        "player_holdings": [],
+        "home_hex_label": "E11",
+        "station_token_hexes": [],
+        "station_token_limit": 3,
+        "station_tokens": [],
+        "double_certificate": {
+          "at": "Ipo"
+        }
+      },
+      {
+        "company_id": 7,
+        "ticker": "NNH",
+        "is_floated": false,
+        "treasury": "0",
+        "total_shares_issued": 0,
+        "par_value": null,
+        "last_route_revenue": "0",
+        "owned_trains": [],
+        "president": null,
+        "ipo_pool_percentage": 100,
+        "bank_pool_percentage": 0,
+        "player_holdings": [],
+        "home_hex_label": "G19",
+        "station_token_hexes": [],
+        "station_token_limit": 2,
+        "station_tokens": []
+      },
+      {
+        "company_id": 8,
+        "ticker": "B&M",
+        "is_floated": false,
+        "treasury": "0",
+        "total_shares_issued": 0,
+        "par_value": null,
+        "last_route_revenue": "0",
+        "owned_trains": [],
+        "president": null,
+        "ipo_pool_percentage": 100,
+        "bank_pool_percentage": 0,
+        "player_holdings": [],
+        "home_hex_label": "E23",
+        "station_token_hexes": [],
+        "station_token_limit": 2,
+        "station_tokens": []
+      },
+      {
+        "company_id": 9,
+        "ticker": "PMQ",
+        "is_floated": false,
+        "treasury": "0",
+        "total_shares_issued": 0,
+        "par_value": null,
+        "last_route_revenue": "0",
+        "owned_trains": [],
+        "president": null,
+        "ipo_pool_percentage": 100,
+        "bank_pool_percentage": 0,
+        "player_holdings": [],
+        "home_hex_label": "E5",
+        "station_token_hexes": [],
+        "station_tokens": [],
+        "station_token_limit": 2
+      },
+      {
+        "company_id": 10,
+        "ticker": "N&W",
+        "is_floated": false,
+        "treasury": "0",
+        "total_shares_issued": 0,
+        "par_value": null,
+        "last_route_revenue": "0",
+        "owned_trains": [],
+        "president": null,
+        "ipo_pool_percentage": 100,
+        "bank_pool_percentage": 0,
+        "player_holdings": [],
+        "home_hex_label": "L16",
+        "station_token_hexes": [],
+        "station_tokens": [],
+        "station_token_limit": 3,
+        "double_certificate": {
+          "at": "Ipo"
+        }
+      }
+    ],
+    "private_companies": [
+      {
+        "private_id": 1,
+        "name": "Schuylkill Valley",
+        "cost": "20",
+        "revenue_per_or": "5",
+        "owner": "p-xj8g7vth",
+        "owner_protocol_id": null,
+        "closed": false
+      },
+      {
+        "private_id": 2,
+        "name": "Champlain & St. Lawrence",
+        "cost": "40",
+        "revenue_per_or": "10",
+        "owner": "p-vmlqoi42",
+        "owner_protocol_id": null,
+        "closed": false
+      },
+      {
+        "private_id": 3,
+        "name": "Delaware & Hudson",
+        "cost": "70",
+        "revenue_per_or": "15",
+        "owner": "p-xj8g7vth",
+        "owner_protocol_id": null,
+        "closed": false
+      },
+      {
+        "private_id": 4,
+        "name": "Mohawk & Hudson",
+        "cost": "110",
+        "revenue_per_or": "20",
+        "owner": "p-vmlqoi42",
+        "owner_protocol_id": null,
+        "closed": false
+      },
+      {
+        "private_id": 7,
+        "name": "James River & Kanawha Company",
+        "cost": "120",
+        "revenue_per_or": "20",
+        "owner": "p-vmlqoi42",
+        "owner_protocol_id": null,
+        "closed": false
+      },
+      {
+        "private_id": 5,
+        "name": "Camden & Amboy",
+        "cost": "160",
+        "revenue_per_or": "25",
+        "owner": "p-xj8g7vth",
+        "owner_protocol_id": null,
+        "closed": false
+      },
+      {
+        "private_id": 6,
+        "name": "Baltimore & Ohio",
+        "cost": "220",
+        "revenue_per_or": "30",
+        "owner": null,
+        "owner_protocol_id": null,
+        "closed": true
+      }
+    ],
+    "market_positions": {
+      "1": {
+        "price": 90,
+        "x": 5,
+        "y": 10,
+        "enteredAt": 18
+      },
+      "2": null,
+      "3": null,
+      "4": {
+        "price": 160,
+        "x": 10,
+        "y": 10,
+        "enteredAt": 16
+      },
+      "5": {
+        "price": 100,
+        "x": 6,
+        "y": 10,
+        "enteredAt": 17
+      },
+      "6": null,
+      "7": null,
+      "8": null
+    },
+    "variants": {
+      "length": "standard",
+      "mode": "live",
+      "delayedAuction": false,
+      "gentleRust": false,
+      "unpredictableRevenue": false,
+      "dynamicStockMarket": false,
+      "expandedMap": true,
+      "plusTiles": true,
+      "levelPlayingField": true
+    },
+    "turn_action_taken": false,
+    "bought_this_turn": 0,
+    "private_auction_complete": true,
+    "sold_this_round": {},
+    "last_trader_index": null,
+    "stock_round_just_ended": false,
+    "operating_round_just_ended": false,
+    "operating_sub_phase": "BuyPrivate",
+    "terrain_fees_paid": [
+      "2,9",
+      "4,8",
+      "-1,5"
+    ]
+  },
+  "waterfall": {
+    "game_id": 0,
+    "waterfall_auction_active": false,
+    "privates": [],
+    "current_turn": "p-xj8g7vth",
+    "mini_auction": null,
+    "consecutive_waterfall_passes": 0
+  },
+  "grid": {
+    "game_id": 1,
+    "tiles": [
+      {
+        "q": 2,
+        "r": 7,
+        "tile_id": 24,
+        "orientation": 3,
+        "paths": [
+          [
+            0,
+            2
+          ],
+          [
+            0,
+            3
+          ]
+        ],
+        "landmark": null,
+        "printed": true
+      },
+      {
+        "q": 2,
+        "r": 9,
+        "tile_id": 57,
+        "orientation": 1,
+        "paths": [
+          [
+            0,
+            3
+          ]
+        ],
+        "revenue": "20",
+        "landmark": null
+      },
+      {
+        "q": 1,
+        "r": 10,
+        "tile_id": 57,
+        "orientation": 1,
+        "paths": [
+          [
+            0,
+            3
+          ]
+        ],
+        "revenue": "20",
+        "landmark": null
+      },
+      {
+        "q": -1,
+        "r": 6,
+        "tile_id": 8,
+        "orientation": 1,
+        "paths": [
+          [
+            0,
+            2
+          ]
+        ],
+        "landmark": null
+      },
+      {
+        "q": 4,
+        "r": 8,
+        "tile_id": 9,
+        "orientation": 0,
+        "paths": [
+          [
+            0,
+            3
+          ]
+        ],
+        "landmark": null
+      },
+      {
+        "q": 3,
+        "r": 7,
+        "tile_id": 9,
+        "orientation": 0,
+        "paths": [
+          [
+            0,
+            3
+          ]
+        ],
+        "landmark": null
+      },
+      {
+        "q": 0,
+        "r": 11,
+        "tile_id": 8,
+        "orientation": 5,
+        "paths": [
+          [
+            0,
+            2
+          ]
+        ],
+        "landmark": null
+      },
+      {
+        "q": -2,
+        "r": 6,
+        "tile_id": 8,
+        "orientation": 0,
+        "paths": [
+          [
+            0,
+            2
+          ]
+        ],
+        "landmark": null
+      },
+      {
+        "q": 5,
+        "r": 7,
+        "tile_id": 59,
+        "orientation": 3,
+        "paths": [
+          [
+            0,
+            0
+          ],
+          [
+            2,
+            2
+          ]
+        ],
+        "revenue": "40",
+        "landmark": null
+      },
+      {
+        "q": -1,
+        "r": 4,
+        "tile_id": 8,
+        "orientation": 2,
+        "paths": [
+          [
+            0,
+            2
+          ]
+        ],
+        "landmark": null
+      },
+      {
+        "q": 4,
+        "r": 7,
+        "tile_id": 619,
+        "orientation": 5,
+        "paths": [
+          [
+            1,
+            3
+          ],
+          [
+            1,
+            4
+          ],
+          [
+            1,
+            5
+          ],
+          [
+            3,
+            4
+          ],
+          [
+            3,
+            5
+          ],
+          [
+            4,
+            5
+          ]
+        ],
+        "revenue": "30",
+        "landmark": null
+      },
+      {
+        "q": 3,
+        "r": 8,
+        "tile_id": 53,
+        "orientation": 0,
+        "paths": [
+          [
+            0,
+            2
+          ],
+          [
+            0,
+            4
+          ],
+          [
+            2,
+            4
+          ]
+        ],
+        "revenue": "50",
+        "landmark": null
+      },
+      {
+        "q": -1,
+        "r": 5,
+        "tile_id": 57,
+        "orientation": 0,
+        "paths": [
+          [
+            0,
+            3
+          ]
+        ],
+        "revenue": "20",
+        "landmark": null
+      },
+      {
+        "q": 1,
+        "r": 7,
+        "tile_id": 14,
+        "orientation": 3,
+        "paths": [
+          [
+            0,
+            1
+          ],
+          [
+            0,
+            3
+          ],
+          [
+            0,
+            4
+          ],
+          [
+            1,
+            3
+          ],
+          [
+            1,
+            4
+          ],
+          [
+            3,
+            4
+          ]
+        ],
+        "revenue": "30",
+        "landmark": null
+      }
+    ]
+  }
+}

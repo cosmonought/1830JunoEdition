@@ -21,16 +21,17 @@ import React, { useState } from "react";
 import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { PresidentCrown, PRESIDENT_CROWN_GOLD } from "./PresidentCrown";
 import { bestContrastTextColor } from "../styles/corporationLivery";
-// Design note #670: the same badge the Operating Round's cash strip uses. The
-// cards are where cash lives in a Stock Round, so this is where the confirmation
-// has to appear there -- and one component means the two rounds cannot end up
-// signalling the same event two different ways.
-// Design note #819: its own file now -- the strip it used to live in has been replaced by these cards.
-import { CashDeltaBadge } from "./CashDeltaBadge";
+import { washedPlayerSurface } from "../styles/palette";
+// Design note #1339: #670's delta badge is gone from the figure -- the card prints the balance, and the money
+// machines (#1060, #1272, #1339) show the movement.
 import type { PlayerFinances } from "../utils/playerFinance";
 // Design note #1035: the same escalation the train chips and the private pills use.
 import { ALERT_CRITICAL_INK, ALERT_WARN_INK } from "../styles/palette";
 import type { PrivateClosureAlert } from "../utils/purchaseWarnings";
+import { numberedPrivate } from "../utils/privateOrdinal";
+
+/** The player card's paper; washed per card toward the seat colour by `washedPlayerSurface` (#1347). */
+const CARD_PARCHMENT = "#f4f1e8";
 
 export interface PlayerCardsProps {
   /** In seating order. */
@@ -54,10 +55,6 @@ export interface PlayerCardsProps {
      same fact -- a round with no seat on turn passes `null`, every card compares unequal, and nothing is marked.
      Design note #568: the private's rules text, for the expandable rows. `null` renders the name as plain text. */
   privateDescription?: (privateId: number) => string | null;
-  /** Design note #670: what this player's cash has just done, or `0`/absent for
-   *  nothing recent. A FUNCTION rather than a map, so the card asks the same
-   *  question the strip asks and neither has to know how the answer is stored. */
-  cashDelta?: (address: string) => number;
   /** ==================================================================
    *   DESIGN NOTE 1035: THE PRIVATES ON THESE CARDS ARE ABOUT TO STOP PAYING
    *  ==================================================================
@@ -116,7 +113,6 @@ export function PlayerCards({
   viewerAddress,
   colorForSeat,
   privateDescription,
-  cashDelta,
   privateClosureAlert = null,
 }: PlayerCardsProps) {
   /* Design note #568: which private row is open, keyed by id. One map for
@@ -155,6 +151,12 @@ export function PlayerCards({
             className="app-player-card"
             style={{
               ...styles.card,
+              /* Design note #1347 (feedback 3): THE CARD IS WASHED IN THE SEAT'S COLOUR. #1291a squared the
+                 player surfaces to tell them from the corporation's, and the shared parchment was pulling the
+                 other way. A 16% wash of the seat colour over the parchment is the second cue: every seat
+                 colour is dark (#569/#1097), so the wash stays a pale tint and the dark ink keeps >= 10.8:1
+                 on all seven -- no inversion needed. The same helper the cash slide-out uses. */
+              backgroundColor: washedPlayerSurface(CARD_PARCHMENT, stripe),
               /* Design note #606: the ring is the SEAT's colour, computed
                  here because only this scope knows it. The 1px border moves
                  with it so the card has one edge colour, not two. */
@@ -227,7 +229,6 @@ export function PlayerCards({
                         meaning. Appending to the value leaves every figure where it was. */}
                     <td style={styles.figureValue}>
                       {money(player.cash)}
-                      <CashDeltaBadge amount={cashDelta?.(player.address) ?? 0} />
                     </td>
                   </tr>
                   <tr>
@@ -328,7 +329,7 @@ export function PlayerCards({
                     /* Design note #568: the NUMBER stays, on instruction -- "referring to Private Company 1 is easier than
                        remembering some of the names". #423 removed the numeric chips because a bare `3` names nothing away from
                        the auction's numbered list; a number IN FRONT OF the name is the opposite trade and costs two characters. */
-                    const title = `${entry.privateId}. ${entry.name}`;
+                    const title = numberedPrivate(entry.privateId, entry.name); // #1370: the auction position
                     return (
                       <React.Fragment key={entry.privateId}>
                         <tr>
@@ -437,7 +438,7 @@ export const styles: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     borderRadius: 0, // #1291a: a player surface
     border: "1px solid #2a2a2a",
-    backgroundColor: "#f4f1e8",
+    backgroundColor: CARD_PARCHMENT, // washed per card with the seat colour, #1347
     color: "#1c1c1c",
     overflow: "hidden",
   },

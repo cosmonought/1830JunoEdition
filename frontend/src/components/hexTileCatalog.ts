@@ -92,6 +92,10 @@ export interface TileCatalogEntry {
   /** Design note #1311: in the Project 18XX+ tray only. `quantity` is then that tray's count; the standard
    *  tray (`STANDARD_TRAY`) leaves the tile out entirely. */
   plusOnly?: true;
+  /** Design note #1403: a one-town green that stands for TWO yellow towns joined -- #87, #88, #204 -- and so
+   *  is laid only over a two-town hex. The three-exit green towns (#141-#144) carry no flag and take a
+   *  one-town hex only; the legality filter reads this to keep the two families apart. */
+  mergesTowns?: true;
 }
 
 /** Hand-kept mirror of `hexmap::TILE_CATALOG` -- keep this in exact sync with that Rust array any time it
@@ -541,16 +545,26 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
   },
   {
     tileId: 630,
-    connections: 0b011_101,
+    /* #1392: RULED "630 has one small town with continuous track connecting edges 5 and 0 (tight curve) and
+       a separate small town with continuous track connecting edges 1 and 3" -- in the request's own edge
+       numbers (`edge()` translates). This is exactly 631's reflection (#1392a), so the pair is finally a pair. */
+    connections: 0b010_111,
     terrain: "DoubleTown",
     color: "Yellow",
     quantity: 1,
-    paths: [[2, 3], [0, 4]],
+    paths: [[1, 2], [0, 4]],
     revenue: 10,
     plusOnly: true,
   },
   {
     tileId: 631,
+    /* #1392: REPORTED "Tiles 630 and 631 are the same tile, but they're supposed to be reflections of each
+       other." RULED: 630 is (5,0) tight + (1,3); 631 is (4,5) tight + (1,3) -- request numbers.
+       #1392a: THIS ENTRY IS UNCHANGED FROM BEFORE THE RULING, AND MUST STAY SO. A live game (JUNO-Z6C, index
+       447) had already laid a 631 with orientation 4 against this base; the first draft of #1392 rewrote the
+       base to the ruling's own numbers and the laid tile turned on every board after the rebuild -- "a tile
+       nobody placed". The ruled 631 is this shape turned two edges, so the base is kept and the ruling is
+       met by making 630 THIS tile's reflection instead. */
     connections: 0b010_111,
     terrain: "DoubleTown",
     color: "Yellow",
@@ -648,6 +662,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     paths: [[0, 1], [0, 3], [0, 4], [1, 3], [1, 4], [3, 4]],
     revenue: 10,
     plusOnly: true,
+    mergesTowns: true, // #1403
   },
   {
     tileId: 204,
@@ -658,6 +673,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     paths: [[1, 3], [1, 4], [1, 5], [3, 4], [3, 5], [4, 5]],
     revenue: 10,
     plusOnly: true,
+    mergesTowns: true, // #1403
   },
   {
     tileId: 87,
@@ -668,6 +684,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     paths: [[0, 1], [0, 4], [0, 5], [1, 4], [1, 5], [4, 5]],
     revenue: 10,
     plusOnly: true,
+    mergesTowns: true, // #1403
   },
   {
     tileId: 619,
@@ -694,21 +711,21 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
   {
     tileId: 884,
     connections: 0b111_010,
-    terrain: "MajorCityHub",
+    terrain: "BostonHub", // #1385: a brown B, beside 61
     color: "Brown",
     quantity: 1,
     paths: [[1, 3], [1, 4], [1, 5], [3, 4], [3, 5], [4, 5]],
-    revenue: 40,
+    revenue: 60, // #1398: "The revenue value on the B brown tiles is wrong. They're $60, not $40." -- the same $60 as #61.
     plusOnly: true,
   },
   {
     tileId: 997,
     connections: 0b111_010,
-    terrain: "MajorCityHub",
+    terrain: "BostonHub", // #1385: a brown B, beside 61
     color: "Brown",
     quantity: 1,
     paths: [[1, 3], [1, 4], [1, 5], [3, 4], [3, 5], [4, 5]],
-    revenue: 40,
+    revenue: 60, // #1398: "The revenue value on the B brown tiles is wrong. They're $60, not $40." -- the same $60 as #61.
     plusOnly: true,
   },
   {
@@ -733,21 +750,23 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
   },
   {
     tileId: 147,
-    connections: 0b110_011,
-    terrain: "SmallTown",
-    color: "Brown",
-    quantity: 1,
-    paths: [[0, 1], [0, 4], [0, 5], [1, 4], [1, 5], [4, 5]],
-    revenue: 20,
-    plusOnly: true,
-  },
-  {
-    tileId: 146,
+    // #1403: swapped with #146 -- the upgrade chart has 204 -> 147 and 87 -> 146, so 147 carries 204's edges.
     connections: 0b111_010,
     terrain: "SmallTown",
     color: "Brown",
     quantity: 1,
     paths: [[1, 3], [1, 4], [1, 5], [3, 4], [3, 5], [4, 5]],
+    revenue: 20,
+    plusOnly: true,
+  },
+  {
+    tileId: 146,
+    // #1403: swapped with #147 -- 146 carries 87's edges, being 87's brown.
+    connections: 0b110_011,
+    terrain: "SmallTown",
+    color: "Brown",
+    quantity: 1,
+    paths: [[0, 1], [0, 4], [0, 5], [1, 4], [1, 5], [4, 5]],
     revenue: 20,
     plusOnly: true,
   },

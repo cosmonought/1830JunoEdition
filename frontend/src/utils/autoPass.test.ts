@@ -24,10 +24,13 @@ import {
   autoPassAlreadyActed,
   autoPassDecision,
   exposedPresidencies,
+  guardsPresidency,
+  DEFAULT_AUTO_PASS_CONDITIONS,
   isInsecurePresidency,
   type AutoPassConditions,
 } from "./autoPass";
 import type { GameStateResponse } from "./gameState";
+import { readStripped } from "./sourceScan";
 
 const ME = "me";
 const RIVAL = "rival";
@@ -60,8 +63,11 @@ const ALL: AutoPassConditions = {
   saleInPresided: true,
 };
 
-/** Both toggles off -- the weakest instruction a player can arm, and the one the guarantee is tested against. */
+/** Both sale toggles off -- the weakest instruction a player can arm, and the one the guard is tested against.
+ *  #1335: `presidencyThreatened` is left unset here, which reads as ON, so every guard case below still holds. */
 const NONE: AutoPassConditions = { saleInHeld: false, saleInPresided: false };
+/** #1335: the player has switched the presidency guard off as well. */
+const RIDE: AutoPassConditions = { presidencyThreatened: false, saleInHeld: false, saleInPresided: false };
 
 function decide(before: GameStateResponse, after: GameStateResponse, conditions = ALL) {
   return autoPassDecision(after, armAutoPass(before, ME, conditions));
@@ -257,6 +263,57 @@ describe("a presidency is never lost to Auto-Pass", () => {
       },
     ]);
     expect(exposedPresidencies(theirs, ME)).toEqual([]);
+  });
+});
+
+/* Design note #1335 (harness): the presidency guard is a toggle, on by default. */
+describe("#1335: the presidency guard is a switch", () => {
+  const exposedBoard = board([
+    {
+      ticker: "PRR",
+      president: ME,
+      ipo: 20,
+      holdings: [{ player: ME, percentage: 40 }, { player: RIVAL, percentage: 40 }],
+    },
+  ]);
+
+  it("defaults on: an arm without the field, or with it true, still wakes on a tie", () => {
+    expect(guardsPresidency(NONE)).toBe(true);
+    expect(guardsPresidency(DEFAULT_AUTO_PASS_CONDITIONS)).toBe(true);
+    expect(decide(exposedBoard, exposedBoard, NONE).pass).toBe(false);
+    expect(decide(exposedBoard, exposedBoard, { ...NONE, presidencyThreatened: true }).pass).toBe(false);
+  });
+
+  it("off: passes through a tied presidency, because the player said so", () => {
+    expect(guardsPresidency(RIDE)).toBe(false);
+    expect(decide(exposedBoard, exposedBoard, RIDE).pass).toBe(true);
+  });
+
+  it("off does not silence the other wakes", () => {
+    const sold = board([
+      {
+        ticker: "PRR",
+        president: ME,
+        ipo: 20,
+        pool: 10,
+        holdings: [{ player: ME, percentage: 40 }, { player: RIVAL, percentage: 40 }],
+      },
+    ]);
+    expect(decide(exposedBoard, sold, { ...RIDE, saleInHeld: true }).pass).toBe(false);
+  });
+
+  it("the modal offers it first, refuses Start only while it is on, and says one sentence per line", () => {
+    const MODAL = readStripped("components/AutoPassModal.tsx");
+    expect(MODAL.indexOf('key: "presidencyThreatened"')).toBeLessThan(MODAL.indexOf('key: "saleInHeld"'));
+    expect(MODAL).toContain("const exposed = exposedPresidencies.length > 0 && guardsPresidency(conditions);");
+    expect(MODAL).not.toContain("GUARANTEE");
+    // Every caption is one sentence: exactly one full stop, at the end.
+    const captions = Array.from(MODAL.matchAll(/caption: "([^"]+)"/g), (m) => m[1]);
+    expect(captions).toHaveLength(3);
+    for (const caption of captions) {
+      expect(caption.trim().endsWith(".")).toBe(true);
+      expect((caption.match(/\./g) ?? []).length).toBe(1);
+    }
   });
 });
 

@@ -73,7 +73,7 @@ describe("the machine is wired where the dividend one is", () => {
     expect(MACHINE).toContain('label: "Treasury"');
     const PANEL = readStripped("components/MoneyMachinePanel.tsx");
     expect(PANEL).toContain("borderRadius: corporation ? RADIUS.card : 0");
-    expect(PANEL).toContain("{corporation ? holderRow : moverRow}");
+    expect(PANEL).toContain("{rises ? holderRow : moverRow}"); // #1339: direction, defaulting from kind
     expect(PANEL).toContain("bottom: `${CORNER_BOTTOM_PX + stackIndex * STACK_STEP_PX}px`");
     expect(readStripped("App.tsx")).toContain("stackIndex={dividendPayout ? 1 : 0}");
   });
@@ -102,5 +102,26 @@ describe("the machine is wired where the dividend one is", () => {
     const fs = require("fs") as typeof import("fs");
     const path = require("path") as typeof import("path");
     expect(fs.existsSync(path.join(__dirname, "..", "..", "public", "audio", "spend.mp3"))).toBe(true);
+  });
+});
+
+describe("the treasury panel is the president's, and back-to-back spends are one panel (#1371, #1372)", () => {
+  const APP = readStripped("App.tsx");
+
+  it("is raised only for the viewer who presides over the corporation that spent", () => {
+    const site = APP.slice(APP.indexOf("const shown = movementToShow("), APP.indexOf("const shown = movementToShow(") + 900);
+    expect(site).toContain("?.president === viewer;");
+    expect(site).toContain("if (shown && presides) {");
+  });
+
+  it("holds a movement for a second one by the same corporation, and folds them", () => {
+    const raiser = APP.slice(APP.indexOf("const showTreasuryMovement = useCallback("), APP.indexOf("const handleTreasuryMachineDone"));
+    expect(raiser).toContain("if (replayingHistory) return;");
+    expect(raiser).toContain("if (held.movement.companyId === movement.companyId) {");
+    expect(raiser).toContain("amount: held.movement.amount + movement.amount,");
+    expect(raiser).toContain("treasuryBefore: held.movement.treasuryBefore,");
+    // A different corporation's movement releases the held one rather than being folded into it.
+    expect(raiser).toContain("releaseHeldTreasury();");
+    expect(raiser).toContain("window.setTimeout(releaseHeldTreasury, TREASURY_MACHINE_COALESCE_MS)");
   });
 });

@@ -122,3 +122,21 @@ describe("nobody keeps a private copy of the rule", () => {
     expect(APP).not.toContain("isUnlimitedReach");
   });
 });
+
+describe("the 7-train is a known train (design note #1396)", () => {
+  // REPORTED: "The Auto-router for 7-trains is treating them like D-trains, but then the Run Routes
+  // correctly rejects it for being too many stops." An unknown model plans as unlimited and checks as the
+  // smallest -- #881's deliberate asymmetry -- so the fix is for the catalog to know the 7.
+  const { MOCK_TRAIN_CATALOG } = require("./mockFixtures");
+  it("plans seven stops and checks seven stops", () => {
+    const seven = MOCK_TRAIN_CATALOG.find((train: { modelType: string }) => train.modelType === "7");
+    expect(seven).toEqual({ modelType: "7", costVgp: 710, maxDistance: 7, bankQuantity: 2 });
+    expect(reachForDrafting(seven.maxDistance)).toBe(7);
+    expect(overrunsReach(7, seven.maxDistance)).toBe(false);
+    expect(overrunsReach(8, seven.maxDistance)).toBe(true);
+  });
+  it("sits between the 6 and the D, since the array's order is the tier order", () => {
+    const models = MOCK_TRAIN_CATALOG.map((train: { modelType: string }) => train.modelType);
+    expect(models).toEqual(["2", "3", "4", "5", "6", "7", "D"]);
+  });
+});

@@ -194,6 +194,26 @@ export const BRAND_GRADIENT = "linear-gradient(90deg, #C9338A 0%, #5B8EF0 100%)"
  *  brand's. */
 export const CARD_SURFACE = "#f2f0eb";
 
+/* ==================================================================
+    DESIGN NOTE 1347: A PLAYER SURFACE IS WASHED IN ITS SEAT'S COLOUR
+   ==================================================================
+   #1291a squared the player surfaces to tell them from the corporation's, and the shared parchment was pulling
+   the other way -- "parchment = corporation thing" is the read the table should be able to make. So every
+   player surface (the player card, the cash slide-out) is the parchment washed `PLAYER_SURFACE_WASH_PERCENT`
+   toward the seat colour. Every seat colour is dark (#569/#1097/#1344), so the wash stays a pale tint and the
+   dark ink keeps >= 10.8:1 on all seven; nothing inverts. One knob, one helper, so the two surfaces cannot
+   be washed to two different depths. */
+export const PLAYER_SURFACE_WASH_PERCENT = 16;
+
+/** `base` washed toward `seat`; `base` unchanged when the seat has no colour. */
+export function washedPlayerSurface(base: string, seat: string | null | undefined): string {
+  if (!seat) return base;
+  const channel = (hex: string, at: number) => parseInt(hex.replace("#", "").slice(at, at + 2), 16);
+  const mix = (at: number) =>
+    Math.round(channel(base, at) + (channel(seat, at) - channel(base, at)) * (PLAYER_SURFACE_WASH_PERCENT / 100));
+  return `#${[0, 2, 4].map((at) => mix(at).toString(16).padStart(2, "0")).join("")}`;
+}
+
 /** An inert card -- e.g. an unfloated corporation. Same paper, dimmer. */
 export const CARD_SURFACE_MUTED = "#dedcd6";
 

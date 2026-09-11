@@ -31,7 +31,7 @@ import { corporationFullName } from "../utils/corporationNames";
 import { depotInventory, derivePhase, rustOutlook } from "../utils/gamePhase";
 // Design note #1035: how close the privates are to closing, for the pills that show them.
 import { privateClosureAlert } from "../utils/purchaseWarnings";
-import { CapacityPill, LastRoutePayout, TrainChips } from "./TrainBadges";
+import { CapacityPill, LastRoutePayout, lastRunFigure, TrainChips } from "./TrainBadges";
 import { stationTickerColor } from "./hexContractTypes";
 import type { MarketGridResponse } from "./StockMarketRenderer";
 import { FONT_SIZE, RADIUS } from "../styles/typography";
@@ -387,7 +387,11 @@ function OperatingRoundCorporationPanel({
 
                 {/* ---- Last route payout -- design note #10 ---- */}
                 <td style={styles.tdNumB}>
-                  <LastRoutePayout surface="dark" revenue={company.last_route_revenue} />
+                  {/* #1391: REPORTED "all of the corporations' Last Route Run is $0" on the Rail Map's
+                      corporations panel. `last_route_revenue` is turn-scoped and cleared at every turn change
+                      (#777); the Stock panel learned this (#1032) and this row did not. The live figure where
+                      one exists, else the filed one. */}
+                  <LastRoutePayout surface="dark" revenue={lastRunFigure(company)} />
                 </td>
 
                 {/* Privates this corporation's treasury owns -- design note #449. `PrivateCompanyPills` is the same component

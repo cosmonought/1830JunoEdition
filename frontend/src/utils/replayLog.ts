@@ -54,18 +54,12 @@ import {
   applySandboxAction,
   applySandboxLayTile,
   applySandboxMarketAction,
-  applySandboxWaterfallAction,
   type SandboxActionContext,
   type SandboxMarketContext,
 } from "./sandboxSession";
 import type { SandboxMarketPrices } from "./sandboxState";
 
-import {
-  applyPrivateExchange,
-  CA_BONUS_TICKER,
-  CA_PRIVATE_ID,
-} from "./privateExchange";
-import { isOpenStockRoundMsg, isSetupGameMsg, waterfallForRoster } from "./gameSetup";
+import { isSetupGameMsg } from "./gameSetup";
 import { boardInEffect } from "../components/hexBoardData";
 import { initialGridFor } from "./initialGrid";
 import { withRules } from "./boardSelection";
@@ -301,7 +295,6 @@ export type ReplayObserver = (event: {
  *  settle rule that cannot yet be implemented correctly would be worse than not having one. */
 export class RoomEngine {
   private state: GameStateResponse;
-  private waterfall: WaterfallStateResponse | null;
   private grid: MapGridResponse;
   private readonly providers: ReplayProviders;
   /** Indices whose payload would not parse. Never thrown: `turnSeed.ts` and `logRevert.ts` both take the
@@ -311,9 +304,9 @@ export class RoomEngine {
 
   constructor(providers: ReplayProviders, seed: ReplaySeed) {
     this.providers = providers;
-    /* #1197: the chart is seeded onto the state ONCE and the reducer carries it from there. */
-    this.state = { ...seed.state, market_positions: providers.initialMarket };
-    this.waterfall = seed.waterfall;
+    /* #1197: the chart is seeded onto the state ONCE and the reducer carries it from there.
+       #1340: and so is the auction atom. From here the engine holds ONE value and applies ONE function. */
+    this.state = { ...seed.state, market_positions: providers.initialMarket, waterfall: seed.waterfall };
     this.grid = providers.initialGrid;
   }
 
@@ -370,82 +363,13 @@ export class RoomEngine {
   }
 
   /* ==================================================================
-      DESIGN NOTE 1192a: THE AUCTION HAS TO BE TOLD IT IS OVER
+      DESIGN NOTE 1340: THE COMPOSITION LAYER IS GONE FROM HERE
      ==================================================================
-     CAUGHT BY #1192 MAKING THINGS WORSE. Wiring the charges dropped the board from four trains to one,
-     which is the opposite of the intended effect and therefore the useful kind of failure.
-     BECAUSE THE ATOM NEVER CLOSED. `App.tsx`'s `OpenStockRound` handler flips `waterfall_auction_active`
-     to false; the reducer arm #1189 moved does not, because the auction is a separate atom the reducer
-     must not reach into. So this loop kept handing every later message to a still-live auction, and every
-     one that looked like a bid charged somebody again -- draining the players who should have been buying
-     shares, which is why capitalisation got worse rather than better.
-     CLOSED HERE, IN THE COMPOSITION LAYER, for #1192's reason exactly: the board's arm and the atom's
-     close are two halves of one event, and this file is the only place that holds both. */
-  if (this.waterfall && isOpenStockRoundMsg(msg) && this.waterfall.waterfall_auction_active) {
-    this.waterfall = { ...this.waterfall, waterfall_auction_active: false };
-  }
-
-  if (this.waterfall) {
-    /* ==================================================================
-        DESIGN NOTE 1192: THE AUCTION'S MONEY, AND WHY IT LIVES HERE
-       ==================================================================
-       `applySandboxWaterfallAction` RETURNS the cash it implies rather than reaching into wallets (#261),
-       because the auction is its own atom and the wallets are on the board. Somebody has to compose the
-       two, and until now that somebody was only ever `App.tsx`.
-       THIS IS NOT A SHIM, UNLIKE THE ONE #1189 REMOVED. `SetupGame` was a gap in the reducer and belonged
-       in the reducer. This is a CROSS-ATOM COMPOSITION, and this file is the composition layer -- it
-       already sequences the this.grid, the chart, the auction and the board. The server will do exactly this,
-       in exactly this order, for the same reason.
-       AND ITS ABSENCE WAS THE PHASE 2 LOCK. Unapplied charges left every player holding their full opening
-       cash through the auction, so the board's money was wrong from index 1 -- and #1189's replay froze at
-       phase 2 with four trains because corporate treasuries, fed by share purchases at par, never grew
-       enough to buy past the 2-trains. */
-    const result = applySandboxWaterfallAction(this.waterfall, msg, this.state.player_addresses ?? []);
-    this.waterfall = result.waterfall;
-
-    /* #334a: a LIST, and not all of them the actor's -- an auto-awarded private is charged to its lone
-       bidder, who may not be the player who just moved. */
-    for (const { player, amount } of result.charges) {
-      this.state = {
-        ...this.state,
-        player_cash: this.state.player_cash.map((entry) =>
-          entry.player === player
-            ? { ...entry, cash_vgp: String(Math.max(0, (Number(entry.cash_vgp) || 0) - amount)) }
-            : entry,
-        ),
-      };
-    }
-
-    /* #303: the reducer REPORTS a win; the owner is written where both atoms are in hand. A list, because
-       one purchase can cascade (#334). */
-    for (const { privateId, player } of result.won) {
-      this.state = {
-        ...this.state,
-        private_companies: this.state.private_companies.map((entry) =>
-          entry.private_id === privateId ? { ...entry, owner: player } : entry,
-        ),
-      };
-
-      /* #576: a CONSEQUENCE is derived by every client, never appended by each of them -- appending inside
-         a replay is how one win issued two certificates. The C&A's free PRR share is that consequence, and
-         the private survives: closing it would cost its owner $25 an Operating Round for the rest of the
-         game. */
-      if (privateId === CA_PRIVATE_ID) {
-        const prr = this.state.public_companies.find((c) => c.ticker === CA_BONUS_TICKER);
-        if (prr) {
-          this.state = applyPrivateExchange(this.state, {
-            ok: true,
-            privateId,
-            companyId: prr.company_id,
-            ticker: CA_BONUS_TICKER,
-            player,
-            source: prr.ipo_pool_percentage >= 10 ? "Ipo" : "Bank",
-            keepOpen: true,
-          });
-        }
-      }
-    }
-  }
+     Three blocks stood here -- #1192a (close the auction on `OpenStockRound`), #1192 (apply the auction's
+     charges and wins, and the C&A's share), #1281 (pay the all-pass) -- each a transcription of `App.tsx`'s,
+     and each added after a divergence found the engine short. `applySandboxAction` performs all of them now,
+     on the auction atom it carries in `state.waterfall`; this loop hands it the message and takes the board
+     back. There is nothing left here for the two callers to disagree about. */
 
   /* ==================================================================
       DESIGN NOTE 1197: THE TWO-ATOM DANCE IS NOT THIS FILE'S JOB ANY MORE
@@ -509,59 +433,8 @@ export class RoomEngine {
       this.providers.layRefused(gridBefore, q, r, tileId, orientation, eraBefore),
   });
 
-  /* ==================================================================
-      DESIGN NOTE 1227: THE AUCTION NEVER HAD ANY PLAYERS IN IT
-     ==================================================================
-     FOUND BY #1226, WHICH IS THE ONLY REASON IT WAS FOUND AT ALL. The alarm named the fields
-     (`player_cash, private_companies`) and printed the client's values; the server's came from replaying the
-     same two-action log. They could not have been further apart:
-
-       CLIENT  Host pays $20, owns Schuylkill Valley           -- obviously right for "buy the lowest"
-       SERVER  nothing happens; one action later the OTHER player's move
-               awards Champlain & St. Lawrence to Host for $40 -- incoherent
-
-     `waterfallForRoster` DID NOT APPEAR IN THIS FILE. The shell's `SetupGame` handler re-seats the auction
-     atom from the dealt roster and always has; the engine was constructed with `waterfallForRoster(base, [])`
-     -- an EMPTY roster, correct before a deal -- and then never re-seated it. So `current_turn` stayed `""`,
-     which "matches nobody, so no client believes it is their turn" (#542's words, and the right answer
-     before a game exists). After the deal it is the wrong answer, and every auction action on the server was
-     judged against an auction nobody was sitting in.
-
-     THE EARLIER PLAYTESTS GOT THROUGH THE AUCTION ONLY BECAUSE THE CLIENT WAS DOING IT. The board a player
-     saw was the shell's, computed locally and correctly; the server's copy was quietly nonsense from index 1,
-     and nothing compared them until #1223. That is the whole argument for the alarm in one sentence.
-
-     THE VARIANT TRAVELS WITH IT (#905). A delayed-auction game opens on Stock Round 1 with the auction dealt
-     but not active -- "dealt now, run later" -- and the shell sets `waterfall_auction_active: false` in the
-     same breath as the re-seat. Splitting those two would give the server a live auction in a game that has
-     not reached one. */
-  if ("SetupGame" in msg) {
-    // #1320: and the dealt privates, so a Level Playing Field replay auctions the JK too.
-    const reseated = waterfallForRoster(
-      this.waterfall,
-      this.state.player_addresses ?? [],
-      this.state.private_companies,
-    );
-    /* READ FROM THE STATE THE REDUCER JUST PRODUCED, not from the message: `applyOneAction` owns `SetupGame`
-       and decides the dealt order (it shuffles), so the roster that matters is the one on the board. Reading
-       `msg.SetupGame.players` would re-seat the auction in the order the players were listed rather than the
-       order they were dealt -- a difference no test would see until two clients disagreed about who is on
-       turn. */
-    /* THE ARMING READS THE VARIANT, NOT THE ROUND TYPE, and the difference is a bug this test found on the
-       way past. The shell's `SetupGame` handler ALSO moves a delayed-auction game to `StockRound`
-       (`opensOnStockRound ? { ...seated, current_round_type: "StockRound", ... } : seated`) and the reducer
-       does not -- so a condition keyed on the round would never fire here, and the server would hold a LIVE
-       auction in a game the client had already moved past. The variant is on the message and says the same
-       thing without depending on a round transition the two halves disagree about.
-       THE ROUND-TYPE GAP ITSELF IS NOT FIXED HERE. It is one more shell-owned rule (#1220's family) and it
-       belongs in the reducer with the rest of them; it is recorded as open work rather than patched into the
-       composition layer, which is where it would rot. */
-    const delayed =
-      (msg as { SetupGame?: { variants?: { delayedAuction?: unknown } } }).SetupGame?.variants
-        ?.delayedAuction === true;
-    this.waterfall =
-      reseated && delayed ? { ...reseated, waterfall_auction_active: false } : reseated;
-  }
+  /* #1227's re-seat of the auction from the DEALT roster -- and #905's dealt-but-inactive delayed auction --
+     are the reducer's on `SetupGame` now (#1340, `settleAuctionLifecycle`). */
 
   /* #1193: AFTER the action, because a par is set BY an action -- a corporation parred by this `BuyStock`
      has no mark until the board says it is parred. Idempotent by construction (`placeParMark` no-ops on a
@@ -659,7 +532,8 @@ export class RoomEngine {
   } {
     return {
       state: this.state,
-      waterfall: this.waterfall,
+      // #1340: read off the state -- the reducer carries it; this is a convenience for the callers' shape.
+      waterfall: this.state.waterfall ?? null,
       grid: this.grid,
       unparseable: [...this.unparseable],
     };

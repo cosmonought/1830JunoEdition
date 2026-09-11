@@ -93,11 +93,13 @@ import {
   CARD_INK_POSITIVE,
   CARD_SURFACE,
   CARD_SURFACE_MUTED,
+  washedPlayerSurface,
 } from "../styles/palette";
 // Design note #1050: the same per-seat ink choice the player card's own stripe makes.
 import { bestContrastTextColor } from "../styles/corporationLivery";
 /* Design note #1290: the chrome scale, so a viewport unit inside it can be divided back out. */
 import { useUiScale } from "../utils/useUiScale";
+import { privateOrdinal } from "../utils/privateOrdinal";
 
 /** One of the viewer's privates, already formatted. The display shape #984 established, plus #1052's number. */
 export interface PrivateRevenueLine {
@@ -216,7 +218,8 @@ export function PrivateRevenueModal({ round, roundLabel, onAcknowledge }: Privat
             does. The phase name and the round stamp above still name it. */}
 
         {/* ---- The viewer's own stripe, borrowed from their player card ---- */}
-        <div style={styles.mine}>
+        {/* Design note #1347: and its paper, washed in the seat colour like every player surface. */}
+        <div style={{ ...styles.mine, backgroundColor: washedPlayerSurface(CARD_SURFACE, stripe) }}>
           <header
             style={{
               ...styles.stripe,
@@ -262,7 +265,7 @@ export function PrivateRevenueModal({ round, roundLabel, onAcknowledge }: Privat
                 {/* Design note #1052: `${private_id}. ${name}`, the form the Ledger, the player cards, the
                     trade panel, the auction dashboard and the action bar all already use. */}
                 <span style={styles.lineLabel}>
-                  <span style={styles.lineNumber}>{line.privateId}.</span> {line.label}
+                  <span style={styles.lineNumber}>{privateOrdinal(line.privateId)}.</span> {line.label}
                 </span>
                 <span style={styles.lineValue}>{line.value}</span>
               </React.Fragment>
@@ -335,7 +338,7 @@ function OtherCollectorRow({ other }: { other: PrivateRevenueOther }) {
         ? `→ $${other.cashAfter}`
         : `+$${other.total}`;
   return (
-    <div style={styles.otherCard}>
+    <div style={{ ...styles.otherCard, backgroundColor: washedPlayerSurface(CARD_SURFACE, stripe) }}>
       <button
         type="button"
         aria-expanded={open}

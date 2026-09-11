@@ -84,6 +84,33 @@ export function certificateCardsHeld(company: CompanyLike, holder: string): numb
   return Math.max(1, president + double + Math.ceil(ordinary / SANDBOX_SHARE_PERCENTAGE));
 }
 
+/** How many CARDS a pool holds of this corporation -- the display's unit, with the double counted once.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 1374: THE PANEL COUNTED IN TENS, SO THE DOUBLE READ AS TWO
+ *  ==================================================================
+ *  REPORTED: "On LPF, the extra 20% share for N&W and ERIE is counting as 2 certificates instead of 1. That
+ *  defeats its purpose. These two corporations should only have 8 shares total."
+ *  THE RULE WAS RIGHT AND THE PANEL WAS NOT. `certificateCardsHeld` above has counted the double as one card
+ *  since #1324, and the certificate limit and every player card read through it. The Stock Round panel's
+ *  ownership table had its own counter -- `percentage / 10`, less one for a president -- written for the
+ *  printed game where that is exactly the card count, and it never learned about the double. So a full N&W
+ *  IPO read "9 (100%)" for eight pieces of card, and a player holding the double read "2 (20%)".
+ *  ONE UNIT FOR EVERY ROW. The pools count here, the holders through `certificateCardsHeld`; the panel's own
+ *  arithmetic is gone. A president's certificate sits in the IPO while the presidency is unsold and never
+ *  reaches the Bank Pool (#448), which is the one asymmetry between the two pools. */
+export function certificateCardsInPool(company: CompanyLike, pool: "Ipo" | "Bank"): number {
+  const percentage = pool === "Ipo" ? company.ipo_pool_percentage : company.bank_pool_percentage;
+  if (percentage <= 0) return 0;
+  const president = pool === "Ipo" && company.president === null ? 1 : 0;
+  const double = doubleCertificateAt(company) === pool ? 1 : 0;
+  const ordinary = Math.max(
+    0,
+    percentage - president * SANDBOX_PRESIDENT_PERCENTAGE - double * DOUBLE_CERTIFICATE_PERCENT,
+  );
+  return president + double + Math.ceil(ordinary / SANDBOX_SHARE_PERCENTAGE);
+}
+
 /* ---- buying ------------------------------------------------------------------ */
 
 /** Why the double cannot be bought from `source` right now, or `null`. The price is twice a share; the

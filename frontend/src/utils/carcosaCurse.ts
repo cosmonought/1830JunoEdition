@@ -45,8 +45,20 @@ export function carcosaStanding(company: Pick<
  *  name -- would read as two different facts rather than one emphasised, and the ruling says so directly. */
 export function showsCurseBesideName(company: Pick<
   PublicCompanyState,
-  "is_carcosan" | "carcosan_trains"
+  "is_carcosan" | "carcosan_trains" | "has_yellow_sign"
 > | null | undefined): boolean {
+  /* ==================================================================
+      DESIGN NOTE 1404a: THE MARK IS SHOWN FROM THE MOMENT IT IS MADE
+     ==================================================================
+     REPORTED: "I also don't see the yellow sign mark on the corporation that experienced the marking. This
+     needs to be applied to their corporation card, Game Ledger, and Corporations panel (after abbreviation)."
+     #1091 put the sign beside the name only once the Carcosa train was GONE, reasoning from the chip: while
+     the gold-trimmed train is held, its chip wears the sign. But Stage 1 -- the Mark -- gifts no train; it
+     TAKES one, and nothing on screen said which corporation now waits for Carcosa. So a marked corporation
+     (`has_yellow_sign`, set by the Mark and cleared by the escalation) carries the sign beside its name
+     through the wait, the chip takes over while the train is held, and the name takes it back when the
+     train is gone -- one sign on screen at a time, which is #1091's rule kept. */
+  if (company?.has_yellow_sign === true) return true;
   return carcosaStanding(company) === "haunted";
 }
 

@@ -273,7 +273,10 @@ export function GameIntroOverlay({ onDone, sfxEnabled }: GameIntroOverlayProps) 
               className="app-intro-word"
               style={{ animationDelay: `${index * CREDIT_WORD_STAGGER_MS}ms` }}
             >
-              {word}{" "}
+              {word}
+              {/* Design note #1338: no trailing space after the LAST word -- a centred line that ends in a space
+                  sits half a space left of centre, which is the "ever so slightly off" that was reported. */}
+              {index < CREDIT_WORDS.length - 1 ? " " : ""}
             </span>
           ))}
         </p>
@@ -363,6 +366,10 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.heading,
     fontWeight: 600,
     letterSpacing: "0.08em",
+    /* Design note #1338: `letter-spacing` is added AFTER every glyph, the last one included, so a centred
+       line of tracked text sits half a track left of the glyphs' true centre. The same amount of left padding
+       puts the ink back under the mark. */
+    paddingLeft: "0.08em",
     color: "#f2f0eb",
     textShadow: "0 2px 12px rgba(0,0,0,0.8)",
     pointerEvents: "none",

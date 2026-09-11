@@ -206,7 +206,8 @@ describe("the variant cue does not happen twice", () => {
        copies of the condition -- #748a's rule, and the direct lesson of how this bug survived: the fog video
        was added as a fourth effect in this block one batch ago without anybody noticing the first three were
        unguarded. */
-    expect(block).toContain("if (ephemeral && cue.audio !== null)");
+    expect(block).toContain("if (ephemeral && cue.audio !== null && !(cue.video && cue.audioAtMs > 0))");
+    expect(block).toContain("if (ephemeral && cue.audio !== null && cue.video && cue.audioAtMs > 0)"); // #1376
     expect(block).toContain("if (ephemeral && cue.video)");
     expect(block).toContain("if (ephemeral && !cue.suppressStandardVisuals)");
   });
@@ -220,8 +221,8 @@ describe("the variant cue does not happen twice", () => {
     /* THE DISPATCHES ARE NOT GATED, asserted by position: each `runGameplayAction` in this block sits before
        the flag is ever consulted. `anchorIndex` rather than `indexOf` (#1090) so a vanished anchor throws
        instead of comparing against -1. */
-    expect(anchorIndex(block, "runGameplayAction(\"YellowSignEvent\"")).toBeLessThan(
-      anchorIndex(block, "if (ephemeral && cue.audio !== null)"),
+    expect(anchorIndex(block, "runGameplayAction(\n                    \"YellowSignEvent\"")).toBeLessThan(
+      anchorIndex(block, "if (ephemeral && cue.audio !== null"),
     );
   });
 

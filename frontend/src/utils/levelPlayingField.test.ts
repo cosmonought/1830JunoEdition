@@ -143,7 +143,7 @@ describe("player counts, cash and certificate limits (design note #1320)", () =>
 /* ------------------------------------------------------------------ */
 
 describe("the tray (design note #1320)", () => {
-  it("is the 18XX+ tray minus #5 (2), #6 (2), #592 (2) and #61 (2)", () => {
+  it("is the 18XX+ tray minus two 5, two 6, two 592, two 61 (#1385 restated; Toronto's pair restored by #1395)", () => {
     expect(LPF_TRAY_REMOVALS).toEqual([
       [5, 2],
       [6, 2],
@@ -155,15 +155,20 @@ describe("the tray (design note #1320)", () => {
       const after = LPF_TRAY.counts.get(tileId) ?? 0;
       expect(before - after).toBe(Math.min(before, removed));
     }
-    // Each of the four is removed outright, because the 18XX+ tray held exactly two of each.
+    // Each is removed outright: the 18XX+ tray holds exactly the count the ruling takes away.
     for (const [tileId] of LPF_TRAY_REMOVALS) expect(LPF_TRAY.counts.has(tileId)).toBe(false);
+    // #1385: with #61 gone, the brown B on this field is 884 or 997 -- typed as B tiles in the catalog.
+    expect(LPF_TRAY.counts.get(884)).toBe(1);
+    expect(LPF_TRAY.counts.get(997)).toBe(1);
     // Everything else is what it was.
     for (const [tileId, count] of Array.from(PLUS_TRAY.counts.entries())) {
       if (LPF_TRAY_REMOVALS.some(([removedId]) => removedId === tileId)) continue;
       expect(LPF_TRAY.counts.get(tileId)).toBe(count);
     }
-    // #810 and #882 are deliberately not coded (not in the catalog).
-    expect(LPF_TRAY_REMOVALS.some(([id]) => id === 810 || id === 882)).toBe(false);
+    // #1395: #810 and #882 (Toronto's green and brown) STAY, one each -- D10 is printed TO and takes only
+    // them, so removing them left a hex that could never be built through.
+    expect(LPF_TRAY.counts.get(810)).toBe(1);
+    expect(LPF_TRAY.counts.get(882)).toBe(1);
     // The 18XX+ tray is untouched.
     expect(PLUS_TRAY.counts.get(5)).toBe(2);
     expect(PLUS_TRAY.counts.get(61)).toBe(2);
@@ -371,7 +376,9 @@ describe("the new corporations (design note #1322)", () => {
     expect(corporationFullName("N&W")).toBe("Norfolk & Western");
     expect(corporationDisplayRank("PMQ")).toBeLessThan(corporationDisplayRank("PRR"));
     expect(corporationDisplayRank("N&W")).toBeLessThan(corporationDisplayRank("NYC"));
-    expect(logoSrcFor("PMQ")).toBe("/Logos/PMQ.jpeg");
+    // #1348: keyed out into an RGBA WebP like every other herald; the JPEG and its exception are gone.
+    expect(logoSrcFor("PMQ")).toBe("/Logos/PMQ.webp");
+    expect(require("fs").existsSync(require("path").join(__dirname, "..", "..", "public", "Logos", "PMQ.webp"))).toBe(true);
     expect(logoSrcFor("N&W")).toBe("/Logos/N%26W.webp");
   });
 

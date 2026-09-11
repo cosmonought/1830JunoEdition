@@ -229,11 +229,12 @@ describe("the index the composer stamps is the start of the clause", () => {
        is atmosphere", and on an unchanged roll that is the same question with the same answer.
        ASSERTED AS AN ORDER, not as two separate greps: the tint is passed conditionally and the index is
        passed after it, unconditionally. Two facts, two arguments. */
-    const call = sliceBetween(APP, "logInfo(\n                flavourWithAppendix,", ");");
+    // #1375: the Mark's run line takes neither the tint nor the italics -- its flavour is the next line.
+    const call = sliceBetween(APP, "logInfo(\n                markRunLine ?? flavourWithAppendix,", ");");
     expect(call).toContain('bucket === "unchanged" ? undefined');
-    expect(call).toContain("flavourFrom,");
+    expect(call).toContain("markRunLine ? undefined : flavourFrom,");
     expect(call.indexOf('bucket === "unchanged"')).toBeLessThan(call.indexOf("flavourFrom,"));
-    expect(call.length).toBeLessThan(1200);
+    expect(call.length).toBeLessThan(1500);
   });
 
   it("refuses a zero index at the stamp as well as at the render", () => {

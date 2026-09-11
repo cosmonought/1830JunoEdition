@@ -124,8 +124,6 @@ import {
   parseRoomCode,
   readSandboxLog,
   subscribeSandboxLog,
-  // Design note #644: sandbox chat hangs off the sandbox room, not a lobby one.
-  SANDBOX_ROOMS_COLLECTION,
   subscribeSandboxRoom,
   toSetupPlayers,
   upsertSandboxPlayer,
@@ -145,7 +143,7 @@ import {
   PENDING_SEAT_BACKSTOP_MS,
   type PendingSeat,
 } from "./utils/pendingSeat";
-import { isFirebaseConfigured } from "./config/firebase";
+import { isBackendConfigured } from "./config/backend";
 import StockMarketRenderer, {
   marketCellForPrice,
   // Design note #712: the price-to-zone lookup, injected into the purchase rules.
@@ -219,6 +217,7 @@ import DividendMoneyMachine, {
 } from "./components/DividendMoneyMachine";
 /* Design note #1272: the treasury's own machine, and the diff that feeds it. */
 import TreasuryMoneyMachine, { SPEND_SFX, type TreasuryMovementEvent } from "./components/TreasuryMoneyMachine";
+import { TREASURY_MACHINE_COALESCE_MS } from "./components/moneyMachineSchedule";
 import { movementToShow, treasuryMovements } from "./utils/treasuryMovement";
 // Design note #718: which dispatches earn a toast -- a named few, not everything that passes through.
 import { deservesActionReceipt } from "./utils/actionReceipt";
@@ -248,18 +247,18 @@ import {
   /* isSidelinedByMiniAuction not imported; the roster pills it fed are deleted.
      See docs/ai_architecture/state_machine.md - App.tsx #601 */
 } from "./utils/gameState";
-// Chat messages arrive pre-built from useFirestoreChat; this file constructs none.
+// Chat messages arrive pre-built from useRoomChat; this file constructs none.
 // See docs/ai_architecture/firebase_middleware.md - App.tsx #22
 import { mergeFeedItems, type ActionLogEntry, type FeedFilter } from "./utils/feed";
 // Design note #670: the payout confirmation. The arithmetic is in the util so
 // the replay and undo cases can be tested as sequences rather than screenshots.
-import {
-  cashByPlayer,
-  cashChanges,
-  settleCashDeltas,
-  type CashByPlayer,
-  type CashDelta,
-} from "./utils/cashDelta";
+import { cashByPlayer } from "./utils/cashDelta";
+// Design note #1339: the viewer's cash in the auction, for the cash machine.
+import { auctionCashMovement } from "./utils/auctionCashMovement";
+// Design note #1340a: the auction's sentences, read off the two states.
+import { describeAuctionTransition } from "./utils/auctionTransition";
+// Design note #1341: the seat PIN, for the hello.
+import { readSeatPin, readSeatToken } from "./utils/seatPin";
 import {
   depotInventory,
   openDepotTiers,
@@ -321,6 +320,8 @@ import { routeBlockedCityReason } from "./utils/routeWaypoints";
 import { dividendReceipt } from "./utils/dividendReceipt";
 // Design note #740: live, unsaved intent -- a hint, never a fact.
 import {
+  PRESENCE_HEARTBEAT_MS,
+  PRESENCE_PUBLISH_MS,
   shouldPublishNow,
   shouldPublishRoutes,
   visiblePresence,
@@ -375,6 +376,8 @@ import FleetLossModal from "./components/FleetLossModal";
 import BuyLicenseModal from "./components/BuyLicenseModal";
 // Design note #1332: the herald-home float, announced.
 import HeraldHomeFloatModal from "./components/HeraldHomeFloatModal";
+// Design note #1341: rejoin a seat from another device.
+import { SeatPinModal } from "./components/SeatPinModal";
 // Design note #818: the D&H's free station, asked for rather than left to be noticed.
 import { filterSandboxPlacements, isTokenableHex } from "./components/sandboxTileLegality";
 // Design note #716: the whole tray at every facing, so the glow can ask what actually fits a hex.
@@ -432,10 +435,12 @@ import {
   markPayout,
   MARK_APPENDIX,
   resolveFlavourLine,
+  runWithoutTrain, // #1375
+
   // Design note #1092: the doom clock, asked at the run rather than at the boundary.
   fogIsDue,
-  yellowSignStateFrom,
-  type ForcedSignStage,
+  yellowSignStateOf,
+  nextForcedSign,
 } from "./utils/yellowSign";
 import YellowSignOverlay from "./components/YellowSignOverlay";
 import type { HauntingComposite } from "./components/YellowSignOverlay";
@@ -459,6 +464,7 @@ import {
 import { availableCash, escrowedBids } from "./utils/auctionEscrow";
 import { privateHexFor } from "./utils/privateReservations";
 import { GameOverModal, type GameEndReason } from "./components/GameOverModal";
+import { gameHistoryFrom } from "./utils/gameHistory"; // #1411
 import { bankIsBroken, rankPlayers, PLACEHOLDER_TOTAL_ANTE, type PlayerStanding } from "./utils/endgame";
 import { turnGuardKey } from "./utils/turnGuardKey";
 import type { GameVariants } from "./utils/gameVariants";
@@ -514,7 +520,6 @@ import {
   applySandboxAction,
   applySandboxMarketAction,
   applyPrivateRevenue,
-  applySandboxWaterfallAction,
   /* Design note #642: `beginOperatingRound` is no longer imported here. The
      shell used to call it when it saw `stock_round_just_ended`; the reducer
      owns that now, which is the whole point of the change -- a round can only
@@ -561,7 +566,7 @@ import TutorialModal, {
   replayTutorials,
   tutorialModeEnabled,
 } from "./components/TutorialModal";
-import { useFirestoreChat } from "./components/ChatBox";
+import { useRoomChat } from "./components/ChatBox";
 // truncateAddress comes from utils/address.ts (configurable lead/trail), not utils/lobby.
 // Importing both would collide. See docs/ai_architecture/ui_shell_layout.md - App.tsx #382
 import { loadDisplayName, usePresenceHeartbeat } from "./utils/lobby";
@@ -581,6 +586,7 @@ import {
   BO_TICKER,
   eraForPhase,
   NO_TRAIN_ROUTE_REASON,
+  tileEraFor, // #1380
 } from "./utils/gameConstants";
 import {
   MOCK_BUY_STOCK_PAR_VALUE,
@@ -623,7 +629,6 @@ import {
 } from "./utils/activePrivatePower";
 import { playerFinances } from "./utils/playerFinance";
 import {
-  applyPrivateExchange,
   CA_BONUS_TICKER,
   CA_PRIVATE_ID,
   MH_PRIVATE_ID,
@@ -657,10 +662,13 @@ import {
   sandboxPlayerLabel,
   seatColor,
   setRoomColors,
+  resolveSeatColors,
   setRoomNicknames,
 } from "./utils/playerLabels";
 import { RevenueModifierFlash, type RevenueFlashSignal } from "./components/RevenueModifierFlash";
 import { RADIUS } from "./styles/typography";
+import { numberedPrivate, setPrivateOrder } from "./utils/privateOrdinal";
+import { isUpgradeDeadEnd } from "./utils/tileUpgrades"; // #1390
 /* Built once. `layTrackFocus` re-runs this filter for every candidate hex on the board, and rebuilding a
    276-entry list inside that loop would be the only expensive thing in the pass. */
 const ALL_TILE_PLACEMENTS = localCatalogPlacements();
@@ -674,9 +682,17 @@ const COMMITTED_PREVIEW_MS = 4000;
    on a bad connection, short enough that a dropped listener does not strand a player who could otherwise
    retry. The same reasoning, and the same figure, as #1169's seat echo. */
 const ACTION_LATCH_BACKSTOP_MS = 6000;
+/** #1376: how long past the line's moment a first frame may still start it, and how long past that moment
+ *  the shell waits for a frame before playing the line anyway (a viewer who is not on the map). */
+const HAUNTING_AUDIO_GRACE_MS = 1500;
 
 /** #1253: the room-error banner while the link is between sockets. A constant so the clear can recognise it. */
 const RECONNECTING_BANNER = "Connection to the room was lost — reconnecting…";
+/** #1407: the turn refusal's one wording -- the client gate's and `turnAuthority`'s -- so a landed move can
+ *  recognise and retire it. */
+const TURN_REFUSAL = "It is not your turn.";
+/** #1407: what a click during the reload's replay is told, in place of a turn refusal about a historical board. */
+const CATCHING_UP_BANNER = "Catching up with the room — try that again in a moment.";
 
 /* Design note #875: `RIVAL_ROUTE_INDEX_BASE` moved to `watcherRouteChips.ts`, which is now the thing that
    applies it. #740's reasoning travels with it: "rivals' live routes are keyed above any real train index, so
@@ -849,10 +865,18 @@ const gameOverReopenStyle: React.CSSProperties = {
 
    SEEDED HERE, IN ONE PLACE, FOR ALL THREE SEED SITES -- the initialisers for state and ref, and
    `rebuildSandbox`. A fourth copy of this expression is how the last one drifted. */
+/* Design note #1340: AND THE AUCTION ATOM, for #1224's reason exactly. `RoomEngine`'s constructor puts
+   `seed.waterfall` on the state; the shell's state must start with the same field or the two boards differ
+   before a single action is played. A room seeds the empty-roster auction (`waterfallForRoster(..., [])`,
+   #578); a scenario played alone seeds the fixture's own. */
 function withSeededChart(
   board: GameStateResponse,
   scenarioId: Parameters<typeof sandboxScenario>[0],
+  gameId: number,
+  room: boolean,
 ): GameStateResponse {
+  const scenario = sandboxScenario(scenarioId);
+  const auction = sandboxWaterfallState(scenario.phase, gameId, scenario.zeroState === true);
   return {
     ...board,
     /* Design note #387: the Zero State seeds an EMPTY chart -- nothing is parred at turn one, so nothing has
@@ -861,8 +885,9 @@ function withSeededChart(
     market_positions: sandboxInitialMarketPrices(
       marketCellForPrice,
       parBoxCellFor,
-      sandboxScenario(scenarioId).zeroState,
+      scenario.zeroState,
     ),
+    waterfall: room ? waterfallForRoster(auction, []) : auction,
   };
 }
 
@@ -908,17 +933,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     () => new Set<string>(),
   );
 
-  /** Design note #303: what each private actually sold for, by id. */
-  const [settledPrivatePrices, setSettledPrivatePrices] = useState<Readonly<Record<number, number>>>(
-    {},
-  );
-  /** Design note #310: mirrored into a ref so the undo snapshot can capture
-   *  it from inside the dispatch closure, the same reason `sandboxStateRef`
-   *  exists. */
-  const settledPrivatePricesRef = useRef<Readonly<Record<number, number>>>(settledPrivatePrices);
-  useEffect(() => {
-    settledPrivatePricesRef.current = settledPrivatePrices;
-  }, [settledPrivatePrices]);
+  /* Design note #303's `settledPrivatePrices` -- what each private actually sold for -- was a `useState` this
+     shell wrote from the auction's report. #1340: the reducer records it on the private itself
+     (`settled_price`), so it is READ here, from the board, like everything else the board knows. */
 
   // Train distribution is a second fixture axis, not a sixth scenario. Setter removed with the toolbar (#578).
   // See docs/ai_architecture/state_machine.md - App.tsx #246
@@ -933,6 +950,23 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   /** Read-only identity: decides whose figures to show and which controls light up. It never signs.
    *  See docs/ai_architecture/session_keys_wallet.md - App.tsx #25 */
   const [sandboxRoomCode, setSandboxRoomCode] = useState<string | null>(sandboxRoomSeed);
+  /* ==================================================================
+      DESIGN NOTE 1373: THE SHELL'S ROOM IS THE ONE A REFRESH MUST FIND
+     ==================================================================
+     REPORTED: "when I refreshed, it took me back to a page where I had to re-enter the room number? it used
+     to just refresh me back to the game."
+     TWO COPIES OF THE CODE. The root `App` holds one, seeded from the session and written back to it by an
+     effect (#551), and this shell holds another, seeded from the root ONCE and then owned by the gate's Host
+     and Join. Entering from the Lobby sets the root's copy and the session with it; entering from the shell's
+     own gate -- where "Back to the lobby" leaves a player, and how a seat is re-joined by code -- set only
+     this one, which nothing persisted. A refresh then found the game flag and no room, and asked for the
+     code. It "used to work" because the table used to arrive through the Lobby.
+     SO THIS COPY IS WRITTEN TO THE SESSION AS WELL, by the same function under the same key. Both effects
+     agree at mount, and whichever copy changes last is the one a refresh reads -- which is the one the player
+     was looking at. */
+  useEffect(() => {
+    writeActiveSandboxRoom(sandboxRoomCode);
+  }, [sandboxRoomCode]);
   const localId = localPlayerId();
 
   /* In a room this browser is one person with one id, which makes every existing turn/president gate correct at once.
@@ -1087,7 +1121,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       if (!sandbox) return null;
       const board = sandboxScenarioState(sandboxScenarioId, gameId, sandboxTrainFixture);
       // #1224: the chart goes ON the state, exactly as `RoomEngine`'s constructor does it.
-      return withSeededChart(roomCode ? withEmptyRoster(board) : board, sandboxScenarioId);
+      return withSeededChart(roomCode ? withEmptyRoster(board) : board, sandboxScenarioId, gameId, roomCode !== null);
     },
     [sandbox, sandboxScenarioId, gameId, sandboxTrainFixture],
   );
@@ -1099,6 +1133,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             ? withEmptyRoster(sandboxScenarioState(sandboxScenarioId, gameId, sandboxTrainFixture))
             : sandboxScenarioState(sandboxScenarioId, gameId, sandboxTrainFixture),
           sandboxScenarioId,
+          gameId,
+          sandboxRoomSeed !== null,
         )
       : null,
   );
@@ -1112,6 +1148,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             ? withEmptyRoster(sandboxScenarioState(sandboxScenarioId, gameId, sandboxTrainFixture))
             : sandboxScenarioState(sandboxScenarioId, gameId, sandboxTrainFixture),
           sandboxScenarioId,
+          gameId,
+          sandboxRoomSeed !== null,
         )
       : null,
   );
@@ -1137,7 +1175,6 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     // See docs/ai_architecture/state_machine.md - App.tsx #330
     if (sandbox) {
       setActionLog([]);
-      setSettledPrivatePrices({});
       setUsedPrivateAbilities(new Set<string>());
     }
     // Design note #246: flipping the trade fixture re-seeds too. It changes
@@ -1147,6 +1184,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   }, [sandbox, sandboxScenarioId, sandboxTrainFixture, gameId, sandboxRoomCode, seedSandboxState]);
 
   const gameState = sandboxState ?? liveGameState;
+  /* #1370: THE PRIVATES' NUMBERS, PUBLISHED WHERE THEY ARE HELD. Written during render rather than in an
+     effect so the very first paint of a freshly dealt game numbers its privates by position; idempotent, and
+     the roster of privates changes once, at the deal. */
+  const privateOrderKey = (gameState?.private_companies ?? []).map((entry) => entry.private_id).join(",");
+  useMemo(() => setPrivateOrder(gameState?.private_companies ?? []), [privateOrderKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* Design note #1296: the corporations that have operated this round -- derived, never logged. */
   const operatedCompanyIds = useMemo<ReadonlySet<number>>(() => {
@@ -1762,6 +1804,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     });
   }, [gameEndReason, gameState, sandbox, sandboxMarketPrices, emergencyPurchasePlan]);
 
+
   /* Design note #899: HOISTED ABOVE ITS FIRST READER. `closeRoom` below calls through this ref, and it was
      declared two thousand lines lower -- fine for the callers that came after it, a temporal-dead-zone error
      for one that comes before. Moving the declaration is safer than moving the closure block, which depends
@@ -1799,7 +1842,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     if (!gameState || actingProtocolId === null || !kanawhaLicensesInPlay(gameState)) return null;
     const company = gameState.public_companies.find((entry) => entry.company_id === actingProtocolId);
     if (!company || licensesHeldBy(company) > 0) return null;
-    if (orSubPhase !== "Track") return null;
+    /* #1342 (feedback 1): the chip showed, greyed, in a Stock Round -- `operating_sub_phase` and the acting
+       corporation both outlive the Operating Round they belong to (#1235 leaves the cursor where the OR ended),
+       so the step test alone was true between rounds. The ROUND is the gate, then the step. */
+    if (gameState.current_round_type !== "OperatingRound" || orSubPhase !== "Track") return null;
     return {
       cost: KANAWHA_LICENSE_COST,
       remaining: licensesRemainingForSale(gameState),
@@ -1839,13 +1885,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     let refusal: string | null;
     if (!company) refusal = "No corporation is operating at the moment.";
     else if (alreadyHeld) refusal = `${company.ticker} already holds a licence.`;
-    else if (orSubPhase !== "Track") refusal = "A licence is bought during the corporation's Lay Track step.";
+    else if (gameState.current_round_type !== "OperatingRound" || orSubPhase !== "Track")
+      refusal = "A licence is bought during the corporation's Lay Track step.";
     else refusal = kanawhaLicenseRefusal(gameState, actingProtocolId as number);
     return {
       actingTicker: company?.ticker ?? null,
       remaining: licensesRemainingForSale(gameState),
       alreadyHeld,
       refusal,
+      // #1388: the treasury the confirm line quotes.
+      treasury: company ? Number(company.treasury) || 0 : null,
     };
   }, [gameState, actingProtocolId, orSubPhase]);
 
@@ -1926,24 +1975,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     closeRoom("timer");
   }, [autoCloseRemaining, closeRoom]);
 
-  /* ==================================================================
-      DESIGN NOTE 905: THE SHELL'S AUCTION ATOM FOLLOWS THE REDUCER'S ROUND
-     ==================================================================
-     `waterfall_auction_active` lives on the shell's own atom rather than on `GameStateResponse`, so the
-     reducer cannot set it when it moves the round to `WaterfallAuction` before Stock Round 3. This is the
-     shell catching up -- the same direction #542 already runs in, with the reducer as the authority.
-     A CONDITION, NOT AN EVENT, which is what makes it safe under #656's rule. It asks "is the round an
-     auction that has not concluded" rather than watching for an edge, so a replay, a refresh and a late
-     joiner all arrive at the same answer without anything having had to observe the transition happen. */
-  useEffect(() => {
-    if (gameState?.current_round_type !== "WaterfallAuction") return;
-    if (gameState.private_auction_complete === true) return;
-    const atom = sandboxWaterfallRef.current;
-    if (!atom || atom.waterfall_auction_active) return;
-    const armed = { ...atom, waterfall_auction_active: true };
-    sandboxWaterfallRef.current = armed;
-    setSandboxWaterfall(armed);
-  }, [gameState?.current_round_type, gameState?.private_auction_complete]);
+  /* Design note #905's arming of the auction atom when the round reaches it -- a condition, not an event --
+     is the reducer's now (#1340, `settleAuctionLifecycle`), applied after every action to the atom on the
+     state; the mirror below simply shows the result. */
 
   /* Design note #900: dismissed, not destroyed. Re-armed whenever a NEW ending arrives so an Undo back into
      play and a second ending does not open silently behind a dismissal from the first. */
@@ -2078,6 +2112,44 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     /** Design note #1260: when the window opened, so a viewer arriving on the map mid-clip joins it there. */
     startedAt: number;
   } | null>(null);
+  /* ==================================================================
+      DESIGN NOTE 1376: THE SPOKEN LINE WAITS FOR THE FILM'S FIRST FRAME
+     ==================================================================
+     The cue's `audioAtMs` (`variantSfx.ts` #1376) is counted from the frame the overlay reports, not from
+     dispatch: a film that took a second to fetch through a tunnel used to have its line finish before it
+     started. One pending line at a time; a fallback plays it at the same offset from dispatch plus a grace
+     when no frame is ever reported (the viewer is not on the map), and a frame that arrives after the
+     line's moment has passed -- a late viewer -- plays nothing, the moment having gone. */
+  const hauntingAudioRef = useRef<{
+    audio: string;
+    audioAtMs: number;
+    dispatchedAt: number;
+    fired: boolean;
+    timer: number | null;
+  } | null>(null);
+  const playHauntingLine = useCallback(() => {
+    const pending = hauntingAudioRef.current;
+    if (!pending || pending.fired) return;
+    pending.fired = true;
+    if (pending.timer !== null) window.clearTimeout(pending.timer);
+    pending.timer = null;
+    playVariantCue(pending.audio, sfxEnabledRef.current && sfxRevenueRef.current);
+  }, []);
+  const handleHauntingFirstFrame = useCallback(
+    (elapsedMs: number) => {
+      const pending = hauntingAudioRef.current;
+      if (!pending || pending.fired) return;
+      const wait = pending.audioAtMs - elapsedMs;
+      if (wait < -HAUNTING_AUDIO_GRACE_MS) {
+        pending.fired = true; // the moment has passed; a late viewer hears nothing
+        if (pending.timer !== null) window.clearTimeout(pending.timer);
+        return;
+      }
+      if (pending.timer !== null) window.clearTimeout(pending.timer);
+      pending.timer = window.setTimeout(playHauntingLine, Math.max(0, wait));
+    },
+    [playHauntingLine],
+  );
   /* Design note #1040: read inside a dispatch handler long after the commit that set it, so refs rather than
      the state -- the same reason `useSoundEffect` holds its mute in one (#1009). */
   const sfxEnabledRef = useRef(sfxEnabled);
@@ -2086,6 +2158,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   useEffect(
     () => () => {
       if (hauntingTimerRef.current !== null) window.clearTimeout(hauntingTimerRef.current);
+      if (hauntingAudioRef.current?.timer != null) window.clearTimeout(hauntingAudioRef.current.timer);
     },
     [],
   );
@@ -2094,7 +2167,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      keeps the hook a transport. Seeded from `localStorage` in the initialiser so the first render already
      has the right one and no effect has to correct it. */
   const [station, setStation] = useState(loadRadioStation);
-  const radio = useRadioStream(station.url);
+  const radio = useRadioStream(station.url, station.fallbacks); // #1359: the sibling hosts, on error
   const handleStationChange = useCallback((id: string) => {
     const next = RADIO_STATIONS.find((entry) => entry.id === id);
     if (!next) return;
@@ -2442,12 +2515,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     error: chatError,
     // The sandbox gets its own room and its own identity: localId is the author, matching the action log's actor.
     // See docs/ai_architecture/firebase_middleware.md - App.tsx #644
-  } = useFirestoreChat(
+  } = useRoomChat(
     sandbox ? sandboxRoomCode : roomId,
     sandbox ? localId : wallet.address,
     // Design note #765: the roster nickname in a sandbox room, the lobby name outside one.
     sandboxChatName,
-    sandbox ? SANDBOX_ROOMS_COLLECTION : undefined,
   );
   const [chatDraft, setChatDraft] = useState("");
   // Renamed from `feedOpen` -- design note #20/item 1. Same boolean role,
@@ -3122,6 +3194,19 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           privateTileHexKey: privateTileHexKeyRef.current,
         })
       ) {
+        /* ==================================================================
+            DESIGN NOTE 1390: A FINAL TILE SAYS SO WHEN IT IS CLICKED
+           ==================================================================
+           REPORTED (LPF, #626 on H18): "the green OO tiles when clicked do not have any tileselector popups
+           to upgrade them" -- and 626 has no brown in the catalogue: its two cities' exits ({0,1} and {3,4})
+           match no brown OO. RULED: "there's no upgrade for 626, it stops at Green." A click that does
+           nothing looks like the board being broken; a click that says why is the game being played. The
+           Tile Reference already knows the word (`isUpgradeDeadEnd`); the board marks such tiles (#1390 in
+           `HexGridRenderer`) and the click says it. */
+        const laidHere = mapGridRef.current.tiles.find((tile) => tile.q === state.q && tile.r === state.r);
+        if (laidHere && isMyTurnRef.current && isUpgradeDeadEnd(laidHere.tile_id)) {
+          showActionToast(`Tile #${laidHere.tile_id} has no upgrade in this game — ${state.hexLabel} stays as it is.`);
+        }
         setRadialSelector(null);
         setPreviewTile(null);
         return;
@@ -3538,6 +3623,22 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   /** The log as last seen, for the undo controls; a ref so pressing a button does not rebuild the handlers. Mirrors `at` too (#643), and `derived` (#668) -- typed as `SandboxAction` rather than restated, so the next field cannot go missing the way those two did.
    *  See docs/ai_architecture/state_machine.md - App.tsx #591 */
   const sandboxLogRef = useRef<SandboxAction[]>([]);
+
+  /* #1411: the game as a round-by-round timeline for the epilogue's charts -- the room's log replayed and
+     sampled (`gameHistoryFrom`). Computed once, when the game ends, from the same log every client holds;
+     `null` in a solo sandbox, which has no room log to read. */
+  const gameHistory = useMemo(() => {
+    if (!gameEndReason || !sandbox || sandboxLogRef.current.length === 0) return null;
+    try {
+      return gameHistoryFrom(sandboxLogRef.current);
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.warn("[epilogue] could not build the game history", error);
+      return null;
+    }
+    // sandboxLogRef is a ref; the reason flipping is what makes the log final.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gameEndReason, sandbox]);
   /* Log index of the last round-opening action, derived from the log rather than counted, so an undo cannot leave it stale.
      See docs/ai_architecture/state_machine.md - App.tsx #592 */
   const roundBoundaryIndexRef = useRef<number | null>(null);
@@ -3570,8 +3671,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   const isSandboxHost = sandbox && sandboxRoom !== null && sandboxRoom.hostId === localId;
   const cycleForcedSign = useCallback(() => {
     if (!isSandboxHost) return;
-    const order: (ForcedSignStage | null)[] = [null, "mark", "carcosa", "fog"];
-    const next = order[(order.indexOf(forcedSign) + 1) % order.length];
+    /* #1404: the cycle offers only the stages the game can still reach -- see `forcedSignStagesAvailable`. */
+    const state = sandboxStateRef.current;
+    const next = nextForcedSign(
+      forcedSign,
+      yellowSignStateOf(state?.public_companies ?? [], actionLogRef.current.map((entry) => entry.label)),
+      derivePhase(state)?.tier ?? "2",
+    );
     void setSandboxForcedSign(sandboxRoomRef.current ?? "", next);
   }, [forcedSign, isSandboxHost]);
 
@@ -4033,37 +4139,69 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       return;
     }
 
+    /* ==================================================================
+        DESIGN NOTE 1397: THE LAST KEYSTROKE IS PUBLISHED, AND THE ENTRY IS KEPT ALIVE
+       ==================================================================
+       REPORTED (with a picture of "7-Train —"): watchers' chips blank during the president's Run Routes.
+       TWO WAYS A WATCHER COULD BE LOOKING AT NOTHING WHILE THE PRESIDENT LOOKED AT A PRICED ROUTE:
+       (1) THE FLOOR DROPPED THE LAST CHANGE. `shouldPublishNow` refused any publish inside 400ms of the
+           previous one and this effect simply returned -- there was no trailing send. Two state changes
+           inside the window (a click and the pricing that follows it, an auto-route and its second pass)
+           left the second unpublished until the NEXT change, which on a president who was done drafting
+           never came. The watcher held the earlier frame: the path, without its figure.
+       (2) THE ENTRY WENT STALE WHILE THE PRESIDENT THOUGHT. `PRESENCE_STALE_MS` is six seconds and nothing
+           republished while the drafts stood still, so the next presence frame from anybody -- a reconnect,
+           another seat clearing -- made the watcher re-filter against `Date.now()` and drop the president's
+           entry as stale. Routes and chips both vanished, on a turn that was still in progress.
+       SO: a refused publish schedules itself for the end of the window, and a heartbeat republishes the
+       standing state every `PRESENCE_HEARTBEAT_MS` while this client is the one drafting. Both send the
+       SAME payload this effect always sent; neither adds a channel. */
+    const publish = () => {
+      const now = Date.now();
+      lastPresenceAtRef.current = now;
+      void publishPresence(room, {
+        playerId: me,
+        at: now,
+        actingCompanyId: actingProtocolId,
+        routeDrafts: Object.fromEntries(
+          Object.entries(routeDrafts).map(([index, points]) => [
+            Number(index),
+            points.map((point) => [point.q, point.r] as [number, number]),
+          ]),
+        ),
+        /* ==================================================================
+            DESIGN NOTE 1021: PUBLISH THE FIGURE, NOT JUST THE PATH
+           ==================================================================
+           REPORTED: the acting player's client priced a route at $440 and a watching client priced the same
+           route at $450.
+
+           `trainDrafts` IS THE ACTING PLAYER'S OWN ANSWER -- the exact value on the chips they are looking at,
+           priced against their board, their era and their bypass marks. Publishing it means a watcher renders
+           what the drafter sees rather than a second opinion assembled from inputs that only mostly agree.
+
+           READ FROM `trainDrafts` RATHER THAN RE-PRICED HERE, which would have been the same mistake one file
+           over: two calls to one pricer is still two answers. */
+        routeValues: Object.fromEntries(
+          trainDrafts
+            .filter((draft) => draft.value !== null)
+            .map((draft) => [draft.trainIndex, draft.value as number]),
+        ),
+      });
+    };
+
     const now = Date.now();
-    if (!shouldPublishNow(lastPresenceAtRef.current, now)) return;
-    lastPresenceAtRef.current = now;
-    void publishPresence(room, {
-      playerId: me,
-      at: now,
-      actingCompanyId: actingProtocolId,
-      routeDrafts: Object.fromEntries(
-        Object.entries(routeDrafts).map(([index, points]) => [
-          Number(index),
-          points.map((point) => [point.q, point.r] as [number, number]),
-        ]),
-      ),
-      /* ==================================================================
-          DESIGN NOTE 1021: PUBLISH THE FIGURE, NOT JUST THE PATH
-         ==================================================================
-         REPORTED: the acting player's client priced a route at $440 and a watching client priced the same
-         route at $450.
-
-         `trainDrafts` IS THE ACTING PLAYER'S OWN ANSWER -- the exact value on the chips they are looking at,
-         priced against their board, their era and their bypass marks. Publishing it means a watcher renders
-         what the drafter sees rather than a second opinion assembled from inputs that only mostly agree.
-
-         READ FROM `trainDrafts` RATHER THAN RE-PRICED HERE, which would have been the same mistake one file
-         over: two calls to one pricer is still two answers. */
-      routeValues: Object.fromEntries(
-        trainDrafts
-          .filter((draft) => draft.value !== null)
-          .map((draft) => [draft.trainIndex, draft.value as number]),
-      ),
-    });
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    if (shouldPublishNow(lastPresenceAtRef.current, now)) {
+      publish();
+    } else {
+      const wait = Math.max(0, PRESENCE_PUBLISH_MS - (now - (lastPresenceAtRef.current ?? now)));
+      timers.push(setTimeout(publish, wait));
+    }
+    const heartbeat = setInterval(publish, PRESENCE_HEARTBEAT_MS);
+    return () => {
+      timers.forEach(clearTimeout);
+      clearInterval(heartbeat);
+    };
     // Design note #1021: `trainDrafts` joins the deps because the published figures come from it.
   }, [sandboxRoomCode, viewerAddress, isMyTurn, orSubPhase, routeDrafts, trainDrafts, actingProtocolId]);
 
@@ -4140,8 +4278,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     /* THE ACTING CORPORATION'S OWN ENTRY, not "any rival". Presence carries one entry per connected player;
        the one that matters is whoever is publishing drafts for the company now operating. `null` when nobody
        is -- the ordinary case at the start of the step, and the case that used to produce no row at all. */
+    /* #1386: REPORTED "the train chips in the Action Bar do not list the values of those routes" while the
+       routes themselves were on the map -- the map draws every visible entry's drafts, the chips only the
+       entry whose `actingCompanyId` matches this tab's acting corporation. An Operating Round has one
+       drafter, so when no entry names the corporation, the one entry that IS publishing drafts is that
+       drafter, and the chips take it rather than showing dashes beside routes the map is already drawing. */
     const actor =
-      rivalPresence.find((entry) => entry.actingCompanyId === actingProtocolId) ?? null;
+      rivalPresence.find((entry) => entry.actingCompanyId === actingProtocolId) ??
+      (() => {
+        const drafting = rivalPresence.filter((entry) => Object.keys(entry.routeDrafts ?? {}).length > 0);
+        return drafting.length === 1 ? drafting[0] : null;
+      })();
     return watcherTrainDrafts({
       roster: ownedTrainRoster,
       actorDrafts: actor?.routeDrafts ?? null,
@@ -4296,6 +4443,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         : MOCK_MARKET_GRID,
     [sandbox, gameId, sandboxMarket],
   );
+
+  /** Design note #303 / #1340: what each private actually sold for, by id -- read off the board. */
+  const settledPrivatePrices = useMemo<Readonly<Record<number, number>>>(() => {
+    const out: Record<number, number> = {};
+    for (const entry of gameState?.private_companies ?? []) {
+      if (entry.settled_price !== undefined) out[entry.private_id] = entry.settled_price;
+    }
+    return out;
+  }, [gameState]);
 
   /* One PlayerFinances per seat, memoised - sellableHoldings walks every corporation for every player.
      See docs/ai_architecture/stock_market.md - App.tsx #563 */
@@ -4452,9 +4608,51 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   const treasuryMachineTokenRef = useRef(0);
   const [treasuryQueue, setTreasuryQueue] = useState<TreasuryMovementEvent[]>([]);
   const treasuryMovement = treasuryQueue[0] ?? null;
-  const showTreasuryMovement = useCallback((movement: TreasuryMovementEvent) => {
-    if (replayingHistory) return;
-    setTreasuryQueue((queue) => [...queue, movement]);
+  /* ==================================================================
+      DESIGN NOTE 1372: BACK-TO-BACK SPENDS BY ONE TREASURY ARRIVE AS ONE PANEL
+     ==================================================================
+     ASKED: "Since players now buy trains one at a time, is it possible to have some kind of 'stagger' that
+     waits to see if they click the button multiple times before the Treasury slide-out?"
+     EACH DISPATCH DIFFS THE BOARD (#1272), so two trains bought in two clicks were two movements, queued and
+     played in turn -- seven seconds of panels for what the player did in three. So a movement is HELD for a
+     short window before it is queued, and a second movement by the same corporation inside that window is
+     folded into it: the sum of the amounts, the first movement's opening balance, the last one's closing
+     balance, and the window restarts. A movement by a DIFFERENT corporation releases the held one at once
+     and starts its own hold -- they are different news. The cost is that every treasury panel now appears
+     `TREASURY_MACHINE_COALESCE_MS` later than it did, which is the trade the question asked for. */
+  const heldTreasuryRef = useRef<{ movement: TreasuryMovementEvent; timer: number } | null>(null);
+  const releaseHeldTreasury = useCallback(() => {
+    const held = heldTreasuryRef.current;
+    if (!held) return;
+    window.clearTimeout(held.timer);
+    heldTreasuryRef.current = null;
+    setTreasuryQueue((queue) => [...queue, held.movement]);
+  }, []);
+  const showTreasuryMovement = useCallback(
+    (movement: TreasuryMovementEvent) => {
+      if (replayingHistory) return;
+      const held = heldTreasuryRef.current;
+      let next = movement;
+      if (held) {
+        if (held.movement.companyId === movement.companyId) {
+          next = {
+            ...movement,
+            amount: held.movement.amount + movement.amount,
+            treasuryBefore: held.movement.treasuryBefore,
+          };
+          window.clearTimeout(held.timer);
+          heldTreasuryRef.current = null;
+        } else {
+          releaseHeldTreasury();
+        }
+      }
+      const timer = window.setTimeout(releaseHeldTreasury, TREASURY_MACHINE_COALESCE_MS);
+      heldTreasuryRef.current = { movement: next, timer };
+    },
+    [releaseHeldTreasury],
+  );
+  useEffect(() => () => {
+    if (heldTreasuryRef.current) window.clearTimeout(heldTreasuryRef.current.timer);
   }, []);
   const handleTreasuryMachineDone = useCallback(() => setTreasuryQueue((queue) => queue.slice(1)), []);
   /* Design note #1291 (9): the spend's whoosh, through the same helper as every cue (#1041), under the
@@ -4556,55 +4754,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      effect could read it means two answers to one question kept in step by hand, which is #891, and it would
      still be racing the commit it was added to describe. */
 
-  const [cashDeltas, setCashDeltas] = useState<CashDelta[]>([]);
-  const noteCashChanges = useCallback(
-    (changes: ReadonlyArray<{ address: string; amount: number }>) => {
-      if (changes.length === 0) return;
-      setCashDeltas((current) => settleCashDeltas(current, changes, Date.now()));
-    },
-    [],
-  );
-
-  /* A badge has to be able to expire with nothing else happening -- a dividend
-     is often the last event for a while. So a timer re-settles the set, which
-     drops whatever has aged out; `settleCashDeltas` returns the SAME array when
-     nothing expired, so this cannot loop. */
-  useEffect(() => {
-    if (cashDeltas.length === 0) return undefined;
-    const timer = window.setTimeout(() => {
-      setCashDeltas((current) => {
-        const next = settleCashDeltas(current, [], Date.now());
-        return next.length === current.length ? current : next;
-      });
-    }, 500);
-    return () => window.clearTimeout(timer);
-  }, [cashDeltas]);
-
-  /* THE LIVE-CHAIN HALF. Polled state, so the only question a diff can answer
-     is "different from last time" -- which is the right question there and the
-     wrong one in a room, where a rebuild replays the entire game through the
-     same state variable and would fire a badge for every historic action at
-     once. Hence the guard: in a room the drain measures instead. */
-  const polledCashRef = useRef<CashByPlayer>({});
-  useEffect(() => {
-    if (sandbox) return;
-    const next = cashByPlayer(liveGameState);
-    const previous = polledCashRef.current;
-    polledCashRef.current = next;
-    noteCashChanges(cashChanges(previous, next));
-  }, [sandbox, liveGameState, noteCashChanges]);
-
-  /** Keyed for the two surfaces that render a badge. Rebuilt only when the set
-   *  changes, so a card is not re-rendered by an unrelated poll. */
-  const cashDeltaByPlayer = useMemo(() => {
-    const out: Record<string, CashDelta> = {};
-    for (const delta of cashDeltas) out[delta.address] = delta;
-    return out;
-  }, [cashDeltas]);
-  const cashDeltaFor = useCallback(
-    (address: string) => cashDeltaByPlayer[address]?.amount ?? 0,
-    [cashDeltaByPlayer],
-  );
+  /* ==================================================================
+      DESIGN NOTE 1339: THE BADGE IS GONE; THE MACHINES ANSWER #670 NOW
+     ==================================================================
+     REPORTED (item 3): "After buying a private company in the Auction, my player card's cash printed
+     '$1140 −$40' -- this is weird ... The player card should just show the current cash."
+     #670's badge answered "did the payout happen" when a balance was the only surface. Since #1060 the
+     dividend machine shows the money arriving, #1272 shows a treasury moving, and #1339 (below, in the drain)
+     shows the viewer's own cash leaving for a private and arriving as private income. A six-second suffix
+     on the figure was a second, quieter statement of the same event, and read as a reservation. The cards
+     print the balance; the movement is the slide-out's job. `cashDelta.ts` stays -- pure and tested -- with
+     no caller. */
 
   /* Design note #670 built `playerCashRows` for the strip: "seating order, cash only -- everything else a
      player might want is a tab away, and a second copy of it here would be a second thing to keep true."
@@ -5234,6 +5394,18 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
            refuses an out-of-turn move regardless (#1205) -- so a gate that is occasionally too PERMISSIVE
            costs a readable refusal from the server. A gate that is occasionally too RESTRICTIVE locks the game
            with no line anywhere, which is what happened. Between the two errors, this is the one to make. */
+        /* #1407: A BOARD MID-REPLAY IS NOBODY'S TURN TO JUDGE. After a reload the drain applies the whole log
+           an action at a time, and a click that lands during it is gated against whichever historical board
+           the drain has reached -- which is how a president on turn was told "It is not your turn". Said
+           honestly instead, and not sent: the player tries again a moment later on the settled board. */
+        if (
+          options?.isRemoteReplay !== true &&
+          options?.automatic !== true &&
+          replayingRef.current
+        ) {
+          setSandboxRoomError(CATCHING_UP_BANNER);
+          return;
+        }
         const boardNow = sandboxStateRef.current;
         const onTurnNow =
           boardNow !== null
@@ -5278,7 +5450,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                 `isMyTurn(ref) ${isMyTurnRef.current}`,
             );
           }
-          setSandboxRoomError("It is not your turn.");
+          setSandboxRoomError(TURN_REFUSAL);
           return;
         }
 
@@ -5382,7 +5554,23 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             }
             // Design note #1173a: released -- nothing will advance the cursor past an action that never landed.
             setPendingAppendIndex((current) => (current === appendAt ? null : current));
-          } else if (appliedIndexRef.current === appendAt) {
+          } else {
+            /* ==================================================================
+                DESIGN NOTE 1407: AN ACCEPTED MOVE RETIRES THE REFUSAL ABOVE IT
+               ==================================================================
+               REPORTED: "the page says 'It is not your turn' even though it is my turn" -- and the turn was
+               then played, every action accepted, with the banner still up. The strip's error is sticky: a
+               local turn-gate refusal (a click while the drain was still replaying the log after a reload,
+               when the board mid-replay pointed at somebody else's seat) or a server `refused` frame set it,
+               and nothing cleared it when the next action went through. A refusal the room has since
+               contradicted is not information; it is the thing the player is reading instead of the game. So
+               a landed submission clears exactly the turn refusals -- the reconnecting banner and a
+               divergence verdict are about other facts and stand. */
+            if (options?.automatic !== true) {
+              setSandboxRoomError((current) => (current === TURN_REFUSAL ? null : current));
+            }
+          }
+          if (allocated !== null && appliedIndexRef.current === appendAt) {
             /* Design note #916: only when nothing else has moved it. A snapshot may already have landed
                during the await and advanced it past this write; overwriting that with `appendAt + 1` would
                walk the cursor BACKWARDS and re-apply actions the client had already taken in. */
@@ -5565,14 +5753,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                 msg.SetupGame.players.map((player) => [player.id, player.nickname || "Player"]),
               ),
             );
-            /* Design note #569: and their colours, from the same payload and in the same breath. */
-            setRoomColors(
-              Object.fromEntries(
-                msg.SetupGame.players
-                  .filter((player) => typeof player.color === "string" && player.color)
-                  .map((player) => [player.id, player.color as string]),
-              ),
-            );
+            /* Design note #569: and their colours, from the same payload and in the same breath.
+               #1337: EVERY seat's, resolved from the roster, so no two seats share one. */
+            setRoomColors(resolveSeatColors(msg.SetupGame.players));
             logInfo(
               "Room",
               `Game dealt for ${dealt.playerAddresses.length} players — $${dealt.startingCash} each, certificate limit ${dealt.certLimit}.`,
@@ -5732,120 +5915,18 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
            union recorded as an audit item; this is the same IOU the engine already carries, not a new one. */
         const gameplay = msg as GameplayExecuteMsg;
 
+        /* ==================================================================
+            DESIGN NOTE 1340: THE SHELL DISPATCHES; THE REDUCER SETTLES THE AUCTION
+           ==================================================================
+           A hundred and twenty lines stood here applying the waterfall sub-reducer's report to the board --
+           #261's atom advance, #334a's charges, #303's owners, #576's C&A share, #337's all-pass income --
+           the composition `RoomEngine` transcribed and was found short three times (#1192, #1227, #1281).
+           `applySandboxAction` performs every one of them now, on the auction it carries in `state.waterfall`
+           (#1196's shape). The atom goes IN with the board below and comes OUT with it; `sandboxWaterfallRef`
+           is a render mirror from here, exactly as `sandboxMarketRef` has been since #1211.
+           THE SENTENCES SURVIVE, derived from the two states after the dispatch (`describeAuctionTransition`,
+           #1340a) -- "the reducer settles, the shell narrates" (#704), with no flag crossing the boundary. */
         let after = before;
-        const waterfallBefore = sandboxWaterfallRef.current;
-        if (waterfallBefore) {
-          const result = applySandboxWaterfallAction(
-            waterfallBefore,
-            gameplay,
-            before?.player_addresses ?? [],
-          );
-          sandboxWaterfallRef.current = result.waterfall;
-          setSandboxWaterfall(result.waterfall);
-
-          /* Design note #334a: a LIST of charges, and not all of them the
-             actor's -- an auto-awarded private is charged to its lone
-             bidder, who may not be the player who just moved. */
-          for (const { player, amount } of result.charges) {
-            if (!after) break;
-            after = {
-              ...after,
-              player_cash: after.player_cash.map((entry: { player: string; cash_vgp: string }) =>
-                entry.player === player
-                  ? {
-                      ...entry,
-                      cash_vgp: String(Math.max(0, (Number(entry.cash_vgp) || 0) - amount)),
-                    }
-                  : entry,
-              ),
-            };
-          }
-
-          /* The reducer REPORTS a win; the owner is written here, where both atoms are in hand. A list, because one purchase can cascade (#334).
-             See docs/ai_architecture/contract_economy.md - App.tsx #303 */
-          for (const { privateId, name, player, price } of result.won) {
-            if (after) {
-              after = {
-                ...after,
-                private_companies: after.private_companies.map((entry) =>
-                  entry.private_id === privateId ? { ...entry, owner: player } : entry,
-                ),
-              };
-            }
-            /* The SETTLED price, kept beside the state - cost is a printed property of the company.
-               See docs/ai_architecture/contract_economy.md - App.tsx #303 */
-            setSettledPrivatePrices((prev) => ({ ...prev, [privateId]: price }));
-            logInfo(
-              "Private Won",
-              `${sandboxPlayerLabel(player) ?? truncateAddress(player)} won ${name} for $${price}.`,
-            );
-
-            /* The B&O private grants a presidency, but not here: the grant needs a par, and the par is a decision, so the win raises a prompt (#399).
-               See docs/ai_architecture/contract_economy.md - App.tsx #354 */
-            if (privateId === BO_PRIVATE_ID) {
-              setBoParPrompt({ player });
-            }
-
-            /* A consequence is DERIVED by every client, not appended by each of them - appending inside a replay is how one win issued two certificates. #550: a choice is logged, a consequence need not be.
-               See docs/ai_architecture/firebase_middleware.md - App.tsx #576 */
-            if (privateId === CA_PRIVATE_ID && after) {
-              const prr = after.public_companies.find((c) => c.ticker === CA_BONUS_TICKER);
-              if (prr) {
-                const granted = applyPrivateExchange(after, {
-                  ok: true,
-                  privateId,
-                  companyId: prr.company_id,
-                  ticker: CA_BONUS_TICKER,
-                  player,
-                  source: prr.ipo_pool_percentage >= 10 ? "Ipo" : "Bank",
-                  /* Design note #576: the company survives. Closing it would
-                     cost its owner $25 an Operating Round for the rest of
-                     the game. */
-                  keepOpen: true,
-                });
-                if (granted !== after) {
-                  after = granted;
-                  logInfo(
-                    "Private Power",
-                    `${sandboxPlayerLabel(player) ?? truncateAddress(player)} receives a free 10% ` +
-                      `${CA_BONUS_TICKER} share with the Camden & Amboy, which stays open.`,
-                  );
-                }
-              }
-            }
-          }
-
-          /* The reducer reports the all-pass markdown; the money moves here through applyPrivateRevenue, the same payout the Operating Round uses.
-             See docs/ai_architecture/contract_economy.md - App.tsx #337 */
-          if (result.markdown) {
-            logInfo(
-              "Waterfall",
-              `Everyone passed \u2014 ${result.markdown.name} drops from $${result.markdown.from} to $${result.markdown.to}.`,
-            );
-          }
-          if (result.allPassed && after) {
-            const revenue = applyPrivateRevenue(after);
-            if (revenue && revenue.state !== after) {
-              after = revenue.state;
-              const labelFor = (address: string) =>
-                sandboxPlayerLabel(address) ?? truncateAddress(address);
-              const tickerFor = (companyId: number) =>
-                after?.public_companies.find((entry) => entry.company_id === companyId)?.ticker ??
-                `company #${companyId}`;
-              /* Design note #1059: THE SAME STAMP AS THE OTHER PAYOUT SITE. Two call sites printing one kind
-                 of event two ways is #891's shape, and this is the one that pays the privates out of an
-                 all-passed auction rather than an opening Operating Round -- same payment, same phase name. */
-              const auctionPayoutStamp = `${roundLabelFor(after)}--Private Companies`;
-              for (const payout of revenue.payouts) {
-                logInfo(
-                  describePrivatePayout(payout, labelFor, tickerFor),
-                  "",
-                  auctionPayoutStamp,
-                );
-              }
-            }
-          }
-        }
 
         /* Design note #1054: the dividend's price move, held from the market atom until `label` is composed
            a few hundred lines below. `let` because it is written by the block that reads the atom's result
@@ -5997,7 +6078,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           /* #1211: the chart goes in WITH the board. From here the reducer performs the whole two-atom
              sequence itself (#1197) -- advance the chart, price the trade, settle, reconcile par marks,
              commit any sold-out rise -- and every one of those was a step this file had to remember. */
-          after = { ...after, market_positions: sandboxMarketRef.current };
+          after = {
+            ...after,
+            market_positions: sandboxMarketRef.current,
+            // #1340: the auction atom rides with the board.
+            waterfall: sandboxWaterfallRef.current,
+          };
           after = applySandboxAction(after, gameplay, {
             // Design note #549: the log's author, so a replayed purchase is
             // credited to the player who made it rather than to whoever this
@@ -6030,12 +6116,30 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             },
             // #1193/#415: so a corporation parred BY this action has its token before the next queue is built.
             parCellFor: parBoxCellFor,
-            // Only `RunManualRoute` reads this, to total the printed value of
-            // the stops the player picked instead of paying a flat nominal
-            // for every route regardless of length.
-            mapGrid,
-            // Design note #492a: likewise read only by `RunManualRoute`.
-            era: eraForPhase(currentPhase, tableVariants),
+            /* ==================================================================
+                DESIGN NOTE 1380: THE REDUCER PRICES THE BOARD IT IS ABOUT TO ACT ON
+               ==================================================================
+               REPORTED: "used private power on F16 and their station token disappeared", and the same
+               tab's divergence banner -- "the server and this tab have not agreed on the board at any point
+               this session (first checked at action 193) ... fields: public_companies". Replayed against
+               JUNO-Z6C's log: at 193 the client had priced NNH's two routes at $40 + $40 where the server
+               had $100 + $90; at 304 the server held NNH's token on F16 (treasury $125 -> $25) and the client
+               had refused the placement. One cause for both.
+               THIS PASSED `mapGrid` -- THE REACT STATE -- AND AN ERA DERIVED FROM THE COMMITTED PHASE. Both
+               are one commit behind, and during a synchronous burst -- a rebuild on reload, the replay after
+               an Undo, a settle-point burst arriving in one frame -- they are the WHOLE burst behind: every
+               route in the burst was priced on the grid as it stood before the burst, in the era the game was
+               in before it, and a token placed on a tile laid earlier in the same burst found no tile there.
+               #1231 named this shape for the turn gate ("a ref reset is half a reset"); the lay gate three
+               screens up already reads `gridBeforeAction` and `phaseBeforeAction` from the refs for the
+               same reason. The reducer's own context did not, and it is the context that prices routes and
+               judges tokens.
+               SO THE REFS. `mapGridRef` is written synchronously by the lay narration above, so the grid the
+               reducer sees is the grid including every tile laid before this message; the era is derived
+               from the state this message is about to be applied to, which is what the server's engine
+               does (`eraFor(this.state)`, `tileEraFor`). */
+            mapGrid: mapGridRef.current,
+            era: tileEraFor(sandboxStateRef.current),
             /* #1197: `sharePrice` is GONE. The reducer prices the trade itself now, so the wallet and the
                chart cannot be handed two different figures for one trade -- which was #273's whole point,
                previously guaranteed by this file passing the same number to both. */
@@ -6088,33 +6192,66 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             setSandboxMarket(after.market_positions);
           }
 
-          /* #1230: THE AUCTION IS RE-SEATED FROM THE DEALT BOARD, here and in `RoomEngine.apply` (#1227), in
-             the same order -- after the reducer has decided the roster, never from the message's player list.
-             The reducer shuffles; the two orders are usually the same and are not the same rule. The arming
-             reads the variant (#905: "dealt now, run later"), as the engine does. Ref first, then the setter,
-             for #767's reason. */
-          /* #1236: the auction atom closes AFTER the reducer opens the round -- the same two halves of one
-             event the engine composes (#1192), in the same order. */
-          if (isOpenStockRoundMsg(msg) && sandboxWaterfallRef.current?.waterfall_auction_active) {
-            const closed = { ...sandboxWaterfallRef.current, waterfall_auction_active: false };
-            sandboxWaterfallRef.current = closed;
-            setSandboxWaterfall(closed);
+          /* #1340: THE AUCTION MIRROR, WRITTEN FROM THE BOARD -- #1211's line for the chart, repeated for the
+             atom that used to be closed (#1236), re-seated (#1230) and armed here by hand. The reducer did all
+             three; this copies the result out for the components that still read `sandboxWaterfall`. Ref
+             first, then the setter (#767). */
+          {
+            const auction = after.waterfall ?? null;
+            if (auction !== sandboxWaterfallRef.current) {
+              sandboxWaterfallRef.current = auction;
+              setSandboxWaterfall(auction);
+            }
           }
 
-          if (isSetupGameMsg(msg)) {
-            /* #1320: the privates the deal put in play -- seven under the Level Playing Field -- so the
-               auction offers what the board holds rather than the fixture's six. */
-            const reseated = waterfallForRoster(
-              sandboxWaterfallRef.current,
-              after.player_addresses ?? [],
-              after.private_companies,
-            );
-            const delayed =
-              (msg.SetupGame.variants as { delayedAuction?: unknown } | undefined)?.delayedAuction === true;
-            const armed =
-              reseated && delayed ? { ...reseated, waterfall_auction_active: false } : reseated;
-            sandboxWaterfallRef.current = armed;
-            setSandboxWaterfall(armed);
+          /* Design note #1340a: the auction's sentences, from the diff. Same lines as before, same order --
+             the win, the C&A's share, the markdown, the payouts -- read off what the reducer did rather than
+             off a report of what it was about to do. */
+          {
+            const settledBoard = after;
+            const transition = describeAuctionTransition(before, settledBoard, gameplay);
+            for (const { privateId, name, player, price } of transition.won) {
+              logInfo(
+                "Private Won",
+                `${sandboxPlayerLabel(player) ?? truncateAddress(player)} won ${name} for $${price}.`,
+              );
+              /* #354/#399: the B&O private grants a presidency, but the grant needs a par, and the par is a
+                 decision -- so the win raises a prompt. */
+              if (privateId === BO_PRIVATE_ID) setBoParPrompt({ player });
+              if (privateId === CA_PRIVATE_ID) {
+                const prrBefore = before?.public_companies.find((c) => c.ticker === CA_BONUS_TICKER);
+                const prrAfter = settledBoard.public_companies.find((c) => c.ticker === CA_BONUS_TICKER);
+                const heldBefore =
+                  prrBefore?.player_holdings.find((h) => h.player === player)?.percentage ?? 0;
+                const heldAfter =
+                  prrAfter?.player_holdings.find((h) => h.player === player)?.percentage ?? 0;
+                if (heldAfter > heldBefore) {
+                  logInfo(
+                    "Private Power",
+                    `${sandboxPlayerLabel(player) ?? truncateAddress(player)} receives a free 10% ` +
+                      `${CA_BONUS_TICKER} share with the Camden & Amboy, which stays open.`,
+                  );
+                }
+              }
+            }
+            if (transition.markdown) {
+              logInfo(
+                "Waterfall",
+                `Everyone passed \u2014 ${transition.markdown.name} drops from $${transition.markdown.from} to $${transition.markdown.to}.`,
+              );
+            }
+            if (transition.allPassed && transition.payouts.length > 0) {
+              const labelFor = (address: string) =>
+                sandboxPlayerLabel(address) ?? truncateAddress(address);
+              const tickerFor = (companyId: number) =>
+                settledBoard.public_companies.find((entry) => entry.company_id === companyId)?.ticker ??
+                `company #${companyId}`;
+              /* Design note #1059: THE SAME STAMP AS THE OTHER PAYOUT SITE -- same payment, same phase name. */
+              const auctionPayoutStamp = `${roundLabelFor(settledBoard)}--Private Companies`;
+              for (const payout of transition.payouts) {
+                logInfo(describePrivatePayout(payout, labelFor, tickerFor), "", auctionPayoutStamp);
+              }
+            }
           }
 
           /* ==================================================================
@@ -6297,10 +6434,18 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                  yet been seen -- and read from the log every client rebuilds identically, so every client
                  reaches the same verdict about the same turn. A flag written onto the corporation would live
                  in one browser's memory and be lost on the first reload. */
-              const signState = yellowSignStateFrom(actionLogRef.current.map((entry) => entry.label));
+              /* #1404: the reducer's flags first (`has_yellow_sign` / `is_carcosan`, replayed), the log's
+                 sentence only as the fallback -- #1375 moved the sign's clause off the "ran for" line. */
+              const signState = yellowSignStateOf(
+                before?.public_companies ?? [],
+                actionLogRef.current.map((entry) => entry.label),
+              );
               /* THE NATURAL DRAW FIRST, then the Easter egg's rules applied to it -- so this cannot disagree
                  with `revenueFlavourClause` about what would otherwise have been printed. */
-              const naturalSentence = turnRevenueSentence(ticker, roll, seed);
+              /* One call site for the turn's sentence (#940/#941 pin it to exactly one); the Mark's re-rolled
+                 run (#1375) asks the same closure with a different roll rather than calling again. */
+              const sentenceFor = (which: typeof roll) => turnRevenueSentence(ticker, which, seed);
+              const naturalSentence = sentenceFor(roll);
               const resolved = resolveFlavourLine({
                 naturalLine: revenueFlavourClause(roll, seed),
                 bucket,
@@ -6375,8 +6520,34 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                     : resolved.line;
               const flavourFrom = flavourWithAppendix.length - flavourTail.length;
               const cue = variantCueFor({ line: flavourWithAppendix, bucket, stage: resolved.stage });
+              /* ==================================================================
+                  DESIGN NOTE 1375: THE MARK'S TWO LINES, AS ASKED FOR
+                 ==================================================================
+                 REPORTED, of the Activity Log on a Mark: four lines, one of them "UNEXPLAINED", one of them
+                 the bare word "Sandbox room". Asked for instead: the run line saying what the corporation
+                 ran WITHOUT the vanished train -- "ran N routes for $Y" -- and a second line carrying the
+                 sign's own flavour, ending with what the president did with the gold.
+                 THE FIGURE IS THE REDUCER'S: `runWithoutTrain` is what the Mark arm applies, read here off
+                 the run that just banked (`banked`) with the turn's own seed, so the sentence and the board
+                 cannot disagree. The run line is the mechanical half of `turnRevenueSentence` -- the roll's
+                 own verdict, no flavour -- and the flavour moves whole to the second line, where the sign
+                 belongs. The mechanical dispatch below is silent in the log (#1375 in `runGameplayAction`'s
+                 caller) and states the treasury itself, so the provenance diagnostic has nothing to add. */
+              const markTaken = resolved.stage === "mark" ? lowestValueTrain(ran?.owned_trains) : null;
+              const markRun = markTaken && banked ? runWithoutTrain(banked, markTaken, seed) : null;
+              const markAward = markTaken ? markPayout(markTaken) : 0;
+              const markRunLine = (() => {
+                if (!markRun) return null;
+                const routesWord = markRun.routes === 1 ? "route" : "routes";
+                const opening = `${ticker} ran ${markRun.routes} ${routesWord} for $${markRun.adjusted}.`;
+                if (!markRun.roll) return opening;
+                const whole = sentenceFor(markRun.roll);
+                const clause = revenueFlavourClause(markRun.roll, seed);
+                const mechanical = whole.slice(0, whole.length - clause.length).trimEnd();
+                return mechanical.replace(`${ticker} ran for $${markRun.roll.adjusted}.`, opening);
+              })();
               logInfo(
-                flavourWithAppendix,
+                markRunLine ?? flavourWithAppendix,
                 "",
                 runRoutesStamp,
                 /* Design note #1042: `unchanged` earns no tint. It is the bucket that says nothing happened,
@@ -6384,35 +6555,49 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                    Design note #1261: A STAGE OUTRANKS THE DIE. The Yellow Sign's lines carry the sign's own
                    tint, not the roll's -- a Mark is not a bad roll, it is the egg, and it reads that way. */
                 // One line, so #1042's pinned text survives the third arm.
-                resolved.stage !== null ? "sign" : bucket === "unchanged" ? undefined : isBonusBucket(bucket) ? "bonus" : "malus",
+                // #1375: the Mark's run line is mechanical and takes the roll's tint; its flavour is the next line.
+                markRunLine ? (bucket === "unchanged" ? undefined : isBonusBucket(bucket) ? "bonus" : "malus") : resolved.stage !== null ? "sign" : bucket === "unchanged" ? undefined : isBonusBucket(bucket) ? "bonus" : "malus",
                 /* Design note #1079: PASSED ON EVERY BUCKET, INCLUDING `unchanged`, unlike the tint above.
                    The italic marks which half of the line is atmosphere, and an unchanged roll's line has the
                    same two halves as any other. Withholding it there would set a third of the variant's
                    flavour upright for a reason no player could see. */
-                flavourFrom,
+                markRunLine ? undefined : flavourFrom,
               );
               /* THE MECHANICS GO THROUGH THE LOG AS AN ACTION (#1046), not through a local mutation: they
                  delete a train and move money, and board state in this app is what the reducer writes while
                  replaying. Dispatched AFTER the flavour line so the Activity Log reads in the order a player
                  experiences it -- the sentence, then what it did. */
               if (resolved.stage === "mark") {
-                const taken = lowestValueTrain(ran?.owned_trains);
+                const taken = markTaken;
                 if (taken) {
-                  const award = markPayout(taken);
+                  const award = markAward;
+                  /* #1375: the sign's line -- the flavour, the ruled appendix, and what became of the gold.
+                     The treasury figures are the banked run's, before and after the award the dispatch
+                     below makes; the president is whoever holds the seat as the run was made. */
+                  const treasuryBefore = Math.max(0, Number(banked?.treasury ?? ran?.treasury ?? 0) || 0);
+                  const presidentName = banked?.president
+                    ? (sandboxPlayerLabel(banked.president) ?? truncateAddress(banked.president))
+                    : "The president";
                   logInfo(
-                    `The ${taken}-train disappeared. $${award} found.`,
+                    `${resolved.line} ${MARK_APPENDIX} President ${presidentName} added $${award} to the company's treasury. Treasury $${treasuryBefore} → $${treasuryBefore + award}.`,
                     "",
                     yellowSignStamp,
+                    "sign",
                   );
-                  void runGameplayAction("YellowSignEvent", {
-                    YellowSignEvent: {
-                      game_id: gameId,
-                      protocol_id: companyId,
-                      stage: "mark",
-                      model: taken,
-                      cash: String(award),
+                  void runGameplayAction(
+                    "YellowSignEvent",
+                    {
+                      YellowSignEvent: {
+                        game_id: gameId,
+                        protocol_id: companyId,
+                        stage: "mark",
+                        model: taken,
+                        cash: String(award),
+                        revenue_seed: seed.turnSeed,
+                      },
                     },
-                  });
+                    { silentInLog: true },
+                  );
                 }
               } else if (resolved.stage === "fog") {
                 /* ==================================================================
@@ -6427,27 +6612,35 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                    roster could take a different one than the game took. */
                 const taken = (ran?.carcosan_trains ?? [])[0] ?? null;
                 if (taken) {
-                  void runGameplayAction("YellowSignEvent", {
-                    YellowSignEvent: {
-                      game_id: gameId,
-                      protocol_id: companyId,
-                      stage: "fog",
-                      model: taken,
+                  void runGameplayAction(
+                    "YellowSignEvent",
+                    {
+                      YellowSignEvent: {
+                        game_id: gameId,
+                        protocol_id: companyId,
+                        stage: "fog",
+                        model: taken,
+                      },
                     },
-                  });
+                    { silentInLog: true }, // #1375: the clause above is the line
+                  );
                 }
               } else if (resolved.stage === "carcosa") {
                 const gifted = escalationTier(derivePhase(before)?.tier ?? "2");
                 if (gifted) {
                   logInfo(`${ticker} received a ${gifted}-train.`, "", yellowSignStamp);
-                  void runGameplayAction("YellowSignEvent", {
-                    YellowSignEvent: {
-                      game_id: gameId,
-                      protocol_id: companyId,
-                      stage: "carcosa",
-                      model: gifted,
+                  void runGameplayAction(
+                    "YellowSignEvent",
+                    {
+                      YellowSignEvent: {
+                        game_id: gameId,
+                        protocol_id: companyId,
+                        stage: "carcosa",
+                        model: gifted,
+                      },
                     },
-                  });
+                    { silentInLog: true }, // #1375: the line above is the line
+                  );
                 }
               }
               /* ==================================================================
@@ -6483,8 +6676,22 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                  `enabled` argument means "the player muted this" and silence-by-design is a different fact:
                  folding them together would make a muted cue and an intentionally silent one indistinguish-
                  able at the one place either could be debugged from. */
-              if (ephemeral && cue.audio !== null) {
+              if (ephemeral && cue.audio !== null && !(cue.video && cue.audioAtMs > 0)) {
                 playVariantCue(cue.audio, sfxEnabledRef.current && sfxRevenueRef.current);
+              }
+              if (ephemeral && cue.audio !== null && cue.video && cue.audioAtMs > 0) {
+                /* #1376: held for the film's first frame; played from dispatch plus a grace if none comes. */
+                const previous = hauntingAudioRef.current;
+                if (previous?.timer != null) window.clearTimeout(previous.timer);
+                const pending = {
+                  audio: cue.audio,
+                  audioAtMs: cue.audioAtMs,
+                  dispatchedAt: performance.now(),
+                  fired: false,
+                  timer: null as number | null,
+                };
+                hauntingAudioRef.current = pending;
+                pending.timer = window.setTimeout(playHauntingLine, cue.audioAtMs + HAUNTING_AUDIO_GRACE_MS);
               }
               if (ephemeral && cue.video) {
                 if (hauntingTimerRef.current !== null) {
@@ -6846,7 +7053,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             if (closures.length > 0) {
               const phaseTurned = derivePhase(before)?.tier !== derivePhase(after)?.tier;
               const named = closures
-                .map((entry) => `${entry.privateId}. ${entry.name}`)
+                .map((entry) => numberedPrivate(entry.privateId, entry.name))
                 .join(", ");
               /* ==================================================================
                   DESIGN NOTE 1068: THE STAMP, NOT THE CATEGORY -- #1058 DID HALF OF THIS
@@ -7022,15 +7229,24 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
              No call site has to remember, which is #748a's rule and the reason this is not inside the train
              purchase's own branch. The acting corporation's movement is preferred when two treasuries move
              at once (a trade), so the panel names the company the player was just looking at.
-             EVERY SEAT SEES IT. A treasury is board state, not one player's money -- #1063's argument for the
-             depot toast, and the reason this does not compare the actor. `showTreasuryMovement` is silent
-             during a rebuild, so a join does not replay every purchase the table has made. */
+             #1371 REVERSED "EVERY SEAT SEES IT". #1272 argued a treasury is board state and showed every
+             spend to every seat, and the table's answer was that a slide-out for somebody else's corporation
+             is noise: "They only need that for their own corporations." So the panel is raised only when the
+             viewer PRESIDES over the corporation whose treasury moved -- read from the committed state, so a
+             presidency that changed in this very burst is judged as it stands now. The ledger and the feed
+             still carry every movement for everybody; this is the notification, not the record.
+             `showTreasuryMovement` is silent during a rebuild, so a join does not replay every purchase. */
           {
             const shown = movementToShow(
               treasuryMovements(before, after),
               (before ? operatingCorporationId(before) : null) ?? operatingCorporationId(after),
             );
-            if (shown) {
+            const viewer = viewerAddressRef.current ?? null;
+            const presides =
+              shown !== null &&
+              viewer !== null &&
+              after.public_companies.find((company) => company.company_id === shown.companyId)?.president === viewer;
+            if (shown && presides) {
               treasuryMachineTokenRef.current += 1;
               showTreasuryMovement({
                 companyId: shown.companyId,
@@ -7039,6 +7255,33 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                 treasuryBefore: shown.before,
                 treasuryAfter: shown.after,
                 token: treasuryMachineTokenRef.current,
+              });
+            }
+          }
+
+          /* ==================================================================
+              DESIGN NOTE 1339: THE AUCTION'S MONEY, ON THE VIEWER'S OWN MACHINE
+             ==================================================================
+             The same diff as the treasury's, for the viewer's cash, scoped by `auctionCashMovement` to the
+             Waterfall Auction: a private bought or won RISES out of cash with the spend's whoosh (3a); the
+             all-pass's private income FALLS onto it with the register (3b). An Operating Round's private
+             payout keeps its modal (3c) -- the scope is the round, so nothing here can fire there. Silent on
+             a rebuild through `showDividendPayout`'s own guard. */
+          {
+            const viewer = viewerAddressRef.current ?? null;
+            const moved = auctionCashMovement(before, after, viewer);
+            if (moved && viewer) {
+              const seatAt = after.player_addresses.indexOf(viewer);
+              moneyMachineTokenRef.current += 1;
+              showDividendPayout({
+                ticker: null,
+                label: moved.label,
+                amount: moved.amount,
+                playerName: sandboxPlayerLabel(viewer) ?? truncateAddress(viewer),
+                seatColor: seatAt >= 0 ? seatColor(viewer, seatAt) : null,
+                cashBefore: moved.cashBefore,
+                cashAfter: moved.cashAfter,
+                token: moneyMachineTokenRef.current,
               });
             }
           }
@@ -7464,8 +7707,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     sandboxMarketRef.current = market;
     setSandboxMarket(market);
 
-    settledPrivatePricesRef.current = {};
-    setSettledPrivatePrices({});
+    /* #1340: the settled prices reset with the board -- they are ON it now. */
 
     /* ==================================================================
        DESIGN NOTE 767: A REF RESET IS HALF A RESET
@@ -7473,7 +7715,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
        REPORTED: "in OR2.1, when a corporation laid its second track, all of the laid tiles on the board
        disappeared."
        EVERY OTHER ATOM IN THIS FUNCTION IS RESET AS A PAIR -- `sandboxMarketRef.current = market` beside
-       `setSandboxMarket(market)`, `settledPrivatePricesRef.current = {}` beside its setter. #757 gave the tile
+       `setSandboxMarket(market)`, (and, until #1340, `settledPrivatePricesRef.current = {}` beside its setter). #757 gave the tile
        grid a ref and did not add it here, so a rebuild reset the STATE and left the REF pointing at the board
        from before the rebuild.
        THE DISAPPEARANCE IS THE TWO WRITERS FIGHTING. `setMapGrid` is asynchronous, so the replay that follows
@@ -7640,9 +7882,18 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      suspect: `effectiveActions` kills a revert's range by INDEX while #1026 made only the revert's own
      identity an id, so two entries sharing an index are still undone together. #1026's own report was a room
      that "rolled back to a much earlier state" for that reason. A clean log rules the family out at a
-     glance. */
+     glance.
+     ==================================================================
+      DESIGN NOTE 1334: EVERY SEAT CAN EXPORT THE LOG
+     ==================================================================
+     #1160 gated this on the host "for the Yellow Sign's own reasons". The Sign's reasons were the Sign's: it
+     WRITES to the room, so one hand on it is the ruling. The export writes nothing. And under settlement (plan
+     §6) the log is the evidence; a player who cannot export their own copy is a player who has to ask the host
+     for the record of a dispute with the host. So the gate is the ROOM, not the host -- any seated client in a
+     sandbox room may copy what its own client holds. `Ctrl+Shift+Y` keeps its host gate untouched. */
+  const isInSandboxRoom = sandbox && sandboxRoom !== null;
   const copySandboxLog = useCallback(() => {
-    if (!isSandboxHost) return;
+    if (!isInSandboxRoom) return;
     const dump = buildSandboxLogExport(sandboxLogRef.current, sandboxRoomRef.current);
     const text = JSON.stringify(dump, null, 2);
     const duplicates =
@@ -7667,12 +7918,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       toConsole();
       said("was printed to the browser console");
     }
-  }, [isSandboxHost, logInfo]);
+  }, [isInSandboxRoom, logInfo]);
 
   useEffect(() => {
-    if (!isSandboxHost) return undefined;
+    if (!isInSandboxRoom) return undefined;
     const onKey = (event: KeyboardEvent) => {
-      // Design note #1160: Ctrl+Shift+L, beside the sign's own Ctrl+Shift+Y.
+      // Design note #1160: Ctrl+Shift+L, beside the sign's own Ctrl+Shift+Y. #1334: for every seat.
       if (!event.ctrlKey || !event.shiftKey) return;
       if (event.key.toLowerCase() !== "l") return;
       event.preventDefault();
@@ -7680,7 +7931,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [isSandboxHost, copySandboxLog]);
+  }, [isInSandboxRoom, copySandboxLog]);
 
   /* handleUndoToRoundStart is gone with the second button; undoToRoundStart stays exported and tested.
      See docs/ai_architecture/state_machine.md - App.tsx #592 */
@@ -8333,6 +8584,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   const [autoBuyPlan, setAutoBuyPlan] = useState<AutoBuyPlan | null>(null);
   const autoBoughtAtLogIndexRef = useRef<number | null>(null);
   const [autoBuyOpen, setAutoBuyOpen] = useState(false);
+  /* Design note #1341: the in-game "Rejoin a seat" card. One flag and one mount; the card owns the rest. */
+  /* #1341a: a MODE rather than a flag, because the shell now opens this card two ways -- to set my own
+     seat's PIN, and to rejoin somebody's seat from this device. One mount, one piece of state. */
+  const [seatPinMode, setSeatPinMode] = useState<"set" | "rejoin" | null>(null);
   /* Design note #1333: the whole instruction -- per-corporation caps, source, the two off-switches. */
   const [autoBuyChoices, setAutoBuyChoices] = useState<AutoBuySettings>({
     targets: [],
@@ -10343,10 +10598,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         actingCompanyId: actingProtocolId,
         chosenCity,
       });
-      /* THE ACTING CORPORATION'S OWN CITY, kept beside the map because the rotate cycle needs to know
-         whether it was ANCHORED (the board decided) or FREE (the president is cycling). `anyFree` answers
-         that; the index alone cannot. */
-      const own = plan?.landings.find((entry) => entry.companyId === actingProtocolId) ?? null;
+      /* THE TOKEN THE CYCLE IS ABOUT, kept beside the map because the rotate cycle needs to know whether it
+         was ANCHORED (the board decided) or FREE (the president is cycling). #1400: the FREE token on the hex,
+         whoever's it is -- N&W upgrading ERIE's unbuilt home cycles ERIE's marker -- and the acting
+         corporation's own token where nothing is free (the anchored case, where `ownCity` reports where the
+         board put it). */
+      const free = plan?.landings.find((entry) => entry.toCityIndex === null) ?? null;
+      const own = free ?? plan?.landings.find((entry) => entry.companyId === actingProtocolId) ?? null;
       return {
         tokenCities,
         ownCity: own?.toCityIndex ?? chosenCity,
@@ -10779,11 +11037,6 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                for the distinction (#670) and was already deciding whether a cash badge fires; publishing it
                is what lets the toasts ask the same question. */
             replayingHistory = !isOrdinaryPlay;
-            /* Design note #670: read off the REF, not the state variable. The
-               reducer writes `sandboxStateRef` synchronously and React commits
-               later, so the ref is the only thing that can be compared either
-               side of one awaited dispatch. */
-            const cashBefore = isOrdinaryPlay ? cashByPlayer(sandboxStateRef.current) : null;
             try {
               /* #1242: THROUGH THE REF, so this effect does not depend on the callback's identity -- see the
                  dependency list below. `runGameplayAction` is a `useCallback` over `gameState`, and there is
@@ -10805,9 +11058,6 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
               // Design note #825: and a stuck flag would silence every later toast, which is the failure
               // that reads as "notifications stopped working" and has no obvious cause.
               replayingHistory = false;
-            }
-            if (cashBefore && live) {
-              noteCashChanges(cashChanges(cashBefore, cashByPlayer(sandboxStateRef.current)));
             }
           }
           if (live) setSandboxAppliedCount(appliedCountRef.current);
@@ -10906,6 +11156,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         }
       } finally {
         replayingRef.current = false;
+        // #1407: the catch-up notice was about this drain, which is over.
+        setSandboxRoomError((current) => (current === CATCHING_UP_BANNER ? null : current));
       }
     };
 
@@ -10932,6 +11184,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             /* #1210: what this client SAYS it is. The server decides whether to believe it -- and on
                anything with money in it, `trustClaimedIdentity` is not what will be answering. */
             claim: localPlayerId(),
+            // Design note #1341: the seat PIN and session token this tab holds for the room, if any.
+            pin: readSeatPin(sandboxRoomCode) ?? undefined,
+            token: readSeatToken(sandboxRoomCode) ?? undefined,
+            /* #1364: and again at every reconnect's hello, from the store the PIN modal writes to -- a PIN set
+               after this link opened must not get the link refused on its next hello. */
+            seat: () => ({
+              pin: readSeatPin(sandboxRoomCode) ?? undefined,
+              token: readSeatToken(sandboxRoomCode) ?? undefined,
+            }),
             onEntries: (entries, serverDigest, serverFields, source) => {
               // #1238: a batch with any catch-up in it is history. Consumed by the drain's next pass.
               if (source === "catch-up") serverBatchIsHistoryRef.current = true;
@@ -10992,17 +11253,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     return () => {
       live = false;
       unsubscribe();
-      /* Design note #670: badges belong to the room they were earned in. */
-      setCashDeltas([]);
       /* Design note #668: a held snapshot belongs to the room being left. The
          next room's first snapshot is a whole log of its own and needs no help
          from this one. */
       pendingSnapshotRef.current = null;
     };
-    /* `noteCashChanges` is stable (`useCallback` with an empty dependency list),
-       so naming it here costs nothing and keeps the linter's guarantee intact --
-       an omission that happens to be safe today is the one that stops being safe
-       silently. See docs/ai_architecture/ui_shell_layout.md - App.tsx #670 */
     /* ==================================================================
         DESIGN NOTE 1242: THE SOCKET LIVED ONE ACTION AT A TIME
        ==================================================================
@@ -11024,7 +11279,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
        THE DRAIN READS THE REF NOW (#546's `runGameplayActionRef`, refreshed by an effect declared above this
        one), so the transport's lifetime is the room's. `sandbox` and `sandboxRoomCode` are the only facts
        that should ever open or close it. */
-  }, [sandbox, sandboxRoomCode, noteCashChanges]);
+  }, [sandbox, sandboxRoomCode]);
 
   /** Design note #522: opens a room and publishes its code. */
   const handleHostSandboxRoom = useCallback(async () => {
@@ -11060,14 +11315,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     setSandboxRoomError(null);
     try {
       /* Read once before subscribing only to tell the player the room exists; the listener owns the replay.
-         See docs/ai_architecture/firebase_middleware.md - App.tsx #465 */
-      const existing = await readSandboxLog(code);
+         See docs/ai_architecture/firebase_middleware.md - App.tsx #465
+         #1367: THE COURTESY LINE IS GONE. "Joined -- no actions in this room yet" was set whenever this read
+         came back empty, and on the server path it ALWAYS comes back empty (#1215: the log arrives through the
+         shell's own listener, and `readSandboxLog` answers `[]` by design). So every rejoin by code pinned a
+         red line to the top of a live game -- "even though we're all taking actions" -- and nothing ever
+         cleared it, because it was an error slot holding a sentence that was not an error. The read stays for
+         its one remaining job, refusing a code that throws. */
+      await readSandboxLog(code);
       appliedIndexRef.current = 0;
       setSandboxAppliedCount(0);
       setSandboxRoomCode(code);
-      if (existing.length === 0) {
-        setSandboxRoomError("Joined — no actions in this room yet.");
-      }
     } catch (error) {
       setSandboxRoomError(error instanceof Error ? error.message : "Could not join that room.");
     } finally {
@@ -11684,7 +11942,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           </p>
           <SandboxRoomBar
             roomCode={sandboxRoomCode}
-            available={isFirebaseConfigured()}
+            available={isBackendConfigured()}
             error={sandboxRoomError}
             busy={sandboxRoomBusy}
             onHost={handleHostSandboxRoom}
@@ -11762,10 +12020,6 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           }
           // Design note #1035: amber at two buys from closure, red at one.
           privateClosureAlert={closureAlert}
-          /* Design note #670: the same confirmation the Operating Round's cash
-             strip gives, on the surface that owns cash in these two rounds. A
-             share bought is a cash change like any other. */
-          cashDelta={cashDeltaFor}
         />
       </section>
     ) : null;
@@ -11979,6 +12233,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         onCloseRoom={roomClosed ? null : () => closeRoom("manual")}
         autoCloseIn={autoCloseRemaining === null ? null : formatCountdown(autoCloseRemaining)}
         roomClosed={roomClosed}
+        /* #1411: the charts' data and the shell's naming and colouring. */
+        history={gameHistory}
+        playerLabel={(address) => sandboxPlayerLabel(address) ?? truncateAddress(address)}
+        playerColor={(address) => {
+          const seat = gameState?.player_addresses.indexOf(address) ?? -1;
+          return seatColor(address, seat === -1 ? 0 : seat);
+        }}
+        corporationColor={stationTickerColor}
       />
 
       {/* Design note #900: the way back in. Only while an ending is standing and the modal is down, so it
@@ -12042,6 +12304,37 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             <span style={styles.sandboxBadge}>🧪 OFFLINE SANDBOX</span>
             {/* Design note #1128: host only, and it says what is armed rather than merely that something is.
                 A tool that waits for its prerequisites needs to be readable while it waits. */}
+            {/* Design note #1341 / #1341a: the seat PIN, mid-game -- set mine, or rejoin one on this device.
+                SETTING A PIN WAS ONLY EVER ON THE WAITING-ROOM ROSTER, which is a screen nobody can reach
+                once the game has started. A player who wanted to lock their seat mid-game was offered the
+                rejoin card and nothing else -- and rejoining is the one thing that does not set your own
+                PIN, because the card deliberately lists every seat except yours. The button was missing,
+                not hidden.
+                THE REJOIN BUTTON IS NO LONGER GATED on some other seat already having one, either: the
+                seats this whole affordance exists for are the ones claimed before PINs did, and not one of
+                them has a PIN to be gated on. */}
+            {sandboxRoom?.players.some((player) => player.id === localId) && (
+              <button
+                type="button"
+                style={styles.forcedSignChip}
+                onClick={() => setSeatPinMode("set")}
+                title="A four-digit PIN for this room only, so you can pick this seat up on another device."
+              >
+                {sandboxRoom.players.find((player) => player.id === localId)?.hasPin
+                  ? "Change my PIN"
+                  : "Set my PIN"}
+              </button>
+            )}
+            {sandboxRoom && sandboxRoom.players.some((player) => player.id !== localId) && (
+              <button
+                type="button"
+                style={styles.forcedSignChip}
+                onClick={() => setSeatPinMode("rejoin")}
+                title="Switched devices? Rejoin your seat here with its four-digit PIN (this room only)."
+              >
+                Rejoin a seat
+              </button>
+            )}
             {isSandboxHost && (
               <button
                 type="button"
@@ -12193,6 +12486,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
            rust and limit countdowns are not, and reading them off `trainPurchase` is what made the
            limit badge vanish when the step turned rather than when the threshold cleared. */
         depot={depot}
+        bankRemaining={gameState ? Number(gameState.virtual_bank_vgp) : null} // #1410
         // Design note #1033: the rust countdown's wording, and whether that badge pulses.
         gentleRust={resolveVariants(gameState?.variants).gentleRust}
         orSequence={
@@ -12360,7 +12654,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         /* Design note #871: the hex powers in an Operating Round, the M&H in a Stock Round. The two
            lists are disjoint by round, so this concatenation never shows both. */
         powerOffers={[...privatePowerOfferList, ...stockRoundPowerOffers, ...(jkPowerOffer ? [jkPowerOffer] : [])]}
-        kanawhaLicense={kanawhaLicenseControl}
+        /* ==================================================================
+            DESIGN NOTE 1388: THE BUTTON OPENS THE MODAL; ONLY THE MODAL BUYS
+           ==================================================================
+           REPORTED: "Clicking the 'Buy License' button in the Action Bar immediately issued the license and
+           charged the treasury. Whether a player clicks the tile or the Buy License button, it needs to open
+           the modal, where players should confirm the purchase with the treasury effect displayed." So the
+           chip's `onBuy` is the modal's open; the modal's own confirm is the one dispatch, and it states the
+           treasury before and after. */
+        kanawhaLicense={
+          kanawhaLicenseControl ? { ...kanawhaLicenseControl, onBuy: openLicenseModal } : kanawhaLicenseControl
+        }
         onUsePowerOffer={handleChipPowerOffer}
         /* Design note #817: the named exit from an armed private power. `errandCancelLabel`
            returns `null` for the compulsory home station, which collapses the whole control. */
@@ -13053,7 +13357,6 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                     privateDescription={(privateId) =>
                       PRIVATE_COMPANY_CATALOG[privateId]?.ability ?? null
                     }
-                    cashDelta={cashDeltaFor}
                   />
                 )}
               </>
@@ -13262,6 +13565,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           the shell is showing rather than needing a turn in a queue. */}
       <DividendMoneyMachine
         event={dividendPayout}
+        /* Design note #1339: a spend on this machine rings the treasury machine's whoosh. */
+        onSpendCue={handleTreasuryMachineCue}
         onCue={handleMoneyMachineCue}
         onDone={handleMoneyMachineDone}
       />
@@ -13279,6 +13584,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           corporation that acts first. The ordering is enforced in `dueFleetNotice` (#1049a) rather than by
           this position or by z-index; source order here simply agrees with it, so a reader is not looking at
           two files that appear to disagree about which comes first. */}
+      {/* Design note #1341: rejoin a seat from this device, mid-game. */}
+      {seatPinMode && sandboxRoomCode && sandboxRoom && (
+        <SeatPinModal
+          mode={seatPinMode}
+          roomCode={sandboxRoomCode}
+          localPlayerId={localId}
+          players={sandboxRoom.players}
+          onClose={() => setSeatPinMode(null)}
+        />
+      )}
       {/* Design note #1332: PRR on the Level Playing Field / 18XX+ floats owing no token -- said, not left to
           be noticed. */}
       <HeraldHomeFloatModal
@@ -13299,6 +13614,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         remaining={licenseModalFacts?.remaining ?? 0}
         alreadyHeld={licenseModalFacts?.alreadyHeld ?? false}
         refusal={licenseModalFacts?.refusal ?? "Licences are not in play."}
+        treasuryBefore={licenseModalFacts?.treasury ?? null}
         onBuy={() => kanawhaLicenseControl?.onBuy()}
       />
       <PrivateRevenueModal
@@ -13395,6 +13711,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           ms={haunting?.ms ?? 0}
           startedAt={haunting?.startedAt}
           sfxEnabled={sfxEnabled}
+          onFirstFrame={handleHauntingFirstFrame} // #1376
         />
       )}
       {/* Design note #201: the station token's confirm ring -- the same
@@ -13463,8 +13780,23 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           candidates={radialCandidates}
           selectedTileId={previewTile?.tileId ?? null}
           orientation={previewTile?.orientation ?? 0}
-          canConfirm={canLayTileNow}
-          confirmDisabledReason={tileLayDisabledReason ?? undefined}
+          /* ==================================================================
+              DESIGN NOTE 1382: THE TICK LOOKS THE WAY IT BEHAVES
+             ==================================================================
+             REPORTED: "Corporation cannot afford a track lay's terrain cost. The green checkmark needs to look
+             disabled even though it is correctly disabled." #891 refuses the unaffordable lay inside
+             `handleConfirmRadialLay` and writes the reason to the log; the button was lit green because
+             `canConfirm` asked only whether a lay is allowed NOW, not whether THIS lay can be paid for. A
+             control that refuses on click but invites the click is Lobby.tsx #3's silent button in reverse.
+             SAME FIGURE, SAME SENTENCE: `pendingLayCost.short` is what the handler refuses on, and the
+             tooltip says what the log would have said. */
+          canConfirm={canLayTileNow && !pendingLayCost?.short}
+          confirmDisabledReason={
+            tileLayDisabledReason ??
+            (pendingLayCost?.short
+              ? `${activeCorporationContext?.ticker ?? "This corporation"} cannot afford the $${pendingLayCost.fee} terrain cost here — its treasury holds $${pendingLayCost.before ?? 0}.`
+              : undefined)
+          }
           provisional={radialSelector.provisional}
           // The ring hands back that tile's FIRST legal orientation
           // (design note #173), so the preview never opens on an angle the

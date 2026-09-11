@@ -73,6 +73,24 @@ export const YELLOW_SIGN_AGAIN = {
 /** Ruled: "a slow, lingering 10-second haunting over the UI". */
 export const YELLOW_SIGN_DURATION_MS = 10000;
 
+/* ==================================================================
+    DESIGN NOTE 1376: THE VOICE LANDS ON THE PICTURE
+   ==================================================================
+   REPORTED: "The audio clip happens much sooner than the video. It would be nice for the 'Have you seen the
+   Yellow Sign?' audio to finish playing when the yellow sign is actually visible/fully drawn." And of the
+   second haunting: "may also need to be synced to the video better."
+   THE LINE PLAYED AT DISPATCH AND THE FILM STARTED WHEN IT HAD LOADED, so on a tunnel the voice was over
+   before the first frame. Measured with ffprobe rather than guessed: both spoken lines are 1.51s; the sign
+   in `yellow-sign.mp4` is drawn stroke by stroke from 1.0s and closes at 2.7s; the sign in
+   `carcosa-awaits.mp4` is whole from the first frame and grows its arms until they are fully extended at
+   6.0s, which is the picture that line is about. So each line starts at (the picture's moment - 1.51s),
+   COUNTED FROM THE FILM'S FIRST FRAME rather than from dispatch -- the overlay reports the frame and the
+   shell schedules from it. A viewer not on the map never gets a first frame; the shell then plays the line
+   at the same offset from dispatch plus a grace, so the sound is not lost with the picture. The fog clip has
+   no picture-moment to wait for and keeps playing at once. */
+export const YELLOW_SIGN_AUDIO_AT_MS = 1200; // 2.7s drawn - 1.5s spoken
+export const CARCOSA_AUDIO_AT_MS = 4500; // 6.0s fully grown - 1.5s spoken
+
 /** The third stage's cue. Design note #1092: reached only through `stage === "fog"`, never through the
  *  keyword table -- see `variantCueFor` for why the event and not the sentence is what rings it. */
 export const CARCOSA_FOG_AUDIO = "carcosan-train.mp3";
@@ -311,6 +329,8 @@ export interface VariantCue {
   video: string | null;
   /** How long the overlay stays up. `0` when there is none. */
   videoMs: number;
+  /** #1376: when the spoken line starts, in ms after the film's first frame. `0` plays at once. */
+  audioAtMs: number;
   /** ==================================================================
    *   DESIGN NOTE 1093: HOW THE CLIP SITS OVER THE BOARD
    *  ==================================================================
@@ -418,6 +438,7 @@ export function variantCueFor(input: {
       audio: CARCOSA_FOG_AUDIO,
       video: CARCOSA_FOG_VIDEO,
       videoMs: CARCOSA_FOG_DURATION_MS,
+      audioAtMs: 0,
       videoComposite: "feather",
       /* The file has no audio stream; `CARCOSA_FOG_AUDIO` is its whole soundtrack and ducks itself. */
       videoHasOwnAudio: false,
@@ -431,6 +452,7 @@ export function variantCueFor(input: {
       audio: clip.audio,
       video: clip.video,
       videoMs: YELLOW_SIGN_DURATION_MS,
+      audioAtMs: stage === "carcosa" ? CARCOSA_AUDIO_AT_MS : YELLOW_SIGN_AUDIO_AT_MS, // #1376
       /* Design note #1093: BOTH ARE BRIGHT-ON-BLACK, which is what #1043's blend mode needs, and both carry
          their own audio, which is what #1045's deep duck exists for. Stated rather than defaulted. */
       videoComposite: "screen",
@@ -458,6 +480,7 @@ function plain(audio: string | null): VariantCue {
     audio,
     video: null,
     videoMs: 0,
+    audioAtMs: 0,
     videoComposite: null,
     videoHasOwnAudio: false,
     suppressStandardVisuals: false,

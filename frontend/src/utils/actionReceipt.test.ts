@@ -188,10 +188,11 @@ describe("a toast marks a move, not a catch-up (design note #825)", () => {
     expect(APP.slice(start, start + 220)).toContain("replayingHistory = false;");
   });
 
-  it("leaves the badges alone", () => {
-    /* THE CONTROL. #670's own gate is what this borrows from, and borrowing must not disturb it -- the cash
-       badge still asks `isOrdinaryPlay` directly, one line away. */
-    expect(APP).toContain("const cashBefore = isOrdinaryPlay ? cashByPlayer(sandboxStateRef.current) : null;");
+  it("still reads the gate it borrowed", () => {
+    /* THE CONTROL. #670's gate was what this borrowed from; #1339 removed the badge and its `cashBefore` read,
+       so what is left to check is that the flag is still written from `isOrdinaryPlay`, one line away. */
+    expect(APP).toContain("replayingHistory = !isOrdinaryPlay;");
+    expect(APP).not.toContain("noteCashChanges");
   });
 });
 
@@ -214,8 +215,11 @@ describe("every toast is mounted behind a rule", () => {
        literally every action", which is about toasts that are not behind a CONDITION. The count is pinned so
        that changing it is a decision rather than a drift, and each site's guard is named individually below.
        Moving this number without moving the guard list is the thing to refuse. */
+    /* #1390 ADDED THE THIRD: a click on a tile with no upgrade in this game (626 on H18) says so, where before
+       it silently did nothing -- "a click that does nothing looks like the board being broken". Guarded on
+       `isUpgradeDeadEnd`, listed below. */
     const calls = APP.match(/^\s*showActionToast\(/gm) ?? [];
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(3);
   });
 
   it("gates the receipt on the message deserving one", () => {
@@ -265,7 +269,9 @@ describe("every toast is mounted behind a rule", () => {
     /* Design note #1072: the call went multi-line when the depot toast gained its own duration, so the
        argument is no longer adjacent to the name. Anchored on the CALL, which is what the ordering is
        about -- and which no reformat can move. */
-    const raised = APP.indexOf("showActionToast(");
+    /* #1390's click toast sits far above the dispatch, so the receipt is the FIRST call after the rebuild
+       rather than the first in the file. */
+    const raised = APP.indexOf("showActionToast(", rebuilt);
     expect(rebuilt).toBeGreaterThan(-1);
     expect(raised).toBeGreaterThan(rebuilt);
   });
@@ -362,7 +368,11 @@ describe("every toast is mounted behind a rule", () => {
   it("leaves no unguarded call", () => {
     /* The property #718 was really after: every call site sits inside an `if`/`else if`. One named guard per
        call, so the count above and this list have to be changed together. */
-    const guards = ["deservesActionReceipt(msg)", "refusalWasRefused && refusalReason"];
+    const guards = [
+      "deservesActionReceipt(msg)",
+      "refusalWasRefused && refusalReason",
+      "isMyTurnRef.current && isUpgradeDeadEnd(laidHere.tile_id)", // #1390
+    ];
     for (const guard of guards) {
       expect(APP).toContain(guard);
     }

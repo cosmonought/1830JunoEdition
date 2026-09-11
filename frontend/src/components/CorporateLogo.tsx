@@ -23,11 +23,11 @@ export const LOGO_EXTENSION = "webp";
 /** The URL for one corporation's logo. Pure and exported so the encoding can be
  *  tested without a DOM -- a regression here is invisible on a case-insensitive
  *  dev machine. */
-/** Design note #1320: the one logo that did not arrive as WebP. Keyed by ticker so the file in `Logos/` is
- *  used as supplied rather than renamed. */
-export const LOGO_EXTENSION_BY_TICKER: Readonly<Record<string, string>> = {
-  PMQ: "jpeg",
-};
+/** Design note #1320 kept the PMQ's JPEG as supplied. Design note #1348 (feedback): a JPEG has no alpha, so
+ *  its black corners were painted on every surface the herald sat on; the disc was keyed out into
+ *  `PMQ.webp` (RGBA, cropped to the disc, so it also draws larger in the same box) and the exception is
+ *  gone. The table stays for the next asset that arrives in another format. */
+export const LOGO_EXTENSION_BY_TICKER: Readonly<Record<string, string>> = {};
 
 export function logoSrcFor(ticker: string): string {
   const extension = LOGO_EXTENSION_BY_TICKER[ticker.toUpperCase()] ?? LOGO_EXTENSION;

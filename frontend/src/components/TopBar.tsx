@@ -18,8 +18,7 @@ import { styles } from "../styles/appStyles";
 import AudioControls from "./AudioControls";
 /* Design note #1273: the text-size picker's steps and store. */
 import { styles as appStyles } from "../styles/appStyles";
-import { UI_SCALE_STEPS, setUiScale, snapUiScale } from "../utils/uiScale";
-import { useUiScale } from "../utils/useUiScale";
+import { UiScalePicker } from "./UiScalePicker";
 import { type AudioCategoryToggle } from "./AudioControlPopover";
 
 /* ------------------------------------------------------------------ */
@@ -93,47 +92,7 @@ function statusDotColor(
    row and two more pills pushed the wallet cluster onto a second line, undoing
    #34. It lives at the far right of the Contextual Action Bar, which already
    says what round it is. */
-/** Design note #1273: `<| 100% |>`, stored per browser, applied by reload. */
-function UiScalePicker() {
-  /* Design note #1294: live. The store re-renders every surface that draws with the scale; no reload, and
-     the radio keeps playing. */
-  const scale = useUiScale();
-  const at = UI_SCALE_STEPS.indexOf(snapUiScale(scale));
-  const choose = (index: number) => {
-    setUiScale(UI_SCALE_STEPS[Math.min(UI_SCALE_STEPS.length - 1, Math.max(0, index))]);
-  };
-  const percent = `${Math.round(scale * 100)}%`;
-  return (
-    <span style={appStyles.topBarAudioGroup} role="group" aria-label="Text size">
-      <button
-        type="button"
-        style={{ ...appStyles.topBarStationStep, ...(at <= 0 ? appStyles.topBarStationStepDisabled : {}) }}
-        onClick={() => choose(at - 1)}
-        disabled={at <= 0}
-        title="Draw the game smaller."
-        aria-label="Smaller text"
-      >
-        −
-      </button>
-      <span style={appStyles.topBarScaleReadout} title={`Text size ${percent}. Stored for this browser.`}>
-        {percent}
-      </span>
-      <button
-        type="button"
-        style={{
-          ...appStyles.topBarStationStep,
-          ...(at >= UI_SCALE_STEPS.length - 1 ? appStyles.topBarStationStepDisabled : {}),
-        }}
-        onClick={() => choose(at + 1)}
-        disabled={at >= UI_SCALE_STEPS.length - 1}
-        title="Draw the game larger."
-        aria-label="Larger text"
-      >
-        +
-      </button>
-    </span>
-  );
-}
+/* Design note #1273's picker lives in `UiScalePicker.tsx` now (#1336), so the lobby can mount the same one. */
 
 export default function TopBar({
   roomContext,

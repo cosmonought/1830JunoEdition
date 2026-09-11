@@ -508,8 +508,20 @@ export function filterSandboxPlacements(
     if (wanted.cities > 0) {
       if (centres.cities === 0) return false;
     } else if (wanted.towns > 0) {
-      // EXACT parity, not "has towns".
-      if (centres.towns !== wanted.towns) return false;
+      /* ==================================================================
+          DESIGN NOTE 1403: TWO TOWNS MAY BECOME ONE, AND WHICH GREEN TOWN TAKES WHICH HEX
+         ==================================================================
+         RULED, the full small-town chart: yellow 3/4/58 -> 141-144; yellow 1/2/55/56/69/630-633 -> 87/88/204;
+         green 141/142 -> 145/146/147, 143 -> 146/147, 144 -> 147, 88 -> 145, 87 -> 146, 204 -> 147.
+         THIS READ "EXACT parity", so a two-town yellow had no green at all: every green town carries one
+         dit, and the double towns' greens (#87/#88/#204) are that one dit standing for both, with all four
+         exits kept. So a town hex may keep its count or MERGE to one -- never gain a town -- and the tile
+         says which family it is: `mergesTowns` marks the three that stand for two, laid over a two-town hex
+         only; the three-exit greens (#141-#144) take a one-town hex only. Geometry (rule 5) settles the rest
+         of the chart: it is why 4 reaches 141 and 142 but not 143, and why 144 reaches 147 alone. */
+      if (centres.towns === 0 || centres.towns > wanted.towns) return false;
+      if (entry.mergesTowns === true && wanted.towns !== 2) return false;
+      if (entry.mergesTowns !== true && centres.towns !== wanted.towns) return false;
     } else if (centres.cities > 0 || centres.towns > 0) {
       return false;
     }

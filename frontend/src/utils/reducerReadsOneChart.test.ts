@@ -73,18 +73,22 @@ describe("no other reducer input is read from committed state", () => {
     /* THE SWEEP, not the one line. Any value in this object that comes from React state rather than a ref or
        from the message itself can be stale for a whole drain, and staleness that varies by client is exactly
        the shape that produced the report. `mapGrid` and `currentPhase` are named exemptions below. */
-    for (const stateBacked of ["sandboxMarket", "marketGrid", "settledPrivatePrices", "sandboxState"]) {
-      expect([stateBacked, REDUCER_CTX.includes(stateBacked)]).toEqual([stateBacked, false]);
+    // #1380: `sandboxStateRef.current` is a ref read, which is the point; the bare state name is the fault.
+    const withoutRefs = REDUCER_CTX.replace(/sandboxStateRef\.current/g, "").replace(/mapGridRef\.current/g, "");
+    for (const stateBacked of ["sandboxMarket", "marketGrid", "settledPrivatePrices", "sandboxState", "mapGrid,", "currentPhase", "tableVariants"]) {
+      expect([stateBacked, withoutRefs.includes(stateBacked)]).toEqual([stateBacked, false]);
     }
   });
 
-  it("names the two that ARE read from state, so they are a decision rather than an oversight", () => {
-    /* `mapGrid` is mirrored into a ref by #767 precisely because a drain lays several tiles, and the context
-       reads the mirrored value; `era` comes from the phase, which only a log action can change and which is
-       therefore identical on every client replaying the same prefix. Asserted so that if either ever becomes
-       a divergence source, this file is where the argument already lives. */
-    expect(REDUCER_CTX).toContain("mapGrid,");
-    expect(REDUCER_CTX).toContain("era: eraForPhase("); // #1312: the phase, plus the table's variants
+  it("the grid and the era come from the refs too (design note #1380)", () => {
+    /* THE ARGUMENT THIS CASE USED TO MAKE WAS WRONG, and JUNO-Z6C paid for it: it said `mapGrid` "reads the
+       mirrored value" (it read the React state) and that the era "only a log action can change" (true, and
+       a burst of log actions changes it several times before React commits once). A tab rebuilding from the
+       log priced every route on the pre-burst grid in the pre-burst era, and refused a token on a tile laid
+       earlier in the same burst. Both now come from the refs -- the grid the lay narration just wrote, the
+       era of the state about to be reduced -- which is what the server engine reads. */
+    expect(REDUCER_CTX).toContain("mapGrid: mapGridRef.current,");
+    expect(REDUCER_CTX).toContain("era: tileEraFor(sandboxStateRef.current),");
     expect(APP).toContain("mapGridRef");
   });
 });

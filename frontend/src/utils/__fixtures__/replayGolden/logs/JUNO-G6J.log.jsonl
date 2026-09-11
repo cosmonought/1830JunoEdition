@@ -1,0 +1,10 @@
+{"index":0,"id":"smtt3b7em-1","actor":"p-lzjh2r6u","payload":"{\"SetupGame\":{\"build\":\"dev\",\"players\":[{\"color\":\"#6f6100\",\"id\":\"p-lzjh2r6u\",\"nickname\":\"Bubba\"},{\"color\":\"#3f6fa8\",\"id\":\"p-fdsq3jbg\",\"nickname\":\"Player\"}],\"variants\":{\"delayedAuction\":false,\"dynamicStockMarket\":false,\"expandedMap\":true,\"gentleRust\":false,\"length\":\"standard\",\"levelPlayingField\":true,\"mode\":\"live\",\"plusTiles\":true,\"unpredictableRevenue\":false}}}","at":1788897965411,"submission_id":"gspzegmk-1"}
+{"index":1,"id":"smtt3b7em-2","actor":"p-lzjh2r6u","payload":"{\"WaterfallBuyLowest\":{\"game_id\":0}}","at":1788898029371,"submission_id":"gspzegmk-2"}
+{"index":2,"id":"smtt3b7em-3","actor":"p-fdsq3jbg","payload":"{\"WaterfallBidHigher\":{\"bid_amount\":\"225\",\"game_id\":0,\"private_id\":6}}","at":1788898041933,"submission_id":"eabafkya-1"}
+{"index":3,"id":"smtt3b7em-4","actor":"p-lzjh2r6u","payload":"{\"WaterfallBuyLowest\":{\"game_id\":0}}","at":1788898053750,"submission_id":"gspzegmk-3"}
+{"index":4,"id":"smtt3b7em-5","actor":"p-fdsq3jbg","payload":"{\"WaterfallBidHigher\":{\"bid_amount\":\"115\",\"game_id\":0,\"private_id\":4}}","at":1788898123300,"submission_id":"eabafkya-2"}
+{"index":5,"id":"smtt3b7em-6","actor":"p-lzjh2r6u","payload":"{\"WaterfallBuyLowest\":{\"game_id\":0}}","at":1788898147594,"submission_id":"gspzegmk-4"}
+{"index":6,"id":"smtt3b7em-7","actor":"p-fdsq3jbg","payload":"{\"WaterfallPass\":{\"game_id\":0}}","at":1788898237156,"submission_id":"eabafkya-3"}
+{"index":7,"id":"smtt3b7em-8","actor":"p-lzjh2r6u","payload":"{\"WaterfallPass\":{\"game_id\":0}}","at":1788898282410,"submission_id":"gspzegmk-5"}
+{"index":8,"id":"smtt3b7em-9","actor":"p-fdsq3jbg","payload":"{\"WaterfallBidHigher\":{\"bid_amount\":\"165\",\"game_id\":0,\"private_id\":5}}","at":1788898304497,"submission_id":"eabafkya-4"}
+{"index":9,"id":"smtt4eqt4-1","actor":"p-lzjh2r6u","payload":"{\"WaterfallBuyLowest\":{\"game_id\":0}}","at":1788899522588,"submission_id":"mrnxvkiu-1"}

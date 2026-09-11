@@ -1,0 +1,350 @@
+{
+  "applied": 10,
+  "dropped": 0,
+  "unparseable": [],
+  "state": {
+    "game_id": 0,
+    "creator": "juno1sandboxalice000000000000000000000000",
+    "is_active": true,
+    "total_juno_pool": "4000000",
+    "virtual_bank_vgp": "9550",
+    "virtual_bank_start": "12000",
+    "max_players": 2,
+    "player_addresses": [
+      "p-lzjh2r6u",
+      "p-fdsq3jbg"
+    ],
+    "active_player_index": 1,
+    "priority_deal_index": 0,
+    "consecutive_passes": 0,
+    "current_global_era": "Yellow",
+    "active_operating_order": [],
+    "active_corporation_index": 0,
+    "current_round_type": "WaterfallAuction",
+    "macro_round_number": 1,
+    "sub_round_index": 0,
+    "operating_round_sequence_length": 2,
+    "player_cash": [
+      {
+        "player": "p-lzjh2r6u",
+        "cash_vgp": "985"
+      },
+      {
+        "player": "p-fdsq3jbg",
+        "cash_vgp": "715"
+      }
+    ],
+    "public_companies": [
+      {
+        "company_id": 1,
+        "ticker": "PRR",
+        "is_floated": false,
+        "treasury": "0",
+        "total_shares_issued": 0,
+        "par_value": null,
+        "last_route_revenue": "0",
+        "owned_trains": [],
+        "president": null,
+        "ipo_pool_percentage": 90,
+        "bank_pool_percentage": 0,
+        "player_holdings": [
+          {
+            "player": "p-fdsq3jbg",
+            "percentage": 10
+          }
+        ],
+        "home_hex_label": "H12",
+        "station_token_hexes": [],
+        "station_token_limit": 4,
+        "station_tokens": []
+      },
+      {
+        "company_id": 2,
+        "ticker": "NYC",
+        "is_floated": false,
+        "treasury": "0",
+        "total_shares_issued": 0,
+        "par_value": null,
+        "last_route_revenue": "0",
+        "owned_trains": [],
+        "president": null,
+        "ipo_pool_percentage": 100,
+        "bank_pool_percentage": 0,
+        "player_holdings": [],
+        "home_hex_label": "E19",
+        "station_token_hexes": [],
+        "station_token_limit": 4,
+        "station_tokens": []
+      },
+      {
+        "company_id": 3,
+        "ticker": "CPR",
+        "is_floated": false,
+        "treasury": "0",
+        "total_shares_issued": 0,
+        "par_value": null,
+        "last_route_revenue": "0",
+        "owned_trains": [],
+        "president": null,
+        "ipo_pool_percentage": 100,
+        "bank_pool_percentage": 0,
+        "player_holdings": [],
+        "home_hex_label": "A19",
+        "station_token_hexes": [],
+        "station_token_limit": 4,
+        "station_tokens": []
+      },
+      {
+        "company_id": 4,
+        "ticker": "B&O",
+        "is_floated": false,
+        "treasury": "0",
+        "total_shares_issued": 0,
+        "par_value": null,
+        "last_route_revenue": "0",
+        "owned_trains": [],
+        "president": null,
+        "ipo_pool_percentage": 100,
+        "bank_pool_percentage": 0,
+        "player_holdings": [],
+        "home_hex_label": "I15",
+        "station_token_hexes": [],
+        "station_token_limit": 3,
+        "station_tokens": []
+      },
+      {
+        "company_id": 5,
+        "ticker": "C&O",
+        "is_floated": false,
+        "treasury": "0",
+        "total_shares_issued": 0,
+        "par_value": null,
+        "last_route_revenue": "0",
+        "owned_trains": [],
+        "president": null,
+        "ipo_pool_percentage": 100,
+        "bank_pool_percentage": 0,
+        "player_holdings": [],
+        "home_hex_label": "F6",
+        "station_token_hexes": [],
+        "station_token_limit": 3,
+        "station_tokens": []
+      },
+      {
+        "company_id": 6,
+        "ticker": "ERIE",
+        "is_floated": false,
+        "treasury": "0",
+        "total_shares_issued": 0,
+        "par_value": null,
+        "last_route_revenue": "0",
+        "owned_trains": [],
+        "president": null,
+        "ipo_pool_percentage": 100,
+        "bank_pool_percentage": 0,
+        "player_holdings": [],
+        "home_hex_label": "E11",
+        "station_token_hexes": [],
+        "station_token_limit": 3,
+        "station_tokens": [],
+        "double_certificate": {
+          "at": "Ipo"
+        }
+      },
+      {
+        "company_id": 7,
+        "ticker": "NNH",
+        "is_floated": false,
+        "treasury": "0",
+        "total_shares_issued": 0,
+        "par_value": null,
+        "last_route_revenue": "0",
+        "owned_trains": [],
+        "president": null,
+        "ipo_pool_percentage": 100,
+        "bank_pool_percentage": 0,
+        "player_holdings": [],
+        "home_hex_label": "G19",
+        "station_token_hexes": [],
+        "station_token_limit": 2,
+        "station_tokens": []
+      },
+      {
+        "company_id": 8,
+        "ticker": "B&M",
+        "is_floated": false,
+        "treasury": "0",
+        "total_shares_issued": 0,
+        "par_value": null,
+        "last_route_revenue": "0",
+        "owned_trains": [],
+        "president": null,
+        "ipo_pool_percentage": 100,
+        "bank_pool_percentage": 0,
+        "player_holdings": [],
+        "home_hex_label": "E23",
+        "station_token_hexes": [],
+        "station_token_limit": 2,
+        "station_tokens": []
+      },
+      {
+        "company_id": 9,
+        "ticker": "PMQ",
+        "is_floated": false,
+        "treasury": "0",
+        "total_shares_issued": 0,
+        "par_value": null,
+        "last_route_revenue": "0",
+        "owned_trains": [],
+        "president": null,
+        "ipo_pool_percentage": 100,
+        "bank_pool_percentage": 0,
+        "player_holdings": [],
+        "home_hex_label": "E5",
+        "station_token_hexes": [],
+        "station_tokens": [],
+        "station_token_limit": 2
+      },
+      {
+        "company_id": 10,
+        "ticker": "N&W",
+        "is_floated": false,
+        "treasury": "0",
+        "total_shares_issued": 0,
+        "par_value": null,
+        "last_route_revenue": "0",
+        "owned_trains": [],
+        "president": null,
+        "ipo_pool_percentage": 100,
+        "bank_pool_percentage": 0,
+        "player_holdings": [],
+        "home_hex_label": "L16",
+        "station_token_hexes": [],
+        "station_tokens": [],
+        "station_token_limit": 3,
+        "double_certificate": {
+          "at": "Ipo"
+        }
+      }
+    ],
+    "private_companies": [
+      {
+        "private_id": 1,
+        "name": "Schuylkill Valley",
+        "cost": "20",
+        "revenue_per_or": "5",
+        "owner": "p-lzjh2r6u",
+        "owner_protocol_id": null,
+        "closed": false
+      },
+      {
+        "private_id": 2,
+        "name": "Champlain & St. Lawrence",
+        "cost": "40",
+        "revenue_per_or": "10",
+        "owner": "p-lzjh2r6u",
+        "owner_protocol_id": null,
+        "closed": false
+      },
+      {
+        "private_id": 3,
+        "name": "Delaware & Hudson",
+        "cost": "70",
+        "revenue_per_or": "15",
+        "owner": "p-lzjh2r6u",
+        "owner_protocol_id": null,
+        "closed": false
+      },
+      {
+        "private_id": 4,
+        "name": "Mohawk & Hudson",
+        "cost": "110",
+        "revenue_per_or": "20",
+        "owner": "p-fdsq3jbg",
+        "owner_protocol_id": null,
+        "closed": false
+      },
+      {
+        "private_id": 7,
+        "name": "James River & Kanawha Company",
+        "cost": "120",
+        "revenue_per_or": "20",
+        "owner": "p-lzjh2r6u",
+        "owner_protocol_id": null,
+        "closed": false
+      },
+      {
+        "private_id": 5,
+        "name": "Camden & Amboy",
+        "cost": "160",
+        "revenue_per_or": "25",
+        "owner": "p-fdsq3jbg",
+        "owner_protocol_id": null,
+        "closed": false
+      },
+      {
+        "private_id": 6,
+        "name": "Baltimore & Ohio",
+        "cost": "220",
+        "revenue_per_or": "30",
+        "owner": "p-fdsq3jbg",
+        "owner_protocol_id": null,
+        "closed": false
+      }
+    ],
+    "market_positions": {
+      "1": null,
+      "2": null,
+      "3": null,
+      "4": null,
+      "5": null,
+      "6": null,
+      "7": null,
+      "8": null
+    },
+    "variants": {
+      "length": "standard",
+      "mode": "live",
+      "delayedAuction": false,
+      "gentleRust": false,
+      "unpredictableRevenue": false,
+      "dynamicStockMarket": false,
+      "expandedMap": true,
+      "plusTiles": true,
+      "levelPlayingField": true
+    },
+    "turn_action_taken": false,
+    "bought_this_turn": 0
+  },
+  "waterfall": {
+    "game_id": 0,
+    "waterfall_auction_active": false,
+    "privates": [],
+    "current_turn": "p-fdsq3jbg",
+    "mini_auction": null,
+    "consecutive_waterfall_passes": 0
+  },
+  "grid": {
+    "game_id": 1,
+    "tiles": [
+      {
+        "q": 2,
+        "r": 7,
+        "tile_id": 24,
+        "orientation": 3,
+        "paths": [
+          [
+            0,
+            2
+          ],
+          [
+            0,
+            3
+          ]
+        ],
+        "landmark": null,
+        "printed": true
+      }
+    ]
+  }
+}

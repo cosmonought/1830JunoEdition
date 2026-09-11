@@ -709,6 +709,6 @@ describe("the fog has no log line of its own", () => {
        the train the clause just said went. */
     expect(CARCOSA_STAMP_STEP).toBe("Yellow Sign");
     expect(APP).toContain("operating_sub_phase: CARCOSA_STAMP_STEP as never");
-    expect(APP).toContain("The ${taken}-train disappeared. $${award} found.");
+    expect(APP).toContain("added $${award} to the company's treasury."); // #1375: the Mark's receipt, on its line
   });
 });

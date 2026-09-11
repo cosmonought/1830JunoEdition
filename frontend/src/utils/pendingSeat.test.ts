@@ -48,13 +48,14 @@ const BASE = room([
 ]);
 
 describe("the difference that made three controls lag", () => {
-  it("still has exactly one transactional writer on the room document", () => {
-    /* IF A FUTURE WRITER REACHES FOR `runTransaction` for a field a control reads back, it inherits this bug
-       silently -- no error, just a control that stops answering. This is the tripwire for that. */
-    const transactional = ROOM.split("runTransaction(db").length - 1;
-    expect(transactional).toBe(2); // the seat upsert, and #522's log append
+  it("has no transactional writer left on the room document (#1361b)", () => {
+    /* THE BUG THIS FILE WAS WRITTEN AGAINST WAS FIRESTORE'S: a `runTransaction` write is not echoed by the
+       listener, so a control that read its own field back lagged a round trip. The room document lives on
+       the game server now and every write is one `writeRoomDoc` frame, applied and fanned out in order --
+       there is no transaction to inherit the bug from. The tripwire inverts: none may come back. */
+    expect(ROOM).not.toContain("runTransaction(");
     expect(sliceBetween(ROOM, "export async function upsertSandboxPlayer(", "\n}")).toContain(
-      "runTransaction(db",
+      'writeRoomDoc(roomCode, player.id, { op: "upsert-player", player });',
     );
   });
 
@@ -67,7 +68,8 @@ describe("the difference that made three controls lag", () => {
       "markSandboxRoomPlaying",
     ]) {
       const body = sliceBetween(ROOM, `export async function ${fn}(`, "\n}");
-      expect([fn, body.includes("updateDoc(")]).toEqual([fn, true]);
+      // #1361b: every writer is the same frame on the same socket; the echo is the server's fan-out.
+      expect([fn, body.includes("writeRoomDoc(")]).toEqual([fn, true]);
       expect([fn, body.includes("runTransaction")]).toEqual([fn, false]);
     }
   });
@@ -148,8 +150,10 @@ describe("the echo stops when the commit lands", () => {
   it("cannot outlive a plausible round trip", () => {
     /* `upsertSandboxPlayer` returns `true` when the room is MISSING -- it opens a transaction, finds nothing
        and returns without writing -- so a "successful" write can leave a field no snapshot will ever settle. */
+    /* #1361b: the server answers a write on a room it does not hold with an error frame rather than a silent
+       no-op, but the backstop stays -- a dropped socket is the same silence from the seat's point of view. */
     expect(sliceBetween(ROOM, "export async function upsertSandboxPlayer(", "\n}")).toContain(
-      "if (!snapshot.exists()) return;",
+      "if (!roomDocOnServer()) return false;",
     );
     expect(PENDING_SEAT_BACKSTOP_MS).toBe(6000);
     expect(APP).toContain("setTimeout(() => setPendingSeat(null), PENDING_SEAT_BACKSTOP_MS)");

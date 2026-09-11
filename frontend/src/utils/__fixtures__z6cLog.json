@@ -1,0 +1,3537 @@
+{
+"roomCode": "JUNO-Z6C",
+"throughIndex": 494,
+"note": "Design note #1411: the room's log itself, through B&O's Run Routes in OR 9.3, for the timeline builder.",
+"entries": [
+{
+"index": 0,
+"id": "smtvxij5h-1",
+"actor": "p-lzjh2r6u",
+"payload": "{\"SetupGame\":{\"build\":\"dev\",\"players\":[{\"color\":\"#3f6fa8\",\"id\":\"p-6a1qgd0g\",\"nickname\":\"Mom\"},{\"id\":\"p-lzjh2r6u\",\"nickname\":\"Bubba\"},{\"color\":\"#7a5aa8\",\"id\":\"p-je0gw2v0\",\"nickname\":\"Monty\"}],\"variants\":{\"delayedAuction\":false,\"dynamicStockMarket\":false,\"expandedMap\":true,\"gentleRust\":false,\"length\":\"standard\",\"levelPlayingField\":true,\"mode\":\"live\",\"plusTiles\":true,\"unpredictableRevenue\":true}}}",
+"at": 1789072815156
+},
+{
+"index": 1,
+"id": "smtvxij5h-2",
+"actor": "p-6a1qgd0g",
+"payload": "{\"WaterfallBidHigher\":{\"bid_amount\":\"165\",\"game_id\":0,\"private_id\":5}}",
+"at": 1789072847268
+},
+{
+"index": 2,
+"id": "smtvxij5h-3",
+"actor": "p-lzjh2r6u",
+"payload": "{\"WaterfallBuyLowest\":{\"game_id\":0}}",
+"at": 1789072873315
+},
+{
+"index": 3,
+"id": "smtvxij5h-4",
+"actor": "p-je0gw2v0",
+"payload": "{\"WaterfallBuyLowest\":{\"game_id\":0}}",
+"at": 1789072939990
+},
+{
+"index": 4,
+"id": "smtvxij5h-5",
+"actor": "p-6a1qgd0g",
+"payload": "{\"WaterfallBidHigher\":{\"bid_amount\":\"115\",\"game_id\":0,\"private_id\":4}}",
+"at": 1789072967048
+},
+{
+"index": 5,
+"id": "smtvxij5h-6",
+"actor": "p-lzjh2r6u",
+"payload": "{\"WaterfallBidHigher\":{\"bid_amount\":\"125\",\"game_id\":0,\"private_id\":7}}",
+"at": 1789072978342
+},
+{
+"index": 6,
+"id": "smtvxij5h-7",
+"actor": "p-je0gw2v0",
+"payload": "{\"WaterfallBuyLowest\":{\"game_id\":0}}",
+"at": 1789072995860
+},
+{
+"index": 7,
+"id": "smtvxij5h-8",
+"actor": "p-6a1qgd0g",
+"payload": "{\"WaterfallPass\":{\"game_id\":0}}",
+"at": 1789073008042
+},
+{
+"index": 8,
+"id": "smtvxij5h-9",
+"actor": "p-lzjh2r6u",
+"payload": "{\"WaterfallPass\":{\"game_id\":0}}",
+"at": 1789073016632
+},
+{
+"index": 9,
+"id": "smtvxij5h-10",
+"actor": "p-je0gw2v0",
+"payload": "{\"WaterfallPass\":{\"game_id\":0}}",
+"at": 1789073047984
+},
+{
+"index": 10,
+"id": "smtvxij5h-11",
+"actor": "p-6a1qgd0g",
+"payload": "{\"WaterfallPass\":{\"game_id\":0}}",
+"at": 1789073069412
+},
+{
+"index": 11,
+"id": "smtvxij5h-12",
+"actor": "p-lzjh2r6u",
+"payload": "{\"WaterfallPass\":{\"game_id\":0}}",
+"at": 1789073073095
+},
+{
+"index": 12,
+"id": "smtvxij5h-13",
+"actor": "p-je0gw2v0",
+"payload": "{\"WaterfallPass\":{\"game_id\":0}}",
+"at": 1789073095293
+},
+{
+"index": 13,
+"id": "smtvxij5h-14",
+"actor": "p-6a1qgd0g",
+"payload": "{\"WaterfallPass\":{\"game_id\":0}}",
+"at": 1789073115603
+},
+{
+"index": 14,
+"id": "smtvxij5h-15",
+"actor": "p-lzjh2r6u",
+"payload": "{\"WaterfallBuyLowest\":{\"game_id\":0}}",
+"at": 1789073122449
+},
+{
+"index": 15,
+"id": "smtvxij5h-16",
+"actor": "p-lzjh2r6u",
+"payload": "{\"SetBoPar\":{\"par_value\":\"100\",\"player\":\"p-lzjh2r6u\"}}",
+"at": 1789073123846
+},
+{
+"index": 16,
+"id": "smtvxij5h-17",
+"actor": "p-lzjh2r6u",
+"payload": "{\"OpenStockRound\":{}}",
+"at": 1789073125329
+},
+{
+"index": 17,
+"id": "smtvxij5h-19",
+"actor": "p-je0gw2v0",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"90\",\"protocol_id\":7,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789073171004
+},
+{
+"index": 18,
+"id": "smtvxij5h-20",
+"actor": "p-6a1qgd0g",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"100\",\"protocol_id\":1,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789073231258
+},
+{
+"index": 19,
+"id": "smtvxij5h-21",
+"actor": "p-lzjh2r6u",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"100\",\"protocol_id\":4,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789073239327
+},
+{
+"index": 20,
+"id": "smtvxij5h-22",
+"actor": "p-je0gw2v0",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"90\",\"protocol_id\":7,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789073252716
+},
+{
+"index": 21,
+"id": "smtvxij5h-23",
+"actor": "p-6a1qgd0g",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"90\",\"protocol_id\":7,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789073265274
+},
+{
+"index": 22,
+"id": "smtvxij5h-24",
+"actor": "p-lzjh2r6u",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"100\",\"protocol_id\":4,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789073273578
+},
+{
+"index": 23,
+"id": "smtvxij5h-25",
+"actor": "p-je0gw2v0",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"90\",\"protocol_id\":7,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789073287294
+},
+{
+"index": 24,
+"id": "smtvxij5h-26",
+"actor": "p-6a1qgd0g",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"90\",\"protocol_id\":5,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789073366990
+},
+{
+"index": 25,
+"id": "smtvxij5h-27",
+"actor": "p-lzjh2r6u",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"90\",\"protocol_id\":5,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789073388312
+},
+{
+"index": 26,
+"id": "smtvxij5h-28",
+"actor": "p-je0gw2v0",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"100\",\"protocol_id\":1,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789073405281
+},
+{
+"index": 27,
+"id": "smtvxij5h-29",
+"actor": "p-6a1qgd0g",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"90\",\"protocol_id\":5,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789073411998
+},
+{
+"index": 28,
+"id": "smtvxij5h-30",
+"actor": "p-lzjh2r6u",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"100\",\"protocol_id\":4,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789073421842
+},
+{
+"index": 29,
+"id": "smtvxij5h-31",
+"actor": "p-je0gw2v0",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"90\",\"protocol_id\":5,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789073687325
+},
+{
+"index": 30,
+"id": "smtvxij5h-32",
+"actor": "p-6a1qgd0g",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789073691292
+},
+{
+"index": 31,
+"id": "smtvxij5h-33",
+"actor": "p-lzjh2r6u",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"100\",\"protocol_id\":4,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789073696026
+},
+{
+"index": 32,
+"id": "smtvxij5h-34",
+"actor": "p-lzjh2r6u",
+"payload": "{\"PlaceHomeStation\":{\"city_index\":null,\"company_id\":4,\"hex_label\":\"I15\",\"kind\":\"home\",\"q\":3,\"r\":8}}",
+"at": 1789073699709
+},
+{
+"index": 33,
+"id": "smtvxij5h-35",
+"actor": "p-je0gw2v0",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"100\",\"protocol_id\":4,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789073768319
+},
+{
+"index": 34,
+"id": "smtvxij5h-36",
+"actor": "p-6a1qgd0g",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789073774702
+},
+{
+"index": 35,
+"id": "smtvxij5h-37",
+"actor": "p-lzjh2r6u",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789073776008
+},
+{
+"index": 36,
+"id": "smtvxij5h-38",
+"actor": "p-je0gw2v0",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"90\",\"protocol_id\":7,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789073791452
+},
+{
+"index": 37,
+"id": "smtvxij5h-39",
+"actor": "p-je0gw2v0",
+"payload": "{\"PlaceHomeStation\":{\"city_index\":0,\"company_id\":7,\"hex_label\":\"G19\",\"kind\":\"home\",\"q\":6,\"r\":6}}",
+"at": 1789073795699
+},
+{
+"index": 38,
+"id": "smtvxij5h-40",
+"actor": "p-6a1qgd0g",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789073800549
+},
+{
+"index": 39,
+"id": "smtvxij5h-41",
+"actor": "p-lzjh2r6u",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789073803040
+},
+{
+"index": 40,
+"id": "smtvxij5h-42",
+"actor": "p-je0gw2v0",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789073804303
+},
+{
+"index": 41,
+"id": "smtvxij5h-43",
+"actor": "p-lzjh2r6u",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":1,\"protocol_id\":4,\"q\":2,\"r\":9,\"tile_id\":57}}",
+"at": 1789073816229
+},
+{
+"index": 42,
+"id": "smtvxij5h-44",
+"actor": "p-lzjh2r6u",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":4}}",
+"at": 1789073827036
+},
+{
+"index": 43,
+"id": "smtvxij5h-45",
+"actor": "p-lzjh2r6u",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":4}}",
+"at": 1789073827036,
+"derived": true
+},
+{
+"index": 44,
+"id": "smtvxij5h-46",
+"actor": "p-lzjh2r6u",
+"payload": "{\"DeclareDividends\":{\"distribute\":false,\"game_id\":0,\"protocol_id\":4,\"revenue_amount\":\"0\"}}",
+"at": 1789073827036,
+"derived": true
+},
+{
+"index": 45,
+"id": "smtvxij5h-47",
+"actor": "p-lzjh2r6u",
+"payload": "{\"BuyHardwareFromPool\":{\"game_id\":0,\"protocol_id\":4}}",
+"at": 1789073829117
+},
+{
+"index": 46,
+"id": "smtvxij5h-48",
+"actor": "p-lzjh2r6u",
+"payload": "{\"BuyHardwareFromPool\":{\"game_id\":0,\"protocol_id\":4}}",
+"at": 1789073830687
+},
+{
+"index": 47,
+"id": "smtvxij5h-49",
+"actor": "p-lzjh2r6u",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789073831838
+},
+{
+"index": 48,
+"id": "smtvxij5h-50",
+"actor": "p-je0gw2v0",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":0,\"protocol_id\":7,\"q\":7,\"r\":5,\"tile_id\":69}}",
+"at": 1789073881541
+},
+{
+"index": 49,
+"id": "smtvxij5h-51",
+"actor": "p-je0gw2v0",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":7}}",
+"at": 1789073881542,
+"derived": true
+},
+{
+"index": 50,
+"id": "smtvxij5h-52",
+"actor": "p-je0gw2v0",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":7}}",
+"at": 1789073881542,
+"derived": true
+},
+{
+"index": 51,
+"id": "smtvxij5h-53",
+"actor": "p-je0gw2v0",
+"payload": "{\"DeclareDividends\":{\"distribute\":false,\"game_id\":0,\"protocol_id\":7,\"revenue_amount\":\"0\"}}",
+"at": 1789073881542,
+"derived": true
+},
+{
+"index": 52,
+"id": "smtvxij5h-54",
+"actor": "p-je0gw2v0",
+"payload": "{\"BuyHardwareFromPool\":{\"game_id\":0,\"protocol_id\":7}}",
+"at": 1789073888558
+},
+{
+"index": 53,
+"id": "smtvxij5h-55",
+"actor": "p-je0gw2v0",
+"payload": "{\"BuyHardwareFromPool\":{\"game_id\":0,\"protocol_id\":7}}",
+"at": 1789073894906
+},
+{
+"index": 54,
+"id": "smtvxij5h-56",
+"actor": "p-je0gw2v0",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789073896336
+},
+{
+"index": 55,
+"id": "smtvxij5h-57",
+"actor": "p-6a1qgd0g",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"90\",\"protocol_id\":5,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789073912907
+},
+{
+"index": 56,
+"id": "smtvxij5h-58",
+"actor": "p-6a1qgd0g",
+"payload": "{\"PlaceHomeStation\":{\"city_index\":null,\"company_id\":5,\"hex_label\":\"F6\",\"kind\":\"home\",\"q\":0,\"r\":5}}",
+"at": 1789073918970
+},
+{
+"index": 57,
+"id": "smtvxij5h-59",
+"actor": "p-lzjh2r6u",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789073922526
+},
+{
+"index": 58,
+"id": "smtvxij5h-60",
+"actor": "p-je0gw2v0",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789073923257
+},
+{
+"index": 59,
+"id": "smtvxij5h-61",
+"actor": "p-6a1qgd0g",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789073927116
+},
+{
+"index": 60,
+"id": "smtvxij5h-62",
+"actor": "p-6a1qgd0g",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":1,\"protocol_id\":5,\"q\":-1,\"r\":6,\"tile_id\":8}}",
+"at": 1789073959215
+},
+{
+"index": 61,
+"id": "smtvxij5h-63",
+"actor": "p-6a1qgd0g",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":5}}",
+"at": 1789073959216,
+"derived": true
+},
+{
+"index": 62,
+"id": "smtvxij5h-64",
+"actor": "p-6a1qgd0g",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":5}}",
+"at": 1789073959216,
+"derived": true
+},
+{
+"index": 63,
+"id": "smtvxij5h-65",
+"actor": "p-6a1qgd0g",
+"payload": "{\"DeclareDividends\":{\"distribute\":false,\"game_id\":0,\"protocol_id\":5,\"revenue_amount\":\"0\"}}",
+"at": 1789073959216,
+"derived": true
+},
+{
+"index": 64,
+"id": "smtvxij5h-66",
+"actor": "p-6a1qgd0g",
+"payload": "{\"BuyHardwareFromPool\":{\"game_id\":0,\"protocol_id\":5}}",
+"at": 1789073991990
+},
+{
+"index": 65,
+"id": "smtvxij5h-67",
+"actor": "p-6a1qgd0g",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789073996743
+},
+{
+"index": 66,
+"id": "smtvxij5h-68",
+"actor": "p-lzjh2r6u",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":1,\"protocol_id\":4,\"q\":1,\"r\":10,\"tile_id\":57}}",
+"at": 1789074010776
+},
+{
+"index": 67,
+"id": "smtvxij5h-69",
+"actor": "p-lzjh2r6u",
+"payload": "{\"PlaceStationToken\":{\"city_index\":0,\"game_id\":0,\"protocol_id\":4,\"q\":1,\"r\":10}}",
+"at": 1789074014296
+},
+{
+"index": 68,
+"id": "smtvxij5h-70",
+"actor": "p-lzjh2r6u",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":4,\"revenue_seed\":2081322187,\"revenue_turn\":\"2.1.4\",\"routes\":[[{\"hex\":\"I15\"},{\"hex\":\"J14\"}],[{\"hex\":\"K13\"},{\"hex\":\"J14\"}]],\"train_indices\":[0,1],\"trains\":[\"2\",\"2\"]}}",
+"at": 1789074017712
+},
+{
+"index": 69,
+"id": "smtvxij5h-71",
+"actor": "p-lzjh2r6u",
+"payload": "{\"DeclareDividends\":{\"distribute\":true,\"game_id\":0,\"protocol_id\":4,\"revenue_amount\":\"80\"}}",
+"at": 1789074024160
+},
+{
+"index": 70,
+"id": "smtvxij5h-72",
+"actor": "p-lzjh2r6u",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789074029094
+},
+{
+"index": 71,
+"id": "smtvxij5h-73",
+"actor": "p-je0gw2v0",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":2,\"protocol_id\":7,\"q\":7,\"r\":4,\"tile_id\":57}}",
+"at": 1789074034502
+},
+{
+"index": 72,
+"id": "smtvxij5h-74",
+"actor": "p-je0gw2v0",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":7}}",
+"at": 1789074034503,
+"derived": true
+},
+{
+"index": 73,
+"id": "smtvxij5h-75",
+"actor": "p-je0gw2v0",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":7}}",
+"at": 1789074034503,
+"derived": true
+},
+{
+"index": 74,
+"id": "smtvxij5h-76",
+"actor": "p-je0gw2v0",
+"payload": "{\"DeclareDividends\":{\"distribute\":false,\"game_id\":0,\"protocol_id\":7,\"revenue_amount\":\"0\"}}",
+"at": 1789074034503,
+"derived": true
+},
+{
+"index": 75,
+"id": "smtvxij5h-77",
+"actor": "p-je0gw2v0",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789074040819
+},
+{
+"index": 76,
+"id": "smtvxij5h-78",
+"actor": "p-lzjh2r6u",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"100\",\"protocol_id\":1,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789074059352
+},
+{
+"index": 77,
+"id": "smtvxij5h-79",
+"actor": "p-je0gw2v0",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789074186292
+},
+{
+"index": 78,
+"id": "smtvxij5h-80",
+"actor": "p-6a1qgd0g",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789074204016
+},
+{
+"index": 79,
+"id": "smtvxij5h-81",
+"actor": "p-lzjh2r6u",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789074204107
+},
+{
+"index": 80,
+"id": "smtvxij5h-82",
+"actor": "p-lzjh2r6u",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":5,\"protocol_id\":4,\"q\":0,\"r\":11,\"tile_id\":8}}",
+"at": 1789074214275
+},
+{
+"index": 81,
+"id": "smtvxij5h-83",
+"actor": "p-lzjh2r6u",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":4}}",
+"at": 1789074216390
+},
+{
+"index": 82,
+"id": "smtvxij5h-84",
+"actor": "p-lzjh2r6u",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":4,\"revenue_seed\":3348000035,\"revenue_turn\":\"3.1.4\",\"routes\":[[{\"hex\":\"I15\"},{\"hex\":\"J14\"}],[{\"hex\":\"K13\"},{\"hex\":\"L12\"},{\"hex\":\"M13\"}]],\"train_indices\":[0,1],\"trains\":[\"2\",\"2\"]}}",
+"at": 1789074221218
+},
+{
+"index": 83,
+"id": "smtvxij5h-85",
+"actor": "p-lzjh2r6u",
+"payload": "{\"DeclareDividends\":{\"distribute\":true,\"game_id\":0,\"protocol_id\":4,\"revenue_amount\":\"120\"}}",
+"at": 1789074223901
+},
+{
+"index": 84,
+"id": "smtvxij5h-86",
+"actor": "p-lzjh2r6u",
+"payload": "{\"BuyHardwareFromPool\":{\"game_id\":0,\"protocol_id\":4}}",
+"at": 1789074226201
+},
+{
+"index": 85,
+"id": "smtvxij5h-87",
+"actor": "p-lzjh2r6u",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789074227470
+},
+{
+"index": 86,
+"id": "smtvxij5h-88",
+"actor": "p-6a1qgd0g",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":0,\"protocol_id\":5,\"q\":-2,\"r\":6,\"tile_id\":8}}",
+"at": 1789074232598
+},
+{
+"index": 87,
+"id": "smtvxij5h-89",
+"actor": "p-6a1qgd0g",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":5}}",
+"at": 1789074232599,
+"derived": true
+},
+{
+"index": 88,
+"id": "smtvxij5h-90",
+"actor": "p-6a1qgd0g",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":5,\"revenue_seed\":399145037,\"revenue_turn\":\"3.1.5\",\"routes\":[[{\"hex\":\"F6\"},{\"hex\":\"G5\"},{\"hex\":\"G3\"},{\"hex\":\"F2\"}]],\"train_indices\":[0],\"trains\":[\"2\"]}}",
+"at": 1789074236063
+},
+{
+"index": 89,
+"id": "smtvxij5h-91",
+"actor": "p-6a1qgd0g",
+"payload": "{\"DeclareDividends\":{\"distribute\":true,\"game_id\":0,\"protocol_id\":5,\"revenue_amount\":\"80\"}}",
+"at": 1789074240206
+},
+{
+"index": 90,
+"id": "smtvxij5h-92",
+"actor": "p-6a1qgd0g",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789074247379
+},
+{
+"index": 91,
+"id": "smtvxij5h-93",
+"actor": "p-je0gw2v0",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":3,\"protocol_id\":7,\"q\":7,\"r\":3,\"tile_id\":8}}",
+"at": 1789074252328
+},
+{
+"index": 92,
+"id": "smtvxij5h-94",
+"actor": "p-je0gw2v0",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":7}}",
+"at": 1789074252329,
+"derived": true
+},
+{
+"index": 93,
+"id": "smtvxij5h-95",
+"actor": "p-je0gw2v0",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":7}}",
+"at": 1789074252329,
+"derived": true
+},
+{
+"index": 94,
+"id": "smtvxij5h-96",
+"actor": "p-je0gw2v0",
+"payload": "{\"DeclareDividends\":{\"distribute\":false,\"game_id\":0,\"protocol_id\":7,\"revenue_amount\":\"0\"}}",
+"at": 1789074252329,
+"derived": true
+},
+{
+"index": 95,
+"id": "smtvxij5h-97",
+"actor": "p-je0gw2v0",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789074257499
+},
+{
+"index": 96,
+"id": "smtvxij5h-98",
+"actor": "p-je0gw2v0",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"100\",\"protocol_id\":1,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789074277543
+},
+{
+"index": 97,
+"id": "smtvxij5h-99",
+"actor": "p-6a1qgd0g",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"100\",\"protocol_id\":1,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789074293650
+},
+{
+"index": 98,
+"id": "smtvxij5h-100",
+"actor": "p-lzjh2r6u",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"90\",\"protocol_id\":5,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789074312992
+},
+{
+"index": 99,
+"id": "smtvxij5h-101",
+"actor": "p-je0gw2v0",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789074321760
+},
+{
+"index": 100,
+"id": "smtvxij5h-102",
+"actor": "p-6a1qgd0g",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789074326136
+},
+{
+"index": 101,
+"id": "smtvxij5h-103",
+"actor": "p-lzjh2r6u",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789074327513
+},
+{
+"index": 102,
+"id": "smtvxij5h-104",
+"actor": "p-lzjh2r6u",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":0,\"protocol_id\":4,\"q\":4,\"r\":8,\"tile_id\":9}}",
+"at": 1789074345272
+},
+{
+"index": 103,
+"id": "smtvxij5h-105",
+"actor": "p-lzjh2r6u",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":4}}",
+"at": 1789074349519
+},
+{
+"index": 104,
+"id": "smtvxij5h-106",
+"actor": "p-lzjh2r6u",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":4,\"revenue_seed\":4201924983,\"revenue_turn\":\"4.1.4\",\"routes\":[[{\"hex\":\"I15\"},{\"hex\":\"J14\"}],[{\"hex\":\"K13\"},{\"hex\":\"L12\"},{\"hex\":\"M13\"}],[{\"hex\":\"K13\"},{\"hex\":\"J14\"}]],\"train_indices\":[0,1,2],\"trains\":[\"2\",\"2\",\"2\"]}}",
+"at": 1789074351250
+},
+{
+"index": 105,
+"id": "smtvxij5h-107",
+"actor": "p-lzjh2r6u",
+"payload": "{\"DeclareDividends\":{\"distribute\":true,\"game_id\":0,\"protocol_id\":4,\"revenue_amount\":\"140\"}}",
+"at": 1789074354824
+},
+{
+"index": 106,
+"id": "smtvxij5h-108",
+"actor": "p-lzjh2r6u",
+"payload": "{\"BuyHardwareFromPool\":{\"game_id\":0,\"protocol_id\":4}}",
+"at": 1789074363771
+},
+{
+"index": 107,
+"id": "smtvxij5h-109",
+"actor": "p-lzjh2r6u",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789074363774,
+"derived": true
+},
+{
+"index": 108,
+"id": "smtvxij5h-110",
+"actor": "p-6a1qgd0g",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":1}}",
+"at": 1789074384408
+},
+{
+"index": 109,
+"id": "smtvxij5h-111",
+"actor": "p-6a1qgd0g",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":0,\"protocol_id\":1,\"q\":1,\"r\":7,\"tile_id\":57}}",
+"at": 1789074388336
+},
+{
+"index": 110,
+"id": "smtvxij5h-112",
+"actor": "p-6a1qgd0g",
+"payload": "{\"PlaceStationToken\":{\"city_index\":0,\"game_id\":0,\"protocol_id\":1,\"q\":1,\"r\":7}}",
+"at": 1789074428696
+},
+{
+"index": 111,
+"id": "smtvxij5h-113",
+"actor": "p-6a1qgd0g",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":1}}",
+"at": 1789074428696,
+"derived": true
+},
+{
+"index": 112,
+"id": "smtvxij5h-114",
+"actor": "p-6a1qgd0g",
+"payload": "{\"DeclareDividends\":{\"distribute\":false,\"game_id\":0,\"protocol_id\":1,\"revenue_amount\":\"0\"}}",
+"at": 1789074428696,
+"derived": true
+},
+{
+"index": 113,
+"id": "smtvxij5h-115",
+"actor": "p-6a1qgd0g",
+"payload": "{\"BuyHardwareFromPool\":{\"game_id\":0,\"protocol_id\":1}}",
+"at": 1789074451692
+},
+{
+"index": 114,
+"id": "smtvxij5h-116",
+"actor": "p-6a1qgd0g",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789074456420
+},
+{
+"index": 115,
+"id": "smtvxij5h-117",
+"actor": "p-6a1qgd0g",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":5}}",
+"at": 1789074540245
+},
+{
+"index": 116,
+"id": "smtvxij5h-118",
+"actor": "p-6a1qgd0g",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":2,\"protocol_id\":5,\"q\":0,\"r\":6,\"tile_id\":2}}",
+"at": 1789074550069
+},
+{
+"index": 117,
+"id": "smtvxij5h-119",
+"actor": "p-6a1qgd0g",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":5}}",
+"at": 1789074550070,
+"derived": true
+},
+{
+"index": 118,
+"id": "smtvxij5h-120",
+"actor": "p-6a1qgd0g",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":5,\"revenue_seed\":2977411800,\"revenue_turn\":\"4.1.5\",\"routes\":[[{\"hex\":\"F6\"},{\"hex\":\"G5\"},{\"hex\":\"G3\"},{\"hex\":\"F2\"}]],\"train_indices\":[0],\"trains\":[\"2\"]}}",
+"at": 1789074558213
+},
+{
+"index": 119,
+"id": "smtvxij5h-121",
+"actor": "p-6a1qgd0g",
+"payload": "{\"DeclareDividends\":{\"distribute\":true,\"game_id\":0,\"protocol_id\":5,\"revenue_amount\":\"60\"}}",
+"at": 1789074562397
+},
+{
+"index": 120,
+"id": "smtvxij5h-122",
+"actor": "p-6a1qgd0g",
+"payload": "{\"BuyHardwareFromPool\":{\"game_id\":0,\"protocol_id\":5}}",
+"at": 1789074566061
+},
+{
+"index": 121,
+"id": "smtvxij5h-123",
+"actor": "p-6a1qgd0g",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789074567853
+},
+{
+"index": 122,
+"id": "smtvxij5h-124",
+"actor": "p-je0gw2v0",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":7}}",
+"at": 1789074581352
+},
+{
+"index": 123,
+"id": "smtvxij5h-125",
+"actor": "p-je0gw2v0",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":1,\"protocol_id\":7,\"q\":6,\"r\":6,\"tile_id\":54,\"token_cities\":[[7,0]],\"token_city\":0}}",
+"at": 1789074586441
+},
+{
+"index": 124,
+"id": "smtvxij5h-126",
+"actor": "p-je0gw2v0",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":7}}",
+"at": 1789074586442,
+"derived": true
+},
+{
+"index": 125,
+"id": "smtvxij5h-127",
+"actor": "p-je0gw2v0",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":7}}",
+"at": 1789074586442,
+"derived": true
+},
+{
+"index": 126,
+"id": "smtvxij5h-128",
+"actor": "p-je0gw2v0",
+"payload": "{\"DeclareDividends\":{\"distribute\":false,\"game_id\":0,\"protocol_id\":7,\"revenue_amount\":\"0\"}}",
+"at": 1789074586442,
+"derived": true
+},
+{
+"index": 127,
+"id": "smtvxij5h-129",
+"actor": "p-je0gw2v0",
+"payload": "{\"BuyHardwareFromPool\":{\"game_id\":0,\"protocol_id\":7}}",
+"at": 1789074593643
+},
+{
+"index": 128,
+"id": "smtvxij5h-130",
+"actor": "p-je0gw2v0",
+"payload": "{\"BuyHardwareFromPool\":{\"game_id\":0,\"protocol_id\":7}}",
+"at": 1789074596651
+},
+{
+"index": 129,
+"id": "smtvxij5h-131",
+"actor": "p-je0gw2v0",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789074596652,
+"derived": true
+},
+{
+"index": 130,
+"id": "smtvxij5h-132",
+"actor": "p-je0gw2v0",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789074604956
+},
+{
+"index": 131,
+"id": "smtvxij5h-133",
+"actor": "p-6a1qgd0g",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"90\",\"protocol_id\":7,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789074643946
+},
+{
+"index": 132,
+"id": "smtvxij5h-134",
+"actor": "p-lzjh2r6u",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"90\",\"protocol_id\":7,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789074656278
+},
+{
+"index": 133,
+"id": "smtvxij5h-135",
+"actor": "p-je0gw2v0",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789074656372
+},
+{
+"index": 134,
+"id": "smtvxij5h-136",
+"actor": "p-6a1qgd0g",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789074704669
+},
+{
+"index": 135,
+"id": "smtvxij5h-137",
+"actor": "p-lzjh2r6u",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789074711466
+},
+{
+"index": 136,
+"id": "smtvxij5h-138",
+"actor": "p-lzjh2r6u",
+"payload": "{\"BuyPrivateCompany\":{\"game_id\":0,\"price\":\"120\",\"private_id\":7,\"protocol_id\":4}}",
+"at": 1789074728157
+},
+{
+"index": 137,
+"id": "smtvxij5h-139",
+"actor": "p-lzjh2r6u",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":4}}",
+"at": 1789074735300
+},
+{
+"index": 138,
+"id": "smtvxij5h-140",
+"actor": "p-lzjh2r6u",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":0,\"protocol_id\":4,\"q\":3,\"r\":8,\"tile_id\":53,\"token_cities\":[[4,0]],\"token_city\":0}}",
+"at": 1789074740209
+},
+{
+"index": 139,
+"id": "smtvxij5h-141",
+"actor": "p-lzjh2r6u",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":4}}",
+"at": 1789074744103
+},
+{
+"index": 140,
+"id": "smtvxij5h-142",
+"actor": "p-lzjh2r6u",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":4,\"revenue_seed\":3228922829,\"revenue_turn\":\"5.1.4\",\"routes\":[[{\"hex\":\"K13\"},{\"hex\":\"J14\"}],[{\"hex\":\"K13\"},{\"hex\":\"L12\"},{\"hex\":\"M13\"}],[{\"hex\":\"I15\"},{\"hex\":\"J14\"}]],\"train_indices\":[0,1,2],\"trains\":[\"2\",\"2\",\"2\"]}}",
+"at": 1789074749273
+},
+{
+"index": 141,
+"id": "smtvxij5h-143",
+"actor": "p-lzjh2r6u",
+"payload": "{\"DeclareDividends\":{\"distribute\":true,\"game_id\":0,\"protocol_id\":4,\"revenue_amount\":\"190\"}}",
+"at": 1789074751807
+},
+{
+"index": 142,
+"id": "smtvxij5h-144",
+"actor": "p-lzjh2r6u",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789074751809,
+"derived": true
+},
+{
+"index": 143,
+"id": "smtvxij5h-145",
+"actor": "p-6a1qgd0g",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":5}}",
+"at": 1789074769234
+},
+{
+"index": 144,
+"id": "smtvxij5h-146",
+"actor": "p-6a1qgd0g",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":0,\"protocol_id\":5,\"q\":0,\"r\":7,\"tile_id\":8}}",
+"at": 1789074774945
+},
+{
+"index": 145,
+"id": "smtvxij5h-147",
+"actor": "p-6a1qgd0g",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":5}}",
+"at": 1789074774946,
+"derived": true
+},
+{
+"index": 146,
+"id": "smtvxij5h-148",
+"actor": "p-6a1qgd0g",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":5,\"revenue_seed\":3487990001,\"revenue_turn\":\"5.1.5\",\"routes\":[[{\"hex\":\"F6\"},{\"hex\":\"G5\"},{\"hex\":\"G3\"},{\"hex\":\"F2\"}],[{\"hex\":\"F6\"},{\"hex\":\"G7\"},{\"hex\":\"H8\"},{\"hex\":\"H10\"}]],\"train_indices\":[0,1],\"trains\":[\"2\",\"3\"]}}",
+"at": 1789074783673
+},
+{
+"index": 147,
+"id": "smtvxij5h-149",
+"actor": "p-6a1qgd0g",
+"payload": "{\"DeclareDividends\":{\"distribute\":true,\"game_id\":0,\"protocol_id\":5,\"revenue_amount\":\"160\"}}",
+"at": 1789074793497
+},
+{
+"index": 148,
+"id": "smtvxij5h-150",
+"actor": "p-6a1qgd0g",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789074812185
+},
+{
+"index": 149,
+"id": "smtvxij5h-151",
+"actor": "p-6a1qgd0g",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":1}}",
+"at": 1789074842404
+},
+{
+"index": 150,
+"id": "smtvxij5h-152",
+"actor": "p-6a1qgd0g",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":0,\"protocol_id\":1,\"q\":1,\"r\":7,\"tile_id\":14,\"token_cities\":[[1,0]],\"token_city\":0}}",
+"at": 1789074848381
+},
+{
+"index": 151,
+"id": "smtvxij5h-153",
+"actor": "p-6a1qgd0g",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":1}}",
+"at": 1789074848383,
+"derived": true
+},
+{
+"index": 152,
+"id": "smtvxij5h-154",
+"actor": "p-6a1qgd0g",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":1,\"revenue_seed\":2448485129,\"revenue_turn\":\"5.1.1\",\"routes\":[[{\"hex\":\"H10\"},{\"hex\":\"H8\"},{\"hex\":\"G7\"},{\"hex\":\"F6\"}]],\"train_indices\":[0],\"trains\":[\"3\"]}}",
+"at": 1789074858038
+},
+{
+"index": 153,
+"id": "smtvxij5h-155",
+"actor": "p-6a1qgd0g",
+"payload": "{\"DeclareDividends\":{\"distribute\":true,\"game_id\":0,\"protocol_id\":1,\"revenue_amount\":\"80\"}}",
+"at": 1789074859605
+},
+{
+"index": 154,
+"id": "smtvxij5h-156",
+"actor": "p-6a1qgd0g",
+"payload": "{\"BuyHardwareFromPool\":{\"game_id\":0,\"protocol_id\":1}}",
+"at": 1789074868853
+},
+{
+"index": 155,
+"id": "smtvxij5h-157",
+"actor": "p-6a1qgd0g",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789074872605
+},
+{
+"index": 156,
+"id": "smtvxij5h-158",
+"actor": "p-je0gw2v0",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":7}}",
+"at": 1789074897175
+},
+{
+"index": 157,
+"id": "smtvxij5h-159",
+"actor": "p-je0gw2v0",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":1,\"protocol_id\":7,\"q\":7,\"r\":4,\"tile_id\":14}}",
+"at": 1789074900585
+},
+{
+"index": 158,
+"id": "smtvxij5h-160",
+"actor": "p-je0gw2v0",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":7}}",
+"at": 1789074906084
+},
+{
+"index": 159,
+"id": "smtvxij5h-161",
+"actor": "p-je0gw2v0",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":7,\"revenue_seed\":286447526,\"revenue_turn\":\"5.1.7\",\"routes\":[[{\"hex\":\"G19\"},{\"hex\":\"F20\"},{\"hex\":\"E19\"}]],\"train_indices\":[0],\"trains\":[\"3\"]}}",
+"at": 1789074915525
+},
+{
+"index": 160,
+"id": "smtvxij5h-162",
+"actor": "p-je0gw2v0",
+"payload": "{\"DeclareDividends\":{\"distribute\":true,\"game_id\":0,\"protocol_id\":7,\"revenue_amount\":\"100\"}}",
+"at": 1789074982841
+},
+{
+"index": 161,
+"id": "smtvxij5h-163",
+"actor": "p-je0gw2v0",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789074987373
+},
+{
+"index": 162,
+"id": "smtvxij5h-164",
+"actor": "p-lzjh2r6u",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":4}}",
+"at": 1789075003337
+},
+{
+"index": 163,
+"id": "smtvxij5h-165",
+"actor": "p-lzjh2r6u",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":4,\"protocol_id\":4,\"q\":5,\"r\":7,\"tile_id\":626}}",
+"at": 1789075025850
+},
+{
+"index": 164,
+"id": "smtvxij5h-166",
+"actor": "p-lzjh2r6u",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":4}}",
+"at": 1789075033875
+},
+{
+"index": 165,
+"id": "smtvxij5h-167",
+"actor": "p-lzjh2r6u",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":4,\"revenue_seed\":2351656744,\"revenue_turn\":\"5.2.4\",\"routes\":[[{\"hex\":\"I15\"},{\"hex\":\"I17\"},{\"hex\":\"I19\"},{\"hex\":\"H18\"}]],\"train_indices\":[0],\"trains\":[\"3\"]}}",
+"at": 1789075035155
+},
+{
+"index": 166,
+"id": "smtvxij5h-168",
+"actor": "p-lzjh2r6u",
+"payload": "{\"DeclareDividends\":{\"distribute\":false,\"game_id\":0,\"protocol_id\":4,\"revenue_amount\":\"110\"}}",
+"at": 1789075041022
+},
+{
+"index": 167,
+"id": "smtvxij5h-169",
+"actor": "p-lzjh2r6u",
+"payload": "{\"BuyHardwareFromPool\":{\"game_id\":0,\"protocol_id\":4}}",
+"at": 1789075043315
+},
+{
+"index": 168,
+"id": "smtvxij5h-170",
+"actor": "p-lzjh2r6u",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789075044682
+},
+{
+"index": 169,
+"id": "smtvxij5h-171",
+"actor": "p-6a1qgd0g",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":5}}",
+"at": 1789075053900
+},
+{
+"index": 170,
+"id": "smtvxij5h-172",
+"actor": "p-6a1qgd0g",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":3,\"protocol_id\":5,\"q\":3,\"r\":7,\"tile_id\":8}}",
+"at": 1789075079548
+},
+{
+"index": 171,
+"id": "smtvxij5h-173",
+"actor": "p-6a1qgd0g",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":5}}",
+"at": 1789075086444
+},
+{
+"index": 172,
+"id": "smtvxij5h-174",
+"actor": "p-6a1qgd0g",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":5,\"revenue_seed\":690310026,\"revenue_turn\":\"5.2.5\",\"routes\":[[{\"hex\":\"F6\"},{\"hex\":\"G5\"},{\"hex\":\"G3\"},{\"hex\":\"F2\"}]],\"train_indices\":[0],\"trains\":[\"3\"]}}",
+"at": 1789075106967
+},
+{
+"index": 173,
+"id": "smtvxij5h-175",
+"actor": "p-6a1qgd0g",
+"payload": "{\"DeclareDividends\":{\"distribute\":true,\"game_id\":0,\"protocol_id\":5,\"revenue_amount\":\"60\"}}",
+"at": 1789075110103
+},
+{
+"index": 174,
+"id": "smtvxij5h-176",
+"actor": "p-6a1qgd0g",
+"payload": "{\"BuyHardwareFromPool\":{\"game_id\":0,\"protocol_id\":5}}",
+"at": 1789075116391
+},
+{
+"index": 175,
+"id": "smtvxij5h-177",
+"actor": "p-6a1qgd0g",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789075120575
+},
+{
+"index": 176,
+"id": "smtvxij5h-178",
+"actor": "p-6a1qgd0g",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":1}}",
+"at": 1789075145929
+},
+{
+"index": 177,
+"id": "smtvxij5h-179",
+"actor": "p-6a1qgd0g",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":2,\"protocol_id\":1,\"q\":2,\"r\":8,\"tile_id\":9}}",
+"at": 1789075149921
+},
+{
+"index": 178,
+"id": "smtvxij5h-180",
+"actor": "p-6a1qgd0g",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":1}}",
+"at": 1789075149925,
+"derived": true
+},
+{
+"index": 179,
+"id": "smtvxij5h-181",
+"actor": "p-6a1qgd0g",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":1,\"revenue_seed\":334371258,\"revenue_turn\":\"5.2.1\",\"routes\":[[{\"hex\":\"H10\"},{\"hex\":\"H8\"},{\"hex\":\"G7\"},{\"hex\":\"F6\"}],[{\"hex\":\"H10\"},{\"hex\":\"H12\"},{\"hex\":\"H14\"},{\"hex\":\"I15\"}]],\"train_indices\":[0,1],\"trains\":[\"3\",\"4\"]}}",
+"at": 1789075155995
+},
+{
+"index": 180,
+"id": "smtvxij5h-182",
+"actor": "p-6a1qgd0g",
+"payload": "{\"DeclareDividends\":{\"distribute\":true,\"game_id\":0,\"protocol_id\":1,\"revenue_amount\":\"130\"}}",
+"at": 1789075159017
+},
+{
+"index": 181,
+"id": "smtvxij5h-183",
+"actor": "p-6a1qgd0g",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789075161712
+},
+{
+"index": 182,
+"id": "smtvxij5h-184",
+"actor": "p-je0gw2v0",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":7}}",
+"at": 1789075175299
+},
+{
+"index": 183,
+"id": "smtvxij5h-185",
+"actor": "p-je0gw2v0",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":5,\"protocol_id\":7,\"q\":6,\"r\":5,\"tile_id\":8}}",
+"at": 1789075184532
+},
+{
+"index": 184,
+"id": "smtvxij5h-186",
+"actor": "p-je0gw2v0",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":7}}",
+"at": 1789075191883
+},
+{
+"index": 185,
+"id": "smtvxij5h-187",
+"actor": "p-je0gw2v0",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":7,\"revenue_seed\":2646887402,\"revenue_turn\":\"5.2.7\",\"routes\":[[{\"hex\":\"G19\"},{\"hex\":\"F20\"},{\"hex\":\"E19\"}],[{\"hex\":\"G19\"},{\"hex\":\"F18\"},{\"hex\":\"E19\"}]],\"train_indices\":[0,1],\"trains\":[\"3\",\"3\"]}}",
+"at": 1789075197726
+},
+{
+"index": 186,
+"id": "smtvxij5h-188",
+"actor": "p-je0gw2v0",
+"payload": "{\"DeclareDividends\":{\"distribute\":true,\"game_id\":0,\"protocol_id\":7,\"revenue_amount\":\"190\"}}",
+"at": 1789075240919
+},
+{
+"index": 187,
+"id": "smtvxij5h-189",
+"actor": "p-je0gw2v0",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789075244360
+},
+{
+"index": 188,
+"id": "smtvxij5h-190",
+"actor": "p-je0gw2v0",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"100\",\"protocol_id\":2,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789075274621
+},
+{
+"index": 189,
+"id": "smtvxij5h-191",
+"actor": "p-6a1qgd0g",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"100\",\"protocol_id\":4,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789075277896
+},
+{
+"index": 190,
+"id": "smtvxij5h-192",
+"actor": "p-lzjh2r6u",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"100\",\"protocol_id\":10,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789075295742
+},
+{
+"index": 191,
+"id": "smtvxij5h-193",
+"actor": "p-je0gw2v0",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"100\",\"protocol_id\":2,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789075334174
+},
+{
+"index": 192,
+"id": "smtvxij5h-194",
+"actor": "p-6a1qgd0g",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"90\",\"protocol_id\":5,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789075342492
+},
+{
+"index": 193,
+"id": "smtvxij5h-195",
+"actor": "p-lzjh2r6u",
+"payload": "{\"BuyStock\":{\"certificate\":\"double\",\"game_id\":0,\"par_value\":\"100\",\"protocol_id\":10,\"source\":\"Ipo\"}}",
+"at": 1789075595702
+},
+{
+"index": 194,
+"id": "smtvxij5h-196",
+"actor": "p-je0gw2v0",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789075675616
+},
+{
+"index": 195,
+"id": "smtvxij5h-197",
+"actor": "p-6a1qgd0g",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"100\",\"protocol_id\":1,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789075698859
+},
+{
+"index": 196,
+"id": "smtvxij5h-198",
+"actor": "p-lzjh2r6u",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789075698945
+},
+{
+"index": 197,
+"id": "smtvxij5h-199",
+"actor": "p-je0gw2v0",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789075699037
+},
+{
+"index": 198,
+"id": "smtvxij5h-200",
+"actor": "p-6a1qgd0g",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789075705844
+},
+{
+"index": 199,
+"id": "smtvxij5h-201",
+"actor": "p-6a1qgd0g",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":5}}",
+"at": 1789075752536
+},
+{
+"index": 200,
+"id": "smtvxij5h-202",
+"actor": "p-6a1qgd0g",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":1,\"protocol_id\":5,\"q\":2,\"r\":6,\"tile_id\":9}}",
+"at": 1789075756169
+},
+{
+"index": 201,
+"id": "smtvxij5h-203",
+"actor": "p-6a1qgd0g",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":5}}",
+"at": 1789075780441
+},
+{
+"index": 202,
+"id": "smtvxij5h-204",
+"actor": "p-6a1qgd0g",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":5,\"revenue_seed\":542199814,\"revenue_turn\":\"6.1.5\",\"routes\":[[{\"hex\":\"F6\"},{\"hex\":\"G5\"},{\"hex\":\"G3\"},{\"hex\":\"F2\"}],[{\"hex\":\"F6\"},{\"hex\":\"G7\"},{\"hex\":\"H8\"},{\"hex\":\"H10\"},{\"hex\":\"H12\"},{\"hex\":\"H14\"},{\"hex\":\"I15\"}]],\"train_indices\":[0,1],\"trains\":[\"3\",\"4\"]}}",
+"at": 1789075782009
+},
+{
+"index": 203,
+"id": "smtvxij5h-205",
+"actor": "p-6a1qgd0g",
+"payload": "{\"YellowSignEvent\":{\"cash\":\"90\",\"game_id\":0,\"model\":\"3\",\"protocol_id\":5,\"stage\":\"mark\"}}",
+"at": 1789075782094
+},
+{
+"index": 204,
+"id": "smtvxij5h-206",
+"actor": "p-6a1qgd0g",
+"payload": "{\"DeclareDividends\":{\"distribute\":false,\"game_id\":0,\"protocol_id\":5,\"revenue_amount\":\"0\"}}",
+"at": 1789075917835
+},
+{
+"index": 205,
+"id": "smtvxij5h-207",
+"actor": "p-6a1qgd0g",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789075920787
+},
+{
+"index": 206,
+"id": "smtvxij5h-208",
+"actor": "p-lzjh2r6u",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":4}}",
+"at": 1789076014519
+},
+{
+"index": 207,
+"id": "smtvxij5h-209",
+"actor": "p-lzjh2r6u",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":4,\"protocol_id\":4,\"q\":1,\"r\":11,\"tile_id\":8}}",
+"at": 1789076042711
+},
+{
+"index": 208,
+"id": "smtvxij5h-210",
+"actor": "p-lzjh2r6u",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":4}}",
+"at": 1789076042724,
+"derived": true
+},
+{
+"index": 209,
+"id": "smtvxij5h-211",
+"actor": "p-lzjh2r6u",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":4,\"revenue_seed\":1169311025,\"revenue_turn\":\"6.1.4\",\"routes\":[[{\"hex\":\"I15\"},{\"hex\":\"J14\"},{\"hex\":\"K13\"}],[{\"hex\":\"H18\"},{\"hex\":\"I19\"},{\"hex\":\"I17\"},{\"hex\":\"I15\"},{\"hex\":\"H14\"},{\"hex\":\"H12\"},{\"hex\":\"H10\"}]],\"train_indices\":[0,1],\"trains\":[\"3\",\"4\"]}}",
+"at": 1789076044921
+},
+{
+"index": 210,
+"id": "smtvxij5h-212",
+"actor": "p-lzjh2r6u",
+"payload": "{\"DeclareDividends\":{\"distribute\":true,\"game_id\":0,\"protocol_id\":4,\"revenue_amount\":\"260\"}}",
+"at": 1789076046735
+},
+{
+"index": 211,
+"id": "smtvxij5h-213",
+"actor": "p-lzjh2r6u",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789076060659
+},
+{
+"index": 212,
+"id": "smtvxij5h-214",
+"actor": "p-6a1qgd0g",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":1}}",
+"at": 1789076200376
+},
+{
+"index": 213,
+"id": "smtvxij5h-215",
+"actor": "p-6a1qgd0g",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":1,\"protocol_id\":1,\"q\":2,\"r\":9,\"tile_id\":14}}",
+"at": 1789076208297
+},
+{
+"index": 214,
+"id": "smtvxij5h-216",
+"actor": "p-6a1qgd0g",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":1}}",
+"at": 1789076232021
+},
+{
+"index": 215,
+"id": "smtvxij5h-217",
+"actor": "p-6a1qgd0g",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":1,\"revenue_seed\":2527231682,\"revenue_turn\":\"6.1.1\",\"routes\":[[{\"hex\":\"H10\"},{\"hex\":\"H8\"},{\"hex\":\"G7\"},{\"hex\":\"F6\"}],[{\"hex\":\"H10\"},{\"hex\":\"H12\"},{\"hex\":\"I13\"},{\"hex\":\"J14\"},{\"hex\":\"I15\"}]],\"train_indices\":[0,1],\"trains\":[\"3\",\"4\"]}}",
+"at": 1789076233980
+},
+{
+"index": 216,
+"id": "smtvxij5h-218",
+"actor": "p-6a1qgd0g",
+"payload": "{\"DeclareDividends\":{\"distribute\":true,\"game_id\":0,\"protocol_id\":1,\"revenue_amount\":\"190\"}}",
+"at": 1789076236948
+},
+{
+"index": 217,
+"id": "smtvxij5h-219",
+"actor": "p-6a1qgd0g",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789076245745
+},
+{
+"index": 218,
+"id": "smtvxij5h-220",
+"actor": "p-je0gw2v0",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":7}}",
+"at": 1789076292837
+},
+{
+"index": 219,
+"id": "smtvxij5h-221",
+"actor": "p-je0gw2v0",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":5,\"protocol_id\":7,\"q\":6,\"r\":5,\"tile_id\":29}}",
+"at": 1789076298065
+},
+{
+"index": 220,
+"id": "smtvxij5h-222",
+"actor": "p-je0gw2v0",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":7}}",
+"at": 1789076307698
+},
+{
+"index": 221,
+"id": "smtvxij5h-223",
+"actor": "p-je0gw2v0",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":7,\"revenue_seed\":986424738,\"revenue_turn\":\"6.1.7\",\"routes\":[[{\"hex\":\"G19\"},{\"hex\":\"F20\"},{\"hex\":\"E19\"}],[{\"hex\":\"G19\"},{\"hex\":\"F18\"},{\"hex\":\"E19\"}]],\"train_indices\":[0,1],\"trains\":[\"3\",\"3\"]}}",
+"at": 1789076310951
+},
+{
+"index": 222,
+"id": "smtvxij5h-224",
+"actor": "p-je0gw2v0",
+"payload": "{\"RevertTo\":{\"index\":221,\"player\":\"p-je0gw2v0\",\"summary\":\"the last set of routes\"}}",
+"at": 1789076337773
+},
+{
+"index": 223,
+"id": "smtvxij5h-225",
+"actor": "p-je0gw2v0",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":7,\"revenue_seed\":986424738,\"revenue_turn\":\"6.1.7\",\"routes\":[[{\"hex\":\"G19\"},{\"hex\":\"F20\"},{\"hex\":\"E19\"}],[{\"hex\":\"G19\"},{\"hex\":\"F18\"},{\"hex\":\"E19\"}]],\"train_indices\":[0,1],\"trains\":[\"3\",\"3\"]}}",
+"at": 1789076340606
+},
+{
+"index": 224,
+"id": "smtvxij5h-226",
+"actor": "p-je0gw2v0",
+"payload": "{\"DeclareDividends\":{\"distribute\":true,\"game_id\":0,\"protocol_id\":7,\"revenue_amount\":\"150\"}}",
+"at": 1789076342667
+},
+{
+"index": 225,
+"id": "smtvxij5h-227",
+"actor": "p-je0gw2v0",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789076351160
+},
+{
+"index": 226,
+"id": "smtvxij5h-228",
+"actor": "p-lzjh2r6u",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":4}}",
+"at": 1789076367363
+},
+{
+"index": 227,
+"id": "smtvxij5h-229",
+"actor": "p-lzjh2r6u",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":0,\"protocol_id\":4,\"q\":-1,\"r\":12,\"tile_id\":8}}",
+"at": 1789076394356
+},
+{
+"index": 228,
+"id": "smtvxij5h-230",
+"actor": "p-lzjh2r6u",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":4}}",
+"at": 1789076394364,
+"derived": true
+},
+{
+"index": 229,
+"id": "smtvxij5h-231",
+"actor": "p-lzjh2r6u",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":4,\"revenue_seed\":3064770846,\"revenue_turn\":\"6.2.4\",\"routes\":[[{\"hex\":\"I15\"},{\"hex\":\"I17\"},{\"hex\":\"I19\"},{\"hex\":\"H18\"}],[{\"hex\":\"I15\"},{\"hex\":\"J14\"},{\"hex\":\"K13\"},{\"hex\":\"L12\"},{\"hex\":\"M13\"}]],\"train_indices\":[0,1],\"trains\":[\"3\",\"4\"]}}",
+"at": 1789076396340
+},
+{
+"index": 230,
+"id": "smtvxij5h-232",
+"actor": "p-lzjh2r6u",
+"payload": "{\"DeclareDividends\":{\"distribute\":true,\"game_id\":0,\"protocol_id\":4,\"revenue_amount\":\"180\"}}",
+"at": 1789076407879
+},
+{
+"index": 231,
+"id": "smtvxij5h-233",
+"actor": "p-lzjh2r6u",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789076409822
+},
+{
+"index": 232,
+"id": "smtvxij5h-234",
+"actor": "p-6a1qgd0g",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":1}}",
+"at": 1789076418229
+},
+{
+"index": 233,
+"id": "smtvxij5h-235",
+"actor": "p-6a1qgd0g",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":2,\"protocol_id\":1,\"q\":2,\"r\":10,\"tile_id\":9}}",
+"at": 1789076422281
+},
+{
+"index": 234,
+"id": "smtvxij5h-236",
+"actor": "p-6a1qgd0g",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":1}}",
+"at": 1789076427263
+},
+{
+"index": 235,
+"id": "smtvxij5h-237",
+"actor": "p-6a1qgd0g",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":1,\"revenue_seed\":2315742819,\"revenue_turn\":\"6.2.1\",\"routes\":[[{\"hex\":\"H10\"},{\"hex\":\"H8\"},{\"hex\":\"G7\"},{\"hex\":\"F6\"}],[{\"hex\":\"H10\"},{\"hex\":\"H12\"},{\"hex\":\"I13\"},{\"hex\":\"J14\"},{\"hex\":\"I15\"}]],\"train_indices\":[0,1],\"trains\":[\"3\",\"4\"]}}",
+"at": 1789076430813
+},
+{
+"index": 236,
+"id": "smtvxij5h-238",
+"actor": "p-6a1qgd0g",
+"payload": "{\"DeclareDividends\":{\"distribute\":true,\"game_id\":0,\"protocol_id\":1,\"revenue_amount\":\"190\"}}",
+"at": 1789076432722
+},
+{
+"index": 237,
+"id": "smtvxij5h-239",
+"actor": "p-6a1qgd0g",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789076460314
+},
+{
+"index": 238,
+"id": "smtvxij5h-240",
+"actor": "p-6a1qgd0g",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":5}}",
+"at": 1789076476590
+},
+{
+"index": 239,
+"id": "smtvxij5h-241",
+"actor": "p-6a1qgd0g",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":3,\"protocol_id\":5,\"q\":-1,\"r\":11,\"tile_id\":8}}",
+"at": 1789076481078
+},
+{
+"index": 240,
+"id": "smtvxij5h-242",
+"actor": "p-6a1qgd0g",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":5}}",
+"at": 1789076486359
+},
+{
+"index": 241,
+"id": "smtvxij5h-243",
+"actor": "p-6a1qgd0g",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":5,\"revenue_seed\":2517725948,\"revenue_turn\":\"6.2.5\",\"routes\":[[{\"hex\":\"F6\"},{\"hex\":\"G7\"},{\"hex\":\"H8\"},{\"hex\":\"H10\"},{\"hex\":\"H12\"},{\"hex\":\"H14\"},{\"hex\":\"I15\"}]],\"train_indices\":[0],\"trains\":[\"4\"]}}",
+"at": 1789076488542
+},
+{
+"index": 242,
+"id": "smtvxij5h-244",
+"actor": "p-6a1qgd0g",
+"payload": "{\"DeclareDividends\":{\"distribute\":true,\"game_id\":0,\"protocol_id\":5,\"revenue_amount\":\"120\"}}",
+"at": 1789076492204
+},
+{
+"index": 243,
+"id": "smtvxij5h-245",
+"actor": "p-6a1qgd0g",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789076496876
+},
+{
+"index": 244,
+"id": "smtvxij5h-246",
+"actor": "p-je0gw2v0",
+"payload": "{\"BuyPrivateCompany\":{\"game_id\":0,\"price\":\"70\",\"private_id\":3,\"protocol_id\":7}}",
+"at": 1789076525564
+},
+{
+"index": 245,
+"id": "smtvxij5h-247",
+"actor": "p-je0gw2v0",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":7}}",
+"at": 1789076530879
+},
+{
+"index": 246,
+"id": "smtvxij5h-248",
+"actor": "p-je0gw2v0",
+"payload": "{\"LayTile\":{\"ability_key\":\"dh-tile\",\"game_id\":0,\"orientation\":0,\"protocol_id\":7,\"q\":5,\"r\":5,\"tile_id\":57}}",
+"at": 1789076539572
+},
+{
+"index": 247,
+"id": "smtvxij5h-249",
+"actor": "p-je0gw2v0",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":7}}",
+"at": 1789076550089
+},
+{
+"index": 248,
+"id": "smtvxij5h-250",
+"actor": "p-je0gw2v0",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":7,\"revenue_seed\":2895868542,\"revenue_turn\":\"6.2.7\",\"routes\":[[{\"hex\":\"G19\"},{\"hex\":\"F20\"},{\"hex\":\"E19\"}],[{\"hex\":\"G19\"},{\"hex\":\"F18\"},{\"hex\":\"E19\"}]],\"train_indices\":[0,1],\"trains\":[\"3\",\"3\"]}}",
+"at": 1789076554164
+},
+{
+"index": 249,
+"id": "smtvxij5h-251",
+"actor": "p-je0gw2v0",
+"payload": "{\"DeclareDividends\":{\"distribute\":true,\"game_id\":0,\"protocol_id\":7,\"revenue_amount\":\"150\"}}",
+"at": 1789076557791
+},
+{
+"index": 250,
+"id": "smtvxij5h-252",
+"actor": "p-je0gw2v0",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789076685969
+},
+{
+"index": 251,
+"id": "smtvxij5h-253",
+"actor": "p-lzjh2r6u",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"100\",\"protocol_id\":10,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789076699452
+},
+{
+"index": 252,
+"id": "smtvxij5h-254",
+"actor": "p-je0gw2v0",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"100\",\"protocol_id\":2,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789076717834
+},
+{
+"index": 253,
+"id": "smtvxij5h-255",
+"actor": "p-6a1qgd0g",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"90\",\"protocol_id\":9,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789076907142
+},
+{
+"index": 254,
+"id": "smtvxij5h-256",
+"actor": "p-lzjh2r6u",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"100\",\"protocol_id\":2,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789076914053
+},
+{
+"index": 255,
+"id": "smtvxij5h-257",
+"actor": "p-je0gw2v0",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"100\",\"protocol_id\":2,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789076921502
+},
+{
+"index": 256,
+"id": "smtvxij5h-258",
+"actor": "p-je0gw2v0",
+"payload": "{\"PlaceHomeStation\":{\"city_index\":0,\"company_id\":2,\"hex_label\":\"E19\",\"kind\":\"home\",\"q\":7,\"r\":4}}",
+"at": 1789076926182
+},
+{
+"index": 257,
+"id": "smtvxij5h-259",
+"actor": "p-6a1qgd0g",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"90\",\"protocol_id\":9,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789076932743
+},
+{
+"index": 258,
+"id": "smtvxij5h-260",
+"actor": "p-lzjh2r6u",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"90\",\"protocol_id\":9,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789076950891
+},
+{
+"index": 259,
+"id": "smtvxij5h-261",
+"actor": "p-je0gw2v0",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"90\",\"protocol_id\":7,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789076963457
+},
+{
+"index": 260,
+"id": "smtvxij5h-262",
+"actor": "p-6a1qgd0g",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"100\",\"protocol_id\":4,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789076973005
+},
+{
+"index": 261,
+"id": "smtvxij5h-263",
+"actor": "p-lzjh2r6u",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"100\",\"protocol_id\":10,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789076980679
+},
+{
+"index": 262,
+"id": "smtvxij5h-264",
+"actor": "p-lzjh2r6u",
+"payload": "{\"PlaceHomeStation\":{\"city_index\":null,\"company_id\":10,\"hex_label\":\"L16\",\"kind\":\"home\",\"q\":2,\"r\":11}}",
+"at": 1789076984816
+},
+{
+"index": 263,
+"id": "smtvxij5h-265",
+"actor": "p-je0gw2v0",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"100\",\"protocol_id\":4,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789076993192
+},
+{
+"index": 264,
+"id": "smtvxij5h-266",
+"actor": "p-6a1qgd0g",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"90\",\"protocol_id\":9,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789077001052
+},
+{
+"index": 265,
+"id": "smtvxij5h-267",
+"actor": "p-lzjh2r6u",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789077008323
+},
+{
+"index": 266,
+"id": "smtvxij5h-268",
+"actor": "p-je0gw2v0",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789077195073
+},
+{
+"index": 267,
+"id": "smtvxij5h-269",
+"actor": "p-6a1qgd0g",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789077220471
+},
+{
+"index": 268,
+"id": "smtvxij5h-270",
+"actor": "p-lzjh2r6u",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":4}}",
+"at": 1789077236753
+},
+{
+"index": 269,
+"id": "smtvxij5h-271",
+"actor": "p-lzjh2r6u",
+"payload": "{\"LayTile\":{\"ability_key\":\"jk-tile\",\"game_id\":0,\"orientation\":0,\"protocol_id\":4,\"q\":-3,\"r\":11,\"tile_id\":9}}",
+"at": 1789077263602
+},
+{
+"index": 270,
+"id": "smtvxij5h-272",
+"actor": "p-lzjh2r6u",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":4}}",
+"at": 1789077263610,
+"derived": true
+},
+{
+"index": 271,
+"id": "smtvxij5h-273",
+"actor": "p-lzjh2r6u",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":4,\"revenue_seed\":1265561463,\"revenue_turn\":\"7.1.4\",\"routes\":[[{\"hex\":\"I15\"},{\"hex\":\"I17\"},{\"hex\":\"I19\"},{\"hex\":\"H18\"}],[{\"hex\":\"I15\"},{\"hex\":\"J14\"},{\"hex\":\"K13\"},{\"hex\":\"L12\"},{\"hex\":\"M13\"}]],\"train_indices\":[0,1],\"trains\":[\"3\",\"4\"]}}",
+"at": 1789077266188
+},
+{
+"index": 272,
+"id": "smtvxij5h-274",
+"actor": "p-lzjh2r6u",
+"payload": "{\"DeclareDividends\":{\"distribute\":true,\"game_id\":0,\"protocol_id\":4,\"revenue_amount\":\"230\"}}",
+"at": 1789077275072
+},
+{
+"index": 273,
+"id": "smtvxij5h-275",
+"actor": "p-lzjh2r6u",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789077276549
+},
+{
+"index": 274,
+"id": "smtvxij5h-276",
+"actor": "p-6a1qgd0g",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":1}}",
+"at": 1789077288554
+},
+{
+"index": 275,
+"id": "smtvxij5h-277",
+"actor": "p-6a1qgd0g",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":0,\"protocol_id\":1,\"q\":0,\"r\":7,\"tile_id\":24}}",
+"at": 1789077304083
+},
+{
+"index": 276,
+"id": "smtvxij5h-278",
+"actor": "p-6a1qgd0g",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":1}}",
+"at": 1789077306720
+},
+{
+"index": 277,
+"id": "smtvxij5h-279",
+"actor": "p-6a1qgd0g",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":1,\"revenue_seed\":3199519303,\"revenue_turn\":\"7.1.1\",\"routes\":[[{\"hex\":\"H10\"},{\"hex\":\"H8\"},{\"hex\":\"G7\"},{\"hex\":\"F6\"}],[{\"hex\":\"H10\"},{\"hex\":\"H12\"},{\"hex\":\"I13\"},{\"hex\":\"J14\"},{\"hex\":\"I15\"}]],\"train_indices\":[0,1],\"trains\":[\"3\",\"4\"]}}",
+"at": 1789077308559
+},
+{
+"index": 278,
+"id": "smtvxij5h-280",
+"actor": "p-6a1qgd0g",
+"payload": "{\"DeclareDividends\":{\"distribute\":true,\"game_id\":0,\"protocol_id\":1,\"revenue_amount\":\"170\"}}",
+"at": 1789077312776
+},
+{
+"index": 279,
+"id": "smtvxij5h-281",
+"actor": "p-6a1qgd0g",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789077322249
+},
+{
+"index": 280,
+"id": "smtvxij5h-282",
+"actor": "p-6a1qgd0g",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":5}}",
+"at": 1789077332499
+},
+{
+"index": 281,
+"id": "smtvxij5h-283",
+"actor": "p-6a1qgd0g",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":0,\"protocol_id\":5,\"q\":-1,\"r\":5,\"tile_id\":57}}",
+"at": 1789077388562
+},
+{
+"index": 282,
+"id": "smtvxij5h-284",
+"actor": "p-6a1qgd0g",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":5}}",
+"at": 1789077393075
+},
+{
+"index": 283,
+"id": "smtvxij5h-285",
+"actor": "p-6a1qgd0g",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":5,\"revenue_seed\":2800199255,\"revenue_turn\":\"7.1.5\",\"routes\":[[{\"hex\":\"F6\"},{\"hex\":\"G7\"},{\"hex\":\"H8\"},{\"hex\":\"H10\"},{\"hex\":\"H12\"},{\"hex\":\"H14\"},{\"hex\":\"I15\"}]],\"train_indices\":[0],\"trains\":[\"4\"]}}",
+"at": 1789077397562
+},
+{
+"index": 284,
+"id": "smtvxij5h-286",
+"actor": "p-6a1qgd0g",
+"payload": "{\"DeclareDividends\":{\"distribute\":true,\"game_id\":0,\"protocol_id\":5,\"revenue_amount\":\"140\"}}",
+"at": 1789077399762
+},
+{
+"index": 285,
+"id": "smtvxij5h-287",
+"actor": "p-6a1qgd0g",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789077406897
+},
+{
+"index": 286,
+"id": "smtvxij5h-288",
+"actor": "p-je0gw2v0",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":2}}",
+"at": 1789077424202
+},
+{
+"index": 287,
+"id": "smtvxij5h-289",
+"actor": "p-je0gw2v0",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":0,\"protocol_id\":2,\"q\":6,\"r\":3,\"tile_id\":9}}",
+"at": 1789077430904
+},
+{
+"index": 288,
+"id": "smtvxij5h-290",
+"actor": "p-je0gw2v0",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":2}}",
+"at": 1789077433702
+},
+{
+"index": 289,
+"id": "smtvxij5h-291",
+"actor": "p-je0gw2v0",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":2}}",
+"at": 1789077433702,
+"derived": true
+},
+{
+"index": 290,
+"id": "smtvxij5h-292",
+"actor": "p-je0gw2v0",
+"payload": "{\"DeclareDividends\":{\"distribute\":false,\"game_id\":0,\"protocol_id\":2,\"revenue_amount\":\"0\"}}",
+"at": 1789077433702,
+"derived": true
+},
+{
+"index": 291,
+"id": "smtvxij5h-293",
+"actor": "p-je0gw2v0",
+"payload": "{\"BuyHardwareFromPool\":{\"game_id\":0,\"protocol_id\":2}}",
+"at": 1789077442875
+},
+{
+"index": 292,
+"id": "smtvxij5h-294",
+"actor": "p-je0gw2v0",
+"payload": "{\"BuyHardwareFromPool\":{\"game_id\":0,\"protocol_id\":2}}",
+"at": 1789077461123
+},
+{
+"index": 293,
+"id": "smtvxij5h-295",
+"actor": "p-je0gw2v0",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789077461125,
+"derived": true
+},
+{
+"index": 294,
+"id": "smtvxij5h-296",
+"actor": "p-lzjh2r6u",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":1,\"protocol_id\":10,\"q\":3,\"r\":10,\"tile_id\":9}}",
+"at": 1789077485780
+},
+{
+"index": 295,
+"id": "smtvxij5h-297",
+"actor": "p-lzjh2r6u",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":10}}",
+"at": 1789077489487
+},
+{
+"index": 296,
+"id": "smtvxij5h-298",
+"actor": "p-lzjh2r6u",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":10}}",
+"at": 1789077489487,
+"derived": true
+},
+{
+"index": 297,
+"id": "smtvxij5h-299",
+"actor": "p-lzjh2r6u",
+"payload": "{\"DeclareDividends\":{\"distribute\":false,\"game_id\":0,\"protocol_id\":10,\"revenue_amount\":\"0\"}}",
+"at": 1789077489487,
+"derived": true
+},
+{
+"index": 298,
+"id": "smtvxij5h-300",
+"actor": "p-lzjh2r6u",
+"payload": "{\"BuyHardwareFromPool\":{\"game_id\":0,\"protocol_id\":10}}",
+"at": 1789077499446
+},
+{
+"index": 299,
+"id": "smtvxij5h-301",
+"actor": "p-lzjh2r6u",
+"payload": "{\"BuyHardwareFromPool\":{\"game_id\":0,\"protocol_id\":10}}",
+"at": 1789077500672
+},
+{
+"index": 300,
+"id": "smtvxij5h-302",
+"actor": "p-lzjh2r6u",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789077500677,
+"derived": true
+},
+{
+"index": 301,
+"id": "smtvxij5h-303",
+"actor": "p-je0gw2v0",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":3,\"protocol_id\":7,\"q\":6,\"r\":5,\"tile_id\":45}}",
+"at": 1789077508730
+},
+{
+"index": 302,
+"id": "smtvxij5h-304",
+"actor": "p-je0gw2v0",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":7}}",
+"at": 1789077518735
+},
+{
+"index": 303,
+"id": "smtvxij5h-305",
+"actor": "p-je0gw2v0",
+"payload": "{\"RevertTo\":{\"index\":302,\"player\":\"p-je0gw2v0\",\"summary\":\"the last skipped step\"}}",
+"at": 1789077538008
+},
+{
+"index": 304,
+"id": "smtvxij5h-306",
+"actor": "p-je0gw2v0",
+"payload": "{\"PlaceStationToken\":{\"city_index\":0,\"game_id\":0,\"protocol_id\":7,\"q\":5,\"r\":5}}",
+"at": 1789077590284
+},
+{
+"index": 305,
+"id": "smtvxij5h-307",
+"actor": "p-je0gw2v0",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":7,\"revenue_seed\":1128023783,\"revenue_turn\":\"7.1.7\",\"routes\":[[{\"hex\":\"G19\"},{\"hex\":\"F18\"},{\"hex\":\"E19\"},{\"hex\":\"D18\"},{\"hex\":\"D16\"},{\"hex\":\"D14\"}],[{\"hex\":\"G19\"},{\"hex\":\"F20\"},{\"hex\":\"E19\"}]],\"train_indices\":[0,1],\"trains\":[\"3\",\"3\"]}}",
+"at": 1789077622724
+},
+{
+"index": 306,
+"id": "smtvxij5h-308",
+"actor": "p-je0gw2v0",
+"payload": "{\"DeclareDividends\":{\"distribute\":true,\"game_id\":0,\"protocol_id\":7,\"revenue_amount\":\"250\"}}",
+"at": 1789077628753
+},
+{
+"index": 307,
+"id": "smtvxij5h-309",
+"actor": "p-je0gw2v0",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789077628754,
+"derived": true
+},
+{
+"index": 308,
+"id": "smtvxij5h-310",
+"actor": "p-lzjh2r6u",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":0,\"protocol_id\":4,\"q\":-4,\"r\":11,\"tile_id\":9}}",
+"at": 1789077773645
+},
+{
+"index": 309,
+"id": "smtvxij5h-311",
+"actor": "p-lzjh2r6u",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":4}}",
+"at": 1789077773654,
+"derived": true
+},
+{
+"index": 310,
+"id": "smtvxij5h-312",
+"actor": "p-lzjh2r6u",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":4,\"revenue_seed\":1496107904,\"revenue_turn\":\"7.2.4\",\"routes\":[[{\"hex\":\"I15\"},{\"hex\":\"J14\"},{\"hex\":\"I13\"},{\"hex\":\"H12\"},{\"hex\":\"H10\"}],[{\"hex\":\"K13\"},{\"hex\":\"L12\"},{\"hex\":\"M13\"},{\"hex\":\"M11\"},{\"hex\":\"L10\"},{\"hex\":\"L8\"},{\"hex\":\"L6\"},{\"hex\":\"L4\"},{\"hex\":\"L2\"}]],\"train_indices\":[0,1],\"trains\":[\"3\",\"4\"]}}",
+"at": 1789077775704
+},
+{
+"index": 311,
+"id": "smtvxij5h-313",
+"actor": "p-lzjh2r6u",
+"payload": "{\"DeclareDividends\":{\"distribute\":false,\"game_id\":0,\"protocol_id\":4,\"revenue_amount\":\"290\"}}",
+"at": 1789077779990
+},
+{
+"index": 312,
+"id": "smtvxij5h-314",
+"actor": "p-lzjh2r6u",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789077779999,
+"derived": true
+},
+{
+"index": 313,
+"id": "smtvxij5h-315",
+"actor": "p-6a1qgd0g",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":0,\"protocol_id\":1,\"q\":-1,\"r\":7,\"tile_id\":7}}",
+"at": 1789077810659
+},
+{
+"index": 314,
+"id": "smtvxij5h-316",
+"actor": "p-6a1qgd0g",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":1}}",
+"at": 1789077815798
+},
+{
+"index": 315,
+"id": "smtvxij5h-317",
+"actor": "p-6a1qgd0g",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":1,\"revenue_seed\":3449705724,\"revenue_turn\":\"7.2.1\",\"routes\":[[{\"hex\":\"H10\"},{\"hex\":\"H8\"},{\"hex\":\"G7\"},{\"hex\":\"F6\"}],[{\"hex\":\"H10\"},{\"hex\":\"H12\"},{\"hex\":\"I13\"},{\"hex\":\"J14\"},{\"hex\":\"I15\"}]],\"train_indices\":[0,1],\"trains\":[\"3\",\"4\"]}}",
+"at": 1789077817780
+},
+{
+"index": 316,
+"id": "smtvxij5h-318",
+"actor": "p-6a1qgd0g",
+"payload": "{\"DeclareDividends\":{\"distribute\":true,\"game_id\":0,\"protocol_id\":1,\"revenue_amount\":\"150\"}}",
+"at": 1789077821188
+},
+{
+"index": 317,
+"id": "smtvxij5h-319",
+"actor": "p-6a1qgd0g",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789077821193,
+"derived": true
+},
+{
+"index": 318,
+"id": "smtvxij5h-320",
+"actor": "p-6a1qgd0g",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":0,\"protocol_id\":5,\"q\":-1,\"r\":5,\"tile_id\":15}}",
+"at": 1789077863717
+},
+{
+"index": 319,
+"id": "smtvxij5h-321",
+"actor": "p-6a1qgd0g",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":5}}",
+"at": 1789077870383
+},
+{
+"index": 320,
+"id": "smtvxij5h-322",
+"actor": "p-6a1qgd0g",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":5,\"revenue_seed\":3538155739,\"revenue_turn\":\"7.2.5\",\"routes\":[[{\"hex\":\"F2\"},{\"hex\":\"G3\"},{\"hex\":\"G5\"},{\"hex\":\"F6\"},{\"hex\":\"G7\"},{\"hex\":\"H8\"},{\"hex\":\"H10\"}]],\"train_indices\":[0],\"trains\":[\"4\"]}}",
+"at": 1789077895406
+},
+{
+"index": 321,
+"id": "smtvxij5h-323",
+"actor": "p-6a1qgd0g",
+"payload": "{\"DeclareDividends\":{\"distribute\":true,\"game_id\":0,\"protocol_id\":5,\"revenue_amount\":\"130\"}}",
+"at": 1789077900500
+},
+{
+"index": 322,
+"id": "smtvxij5h-324",
+"actor": "p-6a1qgd0g",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789077964764
+},
+{
+"index": 323,
+"id": "smtvxij5h-325",
+"actor": "p-je0gw2v0",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":1,\"protocol_id\":7,\"q\":4,\"r\":4,\"tile_id\":9}}",
+"at": 1789077996343
+},
+{
+"index": 324,
+"id": "smtvxij5h-326",
+"actor": "p-je0gw2v0",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":7}}",
+"at": 1789077996344,
+"derived": true
+},
+{
+"index": 325,
+"id": "smtvxij5h-327",
+"actor": "p-je0gw2v0",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":7,\"revenue_seed\":3612750261,\"revenue_turn\":\"7.2.7\",\"routes\":[[{\"hex\":\"G19\"},{\"hex\":\"F18\"},{\"hex\":\"E19\"},{\"hex\":\"D18\"},{\"hex\":\"D16\"},{\"hex\":\"D14\"}],[{\"hex\":\"G19\"},{\"hex\":\"F20\"},{\"hex\":\"E19\"}]],\"train_indices\":[0,1],\"trains\":[\"3\",\"3\"]}}",
+"at": 1789078012463
+},
+{
+"index": 326,
+"id": "smtvxij5h-328",
+"actor": "p-je0gw2v0",
+"payload": "{\"RevertTo\":{\"index\":325,\"player\":\"p-je0gw2v0\",\"summary\":\"the last set of routes\"}}",
+"at": 1789079541631
+},
+{
+"index": 327,
+"id": "smtvxij5h-329",
+"actor": "p-je0gw2v0",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":7,\"revenue_seed\":3612750261,\"revenue_turn\":\"7.2.7\",\"routes\":[[{\"hex\":\"G19\"},{\"hex\":\"F18\"},{\"hex\":\"E19\"},{\"hex\":\"D18\"},{\"hex\":\"D16\"},{\"hex\":\"D14\"}],[{\"hex\":\"G19\"},{\"hex\":\"F20\"},{\"hex\":\"E19\"}]],\"train_indices\":[0,1],\"trains\":[\"3\",\"3\"]}}",
+"at": 1789079552863
+},
+{
+"index": 328,
+"id": "smtvxij5h-330",
+"actor": "p-je0gw2v0",
+"payload": "{\"DeclareDividends\":{\"distribute\":false,\"game_id\":0,\"protocol_id\":7,\"revenue_amount\":\"210\"}}",
+"at": 1789079559009
+},
+{
+"index": 329,
+"id": "smtvxij5h-331",
+"actor": "p-je0gw2v0",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789079559010,
+"derived": true
+},
+{
+"index": 330,
+"id": "smtvxij5h-332",
+"actor": "p-je0gw2v0",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":1,\"protocol_id\":2,\"q\":3,\"r\":5,\"tile_id\":9}}",
+"at": 1789079578548
+},
+{
+"index": 331,
+"id": "smtvxij5h-333",
+"actor": "p-je0gw2v0",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":2}}",
+"at": 1789079584162
+},
+{
+"index": 332,
+"id": "smtvxij5h-334",
+"actor": "p-je0gw2v0",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":2,\"revenue_seed\":468003640,\"revenue_turn\":\"7.2.2\",\"routes\":[[{\"hex\":\"E19\"},{\"hex\":\"F20\"},{\"hex\":\"G19\"}],[{\"hex\":\"G19\"},{\"hex\":\"F18\"},{\"hex\":\"E19\"},{\"hex\":\"D18\"},{\"hex\":\"D16\"},{\"hex\":\"D14\"},{\"hex\":\"E13\"},{\"hex\":\"F12\"},{\"hex\":\"G11\"},{\"hex\":\"H10\"},{\"hex\":\"H12\"},{\"hex\":\"H14\"},{\"hex\":\"I15\"}]],\"train_indices\":[0,1],\"trains\":[\"4\",\"5\"]}}",
+"at": 1789079626567
+},
+{
+"index": 333,
+"id": "smtvxij5h-335",
+"actor": "p-je0gw2v0",
+"payload": "{\"DeclareDividends\":{\"distribute\":true,\"game_id\":0,\"protocol_id\":2,\"revenue_amount\":\"320\"}}",
+"at": 1789079636663
+},
+{
+"index": 334,
+"id": "smtvxij5h-336",
+"actor": "p-je0gw2v0",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789079636668,
+"derived": true
+},
+{
+"index": 335,
+"id": "smtvxij5h-337",
+"actor": "p-lzjh2r6u",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":0,\"protocol_id\":10,\"q\":1,\"r\":10,\"tile_id\":619,\"token_cities\":[[4,0]]}}",
+"at": 1789079952218
+},
+{
+"index": 336,
+"id": "smtvxij5h-338",
+"actor": "p-lzjh2r6u",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":10}}",
+"at": 1789079952234,
+"derived": true
+},
+{
+"index": 337,
+"id": "smtvxij5h-339",
+"actor": "p-lzjh2r6u",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":10,\"revenue_seed\":3289493367,\"revenue_turn\":\"7.2.10\",\"routes\":[[{\"hex\":\"L16\"},{\"hex\":\"L14\"},{\"hex\":\"M13\"},{\"hex\":\"L12\"},{\"hex\":\"K13\"},{\"hex\":\"J14\"},{\"hex\":\"I15\"}],[{\"hex\":\"L16\"},{\"hex\":\"K15\"},{\"hex\":\"J14\"},{\"hex\":\"I13\"},{\"hex\":\"H12\"},{\"hex\":\"H10\"},{\"hex\":\"G11\"},{\"hex\":\"F12\"},{\"hex\":\"E13\"},{\"hex\":\"D14\"},{\"hex\":\"D16\"},{\"hex\":\"D18\"},{\"hex\":\"E19\"}]],\"train_indices\":[0,1],\"trains\":[\"5\",\"5\"]}}",
+"at": 1789079963325
+},
+{
+"index": 338,
+"id": "smtvxij5h-340",
+"actor": "p-lzjh2r6u",
+"payload": "{\"DeclareDividends\":{\"distribute\":false,\"game_id\":0,\"protocol_id\":10,\"revenue_amount\":\"300\"}}",
+"at": 1789079969884
+},
+{
+"index": 339,
+"id": "smtvxij5h-341",
+"actor": "p-lzjh2r6u",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789079969893,
+"derived": true
+},
+{
+"index": 340,
+"id": "smtvxij5h-342",
+"actor": "p-lzjh2r6u",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"100\",\"protocol_id\":2,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789079982772
+},
+{
+"index": 341,
+"id": "smtvxij5h-343",
+"actor": "p-je0gw2v0",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"100\",\"protocol_id\":10,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789080000666
+},
+{
+"index": 342,
+"id": "smtvxij5h-344",
+"actor": "p-6a1qgd0g",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"90\",\"protocol_id\":9,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789080194372
+},
+{
+"index": 343,
+"id": "smtvxij5h-345",
+"actor": "p-6a1qgd0g",
+"payload": "{\"PlaceHomeStation\":{\"city_index\":1,\"company_id\":9,\"hex_label\":\"E5\",\"kind\":\"home\",\"q\":0,\"r\":4}}",
+"at": 1789080208764
+},
+{
+"index": 344,
+"id": "smtvxij5h-346",
+"actor": "p-lzjh2r6u",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"90\",\"protocol_id\":9,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789080251283
+},
+{
+"index": 345,
+"id": "smtvxij5h-347",
+"actor": "p-je0gw2v0",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"90\",\"protocol_id\":9,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789080257645
+},
+{
+"index": 346,
+"id": "smtvxij5h-348",
+"actor": "p-6a1qgd0g",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"100\",\"protocol_id\":2,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789080386418
+},
+{
+"index": 347,
+"id": "smtvxij5h-349",
+"actor": "p-lzjh2r6u",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"100\",\"protocol_id\":2,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789080386503
+},
+{
+"index": 348,
+"id": "smtvxij5h-350",
+"actor": "p-je0gw2v0",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"100\",\"protocol_id\":2,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789080394999
+},
+{
+"index": 349,
+"id": "smtvxij5h-351",
+"actor": "p-6a1qgd0g",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"100\",\"protocol_id\":10,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789080401457
+},
+{
+"index": 350,
+"id": "smtvxij5h-352",
+"actor": "p-lzjh2r6u",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789080423987
+},
+{
+"index": 351,
+"id": "smtvxij5h-353",
+"actor": "p-je0gw2v0",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"100\",\"protocol_id\":10,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789080446708
+},
+{
+"index": 352,
+"id": "smtvxij5h-354",
+"actor": "p-6a1qgd0g",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789080647753
+},
+{
+"index": 353,
+"id": "smtvxij5h-355",
+"actor": "p-lzjh2r6u",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789080647850
+},
+{
+"index": 354,
+"id": "smtvxij5h-356",
+"actor": "p-je0gw2v0",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"90\",\"protocol_id\":5,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789080680922
+},
+{
+"index": 355,
+"id": "smtvxij5h-357",
+"actor": "p-6a1qgd0g",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789080686248
+},
+{
+"index": 356,
+"id": "smtvxij5h-358",
+"actor": "p-lzjh2r6u",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789080686336
+},
+{
+"index": 357,
+"id": "smtvxij5h-359",
+"actor": "p-je0gw2v0",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789080686458
+},
+{
+"index": 358,
+"id": "smtvxij5h-360",
+"actor": "p-6a1qgd0g",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":3,\"protocol_id\":1,\"q\":-1,\"r\":6,\"tile_id\":23}}",
+"at": 1789080715854
+},
+{
+"index": 359,
+"id": "smtvxij5h-361",
+"actor": "p-6a1qgd0g",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":1}}",
+"at": 1789080721685
+},
+{
+"index": 360,
+"id": "smtvxij5h-362",
+"actor": "p-6a1qgd0g",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":1,\"revenue_seed\":2235283681,\"revenue_turn\":\"8.1.1\",\"routes\":[[{\"hex\":\"H10\"},{\"bypass\":true,\"hex\":\"H12\"},{\"hex\":\"I13\"},{\"hex\":\"J14\"},{\"hex\":\"I15\"}],[{\"hex\":\"H10\"},{\"hex\":\"G11\"},{\"hex\":\"F12\"},{\"hex\":\"E13\"},{\"hex\":\"D14\"},{\"hex\":\"D16\"},{\"hex\":\"D18\"},{\"hex\":\"E19\"},{\"hex\":\"F18\"},{\"hex\":\"G19\"}]],\"train_indices\":[0,1],\"trains\":[\"3\",\"4\"]}}",
+"at": 1789080749445
+},
+{
+"index": 361,
+"id": "smtvxij5h-363",
+"actor": "p-6a1qgd0g",
+"payload": "{\"DeclareDividends\":{\"distribute\":true,\"game_id\":0,\"protocol_id\":1,\"revenue_amount\":\"230\"}}",
+"at": 1789080751087
+},
+{
+"index": 362,
+"id": "smtvxij5h-364",
+"actor": "p-6a1qgd0g",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789080751100,
+"derived": true
+},
+{
+"index": 363,
+"id": "smtvxij5h-365",
+"actor": "p-6a1qgd0g",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":2,\"protocol_id\":5,\"q\":-1,\"r\":4,\"tile_id\":8}}",
+"at": 1789080764352
+},
+{
+"index": 364,
+"id": "smtvxij5h-366",
+"actor": "p-6a1qgd0g",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":5}}",
+"at": 1789080772116
+},
+{
+"index": 365,
+"id": "smtvxij5h-367",
+"actor": "p-6a1qgd0g",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":5,\"revenue_seed\":1008899718,\"revenue_turn\":\"8.1.5\",\"routes\":[[{\"hex\":\"F6\"},{\"hex\":\"G5\"},{\"hex\":\"G3\"},{\"hex\":\"F2\"},{\"hex\":\"F4\"}]],\"train_indices\":[0],\"trains\":[\"4\"]}}",
+"at": 1789080791466
+},
+{
+"index": 366,
+"id": "smtvxij5h-368",
+"actor": "p-6a1qgd0g",
+"payload": "{\"DeclareDividends\":{\"distribute\":true,\"game_id\":0,\"protocol_id\":5,\"revenue_amount\":\"100\"}}",
+"at": 1789080793426
+},
+{
+"index": 367,
+"id": "smtvxij5h-369",
+"actor": "p-6a1qgd0g",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789080797168
+},
+{
+"index": 368,
+"id": "smtvxij5h-370",
+"actor": "p-lzjh2r6u",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":3,\"protocol_id\":4,\"q\":4,\"r\":8,\"tile_id\":23}}",
+"at": 1789081106157
+},
+{
+"index": 369,
+"id": "smtvxij5h-371",
+"actor": "p-lzjh2r6u",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":4}}",
+"at": 1789081108430
+},
+{
+"index": 370,
+"id": "smtvxij5h-372",
+"actor": "p-lzjh2r6u",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":4,\"revenue_seed\":4285866490,\"revenue_turn\":\"8.1.4\",\"routes\":[[{\"hex\":\"I15\"},{\"hex\":\"J14\"},{\"hex\":\"I13\"},{\"hex\":\"H12\"},{\"hex\":\"H10\"}],[{\"hex\":\"K13\"},{\"hex\":\"L12\"},{\"hex\":\"M13\"},{\"hex\":\"M11\"},{\"hex\":\"L10\"},{\"hex\":\"L8\"},{\"hex\":\"L6\"},{\"hex\":\"L4\"},{\"hex\":\"L2\"}]],\"train_indices\":[0,1],\"trains\":[\"3\",\"4\"]}}",
+"at": 1789081110270
+},
+{
+"index": 371,
+"id": "smtvxij5h-373",
+"actor": "p-lzjh2r6u",
+"payload": "{\"DeclareDividends\":{\"distribute\":false,\"game_id\":0,\"protocol_id\":4,\"revenue_amount\":\"330\"}}",
+"at": 1789081114637
+},
+{
+"index": 372,
+"id": "smtvxij5h-374",
+"actor": "p-lzjh2r6u",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789081114650,
+"derived": true
+},
+{
+"index": 373,
+"id": "smtvxij5h-375",
+"actor": "p-je0gw2v0",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":1,\"protocol_id\":2,\"q\":6,\"r\":6,\"tile_id\":62,\"token_cities\":[[7,0]]}}",
+"at": 1789082356351
+},
+{
+"index": 374,
+"id": "smtvxij5h-376",
+"actor": "p-je0gw2v0",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":2}}",
+"at": 1789082363638
+},
+{
+"index": 375,
+"id": "smtvxij5h-377",
+"actor": "p-je0gw2v0",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":2,\"revenue_seed\":2696283158,\"revenue_turn\":\"8.1.2\",\"routes\":[[{\"hex\":\"E19\"},{\"hex\":\"F20\"},{\"hex\":\"G19\"}],[{\"hex\":\"G19\"},{\"hex\":\"F18\"},{\"hex\":\"E19\"},{\"hex\":\"D18\"},{\"hex\":\"D16\"},{\"hex\":\"D14\"},{\"hex\":\"E13\"},{\"hex\":\"F12\"},{\"hex\":\"G11\"},{\"hex\":\"H10\"},{\"hex\":\"H12\"},{\"hex\":\"H14\"},{\"hex\":\"I15\"}]],\"train_indices\":[0,1],\"trains\":[\"4\",\"5\"]}}",
+"at": 1789082365425
+},
+{
+"index": 376,
+"id": "smtvxij5h-378",
+"actor": "p-je0gw2v0",
+"payload": "{\"DeclareDividends\":{\"distribute\":true,\"game_id\":0,\"protocol_id\":2,\"revenue_amount\":\"350\"}}",
+"at": 1789082367416
+},
+{
+"index": 377,
+"id": "smtvxij5h-379",
+"actor": "p-je0gw2v0",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789082367421,
+"derived": true
+},
+{
+"index": 378,
+"id": "smtvxij5h-380",
+"actor": "p-6a1qgd0g",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":4,\"protocol_id\":9,\"q\":0,\"r\":4,\"tile_id\":59,\"token_cities\":[[9,0]],\"token_city\":0}}",
+"at": 1789082401630
+},
+{
+"index": 379,
+"id": "smtvxij5h-381",
+"actor": "p-6a1qgd0g",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":9}}",
+"at": 1789082410385
+},
+{
+"index": 380,
+"id": "smtvxij5h-382",
+"actor": "p-6a1qgd0g",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":9}}",
+"at": 1789082410386,
+"derived": true
+},
+{
+"index": 381,
+"id": "smtvxij5h-383",
+"actor": "p-6a1qgd0g",
+"payload": "{\"DeclareDividends\":{\"distribute\":false,\"game_id\":0,\"protocol_id\":9,\"revenue_amount\":\"0\"}}",
+"at": 1789082410386,
+"derived": true
+},
+{
+"index": 382,
+"id": "smtvxij5h-384",
+"actor": "p-6a1qgd0g",
+"payload": "{\"BuyHardwareFromPool\":{\"game_id\":0,\"protocol_id\":9}}",
+"at": 1789082418917
+},
+{
+"index": 383,
+"id": "smtvxij5h-385",
+"actor": "p-6a1qgd0g",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789082428702
+},
+{
+"index": 384,
+"id": "smtvxij5h-386",
+"actor": "p-je0gw2v0",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":0,\"protocol_id\":7,\"q\":7,\"r\":4,\"tile_id\":63,\"token_cities\":[[2,0]]}}",
+"at": 1789082450078
+},
+{
+"index": 385,
+"id": "smtvxij5h-387",
+"actor": "p-je0gw2v0",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":7}}",
+"at": 1789082450078,
+"derived": true
+},
+{
+"index": 386,
+"id": "smtvxij5h-388",
+"actor": "p-je0gw2v0",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":7}}",
+"at": 1789082450078,
+"derived": true
+},
+{
+"index": 387,
+"id": "smtvxij5h-389",
+"actor": "p-je0gw2v0",
+"payload": "{\"DeclareDividends\":{\"distribute\":false,\"game_id\":0,\"protocol_id\":7,\"revenue_amount\":\"0\"}}",
+"at": 1789082450078,
+"derived": true
+},
+{
+"index": 388,
+"id": "smtvxij5h-390",
+"actor": "p-je0gw2v0",
+"payload": "{\"SellStock\":{\"game_id\":0,\"percentage\":10,\"protocol_id\":5}}",
+"at": 1789082497183
+},
+{
+"index": 389,
+"id": "smtvxij5h-391",
+"actor": "p-je0gw2v0",
+"payload": "{\"EmergencyBuyHardware\":{\"game_id\":0,\"protocol_id\":7}}",
+"at": 1789082498964
+},
+{
+"index": 390,
+"id": "smtvxij5h-392",
+"actor": "p-je0gw2v0",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789082502380
+},
+{
+"index": 391,
+"id": "smtvxij5h-393",
+"actor": "p-lzjh2r6u",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":1,\"protocol_id\":10,\"q\":4,\"r\":9,\"tile_id\":9}}",
+"at": 1789082605595
+},
+{
+"index": 392,
+"id": "smtvxij5h-394",
+"actor": "p-lzjh2r6u",
+"payload": "{\"RevertTo\":{\"index\":391,\"player\":\"p-lzjh2r6u\",\"summary\":\"the last tile lay\"}}",
+"at": 1789082616449
+},
+{
+"index": 393,
+"id": "smtvxij5h-395",
+"actor": "p-lzjh2r6u",
+"payload": "{\"BuyKanawhaLicense\":{\"protocol_id\":10}}",
+"at": 1789082665708
+},
+{
+"index": 394,
+"id": "smtvxij5h-396",
+"actor": "p-lzjh2r6u",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":1,\"protocol_id\":10,\"q\":4,\"r\":9,\"tile_id\":9}}",
+"at": 1789082726569
+},
+{
+"index": 395,
+"id": "smtvxij5h-397",
+"actor": "p-lzjh2r6u",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":10}}",
+"at": 1789082729289
+},
+{
+"index": 396,
+"id": "smtvxij5h-398",
+"actor": "p-lzjh2r6u",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":10,\"revenue_seed\":1966382840,\"revenue_turn\":\"8.1.10\",\"routes\":[[{\"hex\":\"L16\"},{\"hex\":\"L14\"},{\"hex\":\"M13\"},{\"hex\":\"M11\"},{\"hex\":\"L10\"},{\"hex\":\"L8\"},{\"hex\":\"L6\"},{\"hex\":\"L4\"},{\"hex\":\"L2\"}],[{\"hex\":\"L16\"},{\"hex\":\"K15\"},{\"hex\":\"J14\"},{\"hex\":\"I13\"},{\"hex\":\"H12\"},{\"hex\":\"H10\"},{\"hex\":\"H8\"},{\"hex\":\"H6\"},{\"hex\":\"G7\"},{\"hex\":\"G5\"},{\"hex\":\"G3\"},{\"hex\":\"F2\"}]],\"train_indices\":[0,1],\"trains\":[\"5\",\"5\"]}}",
+"at": 1789082734780
+},
+{
+"index": 397,
+"id": "smtvxij5h-399",
+"actor": "p-lzjh2r6u",
+"payload": "{\"DeclareDividends\":{\"distribute\":true,\"game_id\":0,\"protocol_id\":10,\"revenue_amount\":\"340\"}}",
+"at": 1789082740505
+},
+{
+"index": 398,
+"id": "smtvxij5h-400",
+"actor": "p-lzjh2r6u",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789082740521,
+"derived": true
+},
+{
+"index": 399,
+"id": "smtvxij5h-401",
+"actor": "p-6a1qgd0g",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":2,\"protocol_id\":1,\"q\":0,\"r\":4,\"tile_id\":36,\"token_cities\":[[9,1]]}}",
+"at": 1789082881774
+},
+{
+"index": 400,
+"id": "smtvxij5h-402",
+"actor": "p-6a1qgd0g",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":1}}",
+"at": 1789082892331
+},
+{
+"index": 401,
+"id": "smtvxij5h-403",
+"actor": "p-6a1qgd0g",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":1,\"revenue_seed\":3324337975,\"revenue_turn\":\"8.2.1\",\"routes\":[[{\"hex\":\"H10\"},{\"hex\":\"G11\"},{\"hex\":\"F12\"},{\"hex\":\"E13\"},{\"hex\":\"D14\"},{\"hex\":\"D16\"},{\"hex\":\"D18\"},{\"hex\":\"E19\"},{\"hex\":\"F18\"},{\"hex\":\"G19\"}]],\"train_indices\":[0],\"trains\":[\"4\"]}}",
+"at": 1789082897269
+},
+{
+"index": 402,
+"id": "smtvxij5h-404",
+"actor": "p-6a1qgd0g",
+"payload": "{\"DeclareDividends\":{\"distribute\":true,\"game_id\":0,\"protocol_id\":1,\"revenue_amount\":\"160\"}}",
+"at": 1789082899788
+},
+{
+"index": 403,
+"id": "smtvxij5h-405",
+"actor": "p-6a1qgd0g",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789082903792
+},
+{
+"index": 404,
+"id": "smtvxij5h-406",
+"actor": "p-6a1qgd0g",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":4,\"protocol_id\":5,\"q\":-1,\"r\":4,\"tile_id\":25}}",
+"at": 1789082923020
+},
+{
+"index": 405,
+"id": "smtvxij5h-407",
+"actor": "p-6a1qgd0g",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":5}}",
+"at": 1789082933560
+},
+{
+"index": 406,
+"id": "smtvxij5h-408",
+"actor": "p-6a1qgd0g",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":5,\"revenue_seed\":1193820406,\"revenue_turn\":\"8.2.5\",\"routes\":[[{\"hex\":\"F6\"},{\"hex\":\"G5\"},{\"hex\":\"G3\"},{\"hex\":\"F2\"},{\"hex\":\"F4\"},{\"hex\":\"E5\"}]],\"train_indices\":[0],\"trains\":[\"4\"]}}",
+"at": 1789082945299
+},
+{
+"index": 407,
+"id": "smtvxij5h-409",
+"actor": "p-6a1qgd0g",
+"payload": "{\"DeclareDividends\":{\"distribute\":false,\"game_id\":0,\"protocol_id\":5,\"revenue_amount\":\"200\"}}",
+"at": 1789082947522
+},
+{
+"index": 408,
+"id": "smtvxij5h-410",
+"actor": "p-6a1qgd0g",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789082948946
+},
+{
+"index": 409,
+"id": "smtvxij5h-411",
+"actor": "p-lzjh2r6u",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":3,\"protocol_id\":4,\"q\":3,\"r\":8,\"tile_id\":884,\"token_cities\":[[4,0]],\"token_city\":0}}",
+"at": 1789083177639
+},
+{
+"index": 410,
+"id": "smtvxij5h-412",
+"actor": "p-lzjh2r6u",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":4}}",
+"at": 1789083180963
+},
+{
+"index": 411,
+"id": "smtvxij5h-413",
+"actor": "p-lzjh2r6u",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":4,\"revenue_seed\":654513198,\"revenue_turn\":\"8.2.4\",\"routes\":[[{\"hex\":\"K13\"},{\"hex\":\"L12\"},{\"hex\":\"M13\"},{\"hex\":\"M11\"},{\"hex\":\"L10\"},{\"hex\":\"L8\"},{\"hex\":\"L6\"},{\"hex\":\"L4\"},{\"hex\":\"L2\"}]],\"train_indices\":[0],\"trains\":[\"4\"]}}",
+"at": 1789083183174
+},
+{
+"index": 412,
+"id": "smtvxij5h-414",
+"actor": "p-lzjh2r6u",
+"payload": "{\"DeclareDividends\":{\"distribute\":false,\"game_id\":0,\"protocol_id\":4,\"revenue_amount\":\"150\"}}",
+"at": 1789083197381
+},
+{
+"index": 413,
+"id": "smtvxij5h-415",
+"actor": "p-lzjh2r6u",
+"payload": "{\"ExchangeTrainForDiesel\":{\"game_id\":0,\"model_type\":\"4\",\"protocol_id\":4}}",
+"at": 1789083322876
+},
+{
+"index": 414,
+"id": "smtvxij5h-416",
+"actor": "p-lzjh2r6u",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789083326875
+},
+{
+"index": 415,
+"id": "smtvxij5h-417",
+"actor": "p-je0gw2v0",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":3,\"protocol_id\":2,\"q\":5,\"r\":5,\"tile_id\":15,\"token_cities\":[[7,0]]}}",
+"at": 1789083352928
+},
+{
+"index": 416,
+"id": "smtvxij5h-418",
+"actor": "p-je0gw2v0",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":2}}",
+"at": 1789083367593
+},
+{
+"index": 417,
+"id": "smtvxij5h-419",
+"actor": "p-je0gw2v0",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":2,\"revenue_seed\":3896816604,\"revenue_turn\":\"8.2.2\",\"routes\":[[{\"hex\":\"G19\"},{\"hex\":\"F18\"},{\"hex\":\"E19\"},{\"hex\":\"D18\"},{\"hex\":\"D16\"},{\"hex\":\"D14\"},{\"hex\":\"E13\"},{\"hex\":\"F12\"},{\"hex\":\"G11\"},{\"hex\":\"H10\"},{\"hex\":\"H12\"},{\"hex\":\"H14\"},{\"hex\":\"I15\"}]],\"train_indices\":[0],\"trains\":[\"5\"]}}",
+"at": 1789083433077
+},
+{
+"index": 418,
+"id": "smtvxij5h-420",
+"actor": "p-je0gw2v0",
+"payload": "{\"DeclareDividends\":{\"distribute\":false,\"game_id\":0,\"protocol_id\":2,\"revenue_amount\":\"180\"}}",
+"at": 1789083441534
+},
+{
+"index": 419,
+"id": "smtvxij5h-421",
+"actor": "p-je0gw2v0",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789083451058
+},
+{
+"index": 420,
+"id": "smtvxij5h-422",
+"actor": "p-lzjh2r6u",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":1,\"protocol_id\":10,\"q\":4,\"r\":7,\"tile_id\":57}}",
+"at": 1789083504599
+},
+{
+"index": 421,
+"id": "smtvxij5h-423",
+"actor": "p-lzjh2r6u",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":10}}",
+"at": 1789083509828
+},
+{
+"index": 422,
+"id": "smtvxij5h-424",
+"actor": "p-lzjh2r6u",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":10,\"revenue_seed\":215916954,\"revenue_turn\":\"8.2.10\",\"routes\":[[{\"hex\":\"L16\"},{\"hex\":\"L14\"},{\"hex\":\"M13\"},{\"hex\":\"M11\"},{\"hex\":\"L10\"},{\"hex\":\"L8\"},{\"hex\":\"L6\"},{\"hex\":\"L4\"},{\"hex\":\"L2\"}],[{\"hex\":\"L16\"},{\"hex\":\"K15\"},{\"hex\":\"J14\"},{\"hex\":\"I13\"},{\"hex\":\"H12\"},{\"hex\":\"H10\"},{\"hex\":\"H8\"},{\"hex\":\"H6\"},{\"hex\":\"G7\"},{\"hex\":\"G5\"},{\"hex\":\"G3\"},{\"hex\":\"F2\"}]],\"train_indices\":[0,1],\"trains\":[\"5\",\"5\"]}}",
+"at": 1789083522343
+},
+{
+"index": 423,
+"id": "smtvxij5h-425",
+"actor": "p-lzjh2r6u",
+"payload": "{\"DeclareDividends\":{\"distribute\":true,\"game_id\":0,\"protocol_id\":10,\"revenue_amount\":\"270\"}}",
+"at": 1789083532835
+},
+{
+"index": 424,
+"id": "smtvxij5h-426",
+"actor": "p-lzjh2r6u",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789083532852,
+"derived": true
+},
+{
+"index": 425,
+"id": "smtvxij5h-427",
+"actor": "p-6a1qgd0g",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":2,\"protocol_id\":9,\"q\":-1,\"r\":4,\"tile_id\":46}}",
+"at": 1789083555230
+},
+{
+"index": 426,
+"id": "smtvxij5h-428",
+"actor": "p-6a1qgd0g",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":9}}",
+"at": 1789083562986
+},
+{
+"index": 427,
+"id": "smtvxij5h-429",
+"actor": "p-6a1qgd0g",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":9,\"revenue_seed\":2469788477,\"revenue_turn\":\"8.2.9\",\"routes\":[[{\"hex\":\"E5\"},{\"hex\":\"F4\"},{\"hex\":\"F2\"},{\"hex\":\"G3\"},{\"hex\":\"G5\"},{\"hex\":\"G7\"},{\"hex\":\"H6\"},{\"hex\":\"H8\"},{\"hex\":\"H10\"},{\"hex\":\"H12\"},{\"hex\":\"H14\"},{\"hex\":\"I15\"}]],\"train_indices\":[0],\"trains\":[\"6\"]}}",
+"at": 1789083565637
+},
+{
+"index": 428,
+"id": "smtvxij5h-430",
+"actor": "p-6a1qgd0g",
+"payload": "{\"DeclareDividends\":{\"distribute\":true,\"game_id\":0,\"protocol_id\":9,\"revenue_amount\":\"290\"}}",
+"at": 1789083569173
+},
+{
+"index": 429,
+"id": "smtvxij5h-431",
+"actor": "p-6a1qgd0g",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789083571814
+},
+{
+"index": 430,
+"id": "smtvxij5h-432",
+"actor": "p-je0gw2v0",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":0,\"protocol_id\":7,\"q\":7,\"r\":4,\"tile_id\":513,\"token_cities\":[[2,0]]}}",
+"at": 1789083846506
+},
+{
+"index": 431,
+"id": "smtvxij5h-433",
+"actor": "p-je0gw2v0",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":7}}",
+"at": 1789083846511,
+"derived": true
+},
+{
+"index": 432,
+"id": "smtvxij5h-434",
+"actor": "p-je0gw2v0",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":7,\"revenue_seed\":124553353,\"revenue_turn\":\"8.2.7\",\"routes\":[[{\"hex\":\"G19\"},{\"hex\":\"F18\"},{\"hex\":\"E19\"},{\"hex\":\"D18\"},{\"hex\":\"D16\"},{\"hex\":\"D14\"},{\"hex\":\"E13\"},{\"hex\":\"F12\"},{\"hex\":\"G11\"},{\"hex\":\"H10\"},{\"hex\":\"H12\"},{\"hex\":\"H14\"},{\"hex\":\"I15\"},{\"hex\":\"I17\"},{\"hex\":\"H18\"}]],\"train_indices\":[0],\"trains\":[\"6\"]}}",
+"at": 1789083864851
+},
+{
+"index": 433,
+"id": "smtvxij5h-435",
+"actor": "p-je0gw2v0",
+"payload": "{\"DeclareDividends\":{\"distribute\":true,\"game_id\":0,\"protocol_id\":7,\"revenue_amount\":\"250\"}}",
+"at": 1789083873742
+},
+{
+"index": 434,
+"id": "smtvxij5h-436",
+"actor": "p-je0gw2v0",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789083876126
+},
+{
+"index": 435,
+"id": "smtvxij5h-437",
+"actor": "p-6a1qgd0g",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":0,\"protocol_id\":1,\"q\":1,\"r\":10,\"tile_id\":63,\"token_cities\":[[4,0]]}}",
+"at": 1789083914466
+},
+{
+"index": 436,
+"id": "smtvxij5h-438",
+"actor": "p-6a1qgd0g",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":1}}",
+"at": 1789083918639
+},
+{
+"index": 437,
+"id": "smtvxij5h-439",
+"actor": "p-6a1qgd0g",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":1}}",
+"at": 1789083918639,
+"derived": true
+},
+{
+"index": 438,
+"id": "smtvxij5h-440",
+"actor": "p-6a1qgd0g",
+"payload": "{\"DeclareDividends\":{\"distribute\":false,\"game_id\":0,\"protocol_id\":1,\"revenue_amount\":\"0\"}}",
+"at": 1789083918639,
+"derived": true
+},
+{
+"index": 439,
+"id": "smtvxij5h-441",
+"actor": "p-6a1qgd0g",
+"payload": "{\"EmergencyBuyHardware\":{\"game_id\":0,\"protocol_id\":1}}",
+"at": 1789083928721
+},
+{
+"index": 440,
+"id": "smtvxij5h-442",
+"actor": "p-6a1qgd0g",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789083942670
+},
+{
+"index": 441,
+"id": "smtvxij5h-443",
+"actor": "p-6a1qgd0g",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":5}}",
+"at": 1789083982417
+},
+{
+"index": 442,
+"id": "smtvxij5h-444",
+"actor": "p-6a1qgd0g",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":5}}",
+"at": 1789083984677
+},
+{
+"index": 443,
+"id": "smtvxij5h-445",
+"actor": "p-6a1qgd0g",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":5}}",
+"at": 1789083984678,
+"derived": true
+},
+{
+"index": 444,
+"id": "smtvxij5h-446",
+"actor": "p-6a1qgd0g",
+"payload": "{\"DeclareDividends\":{\"distribute\":false,\"game_id\":0,\"protocol_id\":5,\"revenue_amount\":\"0\"}}",
+"at": 1789083984678,
+"derived": true
+},
+{
+"index": 445,
+"id": "smtvxij5h-447",
+"actor": "p-6a1qgd0g",
+"payload": "{\"EmergencyBuyHardware\":{\"game_id\":0,\"protocol_id\":5}}",
+"at": 1789083988930
+},
+{
+"index": 446,
+"id": "smtvxij5h-448",
+"actor": "p-6a1qgd0g",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789084000218
+},
+{
+"index": 447,
+"id": "smtvxij5h-449",
+"actor": "p-lzjh2r6u",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":4,\"protocol_id\":4,\"q\":5,\"r\":6,\"tile_id\":631}}",
+"at": 1789084021690
+},
+{
+"index": 448,
+"id": "smtvxij5h-450",
+"actor": "p-lzjh2r6u",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":4}}",
+"at": 1789084021764,
+"derived": true
+},
+{
+"index": 449,
+"id": "smtvxij5h-451",
+"actor": "p-lzjh2r6u",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":4,\"revenue_seed\":756643000,\"revenue_turn\":\"8.3.4\",\"routes\":[[{\"hex\":\"I15\"},{\"hex\":\"I17\"},{\"hex\":\"I19\"},{\"hex\":\"J18\"},{\"hex\":\"K17\"},{\"hex\":\"L16\"},{\"hex\":\"L14\"},{\"hex\":\"M13\"},{\"hex\":\"L12\"},{\"hex\":\"K13\"},{\"hex\":\"J14\"},{\"hex\":\"I13\"},{\"hex\":\"H12\"},{\"hex\":\"H10\"},{\"hex\":\"G11\"},{\"hex\":\"F12\"},{\"hex\":\"E13\"},{\"hex\":\"D14\"},{\"hex\":\"D16\"},{\"hex\":\"D18\"},{\"hex\":\"E19\"},{\"hex\":\"F18\"},{\"hex\":\"F16\"},{\"hex\":\"G17\"},{\"hex\":\"G19\"},{\"hex\":\"H18\"},{\"hex\":\"G17\"},{\"hex\":\"H16\"}]],\"train_indices\":[0],\"trains\":[\"D\"]}}",
+"at": 1789084109589
+},
+{
+"index": 450,
+"id": "smtvxij5h-452",
+"actor": "p-lzjh2r6u",
+"payload": "{\"DeclareDividends\":{\"distribute\":true,\"game_id\":0,\"protocol_id\":4,\"revenue_amount\":\"540\"}}",
+"at": 1789084115879
+},
+{
+"index": 451,
+"id": "smtvxij5h-453",
+"actor": "p-lzjh2r6u",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789084125588
+},
+{
+"index": 452,
+"id": "smtvxij5h-454",
+"actor": "p-je0gw2v0",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":4,\"protocol_id\":2,\"q\":8,\"r\":3,\"tile_id\":8}}",
+"at": 1789084278199
+},
+{
+"index": 453,
+"id": "smtvxij5h-455",
+"actor": "p-je0gw2v0",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":2}}",
+"at": 1789084282261
+},
+{
+"index": 454,
+"id": "smtvxij5h-456",
+"actor": "p-je0gw2v0",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":2,\"revenue_seed\":1225281981,\"revenue_turn\":\"8.3.2\",\"routes\":[[{\"hex\":\"E19\"},{\"hex\":\"F18\"},{\"hex\":\"F16\"},{\"hex\":\"G17\"},{\"hex\":\"G19\"},{\"hex\":\"H18\"}]],\"train_indices\":[0],\"trains\":[\"5\"]}}",
+"at": 1789084310089
+},
+{
+"index": 455,
+"id": "smtvxij5h-457",
+"actor": "p-je0gw2v0",
+"payload": "{\"DeclareDividends\":{\"distribute\":false,\"game_id\":0,\"protocol_id\":2,\"revenue_amount\":\"230\"}}",
+"at": 1789084312279
+},
+{
+"index": 456,
+"id": "smtvxij5h-458",
+"actor": "p-je0gw2v0",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789084328098
+},
+{
+"index": 457,
+"id": "smtvxij5h-459",
+"actor": "p-lzjh2r6u",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":1,\"protocol_id\":10,\"q\":-4,\"r\":10,\"tile_id\":57}}",
+"at": 1789084351244
+},
+{
+"index": 458,
+"id": "smtvxij5h-460",
+"actor": "p-lzjh2r6u",
+"payload": "{\"PlaceStationToken\":{\"city_index\":1,\"game_id\":0,\"protocol_id\":10,\"q\":6,\"r\":6}}",
+"at": 1789084363606
+},
+{
+"index": 459,
+"id": "smtvxij5h-461",
+"actor": "p-lzjh2r6u",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":10,\"revenue_seed\":4223051648,\"revenue_turn\":\"8.3.10\",\"routes\":[[{\"hex\":\"E19\"},{\"hex\":\"F18\"},{\"hex\":\"F16\"},{\"hex\":\"G17\"},{\"hex\":\"G19\"},{\"hex\":\"H18\"}],[{\"hex\":\"L16\"},{\"hex\":\"L14\"},{\"hex\":\"M13\"},{\"hex\":\"M11\"},{\"hex\":\"L10\"},{\"hex\":\"L8\"},{\"hex\":\"L6\"},{\"hex\":\"L4\"},{\"hex\":\"L2\"},{\"hex\":\"K3\"}]],\"train_indices\":[0,1],\"trains\":[\"5\",\"5\"]}}",
+"at": 1789084366850
+},
+{
+"index": 460,
+"id": "smtvxij5h-462",
+"actor": "p-lzjh2r6u",
+"payload": "{\"DeclareDividends\":{\"distribute\":true,\"game_id\":0,\"protocol_id\":10,\"revenue_amount\":\"430\"}}",
+"at": 1789084380577
+},
+{
+"index": 461,
+"id": "smtvxij5h-463",
+"actor": "p-lzjh2r6u",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789084380602,
+"derived": true
+},
+{
+"index": 462,
+"id": "smtvxij5h-464",
+"actor": "p-6a1qgd0g",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":1,\"protocol_id\":9,\"q\":1,\"r\":4,\"tile_id\":58}}",
+"at": 1789084429088
+},
+{
+"index": 463,
+"id": "smtvxij5h-465",
+"actor": "p-6a1qgd0g",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":9}}",
+"at": 1789084433652
+},
+{
+"index": 464,
+"id": "smtvxij5h-466",
+"actor": "p-6a1qgd0g",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":9,\"revenue_seed\":3373842338,\"revenue_turn\":\"8.3.9\",\"routes\":[[{\"hex\":\"E5\"},{\"hex\":\"F4\"},{\"hex\":\"F2\"},{\"hex\":\"G3\"},{\"hex\":\"G5\"},{\"hex\":\"G7\"},{\"hex\":\"H6\"},{\"hex\":\"H8\"},{\"hex\":\"H10\"},{\"hex\":\"H12\"},{\"hex\":\"H14\"},{\"hex\":\"I15\"}]],\"train_indices\":[0],\"trains\":[\"6\"]}}",
+"at": 1789084457664
+},
+{
+"index": 465,
+"id": "smtvxij5h-467",
+"actor": "p-6a1qgd0g",
+"payload": "{\"DeclareDividends\":{\"distribute\":true,\"game_id\":0,\"protocol_id\":9,\"revenue_amount\":\"240\"}}",
+"at": 1789084460167
+},
+{
+"index": 466,
+"id": "smtvxij5h-468",
+"actor": "p-6a1qgd0g",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789084462854
+},
+{
+"index": 467,
+"id": "smtvxij5h-469",
+"actor": "p-je0gw2v0",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":0,\"protocol_id\":7,\"q\":4,\"r\":3,\"tile_id\":9}}",
+"at": 1789084526480
+},
+{
+"index": 468,
+"id": "smtvxij5h-470",
+"actor": "p-je0gw2v0",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":7}}",
+"at": 1789084526485,
+"derived": true
+},
+{
+"index": 469,
+"id": "smtvxij5h-471",
+"actor": "p-je0gw2v0",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":7,\"revenue_seed\":2023585424,\"revenue_turn\":\"8.3.7\",\"routes\":[[{\"hex\":\"G19\"},{\"hex\":\"F18\"},{\"hex\":\"E19\"},{\"hex\":\"D18\"},{\"hex\":\"D16\"},{\"hex\":\"D14\"},{\"hex\":\"E13\"},{\"hex\":\"F12\"},{\"hex\":\"G11\"},{\"hex\":\"H10\"},{\"hex\":\"H12\"},{\"hex\":\"H14\"},{\"hex\":\"I15\"},{\"hex\":\"I17\"},{\"hex\":\"H18\"}]],\"train_indices\":[0],\"trains\":[\"6\"]}}",
+"at": 1789084635665
+},
+{
+"index": 470,
+"id": "smtvxij5h-472",
+"actor": "p-je0gw2v0",
+"payload": "{\"DeclareDividends\":{\"distribute\":true,\"game_id\":0,\"protocol_id\":7,\"revenue_amount\":\"280\"}}",
+"at": 1789084642965
+},
+{
+"index": 471,
+"id": "smtvxij5h-473",
+"actor": "p-je0gw2v0",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789084647399
+},
+{
+"index": 472,
+"id": "smtvxij5h-474",
+"actor": "p-6a1qgd0g",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"90\",\"protocol_id\":5,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789084670966
+},
+{
+"index": 473,
+"id": "smtvxij5h-475",
+"actor": "p-lzjh2r6u",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"100\",\"protocol_id\":6,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789084712822
+},
+{
+"index": 474,
+"id": "smtvxij5h-476",
+"actor": "p-je0gw2v0",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"100\",\"protocol_id\":10,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789084736421
+},
+{
+"index": 475,
+"id": "smtvxij5h-477",
+"actor": "p-6a1qgd0g",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"100\",\"protocol_id\":1,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789084741933
+},
+{
+"index": 476,
+"id": "smtvxij5h-478",
+"actor": "p-lzjh2r6u",
+"payload": "{\"BuyStock\":{\"certificate\":\"double\",\"game_id\":0,\"par_value\":\"100\",\"protocol_id\":6,\"source\":\"Ipo\"}}",
+"at": 1789084744912
+},
+{
+"index": 477,
+"id": "smtvxij5h-479",
+"actor": "p-je0gw2v0",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"100\",\"protocol_id\":1,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789084805362
+},
+{
+"index": 478,
+"id": "smtvxij5h-480",
+"actor": "p-6a1qgd0g",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789084809709
+},
+{
+"index": 479,
+"id": "smtw722ku-1",
+"actor": "p-lzjh2r6u",
+"payload": "{\"SellStock\":{\"game_id\":0,\"percentage\":20,\"protocol_id\":9}}",
+"at": 1789085203357
+},
+{
+"index": 480,
+"id": "smtw722ku-2",
+"actor": "p-lzjh2r6u",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"100\",\"protocol_id\":6,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789085206278
+},
+{
+"index": 481,
+"id": "smtw7b7ir-1",
+"actor": "p-je0gw2v0",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789085608286
+},
+{
+"index": 482,
+"id": "smtw7b7ir-2",
+"actor": "p-6a1qgd0g",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789085613560
+},
+{
+"index": 483,
+"id": "smtw7b7ir-3",
+"actor": "p-lzjh2r6u",
+"payload": "{\"BuyStock\":{\"game_id\":0,\"par_value\":\"100\",\"protocol_id\":6,\"quantity\":1,\"source\":\"Ipo\"}}",
+"at": 1789085645805
+},
+{
+"index": 484,
+"id": "smtw7b7ir-4",
+"actor": "p-lzjh2r6u",
+"payload": "{\"PlaceHomeStation\":{\"city_index\":1,\"company_id\":6,\"hex_label\":\"E11\",\"kind\":\"home\",\"q\":3,\"r\":4}}",
+"at": 1789085653232
+},
+{
+"index": 485,
+"id": "smtw7b7ir-5",
+"actor": "p-je0gw2v0",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789085797649
+},
+{
+"index": 486,
+"id": "smtw7b7ir-6",
+"actor": "p-6a1qgd0g",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789085809689
+},
+{
+"index": 487,
+"id": "smtw7b7ir-7",
+"actor": "p-lzjh2r6u",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789086066579
+},
+{
+"index": 488,
+"id": "smtw7b7ir-8",
+"actor": "p-6a1qgd0g",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":0,\"protocol_id\":1,\"q\":-1,\"r\":7,\"tile_id\":29}}",
+"at": 1789086418072
+},
+{
+"index": 489,
+"id": "smtw7b7ir-9",
+"actor": "p-6a1qgd0g",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":1}}",
+"at": 1789086418185,
+"derived": true
+},
+{
+"index": 490,
+"id": "smtw967l1-1",
+"actor": "p-6a1qgd0g",
+"payload": "{\"RunMultipleRoutes\":{\"game_id\":0,\"payout_strategy\":\"Withhold\",\"protocol_id\":1,\"revenue_seed\":2871433494,\"revenue_turn\":\"9.1.1\",\"routes\":[[{\"hex\":\"H10\"},{\"bypass\":true,\"hex\":\"H12\"},{\"hex\":\"I13\"},{\"hex\":\"J14\"},{\"hex\":\"I15\"},{\"hex\":\"H16\"},{\"hex\":\"G17\"},{\"hex\":\"H18\"},{\"hex\":\"G19\"}]],\"train_indices\":[0],\"trains\":[\"7\"]}}",
+"at": 1789088769309
+},
+{
+"index": 491,
+"id": "smtw967l1-2",
+"actor": "p-6a1qgd0g",
+"payload": "{\"DeclareDividends\":{\"distribute\":true,\"game_id\":0,\"protocol_id\":1,\"revenue_amount\":\"220\"}}",
+"at": 1789088771593
+},
+{
+"index": 492,
+"id": "smtw967l1-3",
+"actor": "p-6a1qgd0g",
+"payload": "{\"PassTurn\":{\"game_id\":0}}",
+"at": 1789088774515
+},
+{
+"index": 493,
+"id": "smtw967l1-4",
+"actor": "p-lzjh2r6u",
+"payload": "{\"LayTile\":{\"game_id\":0,\"orientation\":1,\"protocol_id\":4,\"q\":4,\"r\":4,\"tile_id\":24}}",
+"at": 1789088897368
+},
+{
+"index": 494,
+"id": "smtw967l1-5",
+"actor": "p-lzjh2r6u",
+"payload": "{\"AdvanceOperatingSubPhase\":{\"game_id\":0,\"protocol_id\":4}}",
+"at": 1789088897435,
+"derived": true
+}
+]
+}

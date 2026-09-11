@@ -104,10 +104,10 @@ describe("the expanded board, hex by hex (the request, section 1)", () => {
     expect(pairs).toContainEqual([edge(1), edge(3)].sort());
   });
 
-  it("A19 Montreal is a gray two-station city on SE, SW and W", () => {
-    expect(GRAY_HEXES.A19).toEqual({ edges: [edge(2), edge(3), edge(4)], marker: "city", slots: 2 });
+  it("A19 Montreal is a gray single-station city on SE, SW and W (#1401)", () => {
+    expect(GRAY_HEXES.A19).toEqual({ edges: [edge(2), edge(3), edge(4)], marker: "city" });
     expect(NAMED_HEX_LABELS.A19).toBe("Montreal");
-    expect(EXPANDED_BOARD.printedArtwork?.A19?.marker?.slots).toBe(2);
+    expect(EXPANDED_BOARD.printedArtwork?.A19?.marker?.slots ?? 1).toBe(1);
   });
 
   it("B20 is the double town Plattsburgh & Burlington", () => {
@@ -205,9 +205,9 @@ describe("the expanded board, hex by hex (the request, section 1)", () => {
     }
   });
 
-  it("L16 Norfolk is a gray two-station city on W, NW and NE", () => {
+  it("L16 Norfolk is a gray single-station city on W, NW and NE (#1401)", () => {
     expect(hexOf("L16")?.printedColor).toBe("Gray");
-    expect(GRAY_HEXES.L16).toEqual({ edges: [edge(4), edge(5), edge(0)], marker: "city", slots: 2 });
+    expect(GRAY_HEXES.L16).toEqual({ edges: [edge(4), edge(5), edge(0)], marker: "city" });
     expect(neighbourAcross("L16", edge(4))).toBe("L14");
     expect(neighbourAcross("L16", edge(5))).toBe("K15");
     expect(neighbourAcross("L16", edge(0))).toBe("K17");

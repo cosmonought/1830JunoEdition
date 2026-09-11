@@ -25,8 +25,11 @@
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import {
+  DUCK_FOR_VIDEO,
   RADIO_STREAM_URL,
+  RADIO_VOLUME,
   WHISTLE_SRC,
+  duckRadio,
   playQuietly,
   useRadioStream,
   useTurnWhistle,
@@ -445,5 +448,47 @@ describe("the opening titles silence the first whistle", () => {
     mount(createElement(WhistleProbe, { isMyTurn: false, enabled: true }));
     mount(createElement(WhistleProbe, { isMyTurn: true, enabled: true }));
     expect(play).toHaveBeenCalledTimes(1);
+  });
+});
+
+/* ==================================================================
+    DESIGN NOTE 1365 (harness): A DUCK ALREADY HELD REACHES THE NEXT ELEMENT
+   ==================================================================
+   REPORTED: "The audio did not duck for the intro video anymore." The ordinary order -- radio up, titles
+   mount, `duckRadio` -- worked against this very hook, so the cases below are the two ORDERS that did not:
+   an element built after the hold began, by a station change or by mounting late. Both used to start at
+   the full mix. */
+describe("an element registered while a duck is held starts ducked (design note #1365)", () => {
+  function StationProbe({ url }: { url: string }) {
+    radio = useRadioStream(url);
+    return null;
+  }
+
+  it("a station change during the titles builds the new element at the ducked level", () => {
+    mount(createElement(StationProbe, { url: RADIO_STREAM_URL }));
+    act(() => radio!.toggle());
+    const release = duckRadio(DUCK_FOR_VIDEO);
+    mount(createElement(StationProbe, { url: "https://example.invalid/other" }));
+    const fresh = built[built.length - 1];
+    expect(fresh.volume).toBeCloseTo(RADIO_VOLUME * DUCK_FOR_VIDEO);
+    release();
+  });
+
+  it("a radio mounted after the titles' effect ran comes up ducked", () => {
+    const release = duckRadio(DUCK_FOR_VIDEO);
+    mount(createElement(StationProbe, { url: RADIO_STREAM_URL }));
+    expect(built[built.length - 1].volume).toBeCloseTo(RADIO_VOLUME * DUCK_FOR_VIDEO);
+    release();
+  });
+
+  it("and the ordinary order still ducks and releases", () => {
+    mount(createElement(StationProbe, { url: RADIO_STREAM_URL }));
+    act(() => radio!.toggle());
+    const element = built[built.length - 1];
+    const release = duckRadio(DUCK_FOR_VIDEO);
+    expect(element.volume).toBeCloseTo(RADIO_VOLUME * DUCK_FOR_VIDEO);
+    release();
+    // The release is a fade; the hold itself is gone at once, which is what the next duck reads.
+    expect(duckRadio(DUCK_FOR_VIDEO)).toBeInstanceOf(Function);
   });
 });

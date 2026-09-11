@@ -84,6 +84,7 @@ import {
 } from "../utils/stickyCollapse";
 import type { DepotTier } from "../utils/gamePhase";
 import { purchaseWarnings } from "../utils/purchaseWarnings";
+import { bankBreakWarning } from "../utils/bankBreak"; // #1410
 // Design note #1034: the one place that says a reprieved train occupies no limit slot.
 import { countableTrainCount } from "../utils/trainLimit";
 import { dividendDeclaration, marketMoveDirection } from "../utils/dividendStep";
@@ -107,6 +108,7 @@ import CarcosaMark from "../components/CarcosaMark";
 import { PrivatePowerStar } from "../components/privatePowerStar";
 // Design note #1323: the Kanawha Licence's pickaxe, on the corporation badge and the button that buys one.
 import { KanawhaLicenseBadge, PickaxeIcon } from "../components/KanawhaBadge";
+import { numberedPrivate } from "../utils/privateOrdinal";
 
 /* ------------------------------------------------------------------ */
 /* Contextual Top Action Bar -- see design note #8/item 5              */
@@ -802,6 +804,7 @@ export default function ContextualActionBar({
   operatingOrder = [],
   trainPurchase = null,
   depot = [],
+  bankRemaining = null,
   gentleRust = false,
   armedErrand = null,
   mapEl = null,
@@ -1030,6 +1033,9 @@ export default function ContextualActionBar({
   /** Design note #890: the Bank Depot's tiers, always -- `buyWarnings` reads it to know what the NEXT phase's
    *  train limit will be, and that question is live all round rather than only while the buy panel is up. */
   depot?: readonly DepotTier[];
+  /** #1410: the Bank's balance, for the Bank Break countdown badge beside the phase badge. `null` when
+   *  unknown, which shows nothing. */
+  bankRemaining?: number | null;
   /** Design note #1033: whether the table is playing Gentle Rust. It changes the rust countdown's WORDING and
    *  whether that one badge animates -- see `purchaseWarnings`. Defaults to `false`, so a caller that has not
    *  been taught to pass it shows the standard strings rather than nothing. */
@@ -1331,6 +1337,9 @@ export default function ContextualActionBar({
      obvious shortcut and a wrong one: marks exist only after the trigger is bought, and the two strings this
      changes are both shown BEFORE that. A proxy that is empty in exactly the case it is consulted for is
      #1006's shape. */
+  // #1410: the Bank Break badge, from the balance the shell passes.
+  const bankBreak = bankBreakWarning(bankRemaining);
+
   const buyWarnings = React.useMemo(
     () => purchaseWarnings(phase ?? null, depot, gentleRust),
     [phase, depot, gentleRust],
@@ -3108,7 +3117,7 @@ export default function ContextualActionBar({
                           title={`${priv.name} — $${priv.revenue_per_or} per Operating Round into ${activeCorporation.ticker}'s treasury.`}
                         >
                           {/* Design note #407: revenue shown, not hovered. */}
-                          {priv.private_id}. {priv.name} +${priv.revenue_per_or}
+                          {numberedPrivate(priv.private_id, priv.name)} +${priv.revenue_per_or}
                         </span>
                       ))}
                     </span>
@@ -3153,6 +3162,19 @@ export default function ContextualActionBar({
               {phase && (
                 <span style={{ ...styles.phaseBadge, ...PHASE_TINT_STYLES[phase.tint] }}>
                   {phase.label}
+                </span>
+              )}
+              {/* #1410: the Bank Break countdown, beside the phase on both rails. */}
+              {bankBreak && (
+                <span
+                  className={bankBreak.critical ? "app-phase-shift-critical" : undefined}
+                  style={{
+                    ...styles.phaseShiftBadge,
+                    ...(bankBreak.critical ? styles.phaseShiftBadgeCritical : styles.phaseShiftBadgeWarn),
+                  }}
+                  aria-label={bankBreak.detail}
+                >
+                  &#9888; {bankBreak.label}
                 </span>
               )}
               {/* Design note #920: THE TURN ORDER MOVED OUT OF THIS RAIL. It sat beside the phase badge,
@@ -3991,6 +4013,20 @@ export default function ContextualActionBar({
               {phase.label}
             </span>
           )}
+          {/* #1410: the Bank Break countdown, beside the phase on both rails. */}
+          {bankBreak && (
+                <span
+                  className={bankBreak.critical ? "app-phase-shift-critical" : undefined}
+                  style={{
+                    ...styles.phaseShiftBadge,
+                    ...(bankBreak.critical ? styles.phaseShiftBadgeCritical : styles.phaseShiftBadgeWarn),
+                  }}
+                  aria-label={bankBreak.detail}
+                >
+                  &#9888; {bankBreak.label}
+                </span>
+              )}
+
           {/* ==================================================================
                 DESIGN NOTE 868: THE BADGE THAT ONLY SAID SOMETHING WAS COMING
               ==================================================================

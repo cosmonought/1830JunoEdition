@@ -43,7 +43,22 @@ import {
 } from "../../frontend/src/utils/sandboxState";
 import { waterfallForRoster, withEmptyRoster } from "../../frontend/src/utils/gameSetup";
 import { STANDARD_VARIANTS } from "../../frontend/src/utils/gameVariants";
-import type { RoomDocWrite } from "../../frontend/src/utils/roomDocLink";
+import type {
+  ChatSendRequest,
+  PresenceSetRequest,
+  RoomChatEntry,
+  RoomDocWrite,
+} from "../../frontend/src/utils/roomDocLink";
+import type { PresenceState } from "../../frontend/src/utils/presence";
+import type {
+  LobbyHelloRequest,
+  LobbyWatchRequest,
+  LobbyWriteRequest,
+  RoomDoc,
+  SeatDoc,
+  StagingRoomRecord,
+} from "../../frontend/src/utils/lobbyProtocol";
+import { ROOM_LIST_LIMIT } from "../../frontend/src/utils/lobbyProtocol";
 import type { SandboxRoomDoc } from "../../frontend/src/utils/sandboxRoom";
 import type { LogStore } from "./fileLogStore";
 import { logHash } from "../../frontend/src/utils/logHash";
@@ -78,6 +93,10 @@ interface HelloFrame {
   room: string;
   build: string;
   claim?: unknown;
+  /** Design note #1341: the seat PIN, demanded when the claimed seat has one. */
+  pin?: unknown;
+  /** Design note #1341: the seat's session token; an older one than the seat's latest is superseded. */
+  token?: unknown;
   /** What this client has already applied, so a reconnect is answered rather than guessed at. */
   baseIndex?: number;
 }
@@ -108,6 +127,10 @@ interface RoomHelloFrame {
   room: string;
   build: string;
   claim?: unknown;
+  /** Design note #1341: the seat PIN, demanded when the claimed seat has one. */
+  pin?: unknown;
+  /** Design note #1341: the seat's session token; an older one than the seat's latest is superseded. */
+  token?: unknown;
 }
 
 interface RoomWriteFrame {
@@ -116,7 +139,118 @@ interface RoomWriteFrame {
   write: RoomDocWrite;
 }
 
-type ClientFrame = HelloFrame | SubmitFrame | RoomHelloFrame | RoomWriteFrame;
+/* ==================================================================
+    DESIGN NOTE 1341: THE SEAT PIN, SERVER SIDE
+   ==================================================================
+   `sandboxRoom.ts` #1341 is the design. Here: two frames on the room-doc socket, one gate on both hellos.
+     seat-pin    the socket's OWN seat sets its PIN; changing one needs the current one.
+     claim-seat  any socket takes over a seat by giving its PIN. A seat that HAS one must be given that one.
+                 A seat that has none ADOPTS the PIN offered (#1341a) -- the migration path for seats claimed
+                 before the PIN existed. Read the addendum at the branch before relying on this: an unPINned
+                 seat is first-come, and that is a property of the seat having no PIN, not of this branch.
+     the gate    a `hello` or `room-hello` claiming an id that has a PIN must carry it, or is refused and
+                 closed. This is what makes the PIN protect a seat rather than merely decorate it: the
+                 identity resolver still believes the claim (#1210), the PIN is the one fact it checks.
+   ON A SUCCESSFUL CLAIM the log sockets attached to that actor in that room are told they were SUPERSEDED and
+   closed -- "gracefully close the old connection" -- and a fresh SESSION TOKEN is minted for the seat and
+   handed to the claimant. Both devices know the PIN from then on, so the PIN alone cannot keep the old one
+   out when its socket reconnects on a backoff; the token can. A hello carrying a stale token is refused with
+   the same superseded code, and the client's answer to that code is to forget the seat and reload as a
+   visitor (`seatPin.ts`). Tokens are in memory only: a restart lets any device with the PIN back in.
+   PLAIN STRINGS, in the room document, persisted with it, and stripped from every broadcast by `publicDoc`.
+   Ruled so for closed playtests: no hashing, a key to one room's seat and to nothing else. */
+interface SeatPinFrame {
+  kind: "seat-pin";
+  room: string;
+  requestId: string;
+  playerId: string;
+  pin: unknown;
+  currentPin?: unknown;
+}
+
+interface ClaimSeatFrame {
+  kind: "claim-seat";
+  room: string;
+  requestId: string;
+  playerId: string;
+  pin: unknown;
+}
+
+/* ==================================================================
+    DESIGN NOTE 1355: A PIN FINDS ITS SEATS
+   ==================================================================
+   ASKED: "if players could just enter their PIN, they would have the option to click 'Rejoin' on the games
+   they're currently in ... Does the PIN not already store the game and seat players chose?"
+   IT DOES -- on the server, per room, per seat (`seatPins`). So the lobby asks the server, with the PIN
+   alone and no room named, which seats carry it, and the server answers with every match across every room
+   it holds: room code, seat, nickname, whether the game is waiting or playing. One match is a "Rejoin"
+   button; several (two rooms, or two players who chose the same four digits in one room) are a short list to
+   pick from by name. A PIN is not secret against a determined guesser -- four digits never are -- and this
+   is a closed playtest; what it buys is one number to remember instead of three steps. Answered on any
+   socket, before any hello, because the asker has no room yet. */
+interface FindSeatsFrame {
+  kind: "find-seats";
+  requestId: string;
+  pin: unknown;
+}
+
+/* ==================================================================
+    DESIGN NOTE 1361: CHAT, PRESENCE AND THE STAGING LOBBY, ON THE ROOM-DOC SOCKET
+   ==================================================================
+   Firestore's test-mode window closed and the three records that had stayed there -- the transcript, the
+   route-presence hints and the parked on-chain staging lobby -- became CORS errors. They move here, onto the
+   socket that already carries the room document, and #1215's separation is the rule for all of them: NONE OF
+   THIS IS THE LOG. Nothing here is appended, replayed, hashed or settled; no rule is decided from any of it.
+     chat        (#1361a) one transcript per room, capped, persisted as a sidecar, broadcast whole.
+     presence    (#1361a) one current value per seat, in memory only, cleared when the socket closes.
+     the lobby   (#1361b) the staging rooms and their seats, persisted whole; every write is a named op the
+                 server applies under the rule its Firestore transaction used to carry.
+   THE ACTOR IS THE CONNECTION'S, for chat and presence -- the same posture as the log (#1207): a chat line
+   is stamped with who the socket said it was at `room-hello`, and a presence write can only ever set the
+   sender's own seat. The lobby writes carry a wallet address in the frame because that lobby is keyed by
+   wallet and the socket is keyed by player id; it is the parked Web3 path, believed the way the local
+   identity is believed (#1210). */
+interface ChatSendFrame extends ChatSendRequest {}
+interface PresenceSetFrame extends PresenceSetRequest {}
+interface LobbyHelloFrame extends LobbyHelloRequest {}
+interface LobbyWatchFrame extends LobbyWatchRequest {}
+interface LobbyWriteFrame extends LobbyWriteRequest {}
+
+type ClientFrame =
+  | HelloFrame
+  | SubmitFrame
+  | RoomHelloFrame
+  | RoomWriteFrame
+  | SeatPinFrame
+  | ClaimSeatFrame
+  | FindSeatsFrame
+  | ChatSendFrame
+  | PresenceSetFrame
+  | LobbyHelloFrame
+  | LobbyWatchFrame
+  | LobbyWriteFrame;
+
+/** #1361a: how much of a transcript a room keeps and sends. Mirrors `CHAT_HISTORY_LIMIT` in `ChatBox.tsx`. */
+const CHAT_HISTORY_LIMIT = 200;
+const MAX_CHAT_MESSAGE_LENGTH = 500;
+const MAX_DISPLAY_NAME_LENGTH = 24;
+
+const isValidSeatPin = (pin: unknown): pin is string => typeof pin === "string" && /^[0-9]{4}$/.test(pin);
+const SEAT_SUPERSEDED_CODE = "seat-superseded";
+/** #1346: a hello turned away for a seat reason -- a wrong or missing PIN. Terminal for the client: retrying
+ *  the same hello cannot change the answer, so it must not loop. */
+const SEAT_REFUSED_CODE = "seat-refused";
+const mintSeatToken = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+
+/** The document as the wire sees it: `seatPins` stripped, `hasPin` stamped on each seat. */
+const publicDoc = (doc: SandboxRoomDoc | null): SandboxRoomDoc | null => {
+  if (!doc) return null;
+  const { seatPins, ...rest } = doc;
+  return {
+    ...rest,
+    players: doc.players.map((player) => ({ ...player, hasPin: Boolean(seatPins?.[player.id]) })),
+  };
+};
 
 export interface GameServerOptions {
   port: number;
@@ -153,6 +287,16 @@ export function createGameServer(options: GameServerOptions): {
   /** #1215. A separate map from `rooms` on purpose: this one holds no history and decides nothing. */
   const roomDocs = new Map<string, SandboxRoomDoc>();
   const roomDocSockets = new Map<WebSocket, string>();
+  /** #1341: who each room-doc socket said it was, so a seat-pin write can be checked against its own seat. */
+  const roomDocActors = new Map<WebSocket, string>();
+  /** #1341: the latest session token per seat, by room then player id. In memory only. */
+  const seatTokens = new Map<string, Map<string, string>>();
+  const tokenFor = (code: string, playerId: string) => seatTokens.get(code)?.get(playerId);
+  const setToken = (code: string, playerId: string, token: string) => {
+    const room = seatTokens.get(code) ?? new Map<string, string>();
+    room.set(playerId, token);
+    seatTokens.set(code, room);
+  };
   let minted = 0;
   /* #1250: A PROCESS TAG ON EVERY MINTED ID. `id` is an entry's identity -- `effectiveActions` kills reverted
      entries by it (#1026) -- and a counter that restarts at 1 with the process would mint an id a stored log
@@ -266,12 +410,26 @@ export function createGameServer(options: GameServerOptions): {
     switch (write.op) {
       case "upsert-player": {
         const at = existing.players.findIndex((entry) => entry.id === write.player.id);
+        /* Design note #1337: A COLOUR ANOTHER SEAT HOLDS IS NOT TAKEN -- first write wins. The client greys
+           out held swatches, but two clicks in flight at once both see a free swatch; the server is the one
+           place both writes pass through, so the second keeps whatever colour it had before. */
+        const wanted = write.player.color;
+        const heldElsewhere =
+          typeof wanted === "string" &&
+          existing.players.some((entry, index) => index !== at && entry.color === wanted);
+        const player = heldElsewhere
+          ? (() => {
+              const { color: _refused, ...rest } = write.player;
+              const previous = at === -1 ? undefined : existing.players[at].color;
+              return previous === undefined ? rest : { ...rest, color: previous };
+            })()
+          : write.player;
         next = {
           ...existing,
           players:
             at === -1
-              ? [...existing.players, write.player]
-              : existing.players.map((entry, index) => (index === at ? write.player : entry)),
+              ? [...existing.players, player]
+              : existing.players.map((entry, index) => (index === at ? player : entry)),
         };
         break;
       }
@@ -281,7 +439,13 @@ export function createGameServer(options: GameServerOptions): {
         next = { ...existing, variants: write.variants };
         break;
       case "forced-sign":
-        next = { ...existing, forcedSign: write.stage };
+        /* #1361b/#1404: VALIDATED, NOT CAST. Untrusted wire data; an unknown string would be a flag that
+           matches no stage and never clears (the client's old Firestore reader checked the same three). */
+        next = {
+          ...existing,
+          forcedSign:
+            write.stage === "mark" || write.stage === "carcosa" || write.stage === "fog" ? write.stage : null,
+        };
         break;
       case "status":
         next = { ...existing, status: write.status };
@@ -297,9 +461,241 @@ export function createGameServer(options: GameServerOptions): {
   /** Everyone watching this room's document, the writer included -- unlike the log's fan-out, where the
    *  submitter's own answer is a different message. Here there is no answer: the document IS the answer. */
   const broadcastRoomDoc = (code: string) => {
-    const doc = roomDocs.get(code) ?? null;
+    const doc = publicDoc(roomDocs.get(code) ?? null);
     for (const [socket, watching] of roomDocSockets) {
       if (watching === code) send(socket, { kind: "room", room: code, doc } as never);
+    }
+  };
+
+  /** #1341: the PIN and token gate for both hellos. `null` when the claim may proceed, else the refusal. */
+  const seatRefusal = async (
+    code: string,
+    actor: string,
+    offeredPin: unknown,
+    offeredToken: unknown,
+  ): Promise<{ reason: string; code?: string } | null> => {
+    const required = (await roomDocFor(code))?.seatPins?.[actor];
+    if (!required) return null;
+    if (required !== offeredPin) {
+      return { reason: "This seat has a PIN. Rejoin it from the room screen with the PIN.", code: SEAT_REFUSED_CODE };
+    }
+    const latest = tokenFor(code, actor);
+    if (latest && latest !== offeredToken) {
+      return { reason: "This seat is now on another device.", code: SEAT_SUPERSEDED_CODE };
+    }
+    return null;
+  };
+
+  /** #1341: persist the room document after a seat write, the way `room-write` does. */
+  const saveRoomDocQuietly = async (code: string) => {
+    const doc = roomDocs.get(code);
+    if (!doc || !options.store) return;
+    try {
+      await options.store.saveRoomDoc(code, doc);
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error(`  store: could not save the room document for ${code}`, error);
+    }
+  };
+
+  /* ---- #1361a: chat ---- */
+  const roomChats = new Map<string, RoomChatEntry[]>();
+  const chatLoaded = new Set<string>();
+  async function chatFor(code: string): Promise<RoomChatEntry[]> {
+    if (!chatLoaded.has(code)) {
+      chatLoaded.add(code);
+      if (!roomChats.has(code)) {
+        try {
+          const stored = (await options.store?.loadChat?.(code)) ?? [];
+          roomChats.set(code, stored.slice(-CHAT_HISTORY_LIMIT));
+        } catch (error) {
+          // eslint-disable-next-line no-console
+          console.error(`  store: could not load the transcript for ${code}`, error);
+        }
+      }
+    }
+    return roomChats.get(code) ?? [];
+  }
+  let chatMinted = 0;
+  const broadcastChat = (code: string) => {
+    const messages = roomChats.get(code) ?? [];
+    for (const [socket, watching] of roomDocSockets) {
+      if (watching === code) send(socket, { kind: "chat", room: code, messages } as never);
+    }
+  };
+
+  /* ---- #1361a: presence ---- */
+  const presence = new Map<string, Map<string, PresenceState>>();
+  /* #1397: STAMPED ON THIS CLOCK, SENT WITH THIS CLOCK. A presence entry's `at` decides on every other screen
+     whether the entry is fresh, and it was the sender's wall clock compared against the reader's -- two
+     machines that need only disagree by six seconds for one player's routes to be invisible to another for
+     the whole game. The server overwrites `at` on receipt and sends its own `now` with every frame, so a
+     reader measures age as (server now - server at) and rebases into its own clock. No clock is compared
+     with any other. */
+  const presenceFrame = (code: string) => ({
+    kind: "presence",
+    room: code,
+    now: Date.now(),
+    entries: [...(presence.get(code)?.values() ?? [])],
+  });
+  const broadcastPresence = (code: string) => {
+    const frame = presenceFrame(code);
+    for (const [socket, watching] of roomDocSockets) {
+      if (watching === code) send(socket, frame as never);
+    }
+  };
+
+  /* ---- #1361b: the staging lobby ---- */
+  const stagingRooms = new Map<string, StagingRoomRecord>();
+  const lobbySockets = new Set<WebSocket>();
+  const lobbyWatch = new Map<WebSocket, string>();
+  const lobbyReady: Promise<void> = (async () => {
+    try {
+      for (const record of (await options.store?.loadLobby?.()) ?? []) {
+        if (record?.room?.id) stagingRooms.set(record.room.id, record);
+      }
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error("  store: could not load the staging lobby", error);
+    }
+  })();
+  const saveLobbyQuietly = async () => {
+    if (!options.store?.saveLobby) return;
+    try {
+      await options.store.saveLobby([...stagingRooms.values()]);
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error("  store: could not save the staging lobby", error);
+    }
+  };
+  /** Newest first, closed rooms omitted, bounded -- the query the Firestore list used to run. */
+  const lobbyRooms = (): RoomDoc[] =>
+    [...stagingRooms.values()]
+      .map((record) => record.room)
+      .filter((room) => room.status !== "closed")
+      .sort((a, b) => b.createdAtMs - a.createdAtMs)
+      .slice(0, ROOM_LIST_LIMIT);
+  const broadcastLobby = () => {
+    const rooms = lobbyRooms();
+    for (const socket of lobbySockets) send(socket, { kind: "lobby", rooms } as never);
+  };
+  const broadcastLobbyRoom = (roomId: string) => {
+    const record = stagingRooms.get(roomId) ?? null;
+    const frame = { kind: "lobby-room", roomId, room: record?.room ?? null, seats: record?.seats ?? [] };
+    for (const [socket, watching] of lobbyWatch) {
+      if (watching === roomId) send(socket, frame as never);
+    }
+  };
+  let lobbyMinted = 0;
+  const mintLobbyRoomId = () => `r${processTag}-${(lobbyMinted += 1)}`;
+  const cleanName = (raw: unknown, limit: number) =>
+    typeof raw === "string" ? raw.replace(/\s+/g, " ").trim().slice(0, limit) : "";
+
+  /** Applies one lobby write. EVERY OP MIRRORS A FIRESTORE WRITER ONE FOR ONE, including the rule each
+   *  carried: the capacity check and the seat write are one step; releasing decrements the counter; the
+   *  chain id is write-once. `lastSeenMs` is this process's clock -- the one clock `derivePresence` needs. */
+  const applyLobbyWrite = (write: LobbyWriteFrame["write"]): { ok: boolean; reason?: string; roomId?: string } => {
+    const now = Date.now();
+    const stamp = (seat: SeatDoc, patch: Partial<SeatDoc>): SeatDoc => ({ ...seat, ...patch, lastSeenMs: now });
+
+    if (write.op === "create-room") {
+      const id = mintLobbyRoomId();
+      const room: RoomDoc = {
+        id,
+        name: cleanName(write.name, 48) || "Untitled room",
+        hostAddress: String(write.hostAddress ?? ""),
+        hostDisplayName: cleanName(write.hostDisplayName, MAX_DISPLAY_NAME_LENGTH),
+        maxPlayers: Number.isFinite(write.maxPlayers) ? Math.round(write.maxPlayers) : 6,
+        seatCount: 0,
+        status: "staging",
+        chainGameId: null,
+        anteUjuno: /^\d+$/.test(String(write.anteUjuno)) ? String(write.anteUjuno) : "0",
+        virtualBankStart: /^\d+$/.test(String(write.virtualBankStart)) ? String(write.virtualBankStart) : "0",
+        variants: write.variants ?? STANDARD_VARIANTS,
+        createdAtMs: now,
+        launchError: null,
+      };
+      stagingRooms.set(id, { room, seats: [] });
+      /* Separate step, not part of the create: the claim is the ONE place a seat is ever created, so its
+         capacity accounting cannot drift from a second inlined copy here. */
+      const seated = applyLobbyWrite({
+        op: "claim-seat",
+        roomId: id,
+        address: room.hostAddress,
+        displayName: room.hostDisplayName,
+        asHost: true,
+      });
+      return seated.ok ? { ok: true, roomId: id } : seated;
+    }
+
+    const record = stagingRooms.get(write.roomId);
+    if (!record) return { ok: false, reason: "That room no longer exists." };
+    const { room, seats } = record;
+    const seatAt = "address" in write ? seats.findIndex((seat) => seat.address === write.address) : -1;
+    const patchSeat = (patch: Partial<SeatDoc>) => {
+      if (seatAt === -1) return { ok: false, reason: "You do not hold a seat in that room." };
+      record.seats = seats.map((seat, index) => (index === seatAt ? stamp(seat, patch) : seat));
+      return { ok: true };
+    };
+
+    switch (write.op) {
+      case "claim-seat": {
+        if (seatAt !== -1) return patchSeat({ displayName: cleanName(write.displayName, MAX_DISPLAY_NAME_LENGTH) });
+        if (room.status !== "staging") {
+          return { ok: false, reason: "That room has already launched and is no longer accepting new seats." };
+        }
+        if (room.seatCount >= room.maxPlayers) return { ok: false, reason: "That room is full." };
+        if (!write.address) return { ok: false, reason: "A seat needs an address." };
+        record.seats = [
+          ...seats,
+          {
+            address: String(write.address),
+            displayName: cleanName(write.displayName, MAX_DISPLAY_NAME_LENGTH),
+            ready: write.asHost === true, // the host is implicitly ready; they are the one launching
+            isHost: write.asHost === true,
+            onChain: false,
+            joinedAtMs: now,
+            lastSeenMs: now,
+          },
+        ];
+        record.room = { ...room, seatCount: room.seatCount + 1 };
+        return { ok: true };
+      }
+      case "release-seat": {
+        if (seatAt === -1) return { ok: true };
+        record.seats = seats.filter((_seat, index) => index !== seatAt);
+        record.room = { ...room, seatCount: Math.max(0, room.seatCount - 1) };
+        return { ok: true };
+      }
+      case "set-ready":
+        return patchSeat({ ready: write.ready === true });
+      case "set-display-name":
+        return patchSeat({ displayName: cleanName(write.displayName, MAX_DISPLAY_NAME_LENGTH) });
+      case "mark-on-chain":
+        return patchSeat({ onChain: true });
+      case "heartbeat":
+        return patchSeat({});
+      case "set-status": {
+        const status = write.status;
+        if (status !== "staging" && status !== "launching" && status !== "live" && status !== "closed") {
+          return { ok: false, reason: "That is not a room status." };
+        }
+        record.room = { ...room, status, launchError: typeof write.launchError === "string" ? write.launchError : null };
+        return { ok: true };
+      }
+      case "bind-chain-game-id": {
+        if (!Number.isSafeInteger(write.chainGameId) || write.chainGameId < 0) {
+          return { ok: false, reason: `Refusing to bind a non-integer on-chain game id: ${write.chainGameId}` };
+        }
+        /* WRITE-ONCE, as `firestore.rules` used to enforce: the one field other clients act on unverified. */
+        if (room.chainGameId !== null && room.chainGameId !== write.chainGameId) {
+          return { ok: false, reason: "That room is already bound to an on-chain game." };
+        }
+        record.room = { ...room, chainGameId: write.chainGameId, status: "live", launchError: null };
+        return { ok: true };
+      }
+      default:
+        return { ok: false, reason: "That is not a lobby write." };
     }
   };
 
@@ -350,6 +746,36 @@ export function createGameServer(options: GameServerOptions): {
           return;
         }
 
+        /* ---- FIND MY SEATS BY PIN (#1355) ---- answered before any hello; the asker has no room yet. */
+        if (frame.kind === "find-seats") {
+          const ask: FindSeatsFrame = frame;
+          const reply = (seats: Array<{ room: string; playerId: string; nickname: string; status: string }>, reason?: string) =>
+            send(socket, { kind: "seats", requestId: ask.requestId, seats, reason } as never);
+          if (!isValidSeatPin(frame.pin)) {
+            reply([], "A PIN is exactly four digits.");
+            return;
+          }
+          const codes = new Set<string>(roomDocs.keys());
+          try {
+            for (const code of (await options.store?.listRooms?.()) ?? []) codes.add(code);
+          } catch (error) {
+            // eslint-disable-next-line no-console
+            console.error("  store: could not list rooms for a PIN lookup", error);
+          }
+          const seats: Array<{ room: string; playerId: string; nickname: string; status: string }> = [];
+          for (const code of codes) {
+            const doc = await roomDocFor(code);
+            if (!doc?.seatPins) continue;
+            for (const player of doc.players) {
+              if (doc.seatPins[player.id] === ask.pin) {
+                seats.push({ room: code, playerId: player.id, nickname: player.nickname, status: doc.status });
+              }
+            }
+          }
+          reply(seats);
+          return;
+        }
+
         /* ---- THE WAITING ROOM (#1215) ----
            Answered before the log's frames and kept entirely separate from them. A socket that said
            `room-hello` is watching a roster and is not in `sockets`, so it never receives log fan-out and
@@ -365,12 +791,234 @@ export function createGameServer(options: GameServerOptions): {
             socket.close();
             return;
           }
+          const refused = await seatRefusal(frame.room, actor, frame.pin, frame.token);
+          if (refused) {
+            /* #1346: SAID IN THE WINDOW. A hello turned away silently looked, from the outside, like a wire
+               that kept dropping -- the identity line printed on every attempt and nothing said why the
+               socket closed a moment later. */
+            // eslint-disable-next-line no-console
+            console.warn(`  seat: refused room-hello from "${actor}" in ${frame.room} — ${refused.reason}`);
+            send(socket, { kind: "error", ...refused } as never);
+            socket.close();
+            return;
+          }
           roomDocSockets.set(socket, frame.room);
+          roomDocActors.set(socket, actor);
           send(socket, {
             kind: "room",
             room: frame.room,
-            doc: await roomDocFor(frame.room),
+            doc: publicDoc(await roomDocFor(frame.room)),
           } as never);
+          /* #1361a: the transcript and the current hints, so a joining or reconnecting tab is caught up on
+             both without asking -- the same courtesy the document gets. */
+          send(socket, { kind: "chat", room: frame.room, messages: await chatFor(frame.room) } as never);
+          send(socket, presenceFrame(frame.room) as never);
+          return;
+        }
+
+        /* ---- CHAT (#1361a) ---- stamped with the connection's identity and the server's clock. */
+        if (frame.kind === "chat-send") {
+          const actor = roomDocActors.get(socket);
+          const room = roomDocSockets.get(socket);
+          if (!actor || room !== frame.room) {
+            send(socket, { kind: "error", reason: "say room-hello first" });
+            return;
+          }
+          const text = typeof frame.text === "string" ? frame.text.trim().slice(0, MAX_CHAT_MESSAGE_LENGTH) : "";
+          if (!text) return;
+          const entry: RoomChatEntry = {
+            id: `c${processTag}-${(chatMinted += 1)}`,
+            author: actor,
+            displayName: cleanName(frame.displayName, MAX_DISPLAY_NAME_LENGTH),
+            text,
+            at: Date.now(),
+          };
+          const transcript = [...(await chatFor(room)), entry].slice(-CHAT_HISTORY_LIMIT);
+          roomChats.set(room, transcript);
+          if (options.store?.appendChat) {
+            try {
+              await options.store.appendChat(room, entry);
+            } catch (error) {
+              // eslint-disable-next-line no-console
+              console.error(`  store: could not save a chat line for ${room}`, error);
+            }
+          }
+          broadcastChat(room);
+          return;
+        }
+
+        /* ---- PRESENCE (#1361a) ---- the sender's own seat, and only that. */
+        if (frame.kind === "presence-set") {
+          const actor = roomDocActors.get(socket);
+          const room = roomDocSockets.get(socket);
+          if (!actor || room !== frame.room) {
+            send(socket, { kind: "error", reason: "say room-hello first" });
+            return;
+          }
+          const seats = presence.get(room) ?? new Map<string, PresenceState>();
+          if (frame.state && typeof frame.state === "object") {
+            // #1397: the server's clock, not the sender's -- see `presenceFrame`.
+            seats.set(actor, { ...(frame.state as PresenceState), playerId: actor, at: Date.now() });
+          } else {
+            seats.delete(actor);
+          }
+          presence.set(room, seats);
+          broadcastPresence(room);
+          return;
+        }
+
+        /* ---- THE STAGING LOBBY (#1361b) ---- on any socket; the list is public. */
+        if (frame.kind === "lobby-hello") {
+          await lobbyReady;
+          lobbySockets.add(socket);
+          send(socket, { kind: "lobby", rooms: lobbyRooms() } as never);
+          return;
+        }
+        if (frame.kind === "lobby-watch") {
+          await lobbyReady;
+          if (typeof frame.roomId === "string" && frame.roomId) {
+            lobbyWatch.set(socket, frame.roomId);
+            const record = stagingRooms.get(frame.roomId) ?? null;
+            send(socket, {
+              kind: "lobby-room",
+              roomId: frame.roomId,
+              room: record?.room ?? null,
+              seats: record?.seats ?? [],
+            } as never);
+          } else {
+            lobbyWatch.delete(socket);
+          }
+          return;
+        }
+        if (frame.kind === "lobby-write") {
+          await lobbyReady;
+          const ask: LobbyWriteFrame = frame;
+          const write = ask.write;
+          if (!write || typeof write !== "object" || typeof write.op !== "string") {
+            send(socket, { kind: "lobby-ack", requestId: ask.requestId, ok: false, reason: "That is not a lobby write." } as never);
+            return;
+          }
+          const outcome = applyLobbyWrite(write);
+          if (outcome.ok) {
+            await saveLobbyQuietly();
+            broadcastLobby();
+            const touched = write.op === "create-room" ? outcome.roomId : write.roomId;
+            if (touched) broadcastLobbyRoom(touched);
+          } else {
+            // eslint-disable-next-line no-console
+            console.log(`  lobby: refused ${write.op} — ${outcome.reason}`);
+          }
+          send(socket, { kind: "lobby-ack", requestId: ask.requestId, ...outcome } as never);
+          return;
+        }
+
+        /* ---- THE SEAT PIN (#1341) ---- answered on the room-doc socket, to the asker alone. */
+        if (frame.kind === "seat-pin" || frame.kind === "claim-seat") {
+          const seatFrame: SeatPinFrame | ClaimSeatFrame = frame;
+          const actor = roomDocActors.get(socket);
+          const answer = (ok: boolean, reason?: string, token?: string) =>
+            send(socket, { kind: "seat", requestId: seatFrame.requestId, ok, reason, token } as never);
+          if (!actor || roomDocSockets.get(socket) !== frame.room) {
+            answer(false, "say room-hello first");
+            return;
+          }
+          const doc = await roomDocFor(frame.room);
+          if (!doc) {
+            answer(false, "That room does not exist.");
+            return;
+          }
+          if (!isValidSeatPin(frame.pin)) {
+            answer(false, "A PIN is exactly four digits.");
+            return;
+          }
+          const seat = doc.players.find((player) => player.id === seatFrame.playerId);
+          if (!seat) {
+            answer(false, "That seat is not in this room.");
+            return;
+          }
+          const pins = doc.seatPins ?? {};
+
+          if (frame.kind === "seat-pin") {
+            if (seatFrame.playerId !== actor) {
+              answer(false, "Only the seat's own player may set its PIN.");
+              return;
+            }
+            const current = pins[actor];
+            if (current && current !== frame.currentPin) {
+              answer(false, "That is not this seat's current PIN.");
+              return;
+            }
+            roomDocs.set(frame.room, { ...doc, seatPins: { ...pins, [actor]: frame.pin } });
+            await saveRoomDocQuietly(frame.room);
+            /* The setter's own device holds the seat's first token, so its own log socket -- which said hello
+               without one -- stays valid: a hello carrying NO token is only refused once one exists, and this
+               device's next hello will carry this one. */
+            const token = tokenFor(frame.room, actor) ?? mintSeatToken();
+            setToken(frame.room, actor, token);
+            answer(true, undefined, token);
+            broadcastRoomDoc(frame.room); // `hasPin` changed for this seat
+            return;
+          }
+
+          // claim-seat
+          const required = pins[seatFrame.playerId];
+
+          /* ==================================================================
+              DESIGN NOTE 1341a: A SEAT WITH NO PIN ADOPTS THE ONE IT IS OFFERED
+             ==================================================================
+             THE SEATS THAT EXIST ALREADY HAVE NO PIN. #1341 shipped into a live playtest whose seats were
+             claimed before it existed, and the rule above -- "a seat without a PIN cannot be claimed" --
+             locked exactly those players out of their own seats the moment they changed device. A rule that
+             is right for every future room and wrong for every present one needs a migration, not an
+             argument.
+
+             SO THE FIRST PIN OFFERED FOR AN UNPINNED SEAT BECOMES ITS PIN, and from that moment the seat is
+             an ordinary #1341 seat: the branch below demands this exact PIN of every later device, the gate
+             demands it of every later hello, and the token supersedes whoever held it. One seat crosses over
+             per claim, at the moment somebody needs it to, and no room has to be restarted to get there.
+
+             WHAT THIS IS NOT: protection. An unPINned seat was ALREADY open to anybody who claimed its id --
+             `seatRefusal` returns `null` when there is no PIN, so any hello naming that id was, and still
+             is, believed (#1210). This branch does not open a door; it lets the person walking through it
+             lock the door behind them. The cost it DOES carry is that the lock then works against the seat's
+             own player too, so on a public URL the honest instruction is the one the playtest was given:
+             set your PIN now, from the device you are already on, and the question stops being open.
+
+             LOGGED LOUDLY for the same reason the insecure identity is: it is a thing the operator should be
+             able to see happen in the window, not infer afterwards from a locked-out player. */
+          if (!required) {
+            roomDocs.set(frame.room, {
+              ...doc,
+              seatPins: { ...pins, [seatFrame.playerId]: frame.pin },
+            });
+            await saveRoomDocQuietly(frame.room);
+            // eslint-disable-next-line no-console
+            console.warn(
+              `[#1341a] seat "${seat.nickname || seatFrame.playerId}" in ${frame.room} had no PIN and adopted ` +
+                `the one just offered. Every later device needs it. See design note 1341a.`,
+            );
+          } else if (required !== frame.pin) {
+            answer(false, "Wrong PIN for that seat.");
+            return;
+          }
+          /* The old device is told and closed; the new one adopts the id and reloads with the PIN and a fresh
+             token in hand. The old device's reconnect then carries a stale token and is turned away. */
+          const token = mintSeatToken();
+          setToken(seatFrame.room, seatFrame.playerId, token);
+          for (const [other, attached] of sockets) {
+            if (attached.room === seatFrame.room && attached.actor === seatFrame.playerId && other !== socket) {
+              send(other, {
+                kind: "error",
+                reason: "This seat was rejoined from another device.",
+                code: SEAT_SUPERSEDED_CODE,
+              } as never);
+              other.close();
+            }
+          }
+          answer(true, undefined, token);
+          /* #1341a: `hasPin` just changed for an adopting seat, and the roster is how every other screen
+             learns it. Harmless for a seat that already had one -- the document is identical. */
+          broadcastRoomDoc(frame.room);
           return;
         }
 
@@ -402,6 +1050,14 @@ export function createGameServer(options: GameServerOptions): {
           });
           if (!actor) {
             send(socket, { kind: "error", reason: "not authenticated" });
+            socket.close();
+            return;
+          }
+          const refused = await seatRefusal(frame.room, actor, frame.pin, frame.token);
+          if (refused) {
+            // eslint-disable-next-line no-console
+            console.warn(`  seat: refused hello from "${actor}" in ${frame.room} — ${refused.reason}`);
+            send(socket, { kind: "error", ...refused } as never);
             socket.close();
             return;
           }
@@ -550,7 +1206,16 @@ export function createGameServer(options: GameServerOptions): {
          they lose wifi, they come back -- and dropping them from the roster would empty a waiting room every
          time somebody reloaded. Rooms are in memory and die with the process, which is the only cleanup
          there is until `loadLog` and its equivalent for this record are wired. */
+      /* #1361a: PRESENCE DOES NOT OUTLIVE THE SOCKET. A hint from a tab that is gone is a set of routes
+         nobody is drafting; the client's staleness window would clear it in six seconds, and this clears it
+         now. The transcript stays -- it is the room's, not the socket's. */
+      const room = roomDocSockets.get(socket);
+      const actor = roomDocActors.get(socket);
+      if (room && actor && presence.get(room)?.delete(actor)) broadcastPresence(room);
       roomDocSockets.delete(socket);
+      roomDocActors.delete(socket);
+      lobbySockets.delete(socket);
+      lobbyWatch.delete(socket);
     });
   });
 

@@ -18,12 +18,13 @@
 //
 // Design notes #3/#24/#524/#525/#527/#586: see `docs/ai_architecture/firebase_middleware.md`.
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Coin } from "@cosmjs/stargate";
 import type { ExecuteResult } from "@cosmjs/cosmwasm-stargate";
 
 import { useWallet } from "../context/WalletContext";
 import { ConnectWalletButton } from "./ConnectWalletButton";
+import { UiScalePicker } from "./UiScalePicker";
 import {
   NATIVE_DENOM,
   NATIVE_DENOM_DISPLAY,
@@ -33,7 +34,7 @@ import {
   requireContractAddress,
   APP_NAME,
 } from "../config";
-import { isFirebaseConfigured, firebaseConfigError } from "../config/firebase";
+import { isBackendConfigured, backendConfigError } from "../config/backend";
 import ChatBox from "./ChatBox";
 import { preloadWaitingRoomScene } from "./SandboxWaitingRoom";
 import {
@@ -58,8 +59,15 @@ import {
   localPlayerId,
   parseRoomCode,
   readSandboxLog,
+  subscribeSandboxRoom,
   upsertSandboxPlayer,
+  type SandboxRoomPlayer,
 } from "../utils/sandboxRoom";
+// Design note #1352: rejoin a seat from the lobby -- the PIN card over this room's roster, then a reload into it.
+import { SeatPinModal } from "./SeatPinModal";
+import { RejoinByPinCard } from "./RejoinByPinCard";
+import { roomDocOnServer } from "../utils/roomDocLink";
+import { writeSandboxResume } from "../utils/activeGame";
 import { CONTROL_PADDING, FONT_FAMILY, FONT_FAMILY_MONO, FONT_SIZE, LINE_HEIGHT, RADIUS } from "../styles/typography";
 import {
   MIN_PLAYERS,
@@ -215,9 +223,41 @@ function sceneSizeFor(scale: number): React.CSSProperties {
   };
 }
 
+/* ==================================================================
+    DESIGN NOTE 1354: THE TITLE STAYS UNDER THE UTILITY ROW AND INSIDE THE WINDOW
+   ==================================================================
+   REPORTED (feedback 4): on one device at 100% the title was clipped at the top.
+   THE SCENE IS `cover`, SO IT OVERHANGS THE WINDOW on any aspect that is not the photograph's -- above and
+   below on a wide window -- and the title is anchored to the SCENE (#1131, bottom at 60%), so on a wide or
+   short window its top rises past the viewport's; and the utility row is flow content laid over the scene's
+   top band, taller when it wraps, which at 100% on a narrow device it does. Both are the same fault: nothing
+   held the title below a line it could not see.
+   THE LINE IS COMPUTED. The wordmark is 900x617 and 20% of the scene wide, so its height is 24.6% of the
+   scene's (the scene is always aspect-exact, both `max()`s preserving 1920:1072). The scene's top sits
+   `(sceneH - viewport)/2` above the window, so the highest safe `bottom` is
+   `100% - 24.6% - (50% - viewport/2) - row`, and the title takes the lower of that and #1131's 60%. The row's
+   height is measured (`ResizeObserver`) because it wraps. On the 16:9 window this was tuned on the answer
+   is 60%, unchanged; only a window that would have clipped it moves the title down. */
+const WORDMARK_HEIGHT_OF_SCENE = "24.6%";
+function titleBottomFor(scale: number, utilityRowPx: number): React.CSSProperties {
+  return {
+    bottom: `min(60%, calc(100% - ${WORDMARK_HEIGHT_OF_SCENE} - 50% + ${50 / scale}vh - ${utilityRowPx + 16}px))`,
+  };
+}
+
 export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProps) {
   /* Design note #1294: the chrome scale, live. */
   const uiScale = useUiScale();
+  /* Design note #1354: the utility row's measured height, for the title's safe line. */
+  const utilityRowRef = useRef<HTMLDivElement | null>(null);
+  const [utilityRowPx, setUtilityRowPx] = useState(56);
+  useEffect(() => {
+    const node = utilityRowRef.current;
+    if (!node || typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver(() => setUtilityRowPx(node.getBoundingClientRect().height / uiScale));
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [uiScale]);
   /* Design note #524: the sandbox room handlers. Local to this screen -- the
      code is handed straight to `onEnterSandbox` and this component unmounts,
      so there is nothing to keep. */
@@ -278,6 +318,40 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
     [onEnterSandbox],
   );
 
+  /* ==================================================================
+      DESIGN NOTE 1352: "REJOIN SEAT" LIVES ON THE LOBBY
+     ==================================================================
+     ASKED: "where do players use it? If they already have a game going, I think they should enter their PIN
+     on the lobby screen and then have an option to 'Rejoin' the current game."
+     #1341 put the rejoin card in the waiting room and on the in-game room strip -- both screens a player
+     only reaches AFTER joining as a fresh seat. The device-switch case starts here, on a device that has
+     never seen the room: code, then PIN, then the game. So the join form grows a "Rejoin seat" button; it
+     opens the room's roster (one room-doc subscription, the same one the waiting room uses) under the PIN
+     card, and on success the next load is pointed at the room (`writeSandboxResume`) before `adoptSeat`
+     reloads into it as that seat. */
+  const [rejoin, setRejoin] = useState<{ code: string; players: readonly SandboxRoomPlayer[] } | null>(null);
+  /* Design note #1355: the PIN-first card. Its "by room code" link hands off to the join form's path. */
+  const [rejoinByPin, setRejoinByPin] = useState(false);
+  useEffect(() => {
+    if (!rejoin) return undefined;
+    return subscribeSandboxRoom(
+      rejoin.code,
+      (room) => {
+        if (room) setRejoin((current) => (current ? { ...current, players: room.players } : current));
+      },
+      (message) => setSandboxRoomError(message),
+    );
+  }, [rejoin?.code]); // eslint-disable-line react-hooks/exhaustive-deps -- the players are what the subscription writes
+  const handleRejoinSandboxRoom = useCallback((raw: string) => {
+    const code = parseRoomCode(raw);
+    if (!code) {
+      setSandboxRoomError("That is not a room code — they look like JUNO-4T2.");
+      return;
+    }
+    setSandboxRoomError(null);
+    setRejoin({ code, players: [] });
+  }, []);
+
   const wallet = useWallet();
   const address = wallet.address;
 
@@ -326,7 +400,7 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
   const isHost = room !== null && address !== null && room.hostAddress === address;
 
   const chainError = chainConfigError();
-  const firebaseError = firebaseConfigError();
+  const backendError = backendConfigError();
 
   const runAction = useCallback(
     async (label: string, action: () => Promise<void>) => {
@@ -606,7 +680,7 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
           controls pinned right "reads as two designs sharing a row". That was true of a plate holding both.
           With the account furniture moved to its own corner there is no row left to share -- the title gets
           the middle of the screen to itself, which is what a title is for. */}
-      <div style={styles.utilityRow}>
+      <div style={styles.utilityRow} ref={utilityRowRef}>
         {/* ==================================================================
              DESIGN NOTE 1131: THE PILL GOES LEFT, AND THE ROW BECOMES TWO GROUPS
             ==================================================================
@@ -629,6 +703,9 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
           </div>
         )}
         <div style={styles.utilityAccount}>
+        {/* Design note #1336: the text-size control, on the first screen a player sees. The same component
+            as the bars'; the scale it writes is the one every later screen reads. */}
+        <UiScalePicker />
         {/* ==================================================================
              DESIGN NOTE 1133: THE DISPLAY NAME DOES NOTHING ON THIS SCREEN
             ==================================================================
@@ -710,7 +787,7 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
               lowest" is a bottom edge, and pinning the bottom keeps it true whatever the artwork's aspect
               becomes. The width is what sets the size: 20% of the scene puts the top edge up among the
               chandelier's arms and the bottom clear of the barons' heads, which begin at 0.44. */}
-          <div style={styles.titleAnchor}>
+          <div style={{ ...styles.titleAnchor, ...titleBottomFor(uiScale, utilityRowPx) }}>
             {/* ==================================================================
                  DESIGN NOTE 1130: THE CSS GILT SURVIVES AS THE FALLBACK
                 ==================================================================
@@ -744,11 +821,13 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
             <SandboxRoomBar
               bare
               roomCode={null}
-              available={isFirebaseConfigured()}
+              available={isBackendConfigured()}
               error={sandboxRoomError}
               busy={sandboxRoomBusy}
               onHost={handleHostSandboxRoom}
               onJoin={handleJoinSandboxRoom}
+              onRejoin={roomDocOnServer() ? handleRejoinSandboxRoom : undefined}
+              onRejoinByPin={roomDocOnServer() ? () => setRejoinByPin(true) : undefined}
             />
           </div>
         </div>
@@ -757,11 +836,43 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
       {/* Design note #1114: the width cap.      {/* Design note #1114: the width cap. The HEADER stays full-bleed above it -- its own background is a
           band across the window and capping it would leave two stripes of root either side -- so the cap
           wraps everything below instead, which is the part that actually stretches. */}
+      {/* ==================================================================
+           DESIGN NOTE 1360: THE CARDS LIVE AT THE ROOT, NOT IN THE SCENE
+          ==================================================================
+          REPORTED: on the "Rejoin a game" card "they try clicking Rejoin or anything else on the screen and
+          nothing happens (the cursor doesn't even switch to indicate clickability)". No `[seat]` line in the
+          console: the clicks never reached the buttons.
+          `sceneClip` IS `pointer-events: none` (#1131, so the photograph does not swallow the footer's clicks)
+          and the value INHERITS -- a `position: fixed` card mounted inside it is a card nobody can click. Both
+          cards sat there because they were written beside the bar that opens them. They sit here now, outside
+          the scene, and each card's backdrop says `pointerEvents: "auto"` itself so no ancestor can do this
+          to them again. Enter "worked" only because the PIN field had focus and resubmitted the lookup. */}
+      {rejoinByPin && (
+        <RejoinByPinCard
+          onClose={() => setRejoinByPin(false)}
+          onRejoinByCode={() => {
+            setRejoinByPin(false);
+            setSandboxRoomError("Type the room code, then press Rejoin seat.");
+          }}
+        />
+      )}
+      {/* Design note #1352: the PIN card over the room's roster, from the lobby. */}
+      {rejoin && (
+        <SeatPinModal
+          mode="rejoin"
+          roomCode={rejoin.code}
+          localPlayerId={localPlayerId()}
+          players={rejoin.players}
+          onAdopt={(code) => writeSandboxResume(code)}
+          onClose={() => setRejoin(null)}
+        />
+      )}
+
       <div style={styles.content}>
 
       {/* Honest, specific banners -- never a silently empty screen. Each
           names what is missing and what still works without it. */}
-      {!isFirebaseConfigured() && <Banner tone="error" text={firebaseError ?? "Firebase is not configured."} />}
+      {!isBackendConfigured() && <Banner tone="error" text={backendError ?? "The game server is not configured."} />}
       {/* ==================================================================
            DESIGN NOTE 1114: A STATUS, NOT A WARNING
           ==================================================================

@@ -24,7 +24,7 @@ const APP = readStripped("App.tsx");
 const gate = sliceBetween(
   APP,
   "const boardNow = sandboxStateRef.current;",
-  'setSandboxRoomError("It is not your turn.");',
+  "setSandboxRoomError(TURN_REFUSAL);", // #1407: the one wording, named
 );
 
 describe("the client's turn gate, #1231", () => {

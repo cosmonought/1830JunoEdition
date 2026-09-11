@@ -61,9 +61,10 @@ describe("every token's answer travels (design note #885)", () => {
     expect(result).toEqual([[1, 0]]);
   });
 
-  it("omits somebody else's free token rather than guessing", () => {
-    /* THIS PRESIDENT IS NOT CHOOSING FOR THEM, and inventing an index would be #878's bug in a third hat.
-       The reducer leaves an unnamed token where the chain recorded it. */
+  it("fills in somebody else's free token with the same choice (design note #1400)", () => {
+    /* REPORTED: N&W upgrading ERIE's unbuilt home got one pass of rotations, ERIE's marker stuck in one city.
+       The corporation laying the tile places the tokens on it -- for connectivity's sake everywhere else
+       (#880), and by choice where connectivity says nothing. #885's "not choosing for them" is reversed. */
     const result = tokenLandingsFor({
       plan: plan([
         { companyId: 1, toCityIndex: 0 },
@@ -72,7 +73,19 @@ describe("every token's answer travels (design note #885)", () => {
       actingCompanyId: 1,
       chosenCity: 1,
     });
-    expect(result).toEqual([[1, 0]]);
+    expect(result).toEqual([
+      [1, 0],
+      [2, 1],
+    ]);
+  });
+
+  it("still omits a free token when no choice has been made yet", () => {
+    const result = tokenLandingsFor({
+      plan: plan([{ companyId: 2, toCityIndex: null }]),
+      actingCompanyId: 1,
+      chosenCity: undefined,
+    });
+    expect(result).toEqual([]);
   });
 
   it("says nothing when there is no plan", () => {

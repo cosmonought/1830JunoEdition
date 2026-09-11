@@ -46,6 +46,18 @@
 // an ordinary turn like any other -- authored by the player, undoable, indistinguishable after the fact from
 // a pass they clicked. That is deliberate: the table should not be able to tell who was watching.
 //
+// ==================================================================
+//  DESIGN NOTE 1335: THE PRESIDENCY IS A TOGGLE AFTER ALL
+// ==================================================================
+//
+// RULED (T05 20, 8 September): "let players toggle the Auto-Pass option when a presidency is tied." #717's
+// guarantee above stands as the DEFAULT -- on, and first in the list -- but it is a switch now, not a wall. A
+// player who is content to let a tied presidency ride (they cannot afford the share; they want out of the
+// company; they are passing the round on purpose) was being refused a convenience in the name of protecting
+// them from a choice they had already made. The check itself is unchanged and still reads the board rather
+// than the diff; only who decides whether it runs has moved. Off, the modal's Start button is live even while
+// a presidency is exposed; on, it is refused there as before, with the switch named as the way past.
+//
 // See docs/ai_architecture/state_machine.md, autoPass.ts #717.
 
 import type { GameStateResponse } from "./gameState";
@@ -54,6 +66,8 @@ import type { GameStateResponse } from "./gameState";
 const SHARE_PERCENT = 10;
 
 export interface AutoPassConditions {
+  /** #1335: wake while a presidency of theirs is one purchase from being taken. Default on. */
+  presidencyThreatened?: boolean;
   /** Wake when shares are sold into ANY corporation this player holds. */
   saleInHeld: boolean;
   /** Wake when shares are sold into one they PRESIDE over. Narrower, and useful without the first. */
@@ -61,9 +75,15 @@ export interface AutoPassConditions {
 }
 
 export const DEFAULT_AUTO_PASS_CONDITIONS: AutoPassConditions = {
+  presidencyThreatened: true,
   saleInHeld: true,
   saleInPresided: true,
 };
+
+/** #1335: the switch defaults ON, so an older arm without the field keeps #717's guarantee. */
+export function guardsPresidency(conditions: AutoPassConditions | undefined): boolean {
+  return conditions?.presidencyThreatened !== false;
+}
 
 /** What one corporation looked like when the instruction was given. */
 interface CompanySnapshot {
@@ -246,7 +266,8 @@ export function autoPassDecision(
     };
   }
 
-  const exposed = exposedPresidencies(state, arm.player);
+  // #1335: the guard runs unless the player switched it off.
+  const exposed = guardsPresidency(arm.conditions) ? exposedPresidencies(state, arm.player) : [];
   if (exposed.length > 0) {
     const list = exposed.join(", ");
     return {

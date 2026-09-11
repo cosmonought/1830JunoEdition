@@ -25,6 +25,7 @@
 // fault and is not.
 
 import {
+  PRESENCE_HEARTBEAT_MS,
   PRESENCE_PUBLISH_MS,
   PRESENCE_STALE_MS,
   isPresenceFresh,
@@ -231,26 +232,65 @@ describe("presence stays outside the one source of truth", () => {
     expect(read("sandboxPresence.ts")).toContain("appendSandboxAction");
   });
 
-  it("writes to its own subcollection rather than the room document", () => {
-    /* The room doc is mutated inside a TRANSACTION by `upsertSandboxPlayer`. Publishing twice a second into
-       the same document would contend with joins and colour changes, and re-render every waiting-room
-       subscriber on a game they are not in. */
+  it("is its own record on the socket rather than the room document (#1361a)", () => {
+    /* The room doc is what `upsertSandboxPlayer` writes. Publishing twice a second into the same document
+       would rewrite the roster under joins and colour changes, and re-render every waiting-room subscriber
+       on a game they are not in. So presence is its own frame kind, and the transport never touches
+       `writeRoomDoc`. */
     const transport = code("sandboxPresence.ts");
-    expect(transport).toContain('SANDBOX_PRESENCE_SUBCOLLECTION = "presence"');
-    expect(transport).toContain("SANDBOX_PRESENCE_SUBCOLLECTION,");
+    expect(transport).toContain("sendPresence(");
+    expect(transport).toContain("subscribePresence(");
+    expect(transport).not.toContain("writeRoomDoc");
+    expect(transport).not.toContain("firebase");
   });
 
   it("overwrites per seat rather than accumulating", () => {
-    /* Presence is a CURRENT VALUE, not an event. `addDoc` would build an unbounded history of intentions that
-       nothing ever deletes. */
-    const transport = code("sandboxPresence.ts");
-    expect(transport).toContain("setDoc(");
-    expect(transport).not.toContain("addDoc(");
+    /* Presence is a CURRENT VALUE, not an event: the server keys one entry per seat and the newest write
+       wins, and a clear is a `null` state rather than a second kind of record. */
+    const server = code("../../../server/src/gameServer.ts");
+    expect(server).toContain("seats.set(actor, { ...(frame.state as PresenceState), playerId: actor, at: Date.now() });");
+    expect(server).toContain("seats.delete(actor);");
+    expect(code("sandboxPresence.ts")).toContain("sendPresence(roomCode, playerId, null);");
   });
 
   it("clears a seat when its turn ends rather than waiting for staleness", () => {
     // Staleness is the safety net for a client that vanished, not the mechanism for a turn that ended cleanly.
     expect(read("sandboxPresence.ts")).toContain("export async function clearPresence");
     expect(read("../App.tsx")).toContain("void clearPresence(room, me)");
+  });
+});
+
+/* ==================================================================
+    DESIGN NOTE 1397 (harness): THE WATCHER'S CHIPS STAY PRICED
+   ================================================================== */
+describe("the president's figure reaches every screen (design note #1397)", () => {
+  const read = (rel: string) => {
+    const fs = require("fs") as typeof import("fs");
+    const path = require("path") as typeof import("path");
+    return fs.readFileSync(path.join(__dirname, rel), "utf8");
+  };
+  const code = (rel: string) => read(rel).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+
+  it("the server stamps `at` on its own clock and sends `now` with every frame", () => {
+    const server = code("../../../server/src/gameServer.ts");
+    expect(server).toContain("now: Date.now(),");
+    expect(server).toContain("send(socket, presenceFrame(frame.room) as never);");
+  });
+
+  it("the client rebases `at` into its own clock from the server's `now`", () => {
+    expect(read("sandboxPresence.ts")).toContain("parsed.push({ ...state, at: received - Math.max(0, serverNow - state.at) });");
+  });
+
+  it("a publish refused by the floor is sent at the end of the window, and a heartbeat keeps the entry fresh", () => {
+    const app = read("../App.tsx");
+    expect(app).toContain("timers.push(setTimeout(publish, wait));");
+    expect(app).toContain("const heartbeat = setInterval(publish, PRESENCE_HEARTBEAT_MS);");
+    expect(PRESENCE_HEARTBEAT_MS * 2).toBeLessThan(PRESENCE_STALE_MS);
+  });
+
+  it("the published value is not gated on this client's hex names", () => {
+    const chips = read("watcherRouteChips.ts");
+    expect(chips).toContain("(hexes.length >= 2 ? valueFor?.(train.trainIndex) : undefined) ??");
+    expect(chips).toContain("(labels.length >= 2 ? priceRoute(labels) : null),");
   });
 });

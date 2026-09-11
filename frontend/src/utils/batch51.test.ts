@@ -169,8 +169,13 @@ describe("an action states its own treasury movement", () => {
     }
     expect(LOG.split("treasurySuffix(context,").length - 1).toBeGreaterThan(0);
     // And it answers FALSE for treasury movers whose sentence says nothing about a balance (#750 keeps those).
-    expect(sentenceStatesTreasury({ DeclareDividends: {} } as never)).toBe(false);
-    expect(sentenceStatesTreasury({ BuyStock: {} } as never)).toBe(false);
+    // #1406: DeclareDividends joined the arms -- its sentence now carries the pool slice and the balance --
+    // so the negative control is the round opener, whose private payouts have their own lines.
+    expect(sentenceStatesTreasury({ DeclareDividends: {} } as never)).toBe(true);
+    expect(sentenceStatesTreasury({ PassTurn: {} } as never)).toBe(false);
+    /* #1343: `BuyStock` moved to TRUE. The only treasury a share purchase moves is the float's capitalisation,
+       and the float's one line -- at the home placement, or `describeFloat` for a herald home -- states it. */
+    expect(sentenceStatesTreasury({ BuyStock: {} } as never)).toBe(true);
     expect(sentenceStatesTreasury({ PassTurn: {} } as never)).toBe(false);
   });
 });

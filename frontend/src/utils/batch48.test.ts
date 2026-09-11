@@ -146,7 +146,9 @@ describe("the mark takes the cheapest train and pays half", () => {
        is its own step because the event is neither Run Routes nor Dividends, and filing it under either would
        credit a step that did not do it. */
     expect(APP).toContain('operating_sub_phase: "Yellow Sign" as never');
-    expect(APP).toContain("`The ${taken}-train disappeared. $${award} found.`");
+    /* #1375: the receipt is now the tail of the sign's own line -- the flavour, the ruled appendix, and
+       what the president did with the gold -- rather than a bare "$X found." under the stamp. */
+    expect(APP).toContain("President ${presidentName} added $${award} to the company's treasury. Treasury $${treasuryBefore} → $${treasuryBefore + award}.");
   });
 });
 
@@ -155,14 +157,17 @@ describe("the reducer applies what the shell decided", () => {
     /* THE REPLAY TRAP. By the time a rebuild reaches this action the fleet has moved on, so a reducer that
        re-derived "the cheapest train" would take a DIFFERENT train than the game did -- #902's "an old log
        replays to the game it was played as", broken. */
-    expect(REDUCER).toContain("const { protocol_id, stage, model, cash } = msg.YellowSignEvent;");
+    expect(REDUCER).toContain("const { protocol_id, stage, model, cash, revenue_seed } = msg.YellowSignEvent;");
   });
 
-  it("zeroes both revenue fields, not just the modified one", () => {
-    /* "IT RECEIVES NO STANDARD ROUTE REVENUE FOR THIS SUBMISSION." `printed_route_revenue` is what a later
-       dispatch accumulates onto (#941), so leaving it would pay for these routes on the corporation's NEXT
-       turn -- the silent double-payment #934 was reported for. */
-    expect(REDUCER).toContain('last_route_revenue: "0",\n                printed_route_revenue: "0",');
+  it("takes the taken train's route out of BOTH revenue fields, and zeroes both on a seedless message", () => {
+    /* #1046: "IT RECEIVES NO STANDARD ROUTE REVENUE FOR THIS SUBMISSION." #1375 RULED SINCE: only the taken
+       train's route goes; the rest of the fleet's run stands. `printed_route_revenue` is what a later
+       dispatch accumulates onto (#941), so both fields are rewritten together, as before. A message without
+       the seed is one written under #1046 and keeps the zeroing it was played with. */
+    expect(REDUCER).toContain("const kept = revenue_seed === undefined ? null : runWithoutTrain(company, model, {");
+    expect(REDUCER).toContain("last_route_revenue: String(kept ? kept.adjusted : 0),");
+    expect(REDUCER).toContain("printed_route_revenue: String(kept ? kept.printed : 0),");
   });
 
   it("adds the award to the treasury and sets the flag", () => {
@@ -299,7 +304,9 @@ describe("the haunting still plays alone", () => {
   it("sends the mechanics through the log rather than mutating locally", () => {
     /* THE ARCHITECTURAL LINE THIS BATCH CROSSED. A shell that changed a corporation directly would change one
        browser's board, be lost on reload, and be unreachable by Undo. */
-    expect(APP).toContain('runGameplayAction("YellowSignEvent"');
+    // #1375: multi-line call now, with `{ silentInLog: true }` -- the narration writes the line itself.
+    expect(APP).toContain('"YellowSignEvent",\n                    {\n                      YellowSignEvent: {');
+    expect(APP).toContain("{ silentInLog: true },");
     expect(APP).not.toContain("setGameState((prev) => ({ ...prev, public_companies");
   });
 });

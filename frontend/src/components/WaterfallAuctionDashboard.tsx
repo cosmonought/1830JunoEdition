@@ -17,6 +17,8 @@ import { FONT_SIZE, RADIUS, VIEWPORT_RADIUS } from "../styles/typography";
 import { privateClosureTier } from "../utils/purchaseWarnings";
 import { PRIVATE_COMPANY_CATALOG } from "../utils/privateCatalog";
 import { SpecialPowerBlock, CARD_SECTION_CAPTION } from "./SpecialPowerBlock";
+import { seatColor } from "../utils/playerLabels";
+import { washedPlayerSurface } from "../styles/palette";
 import {
   auctionFunds,
   bidRejectionReason,
@@ -50,6 +52,7 @@ import type {
   WaterfallPrivateStatus,
   WaterfallStateResponse,
 } from "../utils/gameState";
+import { privateOrdinal } from "../utils/privateOrdinal";
 
 /* Design note #1184: the increment and the minimum moved to `auctionEscrow`, where the reducer can also
    reach them. This file used to hold both under a comment calling itself a "hand-kept mirror" of the
@@ -204,6 +207,12 @@ export function WaterfallAuctionDashboard({
      waterfall's whole structure is its ascending face-value order. Merged and sorted by face value, so
      every card holds its slot and simply greys out when won. */
   const soldPrivates = (gameState?.private_companies ?? []).filter((priv) => priv.owner !== null);
+  /* #1369: the bidder's seat colour, by turn-order index -- the same resolver the player cards use, so the
+     stripe on a bid row is the stripe on that player's card. */
+  const seatColorFor = (address: string): string | null => {
+    const index = (gameState?.player_addresses ?? []).indexOf(address);
+    return index === -1 ? null : seatColor(address, index);
+  };
 
   type GridEntry =
     | { kind: "live"; faceValue: number; priv: WaterfallPrivateStatus }
@@ -286,6 +295,7 @@ export function WaterfallAuctionDashboard({
                 key={entry.priv.private_id}
                 priv={entry.priv}
                 playerLabel={playerLabel}
+                seatColorFor={seatColorFor}
                 connectedWalletAddress={connectedWalletAddress}
                 miniAuction={miniAuction}
                 sessionReady={sessionReady}
@@ -356,6 +366,7 @@ export default WaterfallAuctionDashboard;
 
 function PrivateCard({
   playerLabel,
+  seatColorFor,
   priv,
   connectedWalletAddress,
   miniAuction,
@@ -374,6 +385,8 @@ function PrivateCard({
   /** Design note #31: the card renders bidder names, so it needs the same
    *  resolver the dashboard around it uses. */
   playerLabel?: (address: string) => string | null;
+  /** #1369: the bidder's seat colour, for the bid row's stripe and wash. */
+  seatColorFor: (address: string) => string | null;
   miniAuction: WaterfallMiniAuctionStatus | null;
   sessionReady: boolean;
   isMyMainTurn: boolean;
@@ -512,7 +525,7 @@ function PrivateCard({
              is how players refer to the Delaware & Hudson -- and the waterfall IS that order, so the grid was
              showing a sequence with its index filed off. */}
           <span style={styles.privateCardName}>
-            <span style={styles.privateCardNumber}>{priv.private_id}.</span> {priv.name}
+            <span style={styles.privateCardNumber}>{privateOrdinal(priv.private_id)}.</span> {priv.name}
           </span>
           <div style={styles.badgeSlot}>
             {priv.is_lowest_offered && <span style={styles.lowestBadge}>LOWEST OFFER</span>}
@@ -666,13 +679,29 @@ function PrivateCard({
             sortedBids.map((bid) => {
               const isLeader = isCompetingInMiniAuction && miniAuction?.high_bidder === bid.bidder;
               const isTurn = isCompetingInMiniAuction && miniAuction?.current_turn === bid.bidder;
+              /* ==================================================================
+                  DESIGN NOTE 1369: A BID IS A SEAT, AND IT WEARS THE SEAT'S COLOUR
+                 ==================================================================
+                 REPORTED: "For player bids in the Private Auction, right now it's just a plain text line for
+                 each player which is hard to see." A monospace line in body ink at the small size, under the
+                 special powers -- readable, and not findable. The seat colour is the one mark every other
+                 surface already uses for "which player" (the cards, the stripe, the cash slide-out), so the
+                 row takes it: a stripe down the left edge and the same wash the player card wears (#1347),
+                 the name in the card's face rather than the code face, and the figure a size up. The row
+                 the viewer holds keeps an outline; the mini-auction's TURN tag and leading star are
+                 unchanged. */
+              const stripe = seatColorFor(bid.bidder);
               return (
                 <div
                   key={bid.bidder}
                   ref={isTurn ? turnRowRef : undefined}
-                  style={
-                    bid.bidder === connectedWalletAddress ? styles.bidRowEntryOwn : styles.bidRowEntry
-                  }
+                  style={{
+                    ...styles.bidRowEntry,
+                    ...(stripe
+                      ? { borderLeftColor: stripe, backgroundColor: washedPlayerSurface(CARD_SURFACE, stripe) }
+                      : null),
+                    ...(bid.bidder === connectedWalletAddress ? styles.bidRowEntryOwn : null),
+                  }}
                 >
                   <span style={styles.bidRowName}>
                     {nameFor(bid.bidder, playerLabel, 6, 4)}
@@ -886,7 +915,7 @@ function SoldPrivateCard({
     <div style={styles.privateCardSold}>
       <div style={styles.privateCardHeader}>
         <span style={styles.privateCardName}>
-          <span style={styles.privateCardNumber}>{sold.private_id}.</span> {sold.name}
+          <span style={styles.privateCardNumber}>{privateOrdinal(sold.private_id)}.</span> {sold.name}
         </span>
       </div>
       <div style={styles.privateCardFigures}>
@@ -1259,29 +1288,30 @@ const styles: Record<string, React.CSSProperties> = {
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
   },
+  /* #1369: a seat row, not a code line -- stripe left, washed paper, the name in the card face. */
   bidRowEntry: {
     display: "flex",
     alignItems: "center",
     gap: "8px",
     justifyContent: "space-between",
     fontSize: FONT_SIZE.small,
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+    fontWeight: 700,
     color: CARD_INK,
-    padding: "2px 6px",
-    borderRadius: RADIUS.control,
+    padding: "4px 8px 4px 9px",
+    borderLeft: `4px solid ${CARD_DIVIDER}`,
+    borderRadius: `0 ${RADIUS.control} ${RADIUS.control} 0`,
+    backgroundColor: CARD_SURFACE_MUTED,
   },
+  /* The viewer's own row: the same seat row, outlined so it is found without reading. */
   bidRowEntryOwn: {
-    display: "flex",
-    justifyContent: "space-between",
-    fontSize: FONT_SIZE.small,
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-    color: "#14522f",
-    backgroundColor: "#dcf0e2",
-    padding: "2px 6px",
-    borderRadius: RADIUS.control,
+    boxShadow: `inset 0 0 0 1px ${CARD_INK_MUTED}`,
   },
   bidAmount: {
-    fontWeight: 700,
+    fontSize: FONT_SIZE.body,
+    fontWeight: 800,
+    fontVariantNumeric: "tabular-nums",
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+    flex: "none",
   },
   privateCardRevenue: {
     fontSize: FONT_SIZE.small,

@@ -13,10 +13,12 @@
 import {
   SEAT_COLORS,
   SEAT_COLOR_NAMES,
+  resolveSeatColors,
   seatColor,
   setRoomColors,
   takenSeatColors,
 } from "./playerLabels";
+import { readStripped } from "./sourceScan";
 import { CORPORATION_LIVERY_COLORS } from "../styles/corporationLivery";
 
 afterEach(() => setRoomColors({}));
@@ -50,9 +52,9 @@ function cie76(a: string, b: string): number {
 
 describe("the palette", () => {
   it("seats every 1830 table without repeating", () => {
-    // Six is the maximum, so the palette must not wrap before it.
-    expect(SEAT_COLORS).toHaveLength(6);
-    expect(new Set(SEAT_COLORS).size).toBe(6);
+    // Seven is the maximum (the Level Playing Field, #1320), so the palette must not wrap before it (#1344).
+    expect(SEAT_COLORS).toHaveLength(7);
+    expect(new Set(SEAT_COLORS).size).toBe(7);
   });
 
   it("names every colour, for the picker's accessible labels", () => {
@@ -134,8 +136,8 @@ describe("seatColor", () => {
   it("gives six seats six different colours", () => {
     /* The property, not the mapping. `seatColor` is free to change which
        index gets which hue; it is not free to hand two seats the same one. */
-    const assigned = Array.from({ length: 6 }, (_, i) => seatColor(`p-${i}`, i));
-    expect(new Set(assigned).size).toBe(6);
+    const assigned = Array.from({ length: 7 }, (_, i) => seatColor(`p-${i}`, i));
+    expect(new Set(assigned).size).toBe(7);
   });
 
   it("prefers a seat's own choice", () => {
@@ -175,5 +177,41 @@ describe("takenSeatColors", () => {
     // Assigned colours must NOT block: a seat that never opened the picker
     // has no claim on the hue it happens to be wearing.
     expect(takenSeatColors().size).toBe(0);
+  });
+});
+
+/* Design note #1337 (harness): every seat a colour nobody else has. */
+describe("#1337: the roster resolves to distinct colours", () => {
+  it("hands a colourless seat the first free colour, not the one an earlier choice already took", () => {
+    /* THE REPORTED CASE. Seat 0 never chose and was drawn slate blue by index; seat 2 CHOSE slate blue and
+       the picker allowed it. Resolved, the choice is honoured and the colourless seat moves on. */
+    const out = resolveSeatColors([{ id: "a" }, { id: "b", color: SEAT_COLORS[1] }, { id: "c", color: SEAT_COLORS[0] }]);
+    expect(out.c).toBe(SEAT_COLORS[0]);
+    expect(out.b).toBe(SEAT_COLORS[1]);
+    expect(out.a).toBe(SEAT_COLORS[2]);
+    expect(new Set(Object.values(out)).size).toBe(3);
+  });
+
+  it("gives the earlier seat a colour two seats both wrote", () => {
+    const out = resolveSeatColors([{ id: "a", color: SEAT_COLORS[3] }, { id: "b", color: SEAT_COLORS[3] }]);
+    expect(out.a).toBe(SEAT_COLORS[3]);
+    expect(out.b).not.toBe(SEAT_COLORS[3]);
+  });
+
+  it("is distinct for a full table of seven", () => {
+    const out = resolveSeatColors(["a", "b", "c", "d", "e", "f", "g"].map((id) => ({ id })));
+    expect(new Set(Object.values(out)).size).toBe(7);
+  });
+
+  it("is what the waiting room draws and greys, what SetupGame records, and what the server enforces", () => {
+    const ROOM = readStripped("components/SandboxWaitingRoom.tsx");
+    expect(ROOM).toContain("const resolvedColors = resolveSeatColors(players);");
+    expect(ROOM).toContain("(player) => resolvedColors[player.id] === color && player.id !== localPlayerId,");
+    expect(ROOM).not.toContain("player.color ?? SEAT_COLORS[");
+    expect(readStripped("App.tsx")).toContain("setRoomColors(resolveSeatColors(msg.SetupGame.players));");
+    const fs = require("fs") as typeof import("fs");
+    const path = require("path") as typeof import("path");
+    const SERVER = fs.readFileSync(path.join(__dirname, "..", "..", "..", "server", "src", "gameServer.ts"), "utf8");
+    expect(SERVER).toContain("existing.players.some((entry, index) => index !== at && entry.color === wanted)");
   });
 });

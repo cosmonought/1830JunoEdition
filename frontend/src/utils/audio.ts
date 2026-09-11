@@ -54,13 +54,42 @@ export interface RadioStation {
   id: string;
   name: string;
   url: string;
+  /* ==================================================================
+      DESIGN NOTE 1359: A STATION IS A LIST OF DOORS, NOT ONE
+     ==================================================================
+     REPORTED: "The GrooveSalad station has stopped playing." The URL in the table was already the one asked
+     for -- `ice1.somafm.com` -- so the fault was not the address but the HOST: SomaFM serves every channel from
+     several ice servers precisely because any one of them drops out, and its own playlists list them in turn.
+     A single-URL station has no next door to try, so a dropped host is a dead station until somebody edits
+     this file. `fallbacks` are the sibling hosts; `useRadioStream` walks them on `error` while the radio is
+     on, and starts again from the first on the next press. */
+  fallbacks?: readonly string[];
 }
 
+/* ==================================================================
+    DESIGN NOTE 1362: GROOVE SALAD IS GONE, AND WHY IT WAS NEVER A CORS PROBLEM
+   ==================================================================
+   REPORTED: `OpaqueResponseBlocking` in the console for every SomaFM host, "causing the cycler to fail
+   through all channels" -- with a request to drop `crossOrigin` and any Web Audio routing. Neither existed:
+   `useRadioStream` has always been a bare `new Audio()` with `play()` on the click. What the console was
+   describing was a 403. Every SomaFM ice server answered `403 Forbidden` to this network -- to the app, to a
+   bare address-bar visit, and to SomaFM's OWN player on somafm.com -- while the same URL streamed from
+   elsewhere. Their direct-link page says it plainly: the links "are not for use in video games ...
+   Unauthorized use will be blocked." A game table on a public tunnel is that. Firefox reports the HTML body
+   of a 403 on a media request as an opaque-response block, which is how a refusal read as a CORS fault.
+   SO THE STATION IS REMOVED rather than routed around: #1359's fallbacks were for a HOST dropping out, not
+   for a broadcaster declining the audience. The three that replace it, and ChillHop's higher-rate stream,
+   were each checked to play from the app page before being written here.
+   `https` THROUGHOUT, even where the supplied link was `http`: the page is served over TLS and a plain-http
+   stream is mixed content, blocked before the element ever sees it (#1115). Every one of these hosts answers
+   the same path over TLS. */
 export const RADIO_STATIONS: readonly RadioStation[] = [
   { id: "neta", name: "Neta FM", url: RADIO_STREAM_URL },
-  { id: "chillhop", name: "ChillHop", url: "https://fluxmusic.api.radiosphere.io/channels/chillhop/stream.mp3" },
-  { id: "groovesalad", name: "Groove Salad", url: "https://ice1.somafm.com/groovesalad-128-mp3" },
+  { id: "chillhop", name: "ChillHop", url: "https://streams.fluxfm.de/Chillhop/mp3-320/streams.fluxfm.de/" },
+  { id: "funkyradio", name: "Funky Radio", url: "https://funkyradio.streamingmedia.it/play.mp3" },
   { id: "ontheroad", name: "On the Road", url: "https://stream.rcs.revma.com/cgvrymb6p98uv" },
+  { id: "realcountry", name: "Real Country", url: "https://listen.181fm.com/181-realcountry_64k.aac" },
+  { id: "thepower", name: "The Power", url: "https://listen.181fm.com/181-powerexplicit_64k.aac" },
 ] as const;
 
 const STATION_STORAGE_KEY = "1830juno.radio_station.v1";
@@ -245,7 +274,22 @@ let duckDepth = 0;
 let activeDuck = 1;
 let fadeTimer: ReturnType<typeof setInterval> | null = null;
 
-/** The radio calls this once; anything that plays a sound never has to know it happened. */
+/** The radio calls this once per element; anything that plays a sound never has to know it happened.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 1365: A NEWCOMER INHERITS THE DUCK THAT IS ALREADY HELD
+ *  ==================================================================
+ *  REPORTED: "The audio did not duck for the intro video anymore." Against the real hook the ordinary case
+ *  ducks -- radio up, titles mount, the element drops to 20% and stays there -- so the fault is in an ORDER
+ *  this registry did not handle: an element registered WHILE a duck is held started at the full mix. Two
+ *  ways to get there, both real: the station is changed during the titles (#1139 builds a fresh element per
+ *  station), and the titles' effect runs before the radio's own mount effect (a child's effects run before
+ *  its parent's in the same commit). In both, `duckRadio` had already set the OLD target down, the new
+ *  target was built at `radioVolume`, and nothing told it a hold was in force.
+ *  SO REGISTERING APPLIES THE CURRENT LEVEL. The registry knows whether anything is ducking and how deep;
+ *  the element it is handed is set to that at once, the same as if the duck had arrived a moment later.
+ *  `buildElement` still sets `radioVolume` itself for the undisturbed case, and this overwrites it only
+ *  when there is a hold to honour. */
 export function registerDuckTarget(target: DuckTarget | null): void {
   duckTarget = target;
   if (target === null) {
@@ -254,7 +298,9 @@ export function registerDuckTarget(target: DuckTarget | null): void {
       clearInterval(fadeTimer);
       fadeTimer = null;
     }
+    return;
   }
+  if (duckDepth > 0) target.setVolume(radioVolume * activeDuck);
 }
 
 function stopFade(): void {
@@ -430,9 +476,14 @@ export interface RadioStream {
  *
  *  THE ELEMENT IS BUILT ONCE AND NOT ON EVERY TOGGLE, so the mount effect owns its teardown. Constructing a
  *  fresh `Audio` per start would leak one element per click into whatever the browser keeps them in. */
-export function useRadioStream(url: string): RadioStream {
+export function useRadioStream(url: string, fallbacks: readonly string[] = []): RadioStream {
   const elementRef = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
+  /* Design note #1359: the doors, in order, and which one this element is standing at. Reset to the first
+     on every start and every station change; advanced by the element's own `error`. */
+  const doorsRef = useRef<readonly string[]>([url, ...fallbacks]);
+  doorsRef.current = [url, ...fallbacks];
+  const doorRef = useRef(0);
 
   /* ==================================================================
       DESIGN NOTE 1139: A GENERATION TOKEN, AND A FRESH ELEMENT TO GO WITH IT
@@ -472,6 +523,21 @@ export function useRadioStream(url: string): RadioStream {
     const element = new Audio();
     // Nothing is fetched until a `src` is attached, which is the autoplay-safe default stated as a property.
     element.preload = "none";
+    /* Design note #1359: a host that fails hands over to the next. Only while this element is the live one
+       (the token check inside `playQuietly` is the same guard) and only while a door remains; the last door's
+       failure is left to stand, as it always was. `stalled` is deliberately NOT a trigger -- it fires on
+       ordinary rebuffering. */
+    element.addEventListener("error", () => {
+      if (elementRef.current !== element) return;
+      const next = doorRef.current + 1;
+      if (next >= doorsRef.current.length) return;
+      doorRef.current = next;
+      // eslint-disable-next-line no-console
+      console.info(`[radio] ${element.src || "(stream)"} failed; trying ${doorsRef.current[next]}`);
+      element.src = doorsRef.current[next];
+      const token = stationToken.current;
+      playQuietly(element, () => stationToken.current === token);
+    });
     /* Design note #1013: the bed sits UNDER the whistle. Design note #1074: the CURRENT level, not the
        default -- a reconnect, or a station change, must not undo the slider. */
     element.volume = radioVolume;
@@ -490,7 +556,19 @@ export function useRadioStream(url: string): RadioStream {
     elementRef.current = element;
     return () => {
       registerDuckTarget(null);
-      retire(element);
+      /* ==================================================================
+          DESIGN NOTE 1366: THE UNMOUNT RETIRES THE ELEMENT THAT IS PLAYING, NOT THE ONE IT BUILT
+         ==================================================================
+         REPORTED: "the music didn't stop when I clicked 'Return to Lobby.' When I re-entered the music player
+         showed it was muted but the music kept playing." This cleanup retired `element` -- the one this
+         effect built on mount -- and #1139 replaces the element on every station change. A player who had
+         picked a station was therefore listening to an element this closure had never heard of; the original
+         was retired (already silent), the live one played on with nothing holding a reference to it, and the
+         next shell built a fresh element that started paused. Hence "muted but playing".
+         SO THE REF IS RETIRED, AND THE ORIGINAL AS WELL if it is a different object -- belt and braces for an
+         element that was swapped out but whose retirement did not complete. */
+      retire(elementRef.current);
+      if (elementRef.current !== element) retire(element);
       elementRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -508,6 +586,7 @@ export function useRadioStream(url: string): RadioStream {
         return false;
       }
       const token = (stationToken.current += 1);
+      doorRef.current = 0; // #1359: a fresh start tries the first door again
       element.src = url;
       playQuietly(element, () => stationToken.current === token);
       return true;
@@ -541,6 +620,7 @@ export function useRadioStream(url: string): RadioStream {
     /* RETIRED AFTER THE REPLACEMENT IS REGISTERED, so the duck registry never points at a dead element for
        even one statement -- a cue firing in that gap would otherwise duck nothing. */
     retire(outgoing);
+    doorRef.current = 0; // #1359
     element.src = url;
     playQuietly(element, () => stationToken.current === token);
     // `playing` is deliberately NOT a dependency: this reacts to the STATION changing, not to the

@@ -157,9 +157,26 @@ export function watcherTrainDrafts(input: {
          banked figure on the path would hide it in exactly the case it was added for.
          `?? priceRoute` STILL KEEPS every pre-#1021 presence document rendering as it did, and an old log
          with no breakdown falls through both new branches to reach it. */
+      /* ==================================================================
+          DESIGN NOTE 1397: THE PUBLISHED FIGURE IS NOT GATED ON THIS CLIENT'S HEX NAMES
+         ==================================================================
+         REPORTED, WITH A PICTURE OF "7-Train —": "what other corporations' train chips show during their
+         Run Routes action. I cannot stress how important it is that everyone be able to see this."
+         THE TWO-STOP GATE SAT IN FRONT OF THE PRESIDENT'S OWN NUMBER. `labels` is what THIS client could
+         name of the drafted path; the gate exists so this client does not PRICE a one-stop draft (#498).
+         But `valueFor` is not this client's pricing -- it is the figure the president published beside the
+         path (#1021), and it was being thrown away whenever fewer than two of the path's hexes resolved
+         here: a board this tab has not activated, a hex the draft names by a coordinate this table lacks,
+         a presence frame read before the board swap. The route would still draw (the overlay takes raw
+         coordinates) while the chip beside it said nothing. The president's figure is now gated on the
+         DRAFT'S OWN LENGTH -- the coordinates as published, which is what the overlay draws -- so a one-stop
+         draft still shows the em dash (#498) whatever the channel says, and a two-stop draft shows the
+         president's figure whether or not this tab can name its hexes. Only the local re-pricing keeps the
+         gate on NAMED stops, which is the only thing that gate was ever about. */
       value:
         bankedFor?.(train.trainIndex) ??
-        (labels.length >= 2 ? (valueFor?.(train.trainIndex) ?? priceRoute(labels)) : null),
+        (hexes.length >= 2 ? valueFor?.(train.trainIndex) : undefined) ??
+        (labels.length >= 2 ? priceRoute(labels) : null),
       hexLabels: labels,
       stops: labels.length >= 2 && stopsFor ? stopsFor(labels) : [],
     };

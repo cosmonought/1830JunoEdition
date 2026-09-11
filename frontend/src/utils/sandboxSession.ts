@@ -56,9 +56,10 @@ import {
   isProposeTrainPurchaseMsg,
   isSetBoParMsg,
   isSetupGameMsg,
+  waterfallForRoster,
 } from "./gameSetup";
 import { BO_TICKER, eraForPhase } from "./gameConstants";
-import { applyPrivateExchange } from "./privateExchange";
+import { CA_BONUS_TICKER, CA_PRIVATE_ID, applyPrivateExchange } from "./privateExchange";
 import type { MapGridResponse, MapTileEntry } from "../components/hexContractTypes";
 // Design note #1325: a corporation's home hexes on the board in effect (two for the LPF's C&O).
 import { homeHexesFor } from "../components/hexContractTypes";
@@ -118,6 +119,7 @@ import {
 } from "./doubleCertificate";
 // Design note #1320: the Level Playing Field's entities, applied by the `SetupGame` arm.
 import { JK_PRIVATE_ID, withLevelPlayingFieldEntities } from "./levelPlayingField";
+import { runWithoutTrain } from "./yellowSign";
 // Design note #1323: the Kanawha Licence -- its purchase, its grant and the hex it unlocks.
 import {
   JK_TILE_ABILITY_KEY,
@@ -132,6 +134,7 @@ import {
 } from "./kanawhaLicense";
 import { tileCitySlotCounts } from "../components/TileGraphics";
 import { DIESEL_TIER, dieselExchangeCostFor, dieselExchangeRefusal } from "./dieselExchange";
+import { numberedPrivate } from "./privateOrdinal";
 
 /** A nominal share price, applied so a `BuyStock`/`SellStock` visibly moves
  *  the cash column. NOT a computed price -- see design note 0. The real
@@ -2383,7 +2386,118 @@ export function applySandboxAction(
   return withRules(resolveVariants(variants), () => applySandboxActionOnBoard(state, msg, ctx));
 }
 
+/* ==================================================================
+    DESIGN NOTE 1340: THE REDUCER IS ATOMIC -- THE AUCTION'S CONSEQUENCES SETTLE INSIDE IT
+   ==================================================================
+   RULED: "refactor `applySandboxAction` to be a 100% self-contained, atomic state machine ... A single action
+   dispatched to the reducer must compute the entire state transition before returning."
+
+   WHAT WAS OUTSIDE. `applySandboxWaterfallAction` returned `{waterfall, charges, won, allPassed, markdown}`
+   and two composition layers applied them: `App.tsx` (#261, #303, #334a, #337, #576) and `RoomEngine`
+   (#1192, #1227, #1281). Each was a transcription of the other, and each was found short at least once --
+   #1192 (the engine applied no charges), #1227 (never re-seated), #1281 (never paid the all-pass). "Every
+   consumer must remember" is the property #1197 deleted for the chart; this deletes it for the auction.
+
+   SO THE ATOM RIDES ON THE STATE (`state.waterfall`, #1196's shape) and `applyAuctionStep` below does, in
+   the order `App.tsx` established: advance the atom; charge every listed player (#334a: a cascade charges
+   the lone bidder, not the actor); write each winner as owner and record the settled price (#303); grant the
+   C&A's free PRR share (#576); pay the all-pass private income AFTER the wins (#1281: the $0 branch hands the
+   private on within the same all-pass, and the new owner is owed). Then the chart and the board as before.
+   After the board: `OpenStockRound` closes the atom (#1192a), `SetupGame` re-seats it from the DEALT roster
+   and privates (#1227, #1320) and leaves a delayed auction dealt-but-inactive (#905), and an auction the
+   round has reached is armed (the shell's #905 condition, brought home).
+
+   GATED ON `state.waterfall !== undefined`, exactly as the chart is on `market_positions`: a state that
+   carries no auction gets none of this, so a chain game and every pre-#1340 fixture are untouched.
+
+   THE SUB-REDUCER'S REPORT IS NOW PRIVATE TO THIS FILE. `SandboxWaterfallResult` still exists -- it is how
+   the auction arm talks to this function -- but nothing outside reads its flags. Narration (the "Private
+   Won" line, the markdown, the payout lines) is derived by the shell from the two states, the way every
+   other line has been since #704: "the reducer settles, the shell narrates." */
+function applyAuctionStep(state: GameStateResponse, msg: GameplayExecuteMsg): GameStateResponse {
+  if (!state.waterfall) return state;
+  const result = applySandboxWaterfallAction(state.waterfall, msg, state.player_addresses ?? []);
+  let next: GameStateResponse = { ...state, waterfall: result.waterfall };
+
+  for (const { player, amount } of result.charges) {
+    next = {
+      ...next,
+      player_cash: next.player_cash.map((entry) =>
+        entry.player === player
+          ? { ...entry, cash_vgp: String(Math.max(0, (Number(entry.cash_vgp) || 0) - amount)) }
+          : entry,
+      ),
+    };
+  }
+
+  for (const { privateId, player, price } of result.won) {
+    next = {
+      ...next,
+      private_companies: next.private_companies.map((entry) =>
+        entry.private_id === privateId ? { ...entry, owner: player, settled_price: price } : entry,
+      ),
+    };
+    if (privateId === CA_PRIVATE_ID) {
+      const prr = next.public_companies.find((c) => c.ticker === CA_BONUS_TICKER);
+      if (prr) {
+        next = applyPrivateExchange(next, {
+          ok: true,
+          privateId,
+          companyId: prr.company_id,
+          ticker: CA_BONUS_TICKER,
+          player,
+          source: prr.ipo_pool_percentage >= 10 ? "Ipo" : "Bank",
+          keepOpen: true,
+        });
+      }
+    }
+  }
+
+  if (result.allPassed) {
+    next = applyPrivateRevenue(next)?.state ?? next;
+  }
+  return next;
+}
+
+/** #1340: the auction's lifecycle, after the board has moved -- close, re-seat, arm. */
+function settleAuctionLifecycle(state: GameStateResponse, msg: GameplayExecuteMsg): GameStateResponse {
+  if (state.waterfall === undefined) return state;
+  let waterfall = state.waterfall;
+  if (waterfall && isOpenStockRoundMsg(msg) && waterfall.waterfall_auction_active) {
+    waterfall = { ...waterfall, waterfall_auction_active: false };
+  }
+  if (isSetupGameMsg(msg)) {
+    const reseated = waterfallForRoster(waterfall, state.player_addresses ?? [], state.private_companies);
+    const delayed = (msg.SetupGame.variants as { delayedAuction?: unknown } | undefined)?.delayedAuction === true;
+    waterfall = reseated && delayed ? { ...reseated, waterfall_auction_active: false } : reseated;
+  }
+  /* The delayed variant's auction is dealt inactive and the round reaches it at Stock Round 3 (#905); this is
+     the arming. WITH SOMETHING LEFT TO OFFER: an auction `settle` has already closed because its last private
+     sold stays closed while `OpenStockRound` is still owed -- the engine's own reading, kept so a stored log
+     replays to the same atom it always did. */
+  if (
+    waterfall &&
+    !waterfall.waterfall_auction_active &&
+    waterfall.privates.length > 0 &&
+    state.current_round_type === "WaterfallAuction" &&
+    state.private_auction_complete !== true
+  ) {
+    waterfall = { ...waterfall, waterfall_auction_active: true };
+  }
+  return waterfall === state.waterfall ? state : { ...state, waterfall };
+}
+
 function applySandboxActionOnBoard(
+  state: GameStateResponse,
+  msg: GameplayExecuteMsg,
+  ctx?: SandboxActionContext,
+): GameStateResponse {
+  // #1340: the auction first, as `App.tsx` always ran it -- its charges land before the board is judged.
+  const afterAuction = applyAuctionStep(state, msg);
+  return settleAuctionLifecycle(applySandboxActionAfterAuction(afterAuction, msg, ctx), msg);
+}
+
+function applySandboxActionAfterAuction(
   state: GameStateResponse,
   msg: GameplayExecuteMsg,
   ctx?: SandboxActionContext,
@@ -4429,7 +4543,7 @@ function applyOneAction(
      exists to prevent.
      REFUSES BY RETURNING THE STATE IT WAS HANDED (#778), like every other gate here. */
   if ("YellowSignEvent" in msg) {
-    const { protocol_id, stage, model, cash } = msg.YellowSignEvent;
+    const { protocol_id, stage, model, cash, revenue_seed } = msg.YellowSignEvent;
     const company = state.public_companies.find((entry) => entry.company_id === protocol_id);
     if (!company) return state;
 
@@ -4488,6 +4602,20 @@ function applyOneAction(
       const survivors = [...owned];
       survivors.splice(at, 1);
       const award = Math.max(0, Number(cash ?? 0) || 0);
+      /* ==================================================================
+          DESIGN NOTE 1375: THE OTHER TRAINS' ROUTES STAND
+         ==================================================================
+         RULED SINCE #1046: the Mark takes the train and THAT TRAIN'S ROUTE; what the rest of the fleet ran
+         is still earned. `runWithoutTrain` (yellowSign.ts) takes the taken train's printed route out of the
+         run and rolls the remainder under the seed the run itself used -- carried on the message, because
+         the reducer must not draw (#1051). A message without the seed is one written under the old ruling
+         and keeps the zeroing it was played with, so no stored log replays to a different board. */
+      const kept = revenue_seed === undefined ? null : runWithoutTrain(company, model, {
+        macroRound: state.macro_round_number ?? 0,
+        subRound: state.sub_round_index ?? 0,
+        companyId: protocol_id,
+        turnSeed: revenue_seed,
+      });
       return {
         ...state,
         public_companies: state.public_companies.map((entry) =>
@@ -4497,8 +4625,10 @@ function applyOneAction(
                 owned_trains: survivors,
                 has_yellow_sign: true,
                 treasury: String((Number(entry.treasury ?? 0) || 0) + award),
-                last_route_revenue: "0",
-                printed_route_revenue: "0",
+                last_route_revenue: String(kept ? kept.adjusted : 0),
+                printed_route_revenue: String(kept ? kept.printed : 0),
+                ...(kept && kept.breakdown ? { last_run_breakdown: kept.breakdown } : {}),
+                ...(kept ? { routes_run_this_turn: kept.routes } : {}),
               }
             : entry,
         ),
@@ -5127,18 +5257,19 @@ export function describeFloat(
     company.company_id !== undefined && company.home_hex_label
       ? heraldHexFor(company.company_id)
       : null;
+  /* Design note #1343 (feedback 2 / 2a): ONE LINE PER FLOAT. A corporation that owes a home token gets its
+     line at the placement (`actionLog.ts` #1343), so this says nothing for it; a corporation that owes none
+     -- the herald home -- gets the same line here, without the placement clause. */
   if (herald) {
-    return `${company.ticker} floated with $${company.treasury}. Its home is the herald printed on ${herald.label}; no home token is placed.`;
+    return `${company.ticker} has floated. It received $${company.treasury}.`;
   }
 
-  if (company.home_hex_label) {
-    return `${company.ticker} floated with $${company.treasury}. Its home station on ${company.home_hex_label} must now be placed.`;
-  }
+  if (company.home_hex_label) return null;
 
   /* NNH has no home hex on this board (see `applyFloatThreshold`), so it
      floats without one. Said outright rather than leaving the sentence half
      finished, which would read as a placement that failed. */
-  return `${company.ticker} floated with $${company.treasury}. It has no home hex on this board, so no home token is placed.`;
+  return `${company.ticker} has floated. It received $${company.treasury}. It has no home hex on this board, so no home token is placed.`;
 }
 
 /** "Schuylkill Valley pays $5 to Alice." One line per payout, because the
@@ -5155,7 +5286,7 @@ export function describePrivatePayout(
   /* Design note #1059: NUMBERED, in the form five other surfaces already use (#1052). A player reading the
      feed and a player reading the Ledger are looking at the same six companies, and until now only one of
      them was told which. */
-  return `${payout.privateId}. ${payout.privateName} pays $${payout.amount} to ${recipient}.`;
+  return `${numberedPrivate(payout.privateId, payout.privateName)} pays $${payout.amount} to ${recipient}.`;
 }
 
 /** One toast for a whole round of private income, from the viewer's side of it.

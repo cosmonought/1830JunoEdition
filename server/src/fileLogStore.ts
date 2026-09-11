@@ -38,6 +38,8 @@ import * as path from "path";
 
 import type { ServerLogEntry } from "../../frontend/src/utils/roomSession";
 import type { SandboxRoomDoc } from "../../frontend/src/utils/sandboxRoom";
+import type { RoomChatEntry } from "../../frontend/src/utils/roomDocLink";
+import type { StagingRoomRecord } from "../../frontend/src/utils/lobbyProtocol";
 
 export interface LogStore {
   /** Everything appended to this room so far, in file order. Empty for a room never written. */
@@ -46,6 +48,22 @@ export interface LogStore {
   appendLog(room: string, entries: readonly ServerLogEntry[]): Promise<void>;
   loadRoomDoc(room: string): Promise<SandboxRoomDoc | null>;
   saveRoomDoc(room: string, doc: SandboxRoomDoc): Promise<void>;
+  /** Design note #1355: every room this store holds a document for, so a seat can be found by its PIN
+   *  without the player naming the room. Optional: an in-memory store answers with what it has. */
+  listRooms?(): Promise<readonly string[]>;
+  /* ==================================================================
+      DESIGN NOTE 1361: THE TRANSCRIPT AND THE STAGING LOBBY, ON THE SAME DISK
+     ==================================================================
+     Chat left Firestore for the server (#1361a). A playtest spans hours and the server restarts between
+     fixes, so a transcript held only in memory would vanish on every rebuild -- which is exactly the moment a
+     table is asking each other "did you see my last message". One append-only sidecar per room, the log's
+     shape (`<code>.chat.jsonl`), unsynced: a lost chat line is not a lost move.
+     The staging lobby (#1361b) is one small document rewritten whole, like the room document. Optional on
+     the interface, because the in-memory store the tests and the smoke run use has no reason to keep either. */
+  loadChat?(room: string): Promise<readonly RoomChatEntry[]>;
+  appendChat?(room: string, entry: RoomChatEntry): Promise<void>;
+  loadLobby?(): Promise<readonly StagingRoomRecord[]>;
+  saveLobby?(records: readonly StagingRoomRecord[]): Promise<void>;
 }
 
 /** A room code becomes a file name. Codes are `JUNO-XXX` in practice; anything else is reduced to a safe
@@ -58,6 +76,8 @@ function safeName(room: string): string {
 export function createFileLogStore(directory: string): LogStore {
   const logPath = (room: string) => path.join(directory, `${safeName(room)}.log.jsonl`);
   const docPath = (room: string) => path.join(directory, `${safeName(room)}.room.json`);
+  const chatPath = (room: string) => path.join(directory, `${safeName(room)}.chat.jsonl`);
+  const lobbyPath = path.join(directory, "lobby.json");
 
   const ready = fs.mkdir(directory, { recursive: true });
 
@@ -99,6 +119,11 @@ export function createFileLogStore(directory: string): LogStore {
       }
     },
 
+    async listRooms() {
+      await ready;
+      const names = await fs.readdir(directory);
+      return names.filter((name) => name.endsWith(".room.json")).map((name) => name.slice(0, -".room.json".length));
+    },
     async loadRoomDoc(room) {
       await ready;
       try {
@@ -115,6 +140,50 @@ export function createFileLogStore(directory: string): LogStore {
       const temporary = `${target}.tmp`;
       await fs.writeFile(temporary, JSON.stringify(doc), "utf8");
       await fs.rename(temporary, target);
+    },
+
+    async loadChat(room) {
+      await ready;
+      let text: string;
+      try {
+        text = await fs.readFile(chatPath(room), "utf8");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+        throw error;
+      }
+      const entries: RoomChatEntry[] = [];
+      for (const line of text.split("\n")) {
+        if (line.trim() === "") continue;
+        try {
+          entries.push(JSON.parse(line) as RoomChatEntry);
+        } catch {
+          break; // a partial last line, as with the log
+        }
+      }
+      return entries;
+    },
+
+    async appendChat(room, entry) {
+      await ready;
+      await fs.appendFile(chatPath(room), `${JSON.stringify(entry)}\n`, "utf8");
+    },
+
+    async loadLobby() {
+      await ready;
+      try {
+        const parsed = JSON.parse(await fs.readFile(lobbyPath, "utf8")) as unknown;
+        return Array.isArray(parsed) ? (parsed as StagingRoomRecord[]) : [];
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+        throw error;
+      }
+    },
+
+    async saveLobby(records) {
+      await ready;
+      const temporary = `${lobbyPath}.tmp`;
+      await fs.writeFile(temporary, JSON.stringify(records), "utf8");
+      await fs.rename(temporary, lobbyPath);
     },
   };
 }

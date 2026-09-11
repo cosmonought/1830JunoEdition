@@ -19,7 +19,8 @@
 //   reported as "PRR says it has no home hex" and the fix must not simply
 //   swap which company is wrong.
 
-import { applyCardOrder, operatingRoundCardOrder } from "./corporationCardOrder";
+import { applyCardOrder, openingCardOrder, operatingRoundCardOrder } from "./corporationCardOrder";
+import { readStripped } from "./sourceScan";
 import { describeFloat } from "./sandboxSession";
 
 const corp = (company_id: number, is_floated = true) => ({ company_id, is_floated });
@@ -59,6 +60,33 @@ describe("operatingRoundCardOrder", () => {
     const second = operatingRoundCardOrder([corp(1), corp(8), corp(2)], prices);
     expect(first).toEqual([1, 2, 8]);
     expect(second).toEqual(first);
+  });
+
+  /* Design note #1350: three groups, and the spectrum under them. */
+  it("groups floated, then parred (by par), then unbought (by spectrum)", () => {
+    const roster = [
+      { company_id: 2, is_floated: false, par_value: null, ticker: "NYC" }, // black: last of the spectrum
+      { company_id: 1, is_floated: false, par_value: null, ticker: "PRR" }, // red: first
+      { company_id: 6, is_floated: false, par_value: "67", ticker: "ERIE" }, // parred, low
+      { company_id: 4, is_floated: false, par_value: "100", ticker: "B&O" }, // parred, high
+      { company_id: 5, is_floated: true, par_value: "82", ticker: "C&O" },
+      { company_id: 3, is_floated: true, par_value: "71", ticker: "CPR" },
+    ];
+    expect(operatingRoundCardOrder(roster, { 5: 82, 3: 90 })).toEqual([3, 5, 4, 6, 1, 2]);
+  });
+
+  it("opens in the spectrum order, red to violet, neutrals last", () => {
+    const roster = ["NYC", "PMQ", "PRR", "N&W", "ERIE", "NNH", "B&M", "C&O", "B&O", "CPR"].map((ticker, i) => ({
+      company_id: i + 1,
+      is_floated: false,
+      ticker,
+    }));
+    const ordered = openingCardOrder(roster).map((id) => roster[id - 1].ticker);
+    expect(ordered).toEqual(["PRR", "NNH", "CPR", "ERIE", "B&M", "C&O", "B&O", "PMQ", "N&W", "NYC"]);
+    // And the panel uses it until the first Operating Round establishes an order.
+    expect(readStripped("components/StockRoundPanel.tsx")).toContain(
+      "applyCardOrder(publicCompanies, cardOrder ?? openingCardOrder(publicCompanies))",
+    );
   });
 });
 
@@ -108,8 +136,10 @@ describe("applyCardOrder -- the held arrangement", () => {
 describe("describeFloat", () => {
   const unfloated = { is_floated: false };
 
-  it("names the home hex that must now be placed", () => {
-    // The requirement's exact sentence.
+  /* Design note #1343: ONE LINE PER FLOAT. A corporation that owes a home token is announced at the
+     placement (`actionLog.ts`), so this is silent for it; a herald home (PRR on 18XX+/LPF) and a corporation
+     with no home hex are announced here, in the ruled shape, with no "must now be placed". */
+  it("is silent for a corporation that owes a home token -- the placement line says it all", () => {
     expect(
       describeFloat(unfloated, {
         ticker: "PRR",
@@ -117,49 +147,25 @@ describe("describeFloat", () => {
         is_floated: true,
         home_hex_label: "H12",
       }),
-    ).toBe("PRR floated with $1000. Its home station on H12 must now be placed.");
+    ).toBeNull();
+    expect(
+      describeFloat(
+        { is_floated: false, station_token_hexes: [] },
+        { ticker: "ERIE", treasury: "710", is_floated: true, home_hex_label: "E11", station_token_hexes: [] },
+      ),
+    ).toBeNull();
   });
 
-  it("no longer tells the PRR it has no home hex", () => {
-    // The reported bug, asserted as an absence so any reworded version of
-    // the same mistake still fails.
-    const line = describeFloat(unfloated, {
-      ticker: "PRR",
-      treasury: "1000",
-      is_floated: true,
-      home_hex_label: "H12",
-    });
-    expect(line).not.toMatch(/no home hex/i);
-  });
-
-  it("still says so for a corporation that genuinely has none", () => {
-    // NNH. The old sentence was always right about this one.
+  it("says so, in the ruled shape, for a corporation that genuinely has no home hex", () => {
     const line = describeFloat(unfloated, {
       ticker: "NNH",
       treasury: "670",
       is_floated: true,
       home_hex_label: null,
     });
+    expect(line).toContain("NNH has floated. It received $670.");
     expect(line).toMatch(/no home hex on this board/i);
-    expect(line).toContain("NNH floated with $670.");
-  });
-
-  it("does not depend on a token having been placed", () => {
-    // Design note #416 stopped placing the token at float, which is what
-    // made the old `gained` test permanently false. An empty token list must still
-    // produce the placement sentence.
-    expect(
-      describeFloat(
-        { is_floated: false, station_token_hexes: [] },
-        {
-          ticker: "ERIE",
-          treasury: "710",
-          is_floated: true,
-          home_hex_label: "E11",
-          station_token_hexes: [],
-        },
-      ),
-    ).toContain("Its home station on E11 must now be placed.");
+    expect(line).not.toContain("must now be placed");
   });
 
   it("says nothing when there is no float to report", () => {

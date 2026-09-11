@@ -69,3 +69,52 @@ describe("homeCityIndexAt", () => {
     expect(homeCityIndexAt(three, { x: 51, y: 1 })).toBe(1);
   });
 });
+
+describe("a home reservation on a printed two-station city sits in its first slot (design note #1379)", () => {
+  /* #1401: Norfolk (L16), the hex this was written against, and Montreal (A19) are both SINGLE-station
+     cities after all -- "a preprinted gray single-station city like Norfolk" -- so no printed hex on any
+     board carries a pill now. The #1379 rule (a badge sits in a pill's FIRST slot, not the seam) is pinned
+     below as source against `stationMarkerPoint`, and the two hexes are pinned as seating their token in the
+     one circle. */
+  it("a badge on a multi-slot printed city goes to the first slot, not the anchor (#1379, as source)", () => {
+    const { readStripped } = require("../utils/sourceScan") as typeof import("../utils/sourceScan");
+    const PRIMS = readStripped("components/hexCanvasPrimitives.ts");
+    const at = PRIMS.indexOf("export function stationMarkerPoint(");
+    const body = PRIMS.slice(at, PRIMS.indexOf("\n}\n", at));
+    expect(body).toContain("const slots = printedCitySlotPoints(label, center, size);");
+    expect(body).toContain("cityIndex ?? 0");
+  });
+
+  it.each(["L16", "A19"])("%s is one station, and the token seats in its circle (design note #1401)", (label) => {
+    const { activateBoard, STANDARD_BOARD } = require("./hexBoardData") as typeof import("./hexBoardData");
+    const { LPF_BOARD } = require("./hexBoardDataLpf") as typeof import("./hexBoardDataLpf");
+    const { stationMarkerPoint } = require("./hexCanvasPrimitives") as typeof import("./hexCanvasPrimitives");
+    const { printedCitySlotPoints, printedArtwork } = require("./TileGraphics") as typeof import("./TileGraphics");
+    const { axialToPixel } = require("./hexGeometry") as typeof import("./hexGeometry");
+    activateBoard(LPF_BOARD);
+    try {
+      const hex = LPF_BOARD.hexes.find((entry) => entry.label === label)!;
+      expect(LPF_BOARD.grayHexes[label].slots ?? 1).toBe(1);
+      expect(printedArtwork(label)!.marker!.slots ?? 1).toBe(1);
+      const size = 40;
+      const center = axialToPixel(hex.q, hex.r, size);
+      const slots = printedCitySlotPoints(label, center, size);
+      expect(slots.length).toBe(1);
+      const anchor = printedArtwork(label)!.marker!.at;
+      expect(stationMarkerPoint(hex.q, hex.r, size)).toEqual({ x: center.x + size * anchor.x, y: center.y + size * anchor.y });
+    } finally {
+      activateBoard(STANDARD_BOARD);
+    }
+  });
+});
+
+describe("the printed two-station city draws its pill (design note #1387)", () => {
+  it("routes a multi-slot printed city through drawStationPill with the slot geometry's own size and angle", () => {
+    const { readStripped } = require("../utils/sourceScan") as typeof import("../utils/sourceScan");
+    const PRIMS = readStripped("components/hexCanvasPrimitives.ts");
+    const printed = PRIMS.slice(PRIMS.indexOf("export function drawPrintedTrack("), PRIMS.indexOf("export function drawPrintedTrack(") + 1600);
+    expect(printed).toContain('else if (art.marker.kind === "city" && (art.marker.slots ?? 1) > 1) {');
+    expect(printed).toContain("drawStationPill(ctx, point, markerSize, art.marker.slots ?? 1, art.marker.angle ?? 0, art.marker.layout);");
+    expect(printed).toContain("const markerSize = markerSizeFor([art.marker], size);");
+  });
+});

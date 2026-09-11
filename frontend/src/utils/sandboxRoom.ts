@@ -1,44 +1,27 @@
 // frontend/src/utils/sandboxRoom.ts
 //
-// Real-time sandbox multiplayer as an append-only action log on Firestore.
+// Real-time sandbox multiplayer as an append-only action log, on the game server.
 //
 // State is NOT mirrored: the sandbox is three atoms plus a turn cursor that
 // advance together, so replaying the log reproduces them by running the code
 // that produced them. A browser with no state reads from index 0 and catches up.
 //
 // Entries carry a monotonic integer `index` and readers sort by it -- 1830 is
-// not commutative, and serverTimestamp() is null in the optimistic local
-// snapshot. Simultaneous writes at one index are resolved identically by every
-// client (document id tie-break); what that cannot prevent is the second action
-// having been computed against a state without the first.
+// not commutative. The server allocates the index (#1209) and mints the id.
+//
+// #1361: FIRESTORE IS GONE FROM THIS FILE. The log moved to the server in #1213 and the roster in #1215, each
+// behind a branch on `roomDocOnServer()` that fell back to Firestore. The fallback was never reachable in a
+// server-path build (#1242) and Firestore's test-mode window has closed, so the branch is removed: every
+// function here either goes to the server or reports that there is no backend. The shapes, names and return
+// conventions are unchanged, so no caller moved.
 //
 // See docs/ai_architecture/firebase_middleware.md - sandboxRoom.ts #0, #1, #2
 
-import {
-  /* Design note #1026: `addDoc` is GONE. It was the append's writer, and a transaction cannot use it -- a
-     transaction needs its writes named up front, so the ref is minted with `doc(collection)` and set.
-     Dropped rather than left imported, for #686's reason about `liveEdgesForHex`: an unused import of the
-     non-transactional writer is an invitation to reach for it again, and reaching for it is exactly the bug. */
-  collection,
-  doc,
-  getDocs,
-  onSnapshot,
-  orderBy,
-  query,
-  runTransaction,
-  serverTimestamp,
-  setDoc,
-  updateDoc,
-  type DocumentData,
-  type FirestoreError,
-  type QueryDocumentSnapshot,
-} from "firebase/firestore";
-
-import { resolveVariants, STANDARD_VARIANTS, type GameVariants } from "./gameVariants";
-// Design note #1215: the waiting room's second backend. The branch is in this file so no caller has one.
+import { STANDARD_VARIANTS, type GameVariants } from "./gameVariants";
+// Design note #1215: the room document lives on the server. The routing is in this file so no caller has any.
 import { roomDocOnServer, subscribeRoomDoc, writeRoomDoc } from "./roomDocLink";
+import { localPlayerId } from "./seatPin";
 
-import { getFirestoreDb } from "../config/firebase";
 /* Design note #530: `GameplayExecuteMsg` is no longer imported here --
    `SandboxLogMsg` is the union of it and the setup event, and this module
    only ever handles the union. */
@@ -46,10 +29,6 @@ import type { SandboxLogMsg, SetupPlayer } from "./gameSetup";
 // Design note #1128: the stage union is owned by the module that resolves it, not redeclared here.
 import type { ForcedSignStage } from "./yellowSign";
 
-/** A new top-level collection beside `games`: a sandbox room shares none of RoomDoc's shape, and firestore.rules guards that collection for a different document.
- *  See docs/ai_architecture/firebase_middleware.md - sandboxRoom.ts #519 */
-export const SANDBOX_ROOMS_COLLECTION = "sandbox_rooms";
-export const SANDBOX_ACTIONS_SUBCOLLECTION = "actions";
 
 /* The alphabet drops 0/O, 1/I/L and 5/S because the code is read aloud; the JUNO- prefix is part of it. The harness asserts the PROPERTY, since the first draft kept 0 despite the rule written to remove it.
    See docs/ai_architecture/firebase_middleware.md - sandboxRoom.ts #520 */
@@ -153,68 +132,23 @@ export function appliedPrefixHolds(
   return true;
 }
 
-function toAction(snapshot: QueryDocumentSnapshot<DocumentData>): SandboxAction | null {
-  const data = snapshot.data();
-  const index = Number(data.index);
-  if (!Number.isFinite(index)) return null;
-  if (typeof data.payload !== "string") return null;
-  /* Design note #643: `createdAt` is a Firestore `Timestamp` once the server
-     has resolved it, and `null` in the brief local-echo window before that.
-     `toMillis` is guarded rather than assumed -- an optimistic snapshot
-     arriving without it is ordinary, not an error. */
-  const createdAt = data.createdAt;
-  const at =
-    createdAt && typeof createdAt.toMillis === "function"
-      ? Number(createdAt.toMillis())
-      : undefined;
-  return {
-    index,
-    id: snapshot.id,
-    actor: typeof data.actor === "string" ? data.actor : "",
-    payload: data.payload,
-    // Design note #668: `=== true`, so a missing field on an older entry is
-    // `false` rather than `undefined` leaking into the undo walk.
-    derived: data.derived === true,
-    ...(Number.isFinite(at) ? { at: at as number } : {}),
-  };
-}
-
-/** Creates the room document. Returns the code, or `null` when Firestore is
- *  not configured -- which is a legitimate state (design note #1 in
- *  `config/firebase.ts`: the sandbox runs with no backend at all), so the
- *  caller reports it rather than this throwing. */
+/** Creates the room document. Returns the code, or `null` when no game server is configured -- which is a
+ *  legitimate state (the sandbox runs with no backend at all), so the caller reports it rather than this
+ *  throwing. */
 export async function hostSandboxRoom(hostId: string, nickname: string): Promise<string | null> {
   /* ==================================================================
-      DESIGN NOTE 1215: SIX FUNCTIONS THAT NOW ANSWER TO TWO BACKENDS
+      DESIGN NOTE 1215: SIX FUNCTIONS THAT ANSWER TO THE SERVER
      ==================================================================
      THE BRANCH IS HERE RATHER THAN AT THE CALL SITES, and that is the whole design. These six have callers in
      `Lobby.tsx` and in five places in `App.tsx` -- an effect, a join handler, and three waiting-room controls
      -- and routing at each of them would have meant a dozen edits to the file this migration exists to stop
      editing. #1213 made the same choice for the log: `serverLink` was shaped like `appendSandboxAction` so
      the shell could not tell them apart.
-     THE CODE IS MINTED LOCALLY ON THE SERVER PATH. There is nothing to ask for: a room code is a name, not an
-     allocation, and a round trip to learn one would be a round trip that can fail. */
-  if (roomDocOnServer()) {
-    const code = generateRoomCode();
-    writeRoomDoc(code, hostId, { op: "host", hostId, nickname, variants: STANDARD_VARIANTS });
-    return code;
-  }
-  const db = getFirestoreDb();
-  if (!db) return null;
+     THE CODE IS MINTED LOCALLY. There is nothing to ask for: a room code is a name, not an allocation, and a
+     round trip to learn one would be a round trip that can fail. */
+  if (!roomDocOnServer()) return null;
   const code = generateRoomCode();
-  await setDoc(doc(db, SANDBOX_ROOMS_COLLECTION, code), {
-    code,
-    hostId,
-    /* Design note #527: every room opens in the anteroom. The host is
-       seeded as its first player rather than joining afterwards, so the
-       roster is never briefly empty in a room that plainly has somebody in
-       it. */
-    status: "waiting" as SandboxRoomStatus,
-    players: [{ id: hostId, nickname, isReady: false }],
-    // Design note #910: opens on the printed game; the host changes it in the waiting room.
-    variants: STANDARD_VARIANTS,
-    createdAt: serverTimestamp(),
-  });
+  writeRoomDoc(code, hostId, { op: "host", hostId, nickname, variants: STANDARD_VARIANTS });
   return code;
 }
 
@@ -273,60 +207,27 @@ export async function appendSandboxAction(
    *  no other way to tell an auto-skip from a deliberate one. */
   derived = false,
 ): Promise<number | null> {
-  const db = getFirestoreDb();
-  if (!db) return null;
-  const roomRef = doc(db, SANDBOX_ROOMS_COLLECTION, roomCode);
-  const actionsRef = collection(roomRef, SANDBOX_ACTIONS_SUBCOLLECTION);
-  const payload = JSON.stringify(msg);
-
-  return runTransaction(db, async (tx) => {
-    const room = await tx.get(roomRef);
-    const counter = Number(room.data()?.[SANDBOX_NEXT_INDEX_FIELD]);
-    /* THE FLOOR IS THE CALLER'S VIEW, for a legacy room whose counter does not exist yet. A finite counter
-       always wins where it is higher; where it is absent or corrupt, `nextIndex` is the only evidence of how
-       long the log already is. */
-    const allocated = Number.isFinite(counter) ? Math.max(counter, nextIndex) : nextIndex;
-
-    /* THE COUNTER AND THE ENTRY IN ONE TRANSACTION. Written to the ROOM document, which every appending
-       client reads -- that shared read is what makes two simultaneous appends conflict, and a conflict is
-       what makes Firestore retry the loser against the winner's counter. */
-    tx.set(roomRef, { [SANDBOX_NEXT_INDEX_FIELD]: allocated + 1 }, { merge: true });
-    /* `doc(collection)` MINTS THE ID LOCALLY, which is what lets a create happen inside a transaction --
-       `addDoc` cannot, because a transaction needs its writes named up front. */
-    tx.set(doc(actionsRef), {
-      index: allocated,
-      actor,
-      payload,
-      derived,
-      createdAt: serverTimestamp(),
-    });
-    return allocated;
-  }).catch(() => null);
+  /* #1361: THE SERVER IS THE ONLY WRITER. `App.tsx` submits through `serverLink` (#1213) and refuses when the
+     link is down (#1242); this signature survives for the shell's fallback branch, which is unreachable on a
+     server-path build and now answers the only honest thing when reached: nothing was written. */
+  void roomCode;
+  void nextIndex;
+  void actor;
+  void msg;
+  void derived;
+  return null;
 }
 
 /** Reads the whole log once. Used to decide whether a joined room exists and
  *  what its length is before the live subscription opens. */
 export async function readSandboxLog(roomCode: string): Promise<SandboxAction[]> {
   /* #1215. THE JOIN PATH AWAITS THIS, which is what made routing it necessary rather than tidy: with
-     Firestore unreachable the read never settles and "Join game" hangs with no error, exactly as hosting did.
-     EMPTY IS THE HONEST ANSWER on the server path -- the log lives on the server and the shell's own listener
-     is what fetches it (#1213). This call was only ever a courtesy: it exists so a mistyped code is refused
-     at the door instead of opening an empty board, and that courtesy is worth less than a working join. */
-  if (roomDocOnServer()) return [];
-  const db = getFirestoreDb();
-  if (!db) return [];
-  const snapshot = await getDocs(
-    query(
-      collection(db, SANDBOX_ROOMS_COLLECTION, roomCode, SANDBOX_ACTIONS_SUBCOLLECTION),
-      orderBy("index"),
-    ),
-  );
-  const out: SandboxAction[] = [];
-  snapshot.forEach((entry) => {
-    const action = toAction(entry);
-    if (action) out.push(action);
-  });
-  return sortActions(out);
+     Firestore unreachable the read never settled and "Join game" hung with no error, exactly as hosting did.
+     EMPTY IS THE HONEST ANSWER -- the log lives on the server and the shell's own listener is what fetches it
+     (#1213). This call was only ever a courtesy: it exists so a mistyped code is refused at the door instead
+     of opening an empty board, and that courtesy is worth less than a working join. */
+  void roomCode;
+  return [];
 }
 
 /** Hands back the WHOLE ordered log, not a delta -- a delta is identical when nothing goes wrong and a silent desync on a dropped snapshot or reconnect. The caller keeps the cursor.
@@ -336,23 +237,12 @@ export function subscribeSandboxLog(
   onActions: (actions: SandboxAction[]) => void,
   onError?: (message: string) => void,
 ): () => void {
-  const db = getFirestoreDb();
-  if (!db) return () => undefined;
-  return onSnapshot(
-    query(
-      collection(db, SANDBOX_ROOMS_COLLECTION, roomCode, SANDBOX_ACTIONS_SUBCOLLECTION),
-      orderBy("index"),
-    ),
-    (snapshot) => {
-      const out: SandboxAction[] = [];
-      snapshot.forEach((entry) => {
-        const action = toAction(entry);
-        if (action) out.push(action);
-      });
-      onActions(sortActions(out));
-    },
-    (error: FirestoreError) => onError?.(error.message),
-  );
+  /* #1361: the shell subscribes through `connectServerLink` when a server is configured and takes this branch
+     only when none is -- in which case there is nothing to subscribe to. */
+  void roomCode;
+  void onActions;
+  void onError;
+  return () => undefined;
 }
 
 /* The room document is the ANTEROOM: unordered lobby facts where a late write simply wins. status: "playing" is the latch, and everything after it comes from the log.
@@ -368,6 +258,9 @@ export interface SandboxRoomPlayer {
    *  choice from a default -- only the former should block another player
    *  from picking it. */
   color?: string;
+  /** Design note #1341: whether this seat has a PIN on the server. BROADCAST; the PIN itself never is. Read
+   *  by the roster to offer "Rejoin" on a seat that can be rejoined, and "Set PIN" on one that cannot yet. */
+  hasPin?: boolean;
 }
 
 export interface SandboxRoomDoc {
@@ -376,6 +269,23 @@ export interface SandboxRoomDoc {
   hostId: string;
   status: SandboxRoomStatus;
   players: SandboxRoomPlayer[];
+  /* ==================================================================
+      DESIGN NOTE 1341: THE SEAT PIN -- A ROOM-SCOPED KEY TO A PLAYER ID
+     ==================================================================
+     ASKED: playtests span hours and a player may move from a laptop to an iPad "without losing their seat or
+     requiring us to build a massive, permanent identity database right now."
+     THE SEAT IS THE PLAYER ID. Every action is authored by a `p-xxxx` id (#549), the board keys cash and
+     holdings by it, and a browser's id lives in `sessionStorage` (#528) -- so a second device is simply a
+     device with a different id, and "rejoining a seat" is that device ADOPTING the seat's id. The PIN is what
+     gates the adoption: four digits chosen by the seat's owner, held by the server against the id, demanded
+     from any connection that later claims that id (`hello` / `room-hello`) and from a `claim-seat` frame that
+     wants to take it over. On a match the server tells the old connection it has been superseded and closes
+     it; the new device writes the id and the PIN into its own `sessionStorage` and reloads, and the log
+     rebuilds the game for it as it would for any refresh (#551).
+     SERVER-ONLY FIELD. `seatPins` is persisted in the room file and NEVER put on the wire -- `publicDoc`
+     strips it and stamps `hasPin` on each player instead. Plain strings, per the ruling: closed playtests,
+     no hashing, a key to a seat in one room and to nothing else. */
+  seatPins?: Record<string, string>;
   /* ==================================================================
       DESIGN NOTE 910: THE HOUSE RULES BELONG TO THE ROOM, NOT TO THE HOST'S BROWSER
      ==================================================================
@@ -408,38 +318,6 @@ export interface SandboxRoomDoc {
   forcedSign: ForcedSignStage | null;
 }
 
-function toRoomDoc(code: string, data: DocumentData | undefined): SandboxRoomDoc | null {
-  if (!data) return null;
-  const players = Array.isArray(data.players) ? data.players : [];
-  return {
-    code,
-    hostId: typeof data.hostId === "string" ? data.hostId : "",
-    status: data.status === "playing" ? "playing" : "waiting",
-    /* Through `resolveVariants` rather than cast: untrusted document data, and a room written by a newer
-       client must degrade to the standard game rather than reaching the reducer with a length it cannot
-       price. A room created before variants existed reads as 1830, which is what it was. */
-    variants: resolveVariants(data.variants as Partial<GameVariants> | undefined),
-    /* Validated against the union rather than cast: this is untrusted document data like everything else
-       here, and an unknown string reaching `resolveFlavourLine` would be a silently armed flag that matches
-       no stage and never clears. */
-    forcedSign:
-      data.forcedSign === "mark" || data.forcedSign === "carcosa" || data.forcedSign === "fog"
-        ? data.forcedSign
-        : null,
-    players: players
-      .filter((entry: unknown): entry is DocumentData => typeof entry === "object" && entry !== null)
-      .map((entry: DocumentData) => ({
-        id: String(entry.id ?? ""),
-        nickname: String(entry.nickname ?? ""),
-        isReady: entry.isReady === true,
-        // Design note #569: absent stays absent -- "" would read as a
-        // deliberate choice of no colour and block nobody from anything.
-        ...(typeof entry.color === "string" && entry.color ? { color: entry.color } : {}),
-      }))
-      .filter((entry: SandboxRoomPlayer) => entry.id.length > 0),
-  };
-}
-
 /** Subscribes to the room document -- the waiting room's own state. */
 export function subscribeSandboxRoom(
   roomCode: string,
@@ -447,46 +325,17 @@ export function subscribeSandboxRoom(
   onError?: (message: string) => void,
 ): () => void {
   // #1215. The server's frame is already this shape, so there is nothing to translate.
-  if (roomDocOnServer()) return subscribeRoomDoc(roomCode, localPlayerId(), onRoom, onError);
-  const db = getFirestoreDb();
-  if (!db) return () => undefined;
-  return onSnapshot(
-    doc(db, SANDBOX_ROOMS_COLLECTION, roomCode),
-    (snapshot) => onRoom(snapshot.exists() ? toRoomDoc(roomCode, snapshot.data()) : null),
-    (error: FirestoreError) => onError?.(error.message),
-  );
+  if (!roomDocOnServer()) return () => undefined;
+  return subscribeRoomDoc(roomCode, localPlayerId(), onRoom, onError);
 }
 
-/** A TRANSACTION, unlike the append: the players array is a read-modify-write on one document several clients touch, which is the classic lost join.
- *  See docs/ai_architecture/firebase_middleware.md - sandboxRoom.ts #527 */
+/** One writer applying one op at a time: the in-place rule (#541) lives in the server's `applyRoomWrite`. */
 export async function upsertSandboxPlayer(
   roomCode: string,
   player: SandboxRoomPlayer,
 ): Promise<boolean> {
-  /* #1215. The transaction's reason does not survive the move: it existed because SEVERAL BROWSERS wrote
-     this array, and the server is one writer applying one op at a time. The in-place rule (#541) does
-     survive, and lives in `applyRoomWrite`. */
-  if (roomDocOnServer()) {
-    writeRoomDoc(roomCode, player.id, { op: "upsert-player", player });
-    return true;
-  }
-  const db = getFirestoreDb();
-  if (!db) return false;
-  const ref = doc(db, SANDBOX_ROOMS_COLLECTION, roomCode);
-  await runTransaction(db, async (tx) => {
-    const snapshot = await tx.get(ref);
-    if (!snapshot.exists()) return;
-    const room = toRoomDoc(roomCode, snapshot.data());
-    /* An existing player is updated IN PLACE. Filter-and-append moved them to the back on every rename, and toSetupPlayers reads this order to build the shuffle payload.
-       See docs/ai_architecture/firebase_middleware.md - sandboxRoom.ts #541 */
-    const existing = room?.players ?? [];
-    const index = existing.findIndex((entry) => entry.id === player.id);
-    const players =
-      index === -1
-        ? [...existing, player]
-        : existing.map((entry, at) => (at === index ? player : entry));
-    tx.update(ref, { players });
-  });
+  if (!roomDocOnServer()) return false;
+  writeRoomDoc(roomCode, player.id, { op: "upsert-player", player });
   return true;
 }
 
@@ -504,13 +353,8 @@ export async function setSandboxRoomVariants(
   roomCode: string,
   variants: GameVariants,
 ): Promise<void> {
-  if (roomDocOnServer()) {
-    writeRoomDoc(roomCode, localPlayerId(), { op: "variants", variants });
-    return;
-  }
-  const db = getFirestoreDb();
-  if (!db) return;
-  await updateDoc(doc(db, SANDBOX_ROOMS_COLLECTION, roomCode), { variants });
+  if (!roomDocOnServer()) return;
+  writeRoomDoc(roomCode, localPlayerId(), { op: "variants", variants });
 }
 
 /** Design note #1128: arms or clears the forced-sign flag. `null` is the clear, written by whichever client
@@ -519,23 +363,13 @@ export async function setSandboxForcedSign(
   roomCode: string,
   stage: ForcedSignStage | null,
 ): Promise<void> {
-  if (roomDocOnServer()) {
-    writeRoomDoc(roomCode, localPlayerId(), { op: "forced-sign", stage });
-    return;
-  }
-  const db = getFirestoreDb();
-  if (!db) return;
-  await updateDoc(doc(db, SANDBOX_ROOMS_COLLECTION, roomCode), { forcedSign: stage });
+  if (!roomDocOnServer()) return;
+  writeRoomDoc(roomCode, localPlayerId(), { op: "forced-sign", stage });
 }
 
 export async function markSandboxRoomPlaying(roomCode: string): Promise<void> {
-  if (roomDocOnServer()) {
-    writeRoomDoc(roomCode, localPlayerId(), { op: "status", status: "playing" });
-    return;
-  }
-  const db = getFirestoreDb();
-  if (!db) return;
-  await updateDoc(doc(db, SANDBOX_ROOMS_COLLECTION, roomCode), { status: "playing" });
+  if (!roomDocOnServer()) return;
+  writeRoomDoc(roomCode, localPlayerId(), { op: "status", status: "playing" });
 }
 
 /** Both conditions: all ready AND enough players. One person alone satisfies "all ready" trivially, and 1830 needs two.
@@ -614,23 +448,8 @@ export function toSetupPlayers(room: SandboxRoomDoc): SetupPlayer[] {
   }));
 }
 
-/* sessionStorage, not localStorage: two tabs must be two players, which is how one developer playtests this. It survives a refresh so a reloading player reclaims their own seat.
-   See docs/ai_architecture/firebase_middleware.md - sandboxRoom.ts #528 */
-const PLAYER_ID_STORAGE_KEY = "juno.sandbox.playerId";
-
-export function localPlayerId(): string {
-  try {
-    const existing = window.sessionStorage.getItem(PLAYER_ID_STORAGE_KEY);
-    if (existing) return existing;
-    const minted = `p-${Math.random().toString(36).slice(2, 10)}`;
-    window.sessionStorage.setItem(PLAYER_ID_STORAGE_KEY, minted);
-    return minted;
-  } catch {
-    /* Private browsing. A per-render id would make this player a new seat on
-       every render, so it is minted once per module load instead -- the
-       session lasts as long as the tab, which is the same guarantee. */
-    return FALLBACK_PLAYER_ID;
-  }
-}
-
-const FALLBACK_PLAYER_ID = `p-${Math.random().toString(36).slice(2, 10)}`;
+/* Design note #1341: the player-id store, `adoptSeat` and `forgetSeat` live in `seatPin.ts` now, beside the
+   PIN and token they travel with -- `roomDocLink.ts` needs `forgetSeat`, and this module imports
+   `roomDocLink.ts`, so the identity block moved to the leaf rather than closing a cycle. Re-exported here so
+   every existing import of `localPlayerId` stands. */
+export { localPlayerId, adoptLocalPlayerId, adoptSeat, forgetSeat } from "./seatPin";

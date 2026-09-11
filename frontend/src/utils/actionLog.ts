@@ -25,6 +25,7 @@ import { sandboxRouteBreakdown } from "./sandboxSession";
 import { hasHeraldHome, stationTokenPrice } from "./stationTokens";
 import { dieselExchangeCostFor } from "./dieselExchange";
 import { KANAWHA_LICENSE_COST } from "./kanawhaLicense";
+import { numberedPrivate } from "./privateOrdinal";
 
 export interface ActionLogContext {
   /** The board and room as they stand BEFORE this action -- design note #1. */
@@ -212,6 +213,11 @@ function treasuryIn(
   return state?.public_companies.find((entry) => entry.company_id === companyId)?.treasury;
 }
 
+/** #1389: a player's cash in a state, as the ledger holds it. */
+function cashIn(state: GameStateResponse | null | undefined, player: string): string | undefined {
+  return state?.player_cash.find((entry) => entry.player === player)?.cash_vgp;
+}
+
 /** Whether this action actually charged the corporation anything.
  *
  *  ==================================================================
@@ -363,9 +369,14 @@ export function sentenceStatesTreasury(msg: GameplayExecuteMsg): boolean {
     "EmergencyBuyHardware" in msg ||
     "ExchangeTrainForDiesel" in msg || // #1303
     "BuyKanawhaLicense" in msg || // #1323
+    "YellowSignEvent" in msg || // #1375: the Mark's line states the treasury itself
+    "DeclareDividends" in msg || // #1406: the pool slice and the withheld sum are in the sentence
     // #1245: the two purchases that were still printing the diagnostic beside their own sentence.
     "BuyPrivateCompany" in msg ||
-    "BuyTrainFromCorporation" in msg
+    "BuyTrainFromCorporation" in msg ||
+    /* #1343: the only treasury a share purchase moves is the float's capitalisation, and the float's one
+       line (#1343, at the home placement; `describeFloat` for a herald home) states it. */
+    "BuyStock" in msg
   );
 }
 
@@ -453,9 +464,25 @@ export function describeGameplayAction(
       hex_label?: string;
     };
     const where = hex_label ?? hexName(mapGrid, q, r);
-    return kind === "dh"
-      ? `${corp(gameState, company_id)} placed a free station token on ${where} using the Delaware & Hudson.`
-      : `${corp(gameState, company_id)} placed its home station token on ${where}.`;
+    if (kind === "dh") {
+      return `${corp(gameState, company_id)} placed a free station token on ${where} using the Delaware & Hudson.`;
+    }
+    /* ==================================================================
+        DESIGN NOTE 1343: THE FLOAT IS ONE LINE, AND IT IS THIS ONE
+       ==================================================================
+       REPORTED (feedback 2): a float printed three lines -- the treasury diagnostic (#750), `describeFloat`'s
+       "must now be placed", and this placement -- for one event a player experiences as one thing. Ruled:
+       "[Corp] has floated. It received $[10xPar]. Its home station on [hex] is placed."
+       SAID HERE, AT THE PLACEMENT, because that is the last of the three moments and the first at which every
+       clause is true. Between the float and the placement the table is looking at `HomeStationPrompt` (#783,
+       on every screen), which says the rest. `describeFloat` is silent for a corporation that owes a token and
+       speaks for one that does not (PRR's herald home, #1332 -- 2a's exception, without the last sentence);
+       the treasury diagnostic treats a `BuyStock` as a sentence that states its own movement
+       (`sentenceStatesTreasury`). The figure is the corporation's treasury on the settled board -- the home
+       token is free, so nothing has left it yet -- rather than 10 x par recomputed here. */
+    const treasury = treasuryIn(context.afterState, company_id) ?? treasuryIn(gameState, company_id);
+    const received = treasury !== undefined ? ` It received $${treasury}.` : "";
+    return `${corp(gameState, company_id)} has floated.${received} Its home station on ${where} is placed.`;
   }
 
   /* ==================================================================
@@ -715,7 +742,7 @@ export function describeGameplayAction(
        * all withheld a real figure, and one that ran nothing is the only way to reach $0 here. */
       return revenue === 0
         ? `${ticker} did not run any routes.${move}`
-        : `${ticker} withheld $${revenue} into its treasury.${move}`;
+        : `${ticker} withheld $${revenue} into its treasury.${treasurySuffix(context, protocol_id)}${move}`; // #1406: states the balance, since the diagnostic line is retired for this message
     }
 
     /* Sorted for READING only -- largest holding first. The amounts are the reducer's own, so the order
@@ -723,9 +750,24 @@ export function describeGameplayAction(
     const split = [...(settlement?.players ?? [])]
       .sort((a, b) => b.amount - a.amount)
       .map((share) => `$${share.amount} to ${context.labelForAddress(share.player)}`);
+    /* ==================================================================
+        DESIGN NOTE 1406: THE CORPORATION'S OWN SLICE IS PART OF THE DIVIDEND LINE
+       ==================================================================
+       REPORTED: "C&O has a share in the Bank pool. When it pays Dividends, it pays itself, but on the
+       Dividends log this isn't being recorded, it's only showing player payouts. The corporation's payout is
+       instead printing at the start of its next subphase, Buy Trains: '[OR 9.3—Buy Trains] C&O received $20
+       — treasury $40 → $60.'"
+       THAT SECOND LINE WAS #750's DIAGNOSTIC, printed after the dispatch settled -- by which time the
+       sub-phase had advanced, so it wore the next step's stamp. The pool slice is the reducer's own figure
+       (`dividendSplit.poolSlice`), so it goes in the sentence with the players' shares, and the sentence
+       states the treasury (`treasurySuffix`), which retires the diagnostic for this message
+       (`sentenceStatesTreasury`). */
+    const pool = settlement?.poolSlice ?? 0;
+    const slices = pool > 0 ? [...split, `$${pool} to ${ticker}'s treasury for its shares in the Bank Pool`] : split;
     return (
       `${ticker} paid dividends on $${revenue}` +
-      (split.length > 0 ? `: ${split.join(", ")}.` : " — no shareholders on record.") +
+      (slices.length > 0 ? `: ${slices.join(", ")}.` : " — no shareholders on record.") +
+      (pool > 0 ? treasurySuffix(context, protocol_id) : "") +
       move
     );
   }
@@ -771,6 +813,34 @@ export function describeGameplayAction(
        against this file's `treasurySuffix` call sites, and the two disagreed 4 to 2. That case was written to
        catch a future divergence and caught a present one on its first run, which is the argument for pinning
        relationships rather than values. */
+    /* ==================================================================
+        DESIGN NOTE 1389: THE EMERGENCY PURCHASE SAYS WHO PAID WHAT
+       ==================================================================
+       REPORTED: "[OR 8.1--Buy Trains] NNH bought a 6-train for $630. Remaining depot supply: 0/2. Treasury
+       $235 -> $0." for an emergency purchase -- a line that reads as an ordinary buy and hides the one fact
+       an emergency is about: the president's own money went in. The reducer covers the shortfall from the
+       president's cash (#333) before the depot is charged, so the split is the treasury before the buy
+       against the price, and the president's cash before and after is in the two states this narrator
+       already holds. Shares sold to raise the cash are their own actions and keep their own lines. */
+    if ("EmergencyBuyHardware" in msg && gameState) {
+      const company = gameState.public_companies.find((entry) => entry.company_id === protocolId);
+      const before = Number(company?.treasury) || 0;
+      const shortfall = Math.max(0, tier.cost - before);
+      const president = company?.president ?? null;
+      if (shortfall > 0 && president) {
+        const cashBefore = cashIn(gameState, president);
+        const cashAfter = cashIn(context.afterState ?? null, president);
+        const cashLine =
+          cashBefore !== undefined && cashAfter !== undefined ? ` Cash $${cashBefore} → $${cashAfter}.` : "";
+        return (
+          `EMERGENCY PURCHASE: ${corp(gameState, protocolId)} bought a ${tier.tier}-train for $${tier.cost}. ` +
+          `The treasury paid $${tier.cost - shortfall} and President ${context.labelForAddress(president)} ` +
+          `contributed $${shortfall} from cash. Remaining depot supply: ${remaining}.` +
+          treasurySuffix(context, protocolId) +
+          cashLine
+        );
+      }
+    }
     return (
       `${corp(gameState, protocolId)} bought a ${tier.tier}-train for $${tier.cost}. ` +
       `Remaining depot supply: ${remaining}.` +
@@ -847,7 +917,7 @@ export function describeGameplayAction(
     const entry = context.gameState?.private_companies.find(
       (row) => row.private_id === privateId,
     );
-    return entry ? `${entry.private_id}. ${entry.name}` : `private #${privateId}`;
+    return entry ? numberedPrivate(entry.private_id, entry.name) : `private #${privateId}`;
   };
 
   if ("BuyPrivateCompany" in msg) {

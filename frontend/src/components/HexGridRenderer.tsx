@@ -77,6 +77,7 @@ import {
 // Design note #496: the station cursor composites the real herald, so it
 // resolves the path the same way every other logo surface does.
 import { logoSrcFor } from "./CorporateLogo";
+
 import { reservationsByHex } from "../utils/privateReservations";
 // Design note #888: the camera pose that puts a set of hexes on screen, as a function that can be called.
 // Design note #1014: one locked value now, not a function of a mode that no longer exists.
@@ -158,6 +159,7 @@ import {
   drawTrackPath,
   drawUnknownTilePlaceholder,
   drawValueBadge,
+  slotsBlockedByTileMarkers, // #1394
   fitFontSize,
   offboardNameplateLines,
   homeSlotIndex,
@@ -166,6 +168,25 @@ import {
   withHexClip,
   type RouteOverlay,
 } from "./hexCanvasPrimitives";
+
+/* Design note #1357: the herald artwork, cached per ticker for the canvas. `null` until loaded (or when the
+   asset is missing -- the ticker disc stands in for good). Loading is kicked off on first ask; every mounted
+   board is told when it lands. */
+const heraldArtworkCache = new Map<string, HTMLImageElement | null>();
+const heraldArtworkListeners = new Set<(bump: (tick: number) => number) => void>();
+function heraldArtwork(ticker: string): HTMLImageElement | null {
+  if (heraldArtworkCache.has(ticker)) return heraldArtworkCache.get(ticker) ?? null;
+  heraldArtworkCache.set(ticker, null);
+  if (typeof Image === "undefined") return null;
+  const image = new Image();
+  image.onload = () => {
+    heraldArtworkCache.set(ticker, image);
+    heraldArtworkListeners.forEach((bump) => bump((tick) => tick + 1));
+  };
+  image.onerror = () => heraldArtworkCache.set(ticker, null);
+  image.src = logoSrcFor(ticker);
+  return null;
+}
 
 /* ------------------------------------------------------------------ */
 /* Contract data mirrors -- see design note #2                        */
@@ -819,6 +840,14 @@ export function HexGridRenderer({
   );
 
   const [pulsePhase, setPulsePhase] = useState(0);
+  /* Design note #1357: bumped when a herald's artwork finishes loading, so the draw below re-runs once. */
+  const [heraldTick, setHeraldTick] = useState(0);
+  useEffect(() => {
+    heraldArtworkListeners.add(setHeraldTick);
+    return () => {
+      heraldArtworkListeners.delete(setHeraldTick);
+    };
+  }, []);
   useEffect(() => {
     if (cursorMode !== "token") {
       setPulsePhase(0);
@@ -1145,17 +1174,40 @@ export function HexGridRenderer({
         if (herald && herald.companyId === home.companyId) {
           const heraldCenter = axialToPixel(home.q, home.r, hexSize);
           const badge = { x: heraldCenter.x - hexSize * 0.12, y: heraldCenter.y - hexSize * 0.5 };
+          /* ==================================================================
+              DESIGN NOTE 1357: THE HERALD IS THE HERALD, NOT A TOKEN
+             ==================================================================
+             REPORTED (feedback 5): "the preprinted Altoona hex is supposed to carry the PRR herald, but on my
+             screen it's holding a PRR station marker." #1302 drew it with the token primitive, ringless, and
+             a livery disc with a ticker on it IS a token to anyone who has placed one. It is not one: it
+             consumes no token, it cannot be tokened out, and it pays $10 whatever the hex becomes. RULED
+             for the herald -- the corporation's own artwork (`Logos/`), printed flat on the hex with no disc
+             behind it, so it reads as part of the board rather than as a piece somebody placed. "Counts as
+             a station" is carried by the route tracer and the tooltip, not by a disc.
+             THE ARTWORK LOADS ASYNCHRONOUSLY. Until it has, the ticker disc stands in (the same degradation
+             `CorporateLogo` performs); `heraldArtwork` caches the image and bumps `heraldTick` on load, which
+             is a dependency of this draw, so the board repaints once with the real emblem. */
+          const ticker = company?.ticker || stationTickerLabel(home.companyId);
+          const art = heraldArtwork(ticker);
           withHexClip(ctx, heraldCenter, hexSize, () => {
-            drawStationTokenMarker(
-              ctx,
-              badge,
-              hexSize,
-              company?.ticker || stationTickerLabel(home.companyId),
-              stationTickerColor(home.companyId),
-              false,
-              undefined,
-              false,
-            );
+            if (art) {
+              const box = hexSize * 0.5;
+              const fit = Math.min(box / art.width, box / art.height);
+              const w = art.width * fit;
+              const h = art.height * fit;
+              ctx.drawImage(art, badge.x - w / 2, badge.y - h / 2, w, h);
+            } else {
+              drawStationTokenMarker(
+                ctx,
+                badge,
+                hexSize,
+                ticker,
+                stationTickerColor(home.companyId),
+                false,
+                undefined,
+                false,
+              );
+            }
             drawValueBadgeAt(
               ctx,
               { x: badge.x + hexSize * 0.42, y: badge.y },
@@ -1817,15 +1869,22 @@ export function HexGridRenderer({
         /* Design note #1286: THE COALFIELDS ARE BORDERED. "Put a border around L8, both to indicate it's
            interactive and to show that it's blocked." Licences are per corporation, so the border cannot
            simply vanish: it is dashed red while the corporation operating has none, and solid neutral on its
-           turn once it does. Drawn just inside the edge so the neighbours' outlines are untouched. */
+           turn once it does.
+           Design note #1353 (feedback 3): ON THE EDGE ITSELF. #1286 drew it at 0.94 of the hex "so the
+           neighbours' outlines are untouched", and the gap between the dashes and the rim read as a border
+           drawn in the wrong place. The path is the hex's own now, clipped to the hex so the stroke's outer
+           half never crosses into a neighbour -- the same clip the badge and nameplate use -- and the width
+           is doubled so the half that survives the clip is the width it had. */
         if (coalfieldsLicensed !== undefined) {
-          ctx.save();
-          drawHexPath(ctx, center, hexSize * 0.94);
-          ctx.setLineDash(coalfieldsLicensed ? [] : [hexSize * 0.16, hexSize * 0.1]);
-          ctx.strokeStyle = coalfieldsLicensed ? "#f2efe6" : "#e5484d";
-          ctx.lineWidth = Math.max(2, hexSize * 0.05);
-          ctx.stroke();
-          ctx.restore();
+          withHexClip(ctx, center, hexSize, () => {
+            ctx.save();
+            drawHexPath(ctx, center, hexSize);
+            ctx.setLineDash(coalfieldsLicensed ? [] : [hexSize * 0.16, hexSize * 0.1]);
+            ctx.strokeStyle = coalfieldsLicensed ? "#f2efe6" : "#e5484d";
+            ctx.lineWidth = Math.max(4, hexSize * 0.1);
+            ctx.stroke();
+            ctx.restore();
+          });
         }
         withHexClip(ctx, center, hexSize, () => {
           const badgeSlot = PLATE_LAYOUT[hex.label]?.badge;
@@ -1889,7 +1948,8 @@ export function HexGridRenderer({
         catalogEntry.terrain !== "MajorCityHub" &&
         catalogEntry.terrain !== "DoubleCityHub" && // Tile Selection Catalog verification pass, tile 15
         catalogEntry.terrain !== "NewYorkHub" &&
-        catalogEntry.terrain !== "BostonHub"
+        catalogEntry.terrain !== "BostonHub" &&
+        catalogEntry.terrain !== "TorontoHub" // #1405: the TO tiles pay too
       ) {
         continue;
       }
@@ -1911,10 +1971,25 @@ export function HexGridRenderer({
       // and a `$0` badge is noise, so suppress it. `undefined` (a pre-G-11
       // contract) keeps the old terrain-bucket fallback by passing through.
       if (chainRevenue === 0) continue;
+      // #1394/#1405: the tile's own rings, dits and sampled rails decide the slots, in place of the edge guess.
+      const markerBlocked = slotsBlockedByTileMarkers(tile.tile_id, tile.orientation);
       withHexClip(ctx, center, hexSize, () => {
-        drawValueBadge(ctx, center, tile.q, tile.r, terrain, hexSize, chainRevenue, tileEdges, claimedHexSlots);
+        drawValueBadge(
+          ctx,
+          center,
+          tile.q,
+          tile.r,
+          terrain,
+          hexSize,
+          chainRevenue,
+          tileEdges,
+          claimedHexSlots,
+          markerBlocked,
+        );
       });
     }
+    /* #1390's padlock on final tiles was drawn here and is GONE by ruling ("remove the padlocks from the
+       tiles"); the mark lives on the tile SELECTOR's candidates instead (#1393), where the choice is made. */
 
     // B/NY/OO badges persist across EVERY tier, reversing #47's "before tiles are laid" gate. #47 is left in place as the record of the superseded decision.
     // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #49
@@ -2230,6 +2305,7 @@ export function HexGridRenderer({
     drawBoardMarginLabels(ctx, hexSize);
 
     ctx.restore();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- boardId stands for the live board tables (#1300); heraldTick for artwork that has since loaded (#1357).
   }, [
     /* Design note #723: the cost badges are part of the picture too, so paying a hex's fee has to repaint.
        Omitted, the red $80 would sit on New York until some unrelated change happened to redraw the board --
@@ -2271,6 +2347,8 @@ export function HexGridRenderer({
     // Only ever changes while a placement is armed.
     pulsePhase,
     cursorMode,
+    // Design note #1357: the herald artwork arrived, so the board repaints with it.
+    heraldTick,
   ]);
 
   /* Design note #1014: `scheduleDraw` and `rafHandleRef` are GONE. #4 built the coalescer because a drag

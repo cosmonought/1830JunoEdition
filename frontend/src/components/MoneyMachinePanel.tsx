@@ -39,10 +39,10 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { FONT_SIZE, RADIUS } from "../styles/typography";
-import { CARD_BORDER, CARD_DIVIDER, CARD_INK, CARD_INK_MUTED, CARD_SURFACE } from "../styles/palette";
+import { CARD_BORDER, CARD_DIVIDER, CARD_INK, CARD_INK_MUTED, CARD_SURFACE, washedPlayerSurface } from "../styles/palette";
 import { getUiScale } from "../utils/uiScale";
 import { CorporateLogo } from "./CorporateLogo";
-import { MONEY_MACHINE_FALL_MS, MONEY_MACHINE_SLIDE_MS } from "./moneyMachineSchedule";
+import { MONEY_MACHINE_FALL_MS, MONEY_MACHINE_FOLD_MS, MONEY_MACHINE_SLIDE_MS } from "./moneyMachineSchedule";
 
 export type MoneyMachinePhase = "holding" | "falling" | "merged" | "leaving";
 
@@ -76,6 +76,10 @@ export interface MoneyMachinePanelProps {
   stackIndex?: number;
   /** Phase class names the caller wants on the mover row (kept for the callers' own pins). */
   moverClassName?: string;
+  /** Design note #1339: which way the figure travels. Defaults from `kind` -- a payout FALLS onto cash, a
+   *  spend RISES out of a treasury (#1291) -- and a player's SPEND rises too, so the sign is in the motion
+   *  on both surfaces. */
+  direction?: "down" | "up";
 }
 
 /** The flight: the amount span travels to the total span over the fall and fades as it lands. */
@@ -121,6 +125,7 @@ export function MoneyMachinePanel({
   holder,
   stackIndex = 0,
   moverClassName,
+  direction,
 }: MoneyMachinePanelProps) {
   const amountRef = useRef<HTMLSpanElement | null>(null);
   const totalRef = useRef<HTMLSpanElement | null>(null);
@@ -139,24 +144,44 @@ export function MoneyMachinePanel({
 
   const shown = phase === "holding" || phase === "falling" ? holder.before : holder.after;
   const corporation = kind === "corporation";
+  /* #1339: the mover sits BELOW the total when the figure rises, above it when it falls. */
+  const rises = (direction ?? (corporation ? "up" : "down")) === "up";
   /* The divider sits between the two rows, whichever order they take. */
+  /* ==================================================================
+      DESIGN NOTE 1368: THE ROW FOLDS AWAY AFTER THE FIGURE HAS LANDED
+     ==================================================================
+     REPORTED: "The 'spend money' slide-out does not merge the panel after the values merge, so there's a
+     weird blank space" -- and the same of the treasury and the received-money panels.
+     #1291 SAID "THE ROW'S HEIGHT NEVER CHANGES; NOTHING NARROWS", and that was the right answer to the
+     report it was answering: a row that collapsed INSTEAD of merging read as a row disappearing. The figure
+     now flies, so the merge is seen -- and what is left behind is a row with a label and a hole where the
+     number was, held open for the rest of the panel's stay. That hole is the report.
+     SO THE ROW FOLDS AFTER THE LANDING, not instead of the flight: once the figure has arrived the mover
+     row's track goes to zero over a short ease, and the panel closes up around the total. Sequence, not
+     substitution -- the merge is still the event; the fold is the tidy-up. A reduced-motion reader never
+     lands (#1291's rule), so for them the row stays as the static statement it always was. */
   const moverRow = (
-    <div style={{ ...styles.row, ...(corporation ? styles.secondRow : null) }} className={moverClassName}>
-      <span style={styles.rowLabel}>{mover.label}</span>
-      <span
-        ref={amountRef}
-        style={{
-          ...styles.amount,
-          color: mover.ink,
-          ...(landed ? styles.amountLanded : null),
-        }}
+    <div style={{ ...styles.fold, ...(landed ? styles.foldClosed : null) }}>
+      <div
+        style={{ ...styles.foldInner, ...styles.row, ...(rises ? styles.secondRow : null), ...(landed ? styles.rowFolded : null) }}
+        className={moverClassName}
       >
-        {mover.amountText}
-      </span>
+        <span style={styles.rowLabel}>{mover.label}</span>
+        <span
+          ref={amountRef}
+          style={{
+            ...styles.amount,
+            color: mover.ink,
+            ...(landed ? styles.amountLanded : null),
+          }}
+        >
+          {mover.amountText}
+        </span>
+      </div>
     </div>
   );
   const holderRow = (
-    <div style={{ ...styles.row, ...(corporation ? null : styles.secondRow) }}>
+    <div style={{ ...styles.row, ...(rises ? null : styles.secondRow) }}>
       <span style={styles.holderLabel}>{holder.label}</span>
       <span ref={totalRef} style={styles.holderTotal}>
         ${shown}
@@ -172,6 +197,8 @@ export function MoneyMachinePanel({
         style={{
           ...styles.panel,
           borderRadius: corporation ? RADIUS.card : 0,
+          /* Design note #1347: a player's panel is washed in the seat colour; a corporation's keeps the parchment. */
+          backgroundColor: corporation ? CARD_SURFACE : washedPlayerSurface(CARD_SURFACE, header.fill),
           bottom: `${CORNER_BOTTOM_PX + stackIndex * STACK_STEP_PX}px`,
         }}
         className={phase === "leaving" ? "app-money-panel app-money-panel-out" : "app-money-panel"}
@@ -195,9 +222,9 @@ export function MoneyMachinePanel({
           )}
           <span style={styles.stripeLabel}>{header.label}</span>
         </header>
-        {/* Design note #1291: a payout falls onto cash; a spend rises out of a treasury. */}
-        {corporation ? holderRow : moverRow}
-        {corporation ? moverRow : holderRow}
+        {/* Design note #1291: a payout falls onto cash; a spend rises out of a treasury. #1339: or out of cash. */}
+        {rises ? holderRow : moverRow}
+        {rises ? moverRow : holderRow}
       </div>
     </>
   );
@@ -285,6 +312,17 @@ const styles: Record<string, React.CSSProperties> = {
     flex: "none",
   },
   amountLanded: { opacity: 0 },
+  /* #1368: a one-track grid whose track folds to nothing. `0fr` is animatable where a content height is not,
+     and the inner box's `minHeight: 0` is what lets the track actually reach zero. */
+  fold: {
+    display: "grid",
+    gridTemplateRows: "1fr",
+    transition: `grid-template-rows ${MONEY_MACHINE_FOLD_MS}ms ease, opacity ${MONEY_MACHINE_FOLD_MS}ms ease`,
+    opacity: 1,
+  },
+  foldClosed: { gridTemplateRows: "0fr", opacity: 0 },
+  foldInner: { minHeight: 0, overflow: "hidden", transition: `padding ${MONEY_MACHINE_FOLD_MS}ms ease, margin ${MONEY_MACHINE_FOLD_MS}ms ease` },
+  rowFolded: { paddingTop: 0, paddingBottom: 0, marginTop: 0, borderTopWidth: 0 },
   secondRow: {
     marginTop: "4px",
     paddingTop: "5px",

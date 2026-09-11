@@ -37,9 +37,13 @@ describe("the payout panel merges the figure rather than closing a gap (design n
      what was the collapse is asserted gone. */
   const PANEL = readStripped("components/MoneyMachinePanel.tsx");
 
-  it("never changes the panel's height: there is no track to collapse", () => {
-    expect(PANEL).not.toContain("grid-template-rows");
-    expect(PANEL).not.toContain("gridTemplateRows");
+  it("folds the mover row only AFTER the figure has landed, never instead of the flight (#1368)", () => {
+    /* #1291 pinned "no track to collapse" because #1163's collapse stood IN FOR the merge. The figure flies
+       now, and the row folds afterwards -- the fold is gated on `landed`, which is only ever true after a
+       flight, so the sequence merge-then-fold cannot become fold-instead-of-merge. */
+    expect(PANEL).toContain("...(landed ? styles.foldClosed : null)");
+    expect(PANEL).toContain('foldClosed: { gridTemplateRows: "0fr", opacity: 0 },');
+    expect(PANEL).toContain('setLanded(flewRef.current && (phase === "merged" || phase === "leaving"));');
     expect(MACHINE).not.toContain("grid-template-rows");
   });
 

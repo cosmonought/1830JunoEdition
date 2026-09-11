@@ -45,32 +45,41 @@ export const ERA_TILE_FILL: Readonly<Record<TileColorTier, string>> = {
   // preprinted yellow hex and a laid yellow tile are the same tier and must
   // be the same colour; they were `#e8d488` and `#f0d9a0`, which read as two
   // different kinds of yellow sitting next to each other.
-  Yellow: "#FDE900",
-  Green: "#71BF44",
-  Brown: "#CB7745",
-  /* #1312: a LAID gray tile, kept a step lighter and cooler than `PRINTED_HEX_FILL.Gray` (#8a8f94) so a
-     player can still tell a permanent preprint from a tile that was laid this game. */
+  /* Design note #1349 (10 September): the three tiers re-cut to the owner's swatches. Measured before
+     they went in: track ink 13.7 / 6.9 / 5.4 : 1 on Yellow / Green / Brown (the floor for a thick line is
+     3:1); every pair of tiers >= 43 dE (CIE76), Gray included; the nearest livery to each is >= 20 dE (ERIE
+     to Yellow 20.4, B&M to Green 21.9, CPR to Brown 23.1 -- and a station token sits on a white circle, not
+     on the fill). Green/Brown are 1.28:1 by luminance and separated by hue, as #161 already recorded. */
+  Yellow: "#ffe600",
+  Green: "#59b578",
+  Brown: "#bf8156",
+  /* #1312 kept a laid gray a step lighter than the preprint; #1412 unified them -- `PRINTED_HEX_FILL.Gray`
+     is this same value, by ruling. */
   Gray: "#A9AEB4",
 };
 
 /* One named track ink. #153 split it per tier when Brown was dark enough that near-black measured ~1.6:1; #161's lighter canonical Brown made dark ink correct on all three again. THE TABLE STAYS even though the values agree -- it is what makes "ink is a function of the tier" structural, and it caught the problem the last time a fill moved.
    See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #473 */
-export const STANDARD_TRACK_INK = "#1a1a1a";
+/* Design note #1351 (10 September): `#110a0c`, the owner's pick -- a warm near-black. 15.4:1 on Yellow, 7.7:1 on
+   Green, 6.1:1 on Brown, 8.8:1 on laid Gray. */
+export const STANDARD_TRACK_INK = "#110a0c";
 
 export const TILE_TRACK_INK: Readonly<Record<TileColorTier, string>> = {
-  // 13.9:1 on Yellow, 7.7:1 on Green, 5.2:1 on Brown -- comfortably past the 3:1 a thick graphical line needs.
+  // 15.4:1 on Yellow, 7.7:1 on Green, 6.1:1 on Brown (#1349/#1351) -- comfortably past the 3:1 a thick graphical line needs.
   // See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #161
   Yellow: STANDARD_TRACK_INK,
   Green: STANDARD_TRACK_INK,
   Brown: STANDARD_TRACK_INK,
-  Gray: STANDARD_TRACK_INK, // 9.6:1 on #A9AEB4
+  Gray: STANDARD_TRACK_INK, // 8.8:1 on #A9AEB4
 };
 
-/** The track ink for a tile whose tier is unknown -- an id missing from the
- *  catalog mirror. Matches the historic default, so every existing
- *  non-tile track call (preprinted gray hexes, landmark stubs, off-board
- *  stubs) is byte-identical to before. */
-export const DEFAULT_TRACK_INK = "#2b2b2b";
+/** The track ink for a tile whose tier is unknown -- an id missing from the catalog mirror -- and for every
+ *  non-tile track (preprinted gray hexes, landmark stubs, off-board stubs).
+ *  Design note #1356 (10 September): THE SAME INK AS THE TILES. It was `#2b2b2b` against the tiles' `#1a1a1a`
+ *  -- two blacks a pixel apart, kept distinct by history rather than by intent -- and the ruling is that
+ *  track is one colour wherever it runs. Same value, still two names: the tables stay so "ink is a function
+ *  of the tier" remains structural (#473). */
+export const DEFAULT_TRACK_INK = STANDARD_TRACK_INK;
 
 /* TERRAIN_FILL deleted: it mapped each terrain to its own tile background and was the direct cause of the reported colour drift. Unlaid BOARD hexes were never its business.
    See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #122 */
@@ -386,10 +395,15 @@ export const BOARD_HEX_STROKE: Readonly<Record<BoardHexType, string>> = {
 /** Overrides the ordinary fill/stroke for any hex carrying a printedColor, approximating the real board's gray cardstock and starting yellow tile.
  *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #12 */
 export const PRINTED_HEX_FILL: Readonly<Record<PrintedHexColor, string>> = {
-  Gray: "#8a8f94",
+  /* #1412: THE SAME GRAY AS A LAID GRAY TILE. RULED: "The gray tiles that players place are a different gray
+     from the preprinted hexes. Please update the preprinted hexes to match the gray tiles." #1312 had kept
+     the preprint a step darker so a permanent hex could be told from a tile laid this game; the ruling is
+     that one tier is one colour, as it already is for Yellow (#152). Written as the literal, in step with
+     `ERA_TILE_FILL.Gray`, for the same import-cycle reason as Yellow. Coal River stays its own slate. */
+  Gray: "#A9AEB4",
   // THE SAME VALUE as the Yellow era fill, not a near-match: both paint the same claim and differed only because they were tuned in separate passes. Written as a literal rather than a reference to keep this table import-cycle-free.
   // See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #152
-  Yellow: "#FDE900",
+  Yellow: "#ffe600", // #1349, in step with `ERA_TILE_FILL.Yellow`
   // #1320: Coal River. A dark slate, a shade off the cardstock gray so it reads as its own kind of hex.
   Coal: "#4b4f55",
 };

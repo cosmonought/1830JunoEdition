@@ -402,22 +402,36 @@ export function planTokenUpgrade(
    token ignores that choice, because connectivity already decided and there was no choice to make. Letting
    the choice win there would put #878's superseded rule back through a side door. */
 
+/* ==================================================================
+    DESIGN NOTE 1400: THE UPGRADER CHOOSES FOR EVERY FREE TOKEN, NOT ONLY ITS OWN
+   ==================================================================
+   REPORTED: "When upgrading the ERIE home station tile to Green and the home station is placed, the
+   tileselector is supposed to rotate through all possible combinations with ERIE in one city, then repeat it
+   with ERIE in the other city. At one time this worked when ERIE was the one upgrading its home station hex,
+   but N&W is trying to upgrade it and only gets the first set of rotations with ERIE's station in one city."
+   IT ONLY EVER WORKED FOR ERIE, BY DESIGN -- #885 wrote "a free token belonging to anyone else is omitted
+   rather than guessed: this president is not choosing for them", and the shell's `ownIsFree` asked only
+   about the ACTING corporation's token. Both halves were the same decision, and it was the wrong one: the
+   corporation laying the tile is the one placing the tokens on it. That is how connectivity is preserved
+   for everybody (#880), and where connectivity says nothing -- an unbuilt home -- the same president makes
+   the call for the same reason. So the rotation's second dimension (#824) opens whenever ANY standing token
+   is free, and the chosen city fills in every free token. Anchored tokens still ignore the choice (#878). */
+
 /** `[company_id, city_index]` for every token whose destination is known.
  *
- *  A FREE TOKEN BELONGING TO ANYONE ELSE IS OMITTED rather than guessed: the board never said which city it
- *  is in, this president is not choosing for them, and inventing an index would be the index-preservation
- *  bug #878 removed, wearing a third hat. */
+ *  A FREE TOKEN -- anybody's -- takes the city the president chose by rotating (#1400); one with no choice
+ *  yet made is omitted rather than guessed, and the reducer leaves it where the chain recorded it. */
 export function tokenLandingsFor(input: {
   plan: UpgradeTokenPlan | null;
+  /** Kept for the callers' shape; since #1400 the choice is not scoped to it. */
   actingCompanyId: number | null;
-  /** What the president chose by rotating, where the plan left their own token free. */
+  /** What the president chose by rotating, where the plan left a token free. */
   chosenCity: number | undefined;
 }): Array<[number, number]> {
-  const { plan, actingCompanyId, chosenCity } = input;
+  const { plan, chosenCity } = input;
   return (plan?.landings ?? []).flatMap((entry) => {
     const anchored = entry.toCityIndex;
-    const chosen =
-      anchored === null && entry.companyId === actingCompanyId ? chosenCity : anchored;
+    const chosen = anchored === null ? chosenCity : anchored;
     return chosen === undefined || chosen === null
       ? []
       : [[entry.companyId, chosen] as [number, number]];

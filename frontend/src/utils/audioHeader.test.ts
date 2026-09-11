@@ -55,7 +55,8 @@ describe("the shell owns the audio state", () => {
        The claim this case makes is unchanged and is the reason it names the hook at all -- the radio is its
        own state, separate from `sfxEnabled`, so muting one cannot silence the other. The station is a third
        piece of state feeding it, which is asserted on its own below. */
-    expect(APP).toContain("const radio = useRadioStream(station.url);");
+    // #1359: and the station's sibling hosts, walked on `error`.
+    expect(APP).toContain("const radio = useRadioStream(station.url, station.fallbacks);");
   });
 
   it("keeps the station out of the transport and persists the choice", () => {

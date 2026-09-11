@@ -98,7 +98,7 @@ describe("the unchanged roll's default is silence", () => {
     /* Design note #1094: `ephemeral &&` joined the condition, because a replayed log must not replay its
        sounds. THE NULL CHECK IS STILL AT THE CALL SITE, which is what this case is about, and still for the
        same reason. Asserted as a substring so a third clause does not break it. */
-    expect(APP).toContain("cue.audio !== null) {");
+    expect(APP).toContain("cue.audio !== null && !(cue.video && cue.audioAtMs > 0)) {"); // #1376
     expect(SFX).toContain("audio: string | null;");
   });
 });

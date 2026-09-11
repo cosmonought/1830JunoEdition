@@ -62,6 +62,16 @@ export const MOCK_TRAIN_CATALOG: ReadonlyArray<{
   { modelType: "4", costVgp: 300, maxDistance: 4, bankQuantity: 4 },
   { modelType: "5", costVgp: 450, maxDistance: 5, bankQuantity: 3 },
   { modelType: "6", costVgp: 630, maxDistance: 6, bankQuantity: 2 },
+  /* Design note #1396: THE 7-TRAIN RAN LIKE A DIESEL.
+     REPORTED (LPF playtest): "The Auto-router for 7-trains is treating them like D-trains, but then the Run
+     Routes correctly rejects it for being too many stops."
+     #1326 added the tier to `gamePhase` (order, cost, depot count) and not here, so a 7-train's `maxDistance`
+     came back `undefined` -- which `trainReach` #881 reads two ways ON PURPOSE: unlimited when planning
+     (the auto-router drew a Diesel run) and the smallest train when checking (the panel refused it). Both
+     were answering honestly about a train they did not know. Now they know it: seven stops, $710 (#1326's
+     price), two in the depot (`DEPOT_TOTALS`). Sits between the 6 and the D because this array's ORDER is
+     the tier order (`bestOwnedTrain`), and `tierOrderFor` keeps the 7 out of every game but the LPF. */
+  { modelType: "7", costVgp: 710, maxDistance: 7, bankQuantity: 2 },
   { modelType: "D", costVgp: 1_100, maxDistance: 999, bankQuantity: 20 },
 ];
 

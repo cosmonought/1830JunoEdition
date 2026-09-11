@@ -150,7 +150,8 @@ describe("#1245: the home station has a sentence of its own again", () => {
       { PlaceHomeStation: { company_id: PRR, q: 0, r: 0, kind: "home", city_index: null, hex_label: "H12" } } as never,
       context(board()) as never,
     );
-    expect(home).toBe("PRR placed its home station token on H12.");
+    // #1343: the float's one line, said at the placement. The fixture's PRR carries its treasury.
+    expect(home).toMatch(/^PRR has floated\.( It received \$\d+\.)? Its home station on H12 is placed\.$/);
     const dh = describeGameplayAction(
       { PlaceHomeStation: { company_id: BO, q: 0, r: 0, kind: "dh", city_index: null, hex_label: "F16" } } as never,
       context(board()) as never,

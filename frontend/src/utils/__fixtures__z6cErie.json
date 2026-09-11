@@ -1,0 +1,1500 @@
+{
+ "roomCode": "JUNO-Z6C",
+ "throughIndex": 608,
+ "note": "Design note #1408: every effective lay / home / token placement through ERIE's Run Routes step in OR 9.3. `blockedForErie`: the cities the shell's `cityBlockerFor` walled for ERIE at that point. `tokensForErie`: ERIE's station tokens as the replayed state holds them (the home was placed in city 1 and moved to city 0 by an upgrade's token map, #880).",
+ "actions": [
+  {
+   "index": 0,
+   "actor": "p-lzjh2r6u",
+   "msg": {
+    "SetupGame": {
+     "variants": {
+      "delayedAuction": false,
+      "dynamicStockMarket": false,
+      "expandedMap": true,
+      "gentleRust": false,
+      "length": "standard",
+      "levelPlayingField": true,
+      "mode": "live",
+      "plusTiles": true,
+      "unpredictableRevenue": true
+     }
+    }
+   }
+  },
+  {
+   "index": 32,
+   "actor": "p-lzjh2r6u",
+   "msg": {
+    "PlaceHomeStation": {
+     "city_index": null,
+     "company_id": 4,
+     "hex_label": "I15",
+     "kind": "home",
+     "q": 3,
+     "r": 8
+    }
+   }
+  },
+  {
+   "index": 37,
+   "actor": "p-je0gw2v0",
+   "msg": {
+    "PlaceHomeStation": {
+     "city_index": 0,
+     "company_id": 7,
+     "hex_label": "G19",
+     "kind": "home",
+     "q": 6,
+     "r": 6
+    }
+   }
+  },
+  {
+   "index": 41,
+   "actor": "p-lzjh2r6u",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 1,
+     "protocol_id": 4,
+     "q": 2,
+     "r": 9,
+     "tile_id": 57
+    }
+   }
+  },
+  {
+   "index": 48,
+   "actor": "p-je0gw2v0",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 0,
+     "protocol_id": 7,
+     "q": 7,
+     "r": 5,
+     "tile_id": 69
+    }
+   }
+  },
+  {
+   "index": 56,
+   "actor": "p-6a1qgd0g",
+   "msg": {
+    "PlaceHomeStation": {
+     "city_index": null,
+     "company_id": 5,
+     "hex_label": "F6",
+     "kind": "home",
+     "q": 0,
+     "r": 5
+    }
+   }
+  },
+  {
+   "index": 60,
+   "actor": "p-6a1qgd0g",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 1,
+     "protocol_id": 5,
+     "q": -1,
+     "r": 6,
+     "tile_id": 8
+    }
+   }
+  },
+  {
+   "index": 66,
+   "actor": "p-lzjh2r6u",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 1,
+     "protocol_id": 4,
+     "q": 1,
+     "r": 10,
+     "tile_id": 57
+    }
+   }
+  },
+  {
+   "index": 67,
+   "actor": "p-lzjh2r6u",
+   "msg": {
+    "PlaceStationToken": {
+     "city_index": 0,
+     "game_id": 0,
+     "protocol_id": 4,
+     "q": 1,
+     "r": 10
+    }
+   }
+  },
+  {
+   "index": 71,
+   "actor": "p-je0gw2v0",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 2,
+     "protocol_id": 7,
+     "q": 7,
+     "r": 4,
+     "tile_id": 57
+    }
+   }
+  },
+  {
+   "index": 80,
+   "actor": "p-lzjh2r6u",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 5,
+     "protocol_id": 4,
+     "q": 0,
+     "r": 11,
+     "tile_id": 8
+    }
+   }
+  },
+  {
+   "index": 86,
+   "actor": "p-6a1qgd0g",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 0,
+     "protocol_id": 5,
+     "q": -2,
+     "r": 6,
+     "tile_id": 8
+    }
+   }
+  },
+  {
+   "index": 91,
+   "actor": "p-je0gw2v0",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 3,
+     "protocol_id": 7,
+     "q": 7,
+     "r": 3,
+     "tile_id": 8
+    }
+   }
+  },
+  {
+   "index": 102,
+   "actor": "p-lzjh2r6u",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 0,
+     "protocol_id": 4,
+     "q": 4,
+     "r": 8,
+     "tile_id": 9
+    }
+   }
+  },
+  {
+   "index": 109,
+   "actor": "p-6a1qgd0g",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 0,
+     "protocol_id": 1,
+     "q": 1,
+     "r": 7,
+     "tile_id": 57
+    }
+   }
+  },
+  {
+   "index": 110,
+   "actor": "p-6a1qgd0g",
+   "msg": {
+    "PlaceStationToken": {
+     "city_index": 0,
+     "game_id": 0,
+     "protocol_id": 1,
+     "q": 1,
+     "r": 7
+    }
+   }
+  },
+  {
+   "index": 116,
+   "actor": "p-6a1qgd0g",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 2,
+     "protocol_id": 5,
+     "q": 0,
+     "r": 6,
+     "tile_id": 2
+    }
+   }
+  },
+  {
+   "index": 123,
+   "actor": "p-je0gw2v0",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 1,
+     "protocol_id": 7,
+     "q": 6,
+     "r": 6,
+     "tile_id": 54,
+     "token_cities": [
+      [
+       7,
+       0
+      ]
+     ],
+     "token_city": 0
+    }
+   }
+  },
+  {
+   "index": 138,
+   "actor": "p-lzjh2r6u",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 0,
+     "protocol_id": 4,
+     "q": 3,
+     "r": 8,
+     "tile_id": 53,
+     "token_cities": [
+      [
+       4,
+       0
+      ]
+     ],
+     "token_city": 0
+    }
+   }
+  },
+  {
+   "index": 144,
+   "actor": "p-6a1qgd0g",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 0,
+     "protocol_id": 5,
+     "q": 0,
+     "r": 7,
+     "tile_id": 8
+    }
+   }
+  },
+  {
+   "index": 150,
+   "actor": "p-6a1qgd0g",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 0,
+     "protocol_id": 1,
+     "q": 1,
+     "r": 7,
+     "tile_id": 14,
+     "token_cities": [
+      [
+       1,
+       0
+      ]
+     ],
+     "token_city": 0
+    }
+   }
+  },
+  {
+   "index": 157,
+   "actor": "p-je0gw2v0",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 1,
+     "protocol_id": 7,
+     "q": 7,
+     "r": 4,
+     "tile_id": 14
+    }
+   }
+  },
+  {
+   "index": 163,
+   "actor": "p-lzjh2r6u",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 4,
+     "protocol_id": 4,
+     "q": 5,
+     "r": 7,
+     "tile_id": 626
+    }
+   }
+  },
+  {
+   "index": 170,
+   "actor": "p-6a1qgd0g",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 3,
+     "protocol_id": 5,
+     "q": 3,
+     "r": 7,
+     "tile_id": 8
+    }
+   }
+  },
+  {
+   "index": 177,
+   "actor": "p-6a1qgd0g",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 2,
+     "protocol_id": 1,
+     "q": 2,
+     "r": 8,
+     "tile_id": 9
+    }
+   }
+  },
+  {
+   "index": 183,
+   "actor": "p-je0gw2v0",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 5,
+     "protocol_id": 7,
+     "q": 6,
+     "r": 5,
+     "tile_id": 8
+    }
+   }
+  },
+  {
+   "index": 200,
+   "actor": "p-6a1qgd0g",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 1,
+     "protocol_id": 5,
+     "q": 2,
+     "r": 6,
+     "tile_id": 9
+    }
+   }
+  },
+  {
+   "index": 207,
+   "actor": "p-lzjh2r6u",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 4,
+     "protocol_id": 4,
+     "q": 1,
+     "r": 11,
+     "tile_id": 8
+    }
+   }
+  },
+  {
+   "index": 213,
+   "actor": "p-6a1qgd0g",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 1,
+     "protocol_id": 1,
+     "q": 2,
+     "r": 9,
+     "tile_id": 14
+    }
+   }
+  },
+  {
+   "index": 219,
+   "actor": "p-je0gw2v0",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 5,
+     "protocol_id": 7,
+     "q": 6,
+     "r": 5,
+     "tile_id": 29
+    }
+   }
+  },
+  {
+   "index": 227,
+   "actor": "p-lzjh2r6u",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 0,
+     "protocol_id": 4,
+     "q": -1,
+     "r": 12,
+     "tile_id": 8
+    }
+   }
+  },
+  {
+   "index": 233,
+   "actor": "p-6a1qgd0g",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 2,
+     "protocol_id": 1,
+     "q": 2,
+     "r": 10,
+     "tile_id": 9
+    }
+   }
+  },
+  {
+   "index": 239,
+   "actor": "p-6a1qgd0g",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 3,
+     "protocol_id": 5,
+     "q": -1,
+     "r": 11,
+     "tile_id": 8
+    }
+   }
+  },
+  {
+   "index": 246,
+   "actor": "p-je0gw2v0",
+   "msg": {
+    "LayTile": {
+     "ability_key": "dh-tile",
+     "game_id": 0,
+     "orientation": 0,
+     "protocol_id": 7,
+     "q": 5,
+     "r": 5,
+     "tile_id": 57
+    }
+   }
+  },
+  {
+   "index": 256,
+   "actor": "p-je0gw2v0",
+   "msg": {
+    "PlaceHomeStation": {
+     "city_index": 0,
+     "company_id": 2,
+     "hex_label": "E19",
+     "kind": "home",
+     "q": 7,
+     "r": 4
+    }
+   }
+  },
+  {
+   "index": 262,
+   "actor": "p-lzjh2r6u",
+   "msg": {
+    "PlaceHomeStation": {
+     "city_index": null,
+     "company_id": 10,
+     "hex_label": "L16",
+     "kind": "home",
+     "q": 2,
+     "r": 11
+    }
+   }
+  },
+  {
+   "index": 269,
+   "actor": "p-lzjh2r6u",
+   "msg": {
+    "LayTile": {
+     "ability_key": "jk-tile",
+     "game_id": 0,
+     "orientation": 0,
+     "protocol_id": 4,
+     "q": -3,
+     "r": 11,
+     "tile_id": 9
+    }
+   }
+  },
+  {
+   "index": 275,
+   "actor": "p-6a1qgd0g",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 0,
+     "protocol_id": 1,
+     "q": 0,
+     "r": 7,
+     "tile_id": 24
+    }
+   }
+  },
+  {
+   "index": 281,
+   "actor": "p-6a1qgd0g",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 0,
+     "protocol_id": 5,
+     "q": -1,
+     "r": 5,
+     "tile_id": 57
+    }
+   }
+  },
+  {
+   "index": 287,
+   "actor": "p-je0gw2v0",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 0,
+     "protocol_id": 2,
+     "q": 6,
+     "r": 3,
+     "tile_id": 9
+    }
+   }
+  },
+  {
+   "index": 294,
+   "actor": "p-lzjh2r6u",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 1,
+     "protocol_id": 10,
+     "q": 3,
+     "r": 10,
+     "tile_id": 9
+    }
+   }
+  },
+  {
+   "index": 301,
+   "actor": "p-je0gw2v0",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 3,
+     "protocol_id": 7,
+     "q": 6,
+     "r": 5,
+     "tile_id": 45
+    }
+   }
+  },
+  {
+   "index": 304,
+   "actor": "p-je0gw2v0",
+   "msg": {
+    "PlaceStationToken": {
+     "city_index": 0,
+     "game_id": 0,
+     "protocol_id": 7,
+     "q": 5,
+     "r": 5
+    }
+   }
+  },
+  {
+   "index": 308,
+   "actor": "p-lzjh2r6u",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 0,
+     "protocol_id": 4,
+     "q": -4,
+     "r": 11,
+     "tile_id": 9
+    }
+   }
+  },
+  {
+   "index": 313,
+   "actor": "p-6a1qgd0g",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 0,
+     "protocol_id": 1,
+     "q": -1,
+     "r": 7,
+     "tile_id": 7
+    }
+   }
+  },
+  {
+   "index": 318,
+   "actor": "p-6a1qgd0g",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 0,
+     "protocol_id": 5,
+     "q": -1,
+     "r": 5,
+     "tile_id": 15
+    }
+   }
+  },
+  {
+   "index": 323,
+   "actor": "p-je0gw2v0",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 1,
+     "protocol_id": 7,
+     "q": 4,
+     "r": 4,
+     "tile_id": 9
+    }
+   }
+  },
+  {
+   "index": 330,
+   "actor": "p-je0gw2v0",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 1,
+     "protocol_id": 2,
+     "q": 3,
+     "r": 5,
+     "tile_id": 9
+    }
+   }
+  },
+  {
+   "index": 335,
+   "actor": "p-lzjh2r6u",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 0,
+     "protocol_id": 10,
+     "q": 1,
+     "r": 10,
+     "tile_id": 619,
+     "token_cities": [
+      [
+       4,
+       0
+      ]
+     ]
+    }
+   }
+  },
+  {
+   "index": 343,
+   "actor": "p-6a1qgd0g",
+   "msg": {
+    "PlaceHomeStation": {
+     "city_index": 1,
+     "company_id": 9,
+     "hex_label": "E5",
+     "kind": "home",
+     "q": 0,
+     "r": 4
+    }
+   }
+  },
+  {
+   "index": 358,
+   "actor": "p-6a1qgd0g",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 3,
+     "protocol_id": 1,
+     "q": -1,
+     "r": 6,
+     "tile_id": 23
+    }
+   }
+  },
+  {
+   "index": 363,
+   "actor": "p-6a1qgd0g",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 2,
+     "protocol_id": 5,
+     "q": -1,
+     "r": 4,
+     "tile_id": 8
+    }
+   }
+  },
+  {
+   "index": 368,
+   "actor": "p-lzjh2r6u",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 3,
+     "protocol_id": 4,
+     "q": 4,
+     "r": 8,
+     "tile_id": 23
+    }
+   }
+  },
+  {
+   "index": 373,
+   "actor": "p-je0gw2v0",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 1,
+     "protocol_id": 2,
+     "q": 6,
+     "r": 6,
+     "tile_id": 62,
+     "token_cities": [
+      [
+       7,
+       0
+      ]
+     ]
+    }
+   }
+  },
+  {
+   "index": 378,
+   "actor": "p-6a1qgd0g",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 4,
+     "protocol_id": 9,
+     "q": 0,
+     "r": 4,
+     "tile_id": 59,
+     "token_cities": [
+      [
+       9,
+       0
+      ]
+     ],
+     "token_city": 0
+    }
+   }
+  },
+  {
+   "index": 384,
+   "actor": "p-je0gw2v0",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 0,
+     "protocol_id": 7,
+     "q": 7,
+     "r": 4,
+     "tile_id": 63,
+     "token_cities": [
+      [
+       2,
+       0
+      ]
+     ]
+    }
+   }
+  },
+  {
+   "index": 394,
+   "actor": "p-lzjh2r6u",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 1,
+     "protocol_id": 10,
+     "q": 4,
+     "r": 9,
+     "tile_id": 9
+    }
+   }
+  },
+  {
+   "index": 399,
+   "actor": "p-6a1qgd0g",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 2,
+     "protocol_id": 1,
+     "q": 0,
+     "r": 4,
+     "tile_id": 36,
+     "token_cities": [
+      [
+       9,
+       1
+      ]
+     ]
+    }
+   }
+  },
+  {
+   "index": 404,
+   "actor": "p-6a1qgd0g",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 4,
+     "protocol_id": 5,
+     "q": -1,
+     "r": 4,
+     "tile_id": 25
+    }
+   }
+  },
+  {
+   "index": 409,
+   "actor": "p-lzjh2r6u",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 3,
+     "protocol_id": 4,
+     "q": 3,
+     "r": 8,
+     "tile_id": 884,
+     "token_cities": [
+      [
+       4,
+       0
+      ]
+     ],
+     "token_city": 0
+    }
+   }
+  },
+  {
+   "index": 415,
+   "actor": "p-je0gw2v0",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 3,
+     "protocol_id": 2,
+     "q": 5,
+     "r": 5,
+     "tile_id": 15,
+     "token_cities": [
+      [
+       7,
+       0
+      ]
+     ]
+    }
+   }
+  },
+  {
+   "index": 420,
+   "actor": "p-lzjh2r6u",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 1,
+     "protocol_id": 10,
+     "q": 4,
+     "r": 7,
+     "tile_id": 57
+    }
+   }
+  },
+  {
+   "index": 425,
+   "actor": "p-6a1qgd0g",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 2,
+     "protocol_id": 9,
+     "q": -1,
+     "r": 4,
+     "tile_id": 46
+    }
+   }
+  },
+  {
+   "index": 430,
+   "actor": "p-je0gw2v0",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 0,
+     "protocol_id": 7,
+     "q": 7,
+     "r": 4,
+     "tile_id": 513,
+     "token_cities": [
+      [
+       2,
+       0
+      ]
+     ]
+    }
+   }
+  },
+  {
+   "index": 435,
+   "actor": "p-6a1qgd0g",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 0,
+     "protocol_id": 1,
+     "q": 1,
+     "r": 10,
+     "tile_id": 63,
+     "token_cities": [
+      [
+       4,
+       0
+      ]
+     ]
+    }
+   }
+  },
+  {
+   "index": 447,
+   "actor": "p-lzjh2r6u",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 4,
+     "protocol_id": 4,
+     "q": 5,
+     "r": 6,
+     "tile_id": 631
+    }
+   }
+  },
+  {
+   "index": 452,
+   "actor": "p-je0gw2v0",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 4,
+     "protocol_id": 2,
+     "q": 8,
+     "r": 3,
+     "tile_id": 8
+    }
+   }
+  },
+  {
+   "index": 457,
+   "actor": "p-lzjh2r6u",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 1,
+     "protocol_id": 10,
+     "q": -4,
+     "r": 10,
+     "tile_id": 57
+    }
+   }
+  },
+  {
+   "index": 458,
+   "actor": "p-lzjh2r6u",
+   "msg": {
+    "PlaceStationToken": {
+     "city_index": 1,
+     "game_id": 0,
+     "protocol_id": 10,
+     "q": 6,
+     "r": 6
+    }
+   }
+  },
+  {
+   "index": 462,
+   "actor": "p-6a1qgd0g",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 1,
+     "protocol_id": 9,
+     "q": 1,
+     "r": 4,
+     "tile_id": 58
+    }
+   }
+  },
+  {
+   "index": 467,
+   "actor": "p-je0gw2v0",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 0,
+     "protocol_id": 7,
+     "q": 4,
+     "r": 3,
+     "tile_id": 9
+    }
+   }
+  },
+  {
+   "index": 484,
+   "actor": "p-lzjh2r6u",
+   "msg": {
+    "PlaceHomeStation": {
+     "city_index": 1,
+     "company_id": 6,
+     "hex_label": "E11",
+     "kind": "home",
+     "q": 3,
+     "r": 4
+    }
+   }
+  },
+  {
+   "index": 488,
+   "actor": "p-6a1qgd0g",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 0,
+     "protocol_id": 1,
+     "q": -1,
+     "r": 7,
+     "tile_id": 29
+    }
+   }
+  },
+  {
+   "index": 493,
+   "actor": "p-lzjh2r6u",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 1,
+     "protocol_id": 4,
+     "q": 4,
+     "r": 4,
+     "tile_id": 24
+    }
+   }
+  },
+  {
+   "index": 498,
+   "actor": "p-6a1qgd0g",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 4,
+     "protocol_id": 5,
+     "q": 3,
+     "r": 5,
+     "tile_id": 23
+    }
+   }
+  },
+  {
+   "index": 503,
+   "actor": "p-lzjh2r6u",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 0,
+     "protocol_id": 10,
+     "q": 4,
+     "r": 5,
+     "tile_id": 9
+    }
+   }
+  },
+  {
+   "index": 513,
+   "actor": "p-lzjh2r6u",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 4,
+     "protocol_id": 6,
+     "q": 3,
+     "r": 4,
+     "tile_id": 59,
+     "token_cities": [
+      [
+       6,
+       1
+      ]
+     ],
+     "token_city": 1
+    }
+   }
+  },
+  {
+   "index": 519,
+   "actor": "p-je0gw2v0",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 0,
+     "protocol_id": 2,
+     "q": 8,
+     "r": 5,
+     "tile_id": 57
+    }
+   }
+  },
+  {
+   "index": 524,
+   "actor": "p-6a1qgd0g",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 1,
+     "protocol_id": 9,
+     "q": 2,
+     "r": 3,
+     "tile_id": 9
+    }
+   }
+  },
+  {
+   "index": 525,
+   "actor": "p-6a1qgd0g",
+   "msg": {
+    "PlaceStationToken": {
+     "city_index": 0,
+     "game_id": 0,
+     "protocol_id": 9,
+     "q": 3,
+     "r": 8
+    }
+   }
+  },
+  {
+   "index": 529,
+   "actor": "p-6a1qgd0g",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 3,
+     "protocol_id": 1,
+     "q": 3,
+     "r": 4,
+     "tile_id": 66,
+     "token_cities": [
+      [
+       6,
+       0
+      ]
+     ]
+    }
+   }
+  },
+  {
+   "index": 534,
+   "actor": "p-lzjh2r6u",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 2,
+     "protocol_id": 4,
+     "q": 3,
+     "r": 4,
+     "tile_id": 167,
+     "token_cities": [
+      [
+       6,
+       0
+      ]
+     ]
+    }
+   }
+  },
+  {
+   "index": 539,
+   "actor": "p-6a1qgd0g",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 0,
+     "protocol_id": 5,
+     "q": 4,
+     "r": 7,
+     "tile_id": 14
+    }
+   }
+  },
+  {
+   "index": 544,
+   "actor": "p-lzjh2r6u",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 0,
+     "protocol_id": 10,
+     "q": -1,
+     "r": 7,
+     "tile_id": 70
+    }
+   }
+  },
+  {
+   "index": 549,
+   "actor": "p-je0gw2v0",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 3,
+     "protocol_id": 2,
+     "q": 3,
+     "r": 3,
+     "tile_id": 810
+    }
+   }
+  },
+  {
+   "index": 554,
+   "actor": "p-6a1qgd0g",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 1,
+     "protocol_id": 9,
+     "q": 3,
+     "r": 2,
+     "tile_id": 9
+    }
+   }
+  },
+  {
+   "index": 559,
+   "actor": "p-je0gw2v0",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 1,
+     "protocol_id": 7,
+     "q": 9,
+     "r": 4,
+     "tile_id": 53
+    }
+   }
+  },
+  {
+   "index": 564,
+   "actor": "p-lzjh2r6u",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 0,
+     "protocol_id": 6,
+     "q": 3,
+     "r": 3,
+     "tile_id": 882
+    }
+   }
+  },
+  {
+   "index": 572,
+   "actor": "p-6a1qgd0g",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 3,
+     "protocol_id": 1,
+     "q": 3,
+     "r": 7,
+     "tile_id": 24
+    }
+   }
+  },
+  {
+   "index": 577,
+   "actor": "p-lzjh2r6u",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 5,
+     "protocol_id": 4,
+     "q": 2,
+     "r": 5,
+     "tile_id": 58
+    }
+   }
+  },
+  {
+   "index": 582,
+   "actor": "p-6a1qgd0g",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 1,
+     "protocol_id": 5,
+     "q": 0,
+     "r": 11,
+     "tile_id": 25
+    }
+   }
+  },
+  {
+   "index": 587,
+   "actor": "p-lzjh2r6u",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 3,
+     "protocol_id": 10,
+     "q": 4,
+     "r": 2,
+     "tile_id": 7
+    }
+   }
+  },
+  {
+   "index": 592,
+   "actor": "p-je0gw2v0",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 1,
+     "protocol_id": 2,
+     "q": 5,
+     "r": 6,
+     "tile_id": 204
+    }
+   }
+  },
+  {
+   "index": 597,
+   "actor": "p-6a1qgd0g",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 1,
+     "protocol_id": 9,
+     "q": 4,
+     "r": 1,
+     "tile_id": 57
+    }
+   }
+  },
+  {
+   "index": 602,
+   "actor": "p-je0gw2v0",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 1,
+     "protocol_id": 7,
+     "q": 3,
+     "r": 5,
+     "tile_id": 41
+    }
+   }
+  },
+  {
+   "index": 607,
+   "actor": "p-lzjh2r6u",
+   "msg": {
+    "LayTile": {
+     "game_id": 0,
+     "orientation": 4,
+     "protocol_id": 6,
+     "q": 3,
+     "r": 2,
+     "tile_id": 18
+    }
+   }
+  }
+ ],
+ "blockedForErie": [
+  {
+   "label": "E5",
+   "q": 0,
+   "r": 4,
+   "city": 1
+  },
+  {
+   "label": "F6",
+   "q": 0,
+   "r": 5,
+   "city": 0
+  },
+  {
+   "label": "L8",
+   "q": -2,
+   "r": 11,
+   "city": 0
+  },
+  {
+   "label": "L8",
+   "q": -2,
+   "r": 11,
+   "city": 1
+  },
+  {
+   "label": "L8",
+   "q": -2,
+   "r": 11,
+   "city": 2
+  },
+  {
+   "label": "L8",
+   "q": -2,
+   "r": 11,
+   "city": 3
+  },
+  {
+   "label": "L16",
+   "q": 2,
+   "r": 11,
+   "city": 0
+  }
+ ],
+ "tokensForErie": [
+  [
+   3,
+   4,
+   0
+  ]
+ ]
+}

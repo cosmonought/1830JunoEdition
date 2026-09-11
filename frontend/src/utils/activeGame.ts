@@ -122,3 +122,18 @@ export function writeActiveSandboxRoom(code: string | null): void {
     /* as above */
   }
 }
+
+/** Design note #1352: RESUME INTO THE SANDBOX ROOM ON THE NEXT LOAD. The lobby's "Rejoin seat" adopts a seat
+ *  and reloads (`adoptSeat`, #1341); without this the reload would land back on the lobby, seat in hand and
+ *  nowhere to use it. The same two keys `AppRoot` writes when a player enters a room, written once, here. */
+export function writeSandboxResume(roomCode: string): void {
+  try {
+    window.sessionStorage.setItem(
+      ACTIVE_GAME_STORAGE_KEY,
+      JSON.stringify({ gameId: SANDBOX_GAME_ID, roomId: SANDBOX_ROOM_ID, mode: "sandbox" } satisfies ActiveGame),
+    );
+  } catch {
+    /* as above */
+  }
+  writeActiveSandboxRoom(roomCode);
+}

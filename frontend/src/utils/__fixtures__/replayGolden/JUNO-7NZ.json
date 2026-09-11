@@ -1,0 +1,316 @@
+{
+  "applied": 1,
+  "dropped": 0,
+  "unparseable": [],
+  "state": {
+    "game_id": 0,
+    "creator": "juno1sandboxalice000000000000000000000000",
+    "is_active": true,
+    "total_juno_pool": "4000000",
+    "virtual_bank_vgp": "9600",
+    "virtual_bank_start": "12000",
+    "max_players": 2,
+    "player_addresses": [
+      "p-hvbezffr",
+      "p-1kpjsm13"
+    ],
+    "active_player_index": 0,
+    "priority_deal_index": 0,
+    "consecutive_passes": 0,
+    "current_global_era": "Yellow",
+    "active_operating_order": [],
+    "active_corporation_index": 0,
+    "current_round_type": "WaterfallAuction",
+    "macro_round_number": 1,
+    "sub_round_index": 0,
+    "operating_round_sequence_length": 2,
+    "player_cash": [
+      {
+        "player": "p-hvbezffr",
+        "cash_vgp": "1200"
+      },
+      {
+        "player": "p-1kpjsm13",
+        "cash_vgp": "1200"
+      }
+    ],
+    "public_companies": [
+      {
+        "company_id": 1,
+        "ticker": "PRR",
+        "is_floated": false,
+        "treasury": "0",
+        "total_shares_issued": 0,
+        "par_value": null,
+        "last_route_revenue": "0",
+        "owned_trains": [],
+        "president": null,
+        "ipo_pool_percentage": 100,
+        "bank_pool_percentage": 0,
+        "player_holdings": [],
+        "home_hex_label": "H12",
+        "station_token_hexes": [],
+        "station_token_limit": 4,
+        "station_tokens": []
+      },
+      {
+        "company_id": 2,
+        "ticker": "NYC",
+        "is_floated": false,
+        "treasury": "0",
+        "total_shares_issued": 0,
+        "par_value": null,
+        "last_route_revenue": "0",
+        "owned_trains": [],
+        "president": null,
+        "ipo_pool_percentage": 100,
+        "bank_pool_percentage": 0,
+        "player_holdings": [],
+        "home_hex_label": "E19",
+        "station_token_hexes": [],
+        "station_token_limit": 4,
+        "station_tokens": []
+      },
+      {
+        "company_id": 3,
+        "ticker": "CPR",
+        "is_floated": false,
+        "treasury": "0",
+        "total_shares_issued": 0,
+        "par_value": null,
+        "last_route_revenue": "0",
+        "owned_trains": [],
+        "president": null,
+        "ipo_pool_percentage": 100,
+        "bank_pool_percentage": 0,
+        "player_holdings": [],
+        "home_hex_label": "A19",
+        "station_token_hexes": [],
+        "station_token_limit": 4,
+        "station_tokens": []
+      },
+      {
+        "company_id": 4,
+        "ticker": "B&O",
+        "is_floated": false,
+        "treasury": "0",
+        "total_shares_issued": 0,
+        "par_value": null,
+        "last_route_revenue": "0",
+        "owned_trains": [],
+        "president": null,
+        "ipo_pool_percentage": 100,
+        "bank_pool_percentage": 0,
+        "player_holdings": [],
+        "home_hex_label": "I15",
+        "station_token_hexes": [],
+        "station_token_limit": 3,
+        "station_tokens": []
+      },
+      {
+        "company_id": 5,
+        "ticker": "C&O",
+        "is_floated": false,
+        "treasury": "0",
+        "total_shares_issued": 0,
+        "par_value": null,
+        "last_route_revenue": "0",
+        "owned_trains": [],
+        "president": null,
+        "ipo_pool_percentage": 100,
+        "bank_pool_percentage": 0,
+        "player_holdings": [],
+        "home_hex_label": "F6",
+        "station_token_hexes": [],
+        "station_token_limit": 3,
+        "station_tokens": []
+      },
+      {
+        "company_id": 6,
+        "ticker": "ERIE",
+        "is_floated": false,
+        "treasury": "0",
+        "total_shares_issued": 0,
+        "par_value": null,
+        "last_route_revenue": "0",
+        "owned_trains": [],
+        "president": null,
+        "ipo_pool_percentage": 100,
+        "bank_pool_percentage": 0,
+        "player_holdings": [],
+        "home_hex_label": "E11",
+        "station_token_hexes": [],
+        "station_token_limit": 3,
+        "station_tokens": []
+      },
+      {
+        "company_id": 7,
+        "ticker": "NNH",
+        "is_floated": false,
+        "treasury": "0",
+        "total_shares_issued": 0,
+        "par_value": null,
+        "last_route_revenue": "0",
+        "owned_trains": [],
+        "president": null,
+        "ipo_pool_percentage": 100,
+        "bank_pool_percentage": 0,
+        "player_holdings": [],
+        "home_hex_label": "G19",
+        "station_token_hexes": [],
+        "station_token_limit": 2,
+        "station_tokens": []
+      },
+      {
+        "company_id": 8,
+        "ticker": "B&M",
+        "is_floated": false,
+        "treasury": "0",
+        "total_shares_issued": 0,
+        "par_value": null,
+        "last_route_revenue": "0",
+        "owned_trains": [],
+        "president": null,
+        "ipo_pool_percentage": 100,
+        "bank_pool_percentage": 0,
+        "player_holdings": [],
+        "home_hex_label": "E23",
+        "station_token_hexes": [],
+        "station_token_limit": 2,
+        "station_tokens": []
+      }
+    ],
+    "private_companies": [
+      {
+        "private_id": 1,
+        "name": "Schuylkill Valley",
+        "cost": "20",
+        "revenue_per_or": "5",
+        "owner": null,
+        "owner_protocol_id": null,
+        "closed": false
+      },
+      {
+        "private_id": 2,
+        "name": "Champlain & St. Lawrence",
+        "cost": "40",
+        "revenue_per_or": "10",
+        "owner": null,
+        "owner_protocol_id": null,
+        "closed": false
+      },
+      {
+        "private_id": 3,
+        "name": "Delaware & Hudson",
+        "cost": "70",
+        "revenue_per_or": "15",
+        "owner": null,
+        "owner_protocol_id": null,
+        "closed": false
+      },
+      {
+        "private_id": 4,
+        "name": "Mohawk & Hudson",
+        "cost": "110",
+        "revenue_per_or": "20",
+        "owner": null,
+        "owner_protocol_id": null,
+        "closed": false
+      },
+      {
+        "private_id": 5,
+        "name": "Camden & Amboy",
+        "cost": "160",
+        "revenue_per_or": "25",
+        "owner": null,
+        "owner_protocol_id": null,
+        "closed": false
+      },
+      {
+        "private_id": 6,
+        "name": "Baltimore & Ohio",
+        "cost": "220",
+        "revenue_per_or": "30",
+        "owner": null,
+        "owner_protocol_id": null,
+        "closed": false
+      }
+    ],
+    "market_positions": {
+      "1": null,
+      "2": null,
+      "3": null,
+      "4": null,
+      "5": null,
+      "6": null,
+      "7": null,
+      "8": null
+    },
+    "variants": {
+      "length": "standard",
+      "mode": "live",
+      "delayedAuction": false,
+      "gentleRust": false,
+      "unpredictableRevenue": false,
+      "dynamicStockMarket": false,
+      "expandedMap": false,
+      "plusTiles": false,
+      "levelPlayingField": false
+    }
+  },
+  "waterfall": {
+    "game_id": 0,
+    "waterfall_auction_active": true,
+    "privates": [
+      {
+        "private_id": 1,
+        "name": "Schuylkill Valley",
+        "face_value": "20",
+        "is_lowest_offered": true,
+        "bids": []
+      },
+      {
+        "private_id": 2,
+        "name": "Champlain & St. Lawrence",
+        "face_value": "40",
+        "is_lowest_offered": false,
+        "bids": []
+      },
+      {
+        "private_id": 3,
+        "name": "Delaware & Hudson",
+        "face_value": "70",
+        "is_lowest_offered": false,
+        "bids": []
+      },
+      {
+        "private_id": 4,
+        "name": "Mohawk & Hudson",
+        "face_value": "110",
+        "is_lowest_offered": false,
+        "bids": []
+      },
+      {
+        "private_id": 5,
+        "name": "Camden & Amboy",
+        "face_value": "160",
+        "is_lowest_offered": false,
+        "bids": []
+      },
+      {
+        "private_id": 6,
+        "name": "Baltimore & Ohio",
+        "face_value": "220",
+        "is_lowest_offered": false,
+        "bids": []
+      }
+    ],
+    "current_turn": "p-hvbezffr",
+    "mini_auction": null,
+    "consecutive_waterfall_passes": 0
+  },
+  "grid": {
+    "game_id": 1,
+    "tiles": []
+  }
+}

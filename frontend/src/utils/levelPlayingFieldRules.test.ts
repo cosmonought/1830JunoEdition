@@ -32,12 +32,14 @@ import {
 } from "./kanawhaLicense";
 import {
   certificateCardsHeld,
+  certificateCardsInPool,
   doubleCertificateAt,
   doublePurchaseRefusal,
   doubleSaleEffect,
   ordinaryPurchaseRefusal,
 } from "./doubleCertificate";
 import { sharePurchaseBlock } from "./sharePurchase";
+import { readStripped } from "./sourceScan";
 import { shareSaleBlock } from "./shareSale";
 import { evaluateStationPlacement } from "./stationTokens";
 import {
@@ -284,6 +286,28 @@ describe("the 20% standard certificate (design note #1324)", () => {
       { player: P1, cash_vgp: "2000" },
       { player: P2, cash_vgp: "2000" },
     ],
+  });
+
+  it("the ownership table counts eight pieces of card for a full N&W IPO, not nine (design note #1374)", () => {
+    /* The rule counted the double once from #1324; the Stock Round panel's own `percentage / 10` did not,
+       so a full IPO read "9 (100%)" and a double-holder "2 (20%)". The panel counts through these now. */
+    const state = stock();
+    const nw = corp(state, NW_COMPANY_ID);
+    expect(nw.ipo_pool_percentage).toBe(100);
+    expect(certificateCardsInPool(nw, "Ipo")).toBe(8); // president 20 + double 20 + six tens
+    const fullPrr = { ...corp(state, PRR), ipo_pool_percentage: 100, president: null, player_holdings: [] };
+    expect(certificateCardsInPool(fullPrr as never, "Ipo")).toBe(9); // the printed game's nine
+    // The double in a player's hands is one card there and gone from the pool's count.
+    const held = { ...nw, ipo_pool_percentage: 60, president: P1, player_holdings: [{ player: P1, percentage: 40 }], double_certificate: { at: P1 } };
+    expect(certificateCardsHeld(held as never, P1)).toBe(2); // president + double
+    expect(certificateCardsInPool(held as never, "Ipo")).toBe(6);
+    // Sold into the Bank Pool as a block, it is one card there too.
+    const pooled = { ...held, bank_pool_percentage: 20, player_holdings: [{ player: P1, percentage: 20 }], double_certificate: { at: "Bank" } };
+    expect(certificateCardsInPool(pooled as never, "Bank")).toBe(1);
+    const PANEL = readStripped("components/StockRoundPanel.tsx");
+    expect(PANEL).toContain('{certificateCardsInPool(company, "Ipo")} ({company.ipo_pool_percentage}%)');
+    expect(PANEL).toContain('{certificateCardsInPool(company, "Bank")} ({company.bank_pool_percentage}%)');
+    expect(PANEL).toContain("{certificateCardsHeld(company, holding.address)} (");
   });
 
   it("is seeded in ERIE's and N&W's IPO and nowhere else", () => {
@@ -542,5 +566,24 @@ describe("the 7-train and the open shelf (design note #1326)", () => {
     const traded = applySandboxAction(state, { ExchangeTrainForDiesel: { game_id: 1, protocol_id: PRR, model_type: "4" } } as never);
     expect(corp(traded, PRR).owned_trains).toEqual(["6", "D"]);
     expect(Number(corp(traded, PRR).treasury)).toBe(1000 - 750);
+  });
+});
+
+describe("the chart draws the two added corporations (design note #1381)", () => {
+  it("emits a position for every id that holds a mark, not only the printed eight", () => {
+    const { sandboxMarketPositions } = require("./sandboxState") as typeof import("./sandboxState");
+    const { NW_COMPANY_ID: NW, PMQ_COMPANY_ID: PMQ } = require("../components/hexBoardDataLpf") as typeof import("../components/hexBoardDataLpf");
+    const marks = {
+      1: { price: 100, x: 3, y: 2, enteredAt: 1 },
+      [PMQ]: { price: 90, x: 2, y: 3, enteredAt: 2 },
+      [NW]: { price: 100, x: 3, y: 2, enteredAt: 3 },
+    };
+    const positions = sandboxMarketPositions(marks as never);
+    expect(positions.map((entry) => [entry.company_id, entry.ticker])).toEqual([
+      [1, "PRR"],
+      [PMQ, "PMQ"],
+      [NW, "N&W"],
+    ]);
+    expect(positions.find((entry) => entry.company_id === NW)?.enteredAt).toBe(3);
   });
 });

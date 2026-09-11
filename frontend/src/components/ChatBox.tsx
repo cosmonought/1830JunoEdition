@@ -1,38 +1,30 @@
-// Real-time chat transport over `games/{roomId}/chat`, plus one standalone view
-// for the pre-game staging room.
+// Real-time chat transport over the game server's room-doc socket, plus one standalone view for the
+// pre-game staging room.
 //
-// The primary export is `useFirestoreChat`, NOT the component: the dashboard's
-// chat surface is `TopTicker`'s accordion fed by `mergeFeedItems`. Chat is
-// off-chain and carries NO AUTHORITY -- no code path in this app parses a chat
-// message. Ordering uses `clientCreatedAtMs` rather than `serverTimestamp()`,
-// which resolves to `null` in the local snapshot and would sort a pending
-// message out of a `limit(N)` window entirely.
+// The primary export is `useRoomChat`, NOT the component: the dashboard's chat surface is `TopTicker`'s
+// accordion fed by `mergeFeedItems`. Chat is off-chain and carries NO AUTHORITY -- no code path in this app
+// parses a chat message.
+//
+// #1361a: THE TRANSCRIPT LIVES ON THE GAME SERVER. It was `games/{roomId}/chat` on Firestore (and
+// `sandbox_rooms/{code}/chat` for a sandbox room, #644); Firestore is gone. The server keeps one transcript
+// per room, capped at `CHAT_HISTORY_LIMIT`, persisted beside the room's log, and sends the WHOLE of it on
+// every change -- so ordering is the server's clock and there is no pending-write window for a message to
+// fall out of. The hook's contract is unchanged: `ChatMessage[]` oldest-first, `sendMessage`, `error`,
+// `available`.
 //
 // See docs/ai_architecture/firebase_middleware.md, ChatBox.tsx #0 / #1 / #2.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  Timestamp,
-  addDoc,
-  collection,
-  limit as fsLimit,
-  onSnapshot,
-  orderBy,
-  query,
-  serverTimestamp,
-  type DocumentData,
-  type FirestoreError,
-  type QueryDocumentSnapshot,
-} from "firebase/firestore";
 
-import { firebaseConfigError, getFirestoreDb } from "../config/firebase";
-import { chatCollectionPath, seatLabel } from "../utils/lobby";
+import { backendConfigError } from "../config/backend";
+import { seatLabel } from "../utils/lobby";
+import { roomDocOnServer, sendChat, subscribeChat, type RoomChatEntry } from "../utils/roomDocLink";
 import { colorForAuthor, type ChatMessage } from "../utils/feed";
 import { CONTROL_PADDING, FONT_FAMILY, FONT_SIZE, RADIUS } from "../styles/typography";
 
-/** How much scrollback a client subscribes to. Bounded because this is a
- *  live listener over a collection that only ever grows -- an unbounded
- *  subscription re-downloads and re-renders an entire game's transcript. */
+/** How much scrollback a room keeps. Bounded because a transcript only ever grows and the server sends the
+ *  whole of it on every change -- an unbounded one would re-send an entire game's chat per message. The
+ *  server enforces it; this is the figure the client expects. */
 export const CHAT_HISTORY_LIMIT = 200;
 
 const MAX_MESSAGE_LENGTH = 500;
@@ -41,27 +33,16 @@ const MAX_MESSAGE_LENGTH = 500;
 /* Decoding                                                            */
 /* ------------------------------------------------------------------ */
 
-function decodeMessage(snapshot: QueryDocumentSnapshot<DocumentData>): ChatMessage | null {
-  const data = snapshot.data() ?? {};
+function decodeMessage(entry: RoomChatEntry): ChatMessage | null {
+  const text = typeof entry.text === "string" ? entry.text.trim() : "";
+  if (!text) return null;
 
-  const text = typeof data.text === "string" ? data.text.trim() : "";
-  if (!text) return null; // Test Mode lets anything be written; drop junk quietly.
-
-  const address = typeof data.author === "string" ? data.author : "";
-  const displayName = typeof data.displayName === "string" ? data.displayName : "";
-
-  // Design note #2: `createdAt` is authoritative and preferred for DISPLAY,
-  // but is null while the write is pending, so fall back to the client
-  // stamp -- which is also what ordering used, keeping the two consistent.
-  const serverMs = data.createdAt instanceof Timestamp ? data.createdAt.toMillis() : null;
-  const clientMs =
-    typeof data.clientCreatedAtMs === "number" && Number.isFinite(data.clientCreatedAtMs)
-      ? data.clientCreatedAtMs
-      : null;
-  const timestampMs = serverMs ?? clientMs ?? Date.now();
+  const address = typeof entry.author === "string" ? entry.author : "";
+  const displayName = typeof entry.displayName === "string" ? entry.displayName : "";
+  const timestampMs = typeof entry.at === "number" && Number.isFinite(entry.at) ? entry.at : Date.now();
 
   return {
-    id: snapshot.id,
+    id: String(entry.id),
     author: seatLabel({ address, displayName }),
     text: text.slice(0, MAX_MESSAGE_LENGTH),
     timestamp: new Date(timestampMs).toLocaleTimeString(),
@@ -73,7 +54,7 @@ function decodeMessage(snapshot: QueryDocumentSnapshot<DocumentData>): ChatMessa
 /* The hook -- design note #0                                          */
 /* ------------------------------------------------------------------ */
 
-export interface FirestoreChatResult {
+export interface RoomChatResult {
   /** Oldest-first, matching the ordering convention `mergeFeedItems`
    *  documents and `TopTicker` renders against. */
   messages: ChatMessage[];
@@ -85,24 +66,21 @@ export interface FirestoreChatResult {
    *  than swallowed: a chat box that silently drops messages is worse than
    *  one that says it is offline. */
   error: string | null;
-  /** `false` when Firebase is unconfigured or no room is selected. */
+  /** `false` when the game server is unconfigured or no room is selected. */
   available: boolean;
 }
 
 /**
- * Subscribes to `games/{roomId}/chat` and returns the transcript in the
- * exact `ChatMessage[]` shape `utils/feed.ts` already defines.
+ * Subscribes to a room's transcript on the game server and returns it in the exact `ChatMessage[]` shape
+ * `utils/feed.ts` already defines.
  *
- * @param roomId  The FIRESTORE room id -- `RoomDoc.id`, not the on-chain
- *                `chainGameId`. Chat is an off-chain concern keyed to the
- *                off-chain room, which is what lets a staging room have a
- *                transcript before it has any on-chain identity at all.
- *                Pass `null` to subscribe to nothing.
- * @param address The sender's `juno1...` address, stamped on outgoing
- *                messages. `null` disables sending (but not reading).
- * @param displayName Denormalised onto each message on purpose: a player
- *                who later renames themselves should not retroactively
- *                rewrite the byline on things they already said.
+ * @param roomId  The room the transcript hangs off -- a sandbox room code, or a staging room's id. Chat is
+ *                an off-chain concern keyed to the off-chain room, which is what lets a staging room have a
+ *                transcript before it has any on-chain identity at all. Pass `null` to subscribe to nothing.
+ * @param address The sender's identity, stamped on outgoing messages: a wallet address, or the sandbox
+ *                player id. `null` disables sending (but not reading).
+ * @param displayName Denormalised onto each message on purpose: a player who later renames themselves should
+ *                not retroactively rewrite the byline on things they already said.
  */
 /* Design note #644: the sandbox had no chat, twice over. Two independent gates,
    either enough on its own: `App.tsx` passed `sandbox ? null : roomId` on design
@@ -110,33 +88,27 @@ export interface FirestoreChatResult {
    multiplayer mode and already has a real room writing an action log); and
    `sendMessage` refuses when `address` is null, which in a sandbox it always is.
 
-   AND A THIRD CASE THE FIX HAS TO COVER: a sandbox with no Firebase config at
-   all, which is a supported way to run this app (`config/firebase.ts` design
-   note #1). There is no transport there and a Send button that silently does
-   nothing is the worst of the three outcomes, so the hook falls back to keeping
-   messages in memory -- what chat was before design note #22 moved it to
-   Firestore, and honest for a session that is local by construction.
+   AND A THIRD CASE THE FIX HAS TO COVER: a build with no game server configured at all, which is a supported
+   way to run this app. There is no transport there and a Send button that silently does nothing is the worst
+   of the three outcomes, so the hook falls back to keeping messages in memory -- what chat was before design
+   note #22 moved it off the client, and honest for a session that is local by construction.
 
-   THE ERROR STATE IS NOT THE FALLBACK. A configured Firestore that REFUSES a
-   write still reports the failure; it does not quietly divert to local state and
-   leave a player believing the table saw their message. Local is for "there is
-   no transport", never for "the transport said no". */
+   THE ERROR STATE IS NOT THE FALLBACK. A configured server that REFUSES a write still reports the failure; it
+   does not quietly divert to local state and leave a player believing the table saw their message. Local is
+   for "there is no transport", never for "the transport said no". */
 let nextLocalChatId = 1;
 
-export function useFirestoreChat(
+export function useRoomChat(
   roomId: string | null,
   address: string | null,
   displayName: string,
-  /** Design note #644: which collection the room lives in. Sandbox rooms are
-   *  not lobby rooms, and the transcript hangs off whichever one this is. */
-  collectionName?: string,
-): FirestoreChatResult {
+): RoomChatResult {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [localMessages, setLocalMessages] = useState<ChatMessage[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  const db = getFirestoreDb();
-  const available = db !== null && roomId !== null;
+  const onServer = roomDocOnServer();
+  const available = onServer && roomId !== null;
 
   // Kept in a ref so `sendMessage` stays referentially stable across
   // renames -- `InlineQuickChat` receives it as an `onSend` prop, and an
@@ -146,44 +118,34 @@ export function useFirestoreChat(
   identityRef.current = { address, displayName };
 
   useEffect(() => {
-    if (!db || !roomId) {
+    if (!onServer || !roomId) {
       setMessages([]);
-      setError(db ? null : firebaseConfigError());
+      setError(onServer ? null : backendConfigError());
       return;
     }
 
-    const [rooms, room, chat] = chatCollectionPath(roomId, collectionName);
-    const chatQuery = query(
-      collection(db, rooms, room, chat),
-      // Design note #2: `clientCreatedAtMs`, NOT `createdAt`. Ordering on
-      // the server timestamp drops pending writes past the limit and makes
-      // your own message jump.
-      orderBy("clientCreatedAtMs", "desc"),
-      fsLimit(CHAT_HISTORY_LIMIT),
-    );
-
-    const unsubscribe = onSnapshot(
-      chatQuery,
-      (snapshot) => {
-        const decoded = snapshot.docs
+    /* #1361a: the connection's identity is whoever this tab is -- the same claim the room document's
+       subscription made for this room, so the two share one socket. `address` may be null for a reader. */
+    const claim = identityRef.current.address ?? "";
+    const unsubscribe = subscribeChat(
+      roomId,
+      claim,
+      (entries) => {
+        const decoded = entries
           .map(decodeMessage)
           .filter((message): message is ChatMessage => message !== null)
-          // Queried newest-first (that is what `limit` needs in order to
-          // return the most RECENT N rather than the oldest N); reversed
-          // here to the oldest-first order the feed renders in.
-          .reverse();
+          .sort((a, b) => a.timestampMs - b.timestampMs);
         setMessages(decoded);
         setError(null);
       },
-      (snapshotError: FirestoreError) => {
-        setError(`[firebase] Chat is unavailable: ${snapshotError.message}`);
+      (message) => {
+        setError(`[server] Chat is unavailable: ${message}`);
       },
     );
 
     return unsubscribe;
-    // Design note #644: the collection joins, so switching rooms between a
-    // lobby and a sandbox resubscribes rather than listening to the old path.
-  }, [db, roomId, collectionName]);
+    // Design note #644: switching rooms resubscribes rather than listening to the old one.
+  }, [onServer, roomId]);
 
   const sendMessage = useCallback(
     async (text: string) => {
@@ -195,7 +157,7 @@ export function useFirestoreChat(
          session. The message is kept in memory so the button does what it
          says, and the feed shows it exactly as a delivered one -- because
          within this browser it IS delivered; there is nobody else to reach. */
-      if (!db || !roomId) {
+      if (!onServer || !roomId) {
         setLocalMessages((current) => [
           ...current,
           {
@@ -221,26 +183,20 @@ export function useFirestoreChat(
         return;
       }
 
-      const [rooms, room, chat] = chatCollectionPath(roomId, collectionName);
       try {
-        await addDoc(collection(db, rooms, room, chat), {
-          author: sender,
-          displayName: name,
-          text: trimmed,
-          // Both, and each for its own reason -- design note #2.
-          createdAt: serverTimestamp(),
-          clientCreatedAtMs: Date.now(),
-        });
+        /* #1361a: fire-and-forget, like every other write on this socket. The message is visible when the
+           server's next `chat` frame arrives -- the server is the one clock and the one order. */
+        sendChat(roomId, sender, trimmed, name);
         setError(null);
       } catch (sendError) {
         setError(
-          `[firebase] Message not sent: ${
+          `[server] Message not sent: ${
             sendError instanceof Error ? sendError.message : String(sendError)
           }`,
         );
       }
     },
-    [db, roomId, collectionName],
+    [onServer, roomId],
   );
 
   /* Design note #644: one list either way. A caller should not have to know
@@ -271,7 +227,7 @@ export interface ChatBoxProps {
  * in `Lobby.tsx`. NOT used on the dashboard -- see design note #0.
  */
 export function ChatBox({ roomId, address, displayName, title = "Room chat" }: ChatBoxProps) {
-  const { messages, sendMessage, error, available } = useFirestoreChat(roomId, address, displayName);
+  const { messages, sendMessage, error, available } = useRoomChat(roomId, address, displayName);
   const [draft, setDraft] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
 

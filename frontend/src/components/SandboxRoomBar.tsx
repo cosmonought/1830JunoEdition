@@ -28,6 +28,11 @@ export interface SandboxRoomBarProps {
   busy: boolean;
   onHost: () => void;
   onJoin: (code: string) => void;
+  /** Design note #1352: rejoin a seat in `code` with its PIN -- the by-code path, inside the join form. Absent
+   *  hides the button (a build without the game server has no PINs). */
+  onRejoin?: (code: string) => void;
+  /** Design note #1355: rejoin by PIN alone -- the bar's own button, beside Host and Join. */
+  onRejoinByPin?: () => void;
   /** ==================================================================
    *   DESIGN NOTE 1137: THE ERROR HAD NO WAY TO BE WRONG ABOUT ITSELF
    *  ==================================================================
@@ -63,6 +68,8 @@ export function SandboxRoomBar({
   busy,
   onHost,
   onJoin,
+  onRejoin,
+  onRejoinByPin,
   onClearError,
   bare = false,
 }: SandboxRoomBarProps) {
@@ -168,6 +175,19 @@ export function SandboxRoomBar({
           >
             Join
           </button>
+          {/* Design note #1352: the way back into YOUR seat from a new device -- the same code, then the PIN. */}
+          {onRejoin && (
+            <button
+              type="button"
+              className={bare ? "sandbox-bare-btn" : undefined}
+              style={bare ? styles.bareButton : styles.button}
+              onClick={() => onRejoin(codeText)}
+              disabled={busy}
+              title="Already in this game on another device? Rejoin your seat with its four-digit PIN."
+            >
+              Rejoin seat
+            </button>
+          )}
           <button
             type="button"
             className={bare ? "sandbox-bare-btn" : undefined}
@@ -194,6 +214,22 @@ export function SandboxRoomBar({
           disabled={busy}
         >
           Join game
+        </button>
+      )}
+      {/* Design note #1355: the device-switch path -- one PIN, then the games it opens. */}
+      {onRejoinByPin && !joining && (
+        <button
+          type="button"
+          className={bare ? "sandbox-bare-btn" : undefined}
+          style={bare ? styles.bareButton : styles.button}
+          onClick={() => {
+            onClearError?.();
+            onRejoinByPin();
+          }}
+          disabled={busy}
+          title="Already in a game on another device? Type your seat PIN and rejoin it."
+        >
+          Rejoin game
         </button>
       )}
       {error && <span style={styles.error}>{error}</span>}

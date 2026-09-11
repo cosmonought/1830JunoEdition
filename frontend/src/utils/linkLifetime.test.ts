@@ -17,8 +17,9 @@ const APP = (() => {
 
 describe("#1242: the transport effect does not depend on the dispatcher's identity", () => {
   it("lists only the room facts", () => {
-    expect(APP).toContain("}, [sandbox, sandboxRoomCode, noteCashChanges]);");
-    expect(APP).not.toContain("[sandbox, sandboxRoomCode, runGameplayAction, noteCashChanges]");
+    // #1339: `noteCashChanges` left with the cash badge; the room facts are all that remain.
+    expect(APP).toContain("}, [sandbox, sandboxRoomCode]);");
+    expect(APP).not.toContain("[sandbox, sandboxRoomCode, runGameplayAction");
   });
 
   it("the drain dispatches through the ref, so it needs no closure over the callback", () => {

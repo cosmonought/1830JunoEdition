@@ -52,7 +52,7 @@ import { privateClosureAlert } from "../utils/purchaseWarnings";
 import { formatNativeAmountCompact, NATIVE_DENOM_DISPLAY } from "../config";
 import { stationTickerColor } from "./hexContractTypes";
 import { PrivateCompanyPills } from "./PrivateCompanyPills";
-import { CapacityPill, LastRoutePayout, TrainChips } from "./TrainBadges";
+import { CapacityPill, LastRoutePayout, lastRunFigure, TrainChips } from "./TrainBadges";
 // Design note #710: the Liquidity column, from the same rules the emergency-purchase plan reads.
 import { playerLiquidity } from "../utils/endgame";
 import { marketZoneForPrice, type MarketGridResponse } from "./StockMarketRenderer";
@@ -67,6 +67,7 @@ import {
   playerPrivateCompanies,
   usePlayerNetWorths,
 } from "../utils/gameState";
+import { numberedPrivate } from "../utils/privateOrdinal";
 
 export interface FinancialLedgerProps {
   gameState: GameStateResponse | null;
@@ -864,7 +865,7 @@ function CorporationAssetsSection({
                       <LastRoutePayout
                         surface="dark"
                         compact
-                        revenue={company.last_route_revenue}
+                        revenue={lastRunFigure(company)} // #1391
                       />
                     </td>
                     {/* Design note #379: privates the treasury bought. */}
@@ -902,7 +903,7 @@ function CorporationAssetsSection({
                                  lists already KNEW the figure and spent it on a `title`: a tooltip is not a display, it needs a pointer
                                  and a pause and shows one private at a time, so comparing three meant hovering three chips in sequence
                                  and remembering two numbers. The auction is exempt because there the revenue is already the headline. */}
-                              {priv.private_id}. {priv.name}
+                              {numberedPrivate(priv.private_id, priv.name)}
                               <span style={styles.corpPrivateRevenue}>
                                 +${priv.revenue_per_or}
                               </span>

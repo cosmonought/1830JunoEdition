@@ -186,7 +186,8 @@ describe("the panel is the card's paper now", () => {
        is 1.7:1 on paper. `CARD_INK_POSITIVE` is the palette's answer at ~6:1, already used by the sibling
        modal for exactly this -- a swap of register, not a new colour, and #670's "green means money arriving"
        is untouched. */
-    expect(MACHINE_FILE).toContain("ink: CARD_INK_POSITIVE");
+    // #1339: the same ink for a payout; a spend on this machine wears the treasury's negative.
+    expect(MACHINE_FILE).toContain("ink: spend ? CARD_INK_NEGATIVE : CARD_INK_POSITIVE");
     expect(MACHINE).not.toContain("#5fd39a");
     expect(MACHINE_FILE).not.toContain("#5fd39a");
     expect(contrast(CARD_SURFACE, CARD_INK_POSITIVE)).toBeGreaterThanOrEqual(4.5);
@@ -231,9 +232,12 @@ describe("the payout still falls onto the total", () => {
        row in the file. `anchorIndex` throws on a rotted anchor rather than comparing against -1 (#1090). */
     /* Design note #1291: the panel takes both orders -- payer above the total for a player (the payout
        falls), total above the spend for a corporation (the spend rises). The player's is asserted. */
-    expect(MACHINE).toContain("{corporation ? holderRow : moverRow}");
-    expect(MACHINE).toContain("{corporation ? moverRow : holderRow}");
-    expect(anchorIndex(MACHINE, "<header")).toBeLessThan(anchorIndex(MACHINE, "{corporation ? holderRow : moverRow}"));
+    /* Design note #1339: the order is the DIRECTION now (`rises`), which defaults from `kind` exactly as
+       before and lets a player's spend rise out of cash. */
+    expect(MACHINE).toContain('const rises = (direction ?? (corporation ? "up" : "down")) === "up";');
+    expect(MACHINE).toContain("{rises ? holderRow : moverRow}");
+    expect(MACHINE).toContain("{rises ? moverRow : holderRow}");
+    expect(anchorIndex(MACHINE, "<header")).toBeLessThan(anchorIndex(MACHINE, "{rises ? holderRow : moverRow}"));
   });
 
   it("leaves the three phases and their classes alone", () => {

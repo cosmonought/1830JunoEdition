@@ -26,6 +26,16 @@ import type { LegalTilePlacement } from "./hexContractTypes";
 import { FONT_SIZE, RADIUS } from "../styles/typography";
 /* Design note #1294: the chrome scale, live, for the counter-zoom. */
 import { useUiScale } from "../utils/useUiScale";
+import { isUpgradeDeadEnd } from "../utils/tileUpgrades"; // #1393
+import { TILE_CATALOG_BY_ID } from "./hexTileCatalog";
+
+/** #1393, RULED: the "!" is for yellow and green tiles that nothing replaces -- a brown or gray tile is
+ *  the end of every ladder and needs no warning about it. `isUpgradeDeadEnd` already excludes the game's
+ *  top tier; this narrows it to the two tiers a player expects to keep upgrading. */
+function isFinalCandidate(tileId: number): boolean {
+  const color = TILE_CATALOG_BY_ID.get(tileId)?.color;
+  return (color === "Yellow" || color === "Green") && isUpgradeDeadEnd(tileId);
+}
 
 export interface RadialTileSelectorProps {
   /** The click's offset INSIDE the canvas -- design note #1. Board-relative,
@@ -274,6 +284,8 @@ export interface RadialConfirmRingProps {
    *  survive: "Costs $120" and "this destroys a power you own" are both wanted, and a warning that displaced
    *  the figure would trade one surprise for another. */
   warning?: string | null;
+  /** #1393: "This tile does not upgrade further." on a previewed final tile; `null` otherwise. */
+  finalNote?: string | null;
   /** How far out the ring's own contents sit, so the buttons and caption
    *  clear them. */
   radius: number;
@@ -290,6 +302,7 @@ export function RadialConfirmRing({
   title,
   hexLabelForAria,
   hint,
+  finalNote = null,
   note,
   showConfirm,
   showCancel = true,
@@ -363,7 +376,7 @@ export function RadialConfirmRing({
      note means the element is not rendered at all -- an empty positioned div still occupies its slot above
      the hex and still paints, so suppressing the TEXT alone would leave the clutter it was asked to remove. */
   const caption =
-    title === null && hint === null && !note && !cost ? null : { title, hint };
+    title === null && hint === null && !note && !cost && !finalNote ? null : { title, hint };
 
   return (
     /* Design note #168: THE BACKDROP MUST NOT SWALLOW BOARD CLICKS. It was `position: fixed; inset: 0` with
@@ -450,6 +463,8 @@ export function RadialConfirmRing({
               legal and occasionally correct, so colouring it as an error would argue with a president who
               meant it. */}
           {warning && <span style={styles.captionWarning}>{warning}</span>}
+          {/* #1393: under the treasury effect, on a previewed tile nothing replaces. */}
+          {finalNote && <span style={styles.captionFinal}>{finalNote}</span>}
           {/* Design note #290: the migration line, when there is one. */}
           {note && <span style={styles.captionNote}>{note}</span>}
         </div>
@@ -548,6 +563,7 @@ export function RadialTileSelector({
          updates the moment the ring opens. This caption was the third telling of it, and the one with no room. */
       cost={previewing ? costNote : null}
       warning={previewing ? warningNote : null}
+      finalNote={previewing && selectedTileId !== null && isFinalCandidate(selectedTileId) ? "This tile does not upgrade further." : null}
       // Design note #2: nothing to confirm until a tile has been chosen.
       showConfirm={previewing}
       /* Design note #471: the candidate ring's X sits behind its own top
@@ -626,6 +642,18 @@ export function RadialTileSelector({
                   transform: `translate(-50%, -50%) translate(${position.x}px, ${position.y}px)`,
                 }}
               >
+                {/* ==================================================================
+                     DESIGN NOTE 1393: A FINAL TILE IS FLAGGED BEFORE IT IS CHOSEN
+                    ==================================================================
+                    ASKED (after #1390's padlock): "a red exclamation point on non-brown/non-gray tiles that are
+                    final placements, and when players select it to display it should have a tooltip line below
+                    the treasury effect saying 'This tile does not upgrade further.'" The mark rides the
+                    candidate's corner while choosing; the sentence sits in the preview caption under the cost. */}
+                {isFinalCandidate(tile.tileId) && (
+                  <span style={styles.candidateFinal} aria-label={`Tile ${tile.tileId} does not upgrade further`} title="This tile does not upgrade further.">
+                    !
+                  </span>
+                )}
                 <TilePreviewThumbnail
                   tileId={tile.tileId}
                   orientation={tile.firstOrientation}
@@ -983,6 +1011,31 @@ const styles: Record<string, React.CSSProperties> = {
   /* The last copy in the game. Amber rather than red: taking it is a
      legitimate and often correct move, and red would read as a refusal. */
   candidateStockLast: { color: "#e0b050" },
+  /* #1393: the final-tile mark, red because it is a warning about a choice rather than a refusal of it. */
+  candidateFinal: {
+    position: "absolute",
+    top: "-4px",
+    right: "-4px",
+    width: "16px",
+    height: "16px",
+    borderRadius: RADIUS.pill,
+    backgroundColor: "#c0392b",
+    color: "#fff5f3",
+    fontSize: "11px",
+    fontWeight: 900,
+    lineHeight: "16px",
+    textAlign: "center",
+    boxShadow: "0 1px 3px rgba(0,0,0,0.5)",
+    pointerEvents: "none",
+  },
+  captionFinal: {
+    fontSize: FONT_SIZE.micro,
+    color: "#ff8a80",
+    fontWeight: 700,
+    lineHeight: 1.35,
+    maxWidth: "260px",
+    textAlign: "center",
+  },
   /* Exhausted. Still SHOWN rather than hidden -- the candidate is offered by
      the placement rules, which do not consult the tray, and a player who
      picks it will be refused by the contract. Saying so on the thumbnail is

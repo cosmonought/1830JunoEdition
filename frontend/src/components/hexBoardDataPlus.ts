@@ -111,12 +111,12 @@ const PLUS_GRAY: Readonly<Record<string, GrayHexTrack>> = (() => {
     ...kept,
     // Tile-39 connectivity: E, SE and SW, each pair joined.
     A17: { edges: [edge(1), edge(2), edge(3)], marker: "none" },
-    // Montreal: two stations, track meeting at the city from SE, SW and W.
-    A19: { edges: [edge(2), edge(3), edge(4)], marker: "city", slots: 2 },
+    // Montreal: ONE station (#1401, with Norfolk: "a preprinted gray single-station city"), SE, SW and W.
+    A19: { edges: [edge(2), edge(3), edge(4)], marker: "city" },
     // Atlantic City: a town with track to NW, W and SW (SW is new: J18 now exists).
     I19: { edges: [edge(5), edge(4), edge(3)], marker: "town" },
-    // Norfolk: two stations, track to W, NW and NE.
-    L16: { edges: [edge(4), edge(5), edge(0)], marker: "city", slots: 2 },
+    // Norfolk: ONE station (#1401: "It is a single-station city"), track to W, NW and NE.
+    L16: { edges: [edge(4), edge(5), edge(0)], marker: "city" },
   };
 })();
 
@@ -213,9 +213,8 @@ const PLUS_PRINTED_ARTWORK: Readonly<Record<string, PrintedArtwork>> = {
   },
   A19: {
     tracks: [spoke(edge(2)), spoke(edge(3)), spoke(edge(4))],
-    /* The pill bisects the widest gap between the three spokes (SE, SW, W): it points north-east, away from
-       all of them, so it reads as a station the track arrives at rather than one the track crosses. */
-    marker: { kind: "city", at: { x: 0, y: 0 }, slots: 2, angle: 300 },
+    // #1401: a single station, like Norfolk -- the pill and its angle are gone with the second slot.
+    marker: { kind: "city", at: { x: 0, y: 0 } },
   },
   I19: {
     tracks: [spoke(edge(5)), spoke(edge(4)), spoke(edge(3))],
@@ -223,7 +222,8 @@ const PLUS_PRINTED_ARTWORK: Readonly<Record<string, PrintedArtwork>> = {
   },
   L16: {
     tracks: [spoke(edge(4)), spoke(edge(5)), spoke(edge(0))],
-    marker: { kind: "city", at: { x: 0, y: 0 }, slots: 2, angle: 60 },
+    // #1401: a single station, so N&W's home token seats in the one circle rather than a pill's first cap.
+    marker: { kind: "city", at: { x: 0, y: 0 } },
   },
 };
 

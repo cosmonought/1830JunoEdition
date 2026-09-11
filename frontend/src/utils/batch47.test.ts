@@ -355,7 +355,11 @@ describe("two clients replaying one log agree", () => {
   });
 
   it("derives the state rather than storing a flag", () => {
-    expect(APP).toContain("yellowSignStateFrom(actionLogRef.current.map((entry) => entry.label))");
+    /* #1404: the reducer's replayed flags first, the log's sentence as the fallback -- still derived from what
+       every client shares, never from a flag one browser holds. */
+    expect(APP).toContain("const signState = yellowSignStateOf(");
+    expect(APP).toContain("before?.public_companies ?? [],");
+    expect(APP).toContain("actionLogRef.current.map((entry) => entry.label),");
     expect(APP).not.toContain("hasYellowSign");
   });
 });

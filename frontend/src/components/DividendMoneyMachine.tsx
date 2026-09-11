@@ -61,6 +61,8 @@ import {
 /* Design note #1291: the shared panel. It imports this file's schedule constants; this file imports its
    component -- a cycle TypeScript resolves because neither side reads the other at module-evaluation time. */
 import { MoneyMachinePanel } from "./MoneyMachinePanel";
+/* Design note #1339: the spend's own timing and ink, shared with the treasury machine. */
+import { CARD_INK_NEGATIVE, SPEND_CUE_AT_MS } from "./TreasuryMoneyMachine";
 
 /** The cue, by its on-disk name.
  *
@@ -186,9 +188,14 @@ function prefersReducedMotion(): boolean {
 }
 
 export interface DividendPayoutEvent {
-  /** The corporation paying, for the herald and the top line. */
-  ticker: string;
-  /** What this viewer received. */
+  /** The corporation paying, for the herald and the top line. Design note #1339: `null` when the mover is
+   *  not a corporation -- a private bought at auction, or the auction's private income -- and `label` names
+   *  it instead. */
+  ticker: string | null;
+  /** Design note #1339: the mover's name when there is no herald to show. */
+  label?: string;
+  /** What this viewer received. Design note #1339: NEGATIVE for a spend -- the figure rises out of cash with
+   *  the spend's whoosh (`SPEND_SFX`) rather than falling onto it with the register. */
   amount: number;
   /** The viewer, named on the bottom line. */
   playerName: string;
@@ -215,13 +222,21 @@ export interface DividendMoneyMachineProps {
    * RENAMED RATHER THAN RE-DOCUMENTED: a comment correcting a name is read by whoever opens this file, and
    * the name is read by whoever greps for it. */
   onCue: () => void;
+  /** Design note #1339: the spend cue, fired so its whoosh lands on the merge. Only for a negative amount. */
+  onSpendCue?: () => void;
   /** Fired when the panel has finished leaving, so the shell can clear its state. */
   onDone: () => void;
   /** Design note #1291: 1 when the treasury's panel already holds the corner. */
   stackIndex?: number;
 }
 
-export function DividendMoneyMachine({ event, onCue, onDone, stackIndex = 0 }: DividendMoneyMachineProps) {
+export function DividendMoneyMachine({
+  event,
+  onCue,
+  onSpendCue,
+  onDone,
+  stackIndex = 0,
+}: DividendMoneyMachineProps) {
   const [phase, setPhase] = useState<"holding" | "falling" | "merged" | "leaving">("holding");
 
   useEffect(() => {
@@ -229,19 +244,24 @@ export function DividendMoneyMachine({ event, onCue, onDone, stackIndex = 0 }: D
     const quiet = prefersReducedMotion();
     setPhase(quiet ? "merged" : "holding");
     const timers: number[] = [];
+    /* #1339: a spend rings the whoosh (`TreasuryMoneyMachine`'s timing), a payout the register. */
+    const spend = event.amount < 0;
     if (quiet) {
-      onCue();
+      if (spend) (onSpendCue ?? onCue)();
+      else onCue();
     } else {
-      timers.push(window.setTimeout(onCue, MONEY_MACHINE_CUE_AT_MS));
+      if (spend) timers.push(window.setTimeout(onSpendCue ?? onCue, SPEND_CUE_AT_MS));
+      else timers.push(window.setTimeout(onCue, MONEY_MACHINE_CUE_AT_MS));
       timers.push(window.setTimeout(() => setPhase("falling"), MONEY_MACHINE_FALL_AT_MS));
       timers.push(window.setTimeout(() => setPhase("merged"), MONEY_MACHINE_MERGE_AT_MS));
       timers.push(window.setTimeout(() => setPhase("leaving"), MONEY_MACHINE_LEAVE_AT_MS));
     }
     timers.push(window.setTimeout(onDone, MONEY_MACHINE_TOTAL_MS));
     return () => timers.forEach((id) => window.clearTimeout(id));
-  }, [event, onCue, onDone]);
+  }, [event, onCue, onSpendCue, onDone]);
 
   if (!event) return null;
+  const spend = event.amount < 0;
 
   /* ==================================================================
       DESIGN NOTE 1291: THE PANEL IS SHARED; THIS FILE KEEPS THE SCHEDULE AND THE SOUND
@@ -270,23 +290,28 @@ export function DividendMoneyMachine({ event, onCue, onDone, stackIndex = 0 }: D
         ink: event.seatColor ? bestContrastTextColor(event.seatColor) : CARD_INK,
       }}
       mover={{
-        label: (
-          <>
-            <CorporateLogo
-              ticker={event.ticker}
-              size={16}
-              title={`${event.ticker} herald`}
-              fallbackStyle={styles.heraldFallback}
-            />
-            <span style={styles.payerTicker}>{event.ticker}</span>
-          </>
-        ),
-        amountText: `+$${event.amount}`,
-        ink: CARD_INK_POSITIVE,
+        label:
+          event.ticker !== null ? (
+            <>
+              <CorporateLogo
+                ticker={event.ticker}
+                size={16}
+                title={`${event.ticker} herald`}
+                fallbackStyle={styles.heraldFallback}
+              />
+              <span style={styles.payerTicker}>{event.ticker}</span>
+            </>
+          ) : (
+            <span style={styles.payerTicker}>{event.label ?? (spend ? "Spent" : "Received")}</span>
+          ),
+        amountText: `${spend ? "−" : "+"}$${Math.abs(event.amount)}`,
+        ink: spend ? CARD_INK_NEGATIVE : CARD_INK_POSITIVE,
       }}
       holder={{ label: "Cash", before: event.cashBefore, after: event.cashAfter }}
       stackIndex={stackIndex}
       moverClassName={moverClassName}
+      /* #1339: a spend rises out of cash, as it rises out of a treasury (#1291). */
+      direction={spend ? "up" : "down"}
     />
   );
 }

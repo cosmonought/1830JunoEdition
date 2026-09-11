@@ -110,20 +110,27 @@ describe("duplicate indices, the one fault the export can see by itself", () => 
   });
 });
 
-describe("the trigger is the host's, and it cannot fail silently", () => {
+describe("the trigger is every seat's, and it cannot fail silently", () => {
   const APP = readStripped("App.tsx");
 
-  it("is gated the way the other debug tool is", () => {
-    /* Host and sandbox both, for the Yellow Sign's own reasons: a chain game has no room document, and the
-       host gate is the ruling. */
-    const tool = sliceBetween(APP, "const copySandboxLog = useCallback(() => {", "}, [isSandboxHost, logInfo]);");
-    expect(tool).toContain("if (!isSandboxHost) return;");
+  it("is gated on the room, not the host (design note #1334)", () => {
+    /* #1160 borrowed the Yellow Sign's host gate. The Sign writes to the room; the export writes nothing, and
+       under settlement every player needs their own copy of the evidence. Sandbox-only still: a chain game has
+       no room document. The Sign keeps its host gate. */
+    const tool = sliceBetween(APP, "const copySandboxLog = useCallback(() => {", "}, [isInSandboxRoom, logInfo]);");
+    expect(tool).toContain("if (!isInSandboxRoom) return;");
+    expect(tool).not.toContain("isSandboxHost");
+    expect(APP).toContain("const isInSandboxRoom = sandbox && sandboxRoom !== null;");
+    const key = sliceBetween(APP, 'if (event.key.toLowerCase() !== "l") return;', "}, [isInSandboxRoom, copySandboxLog]);");
+    expect(key).toContain("copySandboxLog()");
+    const sign = sliceBetween(APP, "const cycleForcedSign = useCallback(() => {", "}, [forcedSign, isSandboxHost]);");
+    expect(sign).toContain("if (!isSandboxHost) return;");
   });
 
   it("says what happened either way", () => {
     /* `navigator.clipboard` is absent on an insecure origin and rejects without a gesture in some browsers. A
        debug tool that fails silently is worse than none, so both paths reach the Activity Log. */
-    const tool = sliceBetween(APP, "const copySandboxLog = useCallback(() => {", "}, [isSandboxHost, logInfo]);");
+    const tool = sliceBetween(APP, "const copySandboxLog = useCallback(() => {", "}, [isInSandboxRoom, logInfo]);");
     expect(tool).toContain("copied to the clipboard");
     expect(tool).toContain("printed to the browser console");
     expect(tool).toContain("catch");

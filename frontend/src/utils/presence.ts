@@ -79,6 +79,11 @@ export const PRESENCE_STALE_MS = 6_000;
 /** The floor between two publishes from one client. A hex click is a keystroke; nobody reads four a second. */
 export const PRESENCE_PUBLISH_MS = 400;
 
+/** #1397: how often the drafting client republishes an UNCHANGED state, so a president who has stopped
+ *  clicking to think does not go stale on every other screen. Well inside `PRESENCE_STALE_MS`: two missed
+ *  heartbeats still leave the entry visible. */
+export const PRESENCE_HEARTBEAT_MS = 2_500;
+
 /** Whether a presence record is recent enough to show.
  *
  *  `now` is passed rather than read so this is testable and so a caller can filter a whole snapshot against

@@ -114,21 +114,51 @@ export interface YellowSignOverlayProps {
    *  clip seeks to the elapsed offset on mount, so it ends when the window ends rather than being cut off
    *  at the caller's timer with the figure half-drawn. Optional: absent means "start from the top". */
   startedAt?: number;
+  /** #1376: called once, with the ms elapsed since `startedAt`, when the film's first frame is up. The
+   *  shell schedules the spoken line from it. */
+  onFirstFrame?: (elapsedMs: number) => void;
 }
 
-export function YellowSignOverlay({ src, sfxEnabled, composite, ms, startedAt }: YellowSignOverlayProps) {
+export function YellowSignOverlay({ src, sfxEnabled, composite, ms, startedAt, onFirstFrame }: YellowSignOverlayProps) {
   const uiScale = useUiScale();
   if (!src) return null;
   const feathered = composite === "feather";
   /* Design note #1260: a negative delay starts the fog's fade part-way through, matching the seek. */
   const elapsedMs = startedAt === undefined ? 0 : Math.max(0, performance.now() - startedAt);
   return (
+    <>
+      {/* ==================================================================
+           DESIGN NOTE 1377: THE ROOM GOES DARK FOR THE HAUNTING
+          ==================================================================
+          REPORTED: "The Yellow Sign animation is incredibly faint when it displays. I think maybe the whole
+          screen needs to darken for it. I'm guessing all three sequences need this treatment."
+          IT IS FAINT BECAUSE OF WHAT `screen` IS. #1043's blend keys the clip's black to transparent by
+          ADDING the clip's light to the board's -- so a gold stroke over a parchment panel or a pale hex is
+          gold plus pale, which is nearly white and nearly invisible, while the same stroke over the dark
+          board reads. The sign was drawn at full brightness everywhere; the board under it was too bright
+          for the sum to show.
+          SO THE BOARD IS DIMMED FIRST, by a layer UNDER the blended container. Not on the container: a black
+          background inside a `screen` group is black screened against the page, which is the identity.
+          A sibling beneath it darkens everything the clip is added onto, so the addition shows; it fades up
+          and down across the window on the fog clip's own curve (#1093), joins part-way for a late viewer
+          (#1260), and is inert to the pointer like the clip itself. All three stages take it. */}
+      <style>{DIM_CSS}</style>
+      <div
+        className="app-haunting-dim"
+        style={{
+          ...styles.dim,
+          animationDuration: `${ms}ms`,
+          animationDelay: `-${Math.round(elapsedMs)}ms`,
+        }}
+        aria-hidden="true"
+      />
     <div
       style={{ ...styles.container, zoom: 1 / uiScale, ...(feathered ? null : styles.containerScreened) }}
       aria-hidden="true"
     >
       {feathered ? <style>{FOG_CSS}</style> : null}
       <HauntingVideo
+        onFirstFrame={onFirstFrame}
         key={src}
         className={feathered ? "app-haunting-feather" : undefined}
         style={{
@@ -143,6 +173,7 @@ export function YellowSignOverlay({ src, sfxEnabled, composite, ms, startedAt }:
         startedAt={startedAt}
       />
     </div>
+    </>
   );
 }
 
@@ -174,10 +205,12 @@ function HauntingVideo({
   startedAt,
   muted,
   style,
+  onFirstFrame,
   ...rest
-}: React.VideoHTMLAttributes<HTMLVideoElement> & { startedAt?: number }) {
+}: React.VideoHTMLAttributes<HTMLVideoElement> & { startedAt?: number; onFirstFrame?: (elapsedMs: number) => void }) {
   const ref = React.useRef<HTMLVideoElement | null>(null);
   const [playing, setPlaying] = React.useState(false);
+  const reportedRef = React.useRef(false);
 
   React.useEffect(() => {
     const video = ref.current;
@@ -207,7 +240,14 @@ function HauntingVideo({
       muted={muted}
       playsInline
       /* `autoPlay` is gone: the effect above calls `play()` so the rejection is observable. */
-      onPlaying={() => setPlaying(true)}
+      onPlaying={() => {
+        setPlaying(true);
+        // #1376: once, at the first frame -- `playing` can fire again after a stall.
+        if (!reportedRef.current) {
+          reportedRef.current = true;
+          onFirstFrame?.(startedAt === undefined ? 0 : Math.max(0, performance.now() - startedAt));
+        }
+      }}
       /* NOT LOOPED. The caller owns the ten seconds (#1040's `videoMs`); a clip that looped would keep
          going if that timer were ever missed, and a clip shorter than the window simply ends early and
          leaves the overlay transparent -- which is the harmless direction. */
@@ -247,12 +287,38 @@ const FOG_CSS = `
 }
 `;
 
+/* #1377: the dim's own curve -- up quickly, hold, down more slowly, the fog's proportions (#1093). */
+const DIM_CSS = `
+@keyframes app-haunting-dim {
+  0%   { opacity: 0; }
+  8%   { opacity: 1; }
+  88%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+.app-haunting-dim {
+  animation-name: app-haunting-dim;
+  animation-timing-function: ease-in-out;
+  animation-fill-mode: both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .app-haunting-dim { animation: none; }
+}
+`;
+
 /** Design note #1093: one string, used twice -- prefixed and not. Written once so the two cannot drift. */
 const FOG_MASK =
   "radial-gradient(ellipse closest-side at 56% 50%," +
   " rgba(0,0,0,1) 62%, rgba(0,0,0,0.9) 76%, rgba(0,0,0,0) 100%)";
 
 const styles: Record<string, React.CSSProperties> = {
+  /* #1377: the darkness under the clip. Fixed to the viewport, one layer below the container, inert. */
+  dim: {
+    position: "fixed",
+    inset: 0,
+    backgroundColor: "rgba(0, 0, 0, 0.72)",
+    pointerEvents: "none",
+    zIndex: 8999,
+  },
   container: {
     /* ==================================================================
         DESIGN NOTE 1144: ART AT VIEWPORT SIZE OPTS OUT OF THE CHROME'S ZOOM

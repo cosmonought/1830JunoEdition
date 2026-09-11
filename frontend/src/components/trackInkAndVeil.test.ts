@@ -42,12 +42,13 @@ describe("track ink", () => {
     expect(new Set(Object.values(TILE_TRACK_INK)).size).toBe(1);
   });
 
-  it("is NOT the legacy non-tile default", () => {
-    // `DEFAULT_TRACK_INK` is still correct for gray hexes and landmark
-    // stubs on pale printed stock -- but the off-board stubs moved off it,
-    // and this asserts the two are genuinely different constants rather
-    // than one having quietly been redefined as the other.
-    expect(STANDARD_TRACK_INK).not.toBe(DEFAULT_TRACK_INK);
+  it("IS the non-tile default now -- one ink wherever track runs (design note #1356)", () => {
+    /* This case used to assert the two were DIFFERENT, on the reasoning that gray preprints and landmark
+       stubs wanted a lighter ink. RULED 10 September: "tracks should be uniformly colored" -- the seam
+       between a stub and a tile is exactly the edge a player traces a route across. Same value, still two
+       names, so the per-tier table stays structural. */
+    expect(DEFAULT_TRACK_INK).toBe(STANDARD_TRACK_INK);
+    expect(STANDARD_TRACK_INK).toBe("#110a0c");
   });
 
   it("is a well-formed hex colour", () => {

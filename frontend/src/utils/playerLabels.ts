@@ -121,6 +121,10 @@ export const SEAT_COLORS = [
   "#7a5aa8",
   "#6f6100",
   "#00686c",
+  /* Design note #1344 (feedback 4): A SEVENTH, FOR THE LEVEL PLAYING FIELD'S SEVENTH SEAT (#1320). Raspberry:
+     5.4:1 on the card, 35 dE from the nearest livery (PRR's red) and 24 dE from the nearest seat (Brick) by
+     the harness's own CIE76 -- clear of every floor `seatColor.test.ts` holds the six to. */
+  "#a8395a",
 ] as const;
 
 export const SEAT_COLOR_NAMES: Readonly<Record<string, string>> = {
@@ -130,6 +134,7 @@ export const SEAT_COLOR_NAMES: Readonly<Record<string, string>> = {
   "#7a5aa8": "Plum",
   "#6f6100": "Ochre",
   "#00686c": "Teal",
+  "#a8395a": "Raspberry",
 };
 
 let ROOM_COLORS: Record<string, string> = {};
@@ -145,6 +150,44 @@ export function setRoomColors(next: Record<string, string>): void {
  *  "roughly" is not a property a table of six people can live with. */
 export function seatColor(address: string, index: number): string {
   return ROOM_COLORS[address] ?? SEAT_COLORS[index % SEAT_COLORS.length];
+}
+
+/* ==================================================================
+    DESIGN NOTE 1337: EVERY SEAT GETS A COLOUR NOBODY ELSE HAS, RESOLVED ONCE
+   ==================================================================
+   REPORTED (item 1): "Players were able to select the same color in the Waiting Room."
+   THE PICKER ONLY KNEW ABOUT CHOICES. A seat that never touched the palette was drawn "by index" -- the
+   first seat slate blue, the second brick -- and `player.color` stayed absent, so nothing stopped the third
+   player from CHOOSING slate blue: the swatch was not held, the server took the write, and two seats wore
+   one colour. #569's "only a deliberate choice should block" was right about intent and wrong about the
+   outcome, because the default is a colour too, and the table sees colours, not intents.
+   SO THE ASSIGNMENT IS ONE PURE FUNCTION OF THE ROSTER, in roster order: explicit choices first (the earlier
+   seat keeps a colour two seats both wrote), then every colourless seat takes the first palette colour still
+   free. The waiting room draws from it and greys out what it hands out; `SetupGame` writes ALL of it into
+   `ROOM_COLORS`, so `seatColor`'s index fallback is never reached for a room player. The server refuses an
+   upsert that would take a colour another seat holds (`gameServer.ts`, first write wins), which closes the
+   race the client cannot see.
+   SEVEN SEATS, SEVEN COLOURS since #1344; the index wrap below is the last resort for a roster larger than
+   the palette, which no board deals. */
+export function resolveSeatColors(
+  players: ReadonlyArray<{ id: string; color?: string | null }>,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  const claimed = new Set<string>();
+  players.forEach((player) => {
+    if (typeof player.color === "string" && player.color && !claimed.has(player.color)) {
+      out[player.id] = player.color;
+      claimed.add(player.color);
+    }
+  });
+  players.forEach((player, index) => {
+    if (out[player.id]) return;
+    const free = SEAT_COLORS.find((color) => !claimed.has(color));
+    const color = free ?? SEAT_COLORS[index % SEAT_COLORS.length];
+    out[player.id] = color;
+    claimed.add(color);
+  });
+  return out;
 }
 
 /** Which colours are already spoken for, so a picker can grey them out. */

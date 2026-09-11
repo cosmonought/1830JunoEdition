@@ -14,7 +14,7 @@
 // See docs/ai_architecture/sandbox_reducer.md - sandboxState.ts #0, #1
 
 import { STATIC_BOARD_HEXES } from "../components/hexBoardData";
-import { stationHomeHexes } from "../components/hexContractTypes";
+import { stationHomeHexes, stationTickerLabel } from "../components/hexContractTypes";
 import type { TileColorTier } from "../components/hexTileCatalog";
 import type {
   GameStateResponse,
@@ -206,7 +206,26 @@ export interface SandboxMarketPosition {
  *  See docs/ai_architecture/sandbox_reducer.md - sandboxState.ts #2 */
 export function sandboxMarketPositions(marks: SandboxMarketPrices): SandboxMarketPosition[] {
   const positions: SandboxMarketPosition[] = [];
-  for (const corp of SANDBOX_CORPORATIONS) {
+  /* ==================================================================
+      DESIGN NOTE 1381: THE CHART WALKS THE MARKS, NOT THE PRINTED EIGHT
+     ==================================================================
+     REPORTED: "On at least LPF: N&W does not have a corporation token on the Stock Market matrix tracking
+     its price. PMQ is also absent. Both show up in the IPO/Par tray, just not the actual matrix."
+     THIS WALKED `SANDBOX_CORPORATIONS` -- the printed fixture's eight -- and asked each for its mark. The
+     reducer had been placing PMQ's and N&W's marks at par and moving them ever since (#1322 seats them on
+     the deal; the par-track tray reads the same marks and showed them); the walk never asked for ids 9 and
+     10, so the chart never drew them. The marks ARE the positions (#401): every id that holds a mark is a
+     corporation with a price, whatever board dealt it. The fixture's order is kept for the eight it names,
+     then any further id in ascending order, with its ticker from the station table. */
+  const seen = new Set<number>();
+  const extra = Object.keys(marks)
+    .map(Number)
+    .filter((id) => Number.isFinite(id) && !SANDBOX_CORPORATIONS.some((corp) => corp.id === id))
+    .sort((a, b) => a - b)
+    .map((id) => ({ id, ticker: stationTickerLabel(id) || `#${id}` }));
+  for (const corp of [...SANDBOX_CORPORATIONS.map((entry) => ({ id: entry.id, ticker: entry.ticker })), ...extra]) {
+    if (seen.has(corp.id)) continue;
+    seen.add(corp.id);
     const mark = marks[corp.id] ?? null;
     // The MARK is the position; corp.floated read a static fixture, so a corporation parred during play could never gain one. cellForPrice is used once, at seed time.
     // See docs/ai_architecture/sandbox_reducer.md - sandboxState.ts #401

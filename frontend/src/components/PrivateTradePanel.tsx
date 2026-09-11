@@ -28,6 +28,7 @@ import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { STICKY_OPTIONAL } from "../utils/stickyCollapse";
 import { corporateSaleBlockReason } from "../utils/baltimorePrivate";
 import { PRIVATE_COMPANY_CATALOG, abilitySummary } from "../utils/privateCatalog";
+import { numberedPrivate } from "../utils/privateOrdinal";
 
 /** A live proposal. Client-side only -- design note #0. */
 export interface PrivateTradeProposal {
@@ -349,7 +350,7 @@ export function ProposePrivatePurchase({
                          competing -- "1. Schuylkill Valley (SV)" is one title carrying both, where three
                          separate spans made a reader work out which one named the piece. */}
                       <span style={styles.rowTitle}>
-                        {`${entry.private_id}. ${entry.name}`}
+                        {numberedPrivate(entry.private_id, entry.name)}
                         {/* Design note #804: THE ACRONYM DECLARES NOTHING OF ITS OWN.
                            REPORTED: "the abbreviated acronyms need to be in the same color and font as the
                            title, since they are part of the title. Right now you have it in the gray color

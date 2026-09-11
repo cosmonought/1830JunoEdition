@@ -119,8 +119,10 @@ describe("the new tiles, in the request's own edge numbers", () => {
     expect(live(997)).toEqual(codeEdges([0, 2, 3, 4]));
     expect(live(883)).toEqual(codeEdges([0, 1, 2, 3]));
     expect(live(145)).toEqual(codeEdges([0, 1, 3, 4]));
-    expect(live(147)).toEqual(codeEdges([0, 1, 2, 3]));
-    expect(live(146)).toEqual(codeEdges([0, 2, 3, 4]));
+    // #1403: 146 and 147 swapped -- the upgrade chart has 87 -> 146 and 204 -> 147, so each brown carries
+    // its green's edges (146 = 87's, 147 = 204's).
+    expect(live(146)).toEqual(codeEdges([0, 1, 2, 3]));
+    expect(live(147)).toEqual(codeEdges([0, 2, 3, 4]));
     expect(live(513)).toEqual([0, 1, 2, 3, 4, 5]);
   });
 
@@ -135,7 +137,10 @@ describe("the new tiles, in the request's own edge numbers", () => {
     expect(groups(167)).toEqual(spec([0, 1, 3], [2, 4, 5]));
     // Two towns, two separate tracks.
     const paths = (id: number) => TILE_CATALOG_BY_ID.get(id)!.paths!.map((p) => [...p].sort()).sort((a, b) => a[0] - b[0]);
-    expect(paths(630)).toEqual(spec([4, 5], [1, 3]));
+    // #1392: RULED -- 630 is (5,0) tight + (1,3); 631, its reflection, is (4,5) tight + (1,3). #1392a: 631
+    // keeps the base it was first entered with -- (0,1),(3,5), the ruled shape turned two edges -- because a
+    // live game had laid it; 630 is rebuilt as its exact reflection.
+    expect(paths(630)).toEqual(spec([5, 0], [1, 3]));
     expect(paths(631)).toEqual(spec([0, 1], [3, 5]));
     expect(paths(632)).toEqual(spec([4, 5], [2, 3]));
     expect(paths(633)).toEqual(spec([4, 5], [1, 2]));
@@ -148,7 +153,7 @@ describe("the new tiles, in the request's own edge numbers", () => {
     expect(tile(619).revenue).toBe(30);
     expect(tile(592).revenue).toBe(50);
     expect(tile(626).revenue).toBe(40);
-    for (const id of [884, 997]) expect(tile(id).revenue).toBe(40);
+    for (const id of [884, 997]) expect(tile(id).revenue).toBe(60); // #1398: a brown B pays $60, as #61 does
     expect(tile(883).revenue).toBe(90); // the same figure as #62, per the ruling
     for (const id of [145, 146, 147]) expect(tile(id).revenue).toBe(20);
     for (const id of [36, 35, 984]) expect(tile(id).revenue).toBe(50);
@@ -238,13 +243,16 @@ describe("what upgrades to what, under each tray", () => {
       // Yellow towns reach the green towns; green towns reach the brown ones with the same four edges.
       expect(tileUpgradeTargets(4).some((id) => [141, 142, 143, 144, 88, 204, 87].includes(id))).toBe(true);
       expect(tileUpgradeTargets(88)).toContain(145);
-      expect(tileUpgradeTargets(87)).toContain(147);
-      expect(tileUpgradeTargets(204)).toContain(146);
+      expect(tileUpgradeTargets(87)).toContain(146); // #1403
+      expect(tileUpgradeTargets(204)).toContain(147); // #1403
       // The yellow city now has the two new yellow cities beside it, and reaches #619 as well as #14/#15.
       expect(tileUpgradeTargets(57)).toContain(619);
       // Brown cities upgrade to the gray three-station city.
       expect(tileUpgradeTargets(63)).toContain(513);
-      expect(tileUpgradeTargets(997)).toContain(513);
+      // #1385: 884 and 997 are B tiles -- the brown B beside #61, offered on the B hex from the green B.
+      expect(tileUpgradeTargets(53)).toEqual(expect.arrayContaining([61, 884, 997]));
+      expect(tileUpgradeTargets(592)).toEqual(expect.arrayContaining([61, 884, 997]));
+      expect(tileUpgradeTargets(15)).not.toContain(884);
       // The OO hexes: green #626 beside #59, brown #36/#35/#984 beside the printed set, then gray #167.
       expect(tileUpgradeTargets(59).some((id) => [36, 35, 984].includes(id))).toBe(true);
       expect(tileUpgradeTargets(64)).toContain(167);
@@ -381,5 +389,58 @@ describe("legality asks the tray (design note #1311)", () => {
       };
       expect(tileStock(printed, 24)?.remaining).toBe(3);
     });
+  });
+});
+
+/* ==================================================================
+    DESIGN NOTE 1403 (harness): THE SMALL-TOWN CHART, EVERY ROW
+   ==================================================================
+   RULED, verbatim: "YELLOW>GREEN 4>141 and 142, 58>141 and 142 and 143 and 144, 3>141 and 142 and 143,
+   55>88, 69>204, 2>87, 1>88, 56>87, 630>204, 631>204, 632>87, 633>88; GREEN>BROWN 141>145 and 146 and 147,
+   142>145 and 146 and 147, 143>146 and 147, 144>147, 88>145, 204>147, 87>146."
+   THREE THINGS HAD TO MOVE FOR THE DERIVED GRAPH TO MATCH IT: town parity may merge two into one
+   (`sandboxTileLegality` rule 2), the four-exit greens are flagged `mergesTowns` so a one-town hex cannot
+   take them, and #146/#147 swapped edges. Pinned as EXACT lists, not `toContain`: the report was about
+   options that were missing AND options that were extra. */
+describe("the small-town upgrade chart, exactly (design note #1403)", () => {
+  const under = <T,>(variants: typeof PLUS, fn: () => T) =>
+    withRules(variants, () => {
+      resetTileUpgradeGraph();
+      try {
+        return fn();
+      } finally {
+        resetTileUpgradeGraph();
+      }
+    });
+  const CHART: ReadonlyArray<[number, number[]]> = [
+    [4, [141, 142]],
+    [58, [141, 142, 143, 144]],
+    [3, [141, 142, 143]],
+    [55, [88]],
+    [69, [204]],
+    [2, [87]],
+    [1, [88]],
+    [56, [87]],
+    [630, [204]],
+    [631, [204]],
+    [632, [87]],
+    [633, [88]],
+    [141, [145, 146, 147]],
+    [142, [145, 146, 147]],
+    [143, [146, 147]],
+    [144, [147]],
+    [88, [145]],
+    [204, [147]],
+    [87, [146]],
+  ];
+  it.each(CHART)("%i upgrades to exactly %j under the tile set", (from, to) => {
+    under(PLUS, () => {
+      expect(tileUpgradeTargets(from)).toEqual([...to].sort((a, b) => a - b));
+    });
+  });
+
+  it("the four-exit greens are the ones that stand for two towns", () => {
+    for (const id of [87, 88, 204]) expect(TILE_CATALOG_BY_ID.get(id)!.mergesTowns).toBe(true);
+    for (const id of [141, 142, 143, 144, 145, 146, 147]) expect(TILE_CATALOG_BY_ID.get(id)!.mergesTowns).toBeUndefined();
   });
 });

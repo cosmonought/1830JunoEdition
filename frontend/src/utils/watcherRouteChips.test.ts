@@ -142,3 +142,28 @@ describe("the key three surfaces join by survives", () => {
     expect(chips[1].value).toBeNull();
   });
 });
+
+describe("the president's figure is not gated on this client's hex names (design note #1397)", () => {
+  it("shows the published value for a two-stop draft this tab cannot name", () => {
+    const chips = watcherTrainDrafts({
+      roster: [{ trainIndex: 0, model: "7" }],
+      actorDrafts: { 0: [[40, 40] as const, [41, 41] as const] },
+      labelForHex: () => undefined, // not a hex this tab knows
+      priceRoute: () => 0,
+      valueFor: () => 310,
+    });
+    expect(chips[0].value).toBe(310);
+    expect(chips[0].hexLabels).toEqual([]);
+  });
+
+  it("still shows the em dash for a one-stop draft, whatever the channel says", () => {
+    const chips = watcherTrainDrafts({
+      roster: [{ trainIndex: 0, model: "7" }],
+      actorDrafts: { 0: [[40, 40] as const] },
+      labelForHex: () => "A1",
+      priceRoute: () => 0,
+      valueFor: () => 310,
+    });
+    expect(chips[0].value).toBeNull();
+  });
+});

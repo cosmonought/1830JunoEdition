@@ -61,6 +61,7 @@ import { corporationFullName, corporationTitle } from "../utils/corporationNames
 import { PRIVATE_COMPANY_CATALOG } from "../utils/privateCatalog";
 import {
   applyCardOrder,
+  openingCardOrder,
   operatingRoundCardOrder,
 } from "../utils/corporationCardOrder";
 import { StationTokenRow } from "./StationTokenRow";
@@ -73,7 +74,6 @@ import { bestContrastTextColor } from "./hexContractTypes";
 import { corporationLiveryColor } from "../styles/corporationLivery";
 import {
   CARD_BORDER,
-  CARD_BORDER_ACTIVE,
   CARD_DIVIDER,
   CARD_HIGHLIGHT_BG,
   CARD_HIGHLIGHT_BORDER,
@@ -88,6 +88,7 @@ import {
 import { showsCurseBesideName } from "../utils/carcosaCurse";
 import CarcosaMark from "./CarcosaMark";
 import { BO_LOCKED_CARD_NOTE } from "../utils/gameVariants";
+import { certificateCardsHeld, certificateCardsInPool } from "../utils/doubleCertificate";
 
 export interface StockRoundPanelProps {
   publicCompanies: readonly PublicCompanyState[];
@@ -449,7 +450,8 @@ function CorporationRoster({
            on every render -- right about the order, wrong about the moment, since buying is what causes floats
            and the act of using the screen rearranged it. `cardOrder` is recomputed only when an Operating Round
            begins (`utils/corporationCardOrder.ts`) and held until the next one. */}
-        {applyCardOrder(publicCompanies, cardOrder).map((company) => {
+        {/* #1350: before the first Operating Round, the spectrum order rather than the state's numbering. */}
+        {applyCardOrder(publicCompanies, cardOrder ?? openingCardOrder(publicCompanies)).map((company) => {
           const color = tickerColor(company.company_id);
           /* Design note #447: the field is optional and `gameState.ts` is explicit that `undefined` means
              "this build cannot tell you" while "0" means "it earned nothing" -- and a company that never
@@ -578,8 +580,7 @@ function CorporationRoster({
                       title={corporationTitle(company.ticker)}
                       fallbackStyle={styles.rosterLiveryTicker}
                     />
-                    {/* Design note #1323: the Kanawha Licence, in the stripe's own ink. Nothing for none. */}
-                    <KanawhaLicenseBadge count={licensesHeldBy(company)} color={liveryInk} />
+                    {/* Design note #1378: the Kanawha Licence LEFT THE STRIPE -- it is a cell on the price row now. */}
                     {/* Design note #465: THE ACRONYM COMES BACK, beside the herald rather than instead of it. #410 traded
                        one for the other and the trade was not even -- a herald is unmistakable once you know it and
                        unreadable until you do, and the full name is too long to serve as the quick label. "PRR" is what a
@@ -687,6 +688,27 @@ function CorporationRoster({
                      FLUSH RIGHT, not fourth in the line: Market, IPO/Par and Last Run are PER-SHARE facts that read as a
                      sequence, while treasury is the corporation's own money. `marginLeft: auto` also absorbs the slack so
                      four evenly-spaced columns cannot drift apart on a wide card. */}
+                  {/* ==================================================================
+                       DESIGN NOTE 1378: THE LICENCE IS A FACT ABOUT THE CORPORATION, NOT PART OF ITS NAME
+                      ==================================================================
+                      REPORTED: "The pickaxe License icon placement on the corporation cards is wrong. Right now it
+                      sits between the herald and the acronym on the corp card color stripe. It needs to move
+                      down: on the Market IPO/PAR Treasury line, add a LICENSE spot with the icon above it for
+                      corporations that have purchased one."
+                      #1323 PUT IT IN THE STRIPE beside the herald, which is where the identity lives -- and a licence
+                      is not identity, it is a holding, like the market price and the treasury it now sits beside.
+                      A CELL LIKE THE OTHERS: the icon where the figure goes, the word under it in the row's own
+                      caption face, and nothing at all for a corporation without one -- an empty "LICENSE" cell on
+                      seven of nine cards would be a column of absences. Between IPO/par and the treasury, so the
+                      treasury stays flush right (#489). */}
+                  {licensesHeldBy(company) > 0 && (
+                    <div style={styles.rosterPrice}>
+                      <span style={styles.rosterPriceValue}>
+                        <KanawhaLicenseBadge count={licensesHeldBy(company)} color={CARD_INK} size={18} />
+                      </span>
+                      <span style={styles.rosterPriceLabel}>license</span>
+                    </div>
+                  )}
                   <div style={{ ...styles.rosterPrice, ...styles.rosterTreasury }}>
                     <span style={styles.rosterPriceValue}>${company.treasury}</span>
                     <span style={styles.rosterPriceLabel}>treasury</span>
@@ -795,8 +817,7 @@ function CorporationRoster({
                        two units. WHILE THE PRESIDENCY IS UNSOLD the 20% certificate sits in the IPO, which is why this cannot
                        be a constant 9. */}
                     <span style={styles.ownershipNum} role="cell">
-                      {certificateCount(company.ipo_pool_percentage, company.president === null)} (
-                      {company.ipo_pool_percentage}%)
+                      {certificateCardsInPool(company, "Ipo")} ({company.ipo_pool_percentage}%)
                     </span>
                     <span
                       style={styles.ownershipNum}
@@ -811,8 +832,7 @@ function CorporationRoster({
                     {/* Design note #448: the same unit as every other row. A President's Certificate cannot reach the Bank
                        Pool -- a president must dump the presidency before selling out -- so `false` is not a simplification. */}
                     <span style={styles.ownershipNum} role="cell">
-                      {certificateCount(company.bank_pool_percentage, false)} (
-                      {company.bank_pool_percentage}%)
+                      {certificateCardsInPool(company, "Bank")} ({company.bank_pool_percentage}%)
                     </span>
                     <span
                       style={styles.ownershipNum}
@@ -908,7 +928,7 @@ function CorporationRoster({
                         <span style={styles.ownershipNum} role="cell">
                           {/* "5 (60% max)" rather than "5 (60%, max)": the comma buys nothing and this
                              column is fixed-width (#466), so every character is a real constraint. */}
-                          {certificateCount(holding.percentage, holding.isPresident)} (
+                          {certificateCardsHeld(company, holding.address)} (
                           {holding.percentage}%{marker === null ? "" : ` ${marker}`})
                         </span>
                         {/* Design note #394: blank, not a dash. */}
@@ -1055,7 +1075,11 @@ function CorporationRoster({
                 ...styles.rosterCard,
                 ...(company.is_floated ? {} : styles.rosterCardUnfloated),
                 ...(isActive ? styles.rosterCardActive : {}),
-                borderColor: isActive ? CARD_BORDER_ACTIVE : CARD_BORDER,
+                /* Design note #1345 (feedback 5): the pink 1px edge on the selected card is gone. It was the
+                   brand pink (`CARD_BORDER_ACTIVE`) on one surface only, too slight to read as a state and
+                   too odd to read as anything but a mistake; the selected card already expands, and keeps
+                   #1109's lift (`rosterCardActive`) -- a shadow, not a colour. */
+                borderColor: CARD_BORDER,
                 ...(locked ? styles.rosterCardLocked : {}),
               }}
               aria-disabled={locked ? true : undefined}
@@ -1769,7 +1793,10 @@ function CompanyActions({
 /** How many PHYSICAL certificates a holding represents -- NOT `percentage / 10`. A President's Share is
  *  a 20% double certificate, so a president on 60% holds five, not six. The certificate LIMIT is per
  *  certificate, so counting six overstates their position by one per presidency.
- *  `isPresident` comes from the contract, never from who holds the most (design note #8). */
+ *  `isPresident` comes from the contract, never from who holds the most (design note #8).
+ *  #1374: NO LONGER WHAT THE TABLE RENDERS. It cannot see the 20% standard certificate (#1324), so the
+ *  ownership rows count through `doubleCertificate.ts` now; this stays for the printed-game callers and
+ *  tests that read it. */
 export function certificateCount(percentage: number, isPresident: boolean): number {
   return Math.max(0, percentage / 10 - (isPresident ? 1 : 0));
 }

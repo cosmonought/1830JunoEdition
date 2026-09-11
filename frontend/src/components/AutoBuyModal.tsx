@@ -14,6 +14,8 @@
 import React, { useState } from "react";
 
 import { FONT_SIZE, RADIUS } from "../styles/typography";
+import { bestContrastTextColor, corporationLiveryColor } from "../styles/corporationLivery";
+import { CorporateLogo } from "./CorporateLogo";
 import {
   AUTO_BUY_CAPS,
   type AutoBuySettings,
@@ -52,7 +54,14 @@ const SOURCE_LABELS: ReadonlyArray<{ value: AutoBuySourcePreference; label: stri
 export function AutoBuyModal({ open, corporations, initial, onArm, onClose }: AutoBuyModalProps) {
   /* Order of ticking is order of preference (#1240), so an array rather than a set. */
   const [targets, setTargets] = useState<AutoBuyTarget[]>([...(initial?.targets ?? [])]);
-  const [sharedCap, setSharedCap] = useState(initial?.targets[0]?.maxPercent ?? 60);
+  /* ==================================================================
+      DESIGN NOTE 1383: NO SHARED CAP -- EACH ROW IS SET BY HAND
+     ==================================================================
+     RULED: "The global 'Buy up to %' should be removed. Players should set their purchases manually."
+     #1333 seeded every ticked row from one shared figure so a single click set six caps at once; the table
+     found that a cap it had not chosen per corporation was a cap it had not chosen. A newly ticked row now
+     opens at the default and the player sets it on the row, which is the only place a cap lives. */
+  const DEFAULT_CAP = 60;
   const [source, setSource] = useState<AutoBuySourcePreference>(initial?.source ?? "Ipo");
   const [stopOnPar, setStopOnPar] = useState(initial?.stopOnPar ?? true);
   const [stopOnSale, setStopOnSale] = useState(initial?.stopOnSale ?? true);
@@ -67,15 +76,11 @@ export function AutoBuyModal({ open, corporations, initial, onArm, onClose }: Au
       on
         ? current.some((t) => t.companyId === companyId)
           ? current
-          : [...current, { companyId, maxPercent: sharedCap }]
+          : [...current, { companyId, maxPercent: DEFAULT_CAP }]
         : current.filter((t) => t.companyId !== companyId),
     );
   const setCap = (companyId: number, maxPercent: number) =>
     setTargets((current) => current.map((t) => (t.companyId === companyId ? { ...t, maxPercent } : t)));
-  const setEveryCap = (maxPercent: number) => {
-    setSharedCap(maxPercent);
-    setTargets((current) => current.map((t) => ({ ...t, maxPercent })));
-  };
 
   return (
     <div
@@ -101,18 +106,7 @@ export function AutoBuyModal({ open, corporations, initial, onArm, onClose }: Au
           also stops when the Stock Round ends.
         </p>
 
-        <label style={styles.capRow}>
-          <span style={styles.rowLabel}>Buy up to</span>
-          <select value={sharedCap} onChange={(event) => setEveryCap(Number(event.target.value))} style={styles.select}>
-            {AUTO_BUY_CAPS.map((cap) => (
-              <option key={cap} value={cap}>
-                {cap}%
-              </option>
-            ))}
-          </select>
-          <span style={styles.rowCaption}>of each ticked corporation — or set a cap per row below</span>
-        </label>
-
+        {/* #1383: the shared "Buy up to" is gone; every cap is on its row. */}
         <div style={styles.capRow}>
           <span style={styles.rowLabel}>Buy from</span>
           <div style={styles.segment} role="radiogroup" aria-label="Source">
@@ -144,8 +138,24 @@ export function AutoBuyModal({ open, corporations, initial, onArm, onClose }: Au
               .join(", ");
             const order = targets.findIndex((t) => t.companyId === row.companyId);
             const target = order >= 0 ? targets[order] : null;
+            /* ==================================================================
+                DESIGN NOTE 1384: THE ROW WEARS THE LIVERY, AND THE LIVERY FADES OUT
+               ==================================================================
+               ASKED: "the corporations need their herald. I think they could also have their corp color
+               stripe, but have it fade to 0% around the 75% width point?" The herald sits where the ticker
+               was, with the ticker beside it (#465's pairing); the row's ground is the livery running from
+               the left edge and gone by three quarters, so the checkbox and the cap control on the right
+               sit on the card's own surface. Ink on the coloured part is the livery's contrast ink. */
+            const livery = corporationLiveryColor(row.companyId);
+            const liveryInk = bestContrastTextColor(livery);
             return (
-              <div key={row.companyId} style={styles.row}>
+              <div
+                key={row.companyId}
+                style={{
+                  ...styles.row,
+                  background: `linear-gradient(90deg, ${livery} 0%, ${livery} 30%, transparent 75%)`,
+                }}
+              >
                 <label style={styles.rowMain}>
                   <input
                     type="checkbox"
@@ -154,9 +164,16 @@ export function AutoBuyModal({ open, corporations, initial, onArm, onClose }: Au
                     style={styles.checkbox}
                   />
                   <span style={styles.rowText}>
-                    <span style={styles.rowLabel}>
+                    <span style={{ ...styles.rowLabel, ...styles.rowIdentity, color: liveryInk }}>
+                      <CorporateLogo
+                        ticker={row.ticker}
+                        size={20}
+                        color={liveryInk}
+                        title={row.ticker}
+                        fallbackStyle={styles.heraldFallback}
+                      />
                       {row.ticker}
-                      {order >= 0 && <span style={styles.order}> #{order + 1}</span>}
+                      {order >= 0 && <span style={{ ...styles.order, color: liveryInk }}> #{order + 1}</span>}
                     </span>
                     <span style={styles.rowCaption}>
                       {`You hold ${row.holdingPercent}%. `}
@@ -279,7 +296,17 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.small,
   },
   list: { display: "flex", flexDirection: "column", gap: "10px", marginTop: "4px" },
-  row: { display: "flex", flexDirection: "row", alignItems: "flex-start", gap: "10px" },
+  row: {
+    display: "flex",
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: "10px",
+    // #1384: padded so the livery gradient has an edge to run from, and rounded like the card's controls.
+    padding: "6px 8px",
+    borderRadius: RADIUS.card,
+  },
+  rowIdentity: { display: "inline-flex", alignItems: "center", gap: "7px" },
+  heraldFallback: { fontSize: FONT_SIZE.micro, fontWeight: 800 },
   rowMain: { display: "flex", flexDirection: "row", gap: "10px", cursor: "pointer", flex: 1, minWidth: 0 },
   rowCap: { display: "inline-flex", alignItems: "center", gap: "6px", flex: "none" },
   segment: { display: "inline-flex", gap: "0", border: "1px solid #3a3a3a", borderRadius: RADIUS.card, overflow: "hidden" },

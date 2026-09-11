@@ -358,6 +358,17 @@ export type GameplayExecuteMsg =
         model: string;
         /** Stage 1 only: the treasury award, already halved and floored. */
         cash?: string;
+        /** ==================================================================
+         *   DESIGN NOTE 1375: THE MARK TAKES ONE TRAIN'S ROUTE, NOT THE WHOLE RUN
+         *  ==================================================================
+         *  REPORTED: "The Yellow Sign took a corporation's train and provided the 50% train value payout,
+         *  but it also zeroed out the corporation's other train's run." #1046 zeroed the run on the ruling
+         *  "no standard route revenue for this submission"; RULED SINCE that the other trains' routes stand.
+         *  So the Mark now removes the TAKEN train's printed route from the run and re-rolls the remainder
+         *  under the turn's own seed -- the same seed the run rolled with, carried here so the reducer can
+         *  redo the arithmetic without drawing (#1051). A log written before this field has no seed and
+         *  keeps the zeroing it was played under. Stage 1 only. */
+        revenue_seed?: number;
       };
     }
   | {

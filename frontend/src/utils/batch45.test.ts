@@ -101,37 +101,21 @@ describe("a collision no longer destroys the entry nobody undid", () => {
 });
 
 describe("the index is allocated, not supplied", () => {
+  /* #1361 RETIRED THE FIRESTORE TRANSACTION THIS USED TO PIN. The allocator moved to the server in #1209 --
+     `RoomSession` hands out the index and mints the id, one writer, no transaction needed -- and the client
+     function is now the shell's unreachable fallback (#1242), answering `null`. What survives of #1026's
+     property is stated where it lives now. */
   const ROOM = readSource("utils/sandboxRoom.ts");
+  const SESSION = readSource("utils/roomSession.ts");
 
-  it("writes the entry inside a transaction", () => {
-    /* THE ONE GUARANTEE A TRANSACTION BUYS HERE: two clients appending at once both read the room's counter,
-       so the second is aborted and retried against the value the first wrote. The old note argued a re-read
-       was pointless because ORDERING is unobtainable -- true, and never the question. Uniqueness is. */
-    expect(ROOM).toContain("return runTransaction(db, async (tx) => {");
-    expect(ROOM).toContain("const room = await tx.get(roomRef);");
+  it("the client no longer writes an index of its own", () => {
+    expect(ROOM).not.toContain("runTransaction(");
+    expect(ROOM).not.toContain("tx.set(");
   });
 
-  it("advances the counter in the same write", () => {
-    /* THE COUNTER AND THE ENTRY, ATOMICALLY. A counter bumped outside the transaction could be incremented by
-       a write that then failed, which loses an index -- harmless -- or incremented after the entry, which
-       hands the same number out twice and is the bug returning. */
-    expect(ROOM).toContain("tx.set(roomRef, { [SANDBOX_NEXT_INDEX_FIELD]: allocated + 1 }, { merge: true });");
-    expect(ROOM).toContain("tx.set(doc(actionsRef), {");
-  });
-
-  it("mints the document id locally", () => {
-    /* `addDoc` CANNOT RUN INSIDE A TRANSACTION -- a transaction needs its writes named up front -- so the ref
-       is created first and set. Asserted because reaching for `addDoc` here is the obvious edit and it would
-       silently move the write back outside the atomic step. */
-    expect(ROOM).toContain("tx.set(doc(actionsRef), {");
-  });
-
-  it("uses the caller's figure only as a floor", () => {
-    /* A ROOM CREATED BEFORE THIS FIELD EXISTED HAS NO COUNTER, and seeding from zero would hand out indices
-       the log already contains. The client's view of the log length is the only evidence available there. */
-    expect(ROOM).toContain(
-      "const allocated = Number.isFinite(counter) ? Math.max(counter, nextIndex) : nextIndex;",
-    );
+  it("the server allocates the index and mints the id", () => {
+    expect(SESSION).toContain("nextIndex");
+    expect(SESSION).toContain("mintId");
   });
 
   it("returns the index it used", () => {

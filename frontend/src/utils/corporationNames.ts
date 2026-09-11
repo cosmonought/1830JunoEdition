@@ -86,6 +86,35 @@ export const CORPORATION_DISPLAY_ORDER: readonly string[] = [
   "PRR",
 ];
 
+/* ==================================================================
+    DESIGN NOTE 1350: THE SPECTRUM ORDER, FOR THE CARDS NOBODY HAS BOUGHT
+   ==================================================================
+   RULED (10 September): the Stocks page's cards group floated -> parred -> unbought at the Operating Round
+   boundary (#464's moment, kept), and the unbought sit in "ROYGBIV" order -- red to violet by livery, the
+   two neutrals last -- so a player can learn where a card is from its colour. The same order opens the
+   game, before any Operating Round has sorted anything. A PRINTED TABLE (#582's rule): the liveries have
+   hues, but a sort over them would move the moment a livery is re-cut. Hue angles from `corporationLivery`
+   at the time of writing: PRR 351, NNH 27, CPR 27 (the darker of the two oranges), ERIE 47, B&M 145, C&O
+   193, B&O 218, PMQ 272; N&W (gray) and NYC (black) have none. */
+export const CORPORATION_SPECTRUM_ORDER: readonly string[] = [
+  "PRR",
+  "NYNH",
+  "CPR",
+  "ERIE",
+  "B&M",
+  "C&O",
+  "B&O",
+  "PMQ",
+  "N&W",
+  "NYC",
+];
+
+export function corporationSpectrumRank(ticker: string): number {
+  const upper = ticker.toUpperCase();
+  const at = CORPORATION_SPECTRUM_ORDER.indexOf(TICKER_ALIASES[upper] ?? upper);
+  return at === -1 ? CORPORATION_SPECTRUM_ORDER.length : at;
+}
+
 /** Sort position for a ticker, or a number past the end for one this table
  *  does not know -- an unrecognised corporation sorts last rather than
  *  first, so a typo cannot silently head the list. */

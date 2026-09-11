@@ -201,6 +201,8 @@ describe("the shell asks the rule at all three surfaces (design note #879)", () 
     const derive = APP.slice(dv, APP.indexOf("[mapGrid, gameState, actingProtocolId]", dv));
     expect(derive).toContain("planTokenUpgrade(");
     expect(derive).toContain("ownIsFree: own !== null && own.toCityIndex === null,");
+    // #1400: the token the cycle is about is the FREE one on the hex, whoever's it is.
+    expect(derive).toContain("const free = plan?.landings.find((entry) => entry.toCityIndex === null) ?? null;");
   });
 
   it("uses that one derivation everywhere a marker is placed", () => {
@@ -314,12 +316,11 @@ describe("the lay carries every token's destination (design note #880)", () => {
        ASSERTED IN THE RULE (#885) rather than at the call site: `tokenLandingsFor` is now the only place the
        override is written, and a call-site assertion would have gone green on an extraction that quietly
        dropped it. */
-    expect(MIGRATION).toContain(
-      "anchored === null && entry.companyId === actingCompanyId ? chosenCity : anchored;",
-    );
-    /* AND A FREE TOKEN BELONGING TO SOMEBODY ELSE IS OMITTED, not defaulted -- the board never said which
-       city it is in and this president is not choosing for them. `0` would be #878's superseded rule in a
-       third hat. */
+    /* #1400: the choice fills in EVERY free token, whoever's -- the upgrader places the tokens on the tile it
+       lays. The anchored half is unchanged. */
+    expect(MIGRATION).toContain("const chosen = anchored === null ? chosenCity : anchored;");
+    /* AND A FREE TOKEN WITH NO CHOICE YET IS OMITTED, not defaulted -- `0` would be #878's superseded rule in
+       a third hat. */
     expect(MIGRATION).toContain("return chosen === undefined || chosen === null");
   });
 

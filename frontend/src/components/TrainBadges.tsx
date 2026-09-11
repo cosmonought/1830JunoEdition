@@ -536,6 +536,22 @@ export interface LastRoutePayoutProps extends TrainBadgeCommonProps {
   revenue?: string | number | null;
 }
 
+/** ==================================================================
+ *   DESIGN NOTE 1391: ONE RULE FOR "LAST RUN", WHEREVER IT IS PRINTED
+ *  ==================================================================
+ *  `last_route_revenue` is the CURRENT turn's run and is cleared when the turn moves on (#777);
+ *  `last_completed_run_revenue` is what the corporation last filed. The Stock panel has combined them since
+ *  #1032 -- the live figure while it exists, else the filed one -- and the Rail Map's corporations panel and
+ *  the Ledger kept reading the turn-scoped field alone, so between turns every corporation showed $0. The
+ *  rule lives beside the component that prints the figure, and the three surfaces call it. */
+export function lastRunFigure(
+  company: { last_route_revenue?: string | null; last_completed_run_revenue?: string | null },
+): string {
+  const live = Number(company.last_route_revenue ?? 0) || 0;
+  const filed = Number(company.last_completed_run_revenue ?? 0) || 0;
+  return String(live > 0 ? live : filed);
+}
+
 export function LastRoutePayout({ revenue, surface, compact }: LastRoutePayoutProps) {
   const ink = surface === "light" ? lightInk : darkInk;
   const size = compact ? FONT_SIZE.small : FONT_SIZE.strong;

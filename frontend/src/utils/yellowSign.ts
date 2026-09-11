@@ -40,8 +40,9 @@
 import { UNPREDICTABLE_REVENUE_FLAVOR } from "../constants/flavorText";
 // Design note #1051: `revenueSeedHash` is no longer imported here -- every draw this file makes comes out of
 // the turn's own recorded roll now, so there is nothing left for it to hash.
-import { type FlavorBucket, type RevenueSeedParts } from "./gameVariants";
+import { rollTurnRevenue, type FlavorBucket, type RevenueRoll, type RevenueSeedParts } from "./gameVariants";
 import { DEPOT_COST, TIER_ORDER, trainTier, type TrainTier } from "./gamePhase";
+import type { PublicCompanyState } from "./gameState";
 
 /** The Stage 1 line, verbatim from `criticalMalus`. */
 export const YELLOW_SIGN_MALUS_LINE =
@@ -159,6 +160,44 @@ export function markPayout(model: string): number {
   return tier ? Math.floor(DEPOT_COST[tier] / 2) : 0;
 }
 
+/** The run this corporation just made, with the Mark's train taken out of it -- design note #1375.
+ *
+ *  THE TAKEN TRAIN'S ROUTE COMES OFF THE PRINTED TOTAL and the remainder is rolled again under the turn's own
+ *  seed, so the bonus or malus the table saw still applies, to what is left. Which route was the taken
+ *  train's is read from `last_run_breakdown` (#1031): by fleet slot first, since two trains may share a
+ *  model, then by model. A run whose log named no trains has no breakdown and is left whole -- the only
+ *  honest answer when the record cannot say which route vanished.
+ *  ONE FUNCTION FOR BOTH READERS: the reducer applies it and the shell narrates it, so the sentence and the
+ *  board cannot disagree about the figure. */
+export function runWithoutTrain(
+  company: Pick<PublicCompanyState, "owned_trains" | "printed_route_revenue" | "last_route_revenue" | "last_run_breakdown" | "routes_run_this_turn">,
+  model: string,
+  parts: RevenueSeedParts | null,
+): { printed: number; adjusted: number; roll: RevenueRoll | null; routes: number; breakdown: PublicCompanyState["last_run_breakdown"] } {
+  const printedBefore = Math.max(0, Number(company.printed_route_revenue ?? 0) || 0);
+  const adjustedBefore = Math.max(0, Number(company.last_route_revenue ?? 0) || 0);
+  const breakdown = company.last_run_breakdown ?? [];
+  const slot = (company.owned_trains ?? []).indexOf(model);
+  const takenAt = (() => {
+    const bySlot = slot >= 0 ? breakdown.findIndex((entry) => entry.train_index === slot) : -1;
+    return bySlot >= 0 ? bySlot : breakdown.findIndex((entry) => entry.model === model);
+  })();
+  if (takenAt < 0) {
+    return { printed: printedBefore, adjusted: adjustedBefore, roll: null, routes: breakdown.length || (company.routes_run_this_turn ?? 0), breakdown: company.last_run_breakdown };
+  }
+  const takenPrinted = Math.max(0, Number(breakdown[takenAt].printed_revenue) || 0);
+  const printed = Math.max(0, printedBefore - takenPrinted);
+  const remaining = breakdown.filter((_entry, at) => at !== takenAt);
+  const roll = parts ? rollTurnRevenue(printed, parts) : null;
+  return {
+    printed,
+    adjusted: roll ? roll.adjusted : printed,
+    roll,
+    routes: remaining.length,
+    breakdown: remaining,
+  };
+}
+
 /** The tier the Escalation gifts: whatever phase the board is in.
  *
  *  Design note #1046: "a train matching the current phase's tier", read off the phase rather than off the
@@ -206,6 +245,41 @@ export function yellowSignStateFrom(logLabels: readonly string[]): YellowSignSta
     if (label.includes(YELLOW_SIGN_BONUS_LINE)) carcosaSeen = true;
   }
   return { markedTicker, carcosaSeen };
+}
+
+/* ==================================================================
+    DESIGN NOTE 1404: THE STATE KNOWS WHO IS MARKED; THE SENTENCE NO LONGER SAYS
+   ==================================================================
+   REPORTED (Phase D, debug armed): "instead it did the Yellow Sign to my corporation and took my D-train...
+   Yellow Sign is only possible on phases 2-4 ... I was expecting that it would arm the event for the next
+   legal step in the sequence."
+   #1044 READ THE MARKED TICKER OFF THE LOG LINE -- "<TICKER> ran for $N. <the malus line>" -- and #1375 then
+   split that line in two: the run's own mechanical line first, and the sign's clause on a SECOND line that
+   opens with the clause itself. `tickerFrom` found no "ran for" on it and answered null, so every client
+   read the game as unmarked. That is why the forced stage resolved to a second Mark rather than the Carcosa
+   the arming was for, and why a natural second Mark had become possible too.
+   THE REDUCER HAS HELD THE ANSWER SINCE #1046: `has_yellow_sign` is set by the Mark's own action and cleared
+   by the escalation, which sets `is_carcosan`. Both replay from the log like everything else, so this reads
+   them and the sentence parse survives only as the fallback for a state that carries neither flag. */
+export function yellowSignStateFromCompanies(
+  companies: ReadonlyArray<{ ticker: string; has_yellow_sign?: boolean; is_carcosan?: boolean }>,
+): YellowSignState {
+  const marked = companies.find((company) => company.has_yellow_sign === true);
+  const carcosan = companies.find((company) => company.is_carcosan === true);
+  return {
+    markedTicker: marked?.ticker ?? carcosan?.ticker ?? null,
+    carcosaSeen: carcosan !== undefined,
+  };
+}
+
+/** The state's answer where it has one, the log's where it does not (#1404). */
+export function yellowSignStateOf(
+  companies: ReadonlyArray<{ ticker: string; has_yellow_sign?: boolean; is_carcosan?: boolean }>,
+  logLabels: readonly string[],
+): YellowSignState {
+  const fromState = yellowSignStateFromCompanies(companies);
+  if (fromState.markedTicker !== null) return fromState;
+  return yellowSignStateFrom(logLabels);
 }
 
 /** "B&O ran for $170. ..." -> "B&O". `null` when the label is not one of these sentences. */
@@ -333,6 +407,36 @@ export interface FlavourResolution {
    record. What the flag changes is which line got written, once. */
 export type ForcedSignStage = "mark" | "carcosa" | "fog";
 
+/* ==================================================================
+    DESIGN NOTE 1404 (arming): THE SHORTCUT OFFERS THE STAGES THAT CAN STILL HAPPEN
+   ==================================================================
+   "I was expecting that it would arm the event for the next legal step in the sequence." #1128's cycle was
+   fixed -- null, mark, carcosa, fog -- so in Phase D with a corporation already marked the first press
+   armed a Mark: a stage the game had spent and whose window (phases 2-4) had closed. Now the cycle is built
+   from the game: a Mark while nobody is marked and the window is open; the Carcosa while somebody is marked,
+   unescalated, and the window (5-D) is open; the Fog while a Carcosan corporation exists. Off, then each in
+   order, then off. The forced Mark also respects its window below (#1128 skipped it; the ruling here is that
+   it is "only possible on phases 2-4"). */
+export function forcedSignStagesAvailable(state: YellowSignState, phaseTier: string): ForcedSignStage[] {
+  const stages: ForcedSignStage[] = [];
+  if (state.markedTicker === null && markWindowOpen(phaseTier)) stages.push("mark");
+  if (state.markedTicker !== null && !state.carcosaSeen && escalationWindowOpen(phaseTier)) stages.push("carcosa");
+  if (state.carcosaSeen) stages.push("fog");
+  return stages;
+}
+
+/** The next value for the debug chip: off -> first available -> ... -> off. A currently armed stage that is
+ *  no longer available steps to the first one that is. */
+export function nextForcedSign(
+  current: ForcedSignStage | null,
+  state: YellowSignState,
+  phaseTier: string,
+): ForcedSignStage | null {
+  const order: (ForcedSignStage | null)[] = [null, ...forcedSignStagesAvailable(state, phaseTier)];
+  const at = order.indexOf(current);
+  return order[(at + 1) % order.length] ?? null;
+}
+
 export function resolveFlavourLine(input: {
   naturalLine: string;
   bucket: FlavorBucket;
@@ -395,7 +499,12 @@ export function resolveFlavourLine(input: {
   /* Design note #1128: FORCED, THE DRAW AND THE WINDOW BOTH GO. The Mark's real gate is that the hash has to
      land on its line, which is a lottery no amount of playing can hurry; phases 2-4 is the other. What
      survives is an unmarked game and a train to take -- see the note on `ForcedSignStage`. */
-  if (forced === "mark" && state.markedTicker === null && lowestValueTrain(owned) !== null) {
+  if (
+    forced === "mark" &&
+    state.markedTicker === null &&
+    markWindowOpen(phaseTier) && // #1404: "only possible on phases 2-4", forced or not
+    lowestValueTrain(owned) !== null
+  ) {
     return { line: YELLOW_SIGN_MALUS_LINE, stage: "mark" };
   }
 

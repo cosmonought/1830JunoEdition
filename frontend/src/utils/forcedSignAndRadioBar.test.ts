@@ -155,10 +155,13 @@ describe("the flag crosses the machine it was armed on", () => {
   });
 
   it("validates the field rather than casting it", () => {
-    // Untrusted document data. An unknown string would be a flag that matches no stage and never clears.
-    expect(ROOM).toContain('data.forcedSign === "mark"');
-    expect(ROOM).toContain('data.forcedSign === "carcosa"');
-    expect(ROOM).toContain('data.forcedSign === "fog"');
+    /* Untrusted wire data. An unknown string would be a flag that matches no stage and never clears. #1361b
+       moved the room document to the game server, so the check moved with it: the server's write handler
+       admits the three stages and nulls anything else. */
+    const fs = require("fs") as typeof import("fs");
+    const path = require("path") as typeof import("path");
+    const SERVER = fs.readFileSync(path.join(__dirname, "../../../server/src/gameServer.ts"), "utf8");
+    expect(SERVER).toContain('write.stage === "mark" || write.stage === "carcosa" || write.stage === "fog" ? write.stage : null');
   });
 
   it("clears on the stage that fired, not on the attempt", () => {

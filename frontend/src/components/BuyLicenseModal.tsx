@@ -35,6 +35,8 @@ export interface BuyLicenseModalProps {
   alreadyHeld: boolean;
   /** `null` when the purchase is available right now; otherwise the refusal, in its own words. */
   refusal: string | null;
+  /** #1388: the acting corporation's treasury now, for the confirm line; `null` when no corporation is acting. */
+  treasuryBefore?: number | null;
   onBuy: () => void;
 }
 
@@ -45,6 +47,7 @@ export function BuyLicenseModal({
   remaining,
   alreadyHeld,
   refusal,
+  treasuryBefore = null,
   onBuy,
 }: BuyLicenseModalProps) {
   React.useEffect(() => {
@@ -91,6 +94,13 @@ export function BuyLicenseModal({
           <p style={styles.note}>{actingTicker} already holds a licence.</p>
         )}
         {!canBuy && !alreadyHeld && refusal && <p style={styles.note}>{refusal}</p>}
+        {/* #1388: the effect, stated before the click -- the same line every other purchase confirm carries. */}
+        {canBuy && actingTicker && treasuryBefore !== null && (
+          <p style={styles.note}>
+            {actingTicker} pays ${KANAWHA_LICENSE_COST} to the Bank. Treasury ${treasuryBefore} →{" "}
+            ${treasuryBefore - KANAWHA_LICENSE_COST}.
+          </p>
+        )}
         <div style={styles.footer}>
           <button type="button" style={styles.secondaryButton} onClick={onClose}>
             {canBuy ? "Not now" : "Close"}

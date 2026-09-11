@@ -548,18 +548,21 @@ export const TILE_GRAPHICS_CATALOG: Readonly<Record<number, TileArtwork>> = {
       { kind: "city", at: { x: 0, y: 0 } },
     ],
   },
-  /* #630 -- two towns, one on each of two curves (Project 18XX+ tile set, design note #1311) */
+  /* #630 -- two towns, one on each of two curves (Project 18XX+ tile set, design note #1311).
+     #1392: RULED as the tight curve on the upper edges (code 1-2) and the gentle curve 0-4 -- #631's
+     reflection, drawn by mirroring #631's art (#1392a keeps #631 as it was). */
   630: {
     tracks: [
-      "M -0.433013 -0.75 C -0.240563 -0.416667 -0.481125 0 -0.866025 0",
+      "M -0.433013 -0.75 C -0.240563 -0.416667 0.240563 -0.416667 0.433013 -0.75",
       "M 0.866025 0 C 0.330129 0 -0.165065 0.2859 -0.433013 0.75",
     ],
     markers: [
-      { kind: "town", at: { x: -0.433013, y: -0.25 } },
+      { kind: "town", at: { x: 0, y: -0.5 } },
       { kind: "town", at: { x: 0.116026, y: 0.200962 } },
     ],
   },
-  /* #631 -- two towns, one on each of two curves (Project 18XX+ tile set, design note #1311) */
+  /* #631 -- two towns, one on each of two curves (Project 18XX+ tile set, design note #1311).
+     #1392a: UNCHANGED, on purpose -- a live game had laid this base; 630 is its reflection. */
   631: {
     tracks: [
       "M 0.866025 0 C 0.481125 0 0.240563 -0.416667 0.433013 -0.75",
@@ -775,9 +778,10 @@ export const TILE_GRAPHICS_CATALOG: Readonly<Record<number, TileArtwork>> = {
   },
   /* #147 -- brown town, four spokes (Project 18XX+ tile set, design note #1311) */
   147: {
+    // #1403: artwork swapped with #146 to follow the catalog swap (147 is 204's brown).
     tracks: [
-      "M 0.866025 0 L 0 0",
       "M 0.433013 -0.75 L 0 0",
+      "M -0.866025 0 L 0 0",
       "M -0.433013 0.75 L 0 0",
       "M 0.433013 0.75 L 0 0",
     ],
@@ -785,11 +789,11 @@ export const TILE_GRAPHICS_CATALOG: Readonly<Record<number, TileArtwork>> = {
       { kind: "town", at: { x: 0, y: 0 } },
     ],
   },
-  /* #146 -- brown town, four spokes (Project 18XX+ tile set, design note #1311) */
+  /* #146 -- brown town, four spokes (Project 18XX+ tile set, design note #1311); #1403: 87's edges. */
   146: {
     tracks: [
+      "M 0.866025 0 L 0 0",
       "M 0.433013 -0.75 L 0 0",
-      "M -0.866025 0 L 0 0",
       "M -0.433013 0.75 L 0 0",
       "M 0.433013 0.75 L 0 0",
     ],
@@ -848,15 +852,20 @@ export const TILE_GRAPHICS_CATALOG: Readonly<Record<number, TileArtwork>> = {
     ],
   },
   /* #810 -- "TO" green (design note #1317): a single station on the east half fed from NE, E and SE, a double
-     station on the west half fed from NW, W and SW. */
+     station on the west half fed from NW, W and SW.
+     #1402: THE SIDE ARMS CURVE. "The TO tile artwork is a bunch of straight tracks. The actual artwork has the
+     'side' tracks entering the cities curving slightly into them." Each NE/SE/NW/SW arm leaves its edge
+     midpoint square to the edge, as every arm must, and bends into the city on a cubic; only the E/W arm,
+     which is already on the city's axis, stays straight. Same six endpoints, so `paths` and the outline
+     grouping (`trackOutline.test.ts`) are untouched. */
   810: {
     tracks: [
       "M 0.866025 0 L 0.4 0",
-      "M 0.433013 -0.75 L 0.4 0",
-      "M 0.433013 0.75 L 0.4 0",
+      "M 0.433013 -0.75 C 0.258 -0.447 0.4 -0.25 0.4 0",
+      "M 0.433013 0.75 C 0.258 0.447 0.4 0.25 0.4 0",
       "M -0.866025 0 L -0.4 0",
-      "M -0.433013 -0.75 L -0.4 0",
-      "M -0.433013 0.75 L -0.4 0",
+      "M -0.433013 -0.75 C -0.258 -0.447 -0.4 -0.25 -0.4 0",
+      "M -0.433013 0.75 C -0.258 0.447 -0.4 0.25 -0.4 0",
     ],
     markers: [
       { kind: "city", at: { x: 0.4, y: 0 } },
@@ -867,11 +876,11 @@ export const TILE_GRAPHICS_CATALOG: Readonly<Record<number, TileArtwork>> = {
   882: {
     tracks: [
       "M 0.866025 0 L 0.4 0",
-      "M 0.433013 -0.75 L 0.4 0",
-      "M 0.433013 0.75 L 0.4 0",
+      "M 0.433013 -0.75 C 0.258 -0.447 0.4 -0.25 0.4 0",
+      "M 0.433013 0.75 C 0.258 0.447 0.4 0.25 0.4 0",
       "M -0.866025 0 L -0.4 0",
-      "M -0.433013 -0.75 L -0.4 0",
-      "M -0.433013 0.75 L -0.4 0",
+      "M -0.433013 -0.75 C -0.258 -0.447 -0.4 -0.25 -0.4 0",
+      "M -0.433013 0.75 C -0.258 0.447 -0.4 0.25 -0.4 0",
     ],
     markers: [
       { kind: "city", at: { x: 0.4, y: 0 }, slots: 2, angle: 90 },
@@ -2136,6 +2145,27 @@ export function tileArtworkPaths(tileId: number): readonly Path2D[] | undefined 
   const built = art.tracks.map((d) => new Path2D(d));
   PATH_CACHE.set(tileId, built);
   return built;
+}
+
+/** #1405: the tile's rails as sampled points in board pixels, at the laid orientation -- what a badge must
+ *  keep off. `steps` points per authored segment; the artwork's own `M`/`L`/`C` strings, so a curve that
+ *  bends away from a corner leaves that corner free where an edge-based guess would not. */
+export function tileTrackPoints(
+  tileId: number,
+  orientation: number,
+  center: { x: number; y: number },
+  size: number,
+  steps = 8,
+): { x: number; y: number }[] {
+  const art = TILE_GRAPHICS_CATALOG[tileId];
+  if (!art) return [];
+  const [cos, sin] = ROTATION[((orientation % 6) + 6) % 6];
+  return art.tracks.flatMap((d) =>
+    samplePath(d, steps).map((p) => ({
+      x: center.x + size * (p.x * cos - p.y * sin),
+      y: center.y + size * (p.x * sin + p.y * cos),
+    })),
+  );
 }
 
 /** THE single source of truth for city position on a laid tile, and what stationMarkerPoint must consult: the artwork's circle is per-tile, not the fixed diagonal twoNodePositions returns.

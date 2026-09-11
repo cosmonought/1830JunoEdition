@@ -283,6 +283,10 @@ export interface PrivateCompanyState {
    *  corporation bought it -- mutually exclusive with `owner`. Mirrors
    *  `msg.rs::PrivateCompanyState.owner_protocol_id` exactly. */
   owner_protocol_id: number | null;
+  /** Design note #1340: what the auction SETTLED this private at -- the face value on a buy-lowest, the
+   *  winning bid on a contest, `0` when it was marked down to nothing. Written by the reducer on the win and
+   *  absent until then; `cost` stays the printed figure (#303). Sandbox-only, like `market_positions`. */
+  settled_price?: number;
   /** Whether this private has been permanently closed (B&O Special Closure
    *  or Phase 5 Private Closure -- `hardware.rs` module doc comments
    *  #11/#12). A closed private can never be bought or sold again. Mirrors
@@ -517,6 +521,21 @@ export interface GameStateResponse {
    * never a clock, so a replay reproduces the same numbers rather than continuing from wherever a browser's
    * session had reached. The tie-break the operating order depends on needed no redesign to come here. */
   market_positions?: Readonly<Record<number, MarketPositionMark | null>>;
+  /** ==================================================================
+   *   DESIGN NOTE 1340: THE AUCTION ATOM COMES ONTO THE STATE, AS THE CHART DID
+   *  ==================================================================
+   *
+   * `WaterfallStateResponse` was the last atom the shell and the replay engine still composed by hand: the
+   * waterfall reducer RETURNED its charges, its wins and an `allPassed` flag (#261, #334, #337), and two
+   * composition layers -- `App.tsx` and `RoomEngine` -- each applied them to the board in the same order,
+   * and each was found short at least once (#1192, #1227, #1281). #1196/#1197 ended that arrangement for
+   * the chart; this ends it for the auction. The atom rides here, the reducer advances it and settles every
+   * consequence inside one call, and a caller holds no rule about auctions at all.
+   *
+   * OPTIONAL, ON #1196's RULE. `undefined` means "this build does not carry the auction" -- a chain game, or a
+   * fixture that never seeded one -- and the reducer then touches no auction. `null` is a seeded game whose
+   * auction atom is absent (the scenario has none). */
+  waterfall?: WaterfallStateResponse | null;
   /** ==================================================================
    *   DESIGN NOTE 1204: THE PRIVATE POWERS COME OFF THE SHELL TOO
    *  ==================================================================

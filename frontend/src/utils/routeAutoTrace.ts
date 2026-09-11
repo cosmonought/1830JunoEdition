@@ -39,7 +39,7 @@ import { STATIC_BOARD_HEXES, boardMemo, heraldAt } from "../components/hexBoardD
 import type { TileColorTier } from "../components/hexTileCatalog";
 import { isRouteTerminusHex, sandboxRouteBreakdown } from "./sandboxSession";
 // Design note #730: which city an arrival lands in -- shared with the network walk so both ask one question.
-import { cityForArrival, type StationToken } from "./trackReach";
+import { cityForArrival, stopForArrival, type StationToken } from "./trackReach";
 // Design note #1023: the same shut-city predicate the network walk and the auto-tracer already ask.
 import { cityShutAt } from "./cityBypass";
 import {
@@ -458,6 +458,34 @@ interface SearchResult {
   path: TracedHex[];
   revenue: number;
   segments: Set<SegmentKey>;
+  /** #1399: every `hex:city` the path stands in, the start included. What a second arm must keep off. */
+  visits: Set<string>;
+}
+
+/* ==================================================================
+    DESIGN NOTE 1399: A ROUTE MAY RE-ENTER A HEX BY ITS OTHER CITY
+   ==================================================================
+   REPORTED (JUNO-Z6C, B&O's D-train): "Auto-Route is bypassing H18 with tile 626 that has two separate
+   cities ... If you add that city it goes to $550", and the ruling: "each revenue center only counts once,
+   so trains can re-enter hexes with multiple towns and cities as long as they aren't reusing track or
+   revenue centers."
+   THE WALK KEPT A SET OF HEXES. `onPath` refused any hex already on the path "even by different rails",
+   which its own comment called 1830's rule. The pricing had already moved on: #1318 pays PER CITY VISITED
+   and `routeDraftEdit`'s rail-level rule lets a hand-drawn route come back into an OO hex's other city --
+   so the hand could draw what the router refused to look for, which is the reported gap.
+   SO THE WALK KEEPS A SET OF VISITS, `hex:stop`, where the stop is the one the arrival lands in --
+   `stopForArrival` (#1319), which is `cityForArrival` for cities (a city named only on a hex with two, 0
+   otherwise) and the rail's own town on a double-town tile. NOT `cityForArrival` alone: that answers 0 for
+   both towns of a #631, and the second report on this note was exactly a route that could not come back
+   through G17's other town ("continuing through the small town to the next city"). A one-stop hex or plain
+   track keys the same way twice and is refused as before; a two-stop hex keys differently by its two stops
+   and may be entered once by each. Track is still spent by `used`, so the second entry cannot ride the
+   first's rails. The join test below asks the same question of the two arms together, in place of "no hex
+   twice". The pricing (`cityVisitedAt`, #1318/#1319) already reads the same stop, so what the walk may now
+   draw is what the readout already paid. */
+function visitKeyFor(mapGrid: MapGridResponse, q: number, r: number, arrivalEdge: number | null, startCity: number | null): string {
+  const stop = arrivalEdge === null ? (startCity ?? 0) : stopForArrival(mapGrid, q, r, arrivalEdge);
+  return `${q},${r}:${stop === null ? "-" : stop}`;
 }
 
 /** The K best simple paths from `start`, bounded by revenue centres and by the caps above.
@@ -481,6 +509,11 @@ function candidatePathsFrom(
   maxExpansions: number = MAX_EXPANSIONS,
   /** Design note #1302: the corporation running, so its printed herald prices and may be declined. */
   forCompanyId?: number,
+  /** #1399: visits a second arm must keep off -- the first arm's, so the two join into one legal route. */
+  avoidVisits?: ReadonlySet<string>,
+  /** #1408: confine the FIRST step out of the token to this edge, so the caller can ask for the best arms
+   *  down each way out of the city rather than the best arms overall. */
+  firstExitEdge?: number,
 ): SearchResult[] {
   const found: SearchResult[] = [];
   let expansions = 0;
@@ -507,10 +540,8 @@ function candidatePathsFrom(
 
   const path: TracedHex[] = [];
   const used = new Set<SegmentKey>();
-  /** Hexes on the current path, so it stays a SIMPLE path -- a route may
-   *  not visit the same hex twice even by different rails, which is a
-   *  stricter rule than segment disjointness and is 1830's. */
-  const onPath = new Set<string>();
+  /** #1399: `hex:city` visits on the current path. Was a set of hexes -- see the note above. */
+  const visits = new Set<string>();
 
   const record = (candidate: SearchResult) => {
     // Same hex chain, already seen: keep the better scoring one.
@@ -530,7 +561,8 @@ function candidatePathsFrom(
     expansions += 1;
 
     path.push(at);
-    onPath.add(`${at.q},${at.r}`);
+    const visitKey = visitKeyFor(mapGrid, at.q, at.r, arrivalEdge, startCity);
+    visits.add(visitKey);
 
     const breakdown = sandboxRouteBreakdown(
       mapGrid,
@@ -568,6 +600,7 @@ function candidatePathsFrom(
           path: path.map((point) => ({ ...point })),
           revenue: breakdown.revenue,
           segments,
+          visits: new Set(visits),
         });
       }
     }
@@ -658,10 +691,12 @@ function candidatePathsFrom(
           ? /* Design note #852: THE TOKEN'S CITY, NOT THE HEX. `cityExitEdges` returns every live edge when
                `startCity` is `null` -- one city, or a caller that did not say -- so the ordinary board is
                untouched and New York is not. See `AutoTraceInput.startHexes` for the report. */
-            cityExitEdges(mapGrid, at.q, at.r, startCity).map((exitEdge) => ({
-              exitEdge,
-              segments: [] as readonly SegmentKey[],
-            }))
+            cityExitEdges(mapGrid, at.q, at.r, startCity)
+              .filter((exitEdge) => firstExitEdge === undefined || exitEdge === firstExitEdge) // #1408
+              .map((exitEdge) => ({
+                exitEdge,
+                segments: [] as readonly SegmentKey[],
+              }))
           : traversalsFrom(mapGrid, at.q, at.r, arrivalEdge);
       /* Design note #1302: THE OWNER MAY PASS ITS HERALD WITHOUT COUNTING IT. Crossing the herald hex, every
          way through is offered twice -- once stopping (the $10, one centre) and once as a bypass, which the
@@ -692,7 +727,9 @@ function candidatePathsFrom(
         if ((transit.bypass === true ? centresIfBypassed : breakdown.centres) >= maxCentres) continue;
         const next = neighbourAcross(mapGrid, at.q, at.r, transit.exitEdge);
         if (!next) continue;
-        if (onPath.has(`${next.q},${next.r}`)) continue;
+        // #1399: the same revenue centre twice is refused; the other city of a two-city hex is not.
+        const nextKey = visitKeyFor(mapGrid, next.q, next.r, next.arrivalEdge, startCity);
+        if (visits.has(nextKey) || avoidVisits?.has(nextKey)) continue;
         // Occupied by another train, or already used by this route.
         if (transit.segments.some((key) => occupied.has(key) || used.has(key))) continue;
 
@@ -719,7 +756,7 @@ function candidatePathsFrom(
     }
 
     path.pop();
-    onPath.delete(`${at.q},${at.r}`);
+    visits.delete(visitKey);
   };
 
   walk(start, null);
@@ -834,20 +871,46 @@ function candidateRoutes(input: AutoTraceInput): SearchResult[] {
     const startCity = entry.length > 2 ? (entry[2] as number) : null;
     const token: TracedHex = { q, r, hexLabel };
 
-    const oneArm = candidatePathsFrom(
-      mapGrid,
-      era,
-      token,
-      startCity,
-      cap,
-      occupied,
-      CANDIDATES_PER_TOKEN,
-      // Design note #730: the search may not cross a city this corporation is shut out of.
-      input.blocksThrough,
-      MAX_PATH_HEXES,
-      expansionLimit,
-      input.companyId,
-    );
+    /* ==================================================================
+        DESIGN NOTE 1408: THE BEST ARMS DOWN EACH WAY OUT, NOT THE BEST ARMS OVERALL
+       ==================================================================
+       REPORTED (ERIE's D-train, JUNO-Z6C 9.3): "It could be running through both cities in TO before going
+       to ERIE's home hex and then off to Kingston". The exhaustive pairing finds $640; the router drew $570.
+       EVERY KEPT ARM LEFT THE HOME THE SAME WAY. From E11 the richest direction is through Toronto's near
+       city, so all six of the best arms began E11 -> D10 -> D12, and the second arm -- which must keep off
+       the first's centres (#1399) -- could then never take the short loop C9 -> C11 into Toronto's other
+       city. The winning route needs the LONG arm to leave by E13 and the SHORT arm to take D10; a top-N by
+       revenue never offers that pairing, because the long arm's D10 version outscores its E13 version by
+       one city. So the first arm is searched once per exit edge of the token's city, `CANDIDATES_PER_TOKEN`
+       kept down each, and the union is what the second arm is paired against. A one-exit city is the old
+       search exactly; New York's or Toronto's three exits cost three searches, which the measurement below
+       (`reenterOtherCity.test.ts`) puts at well under a second. */
+    const exits = cityExitEdges(mapGrid, q, r, startCity);
+    const oneArm: SearchResult[] = [];
+    const armSeen = new Set<string>();
+    for (const exit of exits.length > 0 ? exits : [undefined]) {
+      for (const arm of candidatePathsFrom(
+        mapGrid,
+        era,
+        token,
+        startCity,
+        cap,
+        occupied,
+        CANDIDATES_PER_TOKEN,
+        // Design note #730: the search may not cross a city this corporation is shut out of.
+        input.blocksThrough,
+        MAX_PATH_HEXES,
+        expansionLimit,
+        input.companyId,
+        undefined,
+        exit,
+      )) {
+        const signature = arm.path.map((p) => p.hexLabel).join(">");
+        if (armSeen.has(signature)) continue;
+        armSeen.add(signature);
+        oneArm.push(arm);
+      }
+    }
     all.push(...oneArm);
 
     /* Design note #2: A ROUTE RUNS THROUGH A TOKEN far more often than it starts at one, so each arm is paired
@@ -858,6 +921,15 @@ function candidateRoutes(input: AutoTraceInput): SearchResult[] {
       const barred = new Set<SegmentKey>();
       occupied.forEach((key) => barred.add(key));
       armA.segments.forEach((key) => barred.add(key));
+      /* #1399: THE SECOND ARM IS KEPT OFF THE FIRST ARM'S CENTRES WHILE IT SEARCHES, not after. It used to be
+         found freely and then thrown away at the join for sharing a hex with arm A -- and with only two
+         candidates kept, both were routinely the richest arms out of the token, which run through the
+         same country as arm A and were both discarded. The route then began at the token instead of
+         running through it, which on the reported board is the town and city the D-train "stops running
+         before hitting". The start is the one visit both arms share, and is allowed. */
+      const startKey = visitKeyFor(mapGrid, q, r, null, startCity);
+      const avoid = new Set(armA.visits);
+      avoid.delete(startKey);
       const armsB = candidatePathsFrom(
         mapGrid,
         era,
@@ -865,18 +937,22 @@ function candidateRoutes(input: AutoTraceInput): SearchResult[] {
         startCity,
         cap,
         barred,
-        2,
+        3,
         input.blocksThrough,
         MAX_PATH_HEXES,
         expansionLimit,
         input.companyId,
+        avoid,
       );
       for (const armB of armsB) {
         if (armB.path.length < 2) continue;
         const joined = [...armB.path.slice(1).reverse(), ...armA.path];
-        // A joined path must still be simple.
-        const seenHexes = new Set(joined.map((p) => `${p.q},${p.r}`));
-        if (seenHexes.size !== joined.length) continue;
+        // #1399: a joined route may stand in each revenue centre once; the two arms share only the start.
+        let overlaps = false;
+        armB.visits.forEach((key) => {
+          if (key !== startKey && armA.visits.has(key)) overlaps = true;
+        });
+        if (overlaps) continue;
         const breakdown = sandboxRouteBreakdown(
           mapGrid,
           joined.map((point) => ({ hex: point.hexLabel, bypass: point.bypass })),
@@ -889,7 +965,9 @@ function candidateRoutes(input: AutoTraceInput): SearchResult[] {
         const segments = routeSegments(mapGrid, joined);
         // The join itself may cross a rail the other train holds.
         if (Array.from(segments).some((key) => occupied.has(key))) continue;
-        all.push({ path: joined, revenue: breakdown.revenue, segments });
+        const visits = new Set(armA.visits);
+        armB.visits.forEach((key) => visits.add(key));
+        all.push({ path: joined, revenue: breakdown.revenue, segments, visits });
       }
     }
   }

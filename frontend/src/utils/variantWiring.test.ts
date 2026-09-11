@@ -48,7 +48,14 @@ describe("the room document carries the table's house rules (design note #910)",
     /* THE POINT OF PUTTING THEM ON THE ROOM. Every seat is subscribed to it, so the host and the guests are
        looking at one answer -- and a guest pressing Ready is agreeing to terms they can see. Held in the
        host's component state instead, they would be visible to one person and applied to everybody. */
-    expect(source).toContain("resolveVariants(data.variants");
+    /* #1361b: the document lives on the game server and reaches every seat as one frame, so there is no
+       per-client parse to default in; the writer sends the whole object and the server stores the whole
+       object (#910: "one agreement, never a field patch"). */
+    expect(source).toContain('writeRoomDoc(roomCode, localPlayerId(), { op: "variants", variants });');
+    const fs = require("fs") as typeof import("fs");
+    const path = require("path") as typeof import("path");
+    const SERVER = fs.readFileSync(path.join(__dirname, "../../../server/src/gameServer.ts"), "utf8");
+    expect(SERVER).toContain("next = { ...existing, variants: write.variants };");
   });
 
   it("has a writer for them", () => {
@@ -318,7 +325,8 @@ describe("a batch of actions gets a batch of indices (design note #916)", () => 
   it("does not advance on a failed write", () => {
     /* A refused append must leave the slot free, or the next action skips a position and the log carries a
        hole that `effectiveActions` would read as a missing entry. */
-    expect(APP).toContain("} else if (appliedIndexRef.current === appendAt) {");
+    // #1407 split the `else` (an accepted move retires the turn refusal) from the advance; the guard stands.
+    expect(APP).toContain("if (allocated !== null && appliedIndexRef.current === appendAt) {");
   });
 
   it("still lets the snapshot be the authority", () => {

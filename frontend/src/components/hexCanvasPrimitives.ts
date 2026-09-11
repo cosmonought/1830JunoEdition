@@ -90,7 +90,10 @@ import {
   terminalRailAtEdge,
   tileArtworkPaths,
   tileCityAnchors,
+  tileCitySlotPoints, // #1394
+  tileTrackPoints, // #1405
   tileMarkerPoints,
+  printedCitySlotPoints, // #1379
 } from "./TileGraphics";
 import {
   PRIVATE_POWER_STAR_FILL,
@@ -434,7 +437,9 @@ export const DOUBLE_TOWN_ROUTES: Readonly<Record<number, readonly DoubleTownRout
   ],
   // Project 18XX+ tile set (design note #1311): the four new double towns.
   630: [
-    { edges: [2, 3], ditAt: 0.50 },
+    // #1392a: 630 is 631's reflection, so its tight curve is [1, 2] (the catalog's pairing; the tripwire below
+    // reads this against it).
+    { edges: [1, 2], ditAt: 0.50 },
     { edges: [0, 4], ditAt: 0.50 },
   ],
   631: [
@@ -1067,7 +1072,7 @@ export function drawStationCircle(
   ctx.arc(point.x, point.y, size * 0.22, 0, Math.PI * 2);
   ctx.fillStyle = "#ffffff";
   ctx.fill();
-  ctx.strokeStyle = "#2b2b2b";
+  ctx.strokeStyle = STANDARD_TRACK_INK; // #1356: the ring wears the track ink it meets
   ctx.lineWidth = Math.max(2, size * 0.06);
   ctx.stroke();
 }
@@ -1105,7 +1110,7 @@ export function drawStationPill(
   // city must read as the same KIND of object, differing only in length.
   ctx.fillStyle = "#ffffff";
   ctx.fill();
-  ctx.strokeStyle = "#2b2b2b";
+  ctx.strokeStyle = STANDARD_TRACK_INK; // #1356: the ring wears the track ink it meets
   ctx.lineWidth = Math.max(2, size * 0.06);
   ctx.stroke();
 
@@ -1165,10 +1170,10 @@ function drawStationCluster(
   ctx.lineJoin = "round";
   ctx.lineCap = "round";
   outline();
-  ctx.strokeStyle = "#2b2b2b";
+  ctx.strokeStyle = STANDARD_TRACK_INK; // #1356: the ring wears the track ink it meets
   ctx.lineWidth = radius * 2 + rim;
   ctx.stroke();
-  ctx.fillStyle = "#2b2b2b";
+  ctx.fillStyle = STANDARD_TRACK_INK; // #1356
   ctx.fill();
   outline();
   ctx.strokeStyle = "#ffffff";
@@ -1177,7 +1182,7 @@ function drawStationCluster(
   ctx.fillStyle = "#ffffff";
   ctx.fill();
 
-  ctx.strokeStyle = "#2b2b2b";
+  ctx.strokeStyle = STANDARD_TRACK_INK; // #1356: the ring wears the track ink it meets
   ctx.lineWidth = Math.max(1, size * 0.03);
   for (const centre of centres) {
     ctx.beginPath();
@@ -1206,7 +1211,8 @@ export type ValueBadgeTerrain =
   | "MajorCityHub"
   | "DoubleCityHub"
   | "NewYorkHub"
-  | "BostonHub";
+  | "BostonHub"
+  | "TorontoHub"; // #1405: "The Brown TO tile doesn't have its revenue value badge."
 
 export const VALUE_BADGE_SHAPE: Readonly<Record<ValueBadgeTerrain, "square" | "diamond">> = {
   SmallTown: "square",
@@ -1215,6 +1221,7 @@ export const VALUE_BADGE_SHAPE: Readonly<Record<ValueBadgeTerrain, "square" | "d
   DoubleCityHub: "square",
   NewYorkHub: "square",
   BostonHub: "square",
+  TorontoHub: "square",
 };
 
 /** One uniform white fill with a navy stroke; the city/town distinction moves from COLOUR to SHAPE. The square's half-side is radius*SQRT1_2, so its farthest corner sits at exactly radius -- the same reach as the circle it replaces.
@@ -1268,6 +1275,95 @@ export function badgeRadiusForLabel(
 // See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #76
 export const BADGE_SLOT_PREFERENCE: readonly number[] = [11, 9, 12, 8, 6, 5, 2, 3];
 
+/* ==================================================================
+    DESIGN NOTE 1394: A BADGE DODGES THE TILE'S OWN CITIES, NOT ONLY ITS TRACK
+   ==================================================================
+
+   REPORTED: "The OO tiles have collisions on the cities, revenue markers, and OO markers, when there are free
+   spaces to put them instead?"
+
+   THE SLOT ENGINE ONLY KNEW ABOUT EDGES. `slotsBlockedByEdges` marks a slot unusable when the track it
+   would sit over is live; that is the whole of what the revenue badge (#39/#70) and the restriction label
+   (#49) dodged. On a printed hex it was enough: a single city sits dead-centre and an OO hex's two nodes
+   sit on the edge-1/edge-4 midpoints (#73), which the badge preferences were tuned around. A LAID OO tile
+   puts its two cities wherever its artwork says -- 626 at the upper-right and lower-left corners, 35 up
+   against two vertices, 984 at a corner and the bottom point -- and the badge, drawn 0.65 of a hex out
+   toward a corner, lands on a city circle drawn 0.5 out toward the same corner. Slot 11 (lower-left) is the
+   revenue badge's FIRST preference and slot 8 (upper-right) the OO label's SECOND: 626 at orientation 0 has
+   a city under each.
+
+   SO A LAID TILE'S MARKERS BLOCK SLOTS TOO. `slotsBlockedByTileMarkers` walks the artwork's markers at the
+   laid orientation -- every cap circle of a pill, via `tileCitySlotPoints`, so a two-slot city blocks what
+   both its rings cover -- and blocks any slot whose badge centre would fall within the marker's radius plus
+   a badge's own. The measurements are the renderer's: a city ring is `STATION_RADIUS_RATIO` of the marker
+   size, a dit is the 0.14 `drawDitMarker` draws, and the badge sits at `REVENUE_BADGE_OFFSET` along the
+   slot direction exactly as `drawValueBadge` places it. The set is unioned with the edge set, so the tier
+   search (#39) is unchanged: a blocked slot yields to the next preference, and a hex with nothing free
+   still falls through to the first candidate rather than drawing nothing.
+
+   WHY NOT WIDEN THE EDGE RULE: a city on a corner is not "a live edge"; the two guard edges of that corner
+   may carry no track at all (626's cities sit between its curves). Blocking by geometry says what is
+   actually in the way. */
+
+/** Half-extent of a revenue or restriction badge, in hex sizes, with a small margin. A two-digit revenue
+ *  square measures ~0.16 of a hex (`drawValueBadgeAt`: 0.2 font, 2px padding, /sqrt2); "OO" at its capped
+ *  0.5-size font is no wider. */
+const BADGE_CLEARANCE = 0.22;
+/** The badge's distance from the hex centre along the slot direction -- `drawValueBadge` and
+ *  `drawRestrictionBadge` both use 0.65 (#109). */
+const BADGE_OFFSET = 0.65;
+
+/** Half the drawn rail width, in hex sizes (`drawTrackPath`: `size * 0.12` wide). #1405. */
+const RAIL_HALF_WIDTH = 0.06;
+
+/** The slots a laid tile's own drawing leaves no room for: its markers (city rings, pill caps, town dits,
+ *  #1394) and its rails (#1405). Empty for an unknown tile.
+ *  ==================================================================
+ *   DESIGN NOTE 1405: THE RAILS ARE MEASURED, NOT GUESSED FROM THE EDGES
+ *  ==================================================================
+ *  REPORTED (brown TO, #882): "the TO marker is colliding with tracks and cities/stations, even though there's
+ *  room to place it without collisions." #882 has all six edges live, so `slotsBlockedByEdges` -- which
+ *  blocks a corner when EITHER guard edge carries track, on the theory that a curve between adjacent edges
+ *  bows toward the corner -- blocked every slot on the hex, and the picker fell through to its first
+ *  candidate, on top of a pill. But #882's side arms bend INTO the cities and away from the top and bottom
+ *  points, which are wide open. So for a laid tile the rails are sampled from the artwork that is actually
+ *  drawn (`tileTrackPoints`), and a slot is blocked when its badge would overlap a sample. The edge rule
+ *  survives for printed hexes, whose rails this module does not draw from a path. */
+export function slotsBlockedByTileMarkers(tileId: number, orientation: number): Set<number> {
+  const blocked = new Set<number>();
+  const art = TILE_GRAPHICS_CATALOG[tileId];
+  if (!art) return blocked;
+  const origin = { x: 0, y: 0 };
+  const rails = tileTrackPoints(tileId, orientation, origin, 1);
+  const markerSize = markerSizeFor(art.markers, 1);
+  const points = tileMarkerPoints(tileId, orientation, origin, 1);
+  const obstacles: { x: number; y: number; radius: number }[] = [];
+  let cityIndex = 0;
+  art.markers.forEach((marker, index) => {
+    const point = points[index];
+    if (!point) return;
+    if (marker.kind === "town") {
+      obstacles.push({ ...point, radius: markerSize * 0.14 });
+      return;
+    }
+    const radius = markerSize * STATION_RADIUS_RATIO;
+    const caps = (marker.slots ?? 1) > 1 ? tileCitySlotPoints(tileId, cityIndex, orientation, origin, 1) : [point];
+    caps.forEach((cap) => obstacles.push({ ...cap, radius }));
+    cityIndex += 1;
+  });
+  for (let slot = 0; slot <= 12; slot++) {
+    const direction = hexSlotDirection(slot);
+    const badge = { x: direction.x * BADGE_OFFSET, y: direction.y * BADGE_OFFSET };
+    if (
+      obstacles.some((o) => Math.hypot(o.x - badge.x, o.y - badge.y) < o.radius + BADGE_CLEARANCE) ||
+      rails.some((p) => Math.hypot(p.x - badge.x, p.y - badge.y) < RAIL_HALF_WIDTH + BADGE_CLEARANCE)
+    ) {
+      blocked.add(slot);
+    }
+  }
+  return blocked;
+}
+
 /** Four tiers: unblocked AND dead-edge-adjacent, then dead-edge-adjacent anyway, then simply unblocked, then the first candidate. A dead edge can NEVER carry track from either side, which is a permanently stronger guarantee than "not currently live".
  *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #39 */
 export function drawValueBadge(
@@ -1294,11 +1390,14 @@ export function drawValueBadge(
   // The LAST of the four slot-picking passes, so on a crowded hex it is the one most likely to need its fallback tail -- without the ledger it picked the exact corner the cost label had already claimed.
   // See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #72
   claimedHexSlots: Map<string, Set<number>> = new Map(),
+  // #1394/#1405: the laid tile's own drawing -- rings, dits and sampled rails. When given, it REPLACES the
+  // edge guess below, which is a proxy for rails this module cannot see on a printed hex.
+  tileBlocked?: ReadonlySet<number>,
 ): void {
   const value = valueOverride ?? terrainBaseValue(terrain);
   // The same four-tier dead/live-edge search, now via the shared engine: slotsBlockedByEdges marks a corner blocked when either guard edge carries live track, derived generically rather than hand-encoded.
   // See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #70
-  const blocked = slotsBlockedByEdges(liveEdges, false);
+  const blocked = tileBlocked ? new Set(tileBlocked) : slotsBlockedByEdges(liveEdges, false);
   const dead = slotsBlockedByEdges(deadEdgesAt(q, r), false);
   const revenueForce = HEX_SLOT_FORCE[`${q},${r}`]?.revenue;
   const revenueOverride = resolveSlotOverride(q, r, "revenue");
@@ -1459,7 +1558,10 @@ export function drawRestrictionBadge(
     "restriction",
     archetype === "DoubleCity" ? RESTRICTION_SLOT_PREFERENCE_DOUBLE_CITY : RESTRICTION_SLOT_PREFERENCE_OTHER,
   );
-  const blocked = hexBlockedSlots(mapGrid, q, r);
+  // #1394/#1405: on a laid tile the label dodges what is drawn -- rings and sampled rails -- in place of the
+  // edge guess, which on a six-edge tile like #882 blocks every slot including the open ones.
+  const laid = mapGrid.tiles.find((tile) => tile.q === q && tile.r === r);
+  const blocked = laid ? slotsBlockedByTileMarkers(laid.tile_id, laid.orientation) : hexBlockedSlots(mapGrid, q, r);
   const dead = slotsBlockedByEdges(deadEdgesAt(q, r), false);
   // No longer restricted to CORNER_SLOTS: this badge can now genuinely land on an edge midpoint, so its fallback tail needs the full pool.
   // See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #105
@@ -1786,7 +1888,19 @@ export function drawPrintedTrack(
     };
     if (art.emblem?.kind === "coal") drawCoalEmblem(ctx, point, size);
     else if (art.emblem?.kind === "crate") drawCrateEmblem(ctx, point, size);
-    else if (art.marker.kind === "city") drawStationCircle(ctx, point, size);
+    else if (art.marker.kind === "city" && (art.marker.slots ?? 1) > 1) {
+      /* ==================================================================
+          DESIGN NOTE 1387: A PRINTED TWO-STATION CITY IS DRAWN AS TWO STATIONS
+         ==================================================================
+         REPORTED (after #1379): "There's only one city marker on L16 (a preprinted gray hex) at the center,
+         and the N&W is sitting somewhat off-center toward the top-left." Both halves are one fault: this
+         drew EVERY printed city as one circle, while #1302's `printedCitySlotPoints` -- which the token pass
+         and now the reservation dock into -- lays Norfolk's and Montreal's two slots out on the pill. So the
+         token sat in a slot the art never drew. The art draws the pill now, through the same
+         `markerSizeFor` and the same angle the slot geometry reads, so a token lands on a circle. */
+      const markerSize = markerSizeFor([art.marker], size);
+      drawStationPill(ctx, point, markerSize, art.marker.slots ?? 1, art.marker.angle ?? 0, art.marker.layout);
+    } else if (art.marker.kind === "city") drawStationCircle(ctx, point, size);
     // Item 8 ("Distinct Dark Small Towns"): dark dit marker, not a white
     // circle -- see `drawDitMarker`'s own doc comment.
     else drawDitMarker(ctx, point, size);
@@ -2069,6 +2183,17 @@ export function stationMarkerPoint(
   if (label !== undefined) {
     const printed = printedArtwork(label);
     if (printed?.marker) {
+      /* ==================================================================
+          DESIGN NOTE 1379: A RESERVATION ON A PRINTED PILL SITS IN A SLOT, NOT BETWEEN THEM
+         ==================================================================
+         REPORTED: "On LPF, the N&W home station is not seated in the city/station marker on L16."
+         Norfolk is a printed two-station city (#1302), and this fallback answered the marker's ANCHOR --
+         the centre of the pill, which on a two-slot pill is the gap between the circles. The placed token
+         already docks into a slot (`printedCitySlotPoints`, the real-token pass); the home reservation drawn
+         before the float did not, so N&W's badge floated in the seam. The first slot is where the first
+         token will land, so the reservation takes it. One-circle cities answer their anchor as before. */
+      const slots = printedCitySlotPoints(label, center, size);
+      if (slots.length > 1) return slots[Math.min(cityIndex ?? 0, slots.length - 1)];
       return {
         x: center.x + size * printed.marker.at.x,
         y: center.y + size * printed.marker.at.y,

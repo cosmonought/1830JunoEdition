@@ -63,11 +63,14 @@ describe("the cards render in the Operating Round too", () => {
     );
   });
 
-  it("keeps the badge that answered the original report", () => {
-    /* THE ASSERTION THE WHOLE SWAP TURNS ON. "$540 confirms a payout only to a reader who had memorised
-       $530" -- the badge is the answer, and losing it would undo #670 while appearing to extend it. */
-    expect(APP.match(/cashDelta=\{cashDeltaFor\}/g)).toHaveLength(2);
-    expect(CARDS).toContain("<CashDeltaBadge");
+  it("prints the balance alone; the machines answer the original report (design note #1339)", () => {
+    /* #670's badge was the answer while a balance was the only surface. The dividend machine (#1060), the
+       treasury machine (#1272) and the auction's cash machine (#1339) show the movement now, and the badge
+       read as a reservation ("$1140 −$40") beside a figure that had already moved. Gone, with its plumbing. */
+    expect(APP).not.toContain("cashDelta={cashDeltaFor}");
+    expect(APP).not.toContain("settleCashDeltas");
+    expect(CARDS).not.toContain("CashDeltaBadge");
+    expect(CARDS).not.toContain("cashDelta");
   });
 
   it("marks the acting president rather than a seat on turn", () => {
@@ -102,30 +105,10 @@ describe("the finances stopped being a fact about a round", () => {
   });
 });
 
-describe("the shared badge outlived the file it lived in", () => {
-  const BADGE_RAW = read("components/CashDeltaBadge.tsx");
-
-  it("has its own home", () => {
-    expect(CARDS).toContain('from "./CashDeltaBadge"');
-    expect(BADGE_RAW).toContain("export function CashDeltaBadge");
-  });
-
-  it("kept the colour decision it was moved with", () => {
-    /* THE MISTAKE I NEARLY SHIPPED. The first draft of the moved file rewrote these from memory as a
-       green/red pair -- and the note being moved says, in three lines, that red is wrong here: "Red in this
-       app marks a contested auction and an error toast, and money leaving a player's hand to buy a share is
-       neither." A move that re-derives is not a move. Asserted as the literal figures, because that is the
-       only way a colour argument survives the next person to relocate it. */
-    expect(BADGE_RAW).toContain("#4ea172");
-    expect(BADGE_RAW).toContain("#c9a94c");
-    expect(BADGE_RAW).toContain("NOT red");
-    expect(BADGE_RAW).not.toContain("#fb7185");
-  });
-
-  it("kept its own keyframes with it", () => {
-    // "A badge that animates on one tab and snaps on another is a bug the second reader reports and the
-    // first cannot reproduce."
-    expect(BADGE_RAW).toContain("@keyframes app-cash-delta-in");
-    expect(BADGE_RAW).toContain("prefers-reduced-motion");
+describe("the badge's file is gone with it (design note #1339)", () => {
+  it("has no home left", () => {
+    const fs = require("fs") as typeof import("fs");
+    const path = require("path") as typeof import("path");
+    expect(fs.existsSync(path.join(__dirname, "..", "components", "CashDeltaBadge.tsx"))).toBe(false);
   });
 });

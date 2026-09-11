@@ -45,6 +45,7 @@ const TREASURY_MOVERS: readonly string[] = [
   "BuyStock", // floats a corporation, which capitalises it
   "PassTurn", // opens an Operating Round, which pays the privates (#685)
   "OpenStockRound",
+  "YellowSignEvent", // #1375: the Mark's award -- half the taken train's depot value into the treasury
 ];
 
 export interface TreasuryMove {

@@ -371,7 +371,8 @@ describe("the haunting plays over a board you can still use", () => {
   it("is inert to the pointer", () => {
     /* THE RULED PROPERTY, and the one that turns a ten-second flourish into a lost turn if it is missing.
        Asserted on the container AND the video: a nested element can re-enable pointer events. */
-    expect(OVERLAY.split('pointerEvents: "none"').length - 1).toBe(2);
+    // #1377: and the dim layer under the clip, which is a third fixed layer and must be inert as well.
+    expect(OVERLAY.split('pointerEvents: "none"').length - 1).toBe(3);
   });
 
   it("blends its black away", () => {

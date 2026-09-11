@@ -70,6 +70,7 @@
 import type { ReplayEntry } from "./replayLog";
 import type { GameplayExecuteMsg } from "./sessionKey";
 import type { BuildId, ServerMessage } from "./serverProtocol";
+import { SEAT_REFUSED_CODE, SEAT_SUPERSEDED_CODE, forgetSeat } from "./seatPin";
 
 /** The slice of `WebSocket` this file uses. Injected so a test needs no browser and no server. */
 export interface SocketLike {
@@ -87,6 +88,24 @@ export interface ServerLinkOptions {
   build: BuildId;
   /** What this client says it is. The server decides whether to believe it (#1210). */
   claim: string;
+  /** Design note #1341: the seat PIN this tab holds for the room, demanded by the server when the claimed seat
+   *  has one. Absent for a seat without a PIN. */
+  pin?: string;
+  /** Design note #1341: the seat's session token, so a device another one has superseded is turned away. */
+  token?: string;
+  /* ==================================================================
+      DESIGN NOTE 1364: THE SECRETS ARE READ AT EVERY HELLO, NOT AT CONNECT
+     ==================================================================
+     REPORTED: a host set their PIN in the waiting room, a red line appeared -- the server's "This seat has a
+     PIN. Rejoin it ..." -- and Start Game did nothing. THE LINK WAS ALREADY UP WHEN THE PIN WAS SET, with a
+     hello that carried no PIN because there was none. `pin` and `token` were captured ONCE, here, so the next
+     reconnect -- and through a tunnel the next reconnect is never far off -- re-sent the stale hello, the seat
+     now had a PIN, the server refused, and #1346 rightly made the refusal terminal. Every submission after
+     that sat in the queue waiting for a socket that would never open.
+     SO THE HELLO ASKS FOR THE SECRETS EACH TIME IT IS SENT. `seat` is a reader over the store the modal
+     writes to (`seatPin.ts`), so a PIN set, changed or adopted after the link opened is what the next hello
+     carries. The static `pin`/`token` stay as the fallback for callers without a store (tests, the CLI). */
+  seat?: () => { pin?: string; token?: string };
   /** Entries to apply, in log order. The client's own reducer runs them exactly as a replay would -- which
    *  is what keeps the local computation live, and the divergence check with it (#1207).
    *
@@ -270,17 +289,24 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
     current.onopen = () => {
       if (socket !== current) return;
       open = true;
-      attempts = 0;
+      /* #1346: `attempts` is NOT reset here. It used to be, and a socket the server accepted and then closed
+         at the hello (a seat refusal, a handler that threw) counted as a fresh outage every time: a 0.5s
+         loop, the "reconnecting" banner re-fired on every cycle, one identity line per cycle in the server
+         window. The attempt is over when the hello's CATCH-UP arrives, and that is where the counter resets. */
       /* HELLO CARRIES `baseIndex`, so a client that already holds part of the log is answered rather than
          sent the whole thing: `-1` on a fresh join, the last applied index on a reconnect (#1209 mechanism
          2). The catch-up it earns is the reconciliation point for anything that was in flight. */
       awaitingHello = true;
+      // #1364: read now, not at connect -- a PIN set since the last hello is the one this hello must carry.
+      const seat = options.seat?.() ?? {};
       current.send(
         JSON.stringify({
           kind: "hello",
           room: options.room,
           build: options.build,
           claim: options.claim,
+          pin: seat.pin ?? options.pin,
+          token: seat.token ?? options.token,
           baseIndex: appliedIndex,
         }),
       );
@@ -356,6 +382,7 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
            go out -- after it, so their `baseIndex` and the server's idea of this client agree. */
         if (awaitingHello) {
           awaitingHello = false;
+          attempts = 0; // #1346: the socket is up and answered; only now is the outage over.
           reconcileOrphans(message.entries);
           return;
         }
@@ -394,6 +421,19 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
         return;
       }
       default: {
+        /* #1341: superseded -- another device took this seat. Forget it, reload as a visitor; no reconnect. */
+        if ((message as { code?: string }).code === SEAT_SUPERSEDED_CODE) {
+          closedByUs = true;
+          forgetSeat(options.room);
+          return;
+        }
+        /* #1346: a seat refusal is TERMINAL -- the same hello cannot earn a different answer, so retrying it
+           on a backoff is a loop. Say why, once, and stop. */
+        if ((message as { code?: string }).code === SEAT_REFUSED_CODE) {
+          closedByUs = true;
+          options.onError?.((message as { reason?: string }).reason ?? "This seat refused the connection.");
+          return;
+        }
         options.onError?.((message as { reason?: string }).reason ?? "unknown frame from server");
         settleHead(null);
       }

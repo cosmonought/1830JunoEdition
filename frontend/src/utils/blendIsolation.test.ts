@@ -27,7 +27,7 @@
 
 export {};
 
-const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
+const { readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
 
 const SOURCES: Record<string, string> = {
   appStyles: readStripped("styles/appStyles.ts"),
@@ -171,7 +171,13 @@ describe("the lobby wordmark keeps the clearance #1132 won for it", () => {
     /* `titleAnchor` sits between `scene`'s background and the wordmark. It is the whole of the near side. */
     const anchor = styleBlock("Lobby", "titleAnchor");
     expect(anchor).not.toContain("transform:");
-    expect(SOURCES.Lobby).toContain("<div style={styles.titleAnchor}>");
+    /* Design note #1354: the anchor's `bottom` is spread per render (the safe line under the utility row) --
+       a length only, never a transform, opacity or filter, so the blend chain is as clean as before. */
+    expect(SOURCES.Lobby).toContain("<div style={{ ...styles.titleAnchor, ...titleBottomFor(uiScale, utilityRowPx) }}>");
+    const bottomFor = sliceBetween(SOURCES.Lobby, "function titleBottomFor(", "}\n}");
+    expect(bottomFor).toContain("bottom:");
+    expect(bottomFor).not.toContain("transform");
+    expect(bottomFor).not.toContain("opacity");
   });
 
   it("keeps the photograph inside the group the title blends in", () => {
@@ -211,7 +217,7 @@ describe("the haunting keys against the board, not against its own box", () => {
     /* The other half of "black box but no video": a rejected unmuted `play()` retries muted, and nothing
        is visible until the element reports `playing`. */
     expect(SOURCES.YellowSignOverlay).toContain("video.muted = true;");
-    expect(SOURCES.YellowSignOverlay).toContain("onPlaying={() => setPlaying(true)}");
+    expect(SOURCES.YellowSignOverlay).toContain("onPlaying={() => {\n        setPlaying(true);"); // #1376: and reports the frame
     expect(SOURCES.YellowSignOverlay).toContain('visibility: playing ? "visible" : "hidden"');
   });
 });

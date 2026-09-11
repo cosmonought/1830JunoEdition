@@ -32,12 +32,14 @@ import {
 import { FONT_FAMILY, FONT_SIZE, LINE_HEIGHT, RADIUS } from "../styles/typography";
 import { waitingRoomBlock, waitingRoomNotice, type SandboxRoomDoc } from "../utils/sandboxRoom";
 import { MIN_PLAYERS, certLimitForPlayers, maxPlayersFor, startingCashForPlayers } from "../utils/gameSetup";
-import { SEAT_COLORS, SEAT_COLOR_NAMES } from "../utils/playerLabels";
+import { SEAT_COLORS, SEAT_COLOR_NAMES, resolveSeatColors } from "../utils/playerLabels";
 import { type AudioControlsProps } from "./AudioControls";
 /* Design note #1138: the shell's own bar, mounted here so the audio controls stop moving between the
    anteroom and the table. */
 import TopBar from "./TopBar";
 import AppFooter from "./AppFooter";
+// Design note #1341: the seat PIN, set and rejoined from the roster.
+import { SeatPinModal } from "./SeatPinModal";
 import { setSkipIntroPreferred, skipIntroPreferred } from "../utils/introPreference";
 import { chromeZoomFor } from "../styles/appStyles";
 /* Design note #1294: the chrome scale, live. */
@@ -141,6 +143,8 @@ export function SandboxWaitingRoom({
   const uiScale = useUiScale();
   const players = room?.players ?? [];
   const me = players.find((player) => player.id === localPlayerId) ?? null;
+  /* Design note #1337: one colour per seat, chosen or assigned, the same on every client. */
+  const resolvedColors = resolveSeatColors(players);
   const isHost = room?.hostId === localPlayerId;
   /* Design note #910: read off the ROOM, so a guest and the host are looking at one answer. */
   const variants = room?.variants ?? STANDARD_VARIANTS;
@@ -156,6 +160,8 @@ export function SandboxWaitingRoom({
      SEEDED ONCE, AND NEVER OVER TYPING. `touched` is what separates "has not been filled in yet" from "is
      deliberately empty because I am clearing it", which a `!nicknameText` test would run together. */
   const [skipIntro, setSkipIntro] = useState(() => skipIntroPreferred());
+  /* Design note #1341: the seat-PIN card -- set mine, or rejoin another seat from this device. */
+  const [seatPin, setSeatPin] = useState<{ mode: "set" | "rejoin"; seatId: string | null } | null>(null);
   const [nicknameText, setNicknameText] = useState(me?.nickname ?? "");
   const [nicknameTouched, setNicknameTouched] = useState(false);
   const knownNickname = me?.nickname ?? "";
@@ -256,8 +262,9 @@ export function SandboxWaitingRoom({
         <div style={styles.colorRow} role="group" aria-label="Your colour">
           <span style={styles.colorLabel}>Colour</span>
           {SEAT_COLORS.map((color) => {
+            /* #1337: a seat's DEFAULT colour is held too -- the table sees colours, not intents. */
             const holder = players.find(
-              (player) => player.color === color && player.id !== localPlayerId,
+              (player) => resolvedColors[player.id] === color && player.id !== localPlayerId,
             );
             const mine = me?.color === color;
             return (
@@ -300,7 +307,7 @@ export function SandboxWaitingRoom({
                     style={{
                       ...styles.rosterDot,
                       backgroundColor:
-                        player.color ?? SEAT_COLORS[players.indexOf(player) % SEAT_COLORS.length],
+                        resolvedColors[player.id],
                     }}
                     aria-hidden="true"
                   />
@@ -308,13 +315,47 @@ export function SandboxWaitingRoom({
                   {player.id === room?.hostId && <span style={styles.hostTag}>HOST</span>}
                   {player.id === localPlayerId && <span style={styles.youTag}>YOU</span>}
                 </span>
-                <span style={player.isReady ? styles.ready : styles.notReady}>
-                  {player.isReady ? "Ready" : "Not ready"}
+                <span style={styles.rosterRight}>
+                  {/* Design note #1341: my seat sets its PIN; another seat can be rejoined from here.
+                      #1341a: offered for a seat with NO PIN too -- it adopts the one typed. Gating this on
+                      `hasPin` while the shell's button does not would put the migration behind whichever
+                      screen the player happened to be looking at. */}
+                  {player.id === localPlayerId ? (
+                    <button
+                      type="button"
+                      style={styles.pinButton}
+                      onClick={() => setSeatPin({ mode: "set", seatId: null })}
+                      title="A four-digit PIN, for this room only, so you can pick this seat up on another device."
+                    >
+                      {player.hasPin ? "PIN set" : "Set PIN"}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      style={styles.pinButton}
+                      onClick={() => setSeatPin({ mode: "rejoin", seatId: player.id })}
+                      title={
+                        player.hasPin
+                          ? `Rejoin ${player.nickname || "this seat"} on this device with its PIN.`
+                          : `${player.nickname || "This seat"} has no PIN yet -- rejoining it here sets one.`
+                      }
+                    >
+                      Rejoin
+                    </button>
+                  )}
+                  <span style={player.isReady ? styles.ready : styles.notReady}>
+                    {player.isReady ? "Ready" : "Not ready"}
+                  </span>
                 </span>
               </span>
             ))
           )}
         </div>
+
+        {/* Design note #1341: said once, under the roster, so nobody takes the PIN for an account. */}
+        <span style={styles.note}>
+          Seat PINs are for this room only: set one to move your seat between devices mid-game.
+        </span>
 
         {/* Design note #529: what this many players are dealt. */}
         <div style={styles.dealRow}>
@@ -537,6 +578,17 @@ export function SandboxWaitingRoom({
       {/* Design note #1113: the meta-UI credit, the same component and the same moving mark the lobby
           carries. The waiting room is the one screen between them and had no footer at all. */}
       </div>
+      {/* Design note #1341: the seat-PIN card, owned here so the shell carries none of it. */}
+      {seatPin && (
+        <SeatPinModal
+          mode={seatPin.mode}
+          roomCode={roomCode}
+          localPlayerId={localPlayerId}
+          players={players}
+          initialSeatId={seatPin.seatId}
+          onClose={() => setSeatPin(null)}
+        />
+      )}
       <AppFooter surface="meta" />
     </div>
   );
@@ -823,6 +875,18 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 800,
     letterSpacing: "0.06em",
     color: "#9ec5ff",
+  },
+  rosterRight: { display: "inline-flex", alignItems: "center", gap: "10px" },
+  /* Design note #1341: a quiet control on the roster row -- the row's own ink, a hairline border. */
+  pinButton: {
+    padding: "2px 8px",
+    borderRadius: RADIUS.control,
+    border: "1px solid #3a3a3a",
+    backgroundColor: "transparent",
+    color: "#c8c6c0",
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 700,
+    cursor: "pointer",
   },
   ready: { color: "#7ee0a1", fontWeight: 700 },
   notReady: { color: "#8a8a86" },

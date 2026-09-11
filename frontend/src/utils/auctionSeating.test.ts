@@ -107,12 +107,15 @@ describe("the shell no longer deals, #1230", () => {
     expect(branch).toContain("Game dealt for");
   });
 
-  it("re-seats the auction after the reducer, from the dealt board", () => {
-    /* `after.player_addresses`, never `msg.SetupGame.players` -- the reducer shuffles, and the listed order
-       is usually the dealt order and is not the same rule. */
-    const reseat = sliceBetween(APP, "const reseated = waterfallForRoster(", "setSandboxWaterfall(armed);");
-    expect(reseat).toContain("after.player_addresses");
+  it("re-seats the auction after the reducer, from the dealt board (in the reducer since #1340)", () => {
+    /* `state.player_addresses`, never `msg.SetupGame.players` -- the reducer shuffles, and the listed order
+       is usually the dealt order and is not the same rule. #1340 moved the re-seat into the reducer's own
+       lifecycle step, after the deal has settled; the shell no longer re-seats at all. */
+    const REDUCER = readStripped("utils/sandboxSession.ts");
+    const reseat = sliceBetween(REDUCER, "const reseated = waterfallForRoster(waterfall, state.player_addresses", "waterfall_auction_active: false } : reseated;");
     expect(reseat).not.toContain("msg.SetupGame.players");
+    expect(APP).not.toContain("waterfallForRoster(\n              sandboxWaterfallRef.current");
+    expect(APP).not.toContain("const reseated = waterfallForRoster(");
   });
 
   it("does not print a second line for the deal", () => {
@@ -352,9 +355,13 @@ describe("OpenStockRound and SetBoPar are off the shell, #1234 / #1236", () => {
     expect(readStripped("utils/actionLog.ts")).toContain("The Waterfall Auction is complete");
   });
 
-  it("closes the auction atom after the reducer, where the engine closes it", () => {
-    const after = sliceBetween(APP, "if (isOpenStockRoundMsg(msg) && sandboxWaterfallRef.current?.waterfall_auction_active) {", "if (isSetupGameMsg(msg)) {");
-    expect(after).toContain("waterfall_auction_active: false");
-    expect(after).toContain("setSandboxWaterfall(closed)");
+  it("closes the auction atom in the reducer, after the board opens the round (#1340)", () => {
+    /* The shell and the engine each used to close the atom by hand; `settleAuctionLifecycle` does it once,
+       after `applySandboxActionAfterAuction` has run the `OpenStockRound` arm. The shell only mirrors. */
+    const REDUCER = readStripped("utils/sandboxSession.ts");
+    expect(REDUCER).toContain("if (waterfall && isOpenStockRoundMsg(msg) && waterfall.waterfall_auction_active) {");
+    expect(REDUCER).toContain("return settleAuctionLifecycle(applySandboxActionAfterAuction(afterAuction, msg, ctx), msg);");
+    expect(APP).not.toContain("setSandboxWaterfall(closed)");
+    expect(APP).toContain("const auction = after.waterfall ?? null;");
   });
 });

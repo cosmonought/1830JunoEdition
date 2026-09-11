@@ -83,8 +83,12 @@ describe("the scale is one number", () => {
        cut the radio, and rejected. The scale is a store now: the picker writes it, every surface that draws
        with it reads it through `useUiScale()`, nothing reloads. */
     const TOPBAR = readStripped("components/TopBar.tsx");
+    const PICKER = readStripped("components/UiScalePicker.tsx");
     expect(TOPBAR).toContain("<UiScalePicker />");
-    expect(TOPBAR).toContain("setUiScale(UI_SCALE_STEPS[");
+    // #1336: one component, and the lobby mounts it too, so the first screen has the control.
+    expect(readStripped("components/Lobby.tsx")).toContain("<UiScalePicker />");
+    expect(PICKER).toContain("setUiScale(UI_SCALE_STEPS[");
+    expect(PICKER).not.toContain("window.location.reload()");
     expect(TOPBAR).not.toContain("window.location.reload()");
     expect(readStripped("utils/uiScale.ts")).toContain('"1830juno.ui_scale.v1"');
     expect(readStripped("utils/useUiScale.ts")).toContain("useSyncExternalStore(subscribeUiScale, getUiScale, getUiScale)");

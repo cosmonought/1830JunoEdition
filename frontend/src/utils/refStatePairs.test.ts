@@ -44,7 +44,7 @@ const REBUILD = (() => {
 const MIRRORED: ReadonlyArray<{ ref: string; setter: string }> = [
   { ref: "mapGridRef", setter: "setMapGrid" },
   { ref: "sandboxMarketRef", setter: "setSandboxMarket" },
-  { ref: "settledPrivatePricesRef", setter: "setSettledPrivatePrices" },
+  // #1340: `settledPrivatePricesRef` / `setSettledPrivatePrices` are gone -- the price is on the board.
   /* #887: the sweep below found this one before any player did, and it is named here as well so the pair is
      asserted by name rather than only by discovery. #850's ref made a rebuild leave a discarded token
      placement in the ref while the state said none -- and `handleHexClick` refuses to open the tile picker

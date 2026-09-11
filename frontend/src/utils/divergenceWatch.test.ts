@@ -103,7 +103,13 @@ describe("the seeds the alarm compares, #1224", () => {
     /* The shape the shell now produces, reproduced here rather than imported: `App.tsx` cannot be called
        from a test, so this asserts the CONTRACT the shell has to meet, and the source scan below asserts
        that it meets it. */
-    const shellSeed = { ...board, market_positions: providers.initialMarket };
+    /* #1340: and the auction atom, which the engine has always carried on its state and the shell now seeds
+       through the same helper (`withSeededChart`), as a room's empty-roster auction. */
+    const shellSeed = {
+      ...board,
+      market_positions: providers.initialMarket,
+      waterfall: waterfallForRoster(S.sandboxWaterfallState(S.sandboxScenario(SCENARIO).phase, 0, true), []),
+    };
     expect(stateDigest(shellSeed)).toBe(stateDigest(engine.snapshot.state));
   });
 
@@ -128,6 +134,7 @@ describe("the seeds the alarm compares, #1224", () => {
        what is asserted rather than the presence. */
     const APP = readStripped("App.tsx");
     expect(APP).toContain("function withSeededChart(");
+    expect(APP).toContain("waterfall: room ? waterfallForRoster(auction, []) : auction,");
     const uses = APP.split("withSeededChart(").length - 1;
     // One declaration plus three call sites.
     expect(uses).toBeGreaterThanOrEqual(4);

@@ -7,43 +7,36 @@
 // REPORTED: "the Send button on the chatbox does not actually send a message.
 // The chat log records 'No activity yet'."
 //
-// The behavioural half of that fix is inside a React hook and needs a
-// renderer to exercise; what is testable without one -- and what would
-// silently break the fix -- is the path arithmetic. Sandbox rooms and lobby
-// rooms are different Firestore collections, and pointing sandbox chat at the
-// lobby's would write a transcript nobody reads into a collection the lobby
-// lists.
+// #1361a MOVED THE TRANSCRIPT TO THE GAME SERVER. It was a Firestore subcollection under whichever collection
+// the room lived in (`games` or `sandbox_rooms`), and the path arithmetic was what this file pinned. There is
+// no path now: a transcript hangs off a ROOM CODE on the socket that already carries the room's document, and
+// the property that survives -- two rooms cannot see each other's messages, and the sandbox is not pointed at
+// the lobby -- is stated against the transport below.
 
-import { chatCollectionPath } from "./lobby";
-import { SANDBOX_ROOMS_COLLECTION } from "./sandboxRoom";
+import { readStripped } from "./sourceScan";
 
-describe("chatCollectionPath", () => {
-  it("defaults to the lobby's rooms, so existing callers are unchanged", () => {
-    const [collection, room, sub] = chatCollectionPath("ABCD");
-    expect(collection).toBe("games");
-    expect(room).toBe("ABCD");
-    expect(sub).toBe("chat");
+describe("a room's transcript rides the room-doc socket (design note #1361a)", () => {
+  const CHAT = readStripped("components/ChatBox.tsx");
+  const LINK = readStripped("utils/roomDocLink.ts");
+  const APP = readStripped("App.tsx");
+
+  it("subscribes and sends through roomDocLink, keyed by the room alone", () => {
+    expect(CHAT).toContain('import { roomDocOnServer, sendChat, subscribeChat, type RoomChatEntry } from "../utils/roomDocLink";');
+    expect(CHAT).toContain("subscribeChat(");
+    expect(CHAT).toContain("sendChat(roomId, sender, trimmed, name);");
+    expect(CHAT).not.toContain("firebase");
   });
 
-  it("puts a sandbox room's transcript in the sandbox collection", () => {
-    /* Design note #644: the same shape, a different collection. A sandbox
-       room is not a lobby room, and its chat hangs off the document that
-       already holds its action log. */
-    const [collection, room, sub] = chatCollectionPath("WXYZ", SANDBOX_ROOMS_COLLECTION);
-    expect(collection).toBe("sandbox_rooms");
-    expect(room).toBe("WXYZ");
-    expect(sub).toBe("chat");
+  it("the link filters frames to the room it was asked about", () => {
+    // Two rooms cannot see each other's messages: a `chat` frame for another room is dropped at the link.
+    expect(LINK).toContain('return subscribeFrame<ChatFrame>(room, claim, "chat", (frame) => {');
+    expect(LINK).toContain("if (frame.room === room) onChat(");
   });
 
-  it("keeps the transcript beside the room rather than under a shared root", () => {
-    /* The property the function exists to guarantee: chat is a SUBCOLLECTION
-       of one room. Two rooms cannot see each other's messages, which is what
-       makes the staging-room transcript continue into the live game without
-       leaking into anybody else's. */
-    const lobby = chatCollectionPath("ROOM1");
-    const other = chatCollectionPath("ROOM2");
-    expect(lobby[1]).not.toBe(other[1]);
-    expect(lobby[0]).toBe(other[0]);
-    expect(lobby[2]).toBe(other[2]);
+  it("the sandbox's transcript hangs off the sandbox room code", () => {
+    // #644's fix, restated: the shell passes the sandbox room, not a lobby room, and no collection name.
+    expect(APP).toContain("} = useRoomChat(");
+    expect(APP).toContain("sandbox ? sandboxRoomCode : roomId,");
+    expect(APP).not.toContain("SANDBOX_ROOMS_COLLECTION");
   });
 });

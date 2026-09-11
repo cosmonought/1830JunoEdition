@@ -88,9 +88,10 @@ const DOLLAR = String.fromCharCode(36);
 
 describe("the title is one title", () => {
   it("numbers the private", () => {
-    // "1. Schuylkill Valley" -- the same numbering the auction list and the Ledger use.
-    const composed = `\`${DOLLAR}{entry.private_id}. ${DOLLAR}{entry.name}\``;
-    expect(CODE).toContain(composed);
+    /* "1. Schuylkill Valley" -- the same numbering the auction list and the Ledger use. #1370: through
+       `numberedPrivate`, so the number is the auction position rather than the catalog id (they differ only
+       on the Level Playing Field, where the JK is offered fifth and keeps id 7). */
+    expect(CODE).toContain("{numberedPrivate(entry.private_id, entry.name)}");
   });
 
   it("puts the acronym in parentheses", () => {

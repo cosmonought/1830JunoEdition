@@ -87,3 +87,20 @@ describe("the drain writes the state ref it now reads", () => {
     expect(APP).toContain("seq: id,");
   });
 });
+
+describe("the reducer's context reads the refs, not the render (design note #1380)", () => {
+  /* JUNO-Z6C: a tab that rebuilt from the log priced NNH's routes at $40 + $40 where the server had
+     $100 + $90, and refused a token on F16 the server accepted -- because the dispatch handed the reducer the
+     React `mapGrid` and an era derived from the committed phase, both a whole burst behind during a rebuild. */
+  it("hands the reducer the live grid and the era of the state it is about to reduce", () => {
+    const call = sliceBetween(APP, "after = applySandboxAction(after, gameplay, {", "era: tileEraFor(sandboxStateRef.current),");
+    expect(call).toContain("mapGrid: mapGridRef.current,");
+    expect(call).not.toContain("\n            mapGrid,\n");
+    expect(call).not.toContain("era: eraForPhase(currentPhase, tableVariants)");
+  });
+
+  it("which is the same era rule the server's engine applies", () => {
+    const ENGINE = readStripped("utils/replayLog.ts");
+    expect(ENGINE).toContain("return tileEraFor(state);");
+  });
+});

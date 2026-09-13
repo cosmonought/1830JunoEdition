@@ -237,7 +237,7 @@ describe("the reported loop: a phase change mid-turn", () => {
     expect(afterPurchase.active_corporation_index).toBe(0);
   });
 
-  it("opens the NEXT turn on Buy Private once the phase allows it", () => {
+  it("opens the NEXT turn on Track even once the phase allows buying a private (#1440: not a step)", () => {
     /* The other side of the same rule, and a bug in its own right (design
        note #656a). A turn opening in Phase 3 opens on `BuyPrivate`, because
        that is where a corporation may buy a private from a player -- a step
@@ -266,7 +266,7 @@ describe("the reported loop: a phase change mid-turn", () => {
     const opened = applySandboxAction(withPrivate, {
       BeginOperatingRound: { game_id: 1 },
     } as Msg);
-    expect(opened.operating_sub_phase).toBe("BuyPrivate");
+    expect(opened.operating_sub_phase).toBe("Track");
   });
 
   it("still opens on Track while the game is in Phase 2", () => {

@@ -60,9 +60,14 @@ describe("the config a game with no config reads as (design note #902)", () => {
   it("is the standard game", () => {
     /* THE PROPERTY EVERY OLD LOG DEPENDS ON. Every game logged before variants existed carries no config, and
        must still replay as 1830 -- not as a game with four `undefined` rules. */
-    expect(resolveVariants(undefined)).toEqual(STANDARD_VARIANTS);
-    expect(resolveVariants(null)).toEqual(STANDARD_VARIANTS);
-    expect(resolveVariants({})).toEqual(STANDARD_VARIANTS);
+    /* #1443: EXCEPT THE RULES REVISION. A log with no config was dealt before the revision existed and must
+       replay under the rules of its day (0: a purchase ended the Stock Round turn); a new game deals at the
+       current revision. The house rules are still the standard game. */
+    const legacy = { ...STANDARD_VARIANTS, rules: 0 };
+    expect(resolveVariants(undefined)).toEqual(legacy);
+    expect(resolveVariants(null)).toEqual(legacy);
+    expect(resolveVariants({})).toEqual(legacy);
+    expect(STANDARD_VARIANTS.rules).toBe(1);
   });
 
   it("fills gaps field by field rather than substituting the whole default", () => {

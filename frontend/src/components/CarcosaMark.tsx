@@ -23,6 +23,7 @@
 import React from "react";
 
 import { YELLOW_SIGN_IMAGE } from "./TrainBadges";
+import { RADIUS } from "../styles/typography";
 
 export interface CarcosaMarkProps {
   /** Matched to the type it sits beside, in px. */
@@ -42,28 +43,49 @@ export interface CarcosaMarkProps {
 export function CarcosaMark({ size = 13, meaning }: CarcosaMarkProps) {
   const label =
     meaning === "president"
-      ? "Yellow Sign — this player's corporation was marked by Carcosa"
-      : "Yellow Sign — this corporation was marked by Carcosa";
+      ? "This player has seen the Yellow Sign." // #1421: the ruled wording
+      : "This corporation has seen the Yellow Sign.";
+  /* ==================================================================
+      DESIGN NOTE 1427: THE SIGN GETS A PILL
+     ==================================================================
+     REPORTED: "the Yellow Sign badge is incredibly faint on corporation stripes and tables during the game."
+     The mark is thin yellow strokes on a transparent ground, so on ERIE's yellow stripe it vanishes and on a
+     dark table row it is a few hairlines. A dark pill behind it, bordered in the sign's own gold, gives it
+     a ground on every surface -- livery, table, card -- and the image inside is a step larger than the type
+     beside it, since a symbol needs more height than a letter to read at the same weight. */
+  const pad = Math.max(2, Math.round(size * 0.22));
   return (
-    <img
-      src={YELLOW_SIGN_IMAGE}
-      alt={label}
+    <span
       title={label}
-      height={size}
       style={{
-        /* Design note #1091: the same shape rules #1088 settled for the chip -- height drives, width follows
-           the 456x547 aspect, and `contain` guarantees neither is exceeded. `verticalAlign: middle` rather
-           than the chip's `display: block`, because this one sits in a line of text rather than in a flex
-           row: a block image beside a name would drop to its own line. */
-        height: size,
-        width: "auto",
-        maxHeight: "100%",
-        objectFit: "contain",
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
         verticalAlign: "middle",
         flex: "none",
         marginLeft: "5px",
+        padding: `${pad}px ${pad + 2}px`,
+        borderRadius: RADIUS.pill,
+        backgroundColor: "#141208",
+        border: "1px solid #c9a227",
+        boxShadow: "0 0 0 1px rgba(0,0,0,0.6)",
+        lineHeight: 0,
       }}
-    />
+    >
+      <img
+        src={YELLOW_SIGN_IMAGE}
+        alt={label}
+        height={size + 3}
+        style={{
+          /* Design note #1091: height drives, width follows the 456x547 aspect, `contain` guarantees neither
+             is exceeded. Block inside the pill; the pill is what sits inline with the text. */
+          height: size + 3,
+          width: "auto",
+          objectFit: "contain",
+          display: "block",
+        }}
+      />
+    </span>
   );
 }
 

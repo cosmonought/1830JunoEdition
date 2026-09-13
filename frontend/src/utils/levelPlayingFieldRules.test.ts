@@ -587,3 +587,20 @@ describe("the chart draws the two added corporations (design note #1381)", () =>
     expect(positions.find((entry) => entry.company_id === NW)?.enteredAt).toBe(3);
   });
 });
+
+describe("the standard depot has an open shelf too (design note #1439)", () => {
+  it("opens 6s and Diesels together the moment the first 6 is owned, on the printed board", () => {
+    const standard = { ...sandboxGameState("OperatingRound", 1), variants: resolveVariants({}) };
+    const with6 = (trains: string[]) => ({
+      ...standard,
+      public_companies: standard.public_companies.map((c, i) => (i === 0 ? { ...c, owned_trains: trains } : { ...c, owned_trains: [] })),
+    });
+    expect(openDepotTiers(with6(["5"])).map((row) => row.tier)).toEqual(["5"]);
+    expect(openDepotTiers(with6(["6"])).map((row) => row.tier)).toEqual(["6", "D"]);
+    expect(depotInventory(with6(["6"])).find((row) => row.tier === "6")?.remaining).toBe(1);
+    expect(depotInventory(with6(["6"])).find((row) => row.tier === "D")?.cost).toBe(1100);
+    // A Diesel does not sell the 6s out.
+    expect(openDepotTiers(with6(["6", "D"])).map((row) => row.tier)).toEqual(["6", "D"]);
+    expect(dieselExchangeRefusal(with6(["5"]), standard.public_companies[0].company_id)).toContain("not for sale yet");
+  });
+});

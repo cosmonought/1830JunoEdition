@@ -41,6 +41,7 @@ import {
      rules reference is the natural home for one. `visibleSubPhases` is what this file needs from it now,
      so the count reads "2 of 5" in the Yellow era and "2 of 6" from Phase 3 rather than a fixed six. */
   OPERATING_SUB_PHASE_LABELS,
+  privatesBuyableNow, // #1440
   visibleSubPhases,
   type OperatingSubPhase,
 } from "../components/OperatingSubPhaseStepper";
@@ -794,6 +795,8 @@ export default function ContextualActionBar({
   autoBuy,
   passDisabledReason,
   turnActionTaken,
+  stockStage = null,
+  onShowStocks,
   onPlaceStationTokenHint,
   stationTokenCost,
   maxRouteRevenue = null,
@@ -908,6 +911,11 @@ export default function ContextualActionBar({
   /** Design note #745: has the acting seat already sold this turn? The bar renders the fact; the reducer
    *  decides it. `undefined` reads as "no", which is the right answer everywhere outside a Stock Round. */
   turnActionTaken?: boolean;
+  /** #1443: the Sell-Buy-Sell stage of the seat's Stock Round turn, or `null` off the revision / outside a
+   *  Stock Round. Decides the stage button and the Pass button's label. */
+  stockStage?: "sell" | "buy" | "sell_again" | null;
+  /** #1443: the stage button's destination -- the Stocks tab, where the sell and buy controls are. */
+  onShowStocks?: () => void;
   onPlaceStationTokenHint: () => void;
   /** Design note #181: what a token costs this corporation, for the button
    *  label. A number rather than a formatted string so the caller cannot
@@ -1556,6 +1564,16 @@ export default function ContextualActionBar({
      `null` when the cursor sits on a step this era does not show -- the
      same -1 case `OperatingSubPhaseStepper` guards, and the same answer:
      say nothing rather than render "0 of 5". */
+  /* ==================================================================
+      DESIGN NOTE 1440: THE PRIVATE PURCHASE IS A STANDING BUTTON, LEFT OF THE STEP'S ACTION
+     ==================================================================
+     CORRECTED: corporations may buy a private "AT ANY TIME during their turn", so the Buy Private step is gone
+     (`OperatingSubPhaseStepper` #1440) and this is what replaces it: a button on the LEFT rail of the bar --
+     "to the left of them, leaving the subphase's 'main' action centered" -- for every step of the acting
+     corporation's turn while the phase allows it (3 and 4) and a private is still for sale. It toggles the
+     same purchase panel the step used to own, which still renders in the panel row beneath the bar. Dashed
+     like the other utility controls, so it does not read as the step's action. */
+  const privatesForSale = privatesBuyableNow(currentGlobalEra, privateCompanies, phase?.known ? phase.tier : null);
   const orSubPhaseProgress = React.useMemo(() => {
     // Design note #613: `Buy Private` shows in Phases 3 and 4 only. The
     // era is the fallback while the phase is not yet knowable.
@@ -1817,62 +1835,10 @@ export default function ContextualActionBar({
         ];
         break;
       case "BuyPrivate":
-        // Design note #144: Phase 3+ only, and FIRST in the turn. The
-        // contract starts the cursor at `Track` before Phase 3, so this case
-        // is unreachable in the Yellow era rather than showing a dead button.
-        /* Design note #715: NO BUTTON. It opened a modal, and the panel that modal held now renders below --
-           so the button's only remaining job would be scrolling to something already on screen.
-           #691 removed the Buy Trains button for the same reason one step later, and #263's argument applies
-           here too: two controls for one outcome implies a distinction a player then has to work out.
-           DESIGN NOTE 792 REINSTATES IT, and the premise that failed is the parenthetical: "already on
-           screen". That was true while #508 had the panel inside the sticky bar; #720 then unpinned the bar
-           whenever the panel made it tall, and #785 moved the panel out to fix that. It is below the fold
-           again, so the jump has a job again.
-           #263 STILL HOLDS, because this is not a second control for one outcome: it scrolls and dispatches
-           nothing, and its label names the destination rather than the purchase. */
-        contextualButtons = privatePurchase
-          ? [
-              {
-                key: "go-to-privates",
-                /* ==================================================================
-                    DESIGN NOTE 919: THE SAME DISCLOSURE, ONE STEP OVER
-                   ==================================================================
-                   REPORTED: "Mirror the fix you just did for Buy Trains."
-                   AND IT IS THE SAME COMPLAINT FOR THE SAME REASON: this button sits in a row of controls
-                   that commit moves, wearing their shape, and scrolls. #915 argued that at length for the
-                   trains step; nothing about the argument was specific to trains.
-                   CLOSED BY DEFAULT AND STAYS THAT WAY, which is where it differs from #918's contextual
-                   rule. Buying a private is never compulsory -- there is no state in 1830 where a
-                   corporation MUST buy one -- so there is no obligation for a default to respond to, and
-                   "open it when you want it" is the whole rule. #918's exception exists because a trainless
-                   corporation genuinely has no choice; this step always does. */
-                label: privatePanelOpen ? "Hide Privates" : "Buy Private Company",
-                /* ==================================================================
-                    DESIGN NOTE 943: THE STAR CAME OFF THIS BUTTON
-                   ==================================================================
-                   CORRECTED: "In Batch 13, I mistakenly instructed you to put the `<PrivatePowerIcon/>` on
-                   the 'Buy Private Companies' button. The star represents the physical location of a private
-                   company's power."
-                   AND THE CORRECTION IS RIGHT ABOUT THE MARK'S MEANING. #714 put the star on hexes where a
-                   power TAKES EFFECT -- it answers "something can be done here", not "a company can be
-                   bought". Buying a private is a transaction in a list; using its power is an act on the
-                   board, and only the second is what the board's star has ever meant. It now marks the
-                   power chips (#943 on `powerChips`), which is the control that does that act. */
-                onClick: () => {
-                  setPrivatePanelOpen((open: boolean) => {
-                    if (!open) scrollToStepPanel();
-                    return !open;
-                  });
-                },
-                /* Design note #919: never disabled, per #915 -- #797's "nothing to scroll to" is right for a
-                   scroll button and backwards for a toggle, because a panel on screen is the one you want to
-                   collapse. */
-                title: privatePanelOpen
-                  ? "Collapse the Buy Private Company panel below."
-                  : "Expands the Buy Private Company panel below.",
-              },
-            ]
-          : [];
+        /* #1440: NOT A STEP ANY MORE. A cursor can only read `BuyPrivate` off a log written before that note,
+           and `settleSubPhase` lands it on Track; the purchase button is on the left rail below, for the whole
+           turn. Nothing to put in the centre. */
+        contextualButtons = [];
         break;
       case "Tokens":
         contextualButtons = [
@@ -2114,6 +2080,8 @@ export default function ContextualActionBar({
      Hardware step -- a seller answering an offer. Hiding it would take away a real decision rather than a
      description of one. */
   const mayActThisTurn = roundType !== "OperatingRound" || isMyTurn;
+  // #1440: the standing private purchase -- the acting president, a phase that allows it, a private to buy.
+  const privateBuyOpen = mayActThisTurn && roundType === "OperatingRound" && privatePurchase !== null && privatesForSale;
   if (!mayActThisTurn) contextualButtons = [];
 
   /* ==================================================================
@@ -3263,6 +3231,33 @@ export default function ContextualActionBar({
                   </span>
                 ))}
               </span>
+              {/* #1440: the standing private purchase, on the left rail. */}
+              {privateBuyOpen && (
+                <button
+                  type="button"
+                  style={{
+                    ...styles.actionBarButton,
+                    ...styles.actionBarUtilityButton,
+                    ...(privatePanelOpen ? styles.routeToggleButtonActive : {}),
+                    ...(!sessionReady ? styles.actionBarButtonDisabled : {}),
+                  }}
+                  onClick={() => {
+                    setPrivatePanelOpen((open: boolean) => {
+                      if (!open) scrollToStepPanel();
+                      return !open;
+                    });
+                  }}
+                  disabled={!sessionReady}
+                  title={
+                    privatePanelOpen
+                      ? "Collapse the Buy Private Company panel below."
+                      : "A corporation may buy a private company at any time during its turn. Expands the Buy Private Company panel below."
+                  }
+                  data-testid="buy-private-any-time"
+                >
+                  {privatePanelOpen ? "Hide Privates" : "Buy Private Company"}
+                </button>
+              )}
             </div>
 
             {/* CENTRE -- only what this sub-phase can actually do. */}
@@ -4065,6 +4060,33 @@ export default function ContextualActionBar({
           ))}
           </span>
           <span style={styles.actionBarButtonsCentre}>
+          {/* ==================================================================
+               DESIGN NOTE 1443: SELL | AUTO | PASS  ->  BUY | AUTO | PASS  ->  SELL | AUTO | END TURN
+              ==================================================================
+              RULED: "The Action Bar should therefore initially show: Sell | Auto | Pass. Then if they sell or
+              pass, it should show Buy | Auto | Pass, and after they buy or pass it should show Sell | Auto |
+              End Turn." The stage button names what this stage is for and goes to the Stocks tab, where the
+              controls are; the Pass button walks the stages (reducer #1443) and reads "End Turn" once a
+              share has been bought. A sale keeps the Sell stage rather than advancing it, so a player can
+              sell out of several corporations before moving on -- the rule is "any number of certificates". */}
+          {stockStage !== null && roundType === "StockRound" && isMyTurn && (
+            <button
+              type="button"
+              style={{ ...styles.actionBarButton, ...(!sessionReady ? styles.actionBarButtonDisabled : {}) }}
+              onClick={onShowStocks}
+              disabled={!sessionReady}
+              title={
+                stockStage === "buy"
+                  ? "Buy one certificate from the IPO or the Bank Pool on the Stocks tab."
+                  : stockStage === "sell_again"
+                    ? "You have bought this turn. You may still sell any number of certificates on the Stocks tab, then end your turn."
+                    : "Sell any number of certificates on the Stocks tab. Pass when you are done selling to move on to buying."
+              }
+              data-testid="stock-stage-button"
+            >
+              {stockStage === "buy" ? "Buy a Share" : "Sell Shares"}
+            </button>
+          )}
           {/* Design note #31: Pass leads -- it is the action available in
               every phase, and the one a player reaches for most. */}
           <button
@@ -4077,12 +4099,24 @@ export default function ContextualActionBar({
             }}
             onClick={onPassTurn}
             disabled={!sessionReady || passDisabledReason !== null}
+            data-testid="pass-turn-button"
             /* Design note #745: the label is the rule. A player who has just sold is looking at the only
                button that will end their turn, and while it read "Pass Turn" the reasonable inference was
                that pressing it forfeits something -- which is how the reported bug was found. */
-            title={passDisabledReason ?? passButtonTitle(turnActionTaken === true)}
+            title={
+              passDisabledReason ??
+              (stockStage === "sell"
+                ? "Done selling (or nothing to sell) — move on to buying."
+                : stockStage === "buy"
+                  ? turnActionTaken === true
+                    ? "Decline the share purchase and end your turn. You have already sold, so this does not count as a pass."
+                    : "Buy nothing and end your turn. Passing without selling or buying counts toward ending the Stock Round."
+                  : stockStage === "sell_again"
+                    ? "End your turn."
+                    : passButtonTitle(turnActionTaken === true))
+            }
           >
-            {passButtonLabel(turnActionTaken === true)}
+            {stockStage === "sell_again" ? "End Turn" : stockStage !== null ? "Pass" : passButtonLabel(turnActionTaken === true)}
           </button>
           {/* Design note #717: AUTO-PASS SITS BESIDE PASS, because it is the same decision with a duration.
               Only in a Stock Round -- an Operating Round turn is a corporation's, not a player's, and there is
@@ -4097,57 +4131,39 @@ export default function ContextualActionBar({
               so the only way out was to wait for a Stock Round that would then be passed for you. An off switch
               that is only reachable in the state it acts on is not an off switch.
               `armed ||` is the whole fix. Arming still needs a Stock Round; disarming needs nothing. */}
-          {autoPass && (autoPass.armed || roundType === "StockRound") && (
-            <button
-              type="button"
-              style={{
-                ...styles.actionBarButton,
-                ...(autoPass.armed ? styles.autoPassArmed : {}),
-                ...(!autoPass.armed && !autoPass.canArm ? styles.actionBarButtonDisabled : {}),
-              }}
-              onClick={autoPass.armed ? autoPass.onDisarm : autoPass.onOpenSettings}
-              /* Design note #728: never disabled while armed. Arming is gated because a standing instruction
-                 that will dispatch needs a session to dispatch through; clearing one is a local state write
-                 that needs nothing. A dropped connection must not trap a player inside a setting that keeps
-                 taking their turns.
-                 Design note #1036: THE GATE IS `canArm`, NOT `sessionReady`. The reasoning above is about the
-                 CONNECTION and the flag it used to read also carried whose turn it is -- so the control was
-                 dead for the whole round except on the one turn a player least needs it. */
-              disabled={!autoPass.armed && !autoPass.canArm}
-              title={
-                autoPass.armed
-                  ? "Auto-Pass is on for this Stock Round. Click to turn it off."
-                  : autoPass.canArm
-                    ? "Pass automatically until something happens that affects you, or the Stock Round ends. You can set this at any point in the round."
-                    : "Auto-Pass needs a live connection to the room."
-              }
-            >
-              {autoPass.armed ? "Auto-Pass: On" : "Auto-Pass"}
-            </button>
-          )}
-          {/* Design note #1240: Auto-Buy beside Auto-Pass, same two states, same #728 rule that the off switch
-              is reachable whenever it is on. A debug tool for running a Stock Round without the clicks. */}
-          {autoBuy && (autoBuy.armed || roundType === "StockRound") && (
-            <button
-              type="button"
-              style={{
-                ...styles.actionBarButton,
-                ...(autoBuy.armed ? styles.autoPassArmed : {}),
-                ...(!autoBuy.armed && !autoBuy.canArm ? styles.actionBarButtonDisabled : {}),
-              }}
-              onClick={autoBuy.armed ? autoBuy.onDisarm : autoBuy.onOpenSettings}
-              disabled={!autoBuy.armed && !autoBuy.canArm}
-              title={
-                autoBuy.armed
-                  ? "Auto-Buy is on for this Stock Round. Click to turn it off."
-                  : autoBuy.canArm
-                    ? "Debug tool: buy one share of a chosen corporation on each of your turns, up to a cap, until the Stock Round ends."
-                    : "Auto-Buy needs a live connection to the room."
-              }
-            >
-              {autoBuy.armed ? "Auto-Buy: On" : "Auto-Buy"}
-            </button>
-          )}
+          {/* #1444: ONE AUTO BUTTON. Opens the settings (Auto-Pass by default; the modal switches modes) and,
+              once one is armed, names it and turns it off -- #728's rule that the off switch is reachable
+              whenever it is on, so it shows wherever either arm is set. */}
+          {(autoPass || autoBuy) && (autoPass?.armed || autoBuy?.armed || roundType === "StockRound") && (() => {
+            const armed = autoPass?.armed ? "pass" : autoBuy?.armed ? "buy" : null;
+            const canArm = autoPass?.canArm || autoBuy?.canArm;
+            return (
+              <button
+                type="button"
+                style={{
+                  ...styles.actionBarButton,
+                  ...(armed ? styles.autoPassArmed : {}),
+                  ...(!armed && !canArm ? styles.actionBarButtonDisabled : {}),
+                }}
+                onClick={
+                  armed === "pass" ? autoPass?.onDisarm : armed === "buy" ? autoBuy?.onDisarm : autoPass?.onOpenSettings ?? autoBuy?.onOpenSettings
+                }
+                disabled={!armed && !canArm}
+                title={
+                  armed === "pass"
+                    ? "Auto-Pass is on for this Stock Round. Click to turn it off."
+                    : armed === "buy"
+                      ? "Auto-Buy is on for this Stock Round. Click to turn it off."
+                      : canArm
+                        ? "Automate your Stock Round turns: pass until something affects you, or buy a share from a list each turn. One or the other."
+                        : "Auto needs a live connection to the room."
+                }
+                data-testid="auto-button"
+              >
+                {armed === "pass" ? "Auto-Pass: On" : armed === "buy" ? "Auto-Buy: On" : "Auto"}
+              </button>
+            );
+          })()}
           {/* Design note #540: A DIVIDER NEEDS SOMETHING ON BOTH SIDES. Reported as two bars between Pass Turn and
              Undo -- these two, with nothing between them. The pair frames `contextualButtons`, which is EMPTY in
              several real states: an auction round, a Stock Round with no corporation selected, and a room whose game
@@ -4346,7 +4362,7 @@ export default function ContextualActionBar({
           present -- so the two purchase steps of a turn have one shape. */}
       {/* Design note #919: unmounted when collapsed, like the trains panel -- a disclosure that leaves its
           contents tabbable has not collapsed anything. */}
-      {mayActThisTurn && orStep === "BuyPrivate" && privatePurchase && privatePanelOpen && (
+      {privateBuyOpen && privatePurchase && privatePanelOpen && (
         <ProposePrivatePurchase
           embedded
           open

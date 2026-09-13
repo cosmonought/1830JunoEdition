@@ -45,6 +45,9 @@ export interface SandboxRoomBarProps {
    * cancelling is looking at a verdict on a string they have already replaced -- the same staleness, one
    * interaction earlier. Optional, so the in-game caller is unaffected. */
   onClearError?: () => void;
+  /** #1415: when given, "Join game" opens the parent's list-and-code card instead of the inline form -- the
+   *  lobby's door; the in-game bar keeps the inline form. */
+  onOpenJoin?: () => void;
   /** ==================================================================
    *   DESIGN NOTE 1131: THE SAME CONTROLS, WITHOUT THE TRAY THEY SIT IN
    *  ==================================================================
@@ -71,6 +74,7 @@ export function SandboxRoomBar({
   onRejoin,
   onRejoinByPin,
   onClearError,
+  onOpenJoin,
   bare = false,
 }: SandboxRoomBarProps) {
   const [joining, setJoining] = useState(false);
@@ -209,7 +213,8 @@ export function SandboxRoomBar({
           style={bare ? styles.bareButton : styles.button}
           onClick={() => {
             onClearError?.();
-            setJoining(true);
+            if (onOpenJoin) onOpenJoin();
+            else setJoining(true);
           }}
           disabled={busy}
         >
@@ -339,8 +344,9 @@ const styles: Record<string, React.CSSProperties> = {
        `space-between` PUTS THEM ON THE BOX'S EDGES, which is what the width was chosen to place. It also
        behaves when the join form opens: Host stays left, the form takes the right, and the row does not
        re-centre itself mid-interaction. */
-    justifyContent: "space-between",
-    gap: "12px",
+    /* #1423: centred with a gap -- three buttons in a wide box, not two on a narrow box's edges. */
+    justifyContent: "center",
+    gap: "24px",
     width: "100%",
     /* ==================================================================
         DESIGN NOTE 1136: `wrap` IS WHY THE JOIN FORM JUMPED A LINE

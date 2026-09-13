@@ -201,7 +201,7 @@ export const VARIANT_COPY: Readonly<Record<VariantCopyKey, { label: string; blur
   dynamicStockMarket: {
     label: "Dynamic stock market",
     blurb:
-      `Markets are volatile. Paying out ${PAY_DOUBLE_JUMP_MULTIPLE}x the share price triggers a double move increase, but withholding ${WITHHOLD_DOUBLE_DROP_MULTIPLE}x the share price will cause a double move decrease.`,
+      `Markets are volatile. Paying out ${PAY_DOUBLE_JUMP_MULTIPLE}x the share price triggers a double move increase, but withholding ${WITHHOLD_DOUBLE_DROP_MULTIPLE}x the share price will cause a double move decrease. The chart gains a row above the top, running to $450.`,
   },
   /* Design note #961a: the difficulty qualifiers moved to the LABELS above. A table choosing variants wants
      to know which way each one pushes as it reads the name, not three lines into the description. */
@@ -351,8 +351,8 @@ export function gameTypeOf(variants: Pick<GameVariants, "expandedMap" | "levelPl
   return "standard";
 }
 
-/** The flags a type implies. `plusTiles` is kept as chosen under 18XX+, forced on under the Level Playing
- *  Field (#1320), and off with the map it needs (#1310). */
+/** The flags a type implies. `plusTiles` is kept as chosen under 18XX and 18XX+ (#1415 -- the tray is offered
+ *  on the printed map too, as the easier game) and forced on under the Level Playing Field (#1320). */
 export function withGameType(variants: GameVariants, type: GameType): GameVariants {
   switch (type) {
     case "levelPlayingField":
@@ -360,8 +360,50 @@ export function withGameType(variants: GameVariants, type: GameType): GameVarian
     case "plus":
       return { ...variants, expandedMap: true, levelPlayingField: false };
     default:
-      return { ...variants, expandedMap: false, plusTiles: false, levelPlayingField: false };
+      return { ...variants, expandedMap: false, levelPlayingField: false };
   }
+}
+
+/* ==================================================================
+    DESIGN NOTE 1415: WHAT EACH TYPE RECOMMENDS
+   ==================================================================
+   RULED: the house-rules step tags one option per type -- 18XX+ tags the tile set "(recommended)", the Level
+   Playing Field tags the $20,000 bank "(recommended)", 18XX tags the tile set "(easier)" -- and "recommended
+   options default on". The 18XX+ tile set on the printed map is a smaller tray for a smaller map, which is why
+   it is tagged as the easier game rather than the recommended one and defaults off there. */
+export type VariantTag = "recommended" | "easier" | "riskier" | "harder" | "chaotic";
+
+/** The defaults a host sees on the house-rules step after choosing a type. */
+export function recommendedVariantsFor(type: GameType, mode: GameMode): GameVariants {
+  const base = withGameType({ ...STANDARD_VARIANTS, mode }, type);
+  switch (type) {
+    case "plus":
+      return { ...base, plusTiles: true };
+    case "levelPlayingField":
+      return { ...base, length: "long" };
+    default:
+      return base;
+  }
+}
+
+/** The tag the house-rules step shows beside the tile-set option, by type. LPF has no such option. */
+export function plusTilesTagFor(type: GameType): { tag: VariantTag; note: string } | null {
+  switch (type) {
+    case "standard":
+      return { tag: "easier", note: "A bigger tray on the printed map: more ways to build, less blocking." };
+    case "plus":
+      return {
+        tag: "recommended",
+        note: "Without it, a tighter race for tiles where some routes may never be finished.",
+      };
+    default:
+      return null;
+  }
+}
+
+/** The bank the type recommends, or `null` when it has no opinion. */
+export function recommendedLengthFor(type: GameType): GameLength | null {
+  return type === "levelPlayingField" ? "long" : null;
 }
 
 export interface GameVariants {
@@ -424,6 +466,25 @@ export interface GameVariants {
   plusTiles: boolean;
   /** Design note #1320: the Level Playing Field variant. Forces `expandedMap` and `plusTiles`. */
   levelPlayingField: boolean;
+  /* ==================================================================
+      DESIGN NOTE 1443: THE RULES REVISION A LOG WAS DEALT UNDER
+     ==================================================================
+     NOT A HOUSE RULE -- a version. The reducer is a function of the log, and a correction to a rule of the
+     printed game (here: the Stock Round is Sell-Buy-Sell, so a purchase no longer ends the turn) would
+     re-interpret every log written before it: a game in which buys ended turns would replay with the seat
+     stuck on every buyer and every later action refused. So `SetupGame` stamps the revision current when
+     the game was dealt, `resolveVariants` reads an absent one as 0 (every log written before this note),
+     and the reducer asks `sellBuySellInForce`. `hasAnyVariant` does not count it and the badge does not
+     light for it. Bump `CURRENT_RULES_REVISION` for the next correction of this kind. */
+  rules: number;
+}
+
+/** #1443: the revision new games are dealt under. 1 = the Stock Round is Sell-Buy-Sell. */
+export const CURRENT_RULES_REVISION = 1;
+
+/** #1443: whether a table plays the Stock Round as Sell-Buy-Sell (a buy leaves the seat with the buyer). */
+export function sellBuySellInForce(variants: Pick<GameVariants, "rules">): boolean {
+  return variants.rules >= 1;
 }
 
 /* ==================================================================
@@ -563,6 +624,7 @@ export const STANDARD_VARIANTS: GameVariants = {
   expandedMap: false,
   plusTiles: false,
   levelPlayingField: false,
+  rules: CURRENT_RULES_REVISION,
 };
 
 /** Whether a table is playing anything other than the printed game -- for the badge that says so. */
@@ -609,10 +671,13 @@ export function resolveVariants(recorded: Partial<GameVariants> | null | undefin
     dynamicStockMarket:
       recorded?.dynamicStockMarket ?? STANDARD_VARIANTS.dynamicStockMarket,
     expandedMap,
-    // #1310: the tray without its board is not a game anybody agreed to. #1320: LPF always brings it.
-    plusTiles:
-      levelPlayingField || (expandedMap && (recorded?.plusTiles ?? STANDARD_VARIANTS.plusTiles)),
+    /* #1320: LPF always brings the tray. #1415 lifts #1310's "needs the map" gate: the tray is offered on the
+       printed map as the easier game, so a log that recorded it there deals it there. No earlier log carries
+       `plusTiles: true` without `expandedMap: true` -- the old waiting room could not write one. */
+    plusTiles: levelPlayingField || (recorded?.plusTiles ?? STANDARD_VARIANTS.plusTiles),
     levelPlayingField,
+    // #1443: absent is 0 -- the rules every log before the revision was written under.
+    rules: typeof recorded?.rules === "number" && Number.isFinite(recorded.rules) ? recorded.rules : 0,
   };
 }
 

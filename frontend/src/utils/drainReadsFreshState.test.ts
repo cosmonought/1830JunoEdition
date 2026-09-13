@@ -39,7 +39,9 @@ describe("labels are composed against the board the action actually applied to",
     /* Off the sandbox `sandboxStateRef` is null by construction -- `gameState` is `sandboxState ?? live` --
        so the conditional is the whole of the compatibility, not a hedge. */
     expect(CONTEXT).toContain(": gameState");
-    expect(APP).toContain("const gameState = sandboxState ?? liveGameState;");
+    // #1425: the replayer sits between -- `liveState` is the committed/sandbox pair, `gameState` may be a past board.
+    expect(APP).toContain("const liveState = sandboxState ?? liveGameState;");
+    expect(APP).toContain("const gameState = replaySnapshot?.state ?? liveState;");
   });
 
   it("quotes prices from the same ref the trade used", () => {

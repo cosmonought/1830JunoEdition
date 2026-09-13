@@ -143,6 +143,54 @@ export const styles: Record<string, React.CSSProperties> = {
     flexWrap: "wrap",
     rowGap: "6px",
   },
+  /* #1413: the Game Over modal, minimised -- a strip in the flow under the header, so nothing fixed can
+     cover it (the status dock covered the old pill). Gold on near-black, the modal's own palette. */
+  /* #1423: the sticky dock the action bar and the minimised Game Over strip share. The bar keeps its own
+     `sticky` (harmless inside a sticky parent); what holds both to the top is this. */
+  actionDock: {
+    position: "sticky",
+    top: 0,
+    zIndex: 50,
+    display: "flex",
+    flexDirection: "column",
+  },
+  gameOverStrip: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: "12px",
+    width: "100%",
+    padding: "6px 20px",
+    boxSizing: "border-box",
+    backgroundColor: "#241d0e",
+    border: "1px solid #7a6320",
+    borderTop: "none",
+    borderRadius: `0 0 ${RADIUS.card} ${RADIUS.card}`,
+    color: "#f0dfa8",
+    fontSize: FONT_SIZE.body,
+    fontWeight: 700,
+  },
+  /* #1442: the strip in the action bar's slot -- the bar's inset and radius, so the two are one width. */
+  gameOverStripAsBar: {
+    marginLeft: "20px",
+    marginRight: "20px",
+    width: "auto",
+    borderTop: "1px solid #7a6320",
+    borderRadius: RADIUS.card,
+    padding: "10px 20px",
+  },
+  gameOverStripText: { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  gameOverStripButton: {
+    flex: "none",
+    padding: "4px 12px",
+    borderRadius: RADIUS.pill,
+    border: "1px solid #7a6320",
+    backgroundColor: "#3b3113",
+    color: "#f0dfa8",
+    fontSize: FONT_SIZE.small,
+    fontWeight: 800,
+    cursor: "pointer",
+  },
   /* ---- Design note #36: the phase badge and its warning. ----
      Both are `flexShrink: 0` and `whiteSpace: nowrap`: the top bar wraps
      rather than clips, and a phase label broken across two lines in a slim

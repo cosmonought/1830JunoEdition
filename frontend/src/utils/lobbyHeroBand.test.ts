@@ -159,7 +159,7 @@ describe("the room is the page, and the text carries its own ground", () => {
        70% in a 24% box, which puts them either side of x 0.40 and 0.60. */
     expect(LOBBY).toContain('bottom: "60%"');
     expect(LOBBY).toContain('top: "70%"');
-    expect(LOBBY).toContain('width: "24%"');
+    expect(LOBBY).toContain('width: "60%"'); // #1423: widened for three buttons; same centre
     /* ==================================================================
         DESIGN NOTE 1132: CENTRED BY ARITHMETIC, NOT BY TRANSFORM
        ==================================================================
@@ -169,17 +169,17 @@ describe("the room is the page, and the text carries its own ground", () => {
        `left: 40%` WITH `width: 20%` IS THE SAME POSITION and creates nothing. Asserted as the absence of the
        horizontal transform, because that is the property that broke it. */
     expect(LOBBY).toContain('left: "40%"');
-    expect(LOBBY).toContain('left: "38%"');
+    expect(LOBBY).toContain('left: "20%"'); // #1423
     expect(LOBBY).not.toContain('transform: "translateX(-50%)"');
     expect(LOBBY).not.toContain('transform: "translate(-50%, -50%)",\n    pointerEvents');
   });
 
-  it("pushes the two buttons to the anchor's edges rather than its middle", () => {
-    /* THE ANCHOR WAS RIGHT AND THE CONTENT ALIGNMENT IGNORED IT. A 24% box centred on the scene with
-       `justify-content: center` packs both buttons at 0.5; `space-between` puts them on 0.38 and 0.62, which
-       is what the width was chosen for. */
-    expect(CONTROLS_BAR).toContain('justifyContent: "space-between"');
-    expect(CONTROLS_BAR).not.toContain('justifyContent: "center"');
+  it("centres the buttons in the anchor with a gap (#1423 supersedes #1132's edges)", () => {
+    /* #1132 pushed TWO buttons to a narrow box's edges. With three (Rejoin, #1355) and the chrome zoom the
+       row overflowed the box to the right; a wide box with centred contents keeps the group centred at any
+       count and any zoom. */
+    expect(CONTROLS_BAR).toContain('justifyContent: "center"');
+    expect(CONTROLS_BAR).toContain('gap: "24px"');
   });
 
   it("gives every bare control the same size, so none is smaller than another", () => {
@@ -353,7 +353,8 @@ describe("the room is the page, and the text carries its own ground", () => {
        gated with that branch rather than deleted, which is #525's standing rule for it. */
     expect(LOBBY).toContain("{WEB3_LOBBY_ENABLED && (");
     expect(LOBBY).toContain('placeholder="Display name"');
-    expect(LOBBY).toContain('hostSandboxRoom(localPlayerId(), "Host")');
+    // #1415: the terms ride along now; the nickname is still the literal.
+    expect(LOBBY).toContain('hostSandboxRoom(localPlayerId(), "Host", variants, setup)');
   });
 
   it("shrinks the connect button to the row it lives in", () => {

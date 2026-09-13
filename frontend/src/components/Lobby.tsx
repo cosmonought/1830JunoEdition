@@ -56,16 +56,21 @@ import { useUiScale } from "../utils/useUiScale";
 import SandboxRoomBar from "./SandboxRoomBar";
 import {
   hostSandboxRoom,
+  joinSandboxRoom,
   localPlayerId,
   parseRoomCode,
   readSandboxLog,
   subscribeSandboxRoom,
-  upsertSandboxPlayer,
+  type RoomSetup,
   type SandboxRoomPlayer,
 } from "../utils/sandboxRoom";
 // Design note #1352: rejoin a seat from the lobby -- the PIN card over this room's roster, then a reload into it.
 import { SeatPinModal } from "./SeatPinModal";
 import { RejoinByPinCard } from "./RejoinByPinCard";
+// #1415: the host's setup card -- type, pace, visibility, then the house rules -- before the room exists; and
+// the join card, the public list with the code box beside it.
+import { HostSetupCard } from "./HostSetupCard";
+import { JoinGameCard } from "./JoinGameCard";
 import { roomDocOnServer } from "../utils/roomDocLink";
 import { writeSandboxResume } from "../utils/activeGame";
 import { CONTROL_PADDING, FONT_FAMILY, FONT_FAMILY_MONO, FONT_SIZE, LINE_HEIGHT, RADIUS } from "../styles/typography";
@@ -87,6 +92,7 @@ import {
   useLobbyRooms,
   usePresenceHeartbeat,
   useRoom,
+  useSandboxRooms,
   type PresenceState,
   type RoomDoc,
   type SeatDoc,
@@ -269,22 +275,31 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
     preloadWaitingRoomScene();
   }, []);
 
-  const handleHostSandboxRoom = useCallback(async () => {
-    setSandboxRoomBusy(true);
-    setSandboxRoomError(null);
-    try {
-      const code = await hostSandboxRoom(localPlayerId(), "Host");
-      if (!code) {
-        setSandboxRoomError("Firestore is not configured in this build.");
-        return;
+  /* #1415: Host opens the setup card; the room is created with what the host chose there. Join opens the
+     list-and-code card over the public rooms the server is pushing. */
+  const [hostSetup, setHostSetup] = useState(false);
+  const [joinOpen, setJoinOpen] = useState(false);
+  const sandboxRooms = useSandboxRooms();
+  const handleHostSandboxRoom = useCallback(
+    async (variants: GameVariants, setup: RoomSetup) => {
+      setSandboxRoomBusy(true);
+      setSandboxRoomError(null);
+      try {
+        const code = await hostSandboxRoom(localPlayerId(), "Host", variants, setup);
+        if (!code) {
+          setSandboxRoomError("The game server is not configured in this build.");
+          return;
+        }
+        setHostSetup(false);
+        onEnterSandbox(code);
+      } catch (error) {
+        setSandboxRoomError(error instanceof Error ? error.message : "Could not open the room.");
+      } finally {
+        setSandboxRoomBusy(false);
       }
-      onEnterSandbox(code);
-    } catch (error) {
-      setSandboxRoomError(error instanceof Error ? error.message : "Could not open the room.");
-    } finally {
-      setSandboxRoomBusy(false);
-    }
-  }, [onEnterSandbox]);
+    },
+    [onEnterSandbox],
+  );
 
   const handleJoinSandboxRoom = useCallback(
     async (raw: string) => {
@@ -302,12 +317,20 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
         await readSandboxLog(code);
         /* Design note #527: joining means taking a seat in the anteroom. Done here rather than in the waiting room so
            a player who joins and then closes the tab has still been seen -- and so the room's roster is correct the
-           moment the screen opens rather than one round trip later. */
-        await upsertSandboxPlayer(code, {
+           moment the screen opens rather than one round trip later.
+           #1415: AND THE ROOM MAY SAY NO -- a full table, a seat the host removed, a game already dealt. The
+           answer is awaited, and a refusal is shown here rather than walking the player into a room that does
+           not hold them. */
+        const answer = await joinSandboxRoom(code, {
           id: localPlayerId(),
           nickname: "Player",
           isReady: false,
         });
+        if (!answer.ok) {
+          setSandboxRoomError(answer.reason);
+          return;
+        }
+        setJoinOpen(false);
         onEnterSandbox(code);
       } catch (error) {
         setSandboxRoomError(error instanceof Error ? error.message : "Could not join that room.");
@@ -824,8 +847,19 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
               available={isBackendConfigured()}
               error={sandboxRoomError}
               busy={sandboxRoomBusy}
-              onHost={handleHostSandboxRoom}
+              onHost={() => {
+                setSandboxRoomError(null);
+                setHostSetup(true);
+              }}
               onJoin={handleJoinSandboxRoom}
+              onOpenJoin={
+                roomDocOnServer()
+                  ? () => {
+                      setSandboxRoomError(null);
+                      setJoinOpen(true);
+                    }
+                  : undefined
+              }
               onRejoin={roomDocOnServer() ? handleRejoinSandboxRoom : undefined}
               onRejoinByPin={roomDocOnServer() ? () => setRejoinByPin(true) : undefined}
             />
@@ -847,6 +881,40 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
           cards sat there because they were written beside the bar that opens them. They sit here now, outside
           the scene, and each card's backdrop says `pointerEvents: "auto"` itself so no ancestor can do this
           to them again. Enter "worked" only because the PIN field had focus and resubmitted the lookup. */}
+      {/* #1415: the host's setup card, at the root for #1360's reason. */}
+      {hostSetup && (
+        <HostSetupCard
+          busy={sandboxRoomBusy}
+          error={sandboxRoomError}
+          onClose={() => setHostSetup(false)}
+          onCreate={(variants, setup) => void handleHostSandboxRoom(variants, setup)}
+        />
+      )}
+      {/* #1415: the public game list, with the code box beside it. Watching a game is entering the room with
+          no seat -- the shell's own watcher path -- so it is `onEnterSandbox` with no join write first. */}
+      {joinOpen && (
+        <JoinGameCard
+          rooms={sandboxRooms.rooms}
+          loading={sandboxRooms.loading}
+          listError={sandboxRooms.error}
+          error={sandboxRoomError}
+          busy={sandboxRoomBusy}
+          onClose={() => {
+            setJoinOpen(false);
+            setSandboxRoomError(null);
+          }}
+          onJoin={(code) => void handleJoinSandboxRoom(code)}
+          onRejoin={(code) => {
+            setJoinOpen(false);
+            handleRejoinSandboxRoom(code);
+          }}
+          onSpectate={(code) => {
+            setJoinOpen(false);
+            onEnterSandbox(code);
+          }}
+          onClearError={() => setSandboxRoomError(null)}
+        />
+      )}
       {rejoinByPin && (
         <RejoinByPinCard
           onClose={() => setRejoinByPin(false)}
@@ -1887,12 +1955,20 @@ const styles: Record<string, React.CSSProperties> = {
      0.62 and its centre on 0.50. `translateY` is all that remains, and only the vertical: nothing here blends,
      but keeping both anchors on the same idiom means the next reader does not have to work out why one uses a
      transform and the other does not. */
+  /* ==================================================================
+      DESIGN NOTE 1423: THREE BUTTONS, CENTRED BY THE SAME ARITHMETIC
+     ==================================================================
+     REPORTED: "the Host/Join/Rejoin buttons are not centered. As players zoom in, Host Game stays anchored
+     but Join and Rejoin push out to the right." #1132's box was 24% wide at 38% -- centred on 0.5 for TWO
+     buttons pushed to its edges -- and a third button (#1355's Rejoin) plus the zoom made the row overflow
+     it to the right, since the box's left edge is what is anchored. The box is now 60% wide at 20% (the same
+     centre, still no horizontal transform -- #1132's blend-mode reason stands) and the row centres its
+     contents with a gap, so the group stays centred at any zoom and any count. */
   tableAnchor: {
     position: "absolute",
-    left: "38%",
+    left: "20%",
     top: "70%",
-    width: "24%",
-    minWidth: "300px",
+    width: "60%",
     transform: "translateY(-50%)",
     pointerEvents: "auto",
   },

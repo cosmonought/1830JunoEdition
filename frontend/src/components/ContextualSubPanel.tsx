@@ -254,7 +254,13 @@ function OperatingRoundCorporationPanel({
                not its subject reads as sorted by the wrong thing. The active row is marked directly, which answers "whose
                turn" without spending the lead column on it. */}
             <th style={styles.thB}>Corporation</th>
-            <th style={styles.thB}>President</th>
+            {/* #1433: the crown is the column's, drawn once in the header; the cells are names. */}
+            <th style={styles.thB}>
+              <span style={styles.presidentCell}>
+                <PresidentCrown label={null} scale={1.05} style={{ color: PRESIDENT_CROWN_GOLD }} />
+                President
+              </span>
+            </th>
             <th style={styles.thNumB}>Market Value</th>
             <th style={styles.thNumB}>Treasury</th>
             <th style={styles.thNumB}>Last Route Payout</th>
@@ -343,18 +349,7 @@ function OperatingRoundCorporationPanel({
                 <td style={styles.tdB}>
                   {company.president ? (
                     <span style={styles.presidentCell}>
-                      {/* Design note #552. Decorative here: the name sits
-                          right beside it and the column header already says
-                          President, so an accessible name would make a
-                          screen reader announce the word twice per row. */}
-                      {/* Design note #974: the hex is `PRESIDENT_CROWN_GOLD` now, not a literal -- three
-                          panels were typing the same string and a near-miss in one of them would be
-                          invisible. */}
-                      <PresidentCrown
-                        label={null}
-                        scale={1.05}
-                        style={{ color: PRESIDENT_CROWN_GOLD }}
-                      />
+                      {/* #552/#974 put the crown here, per row; #1433 moved it to the header (see the FinancialLedger note). */}
                       <span>{playerLabel(company.president)}</span>
                     </span>
                   ) : (

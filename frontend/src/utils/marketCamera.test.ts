@@ -111,7 +111,8 @@ describe("the camera shows the whole board", () => {
     /* THE PROPERTY THAT REPLACED `previewCentre`'s FIVE CASES. Those asked whether the right five columns were
        chosen; there is no choice to make now, so the claim is simply that the extent comes from the grid. */
     expect(PREVIEW).toContain("BOARD_X = {");
-    expect(PREVIEW).toContain("BOARD_Y = {");
+    // #1435: the rows are read per render -- Dynamic Market adds one above the top.
+    expect(PREVIEW).toContain("const BOARD_Y = boardY();");
     expect(PREVIEW).toContain("Math.min(...PRICE_GRID.map((cell) => cell.x))");
     expect(PREVIEW).not.toContain("const WINDOW");
     expect(PREVIEW).not.toContain("previewCentre");

@@ -60,6 +60,16 @@ import type {
 } from "../../frontend/src/utils/lobbyProtocol";
 import { ROOM_LIST_LIMIT } from "../../frontend/src/utils/lobbyProtocol";
 import type { SandboxRoomDoc } from "../../frontend/src/utils/sandboxRoom";
+/* #1415: the room's terms -- values, from the pure module (`sandboxRoom.ts` itself is type-only here because it
+   imports the browser's socket). */
+import {
+  normaliseAnte,
+  normalisePlayerCount,
+  roomSeatCap,
+  roomVisibility,
+  summariseSandboxRoom,
+  type SandboxRoomSummary,
+} from "../../frontend/src/utils/sandboxRoomSummary";
 import type { LogStore } from "./fileLogStore";
 import { logHash } from "../../frontend/src/utils/logHash";
 
@@ -240,6 +250,8 @@ const SEAT_SUPERSEDED_CODE = "seat-superseded";
 /** #1346: a hello turned away for a seat reason -- a wrong or missing PIN. Terminal for the client: retrying
  *  the same hello cannot change the answer, so it must not loop. */
 const SEAT_REFUSED_CODE = "seat-refused";
+/** #1415: a room write the document did not take (full table, kicked seat, a kick by a non-host). */
+const ROOM_WRITE_REFUSED_CODE = "room-write-refused";
 const mintSeatToken = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
 
 /** The document as the wire sees it: `seatPins` stripped, `hasPin` stamped on each seat. */
@@ -384,32 +396,64 @@ export function createGameServer(options: GameServerOptions): {
    *  with a rule worth restating: an existing player is replaced IN PLACE (#541), because `toSetupPlayers`
    *  reads this order to build the deal and a filter-and-append would move a player to the back of the table
    *  every time they typed a character of their name. */
-  const applyRoomWrite = (code: string, write: RoomDocWrite): SandboxRoomDoc | null => {
+  /* ==================================================================
+      DESIGN NOTE 1415 (server): THE TABLE'S TERMS ARE ENFORCED WHERE EVERY WRITE PASSES
+     ==================================================================
+     ASKED: the host sets the table before the room exists -- exactly N players or any, public or private, an
+     ante -- and may remove a joiner; the server "refuses join past N".
+     THREE RULES, ALL HERE, because this is the one place every write goes through (#1337 made the same point
+     about colours). A NEW joiner is refused when the table is full, when the room is no longer waiting, or when
+     the host removed them -- a kicked player who could rejoin by refreshing was not kicked. An EXISTING seat's
+     upsert (a rename, a Ready) is never refused by the cap: they already hold the seat. The `kick` op is gated on
+     the WRITER -- `roomDocActors` knows who each socket said it was, and only the host's word removes anybody --
+     and on the room still waiting, since a seat in a dealt game is a roster the log has already read.
+     A REFUSAL IS A RESULT, NOT A SILENT DROP. The writer is told why; the document is unchanged. */
+  type RoomWriteResult = { doc: SandboxRoomDoc | null; refused?: string };
+
+  const applyRoomWrite = (code: string, write: RoomDocWrite, actor: string | undefined): RoomWriteResult => {
     const existing = roomDocs.get(code) ?? null;
 
     if (write.op === "host") {
       /* #527: every room opens in the anteroom with its host already seated, so the roster is never briefly
          empty in a room that plainly has somebody in it. */
+      const variants = write.variants ?? STANDARD_VARIANTS;
       const created: SandboxRoomDoc = {
         code,
         hostId: write.hostId,
         status: "waiting",
         players: [{ id: write.hostId, nickname: write.nickname, isReady: false }],
-        variants: write.variants ?? STANDARD_VARIANTS,
+        variants,
         forcedSign: null,
+        /* #1415: validated, not cast -- untrusted wire data. */
+        visibility: write.visibility === "private" ? "private" : "public",
+        playerCount: normalisePlayerCount(write.playerCount, variants),
+        anteUjuno: normaliseAnte(write.anteUjuno),
+        createdAtMs: Date.now(),
+        kicked: [],
       };
       roomDocs.set(code, created);
-      return created;
+      return { doc: created };
     }
 
     /* A WRITE TO A ROOM NOBODY HOSTED IS DROPPED, not made to create one. A room whose `hostId` was invented
        from whoever wrote first would hand the Start button to an arbitrary player. */
-    if (!existing) return null;
+    if (!existing) return { doc: null };
 
     let next: SandboxRoomDoc;
     switch (write.op) {
       case "upsert-player": {
         const at = existing.players.findIndex((entry) => entry.id === write.player.id);
+        if (at === -1) {
+          if (existing.kicked?.includes(write.player.id)) {
+            return { doc: existing, refused: "The host removed you from this table." };
+          }
+          if (existing.status !== "waiting") {
+            return { doc: existing, refused: "This game has already started." };
+          }
+          if (existing.players.length >= roomSeatCap(existing)) {
+            return { doc: existing, refused: `This table is full (${roomSeatCap(existing)} seats).` };
+          }
+        }
         /* Design note #1337: A COLOUR ANOTHER SEAT HOLDS IS NOT TAKEN -- first write wins. The client greys
            out held swatches, but two clicks in flight at once both see a free swatch; the server is the one
            place both writes pass through, so the second keeps whatever colour it had before. */
@@ -450,12 +494,24 @@ export function createGameServer(options: GameServerOptions): {
       case "status":
         next = { ...existing, status: write.status };
         break;
+      case "kick": {
+        if (!actor || actor !== existing.hostId) return { doc: existing, refused: "Only the host can remove a player." };
+        if (existing.status !== "waiting") return { doc: existing, refused: "Players cannot be removed once the game has started." };
+        if (write.playerId === existing.hostId) return { doc: existing, refused: "The host cannot remove themselves." };
+        if (!existing.players.some((entry) => entry.id === write.playerId)) return { doc: existing };
+        next = {
+          ...existing,
+          players: existing.players.filter((entry) => entry.id !== write.playerId),
+          kicked: [...(existing.kicked ?? []), write.playerId],
+        };
+        break;
+      }
       default:
-        return existing;
+        return { doc: existing };
     }
 
     roomDocs.set(code, next);
-    return next;
+    return { doc: next };
   };
 
   /** Everyone watching this room's document, the writer included -- unlike the log's fan-out, where the
@@ -578,6 +634,32 @@ export function createGameServer(options: GameServerOptions): {
   const broadcastLobby = () => {
     const rooms = lobbyRooms();
     for (const socket of lobbySockets) send(socket, { kind: "lobby", rooms } as never);
+  };
+  /* ---- #1415: the PUBLIC sandbox room list ---- the one Join Game shows. Every room the server holds or the
+     store remembers, public, newest first; a private room is never listed. Loads every stored document once
+     (`roomDocFor` caches), so a restart re-lists the tables it was holding. */
+  const sandboxRooms = async (): Promise<SandboxRoomSummary[]> => {
+    const codes = new Set<string>(roomDocs.keys());
+    try {
+      for (const code of (await options.store?.listRooms?.()) ?? []) codes.add(code);
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error("  store: could not list rooms for the public list", error);
+    }
+    const out: SandboxRoomSummary[] = [];
+    for (const code of codes) {
+      const doc = await roomDocFor(code);
+      /* The FIELD, not the reader's default: a room from before this note never chose to be listed, and the
+         store holds every finished playtest -- none of which belongs on the Ongoing tab. */
+      if (!doc || doc.visibility !== "public") continue;
+      out.push(summariseSandboxRoom(doc));
+    }
+    return out.sort((a, b) => b.createdAtMs - a.createdAtMs).slice(0, ROOM_LIST_LIMIT);
+  };
+  const broadcastSandboxRooms = async () => {
+    if (lobbySockets.size === 0) return;
+    const rooms = await sandboxRooms();
+    for (const socket of lobbySockets) send(socket, { kind: "rooms", rooms } as never);
   };
   const broadcastLobbyRoom = (roomId: string) => {
     const record = stagingRooms.get(roomId) ?? null;
@@ -872,6 +954,8 @@ export function createGameServer(options: GameServerOptions): {
           await lobbyReady;
           lobbySockets.add(socket);
           send(socket, { kind: "lobby", rooms: lobbyRooms() } as never);
+          /* #1415: and the list a table actually joins by. */
+          send(socket, { kind: "rooms", rooms: await sandboxRooms() } as never);
           return;
         }
         if (frame.kind === "lobby-watch") {
@@ -1027,7 +1111,14 @@ export function createGameServer(options: GameServerOptions): {
             send(socket, { kind: "error", reason: "say room-hello first" });
             return;
           }
-          const doc = applyRoomWrite(frame.room, frame.write);
+          const { doc, refused } = applyRoomWrite(frame.room, frame.write, roomDocActors.get(socket));
+          if (refused) {
+            /* #1415: told, not dropped -- and the current document re-sent, so a joiner whose optimistic
+               "I am seated" the client may have painted is corrected by the roster that does not hold them. */
+            send(socket, { kind: "error", reason: refused, code: ROOM_WRITE_REFUSED_CODE } as never);
+            send(socket, { kind: "room", room: frame.room, doc: publicDoc(doc) } as never);
+            return;
+          }
           /* #1250: saved before the fan-out, like the log. Last-write-wins, so a failed save is logged and
              the in-memory document stands -- the roster is not the game (#1215), and refusing a nickname
              because the disk hiccuped would be the wrong severity. */
@@ -1040,6 +1131,8 @@ export function createGameServer(options: GameServerOptions): {
             }
           }
           broadcastRoomDoc(frame.room);
+          /* #1415: the public list changed with this write -- a seat, a Ready, a status, a new room. */
+          await broadcastSandboxRooms();
           return;
         }
 
@@ -1058,6 +1151,23 @@ export function createGameServer(options: GameServerOptions): {
             // eslint-disable-next-line no-console
             console.warn(`  seat: refused hello from "${actor}" in ${frame.room} — ${refused.reason}`);
             send(socket, { kind: "error", ...refused } as never);
+            socket.close();
+            return;
+          }
+          /* #1415: A PRIVATE GAME HAS NO SPECTATORS. The log socket is the game; once a private room is dealt
+             it admits its own seats and nobody else -- the code is not a door to watching. Checked HERE and
+             not on `room-hello`, because the roster socket is also how a new device claims a seat by PIN
+             (#1341/#1355), and that device's id is not on the roster until the claim succeeds. */
+          const privateDoc = await roomDocFor(frame.room);
+          if (
+            privateDoc &&
+            privateDoc.status !== "waiting" &&
+            roomVisibility(privateDoc) === "private" &&
+            !privateDoc.players.some((player) => player.id === actor)
+          ) {
+            // eslint-disable-next-line no-console
+            console.warn(`  seat: refused hello from "${actor}" in ${frame.room} — private game, not a seat`);
+            send(socket, { kind: "error", reason: "This is a private game and cannot be watched.", code: SEAT_REFUSED_CODE } as never);
             socket.close();
             return;
           }

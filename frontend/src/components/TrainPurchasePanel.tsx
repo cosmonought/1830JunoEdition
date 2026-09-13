@@ -33,6 +33,7 @@ import { buyableNow, countableTrainCount, isTrainLocked } from "../utils/trainLi
 import { STICKY_OPTIONAL } from "../utils/stickyCollapse";
 // Design note #702: moved to its own file, because the train CHIPS draw it now too.
 import { TrainGlyph } from "./TrainGlyph";
+import PresidentCrown from "./PresidentCrown";
 import type { DepotTier, PhaseTint } from "../utils/gamePhase";
 // Design note #632: one tier-to-era lookup, shared with the phase badge.
 // Design note #1007: the shared namer, so this panel and the rust badges spell a tier the same way. It used to
@@ -1152,9 +1153,15 @@ export function TrainPurchasePanel({
                             : {}),
                         }}
                       >
-                        {company.president
-                          ? `\u{1F451} ${labelForAddress(company.president)}`
-                          : "no president"}
+                        {company.president ? (
+                          <>
+                            {/* #1433: the shipped SVG (#552), not the emoji; no column here to carry it. */}
+                            <PresidentCrown label={null} scale={1} style={{ verticalAlign: "-0.1em", marginRight: "3px" }} />
+                            {labelForAddress(company.president)}
+                          </>
+                        ) : (
+                          "no president"
+                        )}
                       </span>
                     </span>
                     <span style={styles.badgeRow}>

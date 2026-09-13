@@ -31,8 +31,9 @@ afterEach(() => {
 });
 
 describe("the variant flag (design note #1310)", () => {
-  it("rides on the map: no tray without the board", () => {
-    expect(resolveVariants({ plusTiles: true }).plusTiles).toBe(false);
+  it("is its own choice: the tray is offered on the printed map too (#1415 lifted #1310's gate)", () => {
+    expect(resolveVariants({ plusTiles: true }).plusTiles).toBe(true);
+    expect(resolveVariants({ plusTiles: true }).expandedMap).toBe(false);
     expect(resolveVariants({ expandedMap: true, plusTiles: true }).plusTiles).toBe(true);
     expect(resolveVariants({ expandedMap: true }).plusTiles).toBe(false);
     expect(STANDARD.plusTiles).toBe(false);

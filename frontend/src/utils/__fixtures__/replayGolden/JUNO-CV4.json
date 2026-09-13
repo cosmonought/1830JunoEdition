@@ -410,7 +410,8 @@
       "dynamicStockMarket": false,
       "expandedMap": true,
       "plusTiles": true,
-      "levelPlayingField": true
+      "levelPlayingField": true,
+      "rules": 0
     },
     "turn_action_taken": false,
     "bought_this_turn": 0,
@@ -419,7 +420,7 @@
     "last_trader_index": null,
     "stock_round_just_ended": false,
     "operating_round_just_ended": false,
-    "operating_sub_phase": "BuyPrivate",
+    "operating_sub_phase": "Track",
     "terrain_fees_paid": [
       "2,9",
       "4,8",

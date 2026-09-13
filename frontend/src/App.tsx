@@ -118,9 +118,9 @@ import {
   canStartSandboxGame,
   decodeAction,
   hostSandboxRoom,
+  kickSandboxPlayer,
   localPlayerId,
   markSandboxRoomPlaying,
-  setSandboxRoomVariants,
   parseRoomCode,
   readSandboxLog,
   subscribeSandboxLog,
@@ -372,6 +372,7 @@ import {
   type AutoBuySettings,
 } from "./utils/autoBuy";
 import FleetLossModal from "./components/FleetLossModal";
+import PhaseThreeNoticeModal from "./components/PhaseThreeNoticeModal";
 // Design note #1299: the Coalfields hex opens the licence explanation, with the purchase where the explanation is.
 import BuyLicenseModal from "./components/BuyLicenseModal";
 // Design note #1332: the herald-home float, announced.
@@ -415,6 +416,7 @@ import {
   // Design note #1115: the station table, and the two helpers that persist a choice across sessions.
   loadRadioStation,
   playVariantCue,
+  preloadCues,
   RADIO_STATIONS,
   RADIO_STREAM_URL,
   RADIO_VOLUME,
@@ -464,11 +466,14 @@ import {
 import { availableCash, escrowedBids } from "./utils/auctionEscrow";
 import { privateHexFor } from "./utils/privateReservations";
 import { GameOverModal, type GameEndReason } from "./components/GameOverModal";
-import { gameHistoryFrom } from "./utils/gameHistory"; // #1411
+import { gameHistoryFrom, type GameHistory } from "./utils/gameHistory"; // #1411
+import { replaySnapshotAtRound, type ReplaySnapshot } from "./utils/roundReplay"; // #1425
+import RoundScrubber from "./components/RoundScrubber";
 import { bankIsBroken, rankPlayers, PLACEHOLDER_TOTAL_ANTE, type PlayerStanding } from "./utils/endgame";
 import { turnGuardKey } from "./utils/turnGuardKey";
-import type { GameVariants } from "./utils/gameVariants";
 import {
+  CURRENT_RULES_REVISION, // #1443
+  sellBuySellInForce,
   boIsLocked,
   dividendStepsFor,
   /* Design note #1051: the pre-#1051 die, for a log entry written before the roll was recorded. Only the
@@ -478,6 +483,9 @@ import {
      every client and must never invent a number, so the die is thrown once here and travels in the log. */
   randomTurnSeed,
   resolveVariants,
+  /* Rules Reference header: the ruleset's display name. */
+  GAME_TYPE_COPY,
+  gameTypeOf,
   revenueDeltaPercent,
   revenueOutcome,
   rollTurnRevenue,
@@ -517,6 +525,7 @@ import {
 } from "./components/EmergencyTrainPurchaseModal";
 import type { GameplayExecuteMsg } from "./utils/sessionKey";
 import {
+  stockTurnStage, // #1443
   applySandboxAction,
   applySandboxMarketAction,
   applyPrivateRevenue,
@@ -551,6 +560,8 @@ import {
 import { CARCOSA_STAMP_STEP, carcosaEpitaph, cursedCompanies } from "./utils/carcosaCurse";
 import AppFooter from "./components/AppFooter";
 import GameIntroOverlay from "./components/GameIntroOverlay";
+import GameOutroOverlay from "./components/GameOutroOverlay";
+import { CEREMONY_SOUNDS, ceremonySoundFor } from "./utils/ceremonySounds";
 import AuctionPromptModal from "./components/AuctionPromptModal";
 import HomeStationPrompt from "./components/HomeStationPrompt";
 
@@ -825,23 +836,6 @@ interface AppShellProps {
 /* Design note #900: the reopen pill. Bottom-centre rather than in the action bar, because during `GameEnd`
    the bar carries the Close Room control and two end-of-game buttons side by side read as a choice between
    them. */
-const gameOverReopenStyle: React.CSSProperties = {
-  position: "fixed",
-  left: "50%",
-  bottom: "18px",
-  transform: "translateX(-50%)",
-  zIndex: 1500,
-  padding: "8px 16px",
-  borderRadius: RADIUS.pill,
-  border: "1px solid #7a6320",
-  backgroundColor: "#241d0e",
-  color: "#f0dfa8",
-  fontSize: "13px",
-  fontWeight: 700,
-  cursor: "pointer",
-  boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
-};
-
 /* ==================================================================
     DESIGN NOTE 1224: THE CHART WAS ON ONE SIDE'S SEED AND NOT THE OTHER'S
    ==================================================================
@@ -1183,7 +1177,33 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     // rosters with no action having created them.
   }, [sandbox, sandboxScenarioId, sandboxTrainFixture, gameId, sandboxRoomCode, seedSandboxState]);
 
-  const gameState = sandboxState ?? liveGameState;
+  /* ==================================================================
+      DESIGN NOTE 1425: THE REPLAY CURSOR SWAPS THE BOARD THE SHELL RENDERS
+     ==================================================================
+     `replayCursor` is a round index into the epilogue's history, or `null` for the live board. While it is
+     set, `gameState`, `mapGrid` and `waterfallState` below are the log replayed to that round's end
+     (`replaySnapshotAtRound`, cached per round), and everything that reads them draws the past. What must NOT
+     read the past: the ending (`gameEndReason` latches the live verdict while scrubbing, or the modal and the
+     strip would vanish and the shell would think the game was on), the turn (`isMyTurn` is false while
+     scrubbing, which is the gate every derived dispatch sits behind), and the action bar (hidden). The log,
+     the room and every ref are untouched -- the past is only ever drawn. */
+  const [replayCursor, setReplayCursor] = useState<number | null>(null);
+  const replayCacheRef = useRef(new Map<number, ReplaySnapshot>());
+  const replayHistoryRef = useRef<GameHistory | null>(null);
+  const replayLogRef = useRef<readonly SandboxAction[]>([]);
+  const replaySnapshot = useMemo<ReplaySnapshot | null>(() => {
+    if (replayCursor === null) return null;
+    const history = replayHistoryRef.current;
+    if (!history) return null;
+    const cached = replayCacheRef.current.get(replayCursor);
+    if (cached) return cached;
+    const built = replaySnapshotAtRound(replayLogRef.current, history.rounds, replayCursor);
+    if (built) replayCacheRef.current.set(replayCursor, built);
+    return built;
+  }, [replayCursor]);
+  const scrubbing = replaySnapshot !== null;
+  const liveState = sandboxState ?? liveGameState;
+  const gameState = replaySnapshot?.state ?? liveState;
   /* #1370: THE PRIVATES' NUMBERS, PUBLISHED WHERE THEY ARE HELD. Written during render rather than in an
      effect so the very first paint of a freshly dealt game numbers its privates by position; idempotent, and
      the roster of privates changes once, at the deal. */
@@ -1475,7 +1495,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   // replace it with a NEW object -- that identity change is what
   // `HexGridRenderer`'s draw effect watches, and mutating `tiles` in place
   // would leave the reference untouched and the canvas would never repaint.
-  const [mapGrid, setMapGrid] = useState<MapGridResponse>(MOCK_MAP_GRID);
+  const [liveMapGrid, setMapGrid] = useState<MapGridResponse>(MOCK_MAP_GRID);
+  // #1425: the replayed grid while scrubbing; the live one otherwise. Writers keep `setMapGrid`.
+  const mapGrid = replaySnapshot?.grid ?? liveMapGrid;
 
   /* Design note #757: THE GRID GETS A REF, for #411's reason and #723's. An Undo replays the whole log in
      one burst, so a legality check reading React state would judge every lay in that burst against the board
@@ -1767,7 +1789,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
 
   /* Two endings, both derived: bankruptcy is read off the emergency plan and wins over a broken bank.
      See docs/ai_architecture/state_machine.md - App.tsx #359 */
-  const gameEndReason = useMemo<GameEndReason | null>(() => {
+  const derivedEndReason = useMemo<GameEndReason | null>(() => {
     if (emergencyPurchasePlan?.bankrupt) return "bankruptcy";
     /* ==================================================================
         DESIGN NOTE 898: THE ROUND SAYS SO, NOT THE BANK BALANCE
@@ -1783,15 +1805,23 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     if (gameState?.current_round_type === "GameEnd") return "bank-broken";
     return null;
   }, [emergencyPurchasePlan, gameState]);
+  /* #1425: while the replay cursor shows an earlier round, the verdict is the LIVE one, latched -- the
+     derivation above is reading a board on which the game had not ended. */
+  const latchedEndReasonRef = useRef<GameEndReason | null>(null);
+  if (!scrubbing) latchedEndReasonRef.current = derivedEndReason;
+  const gameEndReason = scrubbing ? latchedEndReasonRef.current : derivedEndReason;
 
-  const bankruptLabel = emergencyPurchasePlan?.bankrupt
+  const derivedBankruptLabel = emergencyPurchasePlan?.bankrupt
     ? emergencyPurchasePlan.presidentLabel
     : null;
+  const latchedBankruptRef = useRef<string | null>(null);
+  if (!scrubbing) latchedBankruptRef.current = derivedBankruptLabel;
+  const bankruptLabel = scrubbing ? latchedBankruptRef.current : derivedBankruptLabel; // #1425
 
   /** Design note #3 in `endgame.ts`: cash, shares at market, privates at
    *  face. Computed only once the game has actually ended -- ranking four
    *  players on every render of a live game is work nobody is looking at. */
-  const finalStandings = useMemo(() => {
+  const derivedStandings = useMemo(() => {
     if (!gameEndReason || !gameState) return [];
     return rankPlayers({
       state: gameState,
@@ -1803,6 +1833,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       totalAnte: PLACEHOLDER_TOTAL_ANTE,
     });
   }, [gameEndReason, gameState, sandbox, sandboxMarketPrices, emergencyPurchasePlan]);
+  /* #1425: the standings are the FINAL board's, latched while an earlier round is being shown -- the modal
+     and the strip must not re-rank the table on a board from OR 4. */
+  const latchedStandingsRef = useRef<PlayerStanding[]>([]);
+  if (!scrubbing) latchedStandingsRef.current = derivedStandings;
+  const finalStandings = scrubbing ? latchedStandingsRef.current : derivedStandings;
 
 
   /* Design note #899: HOISTED ABOVE ITS FIRST READER. `closeRoom` below calls through this ref, and it was
@@ -1983,10 +2018,64 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      play and a second ending does not open silently behind a dismissal from the first. */
   const [gameOverDismissed, setGameOverDismissed] = useState(false);
   useEffect(() => {
-    if (!gameEndReason) setGameOverDismissed(false);
+    if (!gameEndReason) {
+      setGameOverDismissed(false);
+      setReplayCursor(null); // #1425
+    }
   }, [gameEndReason]);
 
-  const waterfallState = sandboxWaterfall ?? liveWaterfallState;
+  /* ==================================================================
+      DESIGN NOTE 1418: THE OUTRO PLAYS ON THE EDGE, AND THE MODAL WAITS FOR ITS CUE
+     ==================================================================
+     `outro` is `"playing"` from the moment the ending arrives until the clip reaches its cue (or is skipped),
+     then `"cued"` -- the modal is up, the clip's last frame stays behind it -- until the modal is dismissed
+     for the board, then `null`. SEEDED FROM THE FIRST OBSERVED REASON like the intro's status edge (#1111): a
+     tab that loads a finished game sees a reason on its first snapshot and that is not the ending happening.
+     `null -> reason` after that is. */
+  const [outro, setOutro] = useState<"playing" | "cued" | null>(null);
+  const previousEndReason = useRef<GameEndReason | null | undefined>(undefined);
+  useEffect(() => {
+    const previous = previousEndReason.current;
+    previousEndReason.current = gameEndReason;
+    if (previous === undefined) return; // the first observation seeds; it is not an edge
+    if (previous === null && gameEndReason) setOutro("playing");
+    if (!gameEndReason) setOutro(null);
+  }, [gameEndReason]);
+  /* ==================================================================
+      DESIGN NOTE 1441: THE PHASE 3 NOTICE, ON THE EDGE
+     ==================================================================
+     Raised when the derived phase goes from 2 to 3 while the log is live -- seeded from the first observed
+     phase like the outro above, so a tab that loads into Phase 3 (or later) sees no edge and no notice.
+     `currentPhase.tier` is what the badge shows, so the notice and the badge agree about when Phase 3 began. */
+  const [phaseThreeNotice, setPhaseThreeNotice] = useState(false);
+  const previousPhaseTier = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    const tier = currentPhase?.known ? currentPhase.tier : null;
+    const previous = previousPhaseTier.current;
+    previousPhaseTier.current = tier;
+    if (previous === undefined) return; // the first observation seeds; it is not an edge
+    if (previous === "2" && tier === "3") setPhaseThreeNotice(true);
+  }, [currentPhase]);
+
+  /* #1420: warm the ceremony's clips the moment the ending arrives, under the outro's eight seconds.
+     #1423: and say when they are ready, so a modal opened cold (a reload into a finished game) holds its
+     first card until the sounds can keep up -- three seconds at most. */
+  const [ceremonySoundsReady, setCeremonySoundsReady] = useState(false);
+  useEffect(() => {
+    if (!gameEndReason) {
+      setCeremonySoundsReady(false);
+      return;
+    }
+    let live = true;
+    void preloadCues(Object.values(CEREMONY_SOUNDS)).then(() => {
+      if (live) setCeremonySoundsReady(true);
+    });
+    return () => {
+      live = false;
+    };
+  }, [gameEndReason]);
+
+  const waterfallState = replaySnapshot ? replaySnapshot.waterfall : sandboxWaterfall ?? liveWaterfallState;
 
   // Resets the OR sub-phase on a genuine turn change. #385: never seed a step visibleSubPhases has dropped.
   // See docs/ai_architecture/state_machine.md - App.tsx #10
@@ -2064,8 +2153,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   // See docs/ai_architecture/state_machine.md - App.tsx #21
   const isMyTurn = useMemo(() => {
     if (!viewerAddress || !gameState) return false;
+    if (scrubbing) return false; // #1425: a past board is nobody's turn
     return actingAddress(gameState, waterfallState) === viewerAddress;
-  }, [viewerAddress, gameState, waterfallState]);
+  }, [viewerAddress, gameState, waterfallState, scrubbing]);
 
   useDocumentTitleFlash(isMyTurn);
 
@@ -3630,7 +3720,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   const gameHistory = useMemo(() => {
     if (!gameEndReason || !sandbox || sandboxLogRef.current.length === 0) return null;
     try {
-      return gameHistoryFrom(sandboxLogRef.current);
+      const built = gameHistoryFrom(sandboxLogRef.current);
+      // #1425: the replayer reads these at scrub time; both are final once the reason has flipped.
+      replayHistoryRef.current = built;
+      replayLogRef.current = sandboxLogRef.current;
+      replayCacheRef.current.clear();
+      return built;
     } catch (error) {
       // eslint-disable-next-line no-console
       console.warn("[epilogue] could not build the game history", error);
@@ -8351,6 +8446,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       certificate?: "double", // #1324
     ): string | null => {
       if (!gameState || !viewerAddress) return null;
+      /* #1443: SELL-BUY-SELL -- the stages are walked on the action bar. A buy is offered in the Buy stage;
+         the Sell stage greys it with the way forward, and the Sell Again stage is #1172's one-purchase rule. */
+      if (
+        gameState.current_round_type === "StockRound" &&
+        sellBuySellInForce(resolveVariants(gameState.variants)) &&
+        stockTurnStage(gameState) === "sell"
+      ) {
+        return "Selling comes first. Press Pass on the action bar when you are done selling to move on to buying.";
+      }
       return sharePurchaseBlock({
         state: gameState,
         buyer: viewerAddress,
@@ -8378,6 +8482,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   const saleBlockFor = useCallback(
     (companyId: number, percentage: number): string | null => {
       if (!gameState || !viewerAddress) return null;
+      // #1443: in the Buy stage the selling is behind you until you have bought.
+      if (
+        gameState.current_round_type === "StockRound" &&
+        sellBuySellInForce(resolveVariants(gameState.variants)) &&
+        stockTurnStage(gameState) === "buy"
+      ) {
+        return "You have moved on to buying. Buy a share (or Pass) — you can sell again after a purchase.";
+      }
       return shareSaleBlock({ state: gameState, seller: viewerAddress, companyId, percentage });
     },
     [gameState, viewerAddress],
@@ -8490,6 +8602,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       setAutoPassChoices(conditions);
       autoPassedAtLogIndexRef.current = null;
       setAutoPassArm(armAutoPass(gameState, viewerAddress, conditions));
+      setAutoBuyPlan(null); // #1444: one or the other
+      autoBoughtAtLogIndexRef.current = null;
       setAutoPassOpen(false);
       logInfo("Auto-Pass", "Auto-Pass is on for this Stock Round.");
     },
@@ -8618,6 +8732,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       setAutoBuyChoices(settings);
       autoBoughtAtLogIndexRef.current = null;
       setAutoBuyPlan(armAutoBuy(gameState, viewerAddress, settings));
+      setAutoPassArm(null); // #1444: one or the other
+      autoPassedAtLogIndexRef.current = null;
       setAutoBuyOpen(false);
       const caps = settings.targets
         .map((target) => {
@@ -8670,6 +8786,19 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
        their Auto-Buy would flood the same way. Not written into `autoBuyDecision` because the hex lookup lives
        in `components/` (#7) -- same reason the reducer takes it through `ctx`. */
     if (homeTokenOwed(gameState, homeHexToAxial)) return;
+    /* #1443: under Sell-Buy-Sell the purchase leaves the seat with the buyer. The standing instruction was to
+       buy, and a bought turn is done -- so the tool ends it, rather than sitting on a seat it cannot use and
+       reading its own purchase as "nothing qualifies" (#1274's stop). Selling again is the player's, not a
+       tool's; a player who wants that turns Auto-Buy off. */
+    if (sellBuySellInForce(resolveVariants(gameState.variants))) {
+      const stage = stockTurnStage(gameState);
+      if (stage !== "buy") {
+        // Sell stage: Pass moves to Buy. Sell Again: the purchase is made, so Pass ends the turn.
+        autoBoughtAtLogIndexRef.current = lastLogIndex;
+        void handlePassTurn();
+        return;
+      }
+    }
 
     const owed = divestmentDebt({
       state: gameState,
@@ -8729,6 +8858,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     logInfo,
     sandboxMarketPrices,
     homeHexToAxial,
+    handlePassTurn, // #1443
   ]);
 
   const handleSellShares = useCallback(
@@ -10893,6 +11023,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       return;
     }
     seatedRoomRef.current = sandboxRoomCode;
+    /* #1415: NOT A SEAT IF THE ROOM WOULD REFUSE ONE. A dealt game takes no new seats -- a client here is a
+       spectator (the Ongoing tab's door), and asking would only earn the refusal. A seat the host removed is
+       the same: the document says so, and the write would be turned away with the same sentence the waiting
+       room already shows. */
+    if (sandboxRoom.status !== "waiting" || (sandboxRoom.kicked ?? []).includes(localId)) return;
     void upsertSandboxPlayer(sandboxRoomCode, {
       id: localId,
       nickname: sandboxSeatRef.current || "Player",
@@ -11352,16 +11487,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
 
   /* Append the setup event FIRST, then latch status to playing - the flag is what sends every client to the board.
      See docs/ai_architecture/firebase_middleware.md - App.tsx #532 */
-  /** Design note #910: the host rewrites the table's house rules while the room is waiting. */
-  const handleSetSandboxVariants = useCallback(
-    async (next: GameVariants) => {
+  /* #1415: the house rules are chosen on the host's setup card before the room exists and are frozen after;
+     `handleSetSandboxVariants` (#910) went with the controls. What the host CAN still do in the anteroom is
+     remove a joiner -- the server checks it is the host asking and the room is still waiting. */
+  const handleKickSandboxPlayer = useCallback(
+    async (playerId: string) => {
       if (!sandboxRoomCode) return;
       try {
-        await setSandboxRoomVariants(sandboxRoomCode, next);
+        await kickSandboxPlayer(sandboxRoomCode, playerId);
       } catch (error) {
-        setSandboxRoomError(
-          error instanceof Error ? error.message : "Could not save the house rules.",
-        );
+        setSandboxRoomError(error instanceof Error ? error.message : "Could not remove that player.");
       }
     },
     [sandboxRoomCode],
@@ -11406,7 +11541,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           await link.submit({
             /* #1252: the deal names the reducer that made it, so the room is pinned to this build. The
                server has already matched this client's build to its own (#1206). */
-            SetupGame: { players: seated, variants: sandboxRoom.variants, build: CLIENT_BUILD_ID },
+            SetupGame: { players: seated, variants: { ...sandboxRoom.variants, rules: CURRENT_RULES_REVISION }, build: CLIENT_BUILD_ID }, // #1443
           } as unknown as Parameters<typeof link.submit>[0])
         : /* ==================================================================
               DESIGN NOTE 910: THE VARIANTS TRAVEL WITH THE SETUP, OR THEY DO NOT EXIST
@@ -11419,7 +11554,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
              host's browser one game and every other browser another, which is #550's rule and the deepest
              desync available here. */
           await appendSandboxAction(sandboxRoomCode, appliedIndexRef.current, localId, {
-            SetupGame: { players: seated, variants: sandboxRoom.variants, build: CLIENT_BUILD_ID },
+            SetupGame: { players: seated, variants: { ...sandboxRoom.variants, rules: CURRENT_RULES_REVISION }, build: CLIENT_BUILD_ID }, // #1443
           });
       // Design note #1026: `null` is the failure; the setup event legitimately lands on index 0.
       if (allocated === null) {
@@ -11987,11 +12122,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
            different control rather than for a smaller prop, and the whole point now is that there is not a
            different control. One object, one component, both screens. */
         audio={audioControls}
-        /* Design note #910: host-only, and `undefined` for a guest -- which is what renders the controls
-           read-only for them rather than hiding the terms they are about to agree to. */
-        onSetVariants={
-          sandboxRoom?.hostId === localId ? handleSetSandboxVariants : undefined
-        }
+        /* #1415: host-only, and `undefined` for a guest -- the kick control is absent for them, not
+           disabled, since it is not a term they are agreeing to. */
+        onKick={sandboxRoom?.hostId === localId ? handleKickSandboxPlayer : undefined}
         onLeave={handleLeaveSandboxRoom}
       />
     );
@@ -12202,7 +12335,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         /* Design note #900: dismissal hides the modal and nothing else -- the ending stands, and the rail
            below re-raises it. Passing `null` for the reason is what the component already treats as "absent",
            so a dismissed modal renders nothing at all rather than a hidden layer over the board. */
-        reason={gameOverDismissed ? null : gameEndReason}
+        reason={gameOverDismissed || outro === "playing" ? null : gameEndReason}
         standings={finalStandings}
         /* ==================================================================
             DESIGN NOTE 1091: THE EPITAPHS, BUILT WHERE THE ROSTER IS
@@ -12227,7 +12360,19 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         viewerAddress={viewerAddress}
         totalAnte={PLACEHOLDER_TOTAL_ANTE}
         bankruptLabel={bankruptLabel}
-        onDismiss={() => setGameOverDismissed(true)}
+        onDismiss={() => {
+          setGameOverDismissed(true);
+          // #1418: leaving for the board takes the held frame down with the modal.
+          setOutro(null);
+        }}
+        /* #1419: the ceremony's moments, each with its sound from the supplied set. */
+        onCeremonyCue={(cue) => {
+          const file = ceremonySoundFor(cue);
+          if (file) playVariantCue(file, sfxEnabledRef.current, { uncapped: true });
+        }}
+        ceremonySoundsReady={ceremonySoundsReady}
+        /* #1420: "Leave Game" beside "View final board" -- the same door the title bar's back-arrow is. */
+        onLeaveGame={handleLeaveSandboxRoom}
         /* Design note #899: no button once it is closed -- there is nothing left to do, and a control that
            silently no-ops is worse than one that is not there. */
         onCloseRoom={roomClosed ? null : () => closeRoom("manual")}
@@ -12243,21 +12388,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         corporationColor={stationTickerColor}
       />
 
-      {/* Design note #900: the way back in. Only while an ending is standing and the modal is down, so it
-          never competes with the modal itself for the same corner. */}
-      {gameEndReason && gameOverDismissed && (
-        <button
-          type="button"
-          style={gameOverReopenStyle}
-          onClick={() => setGameOverDismissed(false)}
-        >
-          {roomClosed
-            ? "Final standings"
-            : autoCloseRemaining !== null
-              ? `Final standings · closing in ${formatCountdown(autoCloseRemaining)}`
-              : "Final standings"}
-        </button>
-      )}
+      {/* Design note #900's way back in was a fixed pill here; #1413 moved it into the flow, under the header,
+          because the status dock (z 3000) covered it. */}
 
       {/* Design note #34: one bar. The room context is the middle of the single header now. It still says WHICH
          room this shell is bound to, and is still the only place `chatError` surfaces -- chat failing silently
@@ -12345,7 +12477,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                 onClick={cycleForcedSign}
                 title={
                   forcedSign
-                    ? `Yellow Sign: ${forcedSign} armed. Fires at the next window where it can, for whoever is acting. Ctrl+Shift+Y to change.`
+                    ? forcedSign === "mark"
+                      ? "Yellow Sign: Mark armed. Fires on the next run by any corporation with a train, phases 2-4. Ctrl+Shift+Y to change."
+                      : forcedSign === "carcosa"
+                        ? "Yellow Sign: Carcosa armed. Fires on the MARKED corporation's next run, phases 5-D -- nobody else's. Ctrl+Shift+Y to change."
+                        : "Yellow Sign: Fog armed. Fires on the Carcosan corporation's next run. Ctrl+Shift+Y to change."
                     : "Yellow Sign debug: force a stage on the next run. Ctrl+Shift+Y."
                 }
               >
@@ -12389,6 +12525,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
            solo sandbox and for an on-chain game, whose identity the strip above already names. */
         roomName={sandboxRoomCode}
       />
+
 
       {/* ==================================================================
        DESIGN NOTE 1084: THE BAR IS ABOVE THE TABS, AND ABOVE THE TAB BRANCH
@@ -12438,10 +12575,45 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           THE TWO LIVE INSTANCES ARE UNTOUCHED -- the sandbox gate (host or join, before any room exists) and
           the lobby's own panel. Both are surfaces where there is genuinely no room yet, which is the only
           state this component has anything to say in. */}
+      {/* #1423: one sticky dock for the action bar and the minimised epilogue beneath it. */}
+      <div style={styles.actionDock} data-sticky-dock="true">
       {spectator ? (
         <div style={styles.spectatorNotice}>
           👁 Watching game #{gameId}. Board, ledger and market are live; every action
           control is hidden. Join a room from the lobby to play.
+        </div>
+      ) : scrubbing ? (
+        <div style={styles.spectatorNotice}>
+          ⏪ Showing the board as it stood at the end of {replaySnapshot?.label}. Read-only — drag the replay
+          back to Final for the finished game.
+        </div>
+      ) : gameEndReason ? (
+        /* ==================================================================
+            DESIGN NOTE 1442: THE GAME OVER STRIP REPLACES THE ACTION BAR
+           ==================================================================
+           REPORTED: the strip "is wider than the Action Bar sticky it is attached to", and "the Action Bar
+           still has clickable 'Pass' and 'Undo Last Action' buttons once the game is over ... they need to be
+           permanently disabled and hidden from view." Both at once: once an ending stands, the bar is not
+           rendered at all -- there is no action left to take, so a bar of actions is a lie -- and the strip
+           takes its slot, wearing the bar's own inset (`gameOverStripAsBar`) so it is the bar's width by
+           construction. The replay notice above still wins while scrubbing, as before. */
+        <div style={{ ...styles.gameOverStrip, ...styles.gameOverStripAsBar }} role="status" data-testid="game-over-strip">
+          <span style={styles.gameOverStripText}>
+            🏁 Game over
+            {finalStandings.find((row) => row.isWinner)
+              ? ` — ${finalStandings.find((row) => row.isWinner)!.label} wins with $${finalStandings.find((row) => row.isWinner)!.netWorth}.`
+              : "."}
+            {roomClosed
+              ? " The room is closed."
+              : autoCloseRemaining !== null
+                ? ` Closing in ${formatCountdown(autoCloseRemaining)}.`
+                : ""}
+          </span>
+          {gameOverDismissed && (
+            <button type="button" style={styles.gameOverStripButton} onClick={() => setGameOverDismissed(false)}>
+              Show results ▴
+            </button>
+          )}
         </div>
       ) : (
       <ContextualActionBar
@@ -12591,6 +12763,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
            narrator (#400/#685) -- the reducer decides whether the turn has an action in it, and
            an Undo that rewinds past the sale must take the "End Turn" label back with it. */
         turnActionTaken={gameState?.turn_action_taken === true}
+        /* #1443: the Sell-Buy-Sell stage, on the revision only; the stage button goes to the Stocks tab. */
+        stockStage={
+          gameState && gameState.current_round_type === "StockRound" && sellBuySellInForce(resolveVariants(gameState.variants))
+            ? stockTurnStage(gameState)
+            : null
+        }
+        onShowStocks={() => setActiveMainTab("corps")}
         onPlaceStationTokenHint={handlePlaceStationTokenHint}
         stationTokenCost={stationTokenCost}
         /* Design note #707: the same probe the Routes panel's Auto Route runs, so the button and
@@ -12842,6 +13021,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         turnGlowActive={turnGlowActive}
       />
       )}
+      {/* #1413/#1423's strip under the bar is GONE -- #1442: the strip IS the bar once the game is over (above). */}
+      </div>
 
       {/* Design note #1084: the tabs sit DIRECTLY on top of the viewport, which is the third item of the
          ruled order and the reason nothing else may be inserted below this point. */}
@@ -12882,6 +13063,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
          FIXED, so it survives scrolling. The app root carries matching bottom padding, and the box is anchored
          at the bottom rather than sized -- so the expanded history grows UPWARD instead of off the screen. */}
       <div ref={statusDockRef} style={styles.statusLineDock}>
+        {/* #1425/#1430: the round replayer, at the bottom above the Activity Log, for as long as the ending
+            stands and the modal is down. The dock's measured height already pads the page for it. */}
+        {gameEndReason && gameOverDismissed && gameHistory && (
+          <RoundScrubber rounds={gameHistory.rounds} cursor={replayCursor} onChange={setReplayCursor} />
+        )}
         <TopTicker
           latestItem={latestFeedItem}
           items={filteredFeedItems}
@@ -13422,6 +13608,26 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
               : (gameState?.current_round_type ?? null)
           }
           operatingSubPhase={orSubPhase}
+          /* Display props only, per that file's no-`gameState` rule: the round tag for the CURRENT breadcrumb,
+             the acting railroad, the derived phase for the key-reference cards, the seat count for the Player
+             Limits row, and the ruleset name for the header. */
+          roundLabel={roundLabelFor(gameState)}
+          activeCorporation={
+            activeCorporationContext
+              ? { ticker: activeCorporationContext.ticker, fullName: activeCorporationContext.fullName }
+              : null
+          }
+          phase={
+            currentPhase
+              ? { label: currentPhase.label, tier: currentPhase.tier, trainLimit: currentPhase.trainLimit }
+              : null
+          }
+          playerCount={gameState?.player_addresses.length ?? null}
+          rulesetLabel={GAME_TYPE_COPY[gameTypeOf(tableVariants)].label}
+          /* The reference shows this table's rules: the resolved flags decide which variant blocks render, and
+             the auction-complete flag lets the Overview mark a delayed auction as pending or done. */
+          variants={tableVariants}
+          auctionComplete={gameState?.private_auction_complete ?? null}
         />
       )}
 
@@ -13636,12 +13842,22 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         onAcknowledge={acknowledgeFleetNotice}
       />
 
+      {/* #1441: every player hears that privates are for sale, once, when Phase 3 begins. */}
+      <PhaseThreeNoticeModal open={phaseThreeNotice} onAcknowledge={() => setPhaseThreeNotice(false)} />
+
       <AutoPassModal
         open={autoPassOpen}
         initial={autoPassChoices}
         exposedPresidencies={autoPassExposure}
         onArm={handleArmAutoPass}
         onClose={() => setAutoPassOpen(false)}
+        /* #1444: one modal with two modes -- switching swaps which settings are up. */
+        onSwitchMode={(mode) => {
+          if (mode === "buy") {
+            setAutoPassOpen(false);
+            setAutoBuyOpen(true);
+          }
+        }}
       />
       {/* Design note #1240: keyed on `open` so the roster rows and last choices are re-read each time it opens --
           the modal seeds its own state on mount, as `AutoPassModal` does. */}
@@ -13652,6 +13868,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           initial={autoBuyChoices}
           onArm={handleArmAutoBuy}
           onClose={() => setAutoBuyOpen(false)}
+          onSwitchMode={(mode) => {
+            if (mode === "pass") {
+              setAutoBuyOpen(false);
+              setAutoPassOpen(true);
+            }
+          }}
         />
       )}
       {/* The train consent prompt -- design notes #205 and #218. ONE component, TWO sources, decided by
@@ -13897,6 +14119,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           }}
           sfxEnabled={sfxEnabled}
         />
+      )}
+      {/* #1418: the outro, under the Game Over modal -- which rises over it at the cue and keeps its last
+          frame as the ground behind the standings. */}
+      {outro !== null && (
+        <GameOutroOverlay onCue={() => setOutro("cued")} cued={outro === "cued"} sfxEnabled={sfxEnabled} />
       )}
     </div>
   );

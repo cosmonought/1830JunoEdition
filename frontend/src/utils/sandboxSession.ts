@@ -28,6 +28,7 @@ import {
      reload -- it only reads what the log holds, or reconstructs what an older log implied. */
   legacyTurnSeed,
   resolveVariants,
+  sellBuySellInForce,
   rollTurnRevenue,
 } from "./gameVariants";
 // Design note #723: the terrain fee is charged on the FIRST build of a hex and never again.
@@ -218,6 +219,14 @@ function adjustTreasury(
 
 /** Advance the seat and clear the pass streak -- mirrors trading::advance_turn.
  *  See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #0 */
+/** #1443: the Sell-Buy-Sell stage of the current Stock Round turn. */
+export function stockTurnStage(
+  state: Pick<GameStateResponse, "bought_this_turn" | "stock_turn_stage">,
+): "sell" | "buy" | "sell_again" {
+  if ((state.bought_this_turn ?? 0) > 0) return "sell_again";
+  return state.stock_turn_stage === "buy" ? "buy" : "sell";
+}
+
 function advanceSeat(state: GameStateResponse): GameStateResponse {
   const count = state.player_addresses.length;
   if (count === 0) return state;
@@ -231,6 +240,7 @@ function advanceSeat(state: GameStateResponse): GameStateResponse {
     turn_action_taken: false,
     // Design note #1172: the purchase count has the same life and is cleared on the same rule.
     bought_this_turn: 0,
+    stock_turn_stage: undefined, // #1443: the Sell-Buy-Sell stage clears with the seat
   };
 }
 
@@ -482,6 +492,7 @@ function recordPass(state: GameStateResponse): GameStateResponse {
     turn_action_taken: false,
     // Design note #1172: and the purchase count with it.
     bought_this_turn: 0,
+    stock_turn_stage: undefined, // #1443: the Sell-Buy-Sell stage clears with the seat
   };
 
   if (streak < count) return advanced;
@@ -915,6 +926,7 @@ export function openingStockRoundReset(
 ): Pick<
   GameStateResponse,
   | "sold_this_round"
+  | "stock_turn_stage"
   | "consecutive_passes"
   | "last_trader_index"
   | "turn_action_taken"
@@ -934,6 +946,7 @@ export function openingStockRoundReset(
     /* Design note #1172: the third clearing site, and the one #745's comment above predicted -- "the seat is
        being MOVED without going through either seat-moving function". */
     bought_this_turn: 0,
+    stock_turn_stage: undefined, // #1443: the Sell-Buy-Sell stage clears with the seat
     // The Priority Deal holder opens the Stock Round -- design note #353.
     active_player_index: state.priority_deal_index,
   };
@@ -3758,6 +3771,26 @@ function applyOneAction(
        this button to finish, not to decline -- selling is an action, and 1830 guarantees anyone who acts
        another opportunity before the round closes. `advanceSeat` moves the seat and leaves the streak at
        zero; `recordPass` moves it and counts. One message, two meanings, and the flag says which. */
+    /* ==================================================================
+        DESIGN NOTE 1443: SELL-BUY-SELL -- THE PASS WALKS THE STAGES; THE TURN ENDS ON THE LAST
+       ==================================================================
+       CORRECTED: "the rule for the Stock Round is Sell-Buy-Sell. Players can Sell any number of certificates,
+       then Buy at most 1 certificate ... then Sell any number of shares again. This means the round should
+       NOT auto-pass after a player buys a certificate."
+       THREE STAGES, TWO OF THEM ON THE PASS. The turn opens on SELL (any number of sales, no advance); a
+       Pass there moves to BUY; a purchase moves to SELL AGAIN (`bought_this_turn > 0`, no seat move -- see
+       the `BuyStock` arm); a Pass in BUY ends the turn, since with no purchase the third stage would only
+       offer what the first already did; a Pass in SELL AGAIN ("End Turn") ends it. Ending is #745's rule
+       as before: a turn that acted advances without counting, one that did not is a pass in the streak.
+       WHILE A HOME TOKEN IS OWED THE TURN CANNOT END (#769: the seat is held for the placement), so the Pass
+       is refused by returning the state -- the shell's gate says why.
+       ONLY UNDER THE REVISION: a log dealt before it (#1443 in `gameVariants.ts`) ends the turn on the buy
+       as it always did, so it replays to the same board. */
+    if (sellBuySellInForce(resolveVariants(state.variants))) {
+      const stage = stockTurnStage(state);
+      if (stage === "sell") return { ...state, stock_turn_stage: "buy" };
+      if (ctx?.homeHexToAxial && pendingHomeTokens(state, ctx.homeHexToAxial).length > 0) return state;
+    }
     return hasActedThisTurn(state) ? advanceSeat(state) : recordPass(state);
   }
 
@@ -3944,6 +3977,9 @@ function applyOneAction(
     if (ctx?.homeHexToAxial && pendingHomeTokens(settledBuy, ctx.homeHexToAxial).length > 0) {
       return settledBuy;
     }
+    /* #1443: under Sell-Buy-Sell the purchase is the middle of the turn, not its end -- the seat stays with
+       the buyer, who may sell again and then ends the turn with a Pass. */
+    if (sellBuySellInForce(resolveVariants(settledBuy.variants))) return settledBuy;
 
     return advanceSeat(settledBuy);
   }
@@ -4589,6 +4625,20 @@ function applyOneAction(
     }
 
     if (stage === "mark") {
+      /* ==================================================================
+          DESIGN NOTE 1421: THE REDUCER IS THE LAST GATE ON A MARK
+         ==================================================================
+         JUNO-Z6C's log carries a second Mark (index 567, ERIE, phase D) while C&O had held the sign since
+         OR 6.1 -- a line no current client can compose: the Mark's window is phases 2-4 and the game holds
+         one sign. It was dispatched by a tab still running a build from before #1404, whose forced Mark
+         skipped the window and whose sign state came off the log's sentence after #1375 had moved the clause
+         off it. The table reverted it by hand. THE RULES ARE CHECKED HERE TOO, because a stale client is a
+         thing that happens at a playtest and every client replays this same reducer: a Mark while a sign is
+         out, or outside its window, is a no-op on every screen rather than a second curse on one. Entry 203
+         (C&O, phase 4, first sign) replays exactly as before. */
+      const signOut = state.public_companies.some((entry) => entry.has_yellow_sign === true || entry.is_carcosan === true);
+      const tier = derivePhase(state)?.tier ?? "2";
+      if (signOut || !["2", "3", "4"].includes(tier)) return state;
       /* THE TRAIN GOES AND THE TURN EARNS NOTHING. Ruled: "loses its lowest value train. It receives no
          standard route revenue for this submission. Instead, award the corporation cash equal to 0.5x the
          deleted train's depot value."
@@ -5083,6 +5133,9 @@ export function placeHomeStationToken(
      still outstanding, which is exactly the state this pair of notes exists to prevent. */
   if (state.current_round_type !== "StockRound") return placed;
   if (homeHexToAxial && pendingHomeTokens(placed, homeHexToAxial).length > 0) return placed;
+  /* #1443: under Sell-Buy-Sell the placement completes the PURCHASE, not the turn -- the president may still
+     sell, and ends the turn with the Pass. */
+  if (sellBuySellInForce(resolveVariants(placed.variants))) return placed;
   return advanceSeat(placed);
 }
 

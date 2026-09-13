@@ -16,7 +16,8 @@
 //
 // Design history: see `docs/ai_architecture/contract_economy.md`.
 
-import PresidentCrown from "./PresidentCrown";
+import PresidentCrown, { PRESIDENT_CROWN_GOLD } from "./PresidentCrown";
+import { seatColor } from "../utils/playerLabels";
 import React from "react";
 
 import type { GameStateResponse, PlayerNetWorthResponse, QueryCapableClient } from "../utils/gameState";
@@ -596,8 +597,8 @@ export function PlayerAssetsSection({
                 return (
                   <tr key={player}>
                     <td style={styles.tdB}>
-                      {/* Design note #405: a name when there is one. */}
-                      {playerLabel?.(player) ?? truncate(player)}
+                      {/* Design note #405: a name when there is one. #1433: in its seat colour, with its dot. */}
+                      <SeatName address={player} seat={gameState.player_addresses.indexOf(player)} label={playerLabel?.(player) ?? truncate(player)} />
                       {/* ==================================================================
                            DESIGN NOTE 1125: "#1" WAS A RANK, AND IT IS NOT A RANK
                           ==================================================================
@@ -733,6 +734,17 @@ export function PlayerAssetsSection({
    sound reasoning -- and it still had to go: it printed "100%" on every row of every game, so the one time
    it mattered it would be a single digit changing in a column nobody had read in months. A checker that
    cries wolf by never crying is not a checker. */
+/** #1433: a player's name in its seat colour, with the seat's dot -- the Corporation column's idiom, for people. */
+function SeatName({ address, seat, label }: { address: string; seat: number; label: string }) {
+  const color = seat < 0 ? null : seatColor(address, seat);
+  return (
+    <span style={styles.presidentCell}>
+      {color && <span style={{ ...styles.tokenDot, backgroundColor: color }} aria-hidden="true" />}
+      <span style={color ? { color, fontWeight: 700 } : undefined}>{label}</span>
+    </span>
+  );
+}
+
 function CorporationAssetsSection({
   gameState,
   marketGrid,
@@ -765,7 +777,22 @@ function CorporationAssetsSection({
             <thead>
               <tr>
                 <th style={styles.thB}>Corporation</th>
-                <th style={styles.thB}>President</th>
+                {/* ==================================================================
+                     DESIGN NOTE 1433: THE CROWN IS THE COLUMN'S, NOT EVERY ROW'S
+                    ==================================================================
+                    "every name having a crown by it. I think the standard is to put the crown on the column
+                    title" -- it is: a mark repeated on every row of a column says nothing a row does not, so
+                    the crown sits in the header once and the cells are names. The crown beside a name
+                    survives only where there is no column to carry it (a card's president line, a player's
+                    row that holds THIS corporation's presidency). And the emoji this cell still drew (#552
+                    replaced it everywhere else) is the shipped SVG now. The name wears its seat colour and
+                    dot, as the Players table's names do -- one identity, the same way everywhere. */}
+                <th style={styles.thB}>
+                  <span style={styles.presidentHead}>
+                    <PresidentCrown label={null} scale={1.05} style={{ color: PRESIDENT_CROWN_GOLD }} />
+                    President
+                  </span>
+                </th>
                 <th style={styles.thNumB}>Market Price</th>
                 <th style={styles.thNumB}>Treasury</th>
                 <th style={styles.thCenterB}>Trains</th>
@@ -817,10 +844,11 @@ function CorporationAssetsSection({
                     </td>
                     <td style={styles.tdB}>
                       {company.president ? (
-                        <span style={styles.presidentCell}>
-                          <span aria-hidden="true">&#128081;</span>
-                          <span>{sandboxPlayerLabel(company.president) ?? truncate(company.president, 8, 5)}</span>
-                        </span>
+                        <SeatName
+                          address={company.president}
+                          seat={gameState.player_addresses.indexOf(company.president)}
+                          label={sandboxPlayerLabel(company.president) ?? truncate(company.president, 8, 5)}
+                        />
                       ) : (
                         <span style={styles.holdingsEmpty}>--</span>
                       )}
@@ -1424,6 +1452,7 @@ const styles: Record<string, React.CSSProperties> = {
   corpTicker: { fontWeight: 700 },
   corpFullName: { fontSize: FONT_SIZE.micro, color: "#8a8a86", whiteSpace: "nowrap" },
   presidentCell: { display: "inline-flex", alignItems: "center", gap: "6px" },
+  presidentHead: { display: "inline-flex", alignItems: "center", gap: "5px" },
   // Same "badge only on the exception" rule the Operating Round tray uses.
   // Slate, not amber: it sat a few hundred pixels from the Bank Depot's amber CURRENT pill and the two read
   // as one inconsistent style rather than two unrelated states.

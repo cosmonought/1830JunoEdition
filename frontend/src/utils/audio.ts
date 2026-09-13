@@ -367,13 +367,69 @@ let liveSfx = 0;
  *  Design note #1041: THE ELEMENT IS BUILT PER CALL, unlike `useSoundEffect`'s single reused one. These
  *  clips are chosen per event out of fifty-odd files, so there is no stable `src` to hold -- and two
  *  different sounds overlapping is the case the concurrency limit exists to allow. */
-export function playVariantCue(file: string, enabled: boolean): void {
+/* ==================================================================
+    DESIGN NOTE 1420: A CUE THAT IS FETCHED WHEN IT FIRES IS A CUE THAT FIRES LATE
+   ==================================================================
+   REPORTED: the ceremony's sounds "didn't always seem to be quite aligned with what was happening on screen".
+   `playVariantCue` builds a fresh element per call, so the FIRST play of each file fetched it through the
+   tunnel at the moment it was needed -- a few hundred milliseconds behind the card it belonged to, and worse
+   for the longer clips. `preloadCues` warms them when the ending arrives (the outro is eight seconds of cover),
+   and a warmed element is played directly when it is idle, cloned when it is still ringing. */
+const preloadedCues = new Map<string, HTMLAudioElement>();
+
+/** Resolves once every file can play through (or after `timeoutMs`, so a slow tunnel delays nothing by more
+ *  than that). #1423: the ceremony waits on this before its first card, because a cold cache made the first
+ *  play of each clip arrive behind the card it was for even with the warm-up started at the same moment. */
+export function preloadCues(files: readonly string[], timeoutMs = 3000): Promise<void> {
+  const waits: Promise<void>[] = [];
+  for (const file of files) {
+    let element = preloadedCues.get(file);
+    if (!element) {
+      try {
+        element = new Audio(`/audio/${file}`);
+        element.preload = "auto";
+        element.load();
+        preloadedCues.set(file, element);
+      } catch {
+        /* No media stack. Nothing to warm. */
+        continue;
+      }
+    }
+    const ready = element;
+    if (ready.readyState >= 4) continue; // HAVE_ENOUGH_DATA
+    waits.push(
+      new Promise<void>((resolve) => {
+        const done = () => resolve();
+        ready.addEventListener("canplaythrough", done, { once: true });
+        ready.addEventListener("error", done, { once: true });
+      }),
+    );
+  }
+  const timeout = new Promise<void>((resolve) => window.setTimeout(resolve, timeoutMs));
+  return Promise.race([Promise.all(waits).then(() => undefined), timeout]);
+}
+
+export interface CueOptions {
+  /** #1420: the ceremony's cues overlap by design (a fanfare's tail under the next card); the cap that keeps
+   *  a busy Operating Round from stacking three clangs would drop one of them. */
+  uncapped?: boolean;
+}
+
+export function playVariantCue(file: string, enabled: boolean, options: CueOptions = {}): void {
   if (!enabled) return;
-  if (liveSfx >= MAX_CONCURRENT_SFX) return;
+  if (!options.uncapped && liveSfx >= MAX_CONCURRENT_SFX) return;
 
   let element: HTMLAudioElement;
   try {
-    element = new Audio(`/audio/${file}`);
+    const warmed = preloadedCues.get(file);
+    if (warmed && warmed.paused) {
+      element = warmed;
+      element.currentTime = 0;
+    } else if (warmed) {
+      element = warmed.cloneNode(true) as HTMLAudioElement;
+    } else {
+      element = new Audio(`/audio/${file}`);
+    }
   } catch {
     /* jsdom and any engine without a media stack. Nothing to play and nothing to duck. */
     return;

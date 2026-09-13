@@ -10,6 +10,8 @@ import { depotInventory } from "./gamePhase";
 import {
   DIESEL_EXCHANGE_COST,
   dieselAvailable,
+  dieselExchangeCostFor,
+  dieselExchangeEnabled,
   dieselExchangeRefusal,
   exchangeableTrains,
 } from "./dieselExchange";
@@ -213,9 +215,13 @@ describe("the refusals, by identity and by sentence", () => {
     expect(refusalReasonFor(state, msg as never)).toMatch(reason);
   };
 
-  it("is not played on the standard table", () => {
-    refused(board({ variants: {} }), EXCHANGE(NNH, "4"), /not playing Project 18XX\+/);
-    refused(board({ variants: undefined }), EXCHANGE(NNH, "4"), /not playing Project 18XX\+/);
+  it("is played on the standard table too (#1439), at $800 for a 4-, 5- or 6-train", () => {
+    const standard = board({ variants: {} });
+    expect(dieselExchangeEnabled(standard)).toBe(true);
+    expect(dieselExchangeCostFor(standard)).toBe(800);
+    const after = applySandboxAction(standard, EXCHANGE(NNH, "4") as never);
+    expect(after).not.toBe(standard);
+    expect(after.public_companies.find((c) => c.company_id === NNH)?.owned_trains).toContain("D");
   });
 
   it("waits for the Diesel to be for sale", () => {

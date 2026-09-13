@@ -75,7 +75,16 @@ export const YELLOW_SIGN_BONUS_LINE =
    AN INTEGER OUT OF A HUNDRED, not a float. `0.1` was never compared against anything -- the test was
    `% 10 === 0`, so the constant and the behaviour were two separate claims that happened to agree, which is
    #891's shape in a probability. This one IS the comparison. */
-export const CARCOSA_CHANCE_IN_100 = 20;
+/* ==================================================================
+    DESIGN NOTE 1421: SIXTY, BECAUSE TWENTY WAS ANTI-CLIMACTIC
+   ==================================================================
+   RULED: "the Yellow Sign happening without the Carcosa Awaits follow-on is anti-climactic ... I think that
+   needs to be bumped to 50-70%." And the twenty was never the whole story: the escalation also needs a
+   critical bonus on the die (one face in six), so the marked corporation's chance PER RUN was one in thirty,
+   and a corporation marked in phase 4 with six or seven runs left in phases 5-D saw it about one game in five.
+   At sixty it is roughly one in ten per run and better than even over the same stretch -- the sign usually
+   pays off, and still not on schedule. */
+export const CARCOSA_CHANCE_IN_100 = 60;
 
 /** The stride that puts the Carcosa roll on bits neither the die nor the flavour line can reach.
  *

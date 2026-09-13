@@ -19,13 +19,15 @@
 
 import { STANDARD_VARIANTS, type GameVariants } from "./gameVariants";
 // Design note #1215: the room document lives on the server. The routing is in this file so no caller has any.
-import { roomDocOnServer, subscribeRoomDoc, writeRoomDoc } from "./roomDocLink";
+import { joinRoomDoc, roomDocOnServer, subscribeRoomDoc, writeRoomDoc } from "./roomDocLink";
 import { localPlayerId } from "./seatPin";
 
 /* Design note #530: `GameplayExecuteMsg` is no longer imported here --
    `SandboxLogMsg` is the union of it and the setup event, and this module
    only ever handles the union. */
 import type { SandboxLogMsg, SetupPlayer } from "./gameSetup";
+// #1415: the room's terms and their readers, in a module the server can import as values.
+import { DEFAULT_ROOM_SETUP, seatsNeeded, type RoomSetup, type RoomVisibility } from "./sandboxRoomSummary";
 // Design note #1128: the stage union is owned by the module that resolves it, not redeclared here.
 import type { ForcedSignStage } from "./yellowSign";
 
@@ -135,7 +137,14 @@ export function appliedPrefixHolds(
 /** Creates the room document. Returns the code, or `null` when no game server is configured -- which is a
  *  legitimate state (the sandbox runs with no backend at all), so the caller reports it rather than this
  *  throwing. */
-export async function hostSandboxRoom(hostId: string, nickname: string): Promise<string | null> {
+export async function hostSandboxRoom(
+  hostId: string,
+  nickname: string,
+  /* #1415: the terms, chosen before the room exists. Defaults keep every older caller (and test) exactly as
+     it was: the printed game, public, any number of players, no ante. */
+  variants: GameVariants = STANDARD_VARIANTS,
+  setup: RoomSetup = DEFAULT_ROOM_SETUP,
+): Promise<string | null> {
   /* ==================================================================
       DESIGN NOTE 1215: SIX FUNCTIONS THAT ANSWER TO THE SERVER
      ==================================================================
@@ -148,8 +157,22 @@ export async function hostSandboxRoom(hostId: string, nickname: string): Promise
      round trip to learn one would be a round trip that can fail. */
   if (!roomDocOnServer()) return null;
   const code = generateRoomCode();
-  writeRoomDoc(code, hostId, { op: "host", hostId, nickname, variants: STANDARD_VARIANTS });
+  writeRoomDoc(code, hostId, {
+    op: "host",
+    hostId,
+    nickname,
+    variants,
+    visibility: setup.visibility,
+    playerCount: setup.playerCount,
+    anteUjuno: setup.anteUjuno,
+  });
   return code;
+}
+
+/** #1415: the host removes a joiner. Before the game starts only; the server checks who is asking. */
+export async function kickSandboxPlayer(roomCode: string, playerId: string): Promise<void> {
+  if (!roomDocOnServer()) return;
+  writeRoomDoc(roomCode, localPlayerId(), { op: "kick", playerId });
 }
 
 /** The room field that hands out indices -- design note #1026. */
@@ -316,7 +339,38 @@ export interface SandboxRoomDoc {
      the acting client is unique and there is no race worth guarding -- and if a write were somehow lost, the
      worst case is the stage fires twice, which for a debug tool is a nuisance and not a corruption. */
   forcedSign: ForcedSignStage | null;
+  /* ==================================================================
+      DESIGN NOTE 1415: THE TABLE'S TERMS ARE SET BEFORE THE ROOM EXISTS
+     ==================================================================
+     ASKED: Host Game opens a setup flow -- game type, pace, public or private, then the house rules, then
+     "Create Room" -- and the waiting room shows the host's choices as terms rather than controls. Join Game
+     lists every open PUBLIC room. A host may want exactly N players, and may remove a joiner.
+     FOUR MORE FIELDS ON THE DOCUMENT, all written once by the `host` op and read by everyone: `visibility`
+     decides whether the room is listed; `playerCount` is `null` for "any, two or more" or the exact number
+     of seats the host wants (the server refuses a join past it and Start waits for it); `anteUjuno` is the
+     deposit each seat makes on Ready -- a placeholder figure until the wallet is wired, carried now so the
+     card, the confirmation and the receipt all read one number; `kicked` is who the host removed, so a kick
+     is not merely a nudge. All optional on the type because rooms persisted before this carry none of them,
+     and `roomVisibility` / `roomSeatCap` supply the reading for those. */
+  visibility?: RoomVisibility;
+  playerCount?: number | null;
+  anteUjuno?: string;
+  createdAtMs?: number;
+  kicked?: string[];
 }
+
+/* The pure readers of these fields live in `sandboxRoomSummary.ts` so the server can import them as values;
+   re-exported here so client callers keep one import. */
+export {
+  DEFAULT_ROOM_SETUP,
+  roomSeatCap,
+  roomVisibility,
+  seatsNeeded,
+  summariseSandboxRoom,
+  type RoomSetup,
+  type RoomVisibility,
+  type SandboxRoomSummary,
+} from "./sandboxRoomSummary";
 
 /** Subscribes to the room document -- the waiting room's own state. */
 export function subscribeSandboxRoom(
@@ -337,6 +391,17 @@ export async function upsertSandboxPlayer(
   if (!roomDocOnServer()) return false;
   writeRoomDoc(roomCode, player.id, { op: "upsert-player", player });
   return true;
+}
+
+/** #1415: take a seat, and hear whether the room gave one. `upsertSandboxPlayer` stays fire-and-forget for the
+ *  seat's own later writes (a rename, a Ready); a first join is the write the server may refuse -- full table,
+ *  kicked, already started -- and the joiner must not be walked into a waiting room that does not hold them. */
+export async function joinSandboxRoom(
+  roomCode: string,
+  player: SandboxRoomPlayer,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  if (!roomDocOnServer()) return { ok: false, reason: "No game server is configured in this build." };
+  return joinRoomDoc(roomCode, player.id, player);
 }
 
 /** Latches the room into play. Design note #527: the handover. */
@@ -376,7 +441,7 @@ export async function markSandboxRoomPlaying(roomCode: string): Promise<void> {
  *  See docs/ai_architecture/firebase_middleware.md - sandboxRoom.ts #527 */
 export function canStartSandboxGame(room: SandboxRoomDoc | null, minPlayers: number): boolean {
   if (!room || room.status !== "waiting") return false;
-  if (room.players.length < minPlayers) return false;
+  if (room.players.length < seatsNeeded(room, minPlayers)) return false;
   return room.players.every((player) => player.isReady);
 }
 
@@ -409,7 +474,7 @@ export function waitingRoomBlock(
   minPlayers: number,
 ): WaitingRoomBlock {
   if (!room || room.status !== "waiting") return "not-waiting";
-  if (room.players.length < minPlayers) return "need-players";
+  if (room.players.length < seatsNeeded(room, minPlayers)) return "need-players";
   if (!room.players.every((player) => player.isReady)) return "need-ready";
   return "host-to-start";
 }
@@ -426,8 +491,12 @@ export function waitingRoomNotice(
 ): string | null {
   if (viewer.isHost || !viewer.isReady) return null;
   switch (waitingRoomBlock(room, minPlayers)) {
-    case "need-players":
-      return `You are ready. Waiting for more players — Project 18XX needs at least ${minPlayers}.`;
+    case "need-players": {
+      const needed = seatsNeeded(room, minPlayers);
+      return needed > minPlayers
+        ? `You are ready. Waiting for more players — the host set this table for exactly ${needed}.`
+        : `You are ready. Waiting for more players — Project 18XX needs at least ${minPlayers}.`;
+    }
     case "need-ready":
       return "You are ready. Waiting for the other players to mark themselves ready.";
     case "host-to-start":

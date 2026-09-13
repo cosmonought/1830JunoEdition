@@ -49,7 +49,7 @@ describe("the toggle is reachable whenever the player is connected", () => {
        and silently got the second. Arming writes local state and dispatches nothing -- the pass happens later,
        on this player's own turn, which the acting effect tests for itself. */
     expect(APP).toContain("canArm: controlsEnabled,");
-    expect(BAR).toContain("disabled={!autoPass.armed && !autoPass.canArm}");
+    expect(BAR).toContain("disabled={!armed && !canArm}"); // #1444: the one Auto button
   });
 
   it("does not quietly put the turn back into the new predicate", () => {
@@ -73,7 +73,7 @@ describe("the toggle is reachable whenever the player is connected", () => {
 
   it("keeps the off switch free of both gates", () => {
     // #728's rule, unchanged: a dropped connection must not trap a player inside a setting that acts for them.
-    expect(BAR).toContain("autoPass.armed ? autoPass.onDisarm : autoPass.onOpenSettings");
+    expect(BAR).toContain('armed === "pass" ? autoPass?.onDisarm : armed === "buy" ? autoBuy?.onDisarm : autoPass?.onOpenSettings ?? autoBuy?.onOpenSettings'); // #1444
   });
 
   it("arms without consulting the seat", () => {
@@ -155,6 +155,6 @@ describe("a spent arm does not outlive its Stock Round", () => {
        round would be guarded off for its first turn -- which is precisely the bug #816 was reported for,
        reintroduced by the cleanup for a different one. Counted rather than merely present: arm, disarm and
        now the round change. */
-    expect((APP.match(/autoPassedAtLogIndexRef\.current = null;/g) ?? []).length).toBe(3);
+    expect((APP.match(/autoPassedAtLogIndexRef\.current = null;/g) ?? []).length).toBe(4); // #1444: + arming Auto-Buy
   });
 });

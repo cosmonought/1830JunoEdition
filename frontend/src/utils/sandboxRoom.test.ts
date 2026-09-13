@@ -321,7 +321,8 @@ describe("the waiting room actually renders it", () => {
       path.join(__dirname, "..", "components", "SandboxWaitingRoom.tsx"),
       "utf8",
     );
-    expect(room).toContain("{notice && <span style={styles.notice}>{notice}</span>}");
+    // #1415: the line yields to the "you were removed" notice, so the braces around it moved out.
+    expect(room).toContain("notice && <span style={styles.notice}>{notice}</span>");
     expect(room).toContain('block === "need-players"');
     expect(room).toContain('block === "need-ready"');
   });

@@ -25,6 +25,7 @@
 //
 // See docs/ai_architecture/state_machine.md, AutoPassModal.tsx #717.
 
+import { AutoModePicker, type AutoMode } from "./AutoModePicker";
 import React, { useState } from "react";
 
 import { FONT_SIZE, RADIUS } from "../styles/typography";
@@ -42,6 +43,8 @@ export interface AutoPassModalProps {
   initial?: AutoPassConditions;
   onArm: (conditions: AutoPassConditions) => void;
   onClose: () => void;
+  /** #1444: the other mode is one click away, at the top of the card. */
+  onSwitchMode?: (mode: AutoMode) => void;
 }
 
 interface Row {
@@ -75,6 +78,7 @@ export function AutoPassModal({
   exposedPresidencies = [],
   onArm,
   onClose,
+  onSwitchMode,
 }: AutoPassModalProps) {
   const [conditions, setConditions] = useState<AutoPassConditions>({
     ...DEFAULT_AUTO_PASS_CONDITIONS,
@@ -107,6 +111,7 @@ export function AutoPassModal({
             &#10006;
           </button>
         </div>
+        {onSwitchMode && <AutoModePicker mode="pass" onSwitch={onSwitchMode} />}
 
         <p style={styles.body}>
           Your turns pass automatically until one of these wakes you, or the Stock Round ends.

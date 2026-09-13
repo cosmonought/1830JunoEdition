@@ -425,7 +425,8 @@ describe("the warning badges keep to one line (design note #1005)", () => {
     /* THE REPRIEVE BADGE AND THE COUNTDOWN BADGES ARE THE SAME KIND OF OBJECT to a reader, so one outside the
        group would be the second row back for the one case that matters most -- a corporation both holding a
        reprieve and approaching the next rust. */
-    const group = sliceBetween(BAR, "<span style={styles.orWarningGroup}>", "</span>\n            </div>");
+    // #1440: the standing Buy Private button follows the group inside the rail, so the slice ends at its comment.
+    const group = sliceBetween(BAR, "<span style={styles.orWarningGroup}>", "{privateBuyOpen && (");
     expect(group).toContain("reprieveWarning &&");
     expect(group).toContain("buyWarnings.map");
   });

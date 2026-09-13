@@ -684,8 +684,9 @@ describe("the end of the game names the president and says the line", () => {
     expect(nameCell.length).toBeLessThan(700);
   });
 
-  it("puts the epitaph beneath the standings, after the winner", () => {
-    expect(MODAL.indexOf("wins with $")).toBeLessThan(MODAL.indexOf("styles.carcosaEpitaph"));
+  it("puts the epitaph beneath the standings", () => {
+    // #1430: the "wins with $" line is gone (the row's WINNER tag says it); the epitaph still follows the table.
+    expect(MODAL.indexOf('aria-label="Final standings"')).toBeLessThan(MODAL.indexOf("styles.carcosaEpitaph"));
   });
 });
 

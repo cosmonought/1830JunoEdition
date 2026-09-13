@@ -71,10 +71,12 @@ const BOARD_X = {
   min: Math.min(...PRICE_GRID.map((cell) => cell.x)),
   max: Math.max(...PRICE_GRID.map((cell) => cell.x)),
 };
-const BOARD_Y = {
-  min: Math.min(...PRICE_GRID.map((cell) => cell.y)),
-  max: Math.max(...PRICE_GRID.map((cell) => cell.y)),
-};
+/* #1435: the ROWS are read per render, not at module load -- the chart in effect can change per table
+   (Dynamic Market adds one above the top). The columns are the same nineteen on every chart. */
+function boardY() {
+  const ys = PRICE_GRID.map((cell) => cell.y);
+  return { min: Math.min(...ys), max: Math.max(...ys) };
+}
 
 export interface StockMarketPreviewProps {
   /** The corporation the move belongs to -- the token that animates. */
@@ -125,6 +127,7 @@ export function StockMarketPreview({
   positions,
   action,
 }: StockMarketPreviewProps) {
+  const BOARD_Y = boardY(); // #1435
 
   /* ==================================================================
       DESIGN NOTE 1142: THE MOVE REPEATS, AND THE RETURN TRIP IS NOT PART OF IT

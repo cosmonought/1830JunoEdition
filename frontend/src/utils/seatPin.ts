@@ -76,6 +76,9 @@ export function clearSeatSecrets(room: string): void {
 
 /** The wire's word for "another device holds this seat now". Matched by the clients, minted by the server. */
 export const SEAT_SUPERSEDED_CODE = "seat-superseded";
+/** #1415: the wire's word for "the room did not take your write" -- a full table, a kicked seat, a kick by a
+ *  non-host. Reaches the client as an ordinary error with a reason; the current document follows it. */
+export const ROOM_WRITE_REFUSED_CODE = "room-write-refused";
 /** #1346: the wire's word for "this seat turned your hello away" (a wrong or missing PIN). Terminal. */
 export const SEAT_REFUSED_CODE = "seat-refused";
 

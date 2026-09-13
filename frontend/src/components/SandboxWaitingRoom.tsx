@@ -17,21 +17,25 @@ import {
   GAME_LENGTH_BLURB,
   GAME_MODE_COPY,
   GAME_TYPE_COPY,
-  GAME_TYPE_ORDER,
   STANDARD_VARIANTS,
-  type GameLength,
-  type GameMode,
-  type GameType,
-  type GameVariants,
   VARIANT_COPY,
   type VariantCopyKey,
   gameTypeOf,
-  withGameType,
 } from "../utils/gameVariants";
 
 import { FONT_FAMILY, FONT_SIZE, LINE_HEIGHT, RADIUS } from "../styles/typography";
-import { waitingRoomBlock, waitingRoomNotice, type SandboxRoomDoc } from "../utils/sandboxRoom";
-import { MIN_PLAYERS, certLimitForPlayers, maxPlayersFor, startingCashForPlayers } from "../utils/gameSetup";
+import {
+  roomSeatCap,
+  roomVisibility,
+  seatsNeeded,
+  waitingRoomBlock,
+  waitingRoomNotice,
+  type SandboxRoomDoc,
+} from "../utils/sandboxRoom";
+import { MIN_PLAYERS, certLimitForPlayers, startingCashForPlayers } from "../utils/gameSetup";
+// #1415: the ante's figures and the subsidy line, the same ones the host's setup card showed.
+import { ANTE_SUBSIDY_NOTE, VISIBILITY_COPY } from "./HostSetupCard";
+import { anteBreakdown, formatJuno } from "../utils/anteMath";
 import { SEAT_COLORS, SEAT_COLOR_NAMES, resolveSeatColors } from "../utils/playerLabels";
 import { type AudioControlsProps } from "./AudioControls";
 /* Design note #1138: the shell's own bar, mounted here so the audio controls stop moving between the
@@ -63,11 +67,11 @@ import {
    `Object.keys`: the sequence a host reads the toggles in is a presentation decision, and the record is a
    dictionary rather than a running order. Typed as `VariantCopyKey`, so a renamed flag is a compile error
    here rather than a toggle that silently stops binding. */
-/* Design note #1271: `expandedMap` and `levelPlayingField` are NOT toggles any more -- they are the Game
-   Type drop-down, one choice with its illegal combinations removed (see `gameVariants` #1271). `plusTiles`
-   stays a toggle because it is the one independent choice, and the render below shows it only under 18XX+.
-   `GAME_TYPE_FLAGS` names the two the drop-down owns, so `variantWiring.test.ts` can still ask that every
-   boolean flag reaches a control. */
+/* Design note #1271: `expandedMap` and `levelPlayingField` are NOT toggles -- they are the Game Type, one
+   choice with its illegal combinations removed (see `gameVariants` #1271). #1415: the CONTROLS for all of
+   these live on `HostSetupCard` now; this table is the ORDER the terms in force are listed in here, and
+   `GAME_TYPE_FLAGS` names the two the type owns, so `variantWiring.test.ts` can still ask that every boolean
+   flag reaches a control somewhere. */
 export const GAME_TYPE_FLAGS = ["expandedMap", "levelPlayingField"] as const;
 const VARIANT_TOGGLES: ReadonlyArray<{
   key: VariantCopyKey;
@@ -96,9 +100,16 @@ export interface SandboxWaitingRoomProps {
   onToggleReady: (isReady: boolean) => void;
   onStart: () => void;
   onLeave: () => void;
-  /** Design note #910: the host rewrites the table's house rules; every seat sees them. `undefined` for a
-   *  guest, which is what makes the controls read-only rather than absent for them. */
-  onSetVariants?: (variants: GameVariants) => void;
+  /* ==================================================================
+      DESIGN NOTE 1415: THE TERMS ARE READ HERE, NOT WRITTEN
+     ==================================================================
+     `onSetVariants` IS GONE. #910 put the house-rules controls on this screen so every seat could see them
+     before agreeing; the host now chooses them on the setup card BEFORE the room exists (`HostSetupCard`),
+     and "rules frozen after Create Room" is the ruling. What this screen keeps is #910's real point -- the
+     terms are on the room document and every seat reads the same ones -- drawn as a summary rather than a
+     form. A host who wants different terms hosts a different room.
+     `onKick` IS NEW: the host removes a joiner, before the start only. `undefined` for a guest. */
+  onKick?: (playerId: string) => void;
   /** ==================================================================
    *   DESIGN NOTE 1101: THE RADIO WAS ALREADY PLAYING HERE, WITH NOTHING TO PRESS
    *  ==================================================================
@@ -136,7 +147,7 @@ export function SandboxWaitingRoom({
   onToggleReady,
   onStart,
   onLeave,
-  onSetVariants,
+  onKick,
   audio,
 }: SandboxWaitingRoomProps) {
   /* Design note #1294: the chrome scale, live. */
@@ -148,7 +159,17 @@ export function SandboxWaitingRoom({
   const isHost = room?.hostId === localPlayerId;
   /* Design note #910: read off the ROOM, so a guest and the host are looking at one answer. */
   const variants = room?.variants ?? STANDARD_VARIANTS;
-  const canEditVariants = isHost && room?.status === "waiting" && !busy && onSetVariants !== undefined;
+  /* #1415: the table's terms beyond the variants -- who may join, how many, and what a seat puts in. */
+  const visibility = roomVisibility(room);
+  const seatCap = roomSeatCap(room);
+  const exactCount = typeof room?.playerCount === "number" ? room.playerCount : null;
+  const ante = anteBreakdown(room?.anteUjuno);
+  const canKick = isHost && room?.status === "waiting" && !busy && onKick !== undefined;
+  /* #1415: this seat was removed -- the roster no longer holds it and the document says why. */
+  const wasKicked = room !== null && me === null && (room.kicked ?? []).includes(localPlayerId);
+  /* #1415: Ready is the deposit, so it asks first; un-Ready is the withdrawal and asks too. */
+  const [readyConfirm, setReadyConfirm] = useState<"deposit" | "withdraw" | null>(null);
+  const [kicking, setKicking] = useState<string | null>(null);
   /* ==================================================================
      DESIGN NOTE 1169a: AN INITIALISER IS NOT A SUBSCRIPTION
      ==================================================================
@@ -170,7 +191,9 @@ export function SandboxWaitingRoom({
     setNicknameText(knownNickname);
   }, [knownNickname, nicknameTouched]);
 
-  const enough = players.length >= MIN_PLAYERS;
+  /* #1415: "exactly N" means N -- the server refuses the (N+1)th seat, so "at least N" here IS exactly N. */
+  const needed = seatsNeeded(room, MIN_PLAYERS);
+  const enough = players.length >= needed;
   const allReady = players.length > 0 && players.every((player) => player.isReady);
   const canStart = isHost && enough && allReady;
   /* Design note #857: what the ROOM is short of, from the same reader `canStartSandboxGame` uses -- so the
@@ -188,7 +211,7 @@ export function SandboxWaitingRoom({
      variants -- the same object the toggles below edit, so they move the moment the host ticks the box. */
   const cash = startingCashForPlayers(players.length, variants);
   const certs = certLimitForPlayers(players.length, variants);
-  const maxPlayers = maxPlayersFor(variants);
+  const maxPlayers = seatCap;
 
   /* Design note #1144: the same 70% the shell and the lobby draw at. This screen is the one the report named
      first -- "did the Waiting Room panel become huge at some point?" -- and #1137 answered the half of that
@@ -228,7 +251,12 @@ export function SandboxWaitingRoom({
         <div style={styles.codeBlock}>
           <span style={styles.codeLabel}>Room code</span>
           <code style={styles.code}>{roomCode}</code>
-          <span style={styles.note}>Anyone with this code can join from the lobby.</span>
+          {/* #1415: a private room is unlisted, and the sentence says so -- the code is the only door. */}
+          <span style={styles.note}>
+            {visibility === "private"
+              ? "Private room — unlisted. Only someone with this code can join, and nobody can watch."
+              : "Public room — listed under Join Game. Anyone with this code can join from the lobby too."}
+          </span>
         </div>
 
         <form
@@ -346,6 +374,39 @@ export function SandboxWaitingRoom({
                   <span style={player.isReady ? styles.ready : styles.notReady}>
                     {player.isReady ? "Ready" : "Not ready"}
                   </span>
+                  {/* #1415: the host removes a joiner -- never themselves, never after the start. Asked
+                      twice, inline: a seat is a person, and a mis-click here is a person gone. */}
+                  {canKick && player.id !== room?.hostId && (
+                    kicking === player.id ? (
+                      <span style={styles.kickConfirm}>
+                        <button
+                          type="button"
+                          style={styles.kickButtonConfirm}
+                          onClick={() => {
+                            setKicking(null);
+                            onKick?.(player.id);
+                          }}
+                          data-testid={`kick-confirm-${player.id}`}
+                        >
+                          Remove{player.isReady ? " (refunds ante)" : ""}
+                        </button>
+                        <button type="button" style={styles.pinButton} onClick={() => setKicking(null)}>
+                          Keep
+                        </button>
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        style={styles.kickButton}
+                        onClick={() => setKicking(player.id)}
+                        aria-label={`Remove ${player.nickname || "this player"} from the table`}
+                        title="Remove this player. They cannot rejoin this room."
+                        data-testid={`kick-${player.id}`}
+                      >
+                        ✕
+                      </button>
+                    )
+                  )}
                 </span>
               </span>
             ))
@@ -366,9 +427,15 @@ export function SandboxWaitingRoom({
             </span>
           ) : (
             <span style={styles.note}>
-              Project 18XX is dealt for {MIN_PLAYERS}–{maxPlayers} players. Waiting for more.
+              {exactCount !== null
+                ? `The host set this table for exactly ${exactCount} players. Waiting for more.`
+                : `Project 18XX is dealt for ${MIN_PLAYERS}–${maxPlayers} players. Waiting for more.`}
             </span>
           )}
+          {/* #1415: the seat count against the cap, always -- "3 of 5 seats". */}
+          <span style={styles.note}>
+            {players.length} of {maxPlayers} seats{exactCount !== null ? " (exactly)" : ""}.
+          </span>
         </div>
 
         {/* ==================================================================
@@ -384,127 +451,57 @@ export function SandboxWaitingRoom({
             LOCKED ONCE THE GAME STARTS. `status !== "waiting"` closes the controls, because the variants
             travel in the `SetupGame` action and changing them afterwards would describe a game that is not
             the one being played. */}
+        {/* ==================================================================
+             DESIGN NOTE 1415: THE PANEL IS A SUMMARY NOW -- see the prop note above
+            ==================================================================
+            #924's rule survives it: a seat reads the TERMS IN FORCE, not the menu. The rows that are always
+            true of a table (type, pace, players, bank, ante) are always shown; a rule variant is a row only
+            when it is on, and with none on the sentence says so rather than leaving a heading over nothing. */}
         <div style={styles.variantPanel}>
           <span style={styles.variantHeading}>House rules</span>
-          <label style={styles.variantRow}>
-            <span style={styles.variantLabel}>Game length</span>
-            <select
-              value={variants.length}
-              disabled={!canEditVariants}
-              onChange={(event) =>
-                onSetVariants?.({ ...variants, length: event.target.value as GameLength })
-              }
-              style={styles.variantSelect}
-            >
-              {(Object.keys(BANK_SIZE_BY_LENGTH) as GameLength[]).map((option) => (
-                <option key={option} value={option}>
-                  {option === "short" ? "Short" : option === "long" ? "Long" : "Standard"} &mdash; $
-                  {BANK_SIZE_BY_LENGTH[option].toLocaleString()} bank
-                </option>
-              ))}
-            </select>
-          </label>
-          <span style={styles.variantNote}>{GAME_LENGTH_BLURB[variants.length]}</span>
+          <span style={styles.variantNote}>
+            Set by the host before this room opened. You are agreeing to them when you press Ready.
+          </span>
 
-          {/* #1256: how the table plays. Not a house rule -- it changes no rule of 1830 -- but it is a term
-              every timer reads, so it is chosen here with the others and fixed at the deal like them. Shown to
-              guests too, for #910's reason: they are agreeing to it. */}
-          <label style={styles.variantRow}>
-            <span style={styles.variantLabel}>Pace</span>
-            <select
-              value={variants.mode}
-              disabled={!canEditVariants}
-              onChange={(event) =>
-                onSetVariants?.({ ...variants, mode: event.target.value as GameMode })
-              }
-              style={styles.variantSelect}
-            >
-              {(Object.keys(GAME_MODE_COPY) as GameMode[]).map((option) => (
-                <option key={option} value={option}>
-                  {GAME_MODE_COPY[option].label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <span style={styles.variantNote}>{GAME_MODE_COPY[variants.mode].blurb}</span>
+          <TermRow label="Game type" value={GAME_TYPE_COPY[gameTypeOf(variants)].label} />
+          <TermRow label="Pace" value={GAME_MODE_COPY[variants.mode].label} note={GAME_MODE_COPY[variants.mode].blurb} />
+          <TermRow label="Visibility" value={VISIBILITY_COPY[visibility].label} />
+          <TermRow
+            label="Players"
+            value={exactCount !== null ? `Exactly ${exactCount}` : `Any — ${MIN_PLAYERS} to ${maxPlayers}`}
+          />
+          <TermRow
+            label="Bank"
+            value={`$${BANK_SIZE_BY_LENGTH[variants.length].toLocaleString()}`}
+            note={GAME_LENGTH_BLURB[variants.length]}
+          />
+          <TermRow
+            label="Ante"
+            value={formatJuno(ante.anteUjuno)}
+            note={
+              ante.anteUjuno === "0"
+                ? ANTE_SUBSIDY_NOTE
+                : `${formatJuno(ante.subsidyUjuno)} of each ante funds the developer treasury for fee grants; ${formatJuno(ante.netUjuno)} reaches the pool.`
+            }
+          />
 
-          {/* Design note #1271: the Game Type, one drop-down for what used to be three interlocked boxes.
-              Shown to guests read-only like the two selects above it -- it is the biggest term on the table. */}
-          <label style={styles.variantRow}>
-            <span style={styles.variantLabel}>Game type</span>
-            <select
-              value={gameTypeOf(variants)}
-              disabled={!canEditVariants}
-              onChange={(event) =>
-                onSetVariants?.(withGameType(variants, event.target.value as GameType))
-              }
-              style={styles.variantSelect}
-            >
-              {GAME_TYPE_ORDER.map((option) => (
-                <option key={option} value={option}>
-                  {GAME_TYPE_COPY[option].label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <span style={styles.variantNote}>{GAME_TYPE_COPY[gameTypeOf(variants)].blurb}</span>
-
-          {/* ==================================================================
-               DESIGN NOTE 924: A GUEST READS THE TERMS, NOT THE MENU
-              ==================================================================
-              REPORTED: "for joining players (guests), hide the descriptions (or the entire rows) of any
-              variants that the host has toggled OFF. Guests only need to see the terms/variants that are
-              actively enabled."
-              AND #910 WAS RIGHT ABOUT THE WRONG AUDIENCE. It argued that terms only the host can read are not
-              terms -- true, and it made every seat read the whole MENU, including four rules that are not in
-              force. A guest is agreeing to a game, not reviewing a settings screen: what they need is the
-              list of rules that will actually apply, and an unticked box is not one of them.
-              THE HOST STILL SEES ALL FIVE, because the host is choosing rather than agreeing. Same panel, two
-              audiences, and the difference is which question they are answering. */}
-          {/* Design note #1271: THE TILE SET IS OFFERED ONLY WHERE IT IS A CHOICE. Under 18XX it has no map
-              (#1310); under the Level Playing Field it is forced on (#1320) and the drop-down's blurb says
-              so. Under 18XX+ it is the checkbox the request asked for, directly below the drop-down. A guest
-              sees it when it is on, as with every other term (#924). */}
-          {VARIANT_TOGGLES.filter((toggle) =>
-            toggle.key === "plusTiles"
-              ? canEditVariants
-                ? gameTypeOf(variants) === "plus"
-                : variants.plusTiles
-              : canEditVariants || variants[toggle.key],
-          ).map((toggle) => (
-            <label key={toggle.key} style={styles.variantToggle}>
-              <input
-                type="checkbox"
-                checked={variants[toggle.key]}
-                /* Design note #1310/#1320: the two lock rules that used to live here are the drop-down's now
-                   (`withGameType`); a box that is shown is a box that may be ticked. */
-                disabled={!canEditVariants}
-                onChange={(event) =>
-                  onSetVariants?.({
-                    ...variants,
-                    [toggle.key]: event.target.checked,
-                  })
-                }
-              />
+          {/* The rule variants in force, from the shared copy (#961a) -- `VARIANT_COPY[key]` by way of the
+              ordered table, so the rule reads here exactly as it did on the setup card. */}
+          {VARIANT_TOGGLES.filter((toggle) => variants[toggle.key]).map((toggle) => (
+            <div key={toggle.key} style={styles.variantToggle}>
+              <span style={styles.termTick} aria-hidden="true">✓</span>
               <span style={styles.variantToggleText}>
                 <span style={styles.variantToggleLabel}>{toggle.label}</span>
                 <span style={styles.variantNote}>{toggle.blurb}</span>
               </span>
-            </label>
+            </div>
           ))}
 
-          {!canEditVariants && (
+          {!VARIANT_TOGGLES.some((toggle) => variants[toggle.key]) && gameTypeOf(variants) === "standard" && (
             <span style={styles.variantNote}>
-              {VARIANT_TOGGLES.some((toggle) => variants[toggle.key]) ||
-              /* Design note #1271: a bigger map is a variant too, even with every box unticked. */
-              gameTypeOf(variants) !== "standard"
-                ? "Only the host can change these. You are agreeing to them when you press Ready."
-                : /* Design note #924: SILENCE WOULD READ AS A LOADING STATE. With every toggle off the list
-                     above renders nothing, and a heading with an empty body looks broken rather than
-                     settled. This says the same thing the empty list means. */
-                  /* Design note #977: "the standard game" rather than the number. Same rule, same batch's
-                     slip, same reason -- see `gameVariants` #977. */
-                  "No variants are switched on — this table is playing the standard game, as printed."}
+              {/* Design note #924/#977: silence would read as a loading state, and "the standard game"
+                  rather than the number (`appNaming` #706). */}
+              No variants are switched on — this table is playing the standard game, as printed.
             </span>
           )}
         </div>
@@ -528,12 +525,65 @@ export function SandboxWaitingRoom({
           </span>
         </label>
 
+        {/* ==================================================================
+             DESIGN NOTE 1415: READY IS THE DEPOSIT
+            ==================================================================
+            RULED: "Players get a seat, then when they click 'Ready' they ante into the game. Then the Host
+            starts the game." So the button asks first, with the figures: the ante, the treasury's share, and
+            what reaches the pool -- the same three numbers the receipt will carry. Un-Ready is the withdrawal
+            and asks the same way. The wallet is not wired yet (the ante is 0), but the CONFIRMATION is the
+            shape of the thing, and a player learns it now on a table where it costs nothing. */}
+        {readyConfirm && (
+          <div style={styles.readyConfirm} role="dialog" aria-label={readyConfirm === "deposit" ? "Confirm your ante" : "Withdraw your ante"}>
+            <span style={styles.variantToggleLabel}>
+              {readyConfirm === "deposit" ? "Ready to play — ante into this game?" : "Not ready — withdraw your ante?"}
+            </span>
+            <span style={styles.note}>
+              {readyConfirm === "deposit" ? (
+                <>
+                  Ante <strong style={styles.figure}>{formatJuno(ante.anteUjuno)}</strong> · developer
+                  treasury <strong style={styles.figure}>{formatJuno(ante.subsidyUjuno)}</strong> · to the
+                  pool <strong style={styles.figure}>{formatJuno(ante.netUjuno)}</strong>.
+                  {ante.anteUjuno === "0" ? " Nothing moves on this table — the ante is off." : ""}
+                </>
+              ) : (
+                <>
+                  Your ante of <strong style={styles.figure}>{formatJuno(ante.anteUjuno)}</strong> is refunded
+                  and your seat stays. Press Ready again to ante back in.
+                </>
+              )}
+            </span>
+            <span style={styles.kickConfirm}>
+              <button
+                type="button"
+                style={styles.buttonPrimary}
+                onClick={() => {
+                  setReadyConfirm(null);
+                  onToggleReady(readyConfirm === "deposit");
+                }}
+                disabled={busy}
+                data-testid="ready-confirm"
+              >
+                {readyConfirm === "deposit" ? "Confirm and ante" : "Withdraw"}
+              </button>
+              <button type="button" style={styles.button} onClick={() => setReadyConfirm(null)}>
+                Cancel
+              </button>
+            </span>
+          </div>
+        )}
+
         <div style={styles.actionRow}>
           <button
             type="button"
             style={me?.isReady ? styles.button : styles.buttonPrimary}
-            onClick={() => onToggleReady(!(me?.isReady ?? false))}
-            disabled={busy || !me}
+            onClick={() => setReadyConfirm(me?.isReady ? "withdraw" : "deposit")}
+            disabled={busy || !me || readyConfirm !== null}
+            title={
+              me?.isReady
+                ? "Withdraw your ante and mark yourself not ready."
+                : `Ante ${formatJuno(ante.anteUjuno)} and mark yourself ready.`
+            }
           >
             {me?.isReady ? "Not ready" : "Ready to play"}
           </button>
@@ -550,7 +600,9 @@ export function SandboxWaitingRoom({
                  of what was blocking, and it was hovered by the one person who could act on it. */
               title={
                 block === "need-players"
-                  ? `Project 18XX needs at least ${MIN_PLAYERS} players.`
+                  ? exactCount !== null
+                    ? `You set this table for exactly ${exactCount} players; ${players.length} ${players.length === 1 ? "is" : "are"} seated.`
+                    : `Project 18XX needs at least ${MIN_PLAYERS} players.`
                   : block === "need-ready"
                     ? "Waiting for everyone to mark themselves ready."
                     : "Deal the game and begin."
@@ -570,7 +622,13 @@ export function SandboxWaitingRoom({
             #835 applied to the Track hint and #855 to the route detail: a line about a control goes under it.
             NOT AN ERROR, and drawn so: nothing has gone wrong, the player has finished their part. `error`
             below keeps its own louder treatment. */}
-        {notice && <span style={styles.notice}>{notice}</span>}
+        {wasKicked ? (
+          <span style={styles.error}>
+            The host removed you from this table. You cannot rejoin this room; leave and join or host another.
+          </span>
+        ) : (
+          notice && <span style={styles.notice}>{notice}</span>
+        )}
 
         {error && <span style={styles.error}>{error}</span>}
       </div>
@@ -639,6 +697,19 @@ export function SandboxWaitingRoomHold({
         </div>
       </div>
       <AppFooter surface="meta" />
+    </div>
+  );
+}
+
+/** #1415: one term of the table, read-only -- a label, its value, and the sentence that explains it. */
+function TermRow({ label, value, note }: { label: string; value: string; note?: string }) {
+  return (
+    <div style={styles.variantToggleText}>
+      <div style={styles.variantRow}>
+        <span style={styles.variantLabel}>{label}</span>
+        <span style={styles.termValue}>{value}</span>
+      </div>
+      {note && <span style={styles.variantNote}>{note}</span>}
     </div>
   );
 }
@@ -942,16 +1013,43 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#8a8a86",
     textTransform: "uppercase",
   },
-  variantRow: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px" },
+  variantRow: { display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "10px", flexWrap: "wrap" },
   variantLabel: { fontSize: FONT_SIZE.small, fontWeight: 700, color: "#f2f0eb" },
-  variantSelect: {
-    fontSize: FONT_SIZE.small,
-    padding: "5px 8px",
+  /* #1415: a term's value, read rather than chosen -- the control's ink without the control. */
+  termValue: { fontSize: FONT_SIZE.small, fontWeight: 700, color: "#c8c6c0", fontVariantNumeric: "tabular-nums", textAlign: "right" },
+  termTick: { color: "#7ee0a1", fontWeight: 800, fontSize: FONT_SIZE.small, lineHeight: LINE_HEIGHT.normal },
+  /* #1415: the ante confirmation, drawn as a card above the buttons it answers for. */
+  readyConfirm: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "8px",
+    padding: "12px 14px",
+    borderRadius: RADIUS.card,
+    border: "1px solid #2f6f6a",
+    backgroundColor: "#0f1a19",
+    marginTop: "10px",
+  },
+  kickConfirm: { display: "inline-flex", alignItems: "center", gap: "6px" },
+  kickButton: {
+    padding: "2px 7px",
     borderRadius: RADIUS.control,
     border: "1px solid #3a3a3a",
-    backgroundColor: "#141414",
-    color: "#f2f0eb",
-    minWidth: "220px",
+    backgroundColor: "transparent",
+    color: "#8a8a86",
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 700,
+    cursor: "pointer",
+    lineHeight: 1,
+  },
+  kickButtonConfirm: {
+    padding: "2px 8px",
+    borderRadius: RADIUS.control,
+    border: "1px solid #7a3f3f",
+    backgroundColor: "#401d1d",
+    color: "#f5e6e6",
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 700,
+    cursor: "pointer",
   },
   variantToggle: { display: "flex", flexDirection: "row", gap: "9px", alignItems: "flex-start" },
   variantToggleText: { display: "flex", flexDirection: "column", gap: "1px", minWidth: 0 },

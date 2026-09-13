@@ -47,8 +47,14 @@ import { CLIENT_BUILD_ID, GAME_SERVER_URL } from "../config";
 import type { GameVariants } from "./gameVariants";
 import type { ForcedSignStage } from "./yellowSign";
 import type { PresenceState } from "./presence";
-import { SEAT_SUPERSEDED_CODE, forgetSeat, readSeatPin, readSeatToken } from "./seatPin";
-import type { SandboxRoomDoc, SandboxRoomPlayer, SandboxRoomStatus } from "./sandboxRoom";
+import { ROOM_WRITE_REFUSED_CODE, SEAT_SUPERSEDED_CODE, forgetSeat, readSeatPin, readSeatToken } from "./seatPin";
+import type {
+  RoomVisibility,
+  SandboxRoomDoc,
+  SandboxRoomPlayer,
+  SandboxRoomStatus,
+  SandboxRoomSummary,
+} from "./sandboxRoom";
 
 /* ==================================================================
     DESIGN NOTE 1361: EVERYTHING THAT WAS ON FIRESTORE RIDES THIS SOCKET NOW
@@ -78,11 +84,29 @@ import type { SandboxRoomDoc, SandboxRoomPlayer, SandboxRoomStatus } from "./san
  *  document patch: the server applies each one under the rule that belongs to it (an upsert is in-place,
  *  #541), and a client that could patch arbitrary fields could rewrite the host. */
 export type RoomDocWrite =
-  | { op: "host"; hostId: string; nickname: string; variants: GameVariants }
+  | {
+      op: "host";
+      hostId: string;
+      nickname: string;
+      variants: GameVariants;
+      /* #1415: the terms chosen before the room existed. Optional so an older client's host write still opens
+         a room -- the server fills the defaults. */
+      visibility?: RoomVisibility;
+      playerCount?: number | null;
+      anteUjuno?: string;
+    }
   | { op: "upsert-player"; player: SandboxRoomPlayer }
   | { op: "variants"; variants: GameVariants }
   | { op: "forced-sign"; stage: ForcedSignStage | null }
-  | { op: "status"; status: SandboxRoomStatus };
+  | { op: "status"; status: SandboxRoomStatus }
+  /* #1415: the host removes a joiner. The server checks the writer is the host and the room is waiting. */
+  | { op: "kick"; playerId: string };
+
+/** #1415: the public room list -- every listed sandbox room the server holds, sent to lobby sockets. */
+export interface SandboxRoomsFrame {
+  kind: "rooms";
+  rooms: SandboxRoomSummary[];
+}
 
 export interface RoomDocFrame {
   kind: "room";
@@ -241,6 +265,8 @@ interface Connection {
   retired: boolean;
   /** #1363: a `host` write has been sent on this connection and no document has come back yet. */
   hosting: boolean;
+  /** #1415: listeners for a write the room did not take (`ROOM_WRITE_REFUSED_CODE`). */
+  refusals: Set<(reason: string) => void>;
 }
 
 const connections = new Map<string, Connection>();
@@ -360,6 +386,13 @@ function attach(room: string, connection: Connection): void {
         return;
       }
       const reason = (frame as { reason?: string }).reason ?? "room error";
+      /* #1415: a refused write is an answer to whoever wrote it, not a fault on the wire -- the join awaiting
+         its seat, or the host whose kick was turned away -- so it goes to the refusal listeners and, when
+         nobody is waiting, to the error line like any other. */
+      if ((frame as { code?: string }).code === ROOM_WRITE_REFUSED_CODE && connection.refusals.size > 0) {
+        connection.refusals.forEach((onRefused) => onRefused(reason));
+        return;
+      }
       connection.errors.forEach((onError) => onError(reason));
       return;
     }
@@ -423,6 +456,7 @@ function connect(room: string, claim: string): Connection {
     attempts: 0,
     retired: false,
     hosting: false,
+    refusals: new Set(),
   };
   connections.set(room, connection);
   attach(room, connection);
@@ -551,6 +585,40 @@ export function writeRoomDoc(room: string, claim: string, write: RoomDocWrite): 
   // #1363: a create in flight makes the next `null` document a non-answer, not a verdict.
   if (write.op === "host") connect(room, claim).hosting = true;
   sendTo(room, claim, { kind: "room-write", room, write });
+}
+
+/** #1415: a JOIN is a write with an answer. The upsert itself is fire-and-forget like every other write; what
+ *  the joiner waits for is either the next document that seats them (ok) or the server's refusal (a full table,
+ *  a kicked seat, a game already started). Resolved rather than rejected on refusal, like `askSeat`, so the
+ *  caller's sentence is the server's. */
+export function joinRoomDoc(
+  room: string,
+  claim: string,
+  player: SandboxRoomPlayer,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const connection = connect(room, claim);
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (answer: { ok: true } | { ok: false; reason: string }) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      connection.listeners.delete(onRoom);
+      connection.refusals.delete(onRefused);
+      resolve(answer);
+    };
+    const onRoom: Listener = (doc) => {
+      if (doc && doc.players.some((entry) => entry.id === player.id)) finish({ ok: true });
+    };
+    const onRefused = (reason: string) => finish({ ok: false, reason });
+    const timer = window.setTimeout(
+      () => finish({ ok: false, reason: "The game server did not answer. Check the connection and try again." }),
+      SEAT_REQUEST_TIMEOUT_MS,
+    );
+    connection.listeners.add(onRoom);
+    connection.refusals.add(onRefused);
+    sendTo(room, claim, { kind: "room-write", room, write: { op: "upsert-player", player } });
+  });
 }
 
 /** #1358: a seat request that hears nothing is answered as a refusal rather than left hanging -- a card with

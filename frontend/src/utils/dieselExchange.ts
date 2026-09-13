@@ -43,7 +43,12 @@ export function dieselAvailable(state: GameStateResponse | null): boolean {
 
 /** Whether this table plays the exchange at all. */
 export function dieselExchangeEnabled(state: GameStateResponse | null): boolean {
-  return resolveVariants(state?.variants).expandedMap;
+  /* #1439: CORRECTED -- "players can trade-in trains to acquire their D-trains, so this also needs to be
+     adopted from LPF variant. Diesel: $1,100, Diesel with a 4-, 5-, or 6-train trade-in: $800." On every
+     table, then; the prices were already the standard ones outside the Level Playing Field. `state` is kept
+     so a later variant can switch it off without touching the callers. */
+  void state;
+  return true;
 }
 
 /** The models `company` could trade in, in roster order, one entry per train. A train on its Gentle Rust
@@ -60,12 +65,10 @@ export function dieselExchangeRefusal(
   modelType?: string,
 ): string | null {
   if (!dieselExchangeEnabled(state)) {
-    return "This table is not playing Project 18XX+ — trains are not traded in.";
+    return "This table does not trade trains in.";
   }
   if (!dieselAvailable(state)) {
-    return resolveVariants(state.variants).levelPlayingField
-      ? "D-trains are not for sale yet — the first 6-train must be bought first."
-      : "D-trains are not for sale yet — every 6-train must be bought first.";
+    return "D-trains are not for sale yet — the first 6-train must be bought first."; // #1439: every table
   }
   const company = state.public_companies.find((entry) => entry.company_id === companyId);
   if (!company) return "That corporation is not on this board.";

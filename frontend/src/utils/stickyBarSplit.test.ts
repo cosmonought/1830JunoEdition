@@ -188,7 +188,8 @@ describe("the panels are back inside the bar, on a measurement (design note #828
     /* Design note #919: `&& privatePanelOpen` joined this when the private jump became a disclosure, exactly
        as #915 did for trains. The property is that the panel renders FROM THIS BAR -- #828's subject -- so it
        is asserted as the clause that decides the step. */
-    expect(CODE).toContain('orStep === "BuyPrivate" && privatePurchase');
+    // #1440: the private purchase is no longer a step; the panel is gated on the standing button's rule instead.
+    expect(CODE).toContain('privateBuyOpen && privatePurchase && privatePanelOpen && (');
   });
 
   it("still condenses the depot with the bar", () => {
@@ -255,7 +256,8 @@ describe("the lifted panels kept the gate their nesting used to give them (desig
   });
 
   it("gates Buy Private on it", () => {
-    expect(CODE).toContain('{mayActThisTurn && orStep === "BuyPrivate" && privatePurchase');
+    // #1440: through `privateBuyOpen`, which is `mayActThisTurn && ... && privatesForSale`.
+    expect(CODE).toContain("const privateBuyOpen = mayActThisTurn && roundType === \"OperatingRound\" && privatePurchase !== null && privatesForSale;");
     expect(CODE).toContain('privatePurchase && privatePanelOpen && (');
   });
 

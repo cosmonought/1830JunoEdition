@@ -34,6 +34,18 @@ import {
   resolveVariants,
   type GameVariants,
 } from "../utils/gameVariants";
+/* #1435: the chart as data -- see the note at "Price + zone grid mirror" below. */
+import {
+  PRICE_GRID,
+  PAR_VALUE_LADDER,
+  REAL_BOARD_COLUMNS,
+  cellAt,
+  cellKey,
+  marketMaxY,
+  priceCellByKey,
+  type PriceCell,
+  type ZoneType,
+} from "./marketChart";
 
 /* ------------------------------------------------------------------ */
 /* Contract data mirrors -- see design note #1                        */
@@ -65,220 +77,27 @@ export interface MarketGridResponse {
 /* Price + zone grid mirror -- see design notes #1/#3/#4               */
 /* ------------------------------------------------------------------ */
 
-/** Mirrors `market::MARKET_MIN_X`/`MAX_X`/`MIN_Y`/`MAX_Y` exactly: 19 columns (x 0-18), 11 rows
- *  (y 0-10). Clamps occupant placement only -- `REAL_MARKET_ROWS` decides the visible shape. */
+/* ==================================================================
+    DESIGN NOTE 1435: THE CHART IS A VALUE, IN `marketChart.ts`
+   ==================================================================
+   The board data, the par ladder, `PriceCell`, `buildPriceGrid` and `PRICE_GRID` moved to a leaf module
+   with no React in it, for the reason `hexBoardData.ts` #1300 gives for the hex board: a variant now
+   changes the chart's shape (Dynamic Market adds a row above the top), and the chart in effect has to be
+   something `boardSelection.ts` can switch per table -- which a component module cannot be imported to do
+   without `utils/` importing `components/` (#7/#273). Everything this file exported from that block is
+   re-exported below, so no importer moved. `PRICE_GRID` is a LIVE binding: read it at call time, never
+   at module load. */
+export { PRICE_GRID, type PriceCell, type ZoneType } from "./marketChart";
+
+/** Mirrors `market::MARKET_MIN_X`/`MAX_X`/`MIN_Y` exactly; the top row is the chart in effect's (#1435).
+ *  Clamps occupant placement only -- the chart's rows decide the visible shape. */
 const MARKET_MIN_X = 0;
 const MARKET_MAX_X = 18;
 const MARKET_MIN_Y = 0;
-const MARKET_MAX_Y = 10;
-
-function cellKey(x: number, y: number): string {
-  return `${x},${y}`;
-}
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
-
-/** Mirrors `state::ZoneType` exactly -- see design note #3 for the
- *  cumulative-semantics caveat. */
-export type ZoneType = "Normal" | "Yellow" | "Orange" | "Brown";
-
-/** One real price cell: `[price, zoneType]`. Index `i` within a row's
- *  `cells` array corresponds to board column `startX + i`. */
-type RealCell = readonly [number, ZoneType];
-
-interface RealMarketRow {
-  y: number;
-  startX: number;
-  cells: readonly RealCell[];
-}
-
-/** The authentic 1830 board, sourced verbatim from the 18xx.games engine's `g_1830/game.rb`
- *  `MARKET` constant and mirrored byte-for-byte by `market::REAL_MARKET_ROWS`. `y` counts UP from
- *  the bottom (`y = 10` is the top row / Ruby index 0). The six par cells are tagged `Normal`;
- *  `PAR_VALUE_LADDER` is authoritative for their coordinates. See design note #1. */
-const REAL_MARKET_ROWS: readonly RealMarketRow[] = [
-  {
-    y: 10,
-    startX: 0,
-    cells: [
-      [60, "Yellow"], [67, "Normal"], [71, "Normal"], [76, "Normal"], [82, "Normal"],
-      [90, "Normal"], [100, "Normal"], [112, "Normal"], [126, "Normal"], [142, "Normal"],
-      [160, "Normal"], [180, "Normal"], [200, "Normal"], [225, "Normal"], [250, "Normal"],
-      [275, "Normal"], [300, "Normal"], [325, "Normal"], [350, "Normal"],
-    ],
-  },
-  {
-    y: 9,
-    startX: 0,
-    cells: [
-      [53, "Yellow"], [60, "Yellow"], [66, "Normal"], [70, "Normal"], [76, "Normal"],
-      [82, "Normal"], [90, "Normal"], [100, "Normal"], [112, "Normal"], [126, "Normal"],
-      [142, "Normal"], [160, "Normal"], [180, "Normal"], [200, "Normal"], [220, "Normal"],
-      [240, "Normal"], [260, "Normal"], [280, "Normal"], [300, "Normal"],
-    ],
-  },
-  {
-    y: 8,
-    startX: 0,
-    cells: [
-      [46, "Yellow"], [55, "Yellow"], [60, "Yellow"], [65, "Normal"], [70, "Normal"],
-      [76, "Normal"], [82, "Normal"], [90, "Normal"], [100, "Normal"], [111, "Normal"],
-      [125, "Normal"], [140, "Normal"], [155, "Normal"], [170, "Normal"], [185, "Normal"],
-      [200, "Normal"],
-    ],
-  },
-  {
-    y: 7,
-    startX: 0,
-    cells: [
-      [39, "Orange"], [48, "Yellow"], [54, "Yellow"], [60, "Yellow"], [66, "Normal"],
-      [71, "Normal"], [76, "Normal"], [82, "Normal"], [90, "Normal"], [100, "Normal"],
-      [110, "Normal"], [120, "Normal"], [130, "Normal"],
-    ],
-  },
-  {
-    y: 6,
-    startX: 0,
-    cells: [
-      [32, "Orange"], [41, "Orange"], [48, "Yellow"], [55, "Yellow"], [62, "Normal"],
-      [67, "Normal"], [71, "Normal"], [76, "Normal"], [82, "Normal"], [90, "Normal"],
-      [100, "Normal"],
-    ],
-  },
-  {
-    y: 5,
-    startX: 0,
-    cells: [
-      [25, "Brown"], [34, "Orange"], [42, "Orange"], [50, "Yellow"], [58, "Yellow"],
-      [65, "Normal"], [67, "Normal"], [71, "Normal"], [75, "Normal"], [80, "Normal"],
-    ],
-  },
-  {
-    y: 4,
-    startX: 0,
-    cells: [
-      [18, "Brown"], [27, "Brown"], [36, "Orange"], [45, "Orange"], [54, "Yellow"],
-      [63, "Normal"], [67, "Normal"], [69, "Normal"], [70, "Normal"],
-    ],
-  },
-  {
-    y: 3,
-    startX: 0,
-    cells: [
-      [10, "Brown"], [20, "Brown"], [30, "Brown"], [40, "Orange"], [50, "Yellow"],
-      [60, "Yellow"], [67, "Normal"], [68, "Normal"],
-    ],
-  },
-  {
-    y: 2,
-    startX: 1,
-    cells: [
-      [10, "Brown"], [20, "Brown"], [30, "Brown"], [40, "Orange"], [50, "Yellow"], [60, "Yellow"],
-    ],
-  },
-  {
-    y: 1,
-    startX: 2,
-    cells: [
-      [10, "Brown"], [20, "Brown"], [30, "Brown"], [40, "Orange"], [50, "Yellow"],
-    ],
-  },
-  {
-    y: 0,
-    startX: 3,
-    cells: [
-      [10, "Brown"], [20, "Brown"], [30, "Brown"], [40, "Orange"],
-    ],
-  },
-];
-
-/** The widest real row spans columns 0-18 -- sizes the CSS grid's track count only. An occupant
- *  past this still renders via an implicit track (design note #1). */
-const REAL_BOARD_COLUMNS = 19;
-
-/* Design note #652: $350 is a CEILING, not a game end. The always-false `isGameEndCell` flag and
-   its whole apparatus are removed; `GameOverModal`'s `GameEndReason` is what ends the game here.
-   Still owed: `market.rs`'s `GAME_END_PRICE_TRIGGER` / `price_triggers_game_end` (backend audit). */
-
-/* `isRealMarketCell` deleted -- design note #43a moved the question inside `buildPriceGrid`.
-   `cellAt` is the live way to ask, and it returns the cell rather than just a boolean. */
-
-/** Mirrors `market::PAR_VALUE_LADDER` exactly: `(price, x, y)`, the six
- *  standard 1830 par prices, now at their true real-board coordinates
- *  (a vertical column at `x=6`, spanning `y=5..10`) -- see design note #4.
- */
-const PAR_VALUE_LADDER: ReadonlyArray<{ price: number; x: number; y: number }> = [
-  { price: 67, x: 6, y: 5 },
-  { price: 71, x: 6, y: 6 },
-  { price: 76, x: 6, y: 7 },
-  { price: 82, x: 6, y: 8 },
-  { price: 90, x: 6, y: 9 },
-  { price: 100, x: 6, y: 10 },
-];
-
-/* Design note #651: the par ladder's three coordinate constants went with the overlay they
-   positioned (#650). The six cells are found by `cell.isParValueLadder` instead. */
-
-// Design note #20: the column-6 hard-block is gone. `NORMAL_CELL_BACKGROUND`/`styles.priceText`
-// serve the same role by `zoneType` alone, so the real Yellow/Orange `x = 6` cells colour again.
-
-const PAR_VALUE_LADDER_BY_CELL: ReadonlyMap<string, number> = new Map(
-  PAR_VALUE_LADDER.map((entry) => [cellKey(entry.x, entry.y), entry.price]),
-);
-
-export interface PriceCell {
-  x: number;
-  y: number;
-  price: number;
-  zoneType: ZoneType;
-  isParValueLadder: boolean;
-  /** Design note #43: the leftmost cell of its row -- a LEFT CLIFF. A price
-   *  here that would move left moves DOWN instead. */
-  isLeftCliff: boolean;
-  /** The rightmost cell of its row -- a RIGHT CLIFF. A price here that
-   *  would move right moves UP instead. */
-  isRightCliff: boolean;
-}
-
-/** Walks `REAL_MARKET_ROWS` cell by cell -- no rectangular loop, no formula -- overlaying the six
- *  `PAR_VALUE_LADDER` prices. Ordered `y = 10` first so the array reads top-to-bottom as it renders. */
-function buildPriceGrid(): PriceCell[] {
-  const cells: PriceCell[] = [];
-  // Design note #43a: which coordinates exist at all, so a cliff can ask
-  // whether the cell it would be pushed INTO is on the board.
-  const occupied = new Set<string>();
-  for (const row of REAL_MARKET_ROWS) {
-    row.cells.forEach((_, index) => occupied.add(cellKey(row.startX + index, row.y)));
-  }
-  for (const row of REAL_MARKET_ROWS) {
-    row.cells.forEach(([price, zoneType], index) => {
-      const x = row.startX + index;
-      const parOverride = PAR_VALUE_LADDER_BY_CELL.get(cellKey(x, row.y));
-      cells.push({
-        x,
-        y: row.y,
-        price: parOverride ?? price,
-        zoneType,
-        isParValueLadder: parOverride !== undefined,
-        // Design note #43/#43a: a cliff is a property of the ROW (the board is jagged), and only counts
-        // if a cell exists to be redirected into -- the $10 floor and $350 ceiling get no arrow. Derived
-        // from the grid rather than hardcoding the two terminal prices.
-        isLeftCliff: index === 0 && occupied.has(cellKey(x, row.y - 1)),
-        isRightCliff:
-          index === row.cells.length - 1 && occupied.has(cellKey(x, row.y + 1)),
-      });
-    });
-  }
-  return cells;
-}
-
-/* Design note #652: exported for `gameEndCondition.test.ts`. The grid is the
-   only place a cell can claim a rule, so a test that the board makes no
-   game-end claim has to be able to read it. Frozen-by-type (`readonly`) and
-   built once at module load, so a reader cannot perturb it. */
-export const PRICE_GRID: readonly PriceCell[] = buildPriceGrid();
 
 /** Finds the chart cell a share price sits in. EXPORTED for the sandbox, which must produce a
  *  `MarketGridResponse` keyed by `(x, y)` rather than by price.
@@ -393,10 +212,6 @@ export function projectDividendFrom(
  *  block rather than per transaction. Takes and returns a CELL (prices repeat across rows).
  *  Reproduces the FLOOR correctly and the ledges not at all; `market.rs` remains the authority.
  *  See `SandboxMarketMark` for why the caller tracks the cell. */
-function cellAt(x: number, y: number): PriceCell | undefined {
-  return PRICE_GRID.find((candidate) => candidate.x === x && candidate.y === y);
-}
-
 export function projectShareSaleMove(
   from: { x: number; y: number },
   blocks: number,
@@ -1013,12 +828,8 @@ export function cellTitleFor(cell: PriceCell): string {
     .join(" — ");
 }
 
-/** Design note #648: the grid by coordinate, so a token cluster can find the
- *  cell it is standing on. Built once from the module constant rather than
- *  per render -- `PRICE_GRID` never changes. */
-const PRICE_CELL_BY_KEY: ReadonlyMap<string, PriceCell> = new Map(
-  PRICE_GRID.map((cell) => [cellKey(cell.x, cell.y), cell]),
-);
+/* Design note #648's `PRICE_CELL_BY_KEY` is `priceCellByKey()` in `marketChart.ts` now (#1435): the
+   chart can change per table, so the lookup is rebuilt when the chart is switched, not at module load. */
 
 /* ==================================================================
     DESIGN NOTE 1159: THE HOVER LIFTS ONE TOKEN INSTEAD OF SCATTERING THE PILE
@@ -1219,7 +1030,7 @@ export function StockMarketRenderer({
     const groupsByKey = new Map<string, CellOccupantGroup>();
     for (const position of tradingPositions) {
       const x = clamp(position.x, MARKET_MIN_X, MARKET_MAX_X);
-      const y = clamp(position.y, MARKET_MIN_Y, MARKET_MAX_Y);
+      const y = clamp(position.y, MARKET_MIN_Y, marketMaxY());
       const key = cellKey(x, y);
       const existing = groupsByKey.get(key);
       if (existing) {
@@ -1304,7 +1115,7 @@ export function StockMarketRenderer({
                 style={{
                   ...styles.cell,
                   gridColumn: cell.x + 1,
-                  gridRow: 11 - cell.y,
+                  gridRow: marketMaxY() + 1 - cell.y, // #1435: the chart in effect decides the top row
                   // `background` always fully replaces `backgroundColor` -- design note #18/item 1 makes even the
                   // no-special-treatment case an explicit value rather than a fall-through.
                   background: gradient,
@@ -1378,14 +1189,14 @@ export function StockMarketRenderer({
               <div
                 key={group.key}
                 className="market-token-cluster"
-                style={{ ...styles.tokenWrapper, gridColumn: group.x + 1, gridRow: 11 - group.y }}
+                style={{ ...styles.tokenWrapper, gridColumn: group.x + 1, gridRow: marketMaxY() + 1 - group.y }}
                 /* Design note #648: the cell's own facts, because this box is
                    now what the pointer meets there. `undefined` for a token
                    at a coordinate with no cell -- design note #5/#8's orphan
                    case, which has no price to report. */
                 title={
-                  PRICE_CELL_BY_KEY.get(cellKey(group.x, group.y))
-                    ? cellTitleFor(PRICE_CELL_BY_KEY.get(cellKey(group.x, group.y)) as PriceCell)
+                  priceCellByKey().get(cellKey(group.x, group.y))
+                    ? cellTitleFor(priceCellByKey().get(cellKey(group.x, group.y)) as PriceCell)
                     : undefined
                 }
               >

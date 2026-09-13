@@ -11,6 +11,7 @@
 // row the tool will never act on; a line under the list counts them instead. Each ticked row gets its own cap,
 // seeded from the "up to" figure so one shared cap is still one click.
 
+import { AutoModePicker, type AutoMode } from "./AutoModePicker";
 import React, { useState } from "react";
 
 import { FONT_SIZE, RADIUS } from "../styles/typography";
@@ -43,6 +44,8 @@ export interface AutoBuyModalProps {
   initial?: AutoBuySettings;
   onArm: (settings: AutoBuySettings) => void;
   onClose: () => void;
+  /** #1444: the other mode is one click away, at the top of the card. */
+  onSwitchMode?: (mode: AutoMode) => void;
 }
 
 const SOURCE_LABELS: ReadonlyArray<{ value: AutoBuySourcePreference; label: string; title: string }> = [
@@ -51,7 +54,7 @@ const SOURCE_LABELS: ReadonlyArray<{ value: AutoBuySourcePreference; label: stri
   { value: "Cheapest", label: "Cheapest", title: "Whichever of the two is cheaper this turn; IPO on a tie." },
 ];
 
-export function AutoBuyModal({ open, corporations, initial, onArm, onClose }: AutoBuyModalProps) {
+export function AutoBuyModal({ open, corporations, initial, onArm, onClose, onSwitchMode }: AutoBuyModalProps) {
   /* Order of ticking is order of preference (#1240), so an array rather than a set. */
   const [targets, setTargets] = useState<AutoBuyTarget[]>([...(initial?.targets ?? [])]);
   /* ==================================================================
@@ -99,6 +102,7 @@ export function AutoBuyModal({ open, corporations, initial, onArm, onClose }: Au
             &#10006;
           </button>
         </div>
+        {onSwitchMode && <AutoModePicker mode="buy" onSwitch={onSwitchMode} />}
 
         <p style={styles.body}>
           On each of your turns this buys one share of the first ticked corporation you hold less than its cap

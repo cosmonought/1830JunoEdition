@@ -65,7 +65,8 @@ describe("the room document carries the table's house rules (design note #910)",
   it("opens a new room on the printed game", () => {
     /* A room that opened on `undefined` would deal 1830 anyway -- `resolveVariants` sees to that -- but the
        waiting room would render its controls from a config nobody had chosen. */
-    expect(source).toContain("variants: STANDARD_VARIANTS");
+    /* #1415: the terms arrive as a parameter now; the DEFAULT is still the printed game. */
+    expect(source).toContain("variants: GameVariants = STANDARD_VARIANTS");
   });
 });
 
@@ -82,7 +83,7 @@ describe("the setup dispatch carries them (design note #910)", () => {
     /* #1252: the deal also names the build that made it. The property here -- the variants are IN the
        action, from the room -- is unchanged; the literal has one more field. Both dispatch sites carry it. */
     expect(source).toContain(
-      "SetupGame: { players: seated, variants: sandboxRoom.variants, build: CLIENT_BUILD_ID }",
+      "SetupGame: { players: seated, variants: { ...sandboxRoom.variants, rules: CURRENT_RULES_REVISION }, build: CLIENT_BUILD_ID }", // #1443
     );
     expect(source).not.toContain("SetupGame: { players: seated, variants: sandboxRoom.variants }");
   });
@@ -95,32 +96,33 @@ describe("the setup dispatch carries them (design note #910)", () => {
   });
 });
 
-describe("the waiting room offers every variant the schema defines (design note #910)", () => {
-  const source = readStripped("components/SandboxWaitingRoom.tsx");
+/* ==================================================================
+    DESIGN NOTE 1415 (harness): THE CONTROLS MOVED TO THE SETUP CARD; THE TERMS STAYED IN THE ROOM
+   ==================================================================
+   RULED: the host chooses the house rules BEFORE the room exists and they are frozen after "Create Room". So
+   #910's claim -- every boolean flag reaches a control -- is asked of `HostSetupCard` now, and the waiting
+   room's half is #924's: a seat reads the terms in force, from the same ordered table and the same copy. */
+describe("the host's setup card offers every variant the schema defines (design note #910 via #1415)", () => {
+  const source = readStripped("components/HostSetupCard.tsx");
+  const room = readStripped("components/SandboxWaitingRoom.tsx");
 
-  it("is really the panel", () => {
-    expect(source).toContain("SandboxWaitingRoom");
-    expect(source).toContain("House rules");
+  it("is really the card", () => {
+    expect(source).toContain("HostSetupCard");
+    expect(source).toContain("Create Room");
   });
 
   it("binds a control to each boolean flag", () => {
-    /* THE COUNT IS THE ASSERTION, and it is derived from the schema rather than fixed at four. The reported
-       bug was two flags rendered out of five -- a number nobody would notice being wrong in a review, and
-       one this case makes impossible to get wrong silently. */
-    /* Design note #961a: RE-ANCHORED, because the toggle table changed shape. It used to spell out
-       `key: "gentleRust"` per entry; the labels and blurbs now come from `VARIANT_COPY` and the file keeps
-       only the ORDER, as a list of flag names. The rule is untouched -- every boolean flag must reach a
-       control -- and it is asked of the ordered list rather than of the whole file, so a flag mentioned in a
-       comment somewhere cannot satisfy it. */
-    const order = sliceBetween(source, "const VARIANT_TOGGLES", ").map((key)");
-    /* Design note #1271: two flags are owned by the Game Type drop-down rather than by a checkbox --
-       `expandedMap` and `levelPlayingField`, listed as `GAME_TYPE_FLAGS` beside the toggle table. The rule
-       is the same: every boolean flag reaches a control. The drop-down is one. */
-    const dropdown = sliceBetween(source, "const GAME_TYPE_FLAGS", "as const");
-    expect(source).toContain("withGameType(variants, event.target.value as GameType)");
+    /* THE COUNT IS THE ASSERTION, and it is derived from the schema rather than fixed at four. The four rule
+       variants are the ordered `HOUSE_RULE_ROWS`; the tile set is its own toggle; the two the Game Type owns
+       are chosen by the type boxes through `recommendedVariantsFor` -> `withGameType`. */
+    const rows = sliceBetween(source, "export const HOUSE_RULE_ROWS", "];");
+    const typeFlags = sliceBetween(room, "const GAME_TYPE_FLAGS", "as const");
+    expect(source).toContain("recommendedVariantsFor(type, mode)");
+    expect(source).toContain('testId="host-plus-tiles"');
     expect(BOOLEAN_FLAGS.length).toBeGreaterThan(0);
     for (const flag of BOOLEAN_FLAGS) {
-      expect([flag, order.includes(`"${flag}"`) || dropdown.includes(`"${flag}"`)]).toEqual([flag, true]);
+      const reached = rows.includes(`"${flag}"`) || typeFlags.includes(`"${flag}"`) || flag === "plusTiles";
+      expect([flag, reached]).toEqual([flag, true]);
     }
   });
 
@@ -129,25 +131,21 @@ describe("the waiting room offers every variant the schema defines (design note 
        quietly skips. */
     expect(source).toContain("BANK_SIZE_BY_LENGTH");
     expect(source).toContain("GAME_LENGTH_BLURB");
+    expect(source).toContain('data-testid="host-bank-size"');
   });
 
-  it("renders the toggles from the table rather than by hand", () => {
-    /* WHY THE DATA TABLE EXISTS. Five hand-written blocks is five chances to forget the sixth, which is this
-       bug at the scale of one row instead of one panel. */
-    /* Design note #924 put a `.filter` between the table and the `.map`, so the anchor is the table's use
-       rather than the exact call -- what this case is about is that the rows come from data. */
-    expect(source).toContain("VARIANT_TOGGLES.filter");
-    expect(source).toContain(").map((toggle) =>");
+  it("renders the rule rows from the table rather than by hand", () => {
+    expect(source).toContain("HOUSE_RULE_ROWS.map((row) =>");
   });
 
-  it("shows a guest the terms in force, and only those (design note #924)", () => {
-    /* #910 SAID "terms only the host can read are not terms" and made every seat read the whole MENU. A guest
-       is agreeing to a game, not reviewing a settings screen: four unticked boxes are not terms either.
-       THE FILTER IS THE ASSERTION, and it is written so the host is exempt -- the host is choosing rather
-       than agreeing, and needs the options that are off in order to turn them on. */
-    expect(source).toContain("canEditVariants || variants[toggle.key]");
-    expect(source).toContain("disabled={!canEditVariants}");
-    expect(source).toContain("Only the host can change these");
+  it("the waiting room shows every seat the terms in force, and only those (design note #924)", () => {
+    /* THE FILTER IS THE ASSERTION: a rule variant is a row only when it is on. Nobody edits here any more --
+       there is no `canEditVariants`, no `onSetVariants` -- and the sentence says whose choice it was. */
+    expect(room).toContain("VARIANT_TOGGLES.filter((toggle) => variants[toggle.key])");
+    expect(room).not.toContain("canEditVariants");
+    expect(room).not.toContain("onSetVariants");
+    expect(room).toContain("Set by the host before this room opened");
+    expect(room).toContain("House rules");
   });
 
   it("says so when a guest's filtered list would be empty", () => {
@@ -155,15 +153,15 @@ describe("the waiting room offers every variant the schema defines (design note 
        #977 RE-WORDED THE SENTENCE, not the rule: `appNaming` #706 forbids a player-facing string naming
        1830 -- this app is Project 18XX -- and the lobby copy batch had put the number back here. The anchor
        follows the copy, and the claim this case makes is unchanged. */
-    expect(source).toContain("playing the standard game, as printed");
-    expect(source).not.toContain("1830");
+    expect(room).toContain("playing the standard game, as printed");
+    expect(room).not.toContain("1830");
   });
 
   it("gives the rules text a legible treatment (design note #924)", () => {
     /* REPORTED: "too small and too gray against the dark background." These descriptions are the CONTENT of
        the decision, not a caption on a control whose label already carries it, so they take this app's body
        treatment rather than `AutoPassModal`'s micro/grey captions. */
-    const note = sliceBetween(source, "variantNote: {", "},");
+    const note = sliceBetween(room, "variantNote: {", "},");
     expect(note).toContain("FONT_SIZE.small");
     expect(note).not.toContain("FONT_SIZE.micro");
     /* Design note #1092 retoned this to `#c8c6c0`, the neutral ladder's secondary-text step. #924's claim is
@@ -188,12 +186,17 @@ describe("the waiting room offers every variant the schema defines (design note 
        rounding -- and `variantCopy.test.ts` checks that the figure it names is the one the arithmetic
        produces, which is the half this case could never have caught. */
     expect(source).toContain("VARIANT_COPY");
+    expect(room).toContain("VARIANT_COPY");
     expect(VARIANT_COPY.unpredictableRevenue.blurb).toContain("rounded to the nearest $10");
   });
 
-  it("stops accepting changes once the game is running", () => {
-    // The variants travel in `SetupGame`; editing them afterwards would describe a game nobody is playing.
-    expect(source).toContain('room?.status === "waiting"');
+  it("stops accepting changes once the room exists (#1415)", () => {
+    /* The variants travel in `SetupGame`; editing them afterwards would describe a game nobody is playing --
+       and now nothing after `Create Room` writes them at all: the only `variants` op writer left is the
+       module function, with no caller on the waiting room. The kick, the one host power that survives, is
+       still gated on the room waiting. */
+    expect(room).not.toContain("setSandboxRoomVariants");
+    expect(room).toContain('room?.status === "waiting"');
   });
 });
 
@@ -204,6 +207,7 @@ describe("the schema still resolves what the panel writes", () => {
     const chosen: GameVariants = {
       length: "long",
       mode: "async", // #1256
+      rules: 1, // #1443
       delayedAuction: true,
       gentleRust: true,
       unpredictableRevenue: true,

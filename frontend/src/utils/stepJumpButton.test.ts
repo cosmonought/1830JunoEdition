@@ -104,15 +104,15 @@ describe("the Hardware step offers the panel, not only the exit", () => {
 });
 
 describe("Buy Private gets the same treatment", () => {
-  it("has a jump button of its own", () => {
-    /* Reported one round earlier and in the same terms: "the issue with the Action Bar during the Buy Trains
-       subphase is also a problem during Buy Private Company." */
-    expect(privateCase).toContain('key: "go-to-privates"');
+  /* #1440: no longer a step -- the case is empty and the toggle lives on the left rail, for the whole turn. */
+  it("has a toggle of its own, on the left rail, for the whole turn", () => {
+    expect(privateCase).toContain("contextualButtons = [];");
+    expect(CODE).toContain('data-testid="buy-private-any-time"');
+    expect(CODE).toContain("{privateBuyOpen && (");
   });
 
   it("offers nothing when that panel is absent", () => {
-    expect(privateCase).toContain("privatePurchase");
-    expect(privateCase).toContain(": [];");
+    expect(CODE).toContain("privatePurchase !== null && privatesForSale");
   });
 });
 

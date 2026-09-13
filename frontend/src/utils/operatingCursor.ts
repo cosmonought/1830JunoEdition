@@ -66,7 +66,8 @@ function phaseAwareOpening(state: GameStateResponse): OperatingSubPhase {
   /* The same two tiers `visibleSubPhases` gates Buy Private on (design note
      #613): Phase 3 and Phase 4. Phase 5 closes the private companies, so
      there is nothing to open on. */
-  if (phase?.known) return phase.tier === "3" || phase.tier === "4" ? "BuyPrivate" : "Track";
+  // #1440: buying a private is no longer a step; every phase opens on Track.
+  if (phase?.known) return "Track";
   /* No corporation has reported a train yet, so the phase is unknown and the
      era field is the only evidence there is. It is right at this point in a
      game -- a fresh room really is Yellow -- which is why the staleness

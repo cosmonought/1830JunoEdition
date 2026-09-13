@@ -311,7 +311,8 @@
       "dynamicStockMarket": false,
       "expandedMap": true,
       "plusTiles": true,
-      "levelPlayingField": true
+      "levelPlayingField": true,
+      "rules": 0
     },
     "turn_action_taken": false,
     "bought_this_turn": 0

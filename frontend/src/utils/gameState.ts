@@ -479,6 +479,10 @@ export interface GameStateResponse {
    * IN STATE FOR #723'S REASON, like the two records above it: Undo replays the log, so anything the reducer
    * must decide travels in the state the reducer replays. */
   bought_this_turn?: number;
+  /** #1443: the Stock Round turn's stage under Sell-Buy-Sell. Absent is "sell" (the opening stage); `"buy"`
+   *  once the player has declined to sell further; the third stage ("sell again") is implied by
+   *  `bought_this_turn > 0`. Cleared wherever the seat moves. */
+  stock_turn_stage?: "sell" | "buy";
   consecutive_passes: number;
   current_global_era: TileColor;
   /** Operating Round Corporation Turn Queue -- `company_id`s in turn order. */

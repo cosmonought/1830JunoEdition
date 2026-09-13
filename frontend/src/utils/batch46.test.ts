@@ -317,11 +317,12 @@ describe("the bed gets out of the way", () => {
     /* RULED as "a debounce or concurrency limit", and the choice matters: a debounce DROPS the second event,
        and these clips are the game telling a player what happened. A limit keeps the first three. */
     expect(AUDIO).toContain("export const MAX_CONCURRENT_SFX = 3;");
-    expect(AUDIO).toContain("if (liveSfx >= MAX_CONCURRENT_SFX) return;");
+    // #1419: the ceremony's clips pass `uncapped`; every other caller is still bounded.
+    expect(AUDIO).toContain("if (!options.uncapped && liveSfx >= MAX_CONCURRENT_SFX) return;");
   });
 
   it("honours the SFX mute at the one place every caller goes through", () => {
-    expect(AUDIO).toContain("export function playVariantCue(file: string, enabled: boolean): void {\n  if (!enabled) return;");
+    expect(AUDIO).toContain("export function playVariantCue(file: string, enabled: boolean, options: CueOptions = {}): void {\n  if (!enabled) return;");
     /* Design note #1075: the second argument gained the per-category switch (`&& sfxRevenueRef.current`).
        The claim here is that the MASTER mute is still asked at the call site -- the engine takes one boolean
        and every caller composes it -- so the fragment stops before whatever else has been ANDed on. */

@@ -53,9 +53,19 @@ export function tierOrderFor(state: GameStateResponse | null): readonly TrainTie
  * the phase is still "the highest tier anybody owns" -- which is what makes the first Diesel rust the 4s
  * exactly as it always has. The standard queue (#4) is untouched: `openDepotTiers` answers one tier there. */
 const LPF_OPEN_SHELF: readonly TrainTier[] = ["6", "7", "D"];
+/* ==================================================================
+    DESIGN NOTE 1439: THE STANDARD DEPOT HAS AN OPEN SHELF TOO
+   ==================================================================
+   CORRECTED: "D-trains are available for purchase after the first 6-train is bought, not when all 6-trains
+   are bought ... This is true of 1830 and 1830+. LPF is already correct." So #1326's shelf is the rule on
+   every table, and only its contents differ: 6 and D on the printed board and the expanded map, 6, 7 and D
+   under the Level Playing Field. Once any 6 is owned, 6s and Diesels are both for sale, neither sells the
+   other out, and the first Diesel rusts the 4s as before (the phase is still the highest tier owned). */
+const STANDARD_OPEN_SHELF: readonly TrainTier[] = ["6", "D"];
 
 function onOpenShelf(state: GameStateResponse | null, tier: TrainTier): boolean {
-  return resolveVariants(state?.variants).levelPlayingField && LPF_OPEN_SHELF.includes(tier);
+  const shelf = resolveVariants(state?.variants).levelPlayingField ? LPF_OPEN_SHELF : STANDARD_OPEN_SHELF;
+  return shelf.includes(tier);
 }
 
 /** What the app calls a train of this tier -- `"3-Train"`, `"D-Train"`. No tier is a special case.

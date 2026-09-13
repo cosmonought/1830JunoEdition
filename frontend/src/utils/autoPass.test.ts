@@ -489,7 +489,8 @@ describe("the off switch is always reachable", () => {
     /* (1) THE ROUND GATE. `roundType === "StockRound"` is right for offering and wrong for withdrawing: the
        moment the round turned, the button vanished with the arm still set, so the only way out was to wait for
        a Stock Round -- which would then be passed for you. */
-    expect(bar).toContain('autoPass && (autoPass.armed || roundType === "StockRound")');
+    // #1444: one Auto button for both arms -- shown wherever either is armed, or in a Stock Round.
+    expect(bar).toContain('(autoPass || autoBuy) && (autoPass?.armed || autoBuy?.armed || roundType === "StockRound")');
   });
 
   it("never disables it while armed", () => {
@@ -503,7 +504,7 @@ describe("the off switch is always reachable", () => {
        arming was dead for the whole round except on the player's own turn. Reported as: "the ability to
        enable Auto-Pass during a Stock Round even when it is not currently their turn".
        WHAT THE CASE IS FOR IS UNCHANGED: armed, the button is never disabled, whatever the connection says. */
-    expect(bar).toContain("disabled={!autoPass.armed && !autoPass.canArm}");
+    expect(bar).toContain("disabled={!armed && !canArm}"); // #1444
   });
 
   it("does not gate arming on whose turn it is", () => {
@@ -611,7 +612,8 @@ describe("one standing instruction passes a turn once", () => {
        #1036, on the round change that clears a spent arm. THREE, not two: the count is asserted rather than
        the presence because a clear that went missing would leave a fresh arm silently guarded off for one
        turn, which is exactly the bug #816 was reported for. */
-    expect(app.match(/autoPassedAtLogIndexRef\.current = null;/g) ?? []).toHaveLength(3);
+    // #1444: FOUR -- arm, disarm, the round change, and arming Auto-Buy (which disarms this one).
+    expect(app.match(/autoPassedAtLogIndexRef\.current = null;/g) ?? []).toHaveLength(4);
   });
 
   it("leaves the wake path able to say so out loud", () => {

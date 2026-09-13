@@ -33,7 +33,9 @@ import {
   sendFrame,
   sendStanding,
   subscribeFrame,
+  type SandboxRoomsFrame,
 } from "./roomDocLink";
+import type { SandboxRoomSummary } from "./sandboxRoom";
 import { localPlayerId } from "./seatPin";
 import type {
   LobbyAckFrame,
@@ -214,6 +216,65 @@ export function useLobbyRooms(): LobbyRoomsResult {
     return () => {
       unsubscribe();
       dropStanding(LOBBY_ROOM_KEY, "lobby-hello");
+    };
+  }, [available]);
+
+  return { rooms, loading, error, available };
+}
+
+/* ==================================================================
+    DESIGN NOTE 1415: THE PUBLIC GAME LIST IS THE SANDBOX ROOMS, NOT THE STAGING ROOMS
+   ==================================================================
+   ASKED: "When players click 'Join Game' on the Lobby, we need to display all currently open (not yet
+   started) public games alongside the room code textbox", with an Ongoing tab for spectating.
+   THE LIST ABOVE IS THE ON-CHAIN STAGING LOBBY -- "the road nobody drives" (#910). The rooms a table actually
+   hosts and joins by code are the sandbox room documents, so that is what this lists. The server sends every
+   PUBLIC room that is waiting or playing, newest first, on the same lobby socket, as a `rooms` frame; a private
+   room is never in it, and a room stops being listed when it closes. Summaries only (`summariseSandboxRoom`):
+   the roster's names and readiness, the cap, the variants, the ante -- what a card shows and nothing a seat
+   would rather keep. */
+export interface SandboxRoomsResult {
+  rooms: SandboxRoomSummary[];
+  loading: boolean;
+  error: string | null;
+  available: boolean;
+}
+
+export function useSandboxRooms(): SandboxRoomsResult {
+  const [rooms, setRooms] = useState<SandboxRoomSummary[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const available = roomDocOnServer();
+
+  useEffect(() => {
+    if (!available) {
+      setRooms([]);
+      setLoading(false);
+      setError(unavailableMessage());
+      return;
+    }
+    setLoading(true);
+    const claim = lobbyClaim();
+    const unsubscribe = subscribeFrame<SandboxRoomsFrame>(
+      LOBBY_ROOM_KEY,
+      claim,
+      "rooms",
+      (frame) => {
+        setRooms(Array.isArray(frame.rooms) ? frame.rooms : []);
+        setLoading(false);
+        setError(null);
+      },
+      (message) => {
+        setLoading(false);
+        setError(`[server] Could not load the game list: ${message}`);
+      },
+    );
+    /* The same hello the staging list sends (the server answers both lists to it), under its OWN standing key:
+       the two hooks mount and unmount independently, and one's cleanup must not drop the other's. */
+    sendStanding(LOBBY_ROOM_KEY, claim, "rooms-hello", { kind: "lobby-hello" });
+    return () => {
+      unsubscribe();
+      dropStanding(LOBBY_ROOM_KEY, "rooms-hello");
     };
   }, [available]);
 

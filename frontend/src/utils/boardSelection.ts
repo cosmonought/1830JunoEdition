@@ -17,10 +17,13 @@ import { LPF_BOARD } from "../components/hexBoardDataLpf";
 import { STANDARD_TRAY, activateTray, withTray, type TileTray } from "../components/tileTray";
 import { PLUS_TRAY } from "../components/tileTrayPlus";
 import { LPF_TRAY } from "../components/tileTrayLpf";
+import { activateMarketChart, chartFor, withMarketChart } from "../components/marketChart";
 import type { GameVariants } from "./gameVariants";
 
 type BoardVariants = Pick<GameVariants, "expandedMap" | "levelPlayingField">;
 type TrayVariants = Pick<GameVariants, "plusTiles" | "levelPlayingField">;
+/** #1435: Dynamic Market adds a row above the chart's top (`marketChart.ts`). */
+type ChartVariants = Pick<GameVariants, "dynamicStockMarket">;
 
 /** The board `variants` selects. #1320: the Level Playing Field is the expansion with its own changes, and
  *  `resolveVariants` already forces `expandedMap` on under it -- so it is asked first. */
@@ -29,19 +32,21 @@ export function boardFor(variants: BoardVariants): BoardDefinition {
   return variants.expandedMap ? EXPANDED_BOARD : STANDARD_BOARD;
 }
 
-/** Design note #1311: the tray `variants` selects. `plusTiles` already implies `expandedMap` (`resolveVariants`). */
+/** Design note #1311: the tray `variants` selects. #1415: `plusTiles` no longer implies the map -- the tray is
+ *  offered on the printed board too, and this picks it there just the same. */
 export function trayFor(variants: TrayVariants): TileTray {
   if (variants.levelPlayingField) return LPF_TRAY;
   return variants.plusTiles ? PLUS_TRAY : STANDARD_TRAY;
 }
 
-/** Put this table's board AND tray in effect -- the shell's once-per-game call. */
-export function activateRules(variants: BoardVariants & TrayVariants): void {
+/** Put this table's board, tray AND market chart in effect -- the shell's once-per-game call. */
+export function activateRules(variants: BoardVariants & TrayVariants & ChartVariants): void {
   activateBoard(boardFor(variants));
   activateTray(trayFor(variants));
+  activateMarketChart(chartFor(variants)); // #1435
 }
 
-/** Run `fn` with this table's board and tray in effect, restoring both after -- the reducer's call. */
-export function withRules<T>(variants: BoardVariants & TrayVariants, fn: () => T): T {
-  return withBoard(boardFor(variants), () => withTray(trayFor(variants), fn));
+/** Run `fn` with this table's board, tray and chart in effect, restoring all three after -- the reducer's call. */
+export function withRules<T>(variants: BoardVariants & TrayVariants & ChartVariants, fn: () => T): T {
+  return withBoard(boardFor(variants), () => withTray(trayFor(variants), () => withMarketChart(chartFor(variants), fn)));
 }

@@ -255,7 +255,8 @@
       "dynamicStockMarket": false,
       "expandedMap": false,
       "plusTiles": false,
-      "levelPlayingField": false
+      "levelPlayingField": false,
+      "rules": 0
     }
   },
   "waterfall": {

@@ -273,7 +273,7 @@ describe("the Carcosa roll takes bits the others cannot reach", () => {
     /* TWENTY PERCENT, CHOSEN. The old `CARCOSA_CHANCE = 0.1` was never compared against anything -- the code
        tested `% 10 === 0`, so the constant and the behaviour were two claims that happened to agree, which is
        #891's shape in a probability. This constant IS the comparison, so the two cannot drift. */
-    expect(CARCOSA_CHANCE_IN_100).toBe(20);
+    expect(CARCOSA_CHANCE_IN_100).toBe(60); // #1421: raised from 20
     const seeds = sweep(60000);
     const hits = seeds.filter((seed) => Math.floor(seed / CARCOSA_SLICE) % 100 < CARCOSA_CHANCE_IN_100);
     expect(Math.abs((100 * hits.length) / seeds.length - CARCOSA_CHANCE_IN_100)).toBeLessThan(2);

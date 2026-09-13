@@ -41,8 +41,16 @@ export type OperatingSubPhase =
 
 /** Canonical order. The strip, the numbering and every "is this step done"
  *  comparison read this array, so there is one sequence in the app. */
+/* ==================================================================
+    DESIGN NOTE 1440: BUYING A PRIVATE IS NOT A STEP
+   ==================================================================
+   CORRECTED: "I had the 'Buy Private Companies' action added as a sixth step at the start of an Operating
+   Round from Phase 3 ... In fact, the rules allow corporations to buy private companies AT ANY TIME during
+   their turn." So `BuyPrivate` leaves the sequence: five steps, a turn opens on Track in every phase, and the
+   purchase is a standing button on the action bar (`ContextualActionBar`, the left rail) for as long as
+   there is a private to buy and the phase allows it. The TYPE keeps the member so a log written before this
+   note still settles (`operatingCursor.settleSubPhase` lands a `BuyPrivate` cursor on Track). */
 export const OPERATING_SUB_PHASE_ORDER: readonly OperatingSubPhase[] = [
-  "BuyPrivate",
   "Track",
   "Tokens",
   "Routes",
@@ -74,7 +82,8 @@ export const OPERATING_SUB_PHASE_TOTAL = OPERATING_SUB_PHASE_ORDER.length;
  *  `BuyPrivate`'s action is locked until then and the contract's cursor
  *  starts there too. */
 export function initialOrSubPhase(era: string | null | undefined): OperatingSubPhase {
-  return era === "Yellow" || !era ? "Track" : "BuyPrivate";
+  void era; // #1440: every turn opens on Track now, whatever the era
+  return "Track";
 }
 
 /** The shape `visibleSubPhases` needs off a private company -- structural,
@@ -124,14 +133,23 @@ export function visibleSubPhases(
    *  the era test -- see the note above. */
   tier?: string | null,
 ): readonly OperatingSubPhase[] {
-  const phaseAllowsBuying =
-    tier === null || tier === undefined
-      ? initialOrSubPhase(era) !== "Track"
-      : tier === "3" || tier === "4";
-  const showBuyPrivate = phaseAllowsBuying && hasBuyablePrivate(privates);
-  return showBuyPrivate
-    ? OPERATING_SUB_PHASE_ORDER
-    : OPERATING_SUB_PHASE_ORDER.filter((phase) => phase !== "BuyPrivate");
+  // #1440: the private purchase is a standing button, not a step -- see `privatesBuyableNow` for the rule.
+  void era;
+  void privates;
+  void tier;
+  return OPERATING_SUB_PHASE_ORDER;
+}
+
+/** #1440: whether a corporation may buy a private RIGHT NOW -- Phases 3 and 4 (the first 3-train opens it,
+ *  the first 5-train closes the privates), with something left to buy. The era is the fallback while no
+ *  corporation has reported trains. */
+export function privatesBuyableNow(
+  era: string | null | undefined,
+  privates: readonly PrivateAvailability[] | null | undefined,
+  tier: string | null | undefined,
+): boolean {
+  const phaseAllows = tier === null || tier === undefined ? !(era === "Yellow" || !era) : tier === "3" || tier === "4";
+  return phaseAllows && hasBuyablePrivate(privates);
 }
 
 export interface OperatingSubPhaseStepperProps {

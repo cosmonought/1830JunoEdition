@@ -3193,6 +3193,36 @@ function settleRoundTransitions(
       ),
       stock_round_just_ended: false,
     };
+
+    /* ==================================================================
+        DESIGN NOTE 1448: A ROUND NOBODY CAN OPERATE MUST NOT OPEN
+       ==================================================================
+       FOUND replaying the #1447 playtest. With no corporation floated, `buildOperatingOrder` correctly
+       returns an EMPTY queue -- it filters on floated-with-a-president and always has. The fault is what
+       happens next: the round opened anyway, and an open Operating Round with an empty queue cannot be
+       left.
+
+       THE RECOVERY EXISTED AND WAS UNREACHABLE. `advanceCorporation` rebuilds an empty queue and raises
+       `operating_round_just_ended` when the rebuild is empty too (#411) -- but it only runs when somebody
+       ACTS, and in this state nobody can. `actingSeatIndex` resolves the acting seat from
+       `active_operating_order[active_corporation_index]`; an empty queue makes that `undefined` and the
+       function returns `null`, so `isMyTurn` is false for every player at the table and every control is
+       disabled. A repair that can only be triggered by an action is no repair for a state that forbids
+       them.
+
+       SO THE EMPTINESS IS SETTLED AT THE OPENING, where a caller still exists. The round is opened --
+       `openOperatingRound` pays the private income that opening one owes, and that is due whether or not a
+       corporation runs -- and is then immediately marked finished, so the machine carries on to the next
+       Stock Round through the same branch that ends every other set. Recursing rather than duplicating that
+       branch keeps the bank-break ending (#898) on this path too; it terminates because the next pass takes
+       a different branch and a Stock Round always seats a player.
+
+       NOT A RULES CHANGE. A set that opens with nothing floated is Yellow by construction (nothing has
+       floated, so no train has been bought), and Yellow runs one Operating Round per set -- so there is no
+       second round in the set being skipped. */
+    if (opened.active_operating_order.length === 0) {
+      return settleRoundTransitions({ ...opened, operating_round_just_ended: true }, ctx);
+    }
     /* Design note #685: THE PRIVATES ARE PAID HERE, BY THE REDUCER.
 
        REPORTED as a regression -- "the Private Companies are supposed to pay out their income every Operating
@@ -3952,9 +3982,32 @@ function applyOneAction(
        taken, not messages sent, so a Brown-zone pool buy of three reports three -- and ACCUMULATED rather
        than set, because the Brown allowance permits a second message in the same turn and the rule needs the
        running total to judge it. Cleared by the three sites that clear `turn_action_taken` (#745). */
+    /* ==================================================================
+        DESIGN NOTE 1447: THE BUY COUNTS AS THIS TURN'S ACTION, BECAUSE IT NO LONGER ENDS THE TURN
+       ==================================================================
+       REPORTED from a playtest: "we all only got one round during the Stock Round and then it pushed us to
+       the Operating Round -- nobody has floated." Three players each bought a president's certificate and
+       the round ended anyway.
+
+       #745 PUT THIS FLAG ON THE SALE ONLY, and said exactly why: "Set here rather than in `moveShares`
+       because a sale is the only Stock Round action that leaves the seat where it is; every other one ends
+       the turn itself." That was true when it was written. #1443 MADE IT FALSE -- under Sell-Buy-Sell the
+       purchase is the middle of the turn and the seat stays with the buyer, who ends the turn with a Pass.
+
+       SO THE PASS AFTER A PURCHASE WAS READ AS A PASS. `PassTurn` ends with
+       `hasActedThisTurn(state) ? advanceSeat(state) : recordPass(state)`, the flag was still false, and
+       `recordPass` counted a player who had just bought into the streak. Three buyers, three counted passes,
+       streak equals the player count, Stock Round over with nothing floated -- and an Operating Round with an
+       empty queue (#1448).
+
+       ACCUMULATED WITH THE COUNT, on the same purchase, for #745's own reason: "the flag is what survives
+       between the two messages." Set here rather than on the `sellBuySellInForce` branch below so both
+       early returns carry it -- that branch and #769's home-token hold. Under the old revision the buy falls
+       through to `advanceSeat`, which clears the flag on its way past, so a pre-#1443 log replays unchanged. */
     const counted: GameStateResponse = {
       ...settlePresidencies(floated).state,
       bought_this_turn: (state.bought_this_turn ?? 0) + certificates,
+      turn_action_taken: true,
     };
     const settledBuy = markTrader(counted, actor);
 

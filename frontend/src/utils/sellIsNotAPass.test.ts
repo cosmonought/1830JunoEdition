@@ -48,6 +48,13 @@ function board(over: Partial<GameStateResponse> = {}): GameStateResponse {
         ticker: "PRR",
         president: "p0",
         par_value: "100",
+        /* #1448: FLOATED, so the Operating Round these cases end in is a real one. The subject here is the
+           PASS COUNT, and three of the cases below read "we are in an Operating Round" as the proxy for "the
+           Stock Round closed" -- which only worked while an Operating Round opened unconditionally. It no
+           longer does: a round with nothing to operate is finished at its opening rather than left for a
+           player who cannot act to end. 60% is out of the IPO below, so the float is what this board was
+           already describing; the flag just says so. */
+        is_floated: true,
         ipo_pool_percentage: 20,
         bank_pool_percentage: 0,
         player_holdings: [

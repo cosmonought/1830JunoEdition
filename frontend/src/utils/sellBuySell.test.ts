@@ -90,6 +90,35 @@ describe("Sell-Buy-Sell: the stages of a turn", () => {
     expect(stockTurnStage(ended)).toBe("sell");
   });
 
+  /* ==================================================================
+      DESIGN NOTE 1447 (test): THE BUY IS AN ACTION, AND THE PASS THAT FOLLOWS IT IS NOT A PASS
+     ==================================================================
+     THE CASE ABOVE LOOKED LIKE THIS ONE AND WAS NOT. It buys, then SELLS, then ends the turn -- and the sale
+     is what set `turn_action_taken` (#745), so the Pass at the end took the `advanceSeat` branch and the
+     streak assertion passed for a reason the test was not about. A turn that only BUYS has no sale to set the
+     flag, and that is the turn every player took in the playtest this note comes from: three buyers, three
+     Passes counted as passes, streak equal to the player count, Stock Round over with nothing floated. */
+  it("a turn that only bought ends without counting as a pass (#1447)", () => {
+    const bought = buy(pass(board()));
+    expect(stockTurnStage(bought)).toBe("sell_again");
+    expect(bought.turn_action_taken).toBe(true);
+    const ended = pass(bought);
+    expect(ended.active_player_index).toBe(1);
+    expect(ended.consecutive_passes).toBe(0);
+  });
+
+  it("a full lap of buyers does not end the Stock Round (#1447)", () => {
+    let state = board({ public_companies: [{ ...board().public_companies[0], ipo_pool_percentage: 100, player_holdings: [] }] } as never);
+    for (let seat = 0; seat < SEATS.length; seat++) {
+      state = pass(state); // Sell -> Buy
+      state = buy(state); // the purchase
+      state = pass(state); // End Turn
+      expect(state.consecutive_passes).toBe(0);
+    }
+    expect(state.current_round_type).toBe("StockRound");
+    expect(state.active_player_index).toBe(0);
+  });
+
   it("a buy straight from the Sell stage is legal (skipping the selling), and a turn that did nothing passes in two", () => {
     const bought = buy(board());
     expect(bought.active_player_index).toBe(0);

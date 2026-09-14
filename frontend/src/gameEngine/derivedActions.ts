@@ -379,11 +379,35 @@ export function maxRouteRevenueFor(
       (a, b) => (rank(a.model) < 0 ? 99 : rank(a.model)) - (rank(b.model) < 0 ? 99 : rank(b.model)),
     );
   if (roster.length === 0) return 0;
+  const result = routeSearchFor(
+    state,
+    companyId,
+    mapGrid,
+    startHexes,
+    roster.map((train) => ({
+      trainIndex: train.trainIndex,
+      /* #881: THE SIXTH SITE, found by the harness's own "no bare 999 / no `?? 4`" assertion -- which is the
+         argument for asserting an absence across a file rather than checking the call sites you happen to
+         have found. */
+      maxRevenueCentres: reachForDrafting(train.maxDistance),
+    })),
+  );
+  return result.totalRevenue;
+}
 
-  /* #730: a tokened-out city is a terminus, so no drafted route runs past one. Built here from the board
-     rather than read from a ref, which is the whole difference between this file and the memo it was lifted
-     from -- `blocksThroughCityRef` exists because a React callback closes over a stale render, and there are
-     no renders here. */
+/** The one route search, with the board's own wall. Design note #1512: shared by the fleet's real search
+ *  above and the trainless corporation's HYPOTHETICAL one below, so the two cannot walk two different boards.
+ *  #730: a tokened-out city is a terminus, so no drafted route runs past one. Built here from the board rather
+ *  than read from a ref, which is the whole difference between this file and the memo it was lifted from --
+ *  `blocksThroughCityRef` exists because a React callback closes over a stale render, and there are no
+ *  renders here. */
+function routeSearchFor(
+  state: GameStateResponse,
+  companyId: number,
+  mapGrid: MapGridResponse,
+  startHexes: ReturnType<typeof stationTokensOf>,
+  trains: ReadonlyArray<{ trainIndex: number; maxRevenueCentres: number }>,
+) {
   const blocksThrough = cityBlockerFor({
     actingCompanyId: companyId,
     companies: state.public_companies,
@@ -391,21 +415,43 @@ export function maxRouteRevenueFor(
     cityOf: (company_, q, r) => tokenCityIndex(company_ as never, q, r),
     barredHexes: barredHexesFor(state, companyId), // #1323: Coal River, unlicensed
   });
-
-  const result = assignRouteSet({
+  return assignRouteSet({
     blocksThrough,
     mapGrid,
     era: tileEraFor(state), // #1312
     startHexes,
-    companyId: company.company_id, // #1302
-
-    trains: roster.map((train) => ({
-      trainIndex: train.trainIndex,
-      /* #881: THE SIXTH SITE, found by the harness's own "no bare 999 / no `?? 4`" assertion -- which is the
-         argument for asserting an absence across a file rather than checking the call sites you happen to
-         have found. */
-      maxRevenueCentres: reachForDrafting(train.maxDistance),
-    })),
+    companyId, // #1302
+    trains,
   });
-  return result.totalRevenue;
+}
+
+/** Whether this corporation HAS A LEGAL ROUTE -- the rulebook's precondition for the forced purchase
+ *  (6.6.2: "If a corporation has a legal train route but has no train at the end of its Operating Turn, it
+ *  must immediately purchase a train"; "If the corporation has no legal train route, it does not have to own
+ *  or purchase a train").
+ *
+ *  Design note #1512: ASKED OF A HYPOTHETICAL TWO-STOP TRAIN, because the question is about the TRACK and not
+ *  about the fleet -- a trainless corporation has nothing to run, and `maxRouteRevenueFor` would answer 0
+ *  for it whatever the board looks like. A legal route is a route between two revenue centres, which is what
+ *  the smallest train ever printed can run; if a 2-stop route exists, a route exists for any train the
+ *  corporation could be made to buy. This is the same hypothetical `App.tsx` #433 has asked since the
+ *  obligation was first surfaced ("The cheapest train in the depot"), now asked by the authority.
+ *
+ *  `null` MEANS "COULD NOT TELL" (#414's rule): a corporation the board does not describe, or whose tokens it
+ *  has not reported. `false` is a real answer -- no tokens, or tokens with no two-stop route -- and the
+ *  obligation does not arise on it. */
+export function hasLegalRouteFor(
+  state: GameStateResponse,
+  companyId: number,
+  mapGrid: MapGridResponse,
+): boolean | null {
+  const company = state.public_companies.find((entry) => entry.company_id === companyId);
+  if (!company) return null;
+  if (!company.station_token_hexes) return null;
+  const startHexes = stationTokensOf(company);
+  if (startHexes.length === 0) return false;
+  const result = routeSearchFor(state, companyId, mapGrid, startHexes, [
+    { trainIndex: 0, maxRevenueCentres: 2 },
+  ]);
+  return result.totalRevenue > 0;
 }

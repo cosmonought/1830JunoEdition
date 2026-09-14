@@ -513,6 +513,7 @@ import {
 } from "./utils/fleetLossNotice";
 import { dividendRefused, operatingCorporationId } from "./gameEngine/dividendGate";
 import { operatingIdentityRefusal } from "./gameEngine/operatingIdentity";
+import { cheapestPurchasableTrain } from "./gameEngine/trainAvailability";
 import { dividendSplit } from "./gameEngine/dividendSplit";
 import {
   actionWasRefused,
@@ -1744,9 +1745,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     );
     if (!corporation) return null;
 
-    const cheapest = depotInventory(gameState).find(
-      (row) => !row.rusted && (row.remaining === null || row.remaining > 0),
-    );
+    /* Design note #1512: THE SAME QUESTION THE REDUCER'S EMERGENCY ARM ASKS -- the cheapest train the bank
+       will sell, from the depot or the Bank Pool -- so the plan the president is shown is the purchase the
+       authority will make. This read `depotInventory` with its own filter, a third reading of one shelf. */
+    const cheapest = cheapestPurchasableTrain(gameState);
     if (!cheapest) return null;
 
     const treasury = Number(corporation.treasury) || 0;

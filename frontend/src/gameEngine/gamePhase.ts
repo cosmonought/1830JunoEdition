@@ -392,6 +392,7 @@ export function depotInventory(state: GameStateResponse | null): DepotTier[] {
   const phase = derivePhase(state);
   const order = tierOrderFor(state);
   const currentIndex = phase ? order.indexOf(phase.tier) : 0;
+  const pooled = pooledTrainsByTier(state);
 
   return order.map((tier, index) => {
     const total = DEPOT_TOTALS[tier];
@@ -399,8 +400,8 @@ export function depotInventory(state: GameStateResponse | null): DepotTier[] {
     if (total === null) {
       remaining = null; // Diesel: no ceiling.
     } else if (onOpenShelf(state, tier) && phase && onOpenShelf(state, phase.tier)) {
-      // #1326: on the open shelf nothing sells a lower tier out; each counts its own.
-      remaining = Math.max(0, total - (phase.ownedByTier[tier] ?? 0));
+      // #1326: on the open shelf nothing sells a lower tier out; each counts its own. #1512: less the pool.
+      remaining = Math.max(0, total - (phase.ownedByTier[tier] ?? 0) - (pooled.get(tier) ?? 0));
     } else if (index < currentIndex) {
       remaining = 0; // Design note #4: the queue rule.
     } else if (index === currentIndex) {
@@ -537,6 +538,17 @@ export function trainTier(model: string | null | undefined): TrainTier | null {
 }
 
 /** The room's current phase, derived per design notes #1 and #2. */
+/** Design note #1512: how many trains of each tier the Bank Pool (`returned_trains`) holds. */
+export function pooledTrainsByTier(state: GameStateResponse | null): Map<TrainTier, number> {
+  const out = new Map<TrainTier, number>();
+  for (const model of state?.returned_trains ?? []) {
+    const tier = trainTier(model);
+    if (!tier) continue;
+    out.set(tier, (out.get(tier) ?? 0) + 1);
+  }
+  return out;
+}
+
 export function derivePhase(gameState: GameStateResponse | null): GamePhase | null {
   if (!gameState) return null;
   const order = tierOrderFor(gameState);
@@ -590,7 +602,15 @@ export function derivePhase(gameState: GameStateResponse | null): GamePhase | nu
 
   const tier = order[highest] ?? order[0];
   const total = DEPOT_TOTALS[tier];
-  const depotRemaining = total === null ? null : Math.max(0, total - (ownedByTier.get(tier) ?? 0));
+  /* Design note #1512: THE POOL IS NOT THE DEPOT. A train traded in or discarded sits in `returned_trains`
+     (the Bank Pool) and has left a fleet, so `TOTAL - owned` would count it as printed stock again -- one
+     train for sale twice, and on the open shelf a phantom 6. Subtracted here and in `depotInventory`, the
+     two readers of this figure, so a train is in exactly one place. */
+  const pooledByTier = pooledTrainsByTier(gameState);
+  const depotRemaining =
+    total === null
+      ? null
+      : Math.max(0, total - (ownedByTier.get(tier) ?? 0) - (pooledByTier.get(tier) ?? 0));
   const presentation = TIER_PRESENTATION[tier];
   /* #1326: on the open shelf a Diesel may be bought at any moment, so there is no countdown to warn of. */
   const shelf = onOpenShelf(gameState, tier);

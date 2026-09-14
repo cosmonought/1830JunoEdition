@@ -36,7 +36,7 @@ import { terrainFeeDue, withTerrainPaid } from "./terrainFee";
 // Design note #736: which arriving tier closes the private companies.
 import { closesPrivateCompanies } from "./depotSchedule";
 // Design note #979: which train the limit takes is a rule, and it lives with the other train-limit rules.
-import { trimToTrainLimit } from "./trainLimit";
+import { countableTrainCount, isTrainLocked, trimToTrainLimit } from "./trainLimit";
 // actingSeatIndex lives in gameState.ts, not here: it asks about CONTRACT state and the
 // live dashboard needs it too. See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #0
 import type { GameplayExecuteMsg } from "../utils/sessionKey";
@@ -80,6 +80,7 @@ import { homeTokenBlock } from "./homeTokenGate";
 import { dividendRefusal, dividendRefused } from "./dividendGate";
 import { operatingIdentityRefusal } from "./operatingIdentity";
 import { stationPlacementRefusal } from "./stationPlacementGate";
+import { cheapestPurchasableTrain, trainObligationRefusal } from "./trainAvailability";
 // Design note #1019: the purchase gate the reducer never had.
 import { trainPurchaseRefusal } from "./trainPurchaseGate";
 import { dividendSplit } from "./dividendSplit";
@@ -1095,6 +1096,7 @@ export function applyPhaseChange(
   const gentle = variants.gentleRust;
 
   let changed = false;
+  const discardsThisPhase: string[] = [];
   const companies = (state.public_companies ?? []).map((company) => {
     const owned = company.owned_trains;
     // `undefined` means the chain does not report rosters. Trimming a fleet
@@ -1165,6 +1167,7 @@ export function applyPhaseChange(
       cost: (model) => TIER_COST[model] ?? 0,
     });
     const fleet = trimmed.owned;
+    discardsThisPhase.push(...trimmed.discarded); // #1513: bound for the Bank Pool
     /* ==================================================================
         #232: THE FIELD APPEARS WHEN THERE IS SOMETHING TO SAY, AND NOT BEFORE
        ==================================================================
@@ -1237,9 +1240,26 @@ export function applyPhaseChange(
      reprieve: Gentle Rust is a final run, and a train in the depot has nobody to run it. Absent stays
      absent (#232); an emptied list is written as empty, because "was here, now gone" is a fact. */
   const returnedBefore = state.returned_trains;
-  const returnedAfter =
+  const survivingReturned =
     returnedBefore && doomed.size > 0 ? returnedBefore.filter((model) => !doomed.has(model)) : returnedBefore;
-  const returnedChanged = returnedAfter !== returnedBefore && returnedAfter?.length !== returnedBefore?.length;
+  /* ==================================================================
+      DESIGN NOTE 1513: A DISCARDED TRAIN GOES TO THE BANK POOL
+     ==================================================================
+     RULEBOOK 6.6.1: "the president chooses a train to discard. The discarded train goes to the Bank Pool and
+     the corporation receives no payment." The trim above took the train and DROPPED it (audit C6): it left
+     `owned_trains` and entered nothing, and because the depot derives stock from what is owned, it came back
+     as printed stock a tier below the queue's head -- visible to nobody, purchasable by nobody. It is put in
+     the pool now, at face value, where any corporation may buy it (`buyReturnedTrain`).
+     WHICH TRAIN IS STILL THE TRIM'S CHOICE -- cheapest-first -- and that is the half the rulebook gives to
+     the president. Replacing it needs a pending-discard state and a president-sent message; the design is
+     proposed in the batch note rather than approximated here. */
+  const returnedAfter =
+    discardsThisPhase.length === 0
+      ? survivingReturned
+      : [...(survivingReturned ?? []), ...discardsThisPhase];
+  const returnedChanged =
+    returnedAfter !== returnedBefore &&
+    (returnedAfter?.length !== returnedBefore?.length || discardsThisPhase.length > 0);
 
   if (!changed && !privatesChanged && !returnedChanged) return state;
   return {
@@ -1657,6 +1677,8 @@ export function returnedTrainRefusal(
   state: GameStateResponse,
   companyId: number,
   modelType: string,
+  /** Design note #1512: `false` only for the forced purchase, which has already funded the treasury. */
+  requireFunds = true,
 ): string | null {
   if (!(state.returned_trains ?? []).includes(modelType)) {
     return `The Bank Depot holds no returned ${modelType}-train.`;
@@ -1667,7 +1689,7 @@ export function returnedTrainRefusal(
     cost: tier?.cost ?? null,
     // The limit is the CURRENT phase's, which is the tier for sale, not the returned train's own.
     trainLimit: limitRow?.trainLimit ?? tier?.trainLimit ?? null,
-    requireFunds: true,
+    requireFunds,
   });
 }
 
@@ -1677,8 +1699,11 @@ function buyReturnedTrain(
   modelType: string,
   requireFunds: boolean,
 ): GameStateResponse {
-  if (!requireFunds) return state; // an emergency purchase buys from the printed depot, never the returned list
-  if (returnedTrainRefusal(state, companyId, modelType) !== null) return state;
+  /* Design note #1512: THE FORCED PURCHASE MAY TAKE A POOL TRAIN. This line read `if (!requireFunds) return
+     state; // an emergency purchase buys from the printed depot, never the returned list` -- audit M9. The
+     rulebook's "cheapest available train" (6.6.2) is drawn from the Bank and the Bank Pool alike, and
+     `cheapestPurchasableTrain` now names the pool copy when it is the cheapest. */
+  if (returnedTrainRefusal(state, companyId, modelType, requireFunds) !== null) return state;
   const cost = depotInventory(state).find((row) => row.tier === modelType)?.cost ?? 0;
   const returned = [...(state.returned_trains ?? [])];
   returned.splice(returned.indexOf(modelType), 1);
@@ -2669,6 +2694,11 @@ function applySandboxActionCore(
      THE LAY'S OWN LEGALITY IS UNCHANGED: `layRefused` below still judges the tile, and nothing about track
      rules moves in this note. */
   if (operatingIdentityRefusal(state, msg) !== null) return state;
+  /* Design note #1513: THE TURN DOES NOT END WHILE A TRAIN IS OWED. `PassTurn` and `AdvanceOperatingSubPhase`
+     at the Buy Trains step are refused for a corporation with no train, a legal route, and a train for sale
+     (rulebook 6.6.2). Every message that could discharge the obligation passes. The grid is what the route
+     walk needs; without one (a fixture) the gate has no opinion, on #757's rule. */
+  if (trainObligationRefusal(state, msg, ctx?.mapGrid) !== null) return state;
   if ("PlaceStationToken" in msg) {
     if (stationPlacementRefusal(state, msg.PlaceStationToken, ctx?.mapGrid) !== null) return state;
   }
@@ -2720,12 +2750,60 @@ function applySandboxActionCore(
     const { protocol_id, returned_model_type } = msg.BuyHardwareFromPool;
     if (returnedTrainRefusal(state, protocol_id, returned_model_type) !== null) return state;
   }
+  /* ==================================================================
+      DESIGN NOTE 1513: THE FORCED PURCHASE IS GATED HERE, FOR #1019's REASON
+     ==================================================================
+     A refusal inside the arm comes back as a new object -- the settle chain stamps the era after it -- so
+     the two refusals the arm makes (nothing for sale; the president cannot cover the shortfall) are asked
+     here first and the state returned by identity. The train it prices is the one the arm will buy:
+     `cheapestPurchasableTrain`, depot or pool. */
+  if ("EmergencyBuyHardware" in msg) {
+    const companyId = msg.EmergencyBuyHardware.protocol_id;
+    const cheapest = cheapestPurchasableTrain(state);
+    if (!cheapest) return state;
+    const limitRow = depotInventory(state).find((row) => row.isCurrent);
+    if (
+      trainPurchaseRefusal(state, companyId, {
+        cost: cheapest.cost,
+        trainLimit: limitRow?.trainLimit ?? null,
+        requireFunds: false,
+      }) !== null
+    ) {
+      return state;
+    }
+    const company = state.public_companies.find((entry) => entry.company_id === companyId);
+    const shortfall = Math.max(0, cheapest.cost - (Number(company?.treasury) || 0));
+    if (shortfall > 0) {
+      const presidentCash = Number(
+        state.player_cash.find((entry) => entry.player === company?.president)?.cash_vgp ?? 0,
+      );
+      if (!company?.president || !Number.isFinite(presidentCash) || presidentCash < shortfall) return state;
+    }
+  }
+  /* Design note #1513: THE BUYER'S LIMIT ON A TRADE, gated here for the same reason. A trade that settles an
+     accepted offer still retires the offer (#1247) -- an offer the board would otherwise owe again -- and a
+     direct trade with no offer behind it is refused by identity. */
+  if ("BuyTrainFromCorporation" in msg) {
+    const { buyer_protocol_id, seller_protocol_id, model_type } = msg.BuyTrainFromCorporation;
+    const buyer = state.public_companies.find((entry) => entry.company_id === buyer_protocol_id);
+    if (buyer && buyer.owned_trains != null) {
+      const limit = depotInventory(state).find((row) => row.isCurrent)?.trainLimit ?? null;
+      const countable = countableTrainCount(buyer.owned_trains, buyer.pending_rust_trains, buyer.ghost_trains);
+      if (isTrainLocked(countable, limit)) {
+        const offer = state.train_purchase_offer ?? null;
+        const matches =
+          offer !== null &&
+          offer.seller_protocol_id === seller_protocol_id &&
+          offer.buyer_protocol_id === buyer_protocol_id &&
+          offer.model_type === model_type;
+        return matches ? { ...state, train_purchase_offer: null } : state;
+      }
+    }
+  }
   const depotPurchase =
     "BuyHardwareFromPool" in msg && msg.BuyHardwareFromPool.returned_model_type === undefined
       ? { companyId: msg.BuyHardwareFromPool.protocol_id, requireFunds: true }
-      : "EmergencyBuyHardware" in msg
-        ? { companyId: msg.EmergencyBuyHardware.protocol_id, requireFunds: false }
-        : null;
+      : null;
   if (depotPurchase) {
     /* Design note #1326: THE SHELF TIER, WHEN NAMED. A named tier that is not for sale refuses here, before
        any stage runs, for #1019's reason; an unnamed purchase is the queue head, as it always was. The gate
@@ -4380,19 +4458,33 @@ function applyOneAction(
     /* The president's money actually moves: treasury pays what it has, president covers the shortfall, then buyDepotTrain runs against an exact balance so its arithmetic is unchanged.
        See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #333 */
     const companyId = msg.EmergencyBuyHardware.protocol_id;
-    const tier = depotInventory(state).find(
-      (row) => row.remaining === null || row.remaining > 0,
-    );
-    if (!tier) return state;
-
+    /* Design note #1512: THE CHEAPEST TRAIN THE BANK WILL SELL, from the depot or the Bank Pool -- one
+       question, asked of `cheapestPurchasableTrain`, which the shell's emergency plan asks too. This read
+       `depotInventory(state).find(remaining > 0)`: the depot's first row with stock, never the pool (M9). */
+    const cheapest = cheapestPurchasableTrain(state);
+    if (!cheapest) return state;
     const company = state.public_companies.find((entry) => entry.company_id === companyId);
     const treasury = Number(company?.treasury) || 0;
-    const shortfall = Math.max(0, tier.cost - treasury);
-
+    const shortfall = Math.max(0, cheapest.cost - treasury);
+    const buy = (funded: GameStateResponse) =>
+      cheapest.source === "pool"
+        ? buyDepotTrain(funded, companyId, false, cheapest.tier)
+        : buyDepotTrain(funded, companyId, false, undefined, cheapest.tier);
     /* Design note #1019: the funds check is waived on this path and every other rule still applies -- the
        president may cover a shortfall, not buy out of turn or out of phase. */
-    if (shortfall === 0 || !company?.president) return buyDepotTrain(state, companyId, false);
-
+    if (shortfall === 0 || !company?.president) return buy(state);
+    /* ==================================================================
+        DESIGN NOTE 1513: THE PRESIDENT PAYS WHAT THE PRESIDENT HAS
+       ==================================================================
+       `adjustCash` floors at zero, so a president with $100 against a $360 shortfall used to pay $100 and the
+       corporation got the train anyway -- money minted by a clamp (audit C4c). Refused instead, by identity:
+       the obligation then stands (#1513 in `trainAvailability.ts`), which is the honest state and the one
+       Batch 5's funding cascade -- share sales, then bankruptcy -- is written to resolve. Nothing here
+       decides how the shortfall is raised; it only declines to invent the money. */
+    const presidentCash = Number(
+      state.player_cash.find((entry) => entry.player === company.president)?.cash_vgp ?? 0,
+    );
+    if (!Number.isFinite(presidentCash) || presidentCash < shortfall) return state;
     // The president's contribution passes THROUGH the treasury, which is
     // what makes `buyDepotTrain`'s single `adjustTreasury(-cost)` correct
     // for both the ordinary and the emergency case.
@@ -4401,7 +4493,7 @@ function applyOneAction(
       companyId,
       shortfall,
     );
-    return buyDepotTrain(funded, companyId, false);
+    return buy(funded);
   }
 
   if ("BuyTrainFromCorporation" in msg) {
@@ -4422,6 +4514,8 @@ function applyOneAction(
       offer.model_type === model_type
         ? { ...state, train_purchase_offer: null }
         : state;
+    /* Design note #1513: the buyer's limit (rulebook 6.6, audit M14) is asked in `applySandboxActionCore`,
+       before this arm, so the refusal is by identity. */
     return settleTrainSale(settling, buyer_protocol_id, seller_protocol_id, model_type, price);
   }
 

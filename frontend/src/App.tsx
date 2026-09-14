@@ -11371,6 +11371,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                 `This tab is running build ${clientBuild} and the server is on ${serverBuild}. Reload to catch up.`,
               );
             },
+            onIncompatible: (reason, pinned, supported) => {
+              linkExplainedRef.current = true;
+              /* #1520: NOT a desync and NOT a build skew. The server holds this room: its history was dealt
+                 under a rules-engine version the server does not carry (or under none), and the server built
+                 nothing and will apply nothing. The link has closed for good; reloading does not change the
+                 answer, and the sentence says what would. */
+              setSandboxRoomError(
+                `${reason} (Pinned rules version: ${pinned ?? "none"}; this server supports ${supported.join(", ")}.)`,
+              );
+            },
             onError: (message) => {
               linkExplainedRef.current = true;
               setSandboxRoomError(message);

@@ -220,7 +220,7 @@ export const GAMEPLAY_MESSAGE_SCHEMA: Readonly<Record<string, Readonly<Record<st
   },
 
   /* ---- the between-turn / exception family (`isSandboxOnlyMsg`) ---- */
-  SetupGame: { players: "array", variants: "object?", build: "string?" },
+  SetupGame: { players: "array", variants: "object?", build: "string?", rules_engine_version: "int?" }, // #1520
   OpenStockRound: EMPTY,
   CloseRoom: EMPTY,
   SetBoPar: { player: "string", par_value: "string" },

@@ -130,6 +130,11 @@ export interface ServerLinkOptions {
   /** The two halves are not running the same code (#1206). Its own case, because an added field is not a
    *  divergence and a client that learns this should stop reporting desyncs. */
   onBuildSkew?: (clientBuild: BuildId, serverBuild: BuildId) => void;
+  /** #1520: the room's deal is pinned to a rules-engine version the server does not carry (or to none). The
+   *  server built nothing and will apply nothing; the link closes for good after this, because the answer
+   *  cannot change until a different server loads the room. Distinct from `onBuildSkew`: a build is a UI
+   *  deploy, a rules version is the meaning of the log. */
+  onIncompatible?: (reason: string, pinned: number | null, supported: readonly number[]) => void;
   /** #1218: the move was answered with a resync rather than applied, because this client was behind. Not an
    *  error and not a refusal -- the third way a `submit` resolves `null`, and the only one that used to be
    *  silent. */
@@ -418,6 +423,21 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
       case "build-skew": {
         options.onBuildSkew?.(message.clientBuild, message.serverBuild);
         settleHead(null);
+        return;
+      }
+      case "incompatible": {
+        /* #1520: TERMINAL, like a seat refusal -- the room is held by the server until a compatible engine
+           loads it, and the same hello earns the same answer, so a reconnect loop would only repeat it. The
+           reason names the pinned and supported versions; nothing else is applied and nothing is retried. */
+        closedByUs = true;
+        awaitingHello = false;
+        if (options.onIncompatible) {
+          options.onIncompatible(message.reason, message.pinnedRulesEngineVersion, message.supportedRulesEngineVersions);
+        } else {
+          options.onError?.(message.reason);
+        }
+        while (pending.length > 0) settleHead(null);
+        socket?.close();
         return;
       }
       default: {

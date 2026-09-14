@@ -22,6 +22,7 @@ import * as path from "path";
 
 import { createGameServer, trustClaimedIdentity } from "./gameServer";
 import { createFileLogStore } from "./fileLogStore";
+import { RULES_ENGINE_VERSION, SUPPORTED_RULES_ENGINE_VERSIONS } from "../../frontend/src/gameEngine/rulesVersion";
 
 /* ==================================================================
     FLAGS AS WELL AS ENVIRONMENT, AND THE REASON IS WINDOWS
@@ -60,6 +61,19 @@ if (process.env.INSECURE_LOCAL_IDENTITY !== "1" && !flags.includes("--insecure-l
  *  whole of the tooling needed to read a game back; `--data <dir>` or `DATA_DIR` to put it elsewhere. */
 const dataDir = path.resolve(process.env.DATA_DIR ?? flagValue("--data") ?? path.join(process.cwd(), "data"));
 
+/* #1520: THE ONE WAY A ROOM DEALT BEFORE RULES-ENGINE VERSIONING IS LOADED. Absent, such a room is held: a
+   deal with no `rules_engine_version` is never read as "the current version". `--legacy-logs
+   development-corpus` (or `LEGACY_LOGS=development-corpus`) admits the local playtest rooms under the engine
+   this process carries, and says so at startup and per room. Any other value is refused here rather than
+   silently read as "refuse", so a typo cannot hide a policy. */
+const legacyLogsFlag = process.env.LEGACY_LOGS ?? flagValue("--legacy-logs") ?? "refuse";
+if (legacyLogsFlag !== "refuse" && legacyLogsFlag !== "development-corpus") {
+  // eslint-disable-next-line no-console
+  console.error(`Refusing to start: --legacy-logs must be "refuse" or "development-corpus", not "${legacyLogsFlag}".`);
+  process.exit(2);
+}
+const legacyLogs: "refuse" | "development-corpus" = legacyLogsFlag;
+
 createGameServer({
   port,
   build,
@@ -71,6 +85,7 @@ createGameServer({
   /* #1250: the log is on disk and synced before any client is answered, so a restart restores every room
      it was serving. `start.ts` used to say "a restart starts an empty room"; it no longer does. */
   store: createFileLogStore(dataDir),
+  legacyLogs,
 });
 
 /* ==================================================================
@@ -94,5 +109,9 @@ const builtAt = (() => {
 console.log(
   `1830 game server listening on ws://127.0.0.1:${port} (build "${build}", INSECURE local identity)\n` +
     `  compiled ${builtAt} UTC -- if a fix you just made is not in this stamp, the server was not rebuilt\n` +
-    `  rooms stored in ${dataDir} -- one .log.jsonl per room, synced before any client is answered (#1250)`,
+    `  rooms stored in ${dataDir} -- one .log.jsonl per room, synced before any client is answered (#1250)\n` +
+    `  rules engine version ${RULES_ENGINE_VERSION} (supports [${SUPPORTED_RULES_ENGINE_VERSIONS.join(", ")}]); ` +
+    (legacyLogs === "development-corpus"
+      ? "LEGACY LOGS ADMITTED (--legacy-logs development-corpus): unpinned rooms replay under this engine (#1520)"
+      : "unpinned (legacy) rooms are held, not replayed -- pass --legacy-logs development-corpus for local playtests (#1520)"),
 );

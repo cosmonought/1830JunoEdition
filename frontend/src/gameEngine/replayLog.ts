@@ -69,6 +69,13 @@ import { operatingCorporationId } from "./dividendGate";
 import { operatingIdentityRefusal } from "./operatingIdentity";
 import { turnGuardKey } from "./turnGuardKey";
 import { effectiveActions } from "./logRevert";
+import {
+  ReplayIncompatibleError,
+  SERVER_REPLAY_POLICY,
+  replayCompatibility,
+  replayRefusal,
+  type ReplayPolicy,
+} from "./rulesVersion";
 import { derivePhase } from "./gamePhase";
 import { tileEraFor } from "./gameConstants";
 import type { TileColorTier } from "../components/hexTileCatalog";
@@ -551,7 +558,15 @@ export function replayLog(
   providers: ReplayProviders,
   seed: ReplaySeed,
   observe?: ReplayObserver,
+  /* Design note #1520: HOW A LOG WITHOUT A PIN IS TREATED IS THE CALLER'S TO SAY. The default refuses it, so
+     a caller that forgets to decide gets an error rather than a reinterpretation; the development corpus
+     passes `DEVELOPMENT_CORPUS_POLICY` by name. A log pinned to a version this engine does not support is
+     refused under every policy. */
+  policy: ReplayPolicy = SERVER_REPLAY_POLICY,
 ): ReplayResult {
+  const compatibility = replayCompatibility(entries);
+  const refusal = replayRefusal(compatibility, policy);
+  if (refusal !== null) throw new ReplayIncompatibleError(compatibility, refusal);
   /* `RevertTo` IS AN INSTRUCTION ABOUT THE LOG, NOT A GAME ACTION (#1026), so it is resolved before the
      reducer ever sees the history. `effectiveActions` also drops reverts that were themselves reverted.
      THAT IS WHY THIS STAYS A FUNCTION AND NOT A METHOD: resolving reverts needs the WHOLE log, which a

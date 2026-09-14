@@ -17,6 +17,7 @@
 import { readFileSync } from "fs";
 import { join } from "path";
 import { RoomEngine, entriesFromExport, replayLog, type ExportedEntry, type ReplayEntry } from "../gameEngine/replayLog";
+import { DEVELOPMENT_CORPUS_POLICY } from "../gameEngine/rulesVersion";
 import { effectiveActions } from "../gameEngine/logRevert";
 import { readStripped as readSource } from "./sourceScan";
 import {
@@ -44,10 +45,17 @@ describe("JUNO-CV4 replays headless on the Level Playing Field", () => {
     sandboxWaterfallState(sandboxScenario(DEFAULT_SANDBOX_SCENARIO).phase, GAME_ID, true),
     [],
   );
-  const result = replayLog(entries, sandboxReplayProviders(), {
-    state: seedState,
-    waterfall: seedWaterfall,
-  });
+  /* #1520: THIS LOG PREDATES THE RULES-ENGINE PIN. It is replayed as a development fixture under
+     `DEVELOPMENT_CORPUS_POLICY`, which is the one policy that admits a deal with no `rules_engine_version`.
+     A live server refuses the same log. The policy is passed here, visibly, so nobody reads a passing golden
+     test as "the server would continue this game". */
+  const result = replayLog(
+    entries,
+    sandboxReplayProviders(),
+    { state: seedState, waterfall: seedWaterfall },
+    undefined,
+    DEVELOPMENT_CORPUS_POLICY,
+  );
 
   it("applies every entry that a revert did not kill", () => {
     expect(entries).toHaveLength(150);

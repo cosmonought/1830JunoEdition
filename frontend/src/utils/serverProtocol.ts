@@ -152,11 +152,28 @@ export interface BuildSkewResponse {
   serverBuild: BuildId;
 }
 
+/** #1520: the room's deal is pinned to a rules-engine version this server does not carry (or to none at all,
+ *  which the server refuses too -- a missing pin is never read as the current version).
+ *
+ *  ITS OWN CASE, LIKE `build-skew`, because it is not a refusal of one move and not a desync: nothing was
+ *  interpreted. The room's log is intact on disk and untouched; no entry was appended and none will be until
+ *  a server carrying the pinned version loads it. A client that receives this has no history to apply, and
+ *  should say so and stop, rather than retry -- the same hello earns the same answer. */
+export interface IncompatibleResponse {
+  kind: "incompatible";
+  reason: string;
+  /** The version the deal names, or `null` for a legacy (unpinned) deal. */
+  pinnedRulesEngineVersion: number | null;
+  supportedRulesEngineVersions: readonly number[];
+  build: BuildId;
+}
+
 export type ServerMessage =
   | AppliedResponse
   | RefusedResponse
   | CatchUpResponse
-  | BuildSkewResponse;
+  | BuildSkewResponse
+  | IncompatibleResponse;
 
 // ---------------------------------------------------------------------------
 // Minting

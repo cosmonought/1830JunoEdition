@@ -89,6 +89,21 @@ export {
   type ReplayProviders,
   type ReplaySeed,
 } from "./replayLog";
+/* #1520: the rules-engine version a deal is pinned to, and the compatibility boundary every replay crosses
+   before its first entry is applied. */
+export {
+  RULES_ENGINE_VERSION,
+  SUPPORTED_RULES_ENGINE_VERSIONS,
+  RULES_ENGINE_CHANGELOG,
+  SERVER_REPLAY_POLICY,
+  DEVELOPMENT_CORPUS_POLICY,
+  ReplayIncompatibleError,
+  replayCompatibility,
+  replayRefusal,
+  rulesEngineVersionOf,
+  type ReplayCompatibility,
+  type ReplayPolicy,
+} from "./rulesVersion";
 /* The one set of providers, for every headless consumer -- #1199. A server that assembled its own copy of
    the chart geometry and the board's legality rules would be one rule implemented twice, which is the
    mistake #1184, #1193 and #1194 each record. */

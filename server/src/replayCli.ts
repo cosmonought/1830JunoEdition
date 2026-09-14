@@ -35,7 +35,11 @@ import { readFileSync } from "fs";
 /* #1500: the game machine, through its front door -- the same one `gameServer.ts` uses. */
 import {
   DEFAULT_SANDBOX_SCENARIO,
+  DEVELOPMENT_CORPUS_POLICY,
+  ReplayIncompatibleError,
+  SUPPORTED_RULES_ENGINE_VERSIONS,
   derivePhase,
+  replayCompatibility,
   entriesFromExport,
   logHash,
   replayLog,
@@ -73,10 +77,39 @@ function main(): void {
     [],
   );
 
-  const result = replayLog(entries, sandboxReplayProviders(), {
-    state: seedState,
-    waterfall: seedWaterfall,
-  });
+  /* ==================================================================
+      DESIGN NOTE 1520 (CLI): THE ONE PLACE A LEGACY LOG IS READ, AND IT SAYS SO
+     ==================================================================
+     The live server refuses a log whose deal carries no `rules_engine_version` (#1520): a missing pin is
+     never read as "the current version". This tool is the development corpus's reader -- the exports and
+     stored logs that predate the pin -- so it runs under `DEVELOPMENT_CORPUS_POLICY`, which admits a legacy
+     log and nothing else: a log pinned to a version this engine does not carry is refused here exactly as
+     the server would refuse it, before a single entry is applied. Legacy is announced on stderr so a number
+     printed from an unpinned log is never mistaken for one the server would produce. */
+  const compatibility = replayCompatibility(entries);
+  if (compatibility.kind === "legacy") {
+    console.error(
+      `  LEGACY LOG: the deal carries no rules_engine_version; replaying under the development-corpus ` +
+        `policy with engine version(s) [${SUPPORTED_RULES_ENGINE_VERSIONS.join(", ")}]. A live server would ` +
+        `refuse this log (#1520).`,
+    );
+  }
+  let result: ReturnType<typeof replayLog>;
+  try {
+    result = replayLog(
+      entries,
+      sandboxReplayProviders(),
+      { state: seedState, waterfall: seedWaterfall },
+      undefined,
+      DEVELOPMENT_CORPUS_POLICY,
+    );
+  } catch (error) {
+    if (error instanceof ReplayIncompatibleError) {
+      console.error(`  INCOMPATIBLE: ${error.message}`);
+      process.exit(3);
+    }
+    throw error;
+  }
 
   const { state } = result;
   /* Design note #1278: `--json` prints the board's `public_companies` in full, in the exact shape the client's

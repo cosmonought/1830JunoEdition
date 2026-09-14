@@ -235,6 +235,12 @@ export interface SetupGameMsg {
      *  (`RoomSession` #1252). Optional per #232: a log written before this field is unpinned, not pinned to
      *  nothing. */
     build?: string;
+    /** Design note #1520: THE RULES ENGINE THIS GAME IS A PROGRAM FOR. Written by the SERVER over whatever
+     *  the client sent (`RoomSession.submit`), read before any rebuild (`replayCompatibility`), kept for the
+     *  life of the game. Distinct from `build` (which deployment) and `variants.rules` (a house-rules
+     *  revision the reducer branches on). Absent on every log written before this note: legacy, never
+     *  "current". */
+    rules_engine_version?: number;
   };
 }
 

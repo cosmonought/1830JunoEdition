@@ -31,6 +31,12 @@ import { createServer, type Server as HttpServer } from "http";
 import { WebSocketServer, type WebSocket } from "ws";
 
 import { RoomSession, type ServerLogEntry } from "../../frontend/src/utils/roomSession";
+import {
+  DEVELOPMENT_CORPUS_POLICY,
+  SERVER_REPLAY_POLICY,
+  SUPPORTED_RULES_ENGINE_VERSIONS,
+  type ReplayPolicy,
+} from "../../frontend/src/gameEngine/rulesVersion";
 /* #1500: the game machine, through its front door. Everything this server knows about 1830 comes from
    `frontend/src/gameEngine` -- one import, one surface, and no second implementation of any rule. */
 import {
@@ -289,6 +295,12 @@ export interface GameServerOptions {
    *  local-play diagnostic; `start.ts` turns it on wherever it turns on the insecure identity, because those
    *  are the same situation. */
   explainDivergence?: boolean;
+  /** #1520: whether a stored room dealt BEFORE rules-engine versioning (no `rules_engine_version` on its
+   *  deal) may be loaded under this engine. `"refuse"` when absent -- the deployment answer: such a room is
+   *  held and every client is told. `"development-corpus"` is `start.ts`'s `--legacy-logs` opt-in for the
+   *  local playtest rooms, announced at startup and again per room. A room pinned to a version this server
+   *  does not carry is held under either setting. */
+  legacyLogs?: ReplayPolicy["legacyLogs"];
   onAppend?: (room: string, entries: readonly ServerLogEntry[]) => void;
 }
 
@@ -355,6 +367,7 @@ export function createGameServer(options: GameServerOptions): {
       mintId: () => `s${processTag}-${(minted += 1)}`,
       now: () => Date.now(),
       explainDivergence: options.explainDivergence === true,
+      replayPolicy: options.legacyLogs === "development-corpus" ? DEVELOPMENT_CORPUS_POLICY : SERVER_REPLAY_POLICY,
     });
 
     /* RESTORED THROUGH `apply`, NEVER `submit` (#1203): a stored log already holds its derived entries. */
@@ -372,6 +385,27 @@ export function createGameServer(options: GameServerOptions): {
         // eslint-disable-next-line no-console
         console.warn(
           `  ${code} was dealt on build "${dealt}"; this server is "${options.build}" and will refuse to continue it (#1252)`,
+        );
+      }
+      /* #1520: A HELD ROOM, SAID ONCE HERE. `restore` did not interpret a single entry: the deal names a
+         rules-engine version this server does not carry (or names none -- a legacy log, which this server
+         refuses rather than guesses at). The log on disk is exactly as it was found; every hello and every
+         submit on this room is answered `incompatible` until a server with the pinned version loads it. */
+      const held = session.incompatible;
+      if (held === null && session.replayCompatibility().kind === "legacy") {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `  ${code} is a LEGACY room (its deal carries no rules_engine_version) admitted under --legacy-logs ` +
+            `development-corpus and replayed with engine version(s) [${SUPPORTED_RULES_ENGINE_VERSIONS.join(", ")}]. ` +
+            `A deployment refuses this room (#1520).`,
+        );
+      }
+      if (held !== null) {
+        const pinned = held.compatibility.kind === "incompatible" ? String(held.compatibility.version) : "none (legacy)";
+        // eslint-disable-next-line no-console
+        console.warn(
+          `  ${code} is HELD, not rebuilt: pinned rules-engine version ${pinned}, this server supports ` +
+            `[${SUPPORTED_RULES_ENGINE_VERSIONS.join(", ")}] (#1520). ${held.reason}`,
         );
       }
     }

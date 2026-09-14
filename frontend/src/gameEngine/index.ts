@@ -132,3 +132,13 @@ export { derivePhase, type GamePhase } from "./gamePhase";
 export { stateDigest, fieldDigests } from "./stateDigest";
 export { logHash } from "./logHash";
 export { turnRefusal } from "./turnAuthority";
+/* #1530: the excess-train obligation -- who must discard, in what order, and what a discard may do. */
+export {
+  pendingTrainDiscards,
+  discardTrainRefusal,
+  pendingDiscardBlock,
+  excessTrainCount,
+  countableTrainsOf,
+  type PendingTrainDiscards,
+  type TrainDiscardDue,
+} from "./trainDiscard";

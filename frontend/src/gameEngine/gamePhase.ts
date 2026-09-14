@@ -600,6 +600,16 @@ export function derivePhase(gameState: GameStateResponse | null): GamePhase | nu
     }
   }
 
+  /* Design note #1530: A TRAIN IN THE BANK POOL WAS BOUGHT, SO THE PHASE IT BEGAN HAS BEGUN. The phase is "the
+     highest tier anybody owns" (#1), and until the president's discard existed nothing higher than an owned
+     train could sit in the pool -- the trim took the cheapest. A president may now discard the very 5-train
+     whose purchase turned the phase (6.6.1 lets them choose any train), and the phase must not fall back to 4
+     for it: rust has happened, the privates have closed, the limit is 2. So pooled trains count toward
+     `highest` -- and only toward `highest`; they were never printed stock (#1512 subtracts them below). */
+  for (const model of gameState.returned_trains ?? []) {
+    const pooledTier = trainTier(model);
+    if (pooledTier) highest = Math.max(highest, order.indexOf(pooledTier));
+  }
   const tier = order[highest] ?? order[0];
   const total = DEPOT_TOTALS[tier];
   /* Design note #1512: THE POOL IS NOT THE DEPOT. A train traded in or discarded sits in `returned_trains`

@@ -25,6 +25,7 @@ import { sandboxRouteBreakdown } from "../gameEngine/sandboxSession";
 import { hasHeraldHome, stationTokenPrice } from "../gameEngine/stationTokens";
 import { dieselExchangeCostFor } from "../gameEngine/dieselExchange";
 import { KANAWHA_LICENSE_COST } from "../gameEngine/kanawhaLicense";
+import { pendingTrainDiscards } from "../gameEngine/trainDiscard";
 import { numberedPrivate } from "../gameEngine/privateOrdinal";
 
 export interface ActionLogContext {
@@ -854,6 +855,24 @@ export function describeGameplayAction(
     return (
       `${corp(gameState, protocol_id)} bought a Kanawha Licence for $${KANAWHA_LICENSE_COST} — its routes may now cross Coal River (L8).` +
       treasurySuffix(context, protocol_id)
+    );
+  }
+
+  if ("DiscardTrain" in msg) {
+    /* Design note #1530: the president's choice, said as one -- and what the table is still waiting for, if
+       anything, read off the board after it (the next corporation in 6.6.1's order, or this one again). */
+    const { protocol_id, model_type } = msg.DiscardTrain;
+    const still = context.afterState ? pendingTrainDiscards(context.afterState) : null;
+    const next =
+      still === null
+        ? ""
+        : still.required.companyId === protocol_id
+          ? ` ${still.required.ticker} is still ${still.required.excess} over the limit of ${still.required.limit}.`
+          : ` ${still.required.ticker} must discard next.`;
+    return (
+      `${corp(gameState, protocol_id)} discarded a ${model_type}-train to the Bank Pool to meet the train limit of ` +
+      `${depotInventory(gameState).find((row) => row.isCurrent)?.trainLimit ?? "the phase"} — no payment, and it may be bought back at face value.` +
+      next
     );
   }
 

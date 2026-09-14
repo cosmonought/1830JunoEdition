@@ -62,7 +62,7 @@ import { effectiveActions } from "./logRevert";
 
 /** The rules engine this build carries. Bump it, and add a line below, when a deployment changes what a
  *  stored log replays to. Do NOT bump it for UI, protocol or narration changes. */
-export const RULES_ENGINE_VERSION = 1;
+export const RULES_ENGINE_VERSION = 2;
 
 /** Every version this engine can replay faithfully. One entry until somebody builds a versioned reducer;
  *  the point of the list is that "supported" is an explicit statement rather than "whatever is running". */
@@ -77,6 +77,15 @@ export const RULES_ENGINE_CHANGELOG: ReadonlyArray<{ version: number; note: stri
       "station legality in the authority) and Batch 4 (train availability with the Bank Pool, the mandatory " +
       "purchase gate, discards to the pool). Logs dealt before this are legacy: unversioned, and never " +
       "reinterpreted by a server.",
+  },
+  {
+    version: 2,
+    note:
+      "Batch 4.6 (2026-09-14, #1530): automatic cheapest-first excess-train trimming at a phase change is " +
+      "replaced by the president's explicit `DiscardTrain` actions (rulebook 6.6.1: the president chooses; " +
+      "highest share value decides first; the train goes to the Bank Pool). A version-1 log carries no such " +
+      "choices -- its excess trains were removed by the reducer, not by an entry -- so it is not replay-" +
+      "compatible with this semantics and is refused, never reinterpreted.",
   },
 ];
 
@@ -97,15 +106,33 @@ export type ReplayCompatibility =
 /** How a caller treats a log that predates the pin. Stated, never defaulted to "allow". */
 export interface ReplayPolicy {
   legacyLogs: "refuse" | "development-corpus";
+  /** #1530: what a LEGACY log's excess trains mean -- BEST-EFFORT DEVELOPMENT-CORPUS COMPATIBILITY, NOT
+   *  HISTORICAL-FIDELITY REPLAY, AND DEVELOPMENT-ONLY. Every log before version 2 was played on an engine that
+   *  removed excess trains itself, cheapest-first, and wrote no entry for it, so the log is silent exactly
+   *  where version 2 expects a `DiscardTrain`. `"engine-chose-cheapest"` has `replayLog` supply that one
+   *  choice, as `DiscardTrain` entries applied through today's arm and appended nowhere, so the golden and
+   *  replay fixtures can still be read end to end. It does NOT make the replay faithful to the engine that
+   *  played the log: every other version-2 rule (the limit judged in force at the purchase, the pool counting
+   *  toward the phase) still applies, and a legacy log can diverge from its own play for those reasons
+   *  (JUNO-FCJ, index 474). `"refuse"` -- the default, and the only value the server ever carries -- leaves
+   *  the obligation standing, where it blocks the rest of the log; that is what "not replay-compatible"
+   *  means. Only consulted for a `legacy` log; a log pinned to version 1 is refused outright, whatever this
+   *  says. Never a production restore policy: `start.ts --legacy-logs` does not reach it (a legacy room
+   *  admitted on a local server holds at its first past-trim discard until a president resolves it). */
+  legacyExcessTrains?: "refuse" | "engine-chose-cheapest";
 }
 
 /** The server's policy: a room the field does not pin is not interpreted. */
-export const SERVER_REPLAY_POLICY: ReplayPolicy = { legacyLogs: "refuse" };
+export const SERVER_REPLAY_POLICY: ReplayPolicy = { legacyLogs: "refuse", legacyExcessTrains: "refuse" };
 
 /** The development corpus's policy: the stored and golden logs under `frontend/` predate the pin and are
  *  replayed under the current engine AS FIXTURES. Passing this is the visible statement that a test or the
  *  CLI knows the log it holds was never pinned. */
-export const DEVELOPMENT_CORPUS_POLICY: ReplayPolicy = { legacyLogs: "development-corpus" };
+export const DEVELOPMENT_CORPUS_POLICY: ReplayPolicy = {
+  legacyLogs: "development-corpus",
+  // #1530: best-effort corpus compatibility (the corpus was played under the automatic trim); not fidelity.
+  legacyExcessTrains: "engine-chose-cheapest",
+};
 
 /** The version the effective deal names: a number, `null` for a deal without one, `undefined` for no deal. */
 export function rulesEngineVersionOf(entries: readonly ReplayEntry[]): number | null | undefined {

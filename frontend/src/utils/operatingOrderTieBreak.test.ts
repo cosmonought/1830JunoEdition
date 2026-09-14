@@ -296,14 +296,15 @@ describe("rule (iii): equal price on different cells goes to the rightmost", () 
     expect(order).toEqual([4, 1]);
   });
 
-  it("falls through to arrival for two cells in one column", () => {
-    /* Same price, same column, different rows. "Furthest right" cannot
-       separate them -- they are equally right -- so this lands on arrival.
-       Not the stated rule, because the rules do not legislate this case;
-       recorded so the behaviour is a decision rather than an accident. */
+  it("puts the higher token first for two cells in one column (#1531)", () => {
+    /* Same price, same column, different rows. This case USED TO fall through to arrival and was recorded as
+       "not the stated rule, because the rules do not legislate this case". Rulebook 6.0 does: "If 2 or more
+       floated railroads have the same share value and their share value tokens are in the same column, the
+       railroad whose token is furthest up takes a turn first." The standard chart reaches it -- column 6
+       holds $67 at rows 3, 4 and 5. `y` grows upward on this chart, so the larger `y` is the higher token. */
     const prices: SandboxMarketPrices = {
-      1: at(90, 5, 1, 8),
-      4: at(90, 5, 6, 2),
+      1: at(90, 5, 1, 8), // lower row, arrived later
+      4: at(90, 5, 6, 2), // higher row, arrived first
     };
     const order = buildOperatingOrder(
       board([company(1, "PRR", "90"), company(4, "B&O", "90")]),
@@ -311,6 +312,36 @@ describe("rule (iii): equal price on different cells goes to the rightmost", () 
       markFrom(prices),
     );
     expect(order).toEqual([4, 1]);
+  });
+
+  it("height outranks arrival in one column, because the cells differ (#1531)", () => {
+    /* The case that separates the row key from the arrival key: the LOWER token arrived first. An
+       arrival-only fall-through would put PRR first; 6.0 puts the higher token first. */
+    const prices: SandboxMarketPrices = {
+      1: at(90, 5, 1, 2), // lower row, arrived first
+      4: at(90, 5, 6, 8), // higher row, arrived later
+    };
+    const order = buildOperatingOrder(
+      board([company(1, "PRR", "90"), company(4, "B&O", "90")]),
+      priceFrom(prices),
+      markFrom(prices),
+    );
+    expect(order).toEqual([4, 1]);
+  });
+
+  it("the standard chart's $67 column, from the state's own positions (#1531)", () => {
+    /* Column 6 holds $67 at rows 3, 4 and 5 on the printed chart. Three corporations there, one per row, with
+       arrivals in the opposite order to their height: 6.0 orders them top-down regardless. Read from
+       `state.market_positions` (#1196), which is what the reducer and the discard queue read. */
+    const state = {
+      public_companies: [company(1, "PRR", "67"), company(4, "B&O", "67"), company(5, "C&O", "67")],
+      market_positions: {
+        1: at(67, 6, 3, 1), // lowest, arrived first
+        4: at(67, 6, 5, 3), // highest, arrived last
+        5: at(67, 6, 4, 2),
+      },
+    } as unknown as GameStateResponse;
+    expect(buildOperatingOrder(state)).toEqual([4, 5, 1]);
   });
 
   it("still yields to price", () => {

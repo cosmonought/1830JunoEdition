@@ -229,6 +229,7 @@ import TrainTradePanel from "./components/TrainTradePanel";
    and no longer renders it. `TrainTradePrompt` still mounts here: it is the
    offer LEDGER, not the purchase control, and it never moved. */
 import {
+  TrainDiscardPrompt,
   TrainTradePrompt,
   type TrainTradeProposal,
 } from "./components/TrainPurchasePanel";
@@ -514,6 +515,7 @@ import {
 import { dividendRefused, operatingCorporationId } from "./gameEngine/dividendGate";
 import { operatingIdentityRefusal } from "./gameEngine/operatingIdentity";
 import { cheapestPurchasableTrain } from "./gameEngine/trainAvailability";
+import { pendingTrainDiscards } from "./gameEngine/trainDiscard"; // #1530
 import { dividendSplit } from "./gameEngine/dividendSplit";
 import {
   actionWasRefused,
@@ -3490,6 +3492,26 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      Design note #701: DERIVED FROM SHARED SANDBOX STATE, exactly as #662 did for privates. The wallet is what
      travels; the display label is resolved here, at the edge, because two clients can render the same wallet
      differently. */
+  /* ==================================================================
+      DESIGN NOTE 1530: THE DISCARD THE GAME IS WAITING FOR
+     ==================================================================
+     Read off the reducer's state (`pendingTrainDiscards`), never kept here: the obligation is a fact about
+     the fleets and the phase, and a queue this shell maintained privately would be the reducer-blind UI
+     queue the batch note forbids. The president named on it dispatches `DiscardTrain` off-turn, exactly as
+     a consent answer is (#701) -- the buyer of the phase-changing train is the one operating, and the
+     authority gives the message its own owner (`turnRefusal`, exemption 5). */
+  const pendingDiscard = useMemo(() => {
+    const pending = gameState ? pendingTrainDiscards(gameState) : null;
+    if (!pending) return null;
+    const { required } = pending;
+    return {
+      ...required,
+      presidentLabel: required.president
+        ? (sandboxPlayerLabel(required.president) ?? truncateAddress(required.president))
+        : required.ticker,
+    };
+  }, [gameState]);
+
   const sandboxTrainProposal = useMemo<TrainTradeProposal | null>(() => {
     const offer = gameState?.train_purchase_offer ?? null;
     if (!offer || offer.accepted) return null; // #1247, as for the private
@@ -9787,6 +9809,19 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
    *  its own `useState`. The dispatch was right and its AUTHOR was wrong -- the seller had never seen the
    *  offer, so "accepted" meant the buyer had agreed with themselves. The transfer still goes through the
    *  ordinary purchase message; it is now the drain that sends it, once the seller has answered. */
+  /* #1530: the president's discard, dispatched off-turn for #701's reason. `pendingDiscard` is derived above. */
+  const handleDiscardTrain = useCallback(
+    (modelType: string) => {
+      if (!pendingDiscard) return;
+      runGameplayAction(
+        `${pendingDiscard.ticker} discarded a ${modelType}-train`,
+        { DiscardTrain: { game_id: 0, protocol_id: pendingDiscard.companyId, model_type: modelType } },
+        { offTurn: true },
+      );
+    },
+    [pendingDiscard, runGameplayAction],
+  );
+
   const handleAcceptSandboxTrainOffer = useCallback(() => {
     if (!sandboxTrainProposal) return;
     runGameplayAction(
@@ -13918,6 +13953,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         }
         onAccept={liveTrainOffer ? handleAcceptLiveTrainOffer : handleAcceptSandboxTrainOffer}
         onReject={liveTrainOffer ? handleRejectLiveTrainOffer : handleRejectSandboxTrainOffer}
+      />
+      {/* #1530: the excess-train discard the game is waiting for. Same slot as the trade prompt; the two cannot
+         stand at once (an offer cannot be made while a discard is owed). */}
+      <TrainDiscardPrompt
+        due={pendingDiscard}
+        viewerIsPresident={pendingDiscard !== null && pendingDiscard.president === viewerAddress}
+        onDiscard={handleDiscardTrain}
       />
       <PrivateTradePrompt
         proposal={privateProposal}

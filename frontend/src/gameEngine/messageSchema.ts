@@ -181,6 +181,7 @@ export const GAMEPLAY_MESSAGE_SCHEMA: Readonly<Record<string, Readonly<Record<st
   },
   EmergencyBuyHardware: { game_id: "int?", protocol_id: "int" },
   ExchangeTrainForDiesel: { game_id: "int?", protocol_id: "int", model_type: "string" },
+  DiscardTrain: { game_id: "int?", protocol_id: "int", model_type: "string" }, // #1530
   BuyTrainFromCorporation: {
     game_id: "int?",
     buyer_protocol_id: "int",

@@ -31,7 +31,19 @@ import {
   describeFleetLosses,
   describePrivateClosures,
 } from "../gameEngine/sandboxSession";
+import { pendingTrainDiscards } from "../gameEngine/trainDiscard";
 import type { GameStateResponse } from "../gameEngine/gameState";
+
+/* ==================================================================
+    DESIGN NOTE 1530 (harness): THE TRIM IS GONE; THE PHASE OWES, IT DOES NOT TAKE
+   ==================================================================
+   Everything above describes the automatic cheapest-first trim, which stood from #284 to Batch 4 and is
+   replaced in Batch 4.6 by the president's `DiscardTrain` (rulebook 6.6.1; `trainDiscard.ts`). The cases
+   below that pinned WHICH train the trim took now pin that it takes none and that the obligation is owed to
+   the right corporation, in the right amount. The rust half of the ordering is unchanged, and so is the
+   SENTENCE -- `describeFleetLoss` still narrates a fleet that shrank at a boundary (the Yellow Sign ghost's
+   expiry, #1046, keeps its own trim) -- so those cases build their before/after states by hand rather than
+   through a phase change that no longer discards. */
 
 function stateWith(fleets: Record<number, string[]>): GameStateResponse {
   return {
@@ -48,33 +60,37 @@ function fleetOf(state: GameStateResponse, companyId: number): string[] {
   return [...(state.public_companies.find((c) => c.company_id === companyId)?.owned_trains ?? [])];
 }
 
-describe("the phase takes the cheapest train first", () => {
-  it("discards the lowest-value train when the limit drops", () => {
-    /* THE REQUEST. Phase 4 allows three; this corporation holds four after buying the 4-train that started it.
-       The 3-trains are worth $180 and the 4 is worth $300, so a 3 goes. */
+describe("the phase takes nothing; the president is owed the choice (#1530)", () => {
+  it("leaves a fleet over the new limit exactly as it was, and owes one discard", () => {
+    /* Phase 4 allows three; this corporation holds four after buying the 4-train that started it. The trim
+       used to take a 3 ($180) here. Now the fleet stands, and `pendingTrainDiscards` says who owes what. */
     const before = stateWith({ 1: ["3", "3", "3", "4"] });
     const after = applyPhaseChange(before, "4");
-    expect(fleetOf(after, 1)).toEqual(["3", "3", "4"]);
+    expect(fleetOf(after, 1)).toEqual(["3", "3", "3", "4"]);
+    expect(pendingTrainDiscards(after)?.required).toMatchObject({ companyId: 1, excess: 1, limit: 3 });
   });
 
-  it("keeps discarding until the fleet is legal", () => {
-    // Phase 5 allows two. A corporation holding four loses the two cheapest.
+  it("owes as many discards as the fleet is over by", () => {
+    // Phase 5 allows two. A corporation holding four owes two, and loses none here.
     const before = stateWith({ 1: ["3", "3", "4", "5"] });
     const after = applyPhaseChange(before, "5");
-    expect(fleetOf(after, 1)).toEqual(["4", "5"]);
+    expect(fleetOf(after, 1)).toEqual(["3", "3", "4", "5"]);
+    expect(pendingTrainDiscards(after)?.required).toMatchObject({ companyId: 1, excess: 2, limit: 2 });
   });
 
-  it("never discards a train the corporation is entitled to keep", () => {
+  it("owes nothing to a corporation entitled to keep what it holds", () => {
     const before = stateWith({ 1: ["4", "5"] });
     expect(applyPhaseChange(before, "5")).toBe(before);
+    expect(pendingTrainDiscards(before)).toBeNull();
   });
 
-  it("trims every corporation, not only the buyer", () => {
+  it("owes every over-limit corporation, not only the buyer", () => {
     // The limit is a rule about holdings; whose purchase triggered it does not enter into it.
     const before = stateWith({ 1: ["3", "3", "3", "4"], 2: ["4", "4", "4", "5"] });
     const after = applyPhaseChange(before, "5");
-    expect(fleetOf(after, 1)).toEqual(["3", "4"]);
-    expect(fleetOf(after, 2)).toEqual(["4", "5"]);
+    expect(fleetOf(after, 1)).toEqual(["3", "3", "3", "4"]);
+    expect(fleetOf(after, 2)).toEqual(["4", "4", "4", "5"]);
+    expect(pendingTrainDiscards(after)?.queue.map((due) => [due.companyId, due.excess])).toEqual([[1, 2], [2, 2]]);
   });
 
   it("leaves an unreported roster alone", () => {
@@ -112,8 +128,10 @@ describe("a partial state is survived, not filled in (design note #897)", () => 
   it("closes no privates for a state that never reported any", () => {
     const before = partial({ 1: ["3", "3", "4", "5"] });
     const after = applyPhaseChange(before, "5");
-    // The fleet rule still ran, which is what proves the guard did not short-circuit the whole function.
-    expect(fleetOf(after, 1)).toEqual(["4", "5"]);
+    // It did not throw on the way to the privates arm, and (#1530) the limit took nothing: the two-over fleet
+    // is owed to the president, which is the proof the roster was read.
+    expect(fleetOf(after, 1)).toEqual(["3", "3", "4", "5"]);
+    expect(pendingTrainDiscards(after)?.required.excess).toBe(2);
   });
 
   it("does not invent an empty privates list on the way out", () => {
@@ -126,8 +144,17 @@ describe("a partial state is survived, not filled in (design note #897)", () => 
        jobs, and the sibling case above is the one that covers the throw. */
     const before = partial({ 1: ["3", "3", "4", "5"] });
     const after = applyPhaseChange(before, "5");
-    expect(after).not.toBe(before); // it really did rebuild the state, so the check is not vacuous
+    /* #1530: with the trim gone a phase-5 change on this fixture has nothing to write -- no rust at 5, no
+       roster to close -- so the state comes back by identity, which is the strongest form of "nothing was
+       invented". A phase-4 change on a fleet with a 2-train still rebuilds the state (rust), and still
+       writes no privates list: both halves are asserted. */
+    expect(after).toBe(before);
     expect(Object.prototype.hasOwnProperty.call(after, "private_companies")).toBe(false);
+    const rusting = partial({ 1: ["2", "3", "4"] });
+    const rusted = applyPhaseChange(rusting, "4");
+    expect(rusted).not.toBe(rusting);
+    expect(fleetOf(rusted, 1)).toEqual(["3", "4"]);
+    expect(Object.prototype.hasOwnProperty.call(rusted, "private_companies")).toBe(false);
   });
 
   it("survives a state with no public roster either", () => {
@@ -167,28 +194,40 @@ describe("a partial state is survived, not filled in (design note #897)", () => 
   });
 });
 
-describe("rust resolves before the trim, and that ordering is load-bearing", () => {
-  it("does not spend a discard on a train the phase already destroyed", () => {
+describe("rust resolves before the limit is read, and that ordering is load-bearing", () => {
+  it("does not owe a discard for a train the phase already destroyed", () => {
     /* Phase 4 rusts every 2-train AND cuts the limit to three. This corporation holds four, one of which is a
-       2. Rusting it first brings the fleet to three, which is legal -- so nothing is discarded.
-       Trimming FIRST would have taken a 3-train as well, leaving two where the rules leave three. */
+       2. Rusting it first brings the fleet to three, which is legal -- so nothing is owed.
+       Reading the limit FIRST would have owed a 3-train as well, leaving two where the rules leave three. */
     const before = stateWith({ 1: ["2", "3", "3", "4"] });
     const after = applyPhaseChange(before, "4");
     expect(fleetOf(after, 1)).toEqual(["3", "3", "4"]);
+    expect(pendingTrainDiscards(after)).toBeNull();
   });
 
-  it("still trims when rusting alone is not enough", () => {
+  it("still owes a discard when rusting alone is not enough -- and takes nothing itself (#1530)", () => {
     const before = stateWith({ 1: ["2", "3", "3", "3", "4"] });
     const after = applyPhaseChange(before, "4");
-    // The 2 rusts, leaving four; the limit is three, so the cheapest survivor goes too.
-    expect(fleetOf(after, 1)).toEqual(["3", "3", "4"]);
+    // The 2 rusts, leaving four; the limit is three, so ONE discard is owed -- the president's to choose.
+    expect(fleetOf(after, 1)).toEqual(["3", "3", "3", "4"]);
+    expect(pendingTrainDiscards(after)?.required).toMatchObject({ companyId: 1, excess: 1, choices: ["3", "3", "3", "4"] });
   });
 });
 
 describe("the sentence describes what was actually removed", () => {
+  /* #1530: a phase change no longer removes a train for the limit, so the "after" states here are written by
+     hand -- the shape the ghost expiry (#1046) still produces, and the shape the narrator must keep reading. */
+  const shrunk = (before: GameStateResponse, fleets: Record<number, string[]>) => ({
+    ...before,
+    public_companies: before.public_companies.map((company) => ({
+      ...company,
+      owned_trains: fleets[company.company_id] ?? company.owned_trains,
+    })),
+  });
+
   it("separates a rust from a discard", () => {
     const before = stateWith({ 1: ["2", "3", "3", "3", "4"] });
-    const after = applyPhaseChange(before, "4");
+    const after = shrunk(applyPhaseChange(before, "4"), { 1: ["3", "3", "4"] });
     const [loss] = describeFleetLosses(before, after);
 
     expect(loss.rusted).toEqual(["2"]);
@@ -199,7 +238,7 @@ describe("the sentence describes what was actually removed", () => {
     /* Two 3-trains are two trains. A set difference would report one loss where the corporation suffered two,
        and the table would disagree with the sentence beside it. */
     const before = stateWith({ 1: ["3", "3", "3", "4"] });
-    const after = applyPhaseChange(before, "5");
+    const after = shrunk(before, { 1: ["3", "4"] });
     const [loss] = describeFleetLosses(before, after);
     expect(loss.discarded).toEqual(["3", "3"]);
   });
@@ -213,14 +252,14 @@ describe("the sentence describes what was actually removed", () => {
     /* 1830 takes the train; the president has no say. A sentence that said only "discarded its 3-train" would
        describe a decision nobody made. */
     const before = stateWith({ 1: ["3", "3", "3", "4"] });
-    const [loss] = describeFleetLosses(before, applyPhaseChange(before, "4"));
+    const [loss] = describeFleetLosses(before, shrunk(before, { 1: ["3", "3", "4"] }));
     const line = describeFleetLoss(loss, 3);
     expect(line).toBe("C1: its 3-train was discarded to meet the new limit of 3.");
   });
 
   it("joins a rust and a discard into one line", () => {
     const before = stateWith({ 1: ["2", "3", "3", "3", "4"] });
-    const [loss] = describeFleetLosses(before, applyPhaseChange(before, "4"));
+    const [loss] = describeFleetLosses(before, shrunk(applyPhaseChange(before, "4"), { 1: ["3", "3", "4"] }));
     expect(describeFleetLoss(loss, 3)).toBe(
       "C1: its 2-train rusted, and its 3-train was discarded to meet the new limit of 3.",
     );
@@ -228,7 +267,7 @@ describe("the sentence describes what was actually removed", () => {
 
   it("agrees in number for a multiple discard", () => {
     const before = stateWith({ 1: ["3", "3", "4", "5"] });
-    const [loss] = describeFleetLosses(before, applyPhaseChange(before, "5"));
+    const [loss] = describeFleetLosses(before, shrunk(before, { 1: ["4", "5"] }));
     expect(describeFleetLoss(loss, 2)).toBe(
       /* Design note #1100: numerals name the TIER, words count the trains -- ruled, "write out the number
        of trains and reserve numerals for the train tiers", because every train in 1830 is named by a numeral
@@ -243,7 +282,7 @@ describe("the sentence describes what was actually removed", () => {
     // A limit the caller could not read is not a limit of zero, and printing "the new limit of null" would be
     // worse than the vaguer sentence.
     const before = stateWith({ 1: ["3", "3", "3", "4"] });
-    const [loss] = describeFleetLosses(before, applyPhaseChange(before, "4"));
+    const [loss] = describeFleetLosses(before, shrunk(before, { 1: ["3", "3", "4"] }));
     expect(describeFleetLoss(loss, null)).toContain("the new train limit");
   });
 });

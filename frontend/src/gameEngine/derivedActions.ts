@@ -72,6 +72,7 @@ import { barredHexesFor } from "./kanawhaLicense";
 import { MOCK_TRAIN_CATALOG } from "./mockFixtures";
 import { tileEraFor } from "./gameConstants";
 import { depotInventory, derivePhase } from "./gamePhase";
+import { pendingTrainDiscards } from "./trainDiscard";
 import { tokenCityIndex } from "../components/hexContractTypes";
 import { STATIC_BOARD_HEXES } from "../components/hexBoardData";
 
@@ -111,6 +112,12 @@ export function nextDerivedAction(input: DerivedActionInput): DerivedAction | nu
      (#1204), and `dhFreeStationAvailableFor` is the shell's own rule, shared. A caller that knows better may
      still say so; nobody has to. */
   const { state, mapGrid, emitted } = input;
+  /* Design note #1530: WHILE A DISCARD IS OWED THE GAME OWES NOTHING. A corporation over its train limit is
+     waiting on its president's `DiscardTrain`, and the reducer refuses every other message meanwhile -- so an
+     auto-skip or an end-of-turn generated here would only be refused, and a server that generated one
+     anyway would be walking the turn past the decision the rules give to a player. Asked before the accepted
+     offer below, because an accepted purchase is also "anything else". */
+  if (pendingTrainDiscards(state) !== null) return null;
   const extraStationAvailable =
     input.extraStationAvailable ??
     (() => {

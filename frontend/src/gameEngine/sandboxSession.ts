@@ -81,6 +81,7 @@ import { dividendRefusal, dividendRefused } from "./dividendGate";
 import { operatingIdentityRefusal } from "./operatingIdentity";
 import { stationPlacementRefusal } from "./stationPlacementGate";
 import { cheapestPurchasableTrain, trainObligationRefusal } from "./trainAvailability";
+import { discardTrainRefusal, pendingDiscardBlock } from "./trainDiscard";
 // Design note #1019: the purchase gate the reducer never had.
 import { trainPurchaseRefusal } from "./trainPurchaseGate";
 import { dividendSplit } from "./dividendSplit";
@@ -247,72 +248,10 @@ function advanceSeat(state: GameStateResponse): GameStateResponse {
   };
 }
 
-/* The OR queue is BUILT where the round begins, ordered by market price descending, floated-with-a-president only. Nothing used to fill it, which is the infinite round.
-   See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #411 */
-export function buildOperatingOrder(
-  state: GameStateResponse,
-  priceFor?: (companyId: number) => number | null,
-  /* The whole mark, not a growing list of scalars -- rule (iii) needs the column too. priceFor stays separate because #468's fallback reaches past the chart.
-     See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #647 */
-  markFor?: (companyId: number) => { x: number; y: number; enteredAt?: number } | null | undefined,
-): number[] {
-  /* Fall back to PAR, never zero, and coerce NaN: a comparator that returns NaN yields an order that is not total, which puts the cursor back on a corporation that already operated.
-     See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #468 */
-  /* ==================================================================
-      DESIGN NOTE 1196: THE QUEUE READS THE STATE FIRST, AND THE RESOLVERS SECOND
-     ==================================================================
-     THIS IS THE LINE §5a WAS ABOUT. The three sort keys below -- price, column, arrival -- have always come
-     from resolvers backed by a React ref that each client maintained privately, so two clients whose charts
-     had drifted produced two different turn orders from one log. Indices 310/311 of `JUNO-3XD` are that
-     happening to real players.
-     `state.market_positions` IS THE SAME FIGURES, WRITTEN BY THE REDUCER AND DETERMINED BY THE LOG. Prefer
-     it wherever it exists and the queue becomes a function of the log by construction -- which is the
-     property #1174 and #1182 both tried to enforce from the wrong end, by refusing actions on a cursor
-     rather than by making the cursor agree.
-     THE RESOLVERS REMAIN THE FALLBACK, and #232's rule says why: `undefined` means "this caller carries no
-     positions", which is every log written before this note and the shell until increment 2. It does not
-     mean an empty chart -- that is `{}`, and it correctly yields par-priced companies with no column. */
-    const positions = state.market_positions;
-    const positionFor = (companyId: number) =>
-      positions ? positions[companyId] ?? null : markFor?.(companyId) ?? null;
-    const resolvedPriceFor = (companyId: number): number | null =>
-      positions ? positions[companyId]?.price ?? null : priceFor?.(companyId) ?? null;
-
-  const priced = state.public_companies
-    .filter((company) => company.is_floated && !!company.president)
-    .map((company) => {
-      const fromMarket = resolvedPriceFor(company.company_id);
-      const fromPar = Number(company.par_value ?? 0);
-      const price = Number.isFinite(fromMarket as number)
-        ? (fromMarket as number)
-        : Number.isFinite(fromPar)
-          ? fromPar
-          : 0;
-      /* Infinity for an unrecorded arrival sorts it after every recorded one rather than inventing a turn order.
-         See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #646 */
-      const mark = positionFor(company.company_id);
-      const arrival = mark?.enteredAt;
-      return {
-        companyId: company.company_id,
-        price,
-        /* -Infinity sorts a positionless corporation last under the rightmost-first rule, matching #646's direction.
-           See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #647 */
-        column: Number.isFinite(mark?.x as number) ? (mark?.x as number) : -Infinity,
-        arrival: Number.isFinite(arrival as number) ? (arrival as number) : Infinity,
-      };
-    });
-
-  /* Three disjoint levels: price desc, then column desc (rightmost first, #647), then arrival asc (earliest first). company_id is the last resort and keeps the sort TOTAL.
-     See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #646 */
-  priced.sort(
-    (a, b) =>
-      (b.price - a.price) ||
-      (b.column - a.column) ||
-      (a.arrival - b.arrival) ||
-      (a.companyId - b.companyId),
-  );
-  return priced.map((entry) => entry.companyId);
-}
+/* Design note #1530: `buildOperatingOrder` lives in `operatingOrder.ts` now (the discard module needs it and
+   cannot import this file); re-exported so every caller keeps its import. */
+export { buildOperatingOrder } from "./operatingOrder";
+import { buildOperatingOrder } from "./operatingOrder";
 
 /** Keep the seat pointer in step during an OR so actingSeatIndex and the raw pointer agree. Left untouched when the presidency cannot be resolved.
  *  See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #411 */
@@ -900,6 +839,12 @@ function limitForTier(state: GameStateResponse, tier: string): number {
   return depotInventory(state).find((row) => row.tier === tier)?.trainLimit ?? Infinity;
 }
 
+/** #1530: the train limit of the phase in force -- `null` when the board reports no phase. */
+function limitInForce(state: GameStateResponse): number | null {
+  const phase = derivePhase(state);
+  return phase && phase.known ? phase.trainLimit : null;
+}
+
 /* ==================================================================
  *  DESIGN NOTE 909: WHAT A STOCK ROUND OPENING WIPES, IN ONE PLACE
  * ==================================================================
@@ -1096,7 +1041,6 @@ export function applyPhaseChange(
   const gentle = variants.gentleRust;
 
   let changed = false;
-  const discardsThisPhase: string[] = [];
   const companies = (state.public_companies ?? []).map((company) => {
     const owned = company.owned_trains;
     // `undefined` means the chain does not report rosters. Trimming a fleet
@@ -1159,15 +1103,18 @@ export function applyPhaseChange(
       ? [...(company.pending_rust_trains ?? []), ...rustedNow]
       : (company.pending_rust_trains ?? []);
 
-    // 2. Trim to the limit -- reprieved first, then cheapest first (#979).
-    const trimmed = trimToTrainLimit({
-      owned: fleetAfterRust,
-      reprieved: reprievedAfterRust,
-      limit,
-      cost: (model) => TIER_COST[model] ?? 0,
-    });
-    const fleet = trimmed.owned;
-    discardsThisPhase.push(...trimmed.discarded); // #1513: bound for the Bank Pool
+    /* ==================================================================
+        DESIGN NOTE 1530: THE LIMIT IS NOT ENFORCED HERE ANY MORE -- IT IS OWED
+       ==================================================================
+       "2. Trim to the limit" stood here from #284 to Batch 4: `trimToTrainLimit`, cheapest-first, reprieved
+       exempt, and (from #1513) the trimmed train into the Bank Pool. Rulebook 6.6.1 gives the CHOICE to the
+       president, so the trim is gone: a corporation this phase change leaves over the new limit simply stays
+       over it, `pendingTrainDiscards` (`trainDiscard.ts`) reads that off the board, the reducer refuses every
+       other message until the president's `DiscardTrain`s bring the fleet down, and each discard is its own
+       log entry. `limit` is still computed above because `expireGhostTrains` (#1046) keeps its own trim at
+       the round boundary, which is a variant ruling and not this note's. Rules-engine version 2 (#1520). */
+    const fleet = fleetAfterRust;
+    const trimmed = { reprieved: reprievedAfterRust as readonly string[] };
     /* ==================================================================
         #232: THE FIELD APPEARS WHEN THERE IS SOMETHING TO SAY, AND NOT BEFORE
        ==================================================================
@@ -1250,16 +1197,13 @@ export function applyPhaseChange(
      `owned_trains` and entered nothing, and because the depot derives stock from what is owned, it came back
      as printed stock a tier below the queue's head -- visible to nobody, purchasable by nobody. It is put in
      the pool now, at face value, where any corporation may buy it (`buyReturnedTrain`).
-     WHICH TRAIN IS STILL THE TRIM'S CHOICE -- cheapest-first -- and that is the half the rulebook gives to
-     the president. Replacing it needs a pending-discard state and a president-sent message; the design is
-     proposed in the batch note rather than approximated here. */
-  const returnedAfter =
-    discardsThisPhase.length === 0
-      ? survivingReturned
-      : [...(survivingReturned ?? []), ...discardsThisPhase];
-  const returnedChanged =
-    returnedAfter !== returnedBefore &&
-    (returnedAfter?.length !== returnedBefore?.length || discardsThisPhase.length > 0);
+     WHICH TRAIN WAS STILL THE TRIM'S CHOICE -- cheapest-first -- and that was the half the rulebook gives to
+     the president. #1530 (Batch 4.6) replaced the trim with the president's `DiscardTrain`; the pool entry
+     is written by that arm now, and this function no longer discards. */
+  /* #1530: nothing is discarded here any more; the pool only LOSES trains at a phase change (rust). The
+     president's `DiscardTrain` is what puts a train in. */
+  const returnedAfter = survivingReturned;
+  const returnedChanged = returnedAfter !== returnedBefore && returnedAfter?.length !== returnedBefore?.length;
 
   if (!changed && !privatesChanged && !returnedChanged) return state;
   return {
@@ -1480,6 +1424,12 @@ export function describeFleetLosses(
      by one, and a corporation that has just LOST a train cannot be over the limit. The event narrates
      itself (#1046's appendix and the mechanical line), so the model it names comes out of `lost` before it
      can be read as a discard. Both stages that remove a train carry `model` (#902, #1092). */
+  /* #1530: the president's own discard is narrated by the Activity Log as the action it is, not as a loss the
+     phase took -- so it is taken out of the diff like a sale. */
+  const discardedByChoice =
+    typeof msg === "object" && msg !== null && "DiscardTrain" in msg
+      ? (msg as { DiscardTrain: { protocol_id: number; model_type: string } }).DiscardTrain
+      : null;
   const taken =
     typeof msg === "object" && msg !== null && "YellowSignEvent" in msg
       ? (msg as { YellowSignEvent: { protocol_id: number; model?: string | null } }).YellowSignEvent
@@ -1517,6 +1467,10 @@ export function describeFleetLosses(
     // #1264: so does the one the Yellow Sign took.
     if (taken !== null && taken.protocol_id === company.company_id && taken.model) {
       const at = lost.indexOf(taken.model);
+      if (at >= 0) lost.splice(at, 1);
+    }
+    if (discardedByChoice !== null && discardedByChoice.protocol_id === company.company_id) {
+      const at = lost.indexOf(discardedByChoice.model_type);
       if (at >= 0) lost.splice(at, 1);
     }
     /* ==================================================================
@@ -1644,10 +1598,16 @@ function buyDepotTrain(
   /* REFUSES BY RETURNING THE STATE IT WAS HANDED, which is what every gate in this reducer does and what
      `actionWasRefused` detects by reference (#778). That identity is the whole of the "throw an error to the
      UI" half of the report -- the drain already renders a refusal line and #784 already names the rule. */
+  /* Design note #1530: JUDGED AGAINST THE LIMIT IN FORCE, not the tier's own. `tier.trainLimit` is the limit
+     that will apply once this tier is current -- for the phase-changing purchase, the NEW limit -- and
+     judging the buyer by it was #296's mistake inside the reducer (#703 corrected the panel, not this gate):
+     a corporation holding 2 at phase 4 could not buy the first 5-train, though rulebook 2.0 says the purchase
+     "may result in the forced discard of a train by the railroad that just purchased". The limit is tested
+     before the purchase resolves; the discard is what follows it. */
   if (
     trainPurchaseRefusal(state, companyId, {
       cost: tier.cost,
-      trainLimit: tier.trainLimit,
+      trainLimit: limitInForce(state) ?? tier.trainLimit,
       requireFunds,
     }) !== null
   ) {
@@ -2693,6 +2653,22 @@ function applySandboxActionCore(
      (#712: an entry the log already holds must no-op, never halt).
      THE LAY'S OWN LEGALITY IS UNCHANGED: `layRefused` below still judges the tile, and nothing about track
      rules moves in this note. */
+  /* ==================================================================
+      DESIGN NOTE 1530: WHILE A DISCARD IS OWED, NOTHING ELSE HAPPENS -- ASKED FIRST
+     ==================================================================
+     Rulebook 6.6.1: the president chooses the train to discard; 2.0: the limit is in force the moment the
+     phase-changing train is bought. Between those two moments the board is not a board any rule was written
+     against -- a corporation holds more trains than it may -- so every message but the discard itself (and
+     the room's `CloseRoom`) is refused by identity here, ahead of the identity and obligation gates below,
+     which read a cursor that is not the authority while a discard is owed. ONE gate, not one per arm: the
+     Operating sub-phase, the turn's end, another corporation's move, a stock or auction action, a purchase --
+     all are "anything else". `RevertTo` is resolved on the log and never reaches this function (#1026).
+     The discard's own legality -- the right corporation, its president, a train it owns -- is the next line. */
+  if (pendingDiscardBlock(state, msg) !== null) return state;
+  if ("DiscardTrain" in msg) {
+    const { protocol_id, model_type } = msg.DiscardTrain;
+    if (discardTrainRefusal(state, { protocol_id, model_type }, ctx?.actor) !== null) return state;
+  }
   if (operatingIdentityRefusal(state, msg) !== null) return state;
   /* Design note #1513: THE TURN DOES NOT END WHILE A TRAIN IS OWED. `PassTurn` and `AdvanceOperatingSubPhase`
      at the Buy Trains step are refused for a corporation with no train, a legal route, and a train for sale
@@ -2814,10 +2790,11 @@ function applySandboxActionCore(
     const open = openDepotTiers(state);
     const tier = named === undefined ? open[0] : open.find((row) => row.tier === named);
     if (named !== undefined && !tier) return state;
+    // #1530: the limit in force, for `buyDepotTrain`'s reason (the arriving tier's limit is a consequence).
     if (
       trainPurchaseRefusal(state, depotPurchase.companyId, {
         cost: tier?.cost ?? null,
-        trainLimit: tier?.trainLimit ?? null,
+        trainLimit: limitInForce(state) ?? tier?.trainLimit ?? null,
         requireFunds: depotPurchase.requireFunds,
       }) !== null
     ) {
@@ -4452,6 +4429,34 @@ function applyOneAction(
       returned_trains: [...(exchanged.returned_trains ?? []), model_type],
     };
     return after !== null && after !== before ? applyPhaseChange(returned, after) : returned;
+  }
+
+  /* ==================================================================
+      DESIGN NOTE 1530: THE PRESIDENT'S DISCARD
+     ==================================================================
+     Rulebook 6.6.1, the half the trim used to decide. Exactly the named train leaves the fleet (the first
+     matching copy -- two 3-trains are interchangeable) and enters the Bank Pool (`returned_trains`, the one
+     structure #1512 established for trains the bank holds loose), where it is purchasable at face value.
+     Nobody is paid: "its railroad receives no payment for it". The obligation is not tracked, so nothing
+     here advances it -- `pendingTrainDiscards` reads the fleet that results, still owes the same corporation
+     while it is still over, names the next one when it is not, and owes nothing when none is. The gate in
+     `applySandboxActionCore` has already refused a discard that is not this corporation's, its president's,
+     or of a train it holds. */
+  if ("DiscardTrain" in msg) {
+    const { protocol_id, model_type } = msg.DiscardTrain;
+    const company = state.public_companies.find((entry) => entry.company_id === protocol_id);
+    const owned = company?.owned_trains;
+    if (!company || owned == null) return state;
+    const at = owned.indexOf(model_type);
+    if (at < 0) return state;
+    const remaining = [...owned.slice(0, at), ...owned.slice(at + 1)];
+    return {
+      ...state,
+      public_companies: state.public_companies.map((entry) =>
+        entry.company_id === protocol_id ? { ...entry, owned_trains: remaining } : entry,
+      ),
+      returned_trains: [...(state.returned_trains ?? []), model_type],
+    };
   }
 
   if ("EmergencyBuyHardware" in msg) {

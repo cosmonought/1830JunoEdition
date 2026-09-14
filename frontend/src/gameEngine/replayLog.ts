@@ -76,7 +76,8 @@ import {
   replayRefusal,
   type ReplayPolicy,
 } from "./rulesVersion";
-import { derivePhase } from "./gamePhase";
+import { depotCostFor, derivePhase, type TrainTier } from "./gamePhase";
+import { pendingTrainDiscards } from "./trainDiscard";
 import { tileEraFor } from "./gameConstants";
 import type { TileColorTier } from "../components/hexTileCatalog";
 import type { GameStateResponse, WaterfallStateResponse } from "./gameState";
@@ -239,6 +240,10 @@ export interface ReplayResult {
    *  an entry nobody can parse must not be able to break the game, and a harness that dies on one bad row is
    *  useless for diagnosing the log that contains it. */
   unparseable: number[];
+  /** #1530: the `DiscardTrain` entries this replay supplied on a LEGACY log's behalf under
+   *  `legacyExcessTrains: "engine-chose-cheapest"` -- the choice the pre-version-2 engine made silently, made
+   *  visible. Empty for every pinned log and under the server's policy. Each names the index it followed. */
+  legacyDiscards: Array<{ afterIndex: number; companyId: number; model: string }>;
 }
 
 /** Replay a log into final state.
@@ -576,7 +581,45 @@ export function replayLog(
   const live = effectiveActions(ordered);
 
   const engine = new RoomEngine(providers, seed);
-  for (const entry of live) engine.apply(entry, observe);
+  /* ==================================================================
+      DESIGN NOTE 1530 (replay): THE CHOICE THE OLD ENGINE MADE, SUPPLIED AS THE ENTRIES IT NEVER WROTE
+     ==================================================================
+     A legacy log was played on an engine that trimmed excess trains itself, cheapest-first, and logged
+     nothing; version 2 waits for a `DiscardTrain` and refuses everything else. Replayed as-is, such a log
+     stops dead at its first phase-change discard (JUNO-3XD, index 255). Under the development corpus's
+     policy this loop supplies the choice the old engine made -- one synthetic `DiscardTrain` per owed train,
+     cheapest model first, in 6.6.1's order, authored by the president -- and applies it through the SAME arm
+     a live discard goes through. Nothing is appended anywhere; the entries exist only inside this call and
+     are reported in `legacyDiscards`. A pinned log never reaches this (a version-1 pin is refused above; a
+     version-2 log carries its own discards), and the server never passes the policy.
+     BEST-EFFORT, NOT FIDELITY: this supplies the one missing CHOICE and nothing else. Every other version-2
+     rule still applies to the legacy log, so a fixture can diverge from its own play where a version-1 rule
+     was wrong (JUNO-FCJ 474: a purchase version 1 refused at the arriving tier's limit). Development-only. */
+  const supplyLegacyDiscards =
+    compatibility.kind === "legacy" && policy.legacyExcessTrains === "engine-chose-cheapest";
+  const legacyDiscards: ReplayResult["legacyDiscards"] = [];
+  for (const entry of live) {
+    engine.apply(entry, observe);
+    if (!supplyLegacyDiscards) continue;
+    for (let pending = pendingTrainDiscards(engine.snapshot.state); pending !== null; pending = pendingTrainDiscards(engine.snapshot.state)) {
+      const { required } = pending;
+      const model = [...required.choices].sort(
+        (a, b) => depotCostFor(engine.snapshot.state, a as TrainTier) - depotCostFor(engine.snapshot.state, b as TrainTier),
+      )[0];
+      if (model === undefined || required.president === null) break; // nothing the arm could apply; leave it standing
+      const synthetic: ReplayEntry = {
+        index: entry.index,
+        id: `${entry.id}:legacy-discard-${legacyDiscards.length + 1}`,
+        actor: required.president,
+        payload: JSON.stringify({ DiscardTrain: { game_id: 0, protocol_id: required.companyId, model_type: model } }),
+        derived: true,
+      };
+      const before = engine.snapshot.state;
+      engine.apply(synthetic, observe);
+      if (engine.snapshot.state === before) break; // refused: do not spin
+      legacyDiscards.push({ afterIndex: entry.index, companyId: required.companyId, model });
+    }
+  }
 
   const { state, waterfall, grid, unparseable } = engine.snapshot;
   return {
@@ -586,6 +629,7 @@ export function replayLog(
     grid,
     applied: live.length,
     dropped: ordered.length - live.length,
+    legacyDiscards,
     unparseable,
   };
 }

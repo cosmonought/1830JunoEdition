@@ -67,12 +67,33 @@ function board(overrides: Record<string, unknown> = {}): State {
         ticker: "B&O",
         president: "p2",
         treasury: "2000",
-        owned_trains: ["2", "2", "3", "3", "4", "4", "5", "5", "6"],
+        /* #1530: WAS `["2", "2", "3", "3", "4", "4", "5", "5", "6"]` -- nine trains on one corporation, to
+           put the depot on its last tier by owning everything cheaper. A fleet over the limit is now an
+           OBLIGATION the reducer waits on (rulebook 6.6.1), and a board with one standing refuses every other
+           move -- so the cheaper trains are spread over bystanders at two apiece, which is the only way a
+           real phase-6 board can hold them. The depot is still on the Diesel. */
+        owned_trains: ["6"],
         station_token_hexes: [[3, 8]],
         station_token_limit: 4,
         player_holdings: [{ player: "p2", percentage: 60 }],
         is_floated: true,
       },
+      ...[
+        [11, "PRR", ["5", "5"]],
+        [12, "NYC", ["5", "4"]],
+        [13, "C&O", ["4", "4"]],
+        [14, "ERIE", ["4"]],
+      ].map(([id, ticker, owned_trains]) => ({
+        company_id: id,
+        ticker,
+        president: "p2",
+        treasury: "0",
+        owned_trains,
+        station_token_hexes: [],
+        station_token_limit: 4,
+        player_holdings: [{ player: "p2", percentage: 60 }],
+        is_floated: true,
+      })),
     ],
     ...overrides,
   } as unknown as State;

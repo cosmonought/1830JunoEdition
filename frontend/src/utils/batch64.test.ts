@@ -36,6 +36,7 @@ const { spellCount, capitalise, namedTrains, countedTrains } =
 const { readStripped, sliceBetween, anchorIndex } =
   require("./sourceScan") as typeof import("./sourceScan");
 import type { GameStateResponse, PublicCompanyState } from "../gameEngine/gameState";
+import { pendingTrainDiscards } from "../gameEngine/trainDiscard";
 
 const SESSION = readStripped("gameEngine/sandboxSession.ts");
 const NOTICE = readStripped("utils/fleetLossNotice.ts");
@@ -284,14 +285,16 @@ describe("a corporation that both rusts and overflows is told once about each tr
   const fleet = (trains: string[]) =>
     board([company({ owned_trains: trains })], false);
 
-  it("names the rusted train and the trimmed train separately", () => {
+  it("names the rusted train, and owes the limit's train to the president (#1530)", () => {
     /* THE REPORTED SHAPE: 2,3,3,3 at the limit, buys the 4 itself. The 2 rusts; the fleet is still over the
-       new limit of three, so a 3 goes as well. Two losses, two causes, two trains. */
+       new limit of three. Batch 4.6: the rust is narrated as a loss; the limit's train is not taken here but
+       OWED -- the president chooses it with `DiscardTrain` -- so the phase change reports one loss, one cause. */
     const before = fleet(["2", "3", "3", "3"]);
     const after = applyPhaseChange(fleet(["2", "3", "3", "3", "4"]), "4");
     const [loss] = describeFleetLosses(before, after);
     expect(loss.rusted).toEqual(["2"]);
-    expect(loss.discarded).toEqual(["3"]);
+    expect(loss.discarded).toEqual([]);
+    expect(pendingTrainDiscards(after)?.required).toMatchObject({ excess: 1, choices: ["3", "3", "3", "4"] });
   });
 
   it("never names one train under both causes", () => {
@@ -320,10 +323,15 @@ describe("a corporation that both rusts and overflows is told once about each tr
   });
 
   it("measures the limit against the fleet rust has already thinned", () => {
-    /* THE ORDER, ASSERTED IN THE REDUCER rather than inferred from an outcome: `trimToTrainLimit` is handed
-       `fleetAfterRust`. Were it handed the pre-rust fleet it would trim trains the rust was about to take
-       anyway, which is the double-count the report is worried about, arriving from the other direction. */
-    expect(SESSION).toContain("owned: fleetAfterRust,");
+    /* THE ORDER, ASSERTED ON THE OBLIGATION (#1530): the excess is read off the fleet AFTER rust. Were it
+       read off the pre-rust fleet, a corporation whose 2s the rust takes would be owed discards for trains
+       the phase was about to remove anyway -- the double-count the report is worried about, arriving from
+       the other direction. */
+    const thinned = applyPhaseChange(fleet(["2", "2", "3", "4"]), "4"); // the 2s rust; two trains remain
+    expect(pendingTrainDiscards(thinned)).toBeNull();
+    const stillOver = applyPhaseChange(fleet(["2", "3", "3", "3", "4"]), "4"); // the 2 rusts; four remain
+    expect(pendingTrainDiscards(stillOver)?.required.excess).toBe(1);
+    expect(SESSION).toContain("const fleet = fleetAfterRust;");
   });
 
   it("puts the rust notice ahead of the limit notice", () => {

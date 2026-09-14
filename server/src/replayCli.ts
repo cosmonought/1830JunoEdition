@@ -132,6 +132,8 @@ function main(): void {
         })(),
         applied: result.applied,
         droppedByRevert: result.dropped,
+        /* #1530: the discards this replay supplied on a legacy log's behalf (none for a pinned log). */
+        legacyDiscardsSupplied: result.legacyDiscards,
         unparseable: result.unparseable,
         round: state.current_round_type,
         macroRound: state.macro_round_number,

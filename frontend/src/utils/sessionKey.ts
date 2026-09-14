@@ -79,6 +79,9 @@ export const GAMEPLAY_MESSAGE_KEYS = [
   /* Design note #1303: the Project 18XX+ D-train exchange. Pure VGP/gameplay state like every other entry --
      a train leaves, a Diesel arrives, $800 goes to the bank. */
   "ExchangeTrainForDiesel",
+  /* Design note #1530: the president's choice of which excess train to discard after a phase change. Pure
+     VGP/gameplay state: a train leaves a fleet for the Bank Pool, no money moves. */
+  "DiscardTrain",
   "AcceptTrainOffer",
   "RejectTrainOffer",
   "RescindTrainOffer",
@@ -447,6 +450,10 @@ export type GameplayExecuteMsg =
   | { EmergencyBuyHardware: { game_id: number; protocol_id: number } }
   /** Design note #1303: trade `model_type` (a 4, 5 or 6) in for a Diesel at $800. Variant-gated in the reducer. */
   | { ExchangeTrainForDiesel: { game_id: number; protocol_id: number; model_type: string } }
+  /** Design note #1530: the president of `protocol_id` discards one `model_type` train to the Bank Pool, to
+   *  meet a train limit a phase change just lowered. Refused unless that corporation is the one that must
+   *  decide next (rulebook 6.6.1 order) and the sender is its president. */
+  | { DiscardTrain: { game_id: number; protocol_id: number; model_type: string } }
   | { PassTurn: { game_id: number } }
   | { UndoLastAction: { game_id: number } }
   // Pre-Game Waterfall Auction (`waterfall.rs`) -- mirrors `msg.rs`'s five

@@ -142,7 +142,9 @@ describe("the era is settled, not assigned", () => {
       ...aboutToEnterGreen(),
       current_global_era: "Yellow",
       public_companies: aboutToEnterGreen().public_companies.map((c) =>
-        c.company_id === 4 ? { ...c, owned_trains: ["5"] } : c,
+        // #1530: the 5 puts the limit at two, so the bystanders' three 2s each become one -- a fleet over
+        // the limit is a standing discard obligation now, and it would refuse the advance this case sends.
+        c.company_id === 4 ? { ...c, owned_trains: ["5"] } : { ...c, owned_trains: c.owned_trains?.slice(0, 1) },
       ),
     };
     const after = applySandboxAction(stale, {

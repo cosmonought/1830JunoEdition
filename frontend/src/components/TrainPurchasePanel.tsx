@@ -1415,6 +1415,71 @@ export function TrainTradePrompt({
 /* Styles                                                             */
 /* ------------------------------------------------------------------ */
 
+/* ==================================================================
+    DESIGN NOTE 1530: THE DISCARD PROMPT
+   ==================================================================
+   The minimal surface for the excess-train obligation (`trainDiscard.ts`). The required corporation's
+   president sees the trains they may choose among and presses one; everybody else sees who the table is
+   waiting on. Same fixed slot and styles as the trade prompt above, because it is the same kind of thing: a
+   decision the game is waiting for from a player who is usually not the one operating. Everything else on
+   screen is already blocked by the reducer's gate; this prompt does not enforce anything, it offers the one
+   message the gate accepts. */
+export interface TrainDiscardPromptProps {
+  /** `pendingTrainDiscards(state)?.required`, or `null` when nothing is owed. */
+  due: {
+    ticker: string;
+    limit: number;
+    excess: number;
+    choices: readonly string[];
+    presidentLabel: string;
+  } | null;
+  /** Whether the viewer is the president who must decide. */
+  viewerIsPresident: boolean;
+  onDiscard: (modelType: string) => void;
+}
+
+export function TrainDiscardPrompt({ due, viewerIsPresident, onDiscard }: TrainDiscardPromptProps) {
+  if (!due) return null;
+  /* One button per MODEL, not per train: two 3-trains are interchangeable and the message names a model. */
+  const models = Array.from(new Set(due.choices));
+  return (
+    <div style={styles.promptRoot} role="alertdialog" aria-label="Train limit">
+      <div style={styles.promptHeader}>
+        <span style={styles.promptDot} aria-hidden="true" />
+        <span style={styles.promptTitle}>Train limit</span>
+      </div>
+      <p style={styles.promptBody}>
+        <strong>{due.ticker}</strong> holds {due.excess === 1 ? "one train" : `${due.excess} trains`} more than the
+        limit of <strong>{due.limit}</strong>. A discarded train goes to the Bank Pool, unpaid, where any corporation
+        may buy it at face value.
+      </p>
+      <p style={styles.promptWho}>
+        {viewerIsPresident
+          ? `This is ${due.presidentLabel}'s decision. Choose the train to discard.`
+          : `Waiting on ${due.presidentLabel} to discard — nothing else can happen until ${due.ticker} is at the limit.`}
+      </p>
+      <div style={styles.promptActions}>
+        {models.map((model) => (
+          <button
+            key={model}
+            type="button"
+            onClick={() => onDiscard(model)}
+            disabled={!viewerIsPresident}
+            style={{ ...styles.promptButton, ...(viewerIsPresident ? styles.promptReject : styles.buttonDisabled) }}
+            title={
+              viewerIsPresident
+                ? `Discard one ${model}-train from ${due.ticker} to the Bank Pool.`
+                : `Only ${due.presidentLabel} can choose.`
+            }
+          >
+            Discard {model}-train
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /* Design note #632: THE ERA PALETTE, LIGHTENED FOR A DARK PANEL. The tile colours a player already knows,
    adjusted to be legible as INK on near-black rather than as fills on a map -- brown forces the adjustment,
    since the tile brown reads as mud at 12px and the ink is a warm tan that still says "brown era".

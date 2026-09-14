@@ -38,6 +38,7 @@ import {
 } from "../components/StockMarketRenderer";
 import { fleetLossNotices, noticeBody } from "./fleetLossNotice";
 import { isTrainLocked } from "../gameEngine/trainLimit";
+import { pendingTrainDiscards } from "../gameEngine/trainDiscard";
 import type { GameStateResponse } from "../gameEngine/gameState";
 
 const DELAYED = { ...STANDARD_VARIANTS, delayedAuction: true };
@@ -435,8 +436,11 @@ describe("gentle rust reprieves a train for one turn (design note #906)", () => 
     } as unknown as GameStateResponse;
     const after = applyPhaseChange(fleet, "6");
     const pr = after.public_companies[0];
-    expect(pr.owned_trains).toEqual(["3", "5", "6"]);
+    /* #1530: the departure is OWED rather than taken -- the president chooses -- and the marked 3 is not among
+       the choices: `countableTrainsOf` lists the three live trains, the excess is one. */
+    expect(pr.owned_trains).toEqual(["3", "4", "5", "6"]);
     expect(pr.pending_rust_trains).toEqual(["3"]);
+    expect(pendingTrainDiscards(after)?.required).toMatchObject({ companyId: 1, excess: 1, choices: ["4", "5", "6"] });
   });
 
   it("cannot leave a mark behind, because the limit can no longer take a marked train", () => {

@@ -57,7 +57,10 @@ function board(overrides: Record<string, unknown> = {}): GameStateResponse {
         ticker: "B&O",
         president: "p2",
         treasury: "2000",
-        owned_trains: ["4", "5", "6"],
+        /* #1530: was `["4", "5", "6"]` -- three trains at the phase-6 limit of two, which is now a standing
+           discard obligation that refuses every other move. Two trains, both 6s still out (the Diesel is for
+           sale), and a 4 for the first Diesel to rust. */
+        owned_trains: ["4", "6"],
         station_token_hexes: [[3, 8]],
         station_token_limit: 4,
         player_holdings: [{ player: "p2", percentage: 60 }],
@@ -96,7 +99,7 @@ describe("the exchange", () => {
     expect(Number(company(after, NNH).treasury)).toBe(900 - DIESEL_EXCHANGE_COST);
     expect(Number(after.virtual_bank_vgp)).toBe(8000 + DIESEL_EXCHANGE_COST);
     // The first Diesel rusts every 4-train still on the board -- B&O's, not the one that was traded.
-    expect(company(after, BO).owned_trains).toEqual(["5", "6"]);
+    expect(company(after, BO).owned_trains).toEqual(["6"]);
     expect(after.current_global_era).toBe("Brown");
   });
 
@@ -248,14 +251,14 @@ describe("the refusals, by identity and by sentence", () => {
       public_companies: board().public_companies.map((entry) =>
         entry.company_id === NNH
           ? { ...entry, owned_trains: ["D"] }
-          : { ...entry, owned_trains: ["4", "5", "6", "6"] }, // both 6s still out, so the Diesel is for sale
+          : { ...entry, owned_trains: ["6", "6"] }, // both 6s still out, so the Diesel is for sale
       ),
     });
     refused(noneToTrade, EXCHANGE(NNH, "4"), /no 4-, 5- or 6-train/);
   });
 
   it("is the operating corporation's to make, at the Buy Trains step", () => {
-    refused(board(), EXCHANGE(BO, "5"), /Only the operating corporation/);
+    refused(board(), EXCHANGE(BO, "4"), /Only the operating corporation/); // #1530: B&O holds a 4 now, not a 5
     refused(board({ operating_sub_phase: "Track" }), EXCHANGE(NNH, "4"), /Buy Trains step/);
     refused(board({ current_round_type: "StockRound" }), EXCHANGE(NNH, "4"), /Operating Round/);
   });

@@ -20,6 +20,7 @@ import {
   trainObligationRefusal,
 } from "../gameEngine/trainAvailability";
 import { hasLegalRouteFor } from "../gameEngine/derivedActions";
+import { pendingTrainDiscards } from "../gameEngine/trainDiscard";
 import { depotInventory, derivePhase } from "../gameEngine/gamePhase";
 import { countableTrainCount, isTrainLocked } from "../gameEngine/trainLimit";
 import { STATIC_BOARD_HEXES } from "../components/hexBoardData";
@@ -380,19 +381,31 @@ describe("the train limit", () => {
     expect(describeFleetLosses(state, after)).toEqual([]);
   });
 
-  it("(10) above the limit, the excess is discarded and the discarded train goes to the Bank Pool", () => {
+  it("(10) above the limit, the excess is OWED (#1530), and the president's discard is what reaches the Bank Pool", () => {
+    /* Batch 4 asserted the trim here: `["3", "4"]`, cheapest-first, the 3 in the pool. Batch 4.6 replaced the
+       trim with the president's `DiscardTrain` (rulebook 6.6.1); the phase change now leaves the fleet and
+       the pool alone and the obligation is read off the board. `trainDiscard.test.ts` is the full harness. */
+    /* The obligation is DERIVED from the board (the phase in force, the fleets), so the board must carry the
+       5 whose purchase this phase change follows -- NYC holds it, as the buyer does after `buyDepotTrain`. */
     const state = board({
-      corps: [{ id: CO, ticker: "C&O", president: P1, trains: ["3", "3", "4"] }],
+      corps: [
+        { id: CO, ticker: "C&O", president: P1, trains: ["3", "3", "4"] },
+        { id: NYC, ticker: "NYC", president: P2, trains: ["5"] },
+      ],
       operating: CO,
     });
     const after = applyPhaseChange(state, "5");
-    expect(company(after, CO).owned_trains).toEqual(["3", "4"]); // cheapest-first, the trim's standing choice
-    expect(after.returned_trains).toEqual(["3"]);
-    expect(describeFleetLosses(state, after)).toEqual([{ companyId: CO, ticker: "C&O", rusted: [], discarded: ["3"] }]);
+    expect(company(after, CO).owned_trains).toEqual(["3", "3", "4"]);
+    expect(after.returned_trains).toBeUndefined();
+    expect(describeFleetLosses(state, after)).toEqual([]);
+    expect(pendingTrainDiscards(after)?.required).toMatchObject({ companyId: CO, president: P1, excess: 1, limit: 2 });
+    const discarded = applySandboxAction(after, { DiscardTrain: { game_id: 1, protocol_id: CO, model_type: "3" } } as never, { actor: P1, mapGrid: CORRIDOR });
+    expect(company(discarded, CO).owned_trains).toEqual(["3", "4"]);
+    expect(discarded.returned_trains).toEqual(["3"]);
     // The discarded train is now for sale at face value to anybody with room.
-    expect(bankPoolTrains(after)).toEqual([{ source: "pool", tier: "3", cost: 180, remaining: 1 }]);
+    expect(bankPoolTrains(discarded)).toEqual([{ source: "pool", tier: "3", cost: 180, remaining: 1 }]);
     // And it is not ALSO printed stock: 3s are below the phase-5 head, so the depot row stays at zero.
-    expect(depotRow(after, "3").remaining).toBe(0);
+    expect(depotRow(discarded, "3").remaining).toBe(0);
   });
 });
 
@@ -418,22 +431,29 @@ describe("JUNO-FCJ 413 and 468: the discard was real and the sale was not one", 
     operating: NYC,
   });
 
-  it("C&O was genuinely one over the limit when the first 5 arrived, and lost one train to it", () => {
+  /** #1530: on today's engine the 413 purchase OWES C&O a discard rather than making one; the president's
+   *  `DiscardTrain` of the 3 reproduces exactly what the Batch-4 engine did by itself. */
+  const DISCARD_3 = { DiscardTrain: { game_id: 1, protocol_id: CO, model_type: "3" } } as never;
+
+  it("C&O was genuinely one over the limit when the first 5 arrived, and (now) owes one train to it", () => {
     expect(depotInventory(beforeFive).find((row) => row.isCurrent)?.trainLimit).toBe(3);
     expect(depotRow(beforeFive, "4").remaining).toBe(0);
     const afterFive = applySandboxAction(beforeFive, BUY(NYC), { actor: P2, mapGrid: CORRIDOR });
     expect(company(afterFive, NYC).owned_trains).toEqual(["5"]);
     expect(depotInventory(afterFive).find((row) => row.isCurrent)?.trainLimit).toBe(2);
-    expect(company(afterFive, CO).owned_trains).toEqual(["3", "4"]);
+    expect(company(afterFive, CO).owned_trains).toEqual(["3", "3", "4"]); // #1530: owed, not taken
     expect(company(afterFive, PRR).owned_trains).toEqual(["3", "4"]); // at the limit, untouched
-    expect(describeFleetLosses(beforeFive, afterFive, BUY(NYC))).toEqual([
-      { companyId: CO, ticker: "C&O", rusted: [], discarded: ["3"] },
-    ]);
-    expect(afterFive.returned_trains).toEqual(["3"]); // #1513: to the pool, not lost
+    expect(describeFleetLosses(beforeFive, afterFive, BUY(NYC))).toEqual([]);
+    expect(pendingTrainDiscards(afterFive)?.required).toMatchObject({ companyId: CO, president: P1, excess: 1 });
+    const discarded = applySandboxAction(afterFive, DISCARD_3, { actor: P1, mapGrid: CORRIDOR });
+    expect(company(discarded, CO).owned_trains).toEqual(["3", "4"]);
+    expect(discarded.returned_trains).toEqual(["3"]); // #1513: to the pool, not lost
+    expect(pendingTrainDiscards(discarded)).toBeNull();
   });
 
   it("the later sale of C&O's 4 took C&O to one train, owed nothing, and narrated no loss", () => {
-    const afterFive = applySandboxAction(beforeFive, BUY(NYC), { actor: P2, mapGrid: CORRIDOR });
+    const overLimit = applySandboxAction(beforeFive, BUY(NYC), { actor: P2, mapGrid: CORRIDOR });
+    const afterFive = applySandboxAction(overLimit, DISCARD_3, { actor: P1, mapGrid: CORRIDOR });
     const sale = TRADE(NYC, CO, "4", "1");
     const afterSale = applySandboxAction(afterFive, sale, { actor: P2, mapGrid: CORRIDOR });
     expect(company(afterSale, CO).owned_trains).toEqual(["3"]);

@@ -47,6 +47,7 @@ import type { GameplayExecuteMsg } from "../utils/sessionKey";
 import { BO_PRIVATE_ID, BO_TICKER } from "./gameConstants";
 import { DH_PRIVATE_ID } from "./dhPower";
 import { effectiveActions, type RevertableAction } from "./logRevert";
+import { pendingDiscardBlock, pendingTrainDiscards } from "./trainDiscard";
 
 export interface TurnAuthorityInput {
   state: GameStateResponse;
@@ -81,6 +82,18 @@ export function turnRefusal(input: TurnAuthorityInput): string | null {
      solo play deliberately. Refusing here would make a single-player game unplayable, and there is nobody to
      take a turn from. */
   if (actor === null) return null;
+
+  /* ---- THE HOLD (#1530): WHILE A DISCARD IS OWED, NO SEAT HAS A TURN ----
+     Rulebook 6.6.1/2.0: the limit is in force the moment the phase turns, and the president's discard is
+     what the game is waiting for. Until every over-limit corporation is compliant the board is not one any
+     move was written against, so every other move is refused HERE with its reason -- rather than appended
+     and no-op'd by the reducer's gate, which is the second line of the same defence. Exempt: the discard
+     itself (its owner is checked below), and the room's `RevertTo` and `CloseRoom`, which are instructions
+     about the log and the room and keep their own owners. */
+  if (!("DiscardTrain" in msg) && !("RevertTo" in msg) && !("CloseRoom" in msg)) {
+    const held = pendingDiscardBlock(state, msg);
+    if (held !== null) return held;
+  }
 
   /* ---- EXEMPTION 3: consent answers on a two-party trade (#701) ----
      THE OWED ANSWER IS ALWAYS OFF-TURN, BY CONSTRUCTION. A corporation on its turn OFFERS; the private's
@@ -127,6 +140,31 @@ export function turnRefusal(input: TurnAuthorityInput): string | null {
      exemption from the SEAT stands; what each message gets instead is its own owner. */
   if (isSandboxOnlyMsg(msg)) {
     return roomMessageRefusal(input, actor);
+  }
+
+  /* ==================================================================
+      EXEMPTION 5 (#1530): THE DISCARD BELONGS TO THE PRESIDENT WHO OWES IT
+     ==================================================================
+     Rulebook 6.6.1: after a phase change the president of each over-limit corporation chooses a train to
+     discard, highest share value first. That president is usually NOT the seat that is operating -- the
+     buyer of the phase-changing train is -- so the seat cursor is the wrong question, and it is not widened
+     to ask it. `DiscardTrain` gets its own owner instead: the president of the corporation that must decide
+     NEXT (`pendingTrainDiscards`, derived from the board), and nobody else. A corporation further down the
+     queue, its president, any other seat: refused. With no obligation standing there is no owner at all.
+     THE REDUCER ASKS THE SAME QUESTION of the entry's author (#549), so a client that bypassed this gate
+     meets the answer again in `applySandboxActionCore`. */
+  if ("DiscardTrain" in msg) {
+    const pending = pendingTrainDiscards(state);
+    if (pending === null) return "No corporation is over its train limit, so there is no train to discard.";
+    const { required } = pending;
+    const { protocol_id } = msg.DiscardTrain;
+    if (protocol_id !== required.companyId) {
+      return `${required.ticker} must discard first — its president decides before anyone else.`;
+    }
+    if (required.president !== null && actor !== required.president) {
+      return `Only ${required.ticker}'s president can choose which train ${required.ticker} discards.`;
+    }
+    return null;
   }
 
   /* ---- THE RULE ITSELF ----

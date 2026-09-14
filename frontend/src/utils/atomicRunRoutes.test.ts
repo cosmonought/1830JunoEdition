@@ -51,7 +51,9 @@ const board = (unpredictable = true): GameStateResponse =>
     private_companies: [],
     variants: { ...STANDARD_VARIANTS, unpredictableRevenue: unpredictable },
     public_companies: [
-      { company_id: BO, ticker: "B&O", last_route_revenue: "0", owned_trains: ["4", "4", "4", "4"] },
+      // #1530: four trains within the limit -- phase 3 allows four; four 4s at phase 4 (limit 3) would be a
+      // standing discard obligation, and the reducer refuses every other move while one stands.
+      { company_id: BO, ticker: "B&O", last_route_revenue: "0", owned_trains: ["3", "3", "3", "3"] },
       { company_id: 7, ticker: "XX", last_route_revenue: "0", owned_trains: ["2"] },
     ],
   }) as unknown as GameStateResponse;
@@ -247,7 +249,7 @@ describe("the log describes the bulk message (design note #968)", () => {
   it("reads as one route when there is one", () => {
     /* A corporation with a single train is the common case for most of a game, and "ran 1 routes" would be a
        worse sentence than the one this replaces. */
-    expect(line(1)).toMatch(/^B&O ran a \$\d+ route with a 4-train through F2 -> A9\.$/);
+    expect(line(1)).toMatch(/^B&O ran a \$\d+ route with a 3-train through F2 -> A9\.$/); // #1530: the fixture holds 3s
   });
 
   it("names the count and the total for several", () => {

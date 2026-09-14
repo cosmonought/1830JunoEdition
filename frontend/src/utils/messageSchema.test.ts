@@ -68,7 +68,8 @@ describe("the discriminant", () => {
     expect(GAMEPLAY_MESSAGE_KINDS).toContain("PassTurn");
     expect(GAMEPLAY_MESSAGE_KINDS).toContain("RunMultipleRoutes");
     expect(GAMEPLAY_MESSAGE_KINDS).toContain("YellowSignEvent");
-    expect(GAMEPLAY_MESSAGE_KINDS.length).toBe(39);
+    expect(GAMEPLAY_MESSAGE_KINDS).toContain("DiscardTrain"); // #1530
+    expect(GAMEPLAY_MESSAGE_KINDS.length).toBe(40);
   });
 });
 

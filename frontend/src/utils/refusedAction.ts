@@ -45,6 +45,7 @@ import { depotInventory } from "../gameEngine/gamePhase";
 import { boPresidencyRefusal, returnedTrainRefusal } from "../gameEngine/sandboxSession";
 import { BO_TICKER } from "../gameEngine/gameConstants";
 import { dieselExchangeRefusal } from "../gameEngine/dieselExchange";
+import { discardTrainRefusal, pendingDiscardBlock } from "../gameEngine/trainDiscard";
 
 /** Messages that legitimately leave sandbox state untouched, so an unchanged board is not a refusal.
  *  Kept as an explicit list for the reason in the note: an exemption should be a decision. */
@@ -151,6 +152,16 @@ export function refusalReasonFor(
   ctx?: RefusalContext,
 ): string | null {
   if (!before || typeof msg !== "object" || msg === null) return null;
+
+  /* #1530: the same two questions the reducer's gate asked first, on the same `before` state: is a discard
+     owed (then nothing else runs), and is THIS discard the right corporation's, its president's, of a train
+     it holds. */
+  const held = pendingDiscardBlock(before, msg as GameplayExecuteMsg);
+  if (held !== null) return held;
+  if ("DiscardTrain" in msg) {
+    const { protocol_id, model_type } = (msg as { DiscardTrain: { protocol_id: number; model_type: string } }).DiscardTrain;
+    return discardTrainRefusal(before, { protocol_id, model_type }, ctx?.actor ?? null);
+  }
 
   if ("BuyStock" in msg && ctx?.actor && ctx.marketZoneFor) {
     const buy = (msg as { BuyStock: { protocol_id: number; source: "Ipo" | "Bank"; quantity?: number } })

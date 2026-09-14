@@ -20,11 +20,11 @@
 // Round and invisible to the endgame. Tests for "nothing happens" are the ones a later refactor deletes as
 // pointless, so each says which rule it is keeping alive.
 
-import { divestmentDebt, divestmentRefusal, minimumCertificatesToSell } from "./forcedDivestment";
-import { sharePurchaseBlock } from "./sharePurchase";
+import { divestmentDebt, divestmentRefusal, minimumCertificatesToSell } from "../gameEngine/forcedDivestment";
+import { sharePurchaseBlock } from "../gameEngine/sharePurchase";
 import { autoPassDecision } from "./autoPass";
-import { rankPlayers } from "./endgame";
-import type { GameStateResponse } from "./gameState";
+import { rankPlayers } from "../gameEngine/endgame";
+import type { GameStateResponse } from "../gameEngine/gameState";
 
 const PRR = 1;
 const BO = 2;
@@ -273,7 +273,7 @@ describe("the doors all ask one module", () => {
   };
 
   it("is asked by the purchase rules", () => {
-    expect(read("utils/sharePurchase.ts")).toContain("divestmentDebt({ state, player: buyer");
+    expect(read("gameEngine/sharePurchase.ts")).toContain("divestmentDebt({ state, player: buyer");
   });
 
   it("is asked by the Pass button", () => {
@@ -287,6 +287,6 @@ describe("the doors all ask one module", () => {
   it("is never asked by the endgame", () => {
     /* Rule (ii) as a structural assertion: if `endgame.ts` ever imports this module, somebody has taught the
        final scoring to care about a debt the rules say expires unpaid. */
-    expect(read("utils/endgame.ts")).not.toContain("forcedDivestment");
+    expect(read("gameEngine/endgame.ts")).not.toContain("forcedDivestment");
   });
 });

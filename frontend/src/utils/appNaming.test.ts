@@ -132,7 +132,7 @@ describe("no player reads the number 1830", () => {
   it("still lets the design notes cite the rulebook", () => {
     /* THE OTHER HALF, and the one a blunter rename would have broken. #706's whole argument rests on quoting
        1830 verbatim; a scan that forbade the string everywhere would have taken the citation with it. */
-    const reducer = fs.readFileSync(path.join(SRC, "utils", "sandboxSession.ts"), "utf8");
+    const reducer = fs.readFileSync(path.join(SRC, "gameEngine", "sandboxSession.ts"), "utf8");
     expect(reducer).toContain("Shares in the bank pool pay dividends to the corporate treasury");
     expect(reducer).toContain("1830");
   });

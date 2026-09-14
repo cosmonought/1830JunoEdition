@@ -28,7 +28,7 @@
 // `stepsFor` drops `BuyPrivate` once the last private is bought, and #613 varies them by phase -- so "the
 // last one" is the honest predicate and survives a reordering that a hardcoded name would not.
 
-import type { OperatingSubPhase } from "../components/OperatingSubPhaseStepper";
+import type { OperatingSubPhase } from "./operatingSubPhase";
 
 /** What an automatic skip should dispatch. */
 export type AutoSkipExit = "advance" | "end-turn";

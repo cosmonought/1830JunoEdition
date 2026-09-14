@@ -25,7 +25,7 @@ export {};
 const { editRouteDraft } = require("./routeDraftEdit") as typeof import("./routeDraftEdit");
 const { connectionForClick, segmentsUsedBy, edgeToward } =
   require("./routeConnection") as typeof import("./routeConnection");
-const { traversalsFrom } = require("./trackSegments") as typeof import("./trackSegments");
+const { traversalsFrom } = require("../gameEngine/trackSegments") as typeof import("../gameEngine/trackSegments");
 // `liveEdgesForHex` lives with the geometry, not with the segments -- the two modules split at #4.
 const { liveEdgesForHex } =
   require("../components/hexGeometry") as typeof import("../components/hexGeometry");

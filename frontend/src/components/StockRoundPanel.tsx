@@ -16,8 +16,8 @@ import type {
   PrivateCompanyState,
   PublicCompanyState,
   RoundType,
-} from "../utils/gameState";
-import type { GamePhase, TierRustOutlook, TrainTier } from "../utils/gamePhase";
+} from "../gameEngine/gameState";
+import type { GamePhase, TierRustOutlook, TrainTier } from "../gameEngine/gamePhase";
 // Design note #409: `TrainChips` is back, inline in the asset row. `CapacityPill` and
 // `LastRoutePayout` stay out -- the train LIMIT is an Operating Round question, and the payout rides
 // in the livery stripe (design note #392).
@@ -25,10 +25,10 @@ import { TrainChips } from "./TrainBadges";
 // Design note #410: the corporate herald, shared with the action panel.
 import { CorporateLogo } from "./CorporateLogo";
 // Design note #1324: where the 20% standard certificate is, for its own buy button.
-import { doubleCertificateAt, hasDoubleCertificate } from "../utils/doubleCertificate";
+import { doubleCertificateAt, hasDoubleCertificate } from "../gameEngine/doubleCertificate";
 // Design note #1323: the licence badge beside the herald.
 import { KanawhaLicenseBadge } from "./KanawhaBadge";
-import { licensesHeldBy } from "../utils/kanawhaLicense";
+import { licensesHeldBy } from "../gameEngine/kanawhaLicense";
 // Design note #682: what a buy or a sale leaves the player holding, and which
 // way it moves. The colour rule lives there because it is a claim about meaning.
 import {
@@ -48,14 +48,14 @@ import {
 // about whether a player has room.
 import { holdingMarker } from "../utils/holdingMarkers";
 // Design note #713: the sale's arithmetic and its two guards.
-import { certificatesIn, saleProceeds } from "../utils/shareSale";
+import { certificatesIn, saleProceeds } from "../gameEngine/shareSale";
 // Design note #749: the float rule, shared with the reducer so the card and the board cannot disagree.
 import {
   FLOAT_THRESHOLD_PERCENT,
   floatCostIn,
   metFloatThreshold,
   soldFromIpoPercent,
-} from "../utils/floatThreshold";
+} from "../gameEngine/floatThreshold";
 import { corporationFullName, corporationTitle } from "../utils/corporationNames";
 // Design note #391/#395: the canonical rules text a private row expands to.
 import { PRIVATE_COMPANY_CATALOG } from "../utils/privateCatalog";
@@ -65,7 +65,7 @@ import {
   operatingRoundCardOrder,
 } from "../utils/corporationCardOrder";
 import { StationTokenRow } from "./StationTokenRow";
-import { stationTokenSlots } from "../utils/stationTokens";
+import { stationTokenSlots } from "../gameEngine/stationTokens";
 import { FONT_SIZE, RADIUS, VIEWPORT_RADIUS } from "../styles/typography";
 // Design note #389: the same ink-on-fill helper the map's station
 // tokens use, so a corporate colour is legible on the card for the
@@ -87,8 +87,8 @@ import {
 } from "../styles/palette";
 import { showsCurseBesideName } from "../utils/carcosaCurse";
 import CarcosaMark from "./CarcosaMark";
-import { BO_LOCKED_CARD_NOTE } from "../utils/gameVariants";
-import { certificateCardsHeld, certificateCardsInPool } from "../utils/doubleCertificate";
+import { BO_LOCKED_CARD_NOTE } from "../gameEngine/gameVariants";
+import { certificateCardsHeld, certificateCardsInPool } from "../gameEngine/doubleCertificate";
 
 export interface StockRoundPanelProps {
   publicCompanies: readonly PublicCompanyState[];
@@ -176,7 +176,7 @@ export interface StockRoundPanelProps {
    * INDEX, and the roster is ordered by holding, so asking here would hand row 3 seat 3's colour and be
    * confidently wrong. The shell owns the seating; it answers. */
   colorForAddress?: (address: string) => string | null;
-  /** The room's derived phase (`utils/gamePhase.ts`) for the operating snapshot -- train limit and which
+  /** The room's derived phase (`gameEngine/gamePhase.ts`) for the operating snapshot -- train limit and which
    *  tier is about to rust. Optional: without it the capacity pill reads "n / ?", which is honest. */
   phase?: GamePhase | null;
   /** Per-tier rust countdown, so the card-front chips can say how far off a
@@ -2040,7 +2040,7 @@ function TreasuryProjectionBlock({
 }
 
 // Design note #749: the local `60` is gone -- one constant, beside the arithmetic that uses it.
-export { FLOAT_THRESHOLD_PERCENT } from "../utils/floatThreshold";
+export { FLOAT_THRESHOLD_PERCENT } from "../gameEngine/floatThreshold";
 
 export function StockRoundPanel({
   publicCompanies,

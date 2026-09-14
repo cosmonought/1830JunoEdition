@@ -20,8 +20,8 @@ export {};
 
 const { readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
 
-const REDUCER = readStripped("utils/sandboxSession.ts");
-const STATE = readStripped("utils/gameState.ts");
+const REDUCER = readStripped("gameEngine/sandboxSession.ts");
+const STATE = readStripped("gameEngine/gameState.ts");
 const ARM = sliceBetween(REDUCER, 'if ("RunMultipleRoutes" in msg) {', "\n  if (\"");
 
 describe("a turn's run is applied once", () => {

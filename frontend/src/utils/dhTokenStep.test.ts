@@ -24,8 +24,8 @@
 // power adds to it, so an exemption that skipped that check would let the D&H conjure a token. Pinned below,
 // because it is the one that would be easiest to lose while making the other two give way.
 
-import { stationPlacementBlockReason } from "./stationTokens";
-import { dhPowerState } from "./dhPower";
+import { stationPlacementBlockReason } from "../gameEngine/stationTokens";
+import { dhPowerState } from "../gameEngine/dhPower";
 import type { MapGridResponse } from "../components/hexContractTypes";
 
 const EMPTY_GRID = { game_id: 1, tiles: [] } as unknown as MapGridResponse;

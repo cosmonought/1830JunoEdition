@@ -29,7 +29,7 @@ const {
   revenueOutcome,
   rollTurnRevenue,
   turnRevenueSentence,
-} = require("./gameVariants") as typeof import("./gameVariants");
+} = require("../gameEngine/gameVariants") as typeof import("../gameEngine/gameVariants");
 const { readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
 import type { FeedItem } from "./feed";
 

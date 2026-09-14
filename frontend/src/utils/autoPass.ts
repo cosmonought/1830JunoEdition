@@ -60,7 +60,7 @@
 //
 // See docs/ai_architecture/state_machine.md, autoPass.ts #717.
 
-import type { GameStateResponse } from "./gameState";
+import type { GameStateResponse } from "../gameEngine/gameState";
 
 /** A 10% certificate -- the smallest step a rival's holding can take. */
 const SHARE_PERCENT = 10;

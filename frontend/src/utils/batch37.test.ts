@@ -21,11 +21,11 @@
 export {};
 
 const { applyPhaseChange, describeFleetLosses } =
-  require("./sandboxSession") as typeof import("./sandboxSession");
-const { trimToTrainLimit } = require("./trainLimit") as typeof import("./trainLimit");
+  require("../gameEngine/sandboxSession") as typeof import("../gameEngine/sandboxSession");
+const { trimToTrainLimit } = require("../gameEngine/trainLimit") as typeof import("../gameEngine/trainLimit");
 const { noticeDismissKey, nextDueNotice, fleetLossNotices } =
   require("./fleetLossNotice") as typeof import("./fleetLossNotice");
-const { STANDARD_VARIANTS } = require("./gameVariants") as typeof import("./gameVariants");
+const { STANDARD_VARIANTS } = require("../gameEngine/gameVariants") as typeof import("../gameEngine/gameVariants");
 const { readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
 
 const APP = readStripped("App.tsx");

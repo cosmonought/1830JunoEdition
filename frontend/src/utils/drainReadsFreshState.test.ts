@@ -102,7 +102,7 @@ describe("the reducer's context reads the refs, not the render (design note #138
   });
 
   it("which is the same era rule the server's engine applies", () => {
-    const ENGINE = readStripped("utils/replayLog.ts");
+    const ENGINE = readStripped("gameEngine/replayLog.ts");
     expect(ENGINE).toContain("return tileEraFor(state);");
   });
 });

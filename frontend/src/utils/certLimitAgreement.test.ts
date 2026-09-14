@@ -19,7 +19,7 @@
 // used ordinary prices, where the zone-blind count and the zone-aware count are equal by construction -- which
 // is exactly why a bug this visible survived a harness on both sides.
 
-import { certificateBreakdown, certificateCount, type GameStateResponse } from "./gameState";
+import { certificateBreakdown, certificateCount, type GameStateResponse } from "../gameEngine/gameState";
 import { playerFinances } from "./playerFinance";
 
 const ME = "me";

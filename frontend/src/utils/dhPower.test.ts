@@ -24,8 +24,8 @@ import {
   DH_PRIVATE_ID,
   DH_TILE_ID,
   dhPowerState,
-} from "./dhPower";
-import { privateHexFor } from "./privateReservations";
+} from "../gameEngine/dhPower";
+import { privateHexFor } from "../gameEngine/privateReservations";
 
 const FRESH = { hexBuilt: false, layUsed: false, tokenUsed: false };
 

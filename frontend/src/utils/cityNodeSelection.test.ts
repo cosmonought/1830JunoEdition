@@ -20,7 +20,7 @@
 // the contract applies its documented fallback -- which is a different and
 // better outcome than sending a confident wrong index.
 
-import { cityIndexAtPoint, cityNodePoints } from "./stationTokens";
+import { cityIndexAtPoint, cityNodePoints } from "../gameEngine/stationTokens";
 import { tileCitySlotCounts, tileCitySlotPoints } from "../components/TileGraphics";
 import { axialToPixel, twoNodePositions } from "../components/hexGeometry";
 import type { MapGridResponse } from "../components/hexContractTypes";

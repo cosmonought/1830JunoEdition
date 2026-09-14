@@ -42,21 +42,21 @@ import {
   replayLog,
   type ExportedEntry,
   type ReplayProviders,
-} from "./replayLog";
+} from "../gameEngine/replayLog";
 import {
   DEFAULT_SANDBOX_SCENARIO,
   sandboxInitialMarketPrices,
   sandboxScenario,
   sandboxScenarioState,
   sandboxWaterfallState,
-} from "./sandboxState";
-import { sandboxReplayProviders } from "./replayProviders";
-import { waterfallForRoster, withEmptyRoster } from "./gameSetup";
-import { MOCK_MAP_GRID } from "./mockFixtures";
-import { resolveVariants, dividendStepsFor } from "./gameVariants";
+} from "../gameEngine/sandboxState";
+import { sandboxReplayProviders } from "../gameEngine/replayProviders";
+import { waterfallForRoster, withEmptyRoster } from "../gameEngine/gameSetup";
+import { MOCK_MAP_GRID } from "../gameEngine/mockFixtures";
+import { resolveVariants, dividendStepsFor } from "../gameEngine/gameVariants";
 import { turnSeedKey } from "./turnSeed";
-import { derivePhase } from "./gamePhase";
-import { operatingCorporationId } from "./dividendGate";
+import { derivePhase } from "../gameEngine/gamePhase";
+import { operatingCorporationId } from "../gameEngine/dividendGate";
 import {
   marketCellForPrice,
   marketZoneForPrice,

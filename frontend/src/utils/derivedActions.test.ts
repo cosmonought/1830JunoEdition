@@ -15,12 +15,12 @@
 export {};
 
 const { maxRouteRevenueFor, nextDerivedAction } =
-  require("./derivedActions") as typeof import("./derivedActions");
-const { sandboxScenarioState } = require("./sandboxState") as typeof import("./sandboxState");
-const { MOCK_MAP_GRID } = require("./mockFixtures") as typeof import("./mockFixtures");
-const { turnGuardKey } = require("./turnGuardKey") as typeof import("./turnGuardKey");
+  require("../gameEngine/derivedActions") as typeof import("../gameEngine/derivedActions");
+const { sandboxScenarioState } = require("../gameEngine/sandboxState") as typeof import("../gameEngine/sandboxState");
+const { MOCK_MAP_GRID } = require("../gameEngine/mockFixtures") as typeof import("../gameEngine/mockFixtures");
+const { turnGuardKey } = require("../gameEngine/turnGuardKey") as typeof import("../gameEngine/turnGuardKey");
 
-type State = import("./gameState").GameStateResponse;
+type State = import("../gameEngine/gameState").GameStateResponse;
 
 /** A board mid-Operating-Round with one corporation acting. */
 function operating(over: Partial<State> = {}): State {
@@ -222,7 +222,7 @@ describe("the Tokens step is skipped when there is nowhere to place, #1237", () 
      THE TWO CASES BELOW ARE THE LINE #414 DREW: a corporation with a reachable free slot is waited for (skipping
      would take its move away); one with nowhere to place is moved on. Both are asserted, because a rule that
      skips everyone passes the second and breaks the game. */
-  const { dhFreeStationAvailableFor, DH_PRIVATE_ID } = require("./dhPower") as typeof import("./dhPower");
+  const { dhFreeStationAvailableFor, DH_PRIVATE_ID } = require("../gameEngine/dhPower") as typeof import("../gameEngine/dhPower");
 
   it("owes an advance for a corporation at Tokens whose network reaches no free slot", () => {
     /* Company 1 on the mock grid with its home token placed and no track laid: the only city it reaches is its

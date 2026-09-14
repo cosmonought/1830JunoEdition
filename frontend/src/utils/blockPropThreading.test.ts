@@ -102,7 +102,7 @@ describe("the sell side had the identical hole", () => {
        REFUSED line; this pass adds nothing to it and must not have quietly weakened it. */
     const fs = require("fs") as typeof import("fs");
     const path = require("path") as typeof import("path");
-    const reducer = fs.readFileSync(path.join(__dirname, "sandboxSession.ts"), "utf8");
+    const reducer = fs.readFileSync(path.join(__dirname, "..", "gameEngine", "sandboxSession.ts"), "utf8");
     expect(reducer).toContain("const blocked = sharePurchaseBlock({");
     expect(reducer).toContain("shareSaleBlock");
   });

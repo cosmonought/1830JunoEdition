@@ -22,7 +22,7 @@ import { EXPANDED_BOARD, axialOf, edge } from "../components/hexBoardDataPlus";
 import { HEX_NEIGHBOR_OFFSETS, boardHexExistsAt, liveEdgesForHex, rotateConnections, liveEdges } from "../components/hexGeometry";
 import { printedArtworkEdgePairs } from "../components/TileGraphics";
 import { TILE_CATALOG_BY_ID } from "../components/hexTileCatalog";
-import { initialGridFor } from "./initialGrid";
+import { initialGridFor } from "../gameEngine/initialGrid";
 import { tileStock } from "./tileSupply";
 
 const at = (label: string) => axialOf(label);

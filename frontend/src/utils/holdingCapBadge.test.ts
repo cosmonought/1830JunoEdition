@@ -22,7 +22,7 @@
 // AND THE ZONE IS THE WHOLE DIFFICULTY. Orange and Brown lift this cap. "Max" printed there states a rule
 // that does not apply, and a player who believes it stops trying -- worse than silence.
 
-import { atHoldingCap } from "./sharePurchase";
+import { atHoldingCap } from "../gameEngine/sharePurchase";
 import { holdingMarker, tiedForControl, WIDEST_MARKED_CELLS } from "./holdingMarkers";
 
 describe("the cap applies where the cap applies", () => {

@@ -30,8 +30,8 @@ import {
   describeFleetLoss,
   describeFleetLosses,
   describePrivateClosures,
-} from "./sandboxSession";
-import type { GameStateResponse } from "./gameState";
+} from "../gameEngine/sandboxSession";
+import type { GameStateResponse } from "../gameEngine/gameState";
 
 function stateWith(fleets: Record<number, string[]>): GameStateResponse {
   return {

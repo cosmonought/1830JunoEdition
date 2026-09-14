@@ -17,18 +17,16 @@
 import PresidentCrown, { PRESIDENT_CROWN_GOLD } from "./PresidentCrown";
 import React from "react";
 
-import type {
-  GameStateResponse,
-  QueryCapableClient,
-} from "../utils/gameState";
-import { corporationPrivateCompanies } from "../utils/gameState";
+import type { GameStateResponse } from "../gameEngine/gameState";
+import type { QueryCapableClient } from "../utils/gameStatePolling";
+import { corporationPrivateCompanies } from "../gameEngine/gameState";
 // Design note #753: the round's frozen queue decides the display order, not a live re-sort.
 import { operatingOrderRanks, sortForOperatingOrder } from "../utils/operatingOrderView";
 // Design note #572: `usePlayerNetWorths` and the Ledger's `PlayerAssetsSection`
 // went with the footer table they fed. The Ledger still owns both.
 import { PrivateCompanyPills } from "./PrivateCompanyPills";
 import { corporationFullName } from "../utils/corporationNames";
-import { depotInventory, derivePhase, rustOutlook } from "../utils/gamePhase";
+import { depotInventory, derivePhase, rustOutlook } from "../gameEngine/gamePhase";
 // Design note #1035: how close the privates are to closing, for the pills that show them.
 import { privateClosureAlert } from "../utils/purchaseWarnings";
 import { CapacityPill, LastRoutePayout, lastRunFigure, TrainChips } from "./TrainBadges";

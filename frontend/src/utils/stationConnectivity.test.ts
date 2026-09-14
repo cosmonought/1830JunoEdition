@@ -277,7 +277,7 @@ describe("the lay carries every token's destination (design note #880)", () => {
       .replace(/^\s*\/\/.*$/gm, "");
   };
   const APP = read("App.tsx");
-  const REDUCER = read("utils/sandboxSession.ts");
+  const REDUCER = read("gameEngine/sandboxSession.ts");
   const MIGRATION = read("utils/tokenMigration.ts");
   const BOARD = read("components/HexGridRenderer.tsx");
 

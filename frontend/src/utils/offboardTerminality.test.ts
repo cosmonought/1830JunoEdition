@@ -35,13 +35,13 @@ import {
 } from "../components/hexGeometry";
 import { OFFBOARD_TRACKS, STATIC_BOARD_HEXES } from "../components/hexBoardData";
 import type { MapGridResponse, MapTileEntry } from "../components/hexContractTypes";
-import { hexKey, layableHexes, portKey, reachableTrack } from "./trackReach";
+import { hexKey, layableHexes, portKey, reachableTrack } from "../gameEngine/trackReach";
 import {
   isOffboardTerminal,
   segmentsTouchingEdge,
   traversalSegments,
   traversalsFrom,
-} from "./trackSegments";
+} from "../gameEngine/trackSegments";
 
 const BOARD = new Set(STATIC_BOARD_HEXES.map((hex) => hexKey(hex.q, hex.r)));
 const BARE: MapGridResponse = { game_id: 1, tiles: [] };

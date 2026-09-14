@@ -195,7 +195,7 @@ describe("the gates this explains are still in place", () => {
   it("keeps #769's held seat", () => {
     const fs = require("fs") as typeof import("fs");
     const path = require("path") as typeof import("path");
-    const reducer = fs.readFileSync(path.join(__dirname, "sandboxSession.ts"), "utf8");
+    const reducer = fs.readFileSync(path.join(__dirname, "..", "gameEngine", "sandboxSession.ts"), "utf8");
     expect(reducer).toContain("pendingHomeTokens");
   });
 });

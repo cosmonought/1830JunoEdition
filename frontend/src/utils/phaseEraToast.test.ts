@@ -11,8 +11,8 @@
 // THE ERA TABLE IS THE PRECONDITION, so it is checked first: a toast fires on a CHANGE, and the set of
 // changes is a property of `TIER_PRESENTATION`. Two toasts in an 1830 game, not five.
 
-import { tierEra } from "./gamePhase";
-import type { TrainTier } from "./gamePhase";
+import { tierEra } from "../gameEngine/gamePhase";
+import type { TrainTier } from "../gameEngine/gamePhase";
 
 const TIERS: readonly TrainTier[] = ["2", "3", "4", "5", "6", "D"];
 

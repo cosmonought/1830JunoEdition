@@ -1,8 +1,8 @@
 /** @jest-environment node */
 // frontend/src/utils/sellBuySell.test.ts -- design note #1443: the Stock Round is Sell-Buy-Sell.
-import { applySandboxAction, stockTurnStage } from "./sandboxSession";
-import { CURRENT_RULES_REVISION, resolveVariants, sellBuySellInForce, STANDARD_VARIANTS } from "./gameVariants";
-import type { GameStateResponse } from "./gameState";
+import { applySandboxAction, stockTurnStage } from "../gameEngine/sandboxSession";
+import { CURRENT_RULES_REVISION, resolveVariants, sellBuySellInForce, STANDARD_VARIANTS } from "../gameEngine/gameVariants";
+import type { GameStateResponse } from "../gameEngine/gameState";
 
 const SEATS = ["p0", "p1", "p2", "p3"];
 const PRR = 1;

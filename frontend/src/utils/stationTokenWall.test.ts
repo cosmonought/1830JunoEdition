@@ -35,8 +35,8 @@ import {
   placeableStationHexes,
   stationSlotCount,
   type StationPlacementCompany,
-} from "./stationTokens";
-import { hexKey } from "./trackReach";
+} from "../gameEngine/stationTokens";
+import { hexKey } from "../gameEngine/trackReach";
 import type { MapGridResponse } from "../components/hexContractTypes";
 
 /** The reported hexes, FOUND rather than typed -- #686's rule: a coordinate written by hand is one board edit

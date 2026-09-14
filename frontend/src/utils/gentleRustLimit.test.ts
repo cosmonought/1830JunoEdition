@@ -28,10 +28,10 @@
 //   #980's COPY is a value with an answer, so it is compared to the ruled string rather than paraphrased.
 //   #981's AUDIENCE is a memo in the shell: a source scan, and the note there says why that is the weak half.
 
-import { trimToTrainLimit } from "./trainLimit";
-import { applyPhaseChange, describeFleetLosses } from "./sandboxSession";
-import { STANDARD_VARIANTS } from "./gameVariants";
-import type { GameStateResponse } from "./gameState";
+import { trimToTrainLimit } from "../gameEngine/trainLimit";
+import { applyPhaseChange, describeFleetLosses } from "../gameEngine/sandboxSession";
+import { STANDARD_VARIANTS } from "../gameEngine/gameVariants";
+import type { GameStateResponse } from "../gameEngine/gameState";
 import { readStripped, sliceBetween } from "./sourceScan";
 
 const COST: Readonly<Record<string, number>> = { "2": 80, "3": 180, "4": 300, "5": 450, "6": 630 };

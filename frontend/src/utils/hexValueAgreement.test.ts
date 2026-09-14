@@ -17,7 +17,7 @@
 // was laid -- which is most tiles, and none of the fixtures anybody had written.
 
 import { describeHexWithValue, hexValueForEra } from "../components/hexGeometry";
-import { hexStopValue } from "./sandboxSession";
+import { hexStopValue } from "../gameEngine/sandboxSession";
 import { HEX_START_VALUE_OVERRIDE } from "../components/hexBoardData";
 import type { MapGridResponse } from "../components/hexContractTypes";
 

@@ -19,9 +19,9 @@
 // board's ownership (the amounts depend on who owns what, which the after-state knows). No flag crosses the
 // reducer's boundary, and nothing here can move money.
 
-import type { GameStateResponse } from "./gameState";
+import type { GameStateResponse } from "../gameEngine/gameState";
 import type { GameplayExecuteMsg } from "./sessionKey";
-import { applyPrivateRevenue, type PrivatePayout } from "./sandboxSession";
+import { applyPrivateRevenue, type PrivatePayout } from "../gameEngine/sandboxSession";
 
 export interface AuctionTransition {
   /** Privates that gained a player owner in this action, in roster order of the list. */

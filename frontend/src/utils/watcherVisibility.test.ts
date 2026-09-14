@@ -25,8 +25,8 @@
 // every action". The payout notice does not ask whether an event was interesting -- it asks whether it moved
 // THIS viewer's money, off `dividendSplit`'s own list, which is the same value the reducer spent.
 
-import { dividendSplit } from "./dividendSplit";
-import type { GameStateResponse } from "./gameState";
+import { dividendSplit } from "../gameEngine/dividendSplit";
+import type { GameStateResponse } from "../gameEngine/gameState";
 
 const CO = 3;
 

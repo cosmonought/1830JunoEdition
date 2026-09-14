@@ -18,7 +18,7 @@
 import React, { useState } from "react";
 
 import { FONT_SIZE, RADIUS } from "../styles/typography";
-import { BANK_SIZE_BY_LENGTH, GAME_MODE_COPY, GAME_TYPE_COPY, gameTypeOf } from "../utils/gameVariants";
+import { BANK_SIZE_BY_LENGTH, GAME_MODE_COPY, GAME_TYPE_COPY, gameTypeOf } from "../gameEngine/gameVariants";
 import type { SandboxRoomSummary } from "../utils/sandboxRoomSummary";
 import { formatJuno } from "../utils/anteMath";
 

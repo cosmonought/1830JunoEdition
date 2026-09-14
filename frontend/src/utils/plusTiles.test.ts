@@ -14,12 +14,12 @@ import { filterSandboxPlacements, hexLabelRestriction } from "../components/sand
 import { restrictionLabelFor } from "../components/hexCanvasPrimitives";
 import { liveEdges } from "../components/hexGeometry";
 import type { MapGridResponse } from "../components/hexContractTypes";
-import { resolveVariants } from "./gameVariants";
-import { activateRules, trayFor, withRules } from "./boardSelection";
+import { resolveVariants } from "../gameEngine/gameVariants";
+import { activateRules, trayFor, withRules } from "../gameEngine/boardSelection";
 import { resetTileUpgradeGraph, tileUpgradeGraph, tileUpgradeTargets } from "./tileUpgrades";
-import { eraForPhase, tileEraFor } from "./gameConstants";
+import { eraForPhase, tileEraFor } from "../gameEngine/gameConstants";
 import { tileStock } from "./tileSupply";
-import type { GameStateResponse } from "./gameState";
+import type { GameStateResponse } from "../gameEngine/gameState";
 
 const PLUS = resolveVariants({ expandedMap: true, plusTiles: true });
 const STANDARD = resolveVariants({});

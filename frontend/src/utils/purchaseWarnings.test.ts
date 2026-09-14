@@ -26,7 +26,7 @@
 // 2 -> 3, which only unlocks Green tiles -- is asserted as deliberate rather than left to be discovered.
 
 import { purchaseWarnings, limitAfterNextPhase } from "./purchaseWarnings";
-import { tierEra, type DepotTier, type GamePhase, type TrainTier } from "./gamePhase";
+import { tierEra, type DepotTier, type GamePhase, type TrainTier } from "../gameEngine/gamePhase";
 
 /** 1830's depot, with only the fields these rules read. */
 const DEPOT: readonly DepotTier[] = [

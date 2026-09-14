@@ -23,10 +23,10 @@ import {
   applySandboxAction,
   applySandboxMarketAction,
   buildOperatingOrder,
-} from "./sandboxSession";
-import { isSoldOut, roundEndSoldOutRises, soldOutRises, describeSoldOutRise } from "./soldOutRise";
+} from "../gameEngine/sandboxSession";
+import { isSoldOut, roundEndSoldOutRises, soldOutRises, describeSoldOutRise } from "../gameEngine/soldOutRise";
 import { projectRiseMove, COMPASS_ARMS, PRICE_GRID } from "../components/StockMarketRenderer";
-import type { GameStateResponse } from "./gameState";
+import type { GameStateResponse } from "../gameEngine/gameState";
 
 const SEATS = ["p0", "p1"];
 const PRR = 1;
@@ -358,7 +358,7 @@ describe("every arm of the compass names a movement the code performs", () => {
   const marketSource = (() => {
     const fs = require("fs") as typeof import("fs");
     const path = require("path") as typeof import("path");
-    const raw = fs.readFileSync(path.join(__dirname, "sandboxSession.ts"), "utf8");
+    const raw = fs.readFileSync(path.join(__dirname, "..", "gameEngine", "sandboxSession.ts"), "utf8");
     // #490a: the notes discuss the missing rule by name and must keep doing so.
     return raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
   })();

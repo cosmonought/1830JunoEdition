@@ -33,8 +33,8 @@
 // Nothing is being under-reported. An unparred share cannot be sold to anybody at any figure, which is
 // exactly what this column measures, so $0 is the measurement.
 
-import { playerLiquidity } from "./endgame";
-import type { GameStateResponse } from "./gameState";
+import { playerLiquidity } from "../gameEngine/endgame";
+import type { GameStateResponse } from "../gameEngine/gameState";
 
 const ME = "me";
 const RIVAL = "rival";

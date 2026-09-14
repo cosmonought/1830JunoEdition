@@ -32,8 +32,8 @@
 // and therefore assumes this property rather than checking it. These tests
 // check it, and they are what would have failed three passes ago.
 
-import { applySandboxAction, beginOperatingRound } from "./sandboxSession";
-import type { GameStateResponse, PublicCompanyState } from "./gameState";
+import { applySandboxAction, beginOperatingRound } from "../gameEngine/sandboxSession";
+import type { GameStateResponse, PublicCompanyState } from "../gameEngine/gameState";
 
 const ALICE = "juno1alice";
 const BOB = "juno1bob";

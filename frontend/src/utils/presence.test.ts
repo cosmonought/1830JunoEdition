@@ -218,8 +218,8 @@ describe("presence stays outside the one source of truth", () => {
     /* THE ASSERTION THAT PROTECTS THE ARCHITECTURE. Every behavioural test above could pass while
        `sandboxSession` started reading a hint as a fact, and the resulting corruption would be intermittent --
        the worst kind to debug and the worst kind to ship. */
-    expect(code("sandboxSession.ts")).not.toContain("./presence");
-    expect(code("sandboxSession.ts")).not.toContain("sandboxPresence");
+    expect(code("../gameEngine/sandboxSession.ts")).not.toContain("utils/presence");
+    expect(code("../gameEngine/sandboxSession.ts")).not.toContain("sandboxPresence");
   });
 
   it("is never written to the action log", () => {

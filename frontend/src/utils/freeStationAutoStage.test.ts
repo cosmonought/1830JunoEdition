@@ -18,7 +18,7 @@
 // SO THE ARITHMETIC IS TESTED, NOT THE PIXELS. `stationSlotAnchor` is pure and can be checked against the
 // transform it claims to apply; the wiring is a source scan, in this file's usual shape.
 
-import { stationSlotAnchor, soleCityIndex } from "./stationTokens";
+import { stationSlotAnchor, soleCityIndex } from "../gameEngine/stationTokens";
 // Design note #891: the shared source-scan helpers (#886) -- `sliceBetween` throws on a missing anchor.
 import { readSource, sliceBetween, stripComments } from "./sourceScan";
 import type { MapGridResponse } from "../components/hexContractTypes";

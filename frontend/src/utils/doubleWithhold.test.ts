@@ -22,11 +22,11 @@
 // WHAT THIS FILE CANNOT DO is prove that two browsers were the source. It proves that two arrivals now move
 // one cell, which is the property that matters and is true whatever produced the second one.
 
-import { applySandboxAction, applySandboxMarketAction } from "./sandboxSession";
-import { dividendRefusal, operatingCorporationId } from "./dividendGate";
+import { applySandboxAction, applySandboxMarketAction } from "../gameEngine/sandboxSession";
+import { dividendRefusal, operatingCorporationId } from "../gameEngine/dividendGate";
 import { projectDividendCellMove } from "../components/StockMarketRenderer";
-import type { GameStateResponse } from "./gameState";
-import type { SandboxMarketPrices } from "./sandboxState";
+import type { GameStateResponse } from "../gameEngine/gameState";
+import type { SandboxMarketPrices } from "../gameEngine/sandboxState";
 
 const BO = 6;
 const PRR = 1;

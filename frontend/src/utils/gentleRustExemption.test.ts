@@ -28,9 +28,9 @@
 export {};
 
 const { countableTrainCount, trimToTrainLimit, isTrainLocked } =
-  require("./trainLimit") as typeof import("./trainLimit");
+  require("../gameEngine/trainLimit") as typeof import("../gameEngine/trainLimit");
 const { trainPurchaseRefusal } =
-  require("./trainPurchaseGate") as typeof import("./trainPurchaseGate");
+  require("../gameEngine/trainPurchaseGate") as typeof import("../gameEngine/trainPurchaseGate");
 const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
 
 const APP = readStripped("App.tsx");
@@ -247,7 +247,7 @@ describe("the condemned train is still in the fleet and still drawn", () => {
        of this rule is to drop the train from `owned_trains`, which satisfies every count above and breaks the
        feature invisibly -- no roster entry, no route draft, no chip, and no failing test. The reducer must
        keep leaving the fleet alone under this variant. */
-    expect(readStripped("utils/sandboxSession.ts")).toContain(
+    expect(readStripped("gameEngine/sandboxSession.ts")).toContain(
       "const fleetAfterRust = gentle\n      ? [...owned]",
     );
   });

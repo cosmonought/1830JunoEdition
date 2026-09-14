@@ -12,8 +12,8 @@ import {
   withMarketChart,
 } from "./marketChart";
 import { marketCellForPrice, parBoxCellFor, projectDividendCellMove, projectRiseMove } from "./StockMarketRenderer";
-import { withRules } from "../utils/boardSelection";
-import { STANDARD_VARIANTS } from "../utils/gameVariants";
+import { withRules } from "../gameEngine/boardSelection";
+import { STANDARD_VARIANTS } from "../gameEngine/gameVariants";
 
 describe("the Dynamic Market row above the top (design note #1435)", () => {
   afterEach(() => activateMarketChart(STANDARD_MARKET_CHART));

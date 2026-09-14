@@ -9,13 +9,13 @@ import { STANDARD_TRAY, activateTray } from "../components/tileTray";
 import { CO_COMPANY_ID, COAL_RIVER_LABEL, NW_COMPANY_ID } from "../components/hexBoardDataLpf";
 import { homeHexesFor, homeReservationStands, stationHomeHexes } from "../components/hexContractTypes";
 import type { MapGridResponse } from "../components/hexContractTypes";
-import type { GameStateResponse } from "./gameState";
-import { certificateCount } from "./gameState";
-import { resolveVariants } from "./gameVariants";
-import { withRules } from "./boardSelection";
-import { applySandboxAction, pendingHomeTokens, placeHomeStationToken } from "./sandboxSession";
-import { sandboxGameState } from "./sandboxState";
-import { withLevelPlayingFieldEntities, ERIE_COMPANY_ID, JK_PRIVATE_ID } from "./levelPlayingField";
+import type { GameStateResponse } from "../gameEngine/gameState";
+import { certificateCount } from "../gameEngine/gameState";
+import { resolveVariants } from "../gameEngine/gameVariants";
+import { withRules } from "../gameEngine/boardSelection";
+import { applySandboxAction, pendingHomeTokens, placeHomeStationToken } from "../gameEngine/sandboxSession";
+import { sandboxGameState } from "../gameEngine/sandboxState";
+import { withLevelPlayingFieldEntities, ERIE_COMPANY_ID, JK_PRIVATE_ID } from "../gameEngine/levelPlayingField";
 import {
   JK_TILE_ABILITY_KEY,
   KANAWHA_LICENSE_COST,
@@ -29,7 +29,7 @@ import {
   licensesHeldBy,
   licensesRemainingForSale,
   mayCrossCoalRiver,
-} from "./kanawhaLicense";
+} from "../gameEngine/kanawhaLicense";
 import {
   certificateCardsHeld,
   certificateCardsInPool,
@@ -37,11 +37,11 @@ import {
   doublePurchaseRefusal,
   doubleSaleEffect,
   ordinaryPurchaseRefusal,
-} from "./doubleCertificate";
-import { sharePurchaseBlock } from "./sharePurchase";
+} from "../gameEngine/doubleCertificate";
+import { sharePurchaseBlock } from "../gameEngine/sharePurchase";
 import { readStripped } from "./sourceScan";
-import { shareSaleBlock } from "./shareSale";
-import { evaluateStationPlacement } from "./stationTokens";
+import { shareSaleBlock } from "../gameEngine/shareSale";
+import { evaluateStationPlacement } from "../gameEngine/stationTokens";
 import {
   DEPOT_COST,
   LPF_DIESEL_COST,
@@ -52,9 +52,9 @@ import {
   openDepotTiers,
   tierOrderFor,
   trainTier,
-} from "./gamePhase";
-import { dieselExchangeCostFor, dieselExchangeRefusal } from "./dieselExchange";
-import { cityBlockerFor } from "./cityBlocking";
+} from "../gameEngine/gamePhase";
+import { dieselExchangeCostFor, dieselExchangeRefusal } from "../gameEngine/dieselExchange";
+import { cityBlockerFor } from "../gameEngine/cityBlocking";
 
 const LPF = resolveVariants({ levelPlayingField: true });
 const BARE: MapGridResponse = { game_id: 1, tiles: [] };
@@ -571,7 +571,7 @@ describe("the 7-train and the open shelf (design note #1326)", () => {
 
 describe("the chart draws the two added corporations (design note #1381)", () => {
   it("emits a position for every id that holds a mark, not only the printed eight", () => {
-    const { sandboxMarketPositions } = require("./sandboxState") as typeof import("./sandboxState");
+    const { sandboxMarketPositions } = require("../gameEngine/sandboxState") as typeof import("../gameEngine/sandboxState");
     const { NW_COMPANY_ID: NW, PMQ_COMPANY_ID: PMQ } = require("../components/hexBoardDataLpf") as typeof import("../components/hexBoardDataLpf");
     const marks = {
       1: { price: 100, x: 3, y: 2, enteredAt: 1 },

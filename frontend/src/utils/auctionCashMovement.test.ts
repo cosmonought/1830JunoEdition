@@ -3,7 +3,7 @@
 // Design note #1339 (harness): the auction's money on the viewer's cash machine -- and nowhere else's.
 
 import { auctionCashMovement } from "./auctionCashMovement";
-import type { GameStateResponse } from "./gameState";
+import type { GameStateResponse } from "../gameEngine/gameState";
 import { readStripped, sliceBetween } from "./sourceScan";
 
 const ME = "me";

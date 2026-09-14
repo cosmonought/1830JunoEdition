@@ -21,15 +21,15 @@
 // version, so any test that lays once passes either way -- which is roughly how a wrong rule survived a
 // harness. The cases that discriminate all lay twice.
 
-import { applySandboxAction } from "./sandboxSession";
+import { applySandboxAction } from "../gameEngine/sandboxSession";
 import { pendingTileCost } from "./pendingTileCost";
-import { hasPaidTerrain, terrainFeeDue, withTerrainPaid } from "./terrainFee";
+import { hasPaidTerrain, terrainFeeDue, withTerrainPaid } from "../gameEngine/terrainFee";
 import {
   MOUNTAIN_BUILD_FEE,
   RIVER_BUILD_FEE,
   terrainBuildFeeAt,
 } from "../components/hexBoardData";
-import type { GameStateResponse } from "./gameState";
+import type { GameStateResponse } from "../gameEngine/gameState";
 import type { MapGridResponse } from "../components/hexContractTypes";
 
 /** G13 -- a mountain. G19 -- New York, a RIVER hex carrying a preprinted yellow tile. */

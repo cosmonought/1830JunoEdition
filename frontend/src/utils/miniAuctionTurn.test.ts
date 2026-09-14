@@ -30,8 +30,8 @@ import {
   type GameStateResponse,
   type WaterfallPrivateStatus,
   type WaterfallStateResponse,
-} from "./gameState";
-import { applySandboxWaterfallAction } from "./sandboxSession";
+} from "../gameEngine/gameState";
+import { applySandboxWaterfallAction } from "../gameEngine/sandboxSession";
 
 const ADA = "player-ada";
 const BEN = "player-ben";

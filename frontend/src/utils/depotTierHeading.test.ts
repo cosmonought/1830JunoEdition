@@ -29,7 +29,7 @@
 // everything the helper decides. The gap is the JSX itself, and it is the same gap every other UI assertion
 // in this repo has.
 
-import { TIER_ORDER, trainTierName, trainTierNamePlural } from "./gamePhase";
+import { TIER_ORDER, trainTierName, trainTierNamePlural } from "../gameEngine/gamePhase";
 import { readSource, readStripped, sliceBetween } from "./sourceScan";
 
 describe("a tier is named the way a player says it", () => {
@@ -145,10 +145,10 @@ describe("the note and the code agree", () => {
        on a grep would be reading this rule as a spelling ban, which it is not -- so the reason is in the note
        and this is what makes it visible in a test run. */
     // `readSource` resolves from `src/`, not from this file -- #886's one reader, one root.
-    const RAW = readSource("utils/gamePhase.ts");
+    const RAW = readSource("gameEngine/gamePhase.ts");
     expect(RAW).toContain("THE PHASE IS NOT THE TRAIN");
     // And the phase labels themselves still say it, which is the fact the note is defending.
-    expect(readStripped("utils/gamePhase.ts")).toContain('"Phase D (Diesel)"');
-    expect(readStripped("utils/depotSchedule.ts")).toContain('phase: "Diesel Era"');
+    expect(readStripped("gameEngine/gamePhase.ts")).toContain('"Phase D (Diesel)"');
+    expect(readStripped("gameEngine/depotSchedule.ts")).toContain('phase: "Diesel Era"');
   });
 });

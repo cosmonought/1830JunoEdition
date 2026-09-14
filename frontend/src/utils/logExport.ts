@@ -28,7 +28,7 @@
 // with no duplicates rules the whole family out in one glance.
 
 import type { SandboxAction } from "./sandboxRoom";
-import { logHash } from "./logHash";
+import { logHash } from "../gameEngine/logHash";
 
 export interface SandboxLogExport {
   capturedAt: string;

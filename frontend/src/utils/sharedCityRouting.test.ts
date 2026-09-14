@@ -32,8 +32,8 @@
 import { HEX_NEIGHBOR_OFFSETS, liveEdgesForHex } from "../components/hexGeometry";
 import { STATIC_BOARD_HEXES } from "../components/hexBoardData";
 import type { MapGridResponse, MapTileEntry } from "../components/hexContractTypes";
-import { assignRouteSet, routeSegments } from "./routeAutoTrace";
-import { segmentsTouchingEdge, traversalSegments } from "./trackSegments";
+import { assignRouteSet, routeSegments } from "../gameEngine/routeAutoTrace";
+import { segmentsTouchingEdge, traversalSegments } from "../gameEngine/trackSegments";
 
 const BOARD = new Set(STATIC_BOARD_HEXES.map((h) => `${h.q},${h.r}`));
 const YELLOW_CITY = 57;

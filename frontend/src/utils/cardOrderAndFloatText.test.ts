@@ -21,7 +21,7 @@
 
 import { applyCardOrder, openingCardOrder, operatingRoundCardOrder } from "./corporationCardOrder";
 import { readStripped } from "./sourceScan";
-import { describeFloat } from "./sandboxSession";
+import { describeFloat } from "../gameEngine/sandboxSession";
 
 const corp = (company_id: number, is_floated = true) => ({ company_id, is_floated });
 

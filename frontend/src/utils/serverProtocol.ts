@@ -48,9 +48,9 @@
 // at all. Without a build on the wire that surfaces as a phantom desync -- which is the precise thing this
 // migration exists to stop people chasing.
 
-import type { ReplayEntry } from "./replayLog";
+import type { ReplayEntry } from "../gameEngine/replayLog";
 import type { GameplayExecuteMsg } from "./sessionKey";
-import { canonicalJson } from "./stateDigest";
+import { canonicalJson } from "../gameEngine/stateDigest";
 
 /** Identifies the code both sides are running. Any string both halves agree on; a git sha in practice. */
 export type BuildId = string;

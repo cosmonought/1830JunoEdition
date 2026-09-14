@@ -24,7 +24,7 @@ import {
   recommendedVariantsFor,
   resolveVariants,
   withGameType,
-} from "./gameVariants";
+} from "../gameEngine/gameVariants";
 import { canStartSandboxGame, waitingRoomBlock, waitingRoomNotice, type SandboxRoomDoc } from "./sandboxRoom";
 
 const LPF = withGameType(STANDARD_VARIANTS, "levelPlayingField");

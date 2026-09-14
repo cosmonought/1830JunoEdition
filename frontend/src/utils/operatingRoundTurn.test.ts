@@ -21,8 +21,8 @@
 // dispatches a hard cap of turns and asserts the round ended well inside
 // it. A regression would blow the cap rather than hang the suite.
 
-import { applySandboxAction, beginOperatingRound, buildOperatingOrder } from "./sandboxSession";
-import type { GameStateResponse, PublicCompanyState } from "./gameState";
+import { applySandboxAction, beginOperatingRound, buildOperatingOrder } from "../gameEngine/sandboxSession";
+import type { GameStateResponse, PublicCompanyState } from "../gameEngine/gameState";
 
 /* ==================================================================
  *  DESIGN NOTE 642 (harness): "THE ROUND ENDED" IS A STATE, NOT A FLAG

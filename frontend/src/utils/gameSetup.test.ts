@@ -16,7 +16,7 @@
 // one log entry and diverge on move one. The shuffle is deliberately NOT in
 // it, and one test states that as a property rather than trusting the note.
 
-import type { GameStateResponse, WaterfallStateResponse } from "./gameState";
+import type { GameStateResponse, WaterfallStateResponse } from "../gameEngine/gameState";
 import {
   BANK_START,
   CERT_LIMIT_BY_PLAYER_COUNT,
@@ -31,11 +31,11 @@ import {
   withEmptyRoster,
   startingCashForPlayers,
   type SetupPlayer,
-} from "./gameSetup";
+} from "../gameEngine/gameSetup";
 // Design note #611: the two readers that turned a stale era into the
 // reported bug, asserted here so the fix is pinned end to end.
 import { initialOrSubPhase } from "../components/OperatingSubPhaseStepper";
-import { derivePhase } from "./gamePhase";
+import { derivePhase } from "../gameEngine/gamePhase";
 
 function players(count: number): SetupPlayer[] {
   return Array.from({ length: count }, (_, i) => ({ id: `p${i}`, nickname: `Player ${i}` }));

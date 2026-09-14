@@ -14,17 +14,17 @@
    the table actually saw, not a reconstruction. A 600-entry log replays in well under a second; the shell
    caches each round it has visited. */
 
-import { RoomEngine, entriesFromExport } from "./replayLog";
-import { sandboxReplayProviders } from "./replayProviders";
+import { RoomEngine, entriesFromExport } from "../gameEngine/replayLog";
+import { sandboxReplayProviders } from "../gameEngine/replayProviders";
 import {
   DEFAULT_SANDBOX_SCENARIO,
   sandboxScenario,
   sandboxScenarioState,
   sandboxWaterfallState,
-} from "./sandboxState";
-import { waterfallForRoster, withEmptyRoster } from "./gameSetup";
-import { effectiveActions } from "./logRevert";
-import type { GameStateResponse, WaterfallStateResponse } from "./gameState";
+} from "../gameEngine/sandboxState";
+import { waterfallForRoster, withEmptyRoster } from "../gameEngine/gameSetup";
+import { effectiveActions } from "../gameEngine/logRevert";
+import type { GameStateResponse, WaterfallStateResponse } from "../gameEngine/gameState";
 import type { MapGridResponse } from "../components/hexContractTypes";
 import type { SandboxAction } from "./sandboxRoom";
 import type { RoundSample } from "./gameHistory";

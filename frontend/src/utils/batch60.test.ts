@@ -27,9 +27,9 @@ const {
   isCarcosanTransfer,
   applySandboxMarketAction,
   applySandboxAction,
-} = require("./sandboxSession") as typeof import("./sandboxSession");
+} = require("../gameEngine/sandboxSession") as typeof import("../gameEngine/sandboxSession");
 const { fogIsDue, resolveFlavourLine, CARCOSA_FOG_LINE: FOG_LINE } =
-  require("./yellowSign") as typeof import("./yellowSign");
+  require("../gameEngine/yellowSign") as typeof import("../gameEngine/yellowSign");
 const {
   CARCOSA_FOG_AUDIO,
   CARCOSA_FOG_VIDEO,
@@ -48,12 +48,14 @@ const {
 } = require("./carcosaCurse") as typeof import("./carcosaCurse");
 const { readStripped, sliceBetween, anchorIndex } =
   require("./sourceScan") as typeof import("./sourceScan");
-import type { GameStateResponse, PublicCompanyState } from "./gameState";
+import type { GameStateResponse, PublicCompanyState } from "../gameEngine/gameState";
 
 const APP = readStripped("App.tsx");
-const SESSION = readStripped("utils/sandboxSession.ts");
-const YELLOW = readStripped("utils/yellowSign.ts");
-const MARKET = readStripped("components/StockMarketRenderer.tsx");
+const SESSION = readStripped("gameEngine/sandboxSession.ts");
+const YELLOW = readStripped("gameEngine/yellowSign.ts");
+/* #1501: the chart's projections moved to the engine; the renderer draws with them and re-exports them.
+   This suite reads the RULE, so it follows the rule. */
+const MARKET = readStripped("gameEngine/marketGeometry.ts");
 const PANEL = readStripped("components/TrainPurchasePanel.tsx");
 const MODAL = readStripped("components/GameOverModal.tsx");
 const OVERLAY = readStripped("components/YellowSignOverlay.tsx");
@@ -228,7 +230,7 @@ describe("the fog is the third step of the revenue sequence", () => {
        complete-shape assertion breaks the next time anything is added, which is the mistake this suite has
        made more than any other. */
     expect(shape.length).toBeLessThan(200);
-    expect(readStripped("utils/gameVariants.ts")).not.toContain("fog");
+    expect(readStripped("gameEngine/gameVariants.ts")).not.toContain("fog");
   });
 });
 
@@ -672,7 +674,7 @@ describe("the end of the game names the president and says the line", () => {
     /* RULED: "do not alter any final scores." A field on `PlayerStanding` would put flavour inside the object
        every number on that modal comes from, one careless sort away from mattering. */
     expect(MODAL).toContain("carcosa?: readonly { presidentAddress: string; epitaph: string }[];");
-    expect(readStripped("utils/endgame.ts")).not.toContain("carcosa");
+    expect(readStripped("gameEngine/endgame.ts")).not.toContain("carcosa");
     /* THE MARK RIDES THE NAME CELL, NEVER A FIGURE COLUMN.
        ANCHORED ON `{row.label}` RATHER THAN ON `styles.cellName`, which appears twice -- once in the header
        row printing the word "Player" and once in the row that renders one. The first draft of this case took

@@ -20,10 +20,10 @@ export {};
 
 const { readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
 const { homeRingPoints, cityNodePoints, nextCitySlotPoint } =
-  require("./stationTokens") as typeof import("./stationTokens");
+  require("../gameEngine/stationTokens") as typeof import("../gameEngine/stationTokens");
 
 const RENDERER = readStripped("components/HexGridRenderer.tsx");
-const TOKENS = readStripped("utils/stationTokens.ts");
+const TOKENS = readStripped("gameEngine/stationTokens.ts");
 /* ENDED ON THE NEXT DECLARATION, not on a brace. My first draft sliced to the first line-initial "}" and
    caught the one that closes this function's OWN parameter object -- `}): Array<...> {` -- so every
    assertion below ran against the signature and would have failed for a reason that had nothing to do with

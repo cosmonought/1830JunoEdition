@@ -11,8 +11,12 @@
 // is worth more among the surviving placeholders than in a file that no longer
 // has anything to do with them.
 
-import type { MapGridResponse } from "../components/HexGridRenderer";
-import type { MarketGridResponse } from "../components/StockMarketRenderer";
+/* #1503: both types are taken from the modules that DECLARE them rather than from the two components
+   that re-export them. `HexGridRenderer` and `StockMarketRenderer` are React files, and this fixture is
+   reached from the reducer, so importing them here was the third way the engine touched React -- a
+   type-only way, erased at runtime, but a way. Same declarations, same shapes, no behaviour. */
+import type { MapGridResponse } from "../components/hexContractTypes";
+import type { MarketGridResponse } from "./marketGeometry";
 
 /* ------------------------------------------------------------------ */
 /* Placeholder room state -- see design note #1                       */

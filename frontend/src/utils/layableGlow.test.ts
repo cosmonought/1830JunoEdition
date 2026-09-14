@@ -28,7 +28,7 @@
 // consulted, that it can only ever REMOVE hexes, and that the network and ports travel with the question --
 // because a callback asked without them would answer a different question than the picker the click opens.
 
-import { layableHexes, type LayableHexInput } from "./trackReach";
+import { layableHexes, type LayableHexInput } from "../gameEngine/trackReach";
 import type { MapGridResponse } from "../components/hexContractTypes";
 
 /** A tiny board with one laid tile the corporation has a token on. The exact hexes do not matter; what is

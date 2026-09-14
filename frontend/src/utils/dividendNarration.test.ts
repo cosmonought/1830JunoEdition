@@ -26,10 +26,10 @@
 // AND ONE CALCULATION FOR (2): `dividendSplit` is called by the reducer to MOVE the money and by the
 // narration to DESCRIBE it, so a doubled notice is no longer expressible.
 
-import { applySandboxAction } from "./sandboxSession";
+import { applySandboxAction } from "../gameEngine/sandboxSession";
 import { describeGameplayAction } from "./actionLog";
-import { dividendSplit, dividendRevenue } from "./dividendSplit";
-import type { GameStateResponse } from "./gameState";
+import { dividendSplit, dividendRevenue } from "../gameEngine/dividendSplit";
+import type { GameStateResponse } from "../gameEngine/gameState";
 import type { MapGridResponse } from "../components/hexContractTypes";
 
 const CO = 3;

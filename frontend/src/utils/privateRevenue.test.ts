@@ -25,8 +25,8 @@
 // Operating Round have the money in it". The distinction is the whole lesson:
 // a pure function nobody calls passes every test you write for it.
 
-import { applyPrivateRevenue, applySandboxAction, beginOperatingRound } from "./sandboxSession";
-import type { GameStateResponse, PrivateCompanyState, PublicCompanyState } from "./gameState";
+import { applyPrivateRevenue, applySandboxAction, beginOperatingRound } from "../gameEngine/sandboxSession";
+import type { GameStateResponse, PrivateCompanyState, PublicCompanyState } from "../gameEngine/gameState";
 
 const ALICE = "juno1alice";
 const BOB = "juno1bob";

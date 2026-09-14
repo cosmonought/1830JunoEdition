@@ -79,13 +79,13 @@ describe("the seeds the alarm compares, #1224", () => {
      state (#1197); the shell put the same chart in a ref and left the state's field absent. Same values,
      different addresses -- so every screen was right, every rule that read the ref was right, and the two
      boards could never hash alike no matter how faithfully either replayed the log. */
-  const S = require("./sandboxState") as typeof import("./sandboxState");
+  const S = require("../gameEngine/sandboxState") as typeof import("../gameEngine/sandboxState");
   const { withEmptyRoster, waterfallForRoster } =
-    require("./gameSetup") as typeof import("./gameSetup");
-  const { stateDigest } = require("./stateDigest") as typeof import("./stateDigest");
-  const { RoomEngine } = require("./replayLog") as typeof import("./replayLog");
+    require("../gameEngine/gameSetup") as typeof import("../gameEngine/gameSetup");
+  const { stateDigest } = require("../gameEngine/stateDigest") as typeof import("../gameEngine/stateDigest");
+  const { RoomEngine } = require("../gameEngine/replayLog") as typeof import("../gameEngine/replayLog");
   const { sandboxReplayProviders } =
-    require("./replayProviders") as typeof import("./replayProviders");
+    require("../gameEngine/replayProviders") as typeof import("../gameEngine/replayProviders");
   const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
 
   const SCENARIO = S.DEFAULT_SANDBOX_SCENARIO;

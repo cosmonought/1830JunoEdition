@@ -32,7 +32,7 @@
 import { readSource, stripComments } from "./sourceScan";
 
 import { PRIVATE_COMPANY_CATALOG, abilitySummary } from "./privateCatalog";
-import { SANDBOX_PRIVATES } from "./sandboxState";
+import { SANDBOX_PRIVATES } from "../gameEngine/sandboxState";
 
 // #490a: the notes below quote the broken declaration while explaining it.
 

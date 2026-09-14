@@ -39,7 +39,7 @@ import { closesPrivateCompanies } from "./depotSchedule";
 import { trimToTrainLimit } from "./trainLimit";
 // actingSeatIndex lives in gameState.ts, not here: it asks about CONTRACT state and the
 // live dashboard needs it too. See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #0
-import type { GameplayExecuteMsg } from "./sessionKey";
+import type { GameplayExecuteMsg } from "../utils/sessionKey";
 // Design note #1100: numerals name tiers, words count trains.
 import { namedTrains as sayTrains } from "./trainPhrasing";
 /* Design note #1189: the lifecycle messages the shell used to own. `gameSetup.ts` imports nothing from this

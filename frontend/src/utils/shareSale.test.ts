@@ -21,8 +21,8 @@
 // this file tests both, because a harness that only covered the new one would not notice if the old one were
 // dropped while moving the rules into one place.
 
-import { certificatesIn, saleProceeds, shareSaleBlock, type ShareSaleInput } from "./shareSale";
-import type { GameStateResponse } from "./gameState";
+import { certificatesIn, saleProceeds, shareSaleBlock, type ShareSaleInput } from "../gameEngine/shareSale";
+import type { GameStateResponse } from "../gameEngine/gameState";
 
 const ME = "me";
 const RIVAL = "rival";

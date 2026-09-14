@@ -29,7 +29,7 @@ import {
   isInsecurePresidency,
   type AutoPassConditions,
 } from "./autoPass";
-import type { GameStateResponse } from "./gameState";
+import type { GameStateResponse } from "../gameEngine/gameState";
 import { readStripped } from "./sourceScan";
 
 const ME = "me";

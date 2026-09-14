@@ -17,7 +17,7 @@
 //
 // See docs/ai_architecture/state_machine.md, roundLabel.ts #659.
 
-import type { GameStateResponse } from "./gameState";
+import type { GameStateResponse } from "../gameEngine/gameState";
 import { OPERATING_SUB_PHASE_LABELS } from "../components/OperatingSubPhaseStepper";
 
 /** The short round tag the activity log and the ticker stamp on an entry:

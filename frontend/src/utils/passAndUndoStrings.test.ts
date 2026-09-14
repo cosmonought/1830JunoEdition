@@ -28,7 +28,7 @@
 // action it has no way to know (design note #479).
 
 import { actingActor, describeGameplayAction, type ActionLogContext } from "./actionLog";
-import type { GameStateResponse, PublicCompanyState } from "./gameState";
+import type { GameStateResponse, PublicCompanyState } from "../gameEngine/gameState";
 import type { MapGridResponse } from "../components/hexContractTypes";
 
 const ALICE = "juno1alice";

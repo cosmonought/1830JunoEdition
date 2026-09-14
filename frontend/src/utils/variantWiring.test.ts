@@ -28,7 +28,7 @@ import {
   STANDARD_VARIANTS,
   VARIANT_COPY,
   type GameVariants,
-} from "./gameVariants";
+} from "../gameEngine/gameVariants";
 
 /** Every boolean flag in the schema, derived from the standard config rather than typed out -- so a sixth
  *  variant is covered by these cases the day it is added rather than the day somebody remembers. */

@@ -22,7 +22,7 @@
 // refusal through `applySandboxAction` and asserts the identity holds -- because the whole mechanism rests on
 // gates returning the SAME OBJECT, and a gate that started returning a fresh copy would break this silently.
 
-import { applySandboxAction } from "./sandboxSession";
+import { applySandboxAction } from "../gameEngine/sandboxSession";
 import {
   actionWasRefused,
   mayLegitimatelyDoNothing,
@@ -31,7 +31,7 @@ import {
   refusalReasonFor,
   NO_OP_MESSAGE_KEYS,
 } from "./refusedAction";
-import type { GameStateResponse } from "./gameState";
+import type { GameStateResponse } from "../gameEngine/gameState";
 
 const CO = 3;
 

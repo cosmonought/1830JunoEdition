@@ -23,7 +23,7 @@ import {
   WITHHOLD_DOUBLE_DROP_MULTIPLE,
   dividendStepsFor,
   STANDARD_VARIANTS,
-} from "./gameVariants";
+} from "../gameEngine/gameVariants";
 import {
   COMPASS_ARMS,
   PRICE_GRID,

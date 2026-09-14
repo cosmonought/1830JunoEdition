@@ -25,9 +25,9 @@
 // through the reducer; the structural half pins the SNAPSHOT, because every behavioural test here passes
 // against the broken build if the predicate happens to be given the right board.
 
-import { applySandboxAction } from "./sandboxSession";
+import { applySandboxAction } from "../gameEngine/sandboxSession";
 import { filterSandboxPlacements } from "../components/sandboxTileLegality";
-import type { GameStateResponse } from "./gameState";
+import type { GameStateResponse } from "../gameEngine/gameState";
 import type { LegalTilePlacement, MapGridResponse } from "../components/hexContractTypes";
 import { STATIC_BOARD_HEXES } from "../components/hexBoardData";
 

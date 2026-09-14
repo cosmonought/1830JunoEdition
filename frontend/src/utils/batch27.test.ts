@@ -26,7 +26,7 @@ import {
   VARIANT_COPY,
   dividendStepsFor,
   STANDARD_VARIANTS,
-} from "./gameVariants";
+} from "../gameEngine/gameVariants";
 import { COMPASS_ARMS, compassArmsFor } from "../components/StockMarketRenderer";
 import { readStripped } from "./sourceScan";
 
@@ -34,7 +34,7 @@ const DYNAMIC = { ...STANDARD_VARIANTS, dynamicStockMarket: true };
 const APP = readStripped("App.tsx");
 const BAR = readStripped("panels/ContextualActionBar.tsx");
 const STYLES = readStripped("styles/appStyles.ts");
-const VARIANTS = readStripped("utils/gameVariants.ts");
+const VARIANTS = readStripped("gameEngine/gameVariants.ts");
 
 describe("the two thresholds are different on purpose (design note #995)", () => {
   it("keeps the pay at three and drops the withhold to two", () => {
@@ -231,7 +231,7 @@ describe("the double move is marked on the line itself (design note #998)", () =
     expect(BAR).not.toContain("dividendRuleFooter");
     expect(STYLES).not.toContain("dividendRuleFooter:");
     expect(STYLES).not.toContain("dividendRuleLine:");
-    expect(readStripped("utils/gameVariants.ts")).not.toContain("dividendStepsExplanation");
+    expect(readStripped("gameEngine/gameVariants.ts")).not.toContain("dividendStepsExplanation");
   });
 
   it("defaults to one cell for the callers that do not care", () => {

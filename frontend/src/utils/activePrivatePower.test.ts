@@ -35,7 +35,7 @@ import type {
   GameStateResponse,
   PrivateCompanyState,
   PublicCompanyState,
-} from "./gameState";
+} from "../gameEngine/gameState";
 
 const MH = 4;
 const DH = 3;

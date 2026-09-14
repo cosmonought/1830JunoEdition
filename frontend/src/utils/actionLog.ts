@@ -12,20 +12,20 @@
 //
 // See docs/ai_architecture/ui_shell_layout.md - actionLog.ts #0, #1
 
-import { actingAddress, type GameStateResponse, type WaterfallStateResponse } from "./gameState";
-import { dividendSplit } from "./dividendSplit";
+import { actingAddress, type GameStateResponse, type WaterfallStateResponse } from "../gameEngine/gameState";
+import { dividendSplit } from "../gameEngine/dividendSplit";
 import type { GameplayExecuteMsg } from "./sessionKey";
 import type { MapGridResponse } from "../components/hexContractTypes";
 import type { TileColorTier } from "../components/hexTileCatalog";
 import { boardHexLabel } from "../components/hexGeometry";
 import type { OperatingSubPhase } from "../components/OperatingSubPhaseStepper";
-import { depotInventory } from "./gamePhase";
-import { hasActedThisTurn } from "./turnAction";
-import { sandboxRouteBreakdown } from "./sandboxSession";
-import { hasHeraldHome, stationTokenPrice } from "./stationTokens";
-import { dieselExchangeCostFor } from "./dieselExchange";
-import { KANAWHA_LICENSE_COST } from "./kanawhaLicense";
-import { numberedPrivate } from "./privateOrdinal";
+import { depotInventory } from "../gameEngine/gamePhase";
+import { hasActedThisTurn } from "../gameEngine/turnAction";
+import { sandboxRouteBreakdown } from "../gameEngine/sandboxSession";
+import { hasHeraldHome, stationTokenPrice } from "../gameEngine/stationTokens";
+import { dieselExchangeCostFor } from "../gameEngine/dieselExchange";
+import { KANAWHA_LICENSE_COST } from "../gameEngine/kanawhaLicense";
+import { numberedPrivate } from "../gameEngine/privateOrdinal";
 
 export interface ActionLogContext {
   /** The board and room as they stand BEFORE this action -- design note #1. */

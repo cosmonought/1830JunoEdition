@@ -22,7 +22,7 @@
    cell with a price (#415 records why that is dangerous), and every one of these values already appears
    on the standard rows. Putting the new row first would have re-homed every fixture token onto it. */
 
-import type { GameVariants } from "../utils/gameVariants";
+import type { GameVariants } from "../gameEngine/gameVariants";
 
 export function cellKey(x: number, y: number): string {
   return `${x},${y}`;

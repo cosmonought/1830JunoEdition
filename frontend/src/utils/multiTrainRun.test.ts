@@ -22,7 +22,7 @@
 // Recording that framing because "fix the accumulator" was the instruction, and an accumulator that is
 // already right must not be "fixed" into something else.
 
-import { applySandboxAction } from "./sandboxSession";
+import { applySandboxAction } from "../gameEngine/sandboxSession";
 import {
   applyRevenuePercent,
   revenueDieFace,
@@ -30,8 +30,8 @@ import {
   roundToTen,
   STANDARD_VARIANTS,
   legacyTurnSeed,
-} from "./gameVariants";
-import type { GameStateResponse } from "./gameState";
+} from "../gameEngine/gameVariants";
+import type { GameStateResponse } from "../gameEngine/gameState";
 
 const BO = 4;
 

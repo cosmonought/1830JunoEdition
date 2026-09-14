@@ -29,19 +29,19 @@ import { ACTION_GREEN, ACTION_GREEN_BORDER, ACTION_GREEN_INK } from "../styles/p
 import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { corporationLabel } from "../utils/corporationNames";
 import { purchaseCeiling } from "../utils/purchaseCeiling";
-import { buyableNow, countableTrainCount, isTrainLocked } from "../utils/trainLimit";
+import { buyableNow, countableTrainCount, isTrainLocked } from "../gameEngine/trainLimit";
 import { STICKY_OPTIONAL } from "../utils/stickyCollapse";
 // Design note #702: moved to its own file, because the train CHIPS draw it now too.
 import { TrainGlyph } from "./TrainGlyph";
 import PresidentCrown from "./PresidentCrown";
-import type { DepotTier, PhaseTint } from "../utils/gamePhase";
+import type { DepotTier, PhaseTint } from "../gameEngine/gamePhase";
 // Design note #632: one tier-to-era lookup, shared with the phase badge.
 // Design note #1007: the shared namer, so this panel and the rust badges spell a tier the same way. It used to
 // render "D" as "Diesel"; that special case is gone (the note records why), and what the seam is for is that
 // there be exactly one answer, not that any particular answer is correct.
-import { tierTint, trainTierName, trainTierNamePlural } from "../utils/gamePhase";
+import { tierTint, trainTierName, trainTierNamePlural } from "../gameEngine/gamePhase";
 import { stationTickerColor } from "./hexContractTypes";
-import { DIESEL_EXCHANGE_COST } from "../utils/dieselExchange";
+import { DIESEL_EXCHANGE_COST } from "../gameEngine/dieselExchange";
 
 /** The subset of a corporation both sections need. */
 export interface TrainPurchaseCompany {

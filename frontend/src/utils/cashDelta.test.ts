@@ -37,7 +37,7 @@ import {
   settleCashDeltas,
   type CashDelta,
 } from "./cashDelta";
-import type { GameStateResponse } from "./gameState";
+import type { GameStateResponse } from "../gameEngine/gameState";
 
 const ADA = "juno1ada";
 const BEN = "juno1ben";

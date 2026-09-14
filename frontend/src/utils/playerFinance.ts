@@ -27,10 +27,10 @@ import {
   sharePriceFor,
   playerPrivateCompanies,
   type GameStateResponse,
-} from "./gameState";
-import { playerLiquidity, SHARE_BLOCK_PERCENT } from "./endgame";
+} from "../gameEngine/gameState";
+import { playerLiquidity, SHARE_BLOCK_PERCENT } from "../gameEngine/endgame";
 import { PRIVATE_COMPANY_CATALOG } from "./privateCatalog";
-import { certLimitForPlayers } from "./gameSetup";
+import { certLimitForPlayers } from "../gameEngine/gameSetup";
 import { corporationDisplayRank } from "./corporationNames";
 
 /** One corporation this player holds a stake in. */

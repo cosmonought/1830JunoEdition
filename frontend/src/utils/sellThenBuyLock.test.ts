@@ -19,9 +19,9 @@
 // purchase every round after the first, which is a worse bug than the one being fixed and would take far
 // longer to notice -- players would assume they were hitting the certificate limit.
 
-import { applySandboxAction } from "./sandboxSession";
-import { sharePurchaseBlock, soldThisRound } from "./sharePurchase";
-import type { GameStateResponse } from "./gameState";
+import { applySandboxAction } from "../gameEngine/sandboxSession";
+import { sharePurchaseBlock, soldThisRound } from "../gameEngine/sharePurchase";
+import type { GameStateResponse } from "../gameEngine/gameState";
 
 const ME = "me";
 const RIVAL = "rival";
@@ -198,7 +198,7 @@ describe("both surfaces ask the same function", () => {
     /* #712's lesson: a rule the panel knows and the reducer does not is a rule with a door beside it. The
        reducer already routed buys through `sharePurchaseBlock`, so adding the rule there closed both at once
        -- which is the payoff for #712 having put the rules in a module rather than in the panel. */
-    expect(read("utils/sandboxSession.ts")).toContain("sharePurchaseBlock({");
+    expect(read("gameEngine/sandboxSession.ts")).toContain("sharePurchaseBlock({");
   });
 
   it("is what disables the button", () => {

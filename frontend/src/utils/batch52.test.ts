@@ -30,7 +30,7 @@ const {
   MONEY_MACHINE_MERGE_AT_MS,
 } = require("../components/DividendMoneyMachine") as typeof import("../components/DividendMoneyMachine");
 const { readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
-import type { GameStateResponse } from "./gameState";
+import type { GameStateResponse } from "../gameEngine/gameState";
 import type { MapGridResponse } from "../components/hexContractTypes";
 
 const APP = readStripped("App.tsx");

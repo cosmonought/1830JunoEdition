@@ -26,7 +26,7 @@ import {
   PAR_BOX_PRICES,
 } from "./StockMarketRenderer";
 import { PAR_VALUE_LADDER } from "./StockRoundPanel";
-import { placeParMark } from "../utils/sandboxState";
+import { placeParMark } from "../gameEngine/sandboxState";
 
 /** The real board's par boxes: a vertical column at x=6, y=5..10. */
 const EXPECTED_PAR_BOXES: ReadonlyArray<[number, number, number]> = [

@@ -37,25 +37,25 @@
 //
 // COMPUTED ONCE, AT THE END. A 600-action log replays in well under a second.
 
-import { RoomEngine, entriesFromExport, type ReplayEntry } from "./replayLog";
-import { sandboxReplayProviders } from "./replayProviders";
+import { RoomEngine, entriesFromExport, type ReplayEntry } from "../gameEngine/replayLog";
+import { sandboxReplayProviders } from "../gameEngine/replayProviders";
 import {
   DEFAULT_SANDBOX_SCENARIO,
   sandboxScenario,
   sandboxScenarioState,
   sandboxWaterfallState,
-} from "./sandboxState";
-import { waterfallForRoster, withEmptyRoster } from "./gameSetup";
-import { effectiveActions } from "./logRevert";
-import { depotCostFor, derivePhase, trainTier } from "./gamePhase";
-import { citySlotCount } from "./stationTokens";
-import { boardFor, withRules } from "./boardSelection";
-import { flavorBucketFor, resolveVariants, revenueFlavourClause, rollTurnRevenue } from "./gameVariants";
+} from "../gameEngine/sandboxState";
+import { waterfallForRoster, withEmptyRoster } from "../gameEngine/gameSetup";
+import { effectiveActions } from "../gameEngine/logRevert";
+import { depotCostFor, derivePhase, trainTier } from "../gameEngine/gamePhase";
+import { citySlotCount } from "../gameEngine/stationTokens";
+import { boardFor, withRules } from "../gameEngine/boardSelection";
+import { flavorBucketFor, resolveVariants, revenueFlavourClause, rollTurnRevenue } from "../gameEngine/gameVariants";
 import { variantCueFor } from "./variantSfx";
 import { tileStock } from "./tileSupply";
-import { describeFleetLosses } from "./sandboxSession";
+import { describeFleetLosses } from "../gameEngine/sandboxSession";
 import { ACCOLADE_SPEC_BY_KEY, selectCeremony, unearned, type Accolade, type AccoladeKey } from "./accolades";
-import type { GameStateResponse, PublicCompanyState } from "./gameState";
+import type { GameStateResponse, PublicCompanyState } from "../gameEngine/gameState";
 import type { SandboxAction } from "./sandboxRoom";
 
 const SHARE_BLOCK = 10;

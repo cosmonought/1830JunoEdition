@@ -21,7 +21,7 @@ import {
   VARIANT_COPY,
   type VariantCopyKey,
   gameTypeOf,
-} from "../utils/gameVariants";
+} from "../gameEngine/gameVariants";
 
 import { FONT_FAMILY, FONT_SIZE, LINE_HEIGHT, RADIUS } from "../styles/typography";
 import {
@@ -32,7 +32,7 @@ import {
   waitingRoomNotice,
   type SandboxRoomDoc,
 } from "../utils/sandboxRoom";
-import { MIN_PLAYERS, certLimitForPlayers, startingCashForPlayers } from "../utils/gameSetup";
+import { MIN_PLAYERS, certLimitForPlayers, startingCashForPlayers } from "../gameEngine/gameSetup";
 // #1415: the ante's figures and the subsidy line, the same ones the host's setup card showed.
 import { ANTE_SUBSIDY_NOTE, VISIBILITY_COPY } from "./HostSetupCard";
 import { anteBreakdown, formatJuno } from "../utils/anteMath";

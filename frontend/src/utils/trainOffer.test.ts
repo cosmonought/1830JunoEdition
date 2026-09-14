@@ -31,7 +31,7 @@ import {
   isProposeTrainPurchaseMsg,
   isSandboxOnlyMsg,
   type SandboxLogMsg,
-} from "./gameSetup";
+} from "../gameEngine/gameSetup";
 import { decodeAction, type SandboxAction } from "./sandboxRoom";
 import fs from "fs";
 import path from "path";

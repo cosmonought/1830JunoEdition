@@ -28,7 +28,7 @@ import type { PlayerFinances } from "../utils/playerFinance";
 // Design note #1035: the same escalation the train chips and the private pills use.
 import { ALERT_CRITICAL_INK, ALERT_WARN_INK } from "../styles/palette";
 import type { PrivateClosureAlert } from "../utils/purchaseWarnings";
-import { numberedPrivate } from "../utils/privateOrdinal";
+import { numberedPrivate } from "../gameEngine/privateOrdinal";
 
 /** The player card's paper; washed per card toward the seat colour by `washedPlayerSurface` (#1347). */
 const CARD_PARCHMENT = "#f4f1e8";

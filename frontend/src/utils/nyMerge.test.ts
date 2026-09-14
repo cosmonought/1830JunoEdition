@@ -5,12 +5,12 @@
 
 import { planTokenUpgrade, tokenLandingsFor } from "./tokenMigration";
 import { fitStationsToUpgrade } from "./stationConnectivity";
-import { applySandboxAction } from "./sandboxSession";
-import { citySlotCount } from "./stationTokens";
-import { cityBlockerFor } from "./cityBlocking";
+import { applySandboxAction } from "../gameEngine/sandboxSession";
+import { citySlotCount } from "../gameEngine/stationTokens";
+import { cityBlockerFor } from "../gameEngine/cityBlocking";
 import { tokenCityIndex, type StationTokenCompany } from "../components/hexContractTypes";
 import type { MapGridResponse } from "../components/hexContractTypes";
-import type { GameStateResponse } from "./gameState";
+import type { GameStateResponse } from "../gameEngine/gameState";
 import { STANDARD_BOARD, activateBoard } from "../components/hexBoardData";
 import { EXPANDED_BOARD } from "../components/hexBoardDataPlus";
 import { STANDARD_TRAY, activateTray } from "../components/tileTray";

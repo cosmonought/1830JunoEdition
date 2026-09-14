@@ -26,8 +26,8 @@
 // what a transition detector cannot do -- and the rebuild case below is the one
 // the old code could not pass however many edges it watched.
 
-import { placeParMark, reconcileParMarks, sandboxMarketPriceTable } from "./sandboxState";
-import type { SandboxMarketPrices } from "./sandboxState";
+import { placeParMark, reconcileParMarks, sandboxMarketPriceTable } from "../gameEngine/sandboxState";
+import type { SandboxMarketPrices } from "../gameEngine/sandboxState";
 
 /** A stand-in for `StockMarketRenderer.parBoxCellFor`: every par resolves to
  *  its own cell, so the tests are about WHICH companies get marked rather than

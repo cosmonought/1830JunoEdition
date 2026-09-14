@@ -29,7 +29,7 @@
 export {};
 
 const { tileErasAt, tileErasUpTo, tierEra, TILE_ERA_ORDER, TIER_ORDER } =
-  require("./gamePhase") as typeof import("./gamePhase");
+  require("../gameEngine/gamePhase") as typeof import("../gameEngine/gamePhase");
 const { STANDARD_TOAST_MS, PHASE_CHANGE_TOAST_MS } =
   require("../components/ActionToast") as typeof import("../components/ActionToast");
 const { ERA_HEX_FILL } = require("../components/EraHex") as typeof import("../components/EraHex");

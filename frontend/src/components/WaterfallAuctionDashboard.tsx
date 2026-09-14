@@ -25,7 +25,7 @@ import {
   minimumBidFor,
   MIN_BID_INCREMENT,
   type PlayerAuctionFunds,
-} from "../utils/auctionEscrow";
+} from "../gameEngine/auctionEscrow";
 import {
   CARD_ACCENT,
   CARD_BORDER,
@@ -51,8 +51,8 @@ import type {
   WaterfallMiniAuctionStatus,
   WaterfallPrivateStatus,
   WaterfallStateResponse,
-} from "../utils/gameState";
-import { privateOrdinal } from "../utils/privateOrdinal";
+} from "../gameEngine/gameState";
+import { privateOrdinal } from "../gameEngine/privateOrdinal";
 
 /* Design note #1184: the increment and the minimum moved to `auctionEscrow`, where the reducer can also
    reach them. This file used to hold both under a comment calling itself a "hand-kept mirror" of the

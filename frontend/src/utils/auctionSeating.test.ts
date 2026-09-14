@@ -28,11 +28,11 @@
 
 export {};
 
-const RL = require("./replayLog") as typeof import("./replayLog");
-const { sandboxReplayProviders } = require("./replayProviders") as typeof import("./replayProviders");
+const RL = require("../gameEngine/replayLog") as typeof import("../gameEngine/replayLog");
+const { sandboxReplayProviders } = require("../gameEngine/replayProviders") as typeof import("../gameEngine/replayProviders");
 const { withEmptyRoster, waterfallForRoster } =
-  require("./gameSetup") as typeof import("./gameSetup");
-const S = require("./sandboxState") as typeof import("./sandboxState");
+  require("../gameEngine/gameSetup") as typeof import("../gameEngine/gameSetup");
+const S = require("../gameEngine/sandboxState") as typeof import("../gameEngine/sandboxState");
 
 const HOST = "p-host0001";
 const GUEST = "p-guest002";
@@ -111,7 +111,7 @@ describe("the shell no longer deals, #1230", () => {
     /* `state.player_addresses`, never `msg.SetupGame.players` -- the reducer shuffles, and the listed order
        is usually the dealt order and is not the same rule. #1340 moved the re-seat into the reducer's own
        lifecycle step, after the deal has settled; the shell no longer re-seats at all. */
-    const REDUCER = readStripped("utils/sandboxSession.ts");
+    const REDUCER = readStripped("gameEngine/sandboxSession.ts");
     const reseat = sliceBetween(REDUCER, "const reseated = waterfallForRoster(waterfall, state.player_addresses", "waterfall_auction_active: false } : reseated;");
     expect(reseat).not.toContain("msg.SetupGame.players");
     expect(APP).not.toContain("waterfallForRoster(\n              sandboxWaterfallRef.current");
@@ -207,8 +207,8 @@ describe("a mini-auction suspends the rotation on BOTH atoms, #1232", () => {
      had not (sandbox). `actingAddress` read the seat. Host passed the gate and died in an auction that was
      waiting for sandbox; sandbox died at the gate. Two cursors, one step apart, nobody able to move.
      THE SEQUENCE IS THE ONE THE PLAYER PLAYED, so this is the lock itself and not a model of it. */
-  const { actingAddress } = require("./gameState") as typeof import("./gameState");
-  const { turnRefusal } = require("./turnAuthority") as typeof import("./turnAuthority");
+  const { actingAddress } = require("../gameEngine/gameState") as typeof import("../gameEngine/gameState");
+  const { turnRefusal } = require("../gameEngine/turnAuthority") as typeof import("../gameEngine/turnAuthority");
   const { describeGameplayAction } = require("./actionLog") as typeof import("./actionLog");
 
   const SANDBOX = "p-lnmvtnp9";
@@ -293,7 +293,7 @@ describe("the Stock Round opens to the left of the last player who acted, #1235"
      Stock Round 1 whoever had just bought the last private. The seat cursor at the moment the auction closes
      already IS the player to the left of the last actor (every ordinary waterfall action advances past its
      actor; #1232 keeps that honest through a contest), so the priority deal is set from it, once. */
-  const { actingAddress } = require("./gameState") as typeof import("./gameState");
+  const { actingAddress } = require("../gameEngine/gameState") as typeof import("../gameEngine/gameState");
   const HOST_ = "p-gdw59s92";
   const SANDBOX = "p-q3um9cne";
   const auctionEndingWith = (finalBuyer: string, otherPlayer: string) => {
@@ -358,7 +358,7 @@ describe("OpenStockRound and SetBoPar are off the shell, #1234 / #1236", () => {
   it("closes the auction atom in the reducer, after the board opens the round (#1340)", () => {
     /* The shell and the engine each used to close the atom by hand; `settleAuctionLifecycle` does it once,
        after `applySandboxActionAfterAuction` has run the `OpenStockRound` arm. The shell only mirrors. */
-    const REDUCER = readStripped("utils/sandboxSession.ts");
+    const REDUCER = readStripped("gameEngine/sandboxSession.ts");
     expect(REDUCER).toContain("if (waterfall && isOpenStockRoundMsg(msg) && waterfall.waterfall_auction_active) {");
     expect(REDUCER).toContain("return settleAuctionLifecycle(applySandboxActionAfterAuction(afterAuction, msg, ctx), msg);");
     expect(APP).not.toContain("setSandboxWaterfall(closed)");

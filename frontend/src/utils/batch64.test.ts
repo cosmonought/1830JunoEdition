@@ -28,16 +28,16 @@ const {
   describeFleetLosses,
   describeReprieveExpiries,
   expiredReprieves,
-} = require("./sandboxSession") as typeof import("./sandboxSession");
+} = require("../gameEngine/sandboxSession") as typeof import("../gameEngine/sandboxSession");
 const { noticeHeadline, noticeBody, fleetLossNotices } =
   require("./fleetLossNotice") as typeof import("./fleetLossNotice");
 const { spellCount, capitalise, namedTrains, countedTrains } =
-  require("./trainPhrasing") as typeof import("./trainPhrasing");
+  require("../gameEngine/trainPhrasing") as typeof import("../gameEngine/trainPhrasing");
 const { readStripped, sliceBetween, anchorIndex } =
   require("./sourceScan") as typeof import("./sourceScan");
-import type { GameStateResponse, PublicCompanyState } from "./gameState";
+import type { GameStateResponse, PublicCompanyState } from "../gameEngine/gameState";
 
-const SESSION = readStripped("utils/sandboxSession.ts");
+const SESSION = readStripped("gameEngine/sandboxSession.ts");
 const NOTICE = readStripped("utils/fleetLossNotice.ts");
 const PANEL = readStripped("components/TrainPurchasePanel.tsx");
 const APP = readStripped("App.tsx");
@@ -219,7 +219,7 @@ describe("train quantities are spelled out", () => {
        this ruling, which had to reach both at once or the Activity Log and the modal would describe one loss
        two ways. */
     expect(NOTICE).not.toContain("function namedTrains");
-    expect(NOTICE).toContain('from "./trainPhrasing"');
+    expect(NOTICE).toContain('from "../gameEngine/trainPhrasing"');
     expect(SESSION).toContain('from "./trainPhrasing"');
   });
 });
@@ -380,7 +380,7 @@ describe("a replayed tile lay is judged against the reducer's phase", () => {
        replayed upgrade survives the rebuild. Found by search rather than chosen: any pair with this property
        proves it, and asserting a real one keeps the case honest if the catalog changes. */
     const { filterSandboxPlacements } = require("../components/sandboxTileLegality") as typeof import("../components/sandboxTileLegality");
-    const { MOCK_MAP_GRID } = require("./mockFixtures") as typeof import("./mockFixtures");
+    const { MOCK_MAP_GRID } = require("../gameEngine/mockFixtures") as typeof import("../gameEngine/mockFixtures");
     /* ORIENTATION MATTERS AND MY FIRST DRAFT GUESSED IT. I found this pair by search -- yellow #7 at rot 3
        upgrading to green #29 at rot 3 -- and then wrote the case with orientation 0 for both, which is legal
        for neither era, so it asserted `true` about a placement that is simply invalid. The suite caught it.

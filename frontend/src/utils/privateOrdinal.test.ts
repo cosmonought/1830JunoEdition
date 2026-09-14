@@ -2,8 +2,8 @@
 //
 // Design note #1370 (harness): a private's number is its auction position, not its catalog id.
 
-import { clearPrivateOrder, numberedPrivate, privateOrdinal, setPrivateOrder } from "./privateOrdinal";
-import { withLevelPlayingFieldPrivates, JK_PRIVATE_ID } from "./levelPlayingField";
+import { clearPrivateOrder, numberedPrivate, privateOrdinal, setPrivateOrder } from "../gameEngine/privateOrdinal";
+import { withLevelPlayingFieldPrivates, JK_PRIVATE_ID } from "../gameEngine/levelPlayingField";
 import { readStripped } from "./sourceScan";
 
 const printed = [
@@ -48,7 +48,7 @@ describe("every surface that names a private goes through it", () => {
     ["components/WaterfallAuctionDashboard.tsx", "privateOrdinal(priv.private_id)"],
     ["components/PrivateRevenueModal.tsx", "privateOrdinal(line.privateId)"],
     ["utils/actionLog.ts", "numberedPrivate(entry.private_id, entry.name)"],
-    ["utils/sandboxSession.ts", "numberedPrivate(payout.privateId, payout.privateName)"],
+    ["gameEngine/sandboxSession.ts", "numberedPrivate(payout.privateId, payout.privateName)"],
     ["App.tsx", "numberedPrivate(entry.privateId, entry.name)"],
   ])("%s", (file, call) => {
     const code = readStripped(file);

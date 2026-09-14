@@ -21,10 +21,10 @@
 // but it lasts the whole round on purpose, so reusing it would mean a player who sold once could never pass
 // again and the round could never end. Two facts, two lifetimes, two fields.
 
-import { applySandboxAction } from "./sandboxSession";
-import { hasActedThisTurn, passButtonLabel, passButtonTitle } from "./turnAction";
+import { applySandboxAction } from "../gameEngine/sandboxSession";
+import { hasActedThisTurn, passButtonLabel, passButtonTitle } from "../gameEngine/turnAction";
 import { passedSeatIndices } from "./passedSeats";
-import type { GameStateResponse } from "./gameState";
+import type { GameStateResponse } from "../gameEngine/gameState";
 
 const SEATS = ["p0", "p1", "p2", "p3"];
 const PRR = 1;

@@ -27,9 +27,9 @@ import {
   saleChoiceExists,
   trainPurchaseRefusal,
 } from "./trainObligation";
-import { resolveEmergencyFunding } from "./endgame";
+import { resolveEmergencyFunding } from "../gameEngine/endgame";
 import { describeTreasuryMoves, treasuryMoveLine } from "./treasuryProvenance";
-import type { GameStateResponse } from "./gameState";
+import type { GameStateResponse } from "../gameEngine/gameState";
 
 const obliged = {
   atHardwareStep: true,

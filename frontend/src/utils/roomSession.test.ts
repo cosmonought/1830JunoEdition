@@ -15,15 +15,15 @@ export {};
 
 const { RoomSession } = require("./roomSession") as typeof import("./roomSession");
 const { sandboxReplayProviders } =
-  require("./replayProviders") as typeof import("./replayProviders");
+  require("../gameEngine/replayProviders") as typeof import("../gameEngine/replayProviders");
 const {
   DEFAULT_SANDBOX_SCENARIO,
   sandboxScenario,
   sandboxScenarioState,
   sandboxWaterfallState,
-} = require("./sandboxState") as typeof import("./sandboxState");
+} = require("../gameEngine/sandboxState") as typeof import("../gameEngine/sandboxState");
 const { waterfallForRoster, withEmptyRoster } =
-  require("./gameSetup") as typeof import("./gameSetup");
+  require("../gameEngine/gameSetup") as typeof import("../gameEngine/gameSetup");
 
 type ServerLogEntry = import("./roomSession").ServerLogEntry;
 

@@ -4,7 +4,7 @@
 // 2x revenue as a result. However, if a route runs through one city (however many stations it has) and then
 // another city on the same hex, it does collect the revenue twice."
 
-import { sandboxRouteBreakdown } from "./sandboxSession";
+import { sandboxRouteBreakdown } from "../gameEngine/sandboxSession";
 import { STANDARD_BOARD, activateBoard } from "../components/hexBoardData";
 import { EXPANDED_BOARD } from "../components/hexBoardDataPlus";
 import { STANDARD_TRAY, activateTray } from "../components/tileTray";

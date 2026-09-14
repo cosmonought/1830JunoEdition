@@ -43,7 +43,7 @@ import { actingAddress } from "./gameState";
 /* #1220: the SAME predicate the shell dispatches by (#546), not a second list. A copy here would drift the
    moment an eleventh message joined the family, and drift in this direction locks players out of moves. */
 import { isSandboxOnlyMsg } from "./gameSetup";
-import type { GameplayExecuteMsg } from "./sessionKey";
+import type { GameplayExecuteMsg } from "../utils/sessionKey";
 import { BO_PRIVATE_ID, BO_TICKER } from "./gameConstants";
 import { DH_PRIVATE_ID } from "./dhPower";
 import { effectiveActions, type RevertableAction } from "./logRevert";

@@ -6,25 +6,25 @@
 
 import { STANDARD_BOARD, activateBoard, heraldAt, heraldHexFor } from "../components/hexBoardData";
 import { EXPANDED_BOARD } from "../components/hexBoardDataPlus";
-import { initialGridFor } from "./initialGrid";
-import { stationTokensOf } from "./trackReach";
+import { initialGridFor } from "../gameEngine/initialGrid";
+import { stationTokensOf } from "../gameEngine/trackReach";
 import {
   hasHeraldHome,
   nextStationTokenCost,
   placeableStationHexes,
   stationTokenPrice,
   stationTokenSlots,
-} from "./stationTokens";
+} from "../gameEngine/stationTokens";
 import { readStripped } from "./sourceScan";
 import {
   isRevenueCentreHex,
   isRouteTerminusHex,
   pendingHomeTokens,
   sandboxRouteBreakdown,
-} from "./sandboxSession";
-import { autoTraceRoute } from "./routeAutoTrace";
-import { citySlotCount } from "./stationTokens";
-import type { GameStateResponse } from "./gameState";
+} from "../gameEngine/sandboxSession";
+import { autoTraceRoute } from "../gameEngine/routeAutoTrace";
+import { citySlotCount } from "../gameEngine/stationTokens";
+import type { GameStateResponse } from "../gameEngine/gameState";
 
 const PRR = 1;
 const NYC = 2;
@@ -137,7 +137,7 @@ describe("the herald on the expanded board", () => {
   it("counts as a station for the can-it-run question, so PRR's Routes step is not skipped", () => {
     /* JUNO-CV4 87-89: PRR held a 2-train and no token, and the derived actions skipped Routes and forced a
        withhold. The verdict counted `station_token_hexes` (0); it now counts `stationTokensOf` (the herald). */
-    expect(readStripped("utils/derivedActions.ts")).toContain(
+    expect(readStripped("gameEngine/derivedActions.ts")).toContain(
       "company.station_token_hexes == null ? undefined : stationTokensOf(company).length",
     );
     expect(readStripped("App.tsx")).toContain(

@@ -72,7 +72,7 @@ import { derivePhase } from "./gamePhase";
 import { tileEraFor } from "./gameConstants";
 import type { TileColorTier } from "../components/hexTileCatalog";
 import type { GameStateResponse, WaterfallStateResponse } from "./gameState";
-import type { GameplayExecuteMsg } from "./sessionKey";
+import type { GameplayExecuteMsg } from "../utils/sessionKey";
 import type { MapGridResponse } from "../components/hexContractTypes";
 
 /** One entry as the log stores it. Structurally `SandboxAction`, restated so this module does not depend on

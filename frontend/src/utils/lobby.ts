@@ -24,7 +24,7 @@
 // `Lobby.tsx` is unchanged.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { type GameVariants } from "./gameVariants";
+import { type GameVariants } from "../gameEngine/gameVariants";
 import { backendConfigError } from "../config/backend";
 import {
   LOBBY_ROOM_KEY,

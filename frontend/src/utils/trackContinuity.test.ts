@@ -28,7 +28,7 @@
 import { HEX_NEIGHBOR_OFFSETS, evaluateHexForTileLaying } from "../components/hexGeometry";
 import { STATIC_BOARD_HEXES } from "../components/hexBoardData";
 import type { MapGridResponse, MapTileEntry } from "../components/hexContractTypes";
-import { hexKey, layableHexes, portKey, reachableTrack } from "./trackReach";
+import { hexKey, layableHexes, portKey, reachableTrack } from "../gameEngine/trackReach";
 
 const BOARD = new Set(STATIC_BOARD_HEXES.map((hex) => hexKey(hex.q, hex.r)));
 

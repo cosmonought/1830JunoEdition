@@ -23,11 +23,11 @@
 // rest of the game -- which is exactly why 1830 prints a bow around it. A bypass that does not work is not a
 // missing flourish; it is a wall across the map that the rules say is not there.
 
-import { autoTraceRoute } from "./routeAutoTrace";
+import { autoTraceRoute } from "../gameEngine/routeAutoTrace";
 import { routeBlockedCityReason } from "./routeWaypoints";
-import { hexOffersBypass, withForcedBypass } from "./cityBypass";
-import { reachableNetwork } from "./trackReach";
-import { sandboxRouteBreakdown } from "./sandboxSession";
+import { hexOffersBypass, withForcedBypass } from "../gameEngine/cityBypass";
+import { reachableNetwork } from "../gameEngine/trackReach";
+import { sandboxRouteBreakdown } from "../gameEngine/sandboxSession";
 import { STATIC_BOARD_HEXES } from "../components/hexBoardData";
 import { printedArtwork, printedMarkersFor } from "../components/TileGraphics";
 import { STATION_HOME_HEXES } from "../components/hexContractTypes";

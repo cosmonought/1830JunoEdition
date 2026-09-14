@@ -50,9 +50,9 @@
 // PURE, and separate from the bar that renders it: a component deriving its own warnings is a component that
 // can be wrong on its own.
 
-import { phaseAlertLevel, TIER_ORDER, type DepotTier, type GamePhase } from "./gamePhase";
+import { phaseAlertLevel, TIER_ORDER, type DepotTier, type GamePhase } from "../gameEngine/gamePhase";
 // Design note #1035: the same table `applyPhaseChange` asks before it closes them (#736).
-import { closesPrivateCompanies } from "./depotSchedule";
+import { closesPrivateCompanies } from "../gameEngine/depotSchedule";
 
 export interface PurchaseWarning {
   /** Stable identity, for keys and for tests that must name one.

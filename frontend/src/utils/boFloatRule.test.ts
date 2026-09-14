@@ -23,8 +23,8 @@ import {
   applyFloatThreshold,
   grantBOPresidency,
   FLOAT_THRESHOLD_PERCENT,
-} from "./sandboxSession";
-import type { GameStateResponse, PublicCompanyState } from "./gameState";
+} from "../gameEngine/sandboxSession";
+import type { GameStateResponse, PublicCompanyState } from "../gameEngine/gameState";
 
 const DAVE = "juno1dave";
 const ALICE = "juno1alice";

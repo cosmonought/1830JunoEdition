@@ -40,7 +40,7 @@
 // PURE. This module picks a filename; it never touches an `Audio` element. That is what lets the whole table
 // be tested without a media stack, which jsdom does not have (#1009).
 
-import type { FlavorBucket } from "./gameVariants";
+import type { FlavorBucket } from "../gameEngine/gameVariants";
 
 /** Where the clips live. The videos sit beside them rather than in a folder of their own. */
 export const SFX_DIR = "/audio";

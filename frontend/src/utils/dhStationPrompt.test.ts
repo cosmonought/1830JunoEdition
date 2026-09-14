@@ -31,7 +31,7 @@ import {
   dhStationPromptNext,
   DH_STATION_PROMPT_FORFEIT,
   type DhStationPrompt,
-} from "./dhPower";
+} from "../gameEngine/dhPower";
 
 /** Walk the machine through a sequence, for the paths the report describes. */
 const walk = (...events: Parameters<typeof dhStationPromptNext>[1][]): DhStationPrompt =>

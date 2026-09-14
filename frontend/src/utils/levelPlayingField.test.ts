@@ -27,7 +27,7 @@ import {
 } from "../components/hexGeometry";
 import { printedArtwork, printedTraversalVariants } from "../components/TileGraphics";
 import type { MapGridResponse } from "../components/hexContractTypes";
-import { STANDARD_VARIANTS, hasAnyVariant, resolveVariants } from "./gameVariants";
+import { STANDARD_VARIANTS, hasAnyVariant, resolveVariants } from "../gameEngine/gameVariants";
 import {
   LPF_CERT_LIMIT_BY_PLAYER_COUNT,
   LPF_MAX_PLAYERS,
@@ -39,13 +39,13 @@ import {
   startingCashForPlayers,
   waterfallForRoster,
   type SetupPlayer,
-} from "./gameSetup";
-import { boardFor, trayFor, withRules } from "./boardSelection";
-import { isOffboardTerminal, traversalsFrom } from "./trackSegments";
-import { isRevenueCentreHex, isRouteTerminusHex, applySandboxAction } from "./sandboxSession";
-import { sandboxGameState, sandboxWaterfallState } from "./sandboxState";
-import { stationTokenPrice, stationTokenSlots } from "./stationTokens";
-import { JK_PRIVATE_ID, withLevelPlayingFieldPrivates } from "./levelPlayingField";
+} from "../gameEngine/gameSetup";
+import { boardFor, trayFor, withRules } from "../gameEngine/boardSelection";
+import { isOffboardTerminal, traversalsFrom } from "../gameEngine/trackSegments";
+import { isRevenueCentreHex, isRouteTerminusHex, applySandboxAction } from "../gameEngine/sandboxSession";
+import { sandboxGameState, sandboxWaterfallState } from "../gameEngine/sandboxState";
+import { stationTokenPrice, stationTokenSlots } from "../gameEngine/stationTokens";
+import { JK_PRIVATE_ID, withLevelPlayingFieldPrivates } from "../gameEngine/levelPlayingField";
 import { PRIVATE_COMPANY_CATALOG } from "./privateCatalog";
 import { corporationLiveryColor, CORPORATION_LIVERY_COLORS } from "../styles/corporationLivery";
 import { corporationFullName, corporationDisplayRank } from "./corporationNames";

@@ -21,10 +21,10 @@
 // AND TWO OF THEM ARE ABOUT THE EXITS. A gate is easy; a gate somebody can get stuck behind is a worse bug
 // than the one it fixes, so the placement and Undo have their own cases.
 
-import { applySandboxAction, pendingHomeTokens } from "./sandboxSession";
-import { homeTokenBlock, homeTokenOwed } from "./homeTokenGate";
+import { applySandboxAction, pendingHomeTokens } from "../gameEngine/sandboxSession";
+import { homeTokenBlock, homeTokenOwed } from "../gameEngine/homeTokenGate";
 import { STATIC_BOARD_HEXES } from "../components/hexBoardData";
-import type { GameStateResponse } from "./gameState";
+import type { GameStateResponse } from "../gameEngine/gameState";
 
 const PRR = 1;
 const BO = 2;
@@ -221,7 +221,7 @@ describe("both surfaces ask one function", () => {
   };
 
   it("is enforced by the reducer", () => {
-    expect(read("utils/sandboxSession.ts")).toContain("homeTokenBlock({ state, homeHexToAxial: ctx.homeHexToAxial, msg })");
+    expect(read("gameEngine/sandboxSession.ts")).toContain("homeTokenBlock({ state, homeHexToAxial: ctx.homeHexToAxial, msg })");
   });
 
   it("is what the Pass button says", () => {

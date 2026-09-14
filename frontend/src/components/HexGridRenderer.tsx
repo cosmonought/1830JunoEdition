@@ -78,15 +78,15 @@ import {
 // resolves the path the same way every other logo surface does.
 import { logoSrcFor } from "./CorporateLogo";
 
-import { reservationsByHex } from "../utils/privateReservations";
+import { reservationsByHex } from "../gameEngine/privateReservations";
 // Design note #888: the camera pose that puts a set of hexes on screen, as a function that can be called.
 // Design note #1014: one locked value now, not a function of a mode that no longer exists.
 import { MAP_TOUCH_ACTION, isTapGesture } from "../utils/mapGesture";
 // Design note #723: the one place that decides whether ground is still unpaid.
-import { terrainFeeDue } from "../utils/terrainFee";
+import { terrainFeeDue } from "../gameEngine/terrainFee";
 // Design note #727: the palette a private power's hex is marked with.
 import { PRIVATE_POWER_GLOW_STOPS } from "../utils/privatePowerGlow";
-import type { PrivateCompanyState } from "../utils/gameState";
+import type { PrivateCompanyState } from "../gameEngine/gameState";
 /* Design note #1117: the one viewport ground, shared rather than retyped. */
 import { INK_VIEWPORT } from "../styles/palette";
 /* Design note #1281: whether this table's tray has a Gray tier, for the off-board tooltip's rows. */
@@ -98,7 +98,7 @@ import {
   soleCityIndex,
   stationSlotAnchor,
   tokenCityBucket,
-} from "../utils/stationTokens";
+} from "../gameEngine/stationTokens";
 import {
   archetypeForHex,
   axialToPixel,

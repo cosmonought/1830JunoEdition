@@ -19,9 +19,9 @@
 // from the reducer, which is the point of having moved the rounds into it
 // (design note #642).
 
-import { applySandboxAction } from "./sandboxSession";
+import { applySandboxAction } from "../gameEngine/sandboxSession";
 import { roundLabelFor } from "./roundLabel";
-import type { GameStateResponse, PublicCompanyState } from "./gameState";
+import type { GameStateResponse, PublicCompanyState } from "../gameEngine/gameState";
 
 const ALICE = "juno1alice";
 const BOB = "juno1bob";

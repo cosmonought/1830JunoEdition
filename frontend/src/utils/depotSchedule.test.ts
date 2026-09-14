@@ -25,7 +25,7 @@ import {
   PERMANENT_TRAIN,
   rustLabel,
   type DepotTierSchedule,
-} from "./depotSchedule";
+} from "../gameEngine/depotSchedule";
 
 const TIERS = ["2", "3", "4", "5", "6", "D"] as const;
 

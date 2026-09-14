@@ -36,7 +36,7 @@
 
 import { HEX_NEIGHBOR_OFFSETS, liveEdgesForHex } from "../components/hexGeometry";
 import type { MapGridResponse } from "../components/hexContractTypes";
-import { neighbourAcross, traversalsFrom, type SegmentKey } from "./trackSegments";
+import { neighbourAcross, traversalsFrom, type SegmentKey } from "../gameEngine/trackSegments";
 
 /** The minimum a drafted point carries for this module. */
 export interface ConnectablePoint {

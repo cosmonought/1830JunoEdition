@@ -99,7 +99,7 @@ import {
 import { bestContrastTextColor } from "../styles/corporationLivery";
 /* Design note #1290: the chrome scale, so a viewport unit inside it can be divided back out. */
 import { useUiScale } from "../utils/useUiScale";
-import { privateOrdinal } from "../utils/privateOrdinal";
+import { privateOrdinal } from "../gameEngine/privateOrdinal";
 
 /** One of the viewer's privates, already formatted. The display shape #984 established, plus #1052's number. */
 export interface PrivateRevenueLine {

@@ -26,11 +26,16 @@
 // supplies is the shape of the board -- the price ladder, the hex table, the tile legality engine -- which is
 // static, identical in every browser, and no more dangerous to hand in than `hexTileCatalog`.
 //
-// THE ONE THING TO WATCH. `StockMarketRenderer.tsx` is a `.tsx` that imports React, and this file imports the
-// ladder's geometry out of it. That is harmless in a bundler and merely untidy in Node, but it means the
-// server drags React in for a set of pure lookup functions. Splitting the geometry into its own `.ts` is the
-// obvious cleanup and is deliberately NOT done here -- it touches the renderer, which is shell code, and
-// Phase 2 has no business editing the shell while it is standing up its replacement.
+// THE ONE THING TO WATCH -- SETTLED IN #1501. This note read: "`StockMarketRenderer.tsx` is a `.tsx` that
+// imports React, and this file imports the ladder's geometry out of it. That is harmless in a bundler and
+// merely untidy in Node, but it means the server drags React in for a set of pure lookup functions.
+// Splitting the geometry into its own `.ts` is the obvious cleanup and is deliberately NOT done here -- it
+// touches the renderer, which is shell code, and Phase 2 has no business editing the shell while it is
+// standing up its replacement."
+//
+// THE REPLACEMENT IS STANDING, so the reason expired. The geometry moved to `marketGeometry.ts` beside this
+// file, unchanged and re-exported by the renderer -- no importer moved, and the engine imports no React.
+// The old text is kept rather than deleted because it is the record of why the split waited.
 
 import type { ReplayProviders } from "./replayLog";
 import {
@@ -48,7 +53,7 @@ import {
   projectDividendCellMove,
   projectRiseMove,
   projectShareSaleMove,
-} from "../components/StockMarketRenderer";
+} from "./marketGeometry";
 import { filterSandboxPlacements } from "../components/sandboxTileLegality";
 import { STATIC_BOARD_HEXES } from "../components/hexBoardData";
 

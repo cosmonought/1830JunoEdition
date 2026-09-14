@@ -31,17 +31,17 @@ const {
   revenueDieFace,
   revenueFlavourClause,
   rollTurnRevenue,
-} = require("./gameVariants") as typeof import("./gameVariants");
+} = require("../gameEngine/gameVariants") as typeof import("../gameEngine/gameVariants");
 const { seedAlreadyRolled, turnSeedKey } =
   require("./turnSeed") as typeof import("./turnSeed");
 const { YELLOW_SIGN_MALUS_LINE, CARCOSA_CHANCE_IN_100, CARCOSA_SLICE } =
-  require("./yellowSign") as typeof import("./yellowSign");
+  require("../gameEngine/yellowSign") as typeof import("../gameEngine/yellowSign");
 const { UNPREDICTABLE_REVENUE_FLAVOR } =
   require("../constants/flavorText") as typeof import("../constants/flavorText");
 const { readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
 
 const APP = readStripped("App.tsx");
-const REDUCER = readStripped("utils/sandboxSession.ts");
+const REDUCER = readStripped("gameEngine/sandboxSession.ts");
 const SEEDS = readStripped("utils/turnSeed.ts");
 
 /* A DETERMINISTIC SWEEP OF THE 32-BIT RANGE, not `Math.random`. Everything below is a claim about a

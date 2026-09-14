@@ -14,11 +14,11 @@
 
 export {};
 
-const { turnRefusal } = require("./turnAuthority") as typeof import("./turnAuthority");
-const { sandboxScenarioState } = require("./sandboxState") as typeof import("./sandboxState");
+const { turnRefusal } = require("../gameEngine/turnAuthority") as typeof import("../gameEngine/turnAuthority");
+const { sandboxScenarioState } = require("../gameEngine/sandboxState") as typeof import("../gameEngine/sandboxState");
 
-type State = import("./gameState").GameStateResponse;
-type Waterfall = import("./gameState").WaterfallStateResponse;
+type State = import("../gameEngine/gameState").GameStateResponse;
+type Waterfall = import("../gameEngine/gameState").WaterfallStateResponse;
 
 const ALICE = "p-alice";
 const BOB = "p-bob";
@@ -246,7 +246,7 @@ describe("the shell-owned messages, #1220", () => {
       "AnswerTrainPurchase",
     ];
     const source = require("fs").readFileSync(
-      require("path").join(__dirname, "gameSetup.ts"),
+      require("path").join(__dirname, "..", "gameEngine", "gameSetup.ts"),
       "utf8",
     ) as string;
     const predicate = source.slice(source.indexOf("export function isSandboxOnlyMsg"));

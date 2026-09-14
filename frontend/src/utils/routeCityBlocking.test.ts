@@ -25,9 +25,9 @@
 // drawing one by hand reaches the same dispatch. #712's lesson, applied before the report rather than after:
 // a rule enforced on one of two paths is a rule with a door beside it.
 
-import { autoTraceRoute, assignRouteSet } from "./routeAutoTrace";
+import { autoTraceRoute, assignRouteSet } from "../gameEngine/routeAutoTrace";
 import { routeBlockedCityReason } from "./routeWaypoints";
-import { cityForArrival } from "./trackReach";
+import { cityForArrival } from "../gameEngine/trackReach";
 import type { MapGridResponse } from "../components/hexContractTypes";
 
 /** Three plain yellow tiles in a row. 57 joins two opposite edges, so this is a corridor. */
@@ -156,7 +156,7 @@ describe("both tracers ask one question about which city an arrival lands in", (
     expect(typeof cityForArrival).toBe("function");
     const fs = require("fs") as typeof import("fs");
     const path2 = require("path") as typeof import("path");
-    const tracer = fs.readFileSync(path2.join(__dirname, "routeAutoTrace.ts"), "utf8");
+    const tracer = fs.readFileSync(path2.join(__dirname, "..", "gameEngine", "routeAutoTrace.ts"), "utf8");
     expect(tracer).toContain('from "./trackReach"');
     expect(tracer).toContain("cityForArrival(mapGrid, at.q, at.r, arrivalEdge)");
   });

@@ -26,10 +26,10 @@
 // WRONG ON THREE COUNTS -- 20% not 10%, twice par not par, and it omitted the par-setting entirely, which is
 // the most consequential decision in a Stock Round and the one figure a reader cannot reconstruct later.
 
-import { applySandboxAction, placeHomeStationToken } from "./sandboxSession";
+import { applySandboxAction, placeHomeStationToken } from "../gameEngine/sandboxSession";
 import { describeGameplayAction } from "./actionLog";
 import { STATIC_BOARD_HEXES } from "../components/hexBoardData";
-import type { GameStateResponse } from "./gameState";
+import type { GameStateResponse } from "../gameEngine/gameState";
 import type { MapGridResponse } from "../components/hexContractTypes";
 
 const PRR = 1;

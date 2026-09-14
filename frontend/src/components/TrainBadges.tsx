@@ -3,7 +3,7 @@
 //
 // Design note #0: SHARED because the rust rule must not fork. A second copy that
 // drifted by one phase would show green chips on trains that rust on the very
-// next purchase. The rule reads `GamePhase` (`utils/gamePhase.ts`) once.
+// next purchase. The rule reads `GamePhase` (`gameEngine/gamePhase.ts`) once.
 //
 // Design note #1: `surface` selects a palette and is REQUIRED, not defaulted --
 // the dark chip's fill on a linen card reads as a hole punched in the paper, and
@@ -40,9 +40,9 @@ import {
   type GamePhase,
   type TierRustOutlook,
   type TrainTier,
-} from "../utils/gamePhase";
+} from "../gameEngine/gamePhase";
 // Design note #1034: the one place that says a reprieved train occupies no limit slot.
-import { countableTrainCount } from "../utils/trainLimit";
+import { countableTrainCount } from "../gameEngine/trainLimit";
 
 export type BadgeSurface = "dark" | "light";
 

@@ -27,7 +27,7 @@
 // is written and unverifiable a month later.
 
 import { STATION_HOME_HEXES } from "../components/hexContractTypes";
-import { SANDBOX_CORPORATIONS } from "./sandboxState";
+import { SANDBOX_CORPORATIONS } from "../gameEngine/sandboxState";
 
 describe("the sandbox fixture agrees with the board's preprinted home hexes", () => {
   it("gives every corporation the hex its reservation marker is printed on", () => {

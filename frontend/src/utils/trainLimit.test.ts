@@ -25,7 +25,7 @@
 // The reported case is `it("lets a corporation buy the train that starts the next phase")` below -- NNH at 3
 // with a current limit of 4 and a 4-train in the depot.
 
-import { buyableNow, isTrainLocked, type TrainLimitInput } from "./trainLimit";
+import { buyableNow, isTrainLocked, type TrainLimitInput } from "../gameEngine/trainLimit";
 
 function situation(over: Partial<TrainLimitInput> = {}): TrainLimitInput {
   // Phase 3: limit 4, and the depot's cheapest tier is another 3-train, so nothing advances.

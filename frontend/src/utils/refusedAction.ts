@@ -35,16 +35,16 @@
 // states, never what a message was asked to do.
 
 import type { GameplayExecuteMsg } from "./sessionKey";
-import type { GameStateResponse } from "./gameState";
-import { sharePurchaseBlock, type PriceZone } from "./sharePurchase";
-import { shareSaleBlock } from "./shareSale";
-import { dividendRefusal } from "./dividendGate";
+import type { GameStateResponse } from "../gameEngine/gameState";
+import { sharePurchaseBlock, type PriceZone } from "../gameEngine/sharePurchase";
+import { shareSaleBlock } from "../gameEngine/shareSale";
+import { dividendRefusal } from "../gameEngine/dividendGate";
 // Design note #1019: the purchase gate, asked here on the same state the reducer asked it on.
-import { trainPurchaseRefusal } from "./trainPurchaseGate";
-import { depotInventory } from "./gamePhase";
-import { boPresidencyRefusal, returnedTrainRefusal } from "./sandboxSession";
-import { BO_TICKER } from "./gameConstants";
-import { dieselExchangeRefusal } from "./dieselExchange";
+import { trainPurchaseRefusal } from "../gameEngine/trainPurchaseGate";
+import { depotInventory } from "../gameEngine/gamePhase";
+import { boPresidencyRefusal, returnedTrainRefusal } from "../gameEngine/sandboxSession";
+import { BO_TICKER } from "../gameEngine/gameConstants";
+import { dieselExchangeRefusal } from "../gameEngine/dieselExchange";
 
 /** Messages that legitimately leave sandbox state untouched, so an unchanged board is not a refusal.
  *  Kept as an explicit list for the reason in the note: an exemption should be a decision. */

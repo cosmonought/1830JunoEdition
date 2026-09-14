@@ -46,7 +46,7 @@ describe("one press, one train, #1255", () => {
   });
 
   it("the sizing function is gone from trainLimit", () => {
-    const limit = readStripped("utils/trainLimit.ts");
+    const limit = readStripped("gameEngine/trainLimit.ts");
     expect(limit).not.toContain("export function quantityOptionCount");
     expect(limit).toContain("export function buyableNow");
   });

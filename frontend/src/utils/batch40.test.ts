@@ -18,7 +18,7 @@
 export {};
 
 const { applySandboxAction, sandboxRouteBreakdown } =
-  require("./sandboxSession") as typeof import("./sandboxSession");
+  require("../gameEngine/sandboxSession") as typeof import("../gameEngine/sandboxSession");
 const { watcherTrainDrafts } =
   require("./watcherRouteChips") as typeof import("./watcherRouteChips");
 const { describeGameplayAction } =

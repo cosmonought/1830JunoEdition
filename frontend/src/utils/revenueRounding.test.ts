@@ -24,10 +24,10 @@ import {
   STANDARD_VARIANTS,
   turnRevenueSentence,
   legacyTurnSeed,
-} from "./gameVariants";
-import { dividendSplit } from "./dividendSplit";
+} from "../gameEngine/gameVariants";
+import { dividendSplit } from "../gameEngine/dividendSplit";
 import { describeGameplayAction } from "./actionLog";
-import type { GameStateResponse } from "./gameState";
+import type { GameStateResponse } from "../gameEngine/gameState";
 
 describe("rounding to the nearest ten (design note #938)", () => {
   it("matches the ruled examples exactly", () => {

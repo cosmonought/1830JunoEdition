@@ -26,7 +26,7 @@
 // makes a player skip a move they could afford.
 
 import type { MapGridResponse, MapTileEntry } from "../components/hexContractTypes";
-import { terrainFeeDue, withTerrainPaid } from "./terrainFee";
+import { terrainFeeDue, withTerrainPaid } from "../gameEngine/terrainFee";
 import { terrainBuildFeeAt, MOUNTAIN_BUILD_FEE, RIVER_BUILD_FEE, STATIC_BOARD_HEXES } from "../components/hexBoardData";
 import { describePendingSpend } from "./pendingSpend";
 import {

@@ -25,10 +25,10 @@ export {};
 const { describeGameplayAction, sentenceStatesTreasury } =
   require("./actionLog") as typeof import("./actionLog");
 const { describePrivateClosures, describePrivatePayout } =
-  require("./sandboxSession") as typeof import("./sandboxSession");
+  require("../gameEngine/sandboxSession") as typeof import("../gameEngine/sandboxSession");
 const { readStripped, readSource, sliceBetween } =
   require("./sourceScan") as typeof import("./sourceScan");
-import type { GameStateResponse } from "./gameState";
+import type { GameStateResponse } from "../gameEngine/gameState";
 import type { MapGridResponse } from "../components/hexContractTypes";
 
 const APP = readStripped("App.tsx");

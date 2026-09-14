@@ -19,15 +19,15 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "fs";
 import { join } from "path";
 
-import { entriesFromExport, replayLog, type ExportedEntry } from "./replayLog";
+import { entriesFromExport, replayLog, type ExportedEntry } from "../gameEngine/replayLog";
 import {
   DEFAULT_SANDBOX_SCENARIO,
   sandboxScenario,
   sandboxScenarioState,
   sandboxWaterfallState,
-} from "./sandboxState";
-import { sandboxReplayProviders } from "./replayProviders";
-import { waterfallForRoster, withEmptyRoster } from "./gameSetup";
+} from "../gameEngine/sandboxState";
+import { sandboxReplayProviders } from "../gameEngine/replayProviders";
+import { waterfallForRoster, withEmptyRoster } from "../gameEngine/gameSetup";
 
 /* THE LOGS ARE FROZEN WITH THEIR BOARDS. The first draft read `server/data/*.log.jsonl` -- the live store --
    and one of those games was still being played: eighteen entries later the fixture was "wrong". A golden

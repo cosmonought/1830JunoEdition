@@ -31,7 +31,7 @@
 import React from "react";
 import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { TrainGlyph } from "./TrainGlyph";
-import { trainTier } from "../utils/gamePhase";
+import { trainTier } from "../gameEngine/gamePhase";
 import { routeTrainColor } from "../styles/routeLivery";
 import type { TrainRouteDraft } from "./RoutePlannerPanel";
 

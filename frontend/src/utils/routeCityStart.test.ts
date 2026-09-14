@@ -28,7 +28,7 @@
 import { STATIC_BOARD_HEXES } from "../components/hexBoardData";
 import { STATION_HOME_HEXES } from "../components/hexContractTypes";
 import { cityExitEdges, liveEdgesForHex } from "../components/hexGeometry";
-import { assignRouteSet, autoTraceRoute } from "./routeAutoTrace";
+import { assignRouteSet, autoTraceRoute } from "../gameEngine/routeAutoTrace";
 import { routeIncludesOwnedToken, routeTokenBlockReason } from "./routeWaypoints";
 import type { MapGridResponse } from "../components/hexContractTypes";
 
@@ -254,7 +254,7 @@ describe("the source keeps the model out", () => {
   const SEARCH = (() => {
     const fs = require("fs") as typeof import("fs");
     const path = require("path") as typeof import("path");
-    const raw = fs.readFileSync(path.join(__dirname, "routeAutoTrace.ts"), "utf8");
+    const raw = fs.readFileSync(path.join(__dirname, "..", "gameEngine", "routeAutoTrace.ts"), "utf8");
     // #490a: the notes quote the removed call while explaining its removal.
     const code = raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
     const start = code.indexOf("function candidatePathsFrom");
@@ -294,7 +294,7 @@ describe("the source keeps the model out", () => {
        is deleted is a claim that gets made again -- and this one was made confidently. */
     const fs = require("fs") as typeof import("fs");
     const path = require("path") as typeof import("path");
-    const raw = fs.readFileSync(path.join(__dirname, "routeAutoTrace.ts"), "utf8");
+    const raw = fs.readFileSync(path.join(__dirname, "..", "gameEngine", "routeAutoTrace.ts"), "utf8");
     expect(raw).toContain("DESIGN NOTE 852a");
     expect(raw).toContain("BOTH\n     HALVES WERE WRONG");
     expect(raw).toContain("NO NEW FIELD WAS NEEDED");

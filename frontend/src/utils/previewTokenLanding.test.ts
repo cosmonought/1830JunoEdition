@@ -15,7 +15,7 @@
 // applied the acting corporation's single index to every token on the hex.
 
 import { tokenLandingsFor, type UpgradeTokenPlan } from "./tokenMigration";
-import { errandLaysBonus } from "./bonusLay";
+import { errandLaysBonus } from "../gameEngine/bonusLay";
 
 const plan = (
   landings: Array<{ companyId: number; toCityIndex: number | null }>,

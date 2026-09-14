@@ -30,8 +30,8 @@ import {
   applySandboxAction,
   beginOperatingRound,
   buildOperatingOrder,
-} from "./sandboxSession";
-import type { GameStateResponse, PublicCompanyState } from "./gameState";
+} from "../gameEngine/sandboxSession";
+import type { GameStateResponse, PublicCompanyState } from "../gameEngine/gameState";
 
 /* ==================================================================
  *  DESIGN NOTE 642 (harness): "THE ROUND ENDED" IS A STATE, NOT A FLAG

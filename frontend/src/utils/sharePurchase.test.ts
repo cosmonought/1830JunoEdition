@@ -24,8 +24,8 @@ import {
   maxPurchaseQuantity,
   sharePurchaseBlock,
   type SharePurchaseInput,
-} from "./sharePurchase";
-import type { GameStateResponse } from "./gameState";
+} from "../gameEngine/sharePurchase";
+import type { GameStateResponse } from "../gameEngine/gameState";
 
 const ME = "me";
 

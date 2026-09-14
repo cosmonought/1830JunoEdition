@@ -22,7 +22,7 @@ import {
   undoReachFor,
   undoToRoundStart,
   type RevertableAction,
-} from "./logRevert";
+} from "../gameEngine/logRevert";
 
 const ADA = "p-ada";
 const BEN = "p-ben";

@@ -26,7 +26,7 @@
 //
 // A TRANSFERRED CORPORATION IS NEITHER, which is the whole of what the Blood Price buys.
 
-import type { GameStateResponse, PublicCompanyState } from "./gameState";
+import type { GameStateResponse, PublicCompanyState } from "../gameEngine/gameState";
 
 export type CarcosaStanding = "none" | "holding" | "haunted";
 
@@ -96,7 +96,7 @@ export function carcosaEpitaph(ticker: string, presidentName: string | null): st
    third stage's flavour CLAUSE, and it belongs beside `YELLOW_SIGN_MALUS_LINE` and `YELLOW_SIGN_BONUS_LINE`
    -- the two sentences the other stages substitute -- rather than in the module about the corporation's
    curse. Re-exported below so a reader who looks for it here is not sent hunting. */
-export { CARCOSA_FOG_LINE } from "./yellowSign";
+export { CARCOSA_FOG_LINE } from "../gameEngine/yellowSign";
 
 /** The stamp those lines carry, matching the two the Yellow Sign already writes (#1046). */
 export const CARCOSA_STAMP_STEP = "Yellow Sign";

@@ -24,7 +24,7 @@ const { watcherTrainDrafts } =
 const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
 
 const APP = readStripped("App.tsx");
-const REDUCER = readStripped("utils/sandboxSession.ts");
+const REDUCER = readStripped("gameEngine/sandboxSession.ts");
 
 type Roster = Parameters<typeof watcherTrainDrafts>[0]["roster"];
 

@@ -21,8 +21,8 @@ export {};
 const { routeBlockedCityReason } =
   require("./routeWaypoints") as typeof import("./routeWaypoints");
 const { cityEnteredFrom, cityForArrival } =
-  require("./trackReach") as typeof import("./trackReach");
-const { cityBlockerFor } = require("./cityBlocking") as typeof import("./cityBlocking");
+  require("../gameEngine/trackReach") as typeof import("../gameEngine/trackReach");
+const { cityBlockerFor } = require("../gameEngine/cityBlocking") as typeof import("../gameEngine/cityBlocking");
 const { STATIC_BOARD_HEXES } = require("../components/hexBoardData") as typeof import("../components/hexBoardData");
 const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
 
@@ -141,7 +141,7 @@ describe("the resolver is the one the router already uses", () => {
        the exact same helper" -- in this codebase that helper is `cityForArrival`, which `reachableTrack` and
        the route tracer have both asked since #729. `cityEnteredFrom` converts a PREVIOUS POINT into the
        arrival edge that function wants and then calls it; it does not reimplement it. */
-    expect(readStripped("utils/trackReach.ts")).toContain(
+    expect(readStripped("gameEngine/trackReach.ts")).toContain(
       "return cityForArrival(mapGrid, hex.q, hex.r, arrivalEdge);",
     );
   });

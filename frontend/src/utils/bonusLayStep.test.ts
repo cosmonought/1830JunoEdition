@@ -19,9 +19,9 @@
 // on the literal shape rather than on a constructor, because a helper that defaults the flag would make the
 // test agree with itself rather than with the old entries.
 
-import { applySandboxAction } from "./sandboxSession";
-import { isBonusLay, layEndsTrackStep, BONUS_LAY_PRIVATE_ID } from "./bonusLay";
-import type { GameStateResponse } from "./gameState";
+import { applySandboxAction } from "../gameEngine/sandboxSession";
+import { isBonusLay, layEndsTrackStep, BONUS_LAY_PRIVATE_ID } from "../gameEngine/bonusLay";
+import type { GameStateResponse } from "../gameEngine/gameState";
 
 const CSL_OWNER = 4;
 
@@ -166,7 +166,7 @@ describe("the shell says which lay it is", () => {
   const RULE = (() => {
     const fs = require("fs") as typeof import("fs");
     const path = require("path") as typeof import("path");
-    const raw = fs.readFileSync(path.join(__dirname, "bonusLay.ts"), "utf8");
+    const raw = fs.readFileSync(path.join(__dirname, "..", "gameEngine", "bonusLay.ts"), "utf8");
     return raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
   })();
 

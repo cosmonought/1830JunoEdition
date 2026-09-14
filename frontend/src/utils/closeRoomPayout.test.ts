@@ -19,7 +19,7 @@ import {
   resetSettledRooms,
   settleRoomPayout,
 } from "./closeRoomPayout";
-import type { PlayerStanding } from "./endgame";
+import type { PlayerStanding } from "../gameEngine/endgame";
 
 const standing = (over: Partial<PlayerStanding> = {}): PlayerStanding =>
   ({

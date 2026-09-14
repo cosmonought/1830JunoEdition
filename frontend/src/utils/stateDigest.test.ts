@@ -15,8 +15,8 @@
 export {};
 
 const { canonicalJson, digestOf, stateDigest } =
-  require("./stateDigest") as typeof import("./stateDigest");
-const { sandboxScenarioState } = require("./sandboxState") as typeof import("./sandboxState");
+  require("../gameEngine/stateDigest") as typeof import("../gameEngine/stateDigest");
+const { sandboxScenarioState } = require("../gameEngine/sandboxState") as typeof import("../gameEngine/sandboxState");
 
 describe("things that are not differences", () => {
   it("ignores the order keys were written in", () => {

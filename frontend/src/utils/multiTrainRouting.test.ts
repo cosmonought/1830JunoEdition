@@ -36,7 +36,7 @@
 import { HEX_NEIGHBOR_OFFSETS, liveEdgesForHex } from "../components/hexGeometry";
 import { STATIC_BOARD_HEXES } from "../components/hexBoardData";
 import type { MapGridResponse, MapTileEntry } from "../components/hexContractTypes";
-import { assignRouteSet } from "./routeAutoTrace";
+import { assignRouteSet } from "../gameEngine/routeAutoTrace";
 
 const BOARD = new Set(STATIC_BOARD_HEXES.map((h) => `${h.q},${h.r}`));
 const key = (q: number, r: number) => `${q},${r}`;

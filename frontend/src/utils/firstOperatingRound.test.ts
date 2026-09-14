@@ -20,9 +20,9 @@
 // Green one. That is precisely the reported symptom, and only a test that
 // buys the train through the dispatcher can see it.
 
-import { applySandboxAction, beginOperatingRound } from "./sandboxSession";
-import { derivePhase } from "./gamePhase";
-import type { GameStateResponse, PublicCompanyState } from "./gameState";
+import { applySandboxAction, beginOperatingRound } from "../gameEngine/sandboxSession";
+import { derivePhase } from "../gameEngine/gamePhase";
+import type { GameStateResponse, PublicCompanyState } from "../gameEngine/gameState";
 
 /* ==================================================================
  *  DESIGN NOTE 642 (harness): "THE ROUND ENDED" IS A STATE, NOT A FLAG

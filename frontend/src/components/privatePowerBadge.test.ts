@@ -27,8 +27,8 @@ import fs from "fs";
 import path from "path";
 
 import { withReservationNote } from "./HexGridRenderer";
-import { activeReservations } from "../utils/privateReservations";
-import type { PrivateCompanyState } from "../utils/gameState";
+import { activeReservations } from "../gameEngine/privateReservations";
+import type { PrivateCompanyState } from "../gameEngine/gameState";
 
 const PRIMITIVES = fs.readFileSync(path.join(__dirname, "hexCanvasPrimitives.ts"), "utf8");
 

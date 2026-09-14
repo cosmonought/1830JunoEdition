@@ -28,7 +28,7 @@
 // NEWEST stamp in the room rather than the local clock (lobby.ts #1), and that reasoning needs every stamp to
 // come from one clock. The server is that clock now.
 
-import type { GameVariants } from "./gameVariants";
+import type { GameVariants } from "../gameEngine/gameVariants";
 
 export type RoomStatus = "staging" | "launching" | "live" | "closed";
 

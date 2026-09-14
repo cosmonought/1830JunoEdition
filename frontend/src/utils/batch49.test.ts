@@ -19,7 +19,7 @@
 export {};
 
 const { summarisePrivateRevenueRound, summarisePrivateRevenueForPlayer } =
-  require("./sandboxSession") as typeof import("./sandboxSession");
+  require("../gameEngine/sandboxSession") as typeof import("../gameEngine/sandboxSession");
 const { SEAT_COLORS } = require("./playerLabels") as typeof import("./playerLabels");
 const { bestContrastTextColor, relativeLuminance } =
   require("../styles/corporationLivery") as typeof import("../styles/corporationLivery");
@@ -27,7 +27,7 @@ const { readStripped, sliceBetween } = require("./sourceScan") as typeof import(
 
 const APP = readStripped("App.tsx");
 const MODAL = readStripped("components/PrivateRevenueModal.tsx");
-const SUMMARY = readStripped("utils/sandboxSession.ts");
+const SUMMARY = readStripped("gameEngine/sandboxSession.ts");
 
 type Payout = Parameters<typeof summarisePrivateRevenueRound>[0][number];
 

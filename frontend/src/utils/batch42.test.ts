@@ -27,14 +27,14 @@
 
 export {};
 
-const { bridgeWaypoints } = require("./routeAutoTrace") as typeof import("./routeAutoTrace");
+const { bridgeWaypoints } = require("../gameEngine/routeAutoTrace") as typeof import("../gameEngine/routeAutoTrace");
 const { editRouteDraft } = require("./routeDraftEdit") as typeof import("./routeDraftEdit");
 const { routeBlockedCityReason } =
   require("./routeWaypoints") as typeof import("./routeWaypoints");
 const { withForcedBypass, hexOffersBypass } =
-  require("./cityBypass") as typeof import("./cityBypass");
-const { cityBlockerFor } = require("./cityBlocking") as typeof import("./cityBlocking");
-const { cityEnteredFrom } = require("./trackReach") as typeof import("./trackReach");
+  require("../gameEngine/cityBypass") as typeof import("../gameEngine/cityBypass");
+const { cityBlockerFor } = require("../gameEngine/cityBlocking") as typeof import("../gameEngine/cityBlocking");
+const { cityEnteredFrom } = require("../gameEngine/trackReach") as typeof import("../gameEngine/trackReach");
 const { STATIC_BOARD_HEXES } = require("../components/hexBoardData") as typeof import("../components/hexBoardData");
 const { STATION_HOME_HEXES } =
   require("../components/hexContractTypes") as typeof import("../components/hexContractTypes");
@@ -167,7 +167,7 @@ describe("the bridge crosses a shut Altoona by its bow", () => {
        distinction is about something real rather than about a hex that has one way through. The `crossingAt`
        half of the fix IS observable and has its own case above -- deleting it fails "marks the crossing as a
        bypass". */
-    const { traversalsFrom } = require("./trackSegments") as typeof import("./trackSegments");
+    const { traversalsFrom } = require("../gameEngine/trackSegments") as typeof import("../gameEngine/trackSegments");
     const arms = traversalsFrom(BARE, H12.q, H12.r, 0);
     expect(arms.length).toBe(2);
     expect(arms.filter((arm) => arm.bypass === true).length).toBe(1);

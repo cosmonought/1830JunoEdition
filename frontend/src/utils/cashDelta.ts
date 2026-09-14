@@ -36,7 +36,7 @@
 //
 // See docs/ai_architecture/ui_shell_layout.md, cashDelta.ts #670.
 
-import type { GameStateResponse } from "./gameState";
+import type { GameStateResponse } from "../gameEngine/gameState";
 
 /** Every seat's cash, keyed by address. A plain object rather than the
  *  contract's array, because every question below is a lookup. */

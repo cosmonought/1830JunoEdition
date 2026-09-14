@@ -18,8 +18,8 @@
 // and a confident "$0 net worth" for a player holding five certificates is a
 // worse bug than the blank this replaces.
 
-import type { GameStateResponse } from "./gameState";
-import { estimatePlayerNetWorth, estimateStockPortfolioValue } from "./gameState";
+import type { GameStateResponse } from "../gameEngine/gameState";
+import { estimatePlayerNetWorth, estimateStockPortfolioValue } from "../gameEngine/gameState";
 
 const ALICE = "juno1alice";
 const BOB = "juno1bob";

@@ -32,21 +32,21 @@
 
 import { readFileSync } from "fs";
 
-import {
-  entriesFromExport,
-  replayLog,
-  type ExportedEntry,
-} from "../../frontend/src/utils/replayLog";
-import { sandboxReplayProviders } from "../../frontend/src/utils/replayProviders";
+/* #1500: the game machine, through its front door -- the same one `gameServer.ts` uses. */
 import {
   DEFAULT_SANDBOX_SCENARIO,
+  derivePhase,
+  entriesFromExport,
+  logHash,
+  replayLog,
+  sandboxReplayProviders,
   sandboxScenario,
   sandboxScenarioState,
   sandboxWaterfallState,
-} from "../../frontend/src/utils/sandboxState";
-import { waterfallForRoster, withEmptyRoster } from "../../frontend/src/utils/gameSetup";
-import { derivePhase } from "../../frontend/src/utils/gamePhase";
-import { logHash } from "../../frontend/src/utils/logHash";
+  waterfallForRoster,
+  withEmptyRoster,
+  type ExportedEntry,
+} from "../../frontend/src/gameEngine";
 
 interface RawLog {
   roomCode?: string;

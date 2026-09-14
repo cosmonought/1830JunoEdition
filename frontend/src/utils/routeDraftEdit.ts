@@ -22,13 +22,13 @@
 // #881 IS ALREADY HERE and is why the capacity arm is a call rather than a comparison: an unknown train is
 // unlimited for DRAWING and the smallest one for FLAGGING, and this is the drawing end.
 
-import { bridgeWaypoints } from "./routeAutoTrace";
+import { bridgeWaypoints } from "../gameEngine/routeAutoTrace";
 // Design note #1025: the rail-level connection and visited rules, derived from the draft itself.
 import { connectionForClick, segmentsUsedBy } from "./routeConnection";
 import { axialHexDistance, type RoutePoint } from "./routeWaypoints";
-import { isRevenueCentreHex, isRouteTerminusHex } from "./sandboxSession";
-import { stopEnteredFrom } from "./trackReach";
-import { isUnlimitedReach, reachForDrafting } from "./trainReach";
+import { isRevenueCentreHex, isRouteTerminusHex } from "../gameEngine/sandboxSession";
+import { stopEnteredFrom } from "../gameEngine/trackReach";
+import { isUnlimitedReach, reachForDrafting } from "../gameEngine/trainReach";
 import { liveEdgesForHex } from "../components/hexGeometry";
 import type { MapGridResponse } from "../components/hexContractTypes";
 

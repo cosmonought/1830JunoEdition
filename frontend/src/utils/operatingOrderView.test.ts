@@ -22,7 +22,7 @@
 // inputs, and the queue is a decision, not a formula. Same lesson as #734 and #741 from a third direction.
 
 import { operatingOrderRanks, sortForOperatingOrder } from "./operatingOrderView";
-import type { GameStateResponse, PublicCompanyState } from "./gameState";
+import type { GameStateResponse, PublicCompanyState } from "../gameEngine/gameState";
 
 const PRR = 1;
 const BO = 2;

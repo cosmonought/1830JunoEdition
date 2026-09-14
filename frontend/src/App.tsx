@@ -29,7 +29,7 @@ import { connectServerLink, type ServerLink } from "./utils/serverLink";
 /* #1223: the alarm #1207 argued for and nobody connected. The comparison lives in its own module so it is
    testable without a socket, a server or this file. */
 import { divergenceVerdict } from "./utils/divergenceWatch";
-import { divergentFields, fieldDigests, stateDigest } from "./utils/stateDigest";
+import { divergentFields, fieldDigests, stateDigest } from "./gameEngine/stateDigest";
 import { GameSessionProvider, useGameSession } from "./context/GameSessionContext";
 import HexGridRenderer, {
   type RouteOverlay,
@@ -37,14 +37,14 @@ import HexGridRenderer, {
   type HexClickQueryState,
   type StationPreviewMarker,
 } from "./components/HexGridRenderer";
-import { assignRouteSet } from "./utils/routeAutoTrace";
+import { assignRouteSet } from "./gameEngine/routeAutoTrace";
 import {
   cityEnteredFrom,
   layableHexes,
   reachableNetwork,
   stationTokensOf,
   type StationToken,
-} from "./utils/trackReach";
+} from "./gameEngine/trackReach";
 // Design note #888: which hexes the Lay Track jump frames, and the camera pose that frames them.
 import { dividendDeclaration } from "./utils/dividendStep";
 // Design note #591f: `actingActor` went with the snapshot stack it stamped.
@@ -56,16 +56,16 @@ import {
   trainPurchaseToastLine,
 } from "./utils/actionLog";
 import { STATIC_BOARD_HEXES, heraldHexFor } from "./components/hexBoardData";
-import { activateRules, boardFor, withRules } from "./utils/boardSelection";
+import { activateRules, boardFor, withRules } from "./gameEngine/boardSelection";
 /* Design note #1294: the chrome scale, live. */
 import { useUiScale } from "./utils/useUiScale";
-import { initialGridFor } from "./utils/initialGrid";
+import { initialGridFor } from "./gameEngine/initialGrid";
 import {
   dieselAvailable,
   dieselExchangeEnabled,
   dieselExchangeRefusal,
   exchangeableTrains,
-} from "./utils/dieselExchange";
+} from "./gameEngine/dieselExchange";
 import {
   bestContrastTextColor,
   stationTickerColor,
@@ -74,7 +74,7 @@ import {
   stationTickerLabel,
 } from "./components/hexContractTypes";
 // Design note #885: `PrivateAbility` / `PrivateAbilityAction` came from `PrivatePowerPanel`, which is gone.
-import { corporationPrivateCompanies } from "./utils/gameState";
+import { corporationPrivateCompanies } from "./gameEngine/gameState";
 import type { TrainRouteDraft } from "./components/RoutePlannerPanel";
 import {
   citySlotCount,
@@ -84,7 +84,7 @@ import {
   stationPlacementBlockReason,
   stationTokenPrice,
   stationTokenSlots,
-} from "./utils/stationTokens";
+} from "./gameEngine/stationTokens";
 import { corporationFullName } from "./utils/corporationNames";
 // Design note #494: one distinct ink per train, so overlapping routes are
 // tellable apart. Shared with `RoutePlannerPanel`'s chips -- the same pure
@@ -105,7 +105,7 @@ import {
   waterfallForRoster,
   withEmptyRoster,
   type SandboxLogMsg,
-} from "./utils/gameSetup";
+} from "./gameEngine/gameSetup";
 // Design note #522: the Sandbox multiplayer bridge.
 import SandboxRoomBar from "./components/SandboxRoomBar";
 /* Design note #1141: the mini-camera and the dialog that frames it. */
@@ -159,7 +159,7 @@ import StockMarketRenderer, {
      Blood Price inherits every edge case those two already handle. */
   projectBloodPriceMove,
 } from "./components/StockMarketRenderer";
-import { describeSoldOutRise, soldOutRises } from "./utils/soldOutRise";
+import { describeSoldOutRise, soldOutRises } from "./gameEngine/soldOutRise";
 // Design note #750: the instrument for the phantom $1500 -- a diff, not an annotation.
 import { describeTreasuryMoves, treasuryMoveLine } from "./utils/treasuryProvenance";
 // Design note #768: the board cannot lose tiles; this is what says so out loud when it does.
@@ -167,9 +167,9 @@ import { describeGridChange, gridChangeLine } from "./utils/gridProvenance";
 // Design note #751: the obligation lives on Pass, so the player keeps the choice of how to discharge it.
 import { noDecisionRemains, trainPurchaseRefusal } from "./utils/trainObligation";
 // Design note #759: the zone exemptions expire, and the debt shuts three doors.
-import { divestmentDebt, divestmentRefusal } from "./utils/forcedDivestment";
+import { divestmentDebt, divestmentRefusal } from "./gameEngine/forcedDivestment";
 // Design note #763: a floated corporation with no home token stops the game until the token is down.
-import { homeTokenBlock, homeTokenOwed } from "./utils/homeTokenGate";
+import { homeTokenBlock, homeTokenOwed } from "./gameEngine/homeTokenGate";
 // Design note #162: `TileSelectionPopup` is no longer rendered or imported
 // -- the radial selector replaced it, and its two callbacks went with it.
 // The file is retained on disk, unreferenced, until the radial path has been
@@ -238,6 +238,8 @@ import {
   useGameStatePolling,
   useTrainOffersPolling,
   useWaterfallStatePolling,
+} from "./utils/gameStatePolling";
+import {
   type RoundType,
   type GameStateResponse,
   type WaterfallStateResponse,
@@ -246,7 +248,7 @@ import {
   actingSeatIndex,
   /* isSidelinedByMiniAuction not imported; the roster pills it fed are deleted.
      See docs/ai_architecture/state_machine.md - App.tsx #601 */
-} from "./utils/gameState";
+} from "./gameEngine/gameState";
 // Chat messages arrive pre-built from useRoomChat; this file constructs none.
 // See docs/ai_architecture/firebase_middleware.md - App.tsx #22
 import { mergeFeedItems, type ActionLogEntry, type FeedFilter } from "./utils/feed";
@@ -265,17 +267,17 @@ import {
   derivePhase,
   rustOutlook,
   tierEra,
-} from "./utils/gamePhase";
+} from "./gameEngine/gamePhase";
 // Design note #703: the train-limit rule, so this gate and the Buy Trains panel cannot drift apart again.
-import { countableTrainCount, isTrainLocked } from "./utils/trainLimit";
+import { countableTrainCount, isTrainLocked } from "./gameEngine/trainLimit";
 // Design note #1035: how close the privates are to closing, threaded to every surface that draws one.
 import { privateClosureAlert } from "./utils/purchaseWarnings";
 // Design note #705: the Pay column's before-and-after, alongside the Withhold column's.
 import { projectDividendPayouts } from "./utils/dividendProjection";
 // Design note #712: the market-zone purchase rules.
-import { sharePurchaseBlock } from "./utils/sharePurchase";
+import { sharePurchaseBlock } from "./gameEngine/sharePurchase";
 // Design note #713: the sale's guards.
-import { shareSaleBlock } from "./utils/shareSale";
+import { shareSaleBlock } from "./gameEngine/shareSale";
 // Design note #725: the D&H's two halves, and the order between them.
 import {
   privatePowerHexKeys,
@@ -287,7 +289,7 @@ import {
    instead. What is left is the open/closed predicate and the key type -- the two things the render needs. */
 import { powerFlowOpen, type PowerAbilityKey } from "./utils/privatePowerFlow";
 // Design note #729: which cities a corporation may not run through.
-import { cityBlockerFor } from "./utils/cityBlocking";
+import { cityBlockerFor } from "./gameEngine/cityBlocking";
 import {
   JK_TILE_ABILITY_KEY,
   KANAWHA_LICENSE_COST,
@@ -299,10 +301,10 @@ import {
   kanawhaLicensesInPlay,
   licensesHeldBy,
   licensesRemainingForSale,
-} from "./utils/kanawhaLicense";
-import { JK_PRIVATE_ID } from "./utils/levelPlayingField";
+} from "./gameEngine/kanawhaLicense";
+import { JK_PRIVATE_ID } from "./gameEngine/levelPlayingField";
 // Design note #808: one predicate for the bow, consulted by the tracer, the legality check and the pricing.
-import { hexOffersBypass, withForcedBypass } from "./utils/cityBypass";
+import { hexOffersBypass, withForcedBypass } from "./gameEngine/cityBypass";
 // Design note #809: whose clicks the Lay Track glow may swallow -- watchers keep the inspector.
 import { inspectorClickRefused } from "./utils/inspectorClick";
 /* Design note #817: an armed errand's lifecycle -- what a click means, which lay is its own, and when it
@@ -333,7 +335,7 @@ import {
   subscribeSandboxPresence,
 } from "./utils/sandboxPresence";
 /* Design note #1006: `printedMarkersFor` and `tileCitySlotCounts` are no longer imported here. Their one
-   caller was `citySlotsAt`, whose body moved to `utils/stationTokens.ts` so the placement gate could reach it.
+   caller was `citySlotsAt`, whose body moved to `gameEngine/stationTokens.ts` so the placement gate could reach it.
    Dropped rather than left imported, for #686's reason about `liveEdgesForHex`: an unused import of the tile
    catalog is an invitation for the next resolver to be written here instead of beside the rule again. */
 import { tokenCityIndex, type StationTokenCompany } from "./components/hexContractTypes";
@@ -349,7 +351,7 @@ import {
      for why it is kept rather than deleted. */
   dhSelfLayWarning,
   privateSelfLayWarning,
-} from "./utils/dhPower";
+} from "./gameEngine/dhPower";
 // Design note #717: the standing-pass instruction and what cancels it.
 import {
   DEFAULT_AUTO_PASS_CONDITIONS,
@@ -443,11 +445,11 @@ import {
   fogIsDue,
   yellowSignStateOf,
   nextForcedSign,
-} from "./utils/yellowSign";
+} from "./gameEngine/yellowSign";
 import YellowSignOverlay from "./components/YellowSignOverlay";
 import type { HauntingComposite } from "./components/YellowSignOverlay";
 // Design note #1018: the auto-skip acts on a definite refusal, never on an unsettled one.
-import { earnableRevenueVerdict, skipReasonFor } from "./utils/earnableRevenue";
+import { earnableRevenueVerdict, skipReasonFor } from "./gameEngine/earnableRevenue";
 import {
   // Design note #688: the invariant that replaced the par-mark edge detector.
   reconcileParMarks,
@@ -462,15 +464,15 @@ import {
   sandboxMarketPositions,
   sandboxWaterfallState,
   // Design note #746b: a rise is an arrival, stamped like every other landing (#646).
-} from "./utils/sandboxState";
-import { availableCash, escrowedBids } from "./utils/auctionEscrow";
-import { privateHexFor } from "./utils/privateReservations";
+} from "./gameEngine/sandboxState";
+import { availableCash, escrowedBids } from "./gameEngine/auctionEscrow";
+import { privateHexFor } from "./gameEngine/privateReservations";
 import { GameOverModal, type GameEndReason } from "./components/GameOverModal";
 import { gameHistoryFrom, type GameHistory } from "./utils/gameHistory"; // #1411
 import { replaySnapshotAtRound, type ReplaySnapshot } from "./utils/roundReplay"; // #1425
 import RoundScrubber from "./components/RoundScrubber";
-import { bankIsBroken, rankPlayers, PLACEHOLDER_TOTAL_ANTE, type PlayerStanding } from "./utils/endgame";
-import { turnGuardKey } from "./utils/turnGuardKey";
+import { bankIsBroken, rankPlayers, PLACEHOLDER_TOTAL_ANTE, type PlayerStanding } from "./gameEngine/endgame";
+import { turnGuardKey } from "./gameEngine/turnGuardKey";
 import {
   CURRENT_RULES_REVISION, // #1443
   sellBuySellInForce,
@@ -492,7 +494,7 @@ import {
   flavorBucketFor,
   revenueFlavourClause,
   turnRevenueSentence,
-} from "./utils/gameVariants";
+} from "./gameEngine/gameVariants";
 /* Design note #1051: finding the roll a turn already made, in the RAW log -- including the entries an undo
    struck out, which is what makes an undo unable to re-roll the die. */
 import { seedAlreadyRolled, turnSeedKey } from "./utils/turnSeed";
@@ -509,8 +511,8 @@ import {
   setNoticeSilenced,
   type FleetLossNotice,
 } from "./utils/fleetLossNotice";
-import { dividendRefused, operatingCorporationId } from "./utils/dividendGate";
-import { dividendSplit } from "./utils/dividendSplit";
+import { dividendRefused, operatingCorporationId } from "./gameEngine/dividendGate";
+import { dividendSplit } from "./gameEngine/dividendSplit";
 import {
   actionWasRefused,
   refusalReasonFor,
@@ -554,7 +556,7 @@ import {
   isCarcosanTransfer,
   SANDBOX_NOMINAL_TOKEN_COST,
   returnedTrainRefusal, // #1314
-} from "./utils/sandboxSession";
+} from "./gameEngine/sandboxSession";
 /* Design note #1091: the curse's vocabulary, shared by the log, the three name surfaces and the
    scoreboard so none of them can word it differently. */
 import { CARCOSA_STAMP_STEP, carcosaEpitaph, cursedCompanies } from "./utils/carcosaCurse";
@@ -598,14 +600,14 @@ import {
   eraForPhase,
   NO_TRAIN_ROUTE_REASON,
   tileEraFor, // #1380
-} from "./utils/gameConstants";
+} from "./gameEngine/gameConstants";
 import {
   MOCK_BUY_STOCK_PAR_VALUE,
   MOCK_LAY_TILE_PROTOCOL_ID,
   MOCK_MAP_GRID,
   MOCK_MARKET_GRID,
   MOCK_TRAIN_CATALOG,
-} from "./utils/mockFixtures";
+} from "./gameEngine/mockFixtures";
 import {
   routePointsToWaypoints,
   type RoutePoint,
@@ -644,20 +646,20 @@ import {
   CA_PRIVATE_ID,
   MH_PRIVATE_ID,
   resolvePrivateExchange,
-} from "./utils/privateExchange";
-import { effectiveActions, undoReachFor } from "./utils/logRevert";
+} from "./gameEngine/privateExchange";
+import { effectiveActions, undoReachFor } from "./gameEngine/logRevert";
 import { buildSandboxLogExport } from "./utils/logExport";
 import { RIVAL_ROUTE_INDEX_BASE, watcherTrainDrafts } from "./utils/watcherRouteChips";
-import { autoSkipExit } from "./utils/autoSkipExit";
+import { autoSkipExit } from "./gameEngine/autoSkipExit";
 // Design note #1247: the accepted offer's purchase, owed by the board and sent here only where no server can.
-import { nextDerivedAction } from "./utils/derivedActions";
-import { overrunsReach, reachForDrafting } from "./utils/trainReach";
+import { nextDerivedAction } from "./gameEngine/derivedActions";
+import { overrunsReach, reachForDrafting } from "./gameEngine/trainReach";
 import { editRouteDraft } from "./utils/routeDraftEdit";
 // Design note #1024: the splice is a rule about an array, so it lives where it can be tested as one.
 import { stopsRemovedByTruncating, truncateRouteAtHex } from "./utils/routeTruncate";
 import { runnableDrafts, runTrainsRefusal } from "./utils/runTrainsRules";
-import { errandLaysBonus } from "./utils/bonusLay";
-import { stepsFor } from "./utils/operatingCursor";
+import { errandLaysBonus } from "./gameEngine/bonusLay";
+import { stepsFor } from "./gameEngine/operatingCursor";
 // Design note #673: one computation of what a previewed lay costs, read by the
 // corporation card and by the radial confirm caption.
 import { describePendingSpend, pendingSpend } from "./utils/pendingSpend";
@@ -678,7 +680,7 @@ import {
 } from "./utils/playerLabels";
 import { RevenueModifierFlash, type RevenueFlashSignal } from "./components/RevenueModifierFlash";
 import { RADIUS } from "./styles/typography";
-import { numberedPrivate, setPrivateOrder } from "./utils/privateOrdinal";
+import { numberedPrivate, setPrivateOrder } from "./gameEngine/privateOrdinal";
 import { isUpgradeDeadEnd } from "./utils/tileUpgrades"; // #1390
 /* Built once. `layTrackFocus` re-runs this filter for every candidate hex on the board, and rebuilding a
    276-entry list inside that loop would be the only expensive thing in the pass. */
@@ -3037,7 +3039,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
    * PREPRINTED CITIES COUNT TOO -- New York, Baltimore and Boston hold tokens before anybody lays anything, so
    * a resolver that only read `tiles` would report zero slots on exactly the three hexes most worth blocking,
    * and #729's rule 3 would then read them as "not a city". */
-  /* Design note #1006: the BODY moved to `utils/stationTokens.ts` and this is now a binding, not a resolver.
+  /* Design note #1006: the BODY moved to `gameEngine/stationTokens.ts` and this is now a binding, not a resolver.
      The placement gate has to ask the same question -- that is the whole of this batch's bug -- and a second
      copy of the count living here is how the wall the board draws and the wall the gate enforces come to
      disagree about a preprinted city. Kept as a callback because `blocksThroughCity` below and the tile-lay

@@ -105,7 +105,7 @@ import {
   type GameLength,
   type GameVariants,
   VARIANT_COPY,
-} from "../utils/gameVariants";
+} from "../gameEngine/gameVariants";
 
 // Design note #3: THE SILENT-BUTTON BUG, AND THE RULE THAT REPLACED IT. Reported: clicking "Create Room" did
 // nothing -- no UI change, no error banner, and NOTHING in the console. Cause: the button was `disabled`, so

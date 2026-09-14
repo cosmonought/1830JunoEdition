@@ -116,7 +116,7 @@ describe("the log stops narrating the tile count", () => {
 /* ------------------------------------------------------------------ */
 
 describe("every corporation keeps its own last run", () => {
-  const REDUCER = readStripped("utils/sandboxSession.ts");
+  const REDUCER = readStripped("gameEngine/sandboxSession.ts");
   const PANEL = readStripped("components/StockRoundPanel.tsx");
 
   it("files the figure away in the same expression that clears it", () => {
@@ -162,7 +162,7 @@ describe("every corporation keeps its own last run", () => {
   });
 
   it("declares the field with the rest of the company state", () => {
-    expect(readStripped("utils/gameState.ts")).toContain("last_completed_run_revenue?: string;");
+    expect(readStripped("gameEngine/gameState.ts")).toContain("last_completed_run_revenue?: string;");
   });
 });
 

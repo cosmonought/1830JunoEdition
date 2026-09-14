@@ -27,9 +27,9 @@
 // pinned the bug it was written to catch, so the cases below run real messages through the real reducer and
 // read the stored figure afterwards.
 
-import { applySandboxAction } from "./sandboxSession";
-import { dividendRevenue } from "./dividendSplit";
-import type { GameStateResponse } from "./gameState";
+import { applySandboxAction } from "../gameEngine/sandboxSession";
+import { dividendRevenue } from "../gameEngine/dividendSplit";
+import type { GameStateResponse } from "../gameEngine/gameState";
 
 const A = 1;
 const B = 2;
@@ -141,7 +141,7 @@ describe("the unreachable option is gone", () => {
     const strip = (raw: string) =>
       raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
     return {
-      reducer: strip(fs.readFileSync(path.join(__dirname, "sandboxSession.ts"), "utf8")),
+      reducer: strip(fs.readFileSync(path.join(__dirname, "..", "gameEngine", "sandboxSession.ts"), "utf8")),
       app: strip(fs.readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8")),
       room: strip(fs.readFileSync(path.join(__dirname, "sandboxRoom.ts"), "utf8")),
     };
@@ -156,7 +156,7 @@ describe("the unreachable option is gone", () => {
   it("keeps the note explaining why", () => {
     const fs = require("fs") as typeof import("fs");
     const path = require("path") as typeof import("path");
-    const raw = fs.readFileSync(path.join(__dirname, "sandboxSession.ts"), "utf8");
+    const raw = fs.readFileSync(path.join(__dirname, "..", "gameEngine", "sandboxSession.ts"), "utf8");
     expect(raw).toContain("DESIGN NOTE 777");
     expect(raw).toContain("resetRouteRevenue");
   });

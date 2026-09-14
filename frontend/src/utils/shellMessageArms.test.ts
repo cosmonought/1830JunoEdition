@@ -25,13 +25,13 @@
 
 export {};
 
-const { applySandboxAction } = require("./sandboxSession") as typeof import("./sandboxSession");
-const { sandboxScenarioState } = require("./sandboxState") as typeof import("./sandboxState");
-const { nextDerivedAction } = require("./derivedActions") as typeof import("./derivedActions");
+const { applySandboxAction } = require("../gameEngine/sandboxSession") as typeof import("../gameEngine/sandboxSession");
+const { sandboxScenarioState } = require("../gameEngine/sandboxState") as typeof import("../gameEngine/sandboxState");
+const { nextDerivedAction } = require("../gameEngine/derivedActions") as typeof import("../gameEngine/derivedActions");
 const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
 import type { MapGridResponse } from "../components/hexContractTypes";
 
-type State = import("./gameState").GameStateResponse;
+type State = import("../gameEngine/gameState").GameStateResponse;
 
 const base = (): State => sandboxScenarioState("start", 0, "default");
 const GRID = { game_id: 1, tiles: [] } as unknown as MapGridResponse;

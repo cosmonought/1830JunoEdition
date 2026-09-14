@@ -41,8 +41,8 @@
 //      the era is a legal thing to do on the Buy Trains step, and it does not
 //      send the corporation back to Lay Track.
 
-import { applySandboxAction } from "./sandboxSession";
-import type { GameStateResponse, PublicCompanyState } from "./gameState";
+import { applySandboxAction } from "../gameEngine/sandboxSession";
+import type { GameStateResponse, PublicCompanyState } from "../gameEngine/gameState";
 
 const ALICE = "juno1alice";
 const BOB = "juno1bob";

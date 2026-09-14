@@ -62,7 +62,7 @@
 // "Bank" name one source and fall to the other only when the named one is empty or refused, which is what
 // #1240 already did with IPO first.
 
-import type { GameStateResponse } from "./gameState";
+import type { GameStateResponse } from "../gameEngine/gameState";
 
 export type AutoBuySource = "Ipo" | "Bank";
 /** 10c: which source to buy from. `Cheapest` compares the two prices each turn. */

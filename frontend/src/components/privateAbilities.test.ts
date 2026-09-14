@@ -27,8 +27,8 @@
 //   THE HEX, because "accurate D&H execution mapping strictly to F16" is a deliverable and the coordinate
 //   comes from a table the board can move under (`hexBoardData.ts` has relocated F16 once already).
 
-import { DH_POWER_DESCRIPTION } from "../utils/dhPower";
-import { privateHexFor } from "../utils/privateReservations";
+import { DH_POWER_DESCRIPTION } from "../gameEngine/dhPower";
+import { privateHexFor } from "../gameEngine/privateReservations";
 import { PRIVATE_COMPANY_CATALOG } from "../utils/privateCatalog";
 
 /* Design note #885: the two ids the hex powers belong to, named here rather than read from a table. They

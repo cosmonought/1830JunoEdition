@@ -26,9 +26,9 @@ import {
   DH_HEX_LABEL,
   cslPowerState,
   privateSelfLayWarning,
-} from "./dhPower";
+} from "../gameEngine/dhPower";
 import { PRIVATE_POWER_GLOW_STOPS, privatePowerGlowKeys } from "./privatePowerGlow";
-import { privateHexFor } from "./privateReservations";
+import { privateHexFor } from "../gameEngine/privateReservations";
 
 const B20 = privateHexFor(CSL_PRIVATE_ID);
 

@@ -27,8 +27,8 @@
 // nearly every dividend it declared; a corporation players had dumped back into the pool is where the real
 // rule pays, and it collected nothing.
 
-import { applySandboxAction } from "./sandboxSession";
-import type { GameStateResponse } from "./gameState";
+import { applySandboxAction } from "../gameEngine/sandboxSession";
+import type { GameStateResponse } from "../gameEngine/gameState";
 
 const ALICE = "alice";
 

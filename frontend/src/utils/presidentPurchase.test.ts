@@ -20,8 +20,8 @@
 // player's seat — which is why these tests assert the FULL outcome of a
 // founding purchase rather than just the flag.
 
-import { applySandboxAction, type SandboxActionContext } from "./sandboxSession";
-import type { GameStateResponse } from "./gameState";
+import { applySandboxAction, type SandboxActionContext } from "../gameEngine/sandboxSession";
+import type { GameStateResponse } from "../gameEngine/gameState";
 
 const ADA = "p-ada";
 const BEN = "p-ben";

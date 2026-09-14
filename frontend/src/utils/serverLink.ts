@@ -67,7 +67,7 @@
 // thinking" and "the wire is down". The status is the link's, not the socket's: `reconnecting` from the
 // first close to the next open, `open` thereafter.
 
-import type { ReplayEntry } from "./replayLog";
+import type { ReplayEntry } from "../gameEngine/replayLog";
 import type { GameplayExecuteMsg } from "./sessionKey";
 import type { BuildId, ServerMessage } from "./serverProtocol";
 import { SEAT_REFUSED_CODE, SEAT_SUPERSEDED_CODE, forgetSeat } from "./seatPin";

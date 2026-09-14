@@ -137,7 +137,9 @@ describe("both tracers ask the same primitive", () => {
     const fs = require("fs") as typeof import("fs");
     const path = require("path") as typeof import("path");
     return fs
-      .readFileSync(path.join(__dirname, rel), "utf8")
+      /* #1500: `rel` is src-relative now -- two of the three tracers moved to `gameEngine/` with the
+         reducer and `routeWaypoints.ts` did not, so the directory belongs at the call site. */
+      .readFileSync(path.join(__dirname, "..", rel), "utf8")
       .replace(/\/\*[\s\S]*?\*\//g, "")
       .replace(/^\s*\/\/.*$/gm, "");
   };
@@ -149,16 +151,16 @@ describe("both tracers ask the same primitive", () => {
          `routeWaypoints.ts`  -- the token rule for a drawn route (#853)
        A fourth surface deciding this for itself is the failure this codebase keeps finding, so the count is
        the assertion. */
-    expect(read("trackReach.ts")).toContain("cityExitEdges(");
-    expect(read("routeAutoTrace.ts")).toContain("cityExitEdges(");
-    expect(read("routeWaypoints.ts")).toContain("cityExitEdges(");
+    expect(read("gameEngine/trackReach.ts")).toContain("cityExitEdges(");
+    expect(read("gameEngine/routeAutoTrace.ts")).toContain("cityExitEdges(");
+    expect(read("utils/routeWaypoints.ts")).toContain("cityExitEdges(");
   });
 
   it("leaves no tracer taking every rail on a tokened hex", () => {
     /* `liveEdgesForHex` is the hex-as-a-node model. It survives in `routeAutoTrace` for ONE caller --
        `bridgeWaypoints`, which starts where a player clicked rather than at a token -- and nowhere in the
        other two. */
-    expect(read("trackReach.ts")).not.toContain("liveEdgesForHex");
-    expect((read("routeAutoTrace.ts").match(/liveEdgesForHex\(/g) ?? []).length).toBe(1);
+    expect(read("gameEngine/trackReach.ts")).not.toContain("liveEdgesForHex");
+    expect((read("gameEngine/routeAutoTrace.ts").match(/liveEdgesForHex\(/g) ?? []).length).toBe(1);
   });
 });

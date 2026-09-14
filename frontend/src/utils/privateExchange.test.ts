@@ -22,8 +22,8 @@ import {
   PLAYER_HOLDING_CAP_PERCENT,
   resolvePrivateExchange,
   type ExchangeGrant,
-} from "./privateExchange";
-import type { GameStateResponse } from "./gameState";
+} from "../gameEngine/privateExchange";
+import type { GameStateResponse } from "../gameEngine/gameState";
 
 const ADA = "p-ada";
 const BEN = "p-ben";

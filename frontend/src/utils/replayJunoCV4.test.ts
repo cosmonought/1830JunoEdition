@@ -16,17 +16,17 @@
 
 import { readFileSync } from "fs";
 import { join } from "path";
-import { RoomEngine, entriesFromExport, replayLog, type ExportedEntry, type ReplayEntry } from "./replayLog";
-import { effectiveActions } from "./logRevert";
+import { RoomEngine, entriesFromExport, replayLog, type ExportedEntry, type ReplayEntry } from "../gameEngine/replayLog";
+import { effectiveActions } from "../gameEngine/logRevert";
 import { readStripped as readSource } from "./sourceScan";
 import {
   DEFAULT_SANDBOX_SCENARIO,
   sandboxScenario,
   sandboxScenarioState,
   sandboxWaterfallState,
-} from "./sandboxState";
-import { sandboxReplayProviders } from "./replayProviders";
-import { waterfallForRoster, withEmptyRoster } from "./gameSetup";
+} from "../gameEngine/sandboxState";
+import { sandboxReplayProviders } from "../gameEngine/replayProviders";
+import { waterfallForRoster, withEmptyRoster } from "../gameEngine/gameSetup";
 import { readStripped, sliceBetween } from "./sourceScan";
 
 const GAME_ID = 0;
@@ -92,7 +92,7 @@ describe("JUNO-CV4 replays headless on the Level Playing Field", () => {
     const owed = engine.settleOwed(mint);
     const first = owed[0] ? (JSON.parse(owed[0].payload) as Record<string, unknown>) : null;
     expect(first === null || !("AdvanceOperatingSubPhase" in first)).toBe(true);
-    expect(readSource("utils/replayLog.ts")).toContain(
+    expect(readSource("gameEngine/replayLog.ts")).toContain(
       "const next = withRules(resolveVariants(this.state.variants), () =>",
     );
   });

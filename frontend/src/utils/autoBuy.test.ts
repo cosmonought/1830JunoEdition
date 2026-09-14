@@ -16,7 +16,7 @@ import {
   type AutoBuyPlan,
   type AutoBuySettings,
 } from "./autoBuy";
-import type { GameStateResponse } from "./gameState";
+import type { GameStateResponse } from "../gameEngine/gameState";
 import { readStripped, sliceBetween } from "./sourceScan";
 
 const ME = "me";
@@ -227,6 +227,6 @@ describe("#1243: the acting effect waits for the home station", () => {
     expect(guard).toBeGreaterThan(-1);
     expect(guard).toBeLessThan(decide);
     expect(guard).toBeLessThan(acted);
-    expect(APP).toContain('import { homeTokenBlock, homeTokenOwed } from "./utils/homeTokenGate";');
+    expect(APP).toContain('import { homeTokenBlock, homeTokenOwed } from "./gameEngine/homeTokenGate";');
   });
 });

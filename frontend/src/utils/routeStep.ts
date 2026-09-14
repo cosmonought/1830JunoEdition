@@ -40,7 +40,7 @@
 //
 // See docs/ai_architecture/state_machine.md, routeStep.ts #707.
 
-import type { OperatingSubPhase } from "./operatingCursor";
+import type { OperatingSubPhase } from "../gameEngine/operatingCursor";
 
 export interface RouteStepInput {
   /** The step the acting corporation is on. */

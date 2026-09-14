@@ -21,9 +21,9 @@
 // placed -- the cross-atom split #748a had to solve for the market chart, arriving again. So the tests below
 // check all three, and the grid one matters most: it is the atom that would silently disagree.
 
-import { applySandboxAction, applySandboxLayTile } from "./sandboxSession";
+import { applySandboxAction, applySandboxLayTile } from "../gameEngine/sandboxSession";
 import { filterSandboxPlacements } from "../components/sandboxTileLegality";
-import type { GameStateResponse } from "./gameState";
+import type { GameStateResponse } from "../gameEngine/gameState";
 import type { MapGridResponse } from "../components/hexContractTypes";
 
 const PRR = 1;
@@ -231,7 +231,7 @@ describe("the surfaces share one answer", () => {
   });
 
   it("gates before anything settles", () => {
-    expect(read("utils/sandboxSession.ts")).toContain(
+    expect(read("gameEngine/sandboxSession.ts")).toContain(
       'if ("LayTile" in msg && ctx?.layRefused) {',
     );
   });

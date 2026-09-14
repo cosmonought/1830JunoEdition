@@ -17,9 +17,9 @@ import {
   grantBOPresidency,
   openingStockRoundReset,
   operatingRoundSequenceLength,
-} from "./sandboxSession";
-import { sharePurchaseBlock } from "./sharePurchase";
-import { dividendSplit } from "./dividendSplit";
+} from "../gameEngine/sandboxSession";
+import { sharePurchaseBlock } from "../gameEngine/sharePurchase";
+import { dividendSplit } from "../gameEngine/dividendSplit";
 import { readStripped } from "./sourceScan";
 import {
   boIsLocked,
@@ -30,15 +30,15 @@ import {
   rollTurnRevenue,
   STANDARD_VARIANTS,
   legacyTurnSeed,
-} from "./gameVariants";
+} from "../gameEngine/gameVariants";
 import {
   PRICE_GRID,
   projectDividendCellMove,
   projectDividendFrom,
 } from "../components/StockMarketRenderer";
 import { fleetLossNotices, noticeBody } from "./fleetLossNotice";
-import { isTrainLocked } from "./trainLimit";
-import type { GameStateResponse } from "./gameState";
+import { isTrainLocked } from "../gameEngine/trainLimit";
+import type { GameStateResponse } from "../gameEngine/gameState";
 
 const DELAYED = { ...STANDARD_VARIANTS, delayedAuction: true };
 
@@ -698,7 +698,7 @@ describe("the market rewards the size of the dividend (design note #908)", () =>
        IT."
        SO THE ABSENCE IS THE ASSERTION, because the failure this guards is the function coming back exported
        and uncalled -- which is the state it was in for eight batches. */
-    const source = readStripped("utils/gameVariants.ts");
+    const source = readStripped("gameEngine/gameVariants.ts");
     expect(source).not.toContain("export function dividendStepsExplanation");
     expect(source).not.toContain("Dynamic Stock Market: $");
   });
@@ -812,7 +812,7 @@ describe("a share of the revenue, rounded (design note #922)", () => {
   it("uses no floating point on the way there", () => {
     /* The project rule. Asserted on the SOURCE because a correct answer can still be reached through a float
        -- `revenue * pct / 100` rounds correctly for these cases and would violate the constraint silently. */
-    const source = readStripped("utils/dividendSplit.ts");
+    const source = readStripped("gameEngine/dividendSplit.ts");
     expect(source).toContain("Math.floor((revenue * percentage + 50) / 100)");
     expect(source).not.toContain("Math.round(");
   });

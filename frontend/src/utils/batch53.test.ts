@@ -22,7 +22,7 @@ const { DEPOT_TOAST_MS, STANDARD_TOAST_MS } =
 const { DUCK_FOR_CUE, DUCK_FOR_VIDEO, RADIO_VOLUME } =
   require("./audio") as typeof import("./audio");
 const { readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
-import type { GameStateResponse } from "./gameState";
+import type { GameStateResponse } from "../gameEngine/gameState";
 import type { MapGridResponse } from "../components/hexContractTypes";
 
 const APP = readStripped("App.tsx");

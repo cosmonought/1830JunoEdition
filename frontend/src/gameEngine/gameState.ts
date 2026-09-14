@@ -15,12 +15,10 @@
 //
 // Design notes #3/#6/#7 and #352/#379/#526/#544/#553/#656/#662: see `docs/ai_architecture/utils_layer.md`.
 
-import { useCallback, useEffect, useRef, useState } from "react";
-
 // Design note #526: the one printed-limits table.
 import { certLimitForPlayers } from "./gameSetup";
 import { certificateCardsHeld } from "./doubleCertificate";
-import type { OperatingSubPhase } from "../components/OperatingSubPhaseStepper";
+import type { OperatingSubPhase } from "./operatingSubPhase";
 import type { GameVariants } from "./gameVariants";
 
 /* ------------------------------------------------------------------ */
@@ -704,14 +702,6 @@ export interface PlayerNetWorthResponse {
   net_worth: string;
 }
 
-/** Structural query-client shape -- same pattern as
- *  `HexGridRenderer.tsx`'s `QueryCapableClient` (design note #7 there),
- *  re-declared locally rather than imported so this utils file has no
- *  dependency on a specific component. */
-export interface QueryCapableClient {
-  queryContractSmart(contractAddress: string, queryMsg: Record<string, unknown>): Promise<unknown>;
-}
-
 /* ------------------------------------------------------------------ */
 /* Derived helpers -- see design note #3                              */
 /* ------------------------------------------------------------------ */
@@ -754,7 +744,7 @@ export function certificateCount(playerAddress: string, state: GameStateResponse
 
 /* Design note #526: the local copy is GONE. It carried a doc comment saying "mirrors `RulesReference`'s
    table" -- a correctness requirement enforced by a sentence, the arrangement TD-1 catalogued and #507 hit
-   again. `utils/gameSetup.ts` is the one table now; a third copy is what this delegation exists to avoid. */
+   again. `gameEngine/gameSetup.ts` is the one table now; a third copy is what this delegation exists to avoid. */
 
 /** How many certificates a player may hold, given the room's size.
  *  `null` for a player count the printed table does not cover, so a caller
@@ -985,158 +975,6 @@ export function playerSellablePrivateCompanies(
   return state.private_companies.filter((p) => p.owner === playerAddress && !p.closed);
 }
 
-/* ------------------------------------------------------------------ */
-/* Polling hook -- see design note #4                                 */
-/* ------------------------------------------------------------------ */
-
-export interface UseGameStatePollingResult {
-  gameState: GameStateResponse | null;
-  loading: boolean;
-  /** Set on the most recent failed query; NOT cleared just because an earlier successful state is still being
-   *  displayed -- callers wanting "stale but still show the last good state" can keep rendering while
-   *  surfacing this as an inline note, matching this codebase's "never silently hide a failure" discipline. */
-  error: string | null;
-  refresh: () => void;
-}
-
-const DEFAULT_POLL_INTERVAL_MS = 6000;
-
-/** Polls `QueryMsg::GetGameState` on a fixed interval -- design note #4. Returns `null` rather than throwing
- *  whenever `client` is absent, matching `HexGridRenderer.tsx`'s "omit the query props to keep this
- *  query-free" convention rather than forcing every caller to guard against a client-less render. */
-export function useGameStatePolling(
-  client: QueryCapableClient | null | undefined,
-  /** OFFLINE-AWARE. `null`/`undefined` means the app has no configured contract, which is a supported state,
-   *  not an error -- the same offline mode the tile-catalog fallback runs in. The hook clears state, stops
-   *  loading and never queries. Typed optional rather than coerced to `""` at the call site, so the offline
-   *  case cannot be mistaken for a real address that happens to be empty. */
-  contractAddress: string | null | undefined,
-  gameId: number,
-  intervalMs: number = DEFAULT_POLL_INTERVAL_MS,
-): UseGameStatePollingResult {
-  const [gameState, setGameState] = useState<GameStateResponse | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  // Monotonic guard against a slow, stale poll resolving after a newer one
-  // already has -- same pattern as HexGridRenderer.tsx's click interceptor
-  // (design note #7 there).
-  const requestSeqRef = useRef(0);
-
-  const refresh = useCallback(() => {
-    if (!client || !contractAddress) {
-      setGameState(null);
-      setLoading(false);
-      return;
-    }
-    const seq = ++requestSeqRef.current;
-    setLoading(true);
-    client
-      .queryContractSmart(contractAddress, { GetGameState: { game_id: gameId } })
-      .then((response) => {
-        if (requestSeqRef.current !== seq) return;
-        setGameState(response as GameStateResponse);
-        setError(null);
-        setLoading(false);
-      })
-      .catch((e: unknown) => {
-        if (requestSeqRef.current !== seq) return;
-        setError(e instanceof Error ? e.message : "Unknown error querying GetGameState.");
-        setLoading(false);
-      });
-  }, [client, contractAddress, gameId]);
-
-  useEffect(() => {
-    refresh();
-    if (!client) return;
-    const handle = window.setInterval(refresh, intervalMs);
-    return () => window.clearInterval(handle);
-  }, [client, refresh, intervalMs]);
-
-  return { gameState, loading, error, refresh };
-}
-
-/* ------------------------------------------------------------------ */
-/* Player Net Worth polling hook -- see design note #6                */
-/* ------------------------------------------------------------------ */
-
-export interface UsePlayerNetWorthsResult {
-  /** Keyed by player address -- absent for any address that hasn't
-   *  resolved a `PlayerNetWorth` query yet (e.g. the very first render, or
-   *  a brand-new player who just joined mid-poll-cycle). */
-  netWorths: Record<string, PlayerNetWorthResponse>;
-  loading: boolean;
-  error: string | null;
-  refresh: () => void;
-}
-
-const DEFAULT_NET_WORTH_POLL_INTERVAL_MS = 6000;
-
-/** Polls `QueryMsg::PlayerNetWorth` for every address on a fixed interval -- design note #6 for why this is
- *  a distinct hook rather than a field on `GameStateResponse`. Every query fires concurrently via
- *  `Promise.all`, so this scales to a full player table in one round-trip-latency's worth of time, not N. */
-export function usePlayerNetWorths(
-  client: QueryCapableClient | null | undefined,
-  contractAddress: string,
-  gameId: number,
-  playerAddresses: readonly string[],
-  intervalMs: number = DEFAULT_NET_WORTH_POLL_INTERVAL_MS,
-): UsePlayerNetWorthsResult {
-  const [netWorths, setNetWorths] = useState<Record<string, PlayerNetWorthResponse>>({});
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  // Monotonic guard against a slow, stale poll resolving after a newer one
-  // already has -- same pattern as `useGameStatePolling` above.
-  const requestSeqRef = useRef(0);
-  // See design note #6: keys `refresh`'s own identity off the ADDRESS SET,
-  // not the `playerAddresses` array reference itself, so a same-content
-  // re-parse of `GameStateResponse.player_addresses` (every poll, being
-  // fresh JSON) doesn't rebuild this hook's interval every cycle.
-  const playersKey = playerAddresses.join(",");
-
-  const refresh = useCallback(() => {
-    if (!client || playerAddresses.length === 0) {
-      setNetWorths({});
-      setLoading(false);
-      return;
-    }
-    const seq = ++requestSeqRef.current;
-    setLoading(true);
-    Promise.all(
-      playerAddresses.map((player) =>
-        client
-          .queryContractSmart(contractAddress, {
-            PlayerNetWorth: { game_id: gameId, wallet_address: player },
-          })
-          .then((response) => [player, response as PlayerNetWorthResponse] as const),
-      ),
-    )
-      .then((entries) => {
-        if (requestSeqRef.current !== seq) return;
-        setNetWorths(Object.fromEntries(entries));
-        setError(null);
-        setLoading(false);
-      })
-      .catch((e: unknown) => {
-        if (requestSeqRef.current !== seq) return;
-        setError(e instanceof Error ? e.message : "Unknown error querying PlayerNetWorth.");
-        setLoading(false);
-      });
-    // `playerAddresses` itself is intentionally omitted below -- `playersKey`
-    // (its joined content) is the real dependency; see this hook's own
-    // design note #6 comment above.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [client, contractAddress, gameId, playersKey]);
-
-  useEffect(() => {
-    refresh();
-    if (!client) return;
-    const handle = window.setInterval(refresh, intervalMs);
-    return () => window.clearInterval(handle);
-  }, [client, refresh, intervalMs]);
-
-  return { netWorths, loading, error, refresh };
-}
-
 // Pre-Game Waterfall Auction (`waterfall.rs`) -- design note #7. Mirrors `WaterfallStateResponse` and its
 // nested types exactly, plus a THIRD independent polling hook on the same fixed-interval-plus-monotonic-
 // guard pattern. Separate rather than folded into `GameStateResponse` because `GetWaterfallState` is its
@@ -1200,19 +1038,7 @@ export interface WaterfallStateResponse {
   consecutive_waterfall_passes: number;
 }
 
-export interface UseWaterfallStatePollingResult {
-  waterfallState: WaterfallStateResponse | null;
-  loading: boolean;
-  error: string | null;
-  refresh: () => void;
-}
-
-const DEFAULT_WATERFALL_POLL_INTERVAL_MS = 4000;
-
-/** Polls `QueryMsg::GetWaterfallState` -- design note #7. Callers should gate on `enabled` rather than
- *  polling every room forever; when it is `false` the hook tears down its interval and clears state rather
- *  than continuing to query a phase that is already over.
- *  Mirrors `msg::TrainOfferEntry`. */
+/** Mirrors `msg::TrainOfferEntry`. */
 export interface TrainOfferEntry {
   offer_id: number;
   buyer_protocol_id: number;
@@ -1227,108 +1053,6 @@ export interface TrainOfferEntry {
 export interface TrainOffersResponse {
   game_id: number;
   offers: TrainOfferEntry[];
-}
-
-export interface UseTrainOffersPollingResult {
-  offers: TrainOfferEntry[];
-  loading: boolean;
-  error: string | null;
-  refresh: () => void;
-}
-
-/** Audit G-15: polls `GetTrainOffers`. Its own hook rather than a field on the main poll, following the
- *  pattern the waterfall hook established: offers change on a different rhythm from the board -- they appear
- *  and vanish on two players' actions rather than on turn boundaries -- and a seller needs to see one arrive
- *  while it is emphatically NOT their turn, so this cannot key off turn state. */
-export function useTrainOffersPolling(
-  client: QueryCapableClient | null | undefined,
-  contractAddress: string | null | undefined,
-  gameId: number,
-  intervalMs: number = DEFAULT_POLL_INTERVAL_MS,
-): UseTrainOffersPollingResult {
-  const [offers, setOffers] = useState<TrainOfferEntry[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const requestSeqRef = useRef(0);
-
-  const refresh = useCallback(() => {
-    if (!client || !contractAddress) {
-      setOffers([]);
-      setLoading(false);
-      return;
-    }
-    const seq = ++requestSeqRef.current;
-    setLoading(true);
-    client
-      .queryContractSmart(contractAddress, { GetTrainOffers: { game_id: gameId } })
-      .then((response) => {
-        if (requestSeqRef.current !== seq) return;
-        setOffers((response as TrainOffersResponse).offers ?? []);
-        setError(null);
-        setLoading(false);
-      })
-      .catch((e: unknown) => {
-        if (requestSeqRef.current !== seq) return;
-        setError(e instanceof Error ? e.message : "Unknown error querying GetTrainOffers.");
-        setLoading(false);
-      });
-  }, [client, contractAddress, gameId]);
-
-  useEffect(() => {
-    refresh();
-    const handle = setInterval(refresh, intervalMs);
-    return () => clearInterval(handle);
-  }, [refresh, intervalMs]);
-
-  return { offers, loading, error, refresh };
-}
-
-export function useWaterfallStatePolling(
-  client: QueryCapableClient | null | undefined,
-  /** OFFLINE-AWARE, exactly as the game-state hook is: no configured contract is a supported state, the hook
-   *  clears and never queries, and the prop is typed optional rather than coerced to `""` so the offline case
-   *  cannot be mistaken for a real address that happens to be empty. */
-  contractAddress: string | null | undefined,
-  gameId: number,
-  enabled: boolean,
-  intervalMs: number = DEFAULT_WATERFALL_POLL_INTERVAL_MS,
-): UseWaterfallStatePollingResult {
-  const [waterfallState, setWaterfallState] = useState<WaterfallStateResponse | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const requestSeqRef = useRef(0);
-
-  const refresh = useCallback(() => {
-    if (!client || !enabled || !contractAddress) {
-      setWaterfallState(null);
-      setLoading(false);
-      return;
-    }
-    const seq = ++requestSeqRef.current;
-    setLoading(true);
-    client
-      .queryContractSmart(contractAddress, { GetWaterfallState: { game_id: gameId } })
-      .then((response) => {
-        if (requestSeqRef.current !== seq) return;
-        setWaterfallState(response as WaterfallStateResponse);
-        setError(null);
-        setLoading(false);
-      })
-      .catch((e: unknown) => {
-        if (requestSeqRef.current !== seq) return;
-        setError(e instanceof Error ? e.message : "Unknown error querying GetWaterfallState.");
-        setLoading(false);
-      });
-  }, [client, contractAddress, gameId, enabled]);
-
-  useEffect(() => {
-    refresh();
-    if (!client || !enabled) return;
-    const handle = window.setInterval(refresh, intervalMs);
-    return () => window.clearInterval(handle);
-  }, [client, enabled, refresh, intervalMs]);
-
-  return { waterfallState, loading, error, refresh };
 }
 
 

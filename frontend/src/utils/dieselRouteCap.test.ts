@@ -49,12 +49,12 @@
 // seventeen `RevertTo` entries, three of them undoing tile lays -- a replay that ignored them would build a
 // board the players never saw, and would do it silently.
 
-import { applySandboxLayTile } from "./sandboxSession";
-import { autoTraceRoute } from "./routeAutoTrace";
-import { effectiveActions } from "./logRevert";
+import { applySandboxLayTile } from "../gameEngine/sandboxSession";
+import { autoTraceRoute } from "../gameEngine/routeAutoTrace";
+import { effectiveActions } from "../gameEngine/logRevert";
 import { STATIC_BOARD_HEXES } from "../components/hexBoardData";
 import type { MapGridResponse } from "../components/hexContractTypes";
-import type { StationToken } from "./trackReach";
+import type { StationToken } from "../gameEngine/trackReach";
 
 import FIXTURE from "./__fixtures__erieBoard.json";
 

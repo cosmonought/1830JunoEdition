@@ -35,7 +35,7 @@ import type { LegalTilePlacement, MapGridResponse } from "./hexContractTypes";
 // Design note #483: the port key is `trackReach`'s to define. Importing it
 // rather than re-templating `"q,r:edge"` here keeps one format -- a second
 // hand-built copy is how a set lookup starts silently missing.
-import { portKey } from "../utils/trackReach";
+import { portKey } from "../gameEngine/trackReach";
 
 /* ------------------------------------------------------------------ */
 /* Revenue-centre counts                                              */

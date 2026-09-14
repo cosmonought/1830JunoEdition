@@ -23,17 +23,17 @@ export {};
 
 const { readStripped, readSource, sliceBetween } =
   require("./sourceScan") as typeof import("./sourceScan");
-const { sharePurchaseBlock } = require("./sharePurchase") as typeof import("./sharePurchase");
+const { sharePurchaseBlock } = require("../gameEngine/sharePurchase") as typeof import("../gameEngine/sharePurchase");
 
-const REDUCER = readStripped("utils/sandboxSession.ts");
+const REDUCER = readStripped("gameEngine/sandboxSession.ts");
 /* Design notes are COMMENTS, so a note can only be asserted against the raw file -- `readStripped` removes
    the very text being looked for, and my first draft of the tripwire below searched the stripped copy and
    failed for that reason rather than for a real one. */
-const REDUCER_RAW = readSource("utils/sandboxSession.ts");
+const REDUCER_RAW = readSource("gameEngine/sandboxSession.ts");
 const APP = readStripped("App.tsx");
 const PANEL = readStripped("components/StockRoundPanel.tsx");
 
-type State = import("./gameState").GameStateResponse;
+type State = import("../gameEngine/gameState").GameStateResponse;
 
 /* ==================================================================
     DESIGN NOTE 1174: THE THIRD FIX WAS REVERTED, AND THE SUITE IS WHY

@@ -44,8 +44,8 @@
 // editing. A module-level registry keyed by room code costs one socket and no call sites.
 
 import { CLIENT_BUILD_ID, GAME_SERVER_URL } from "../config";
-import type { GameVariants } from "./gameVariants";
-import type { ForcedSignStage } from "./yellowSign";
+import type { GameVariants } from "../gameEngine/gameVariants";
+import type { ForcedSignStage } from "../gameEngine/yellowSign";
 import type { PresenceState } from "./presence";
 import { ROOM_WRITE_REFUSED_CODE, SEAT_SUPERSEDED_CODE, forgetSeat, readSeatPin, readSeatToken } from "./seatPin";
 import type {

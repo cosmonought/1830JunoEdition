@@ -23,7 +23,7 @@ const {
   carcosaRollHits,
   CARCOSA_CHANCE_IN_100,
   resolveFlavourLine,
-} = require("./yellowSign") as typeof import("./yellowSign");
+} = require("../gameEngine/yellowSign") as typeof import("../gameEngine/yellowSign");
 const { UNPREDICTABLE_REVENUE_FLAVOR } =
   require("../constants/flavorText") as typeof import("../constants/flavorText");
 const {
@@ -34,13 +34,13 @@ const {
   legacyTurnSeed,
   revenueDieFace,
 } =
-  require("./gameVariants") as typeof import("./gameVariants");
+  require("../gameEngine/gameVariants") as typeof import("../gameEngine/gameVariants");
 const { variantCueFor } = require("./variantSfx") as typeof import("./variantSfx");
 const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
 
 const APP = readStripped("App.tsx");
 const OVERLAY = readStripped("components/YellowSignOverlay.tsx");
-const SIGN = readStripped("utils/yellowSign.ts");
+const SIGN = readStripped("gameEngine/yellowSign.ts");
 
 /* Design note #1051: the pre-#1051 die, asked for by name. Every case in this file was written against the
    FNV hash and measures its behaviour; `legacyTurnSeed` is that hash, and it is still the path a game logged

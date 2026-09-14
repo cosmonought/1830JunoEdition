@@ -20,8 +20,8 @@
 // checked the flag, and would leave both players' certificate totals wrong
 // against a limit they plan around for the rest of the game.
 
-import { certificateCount, type GameStateResponse } from "./gameState";
-import { presidentFor, settlePresidencies } from "./presidencyTransfer";
+import { certificateCount, type GameStateResponse } from "../gameEngine/gameState";
+import { presidentFor, settlePresidencies } from "../gameEngine/presidencyTransfer";
 
 const P1 = "p-one";
 const P2 = "p-two";

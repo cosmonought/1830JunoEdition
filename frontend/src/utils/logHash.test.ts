@@ -10,9 +10,9 @@
 
 export {};
 
-const { sha256Hex, utf8Bytes } = require("./sha256") as typeof import("./sha256");
+const { sha256Hex, utf8Bytes } = require("../gameEngine/sha256") as typeof import("../gameEngine/sha256");
 const { logHash, logHashInput, logEntryLine } =
-  require("./logHash") as typeof import("./logHash");
+  require("../gameEngine/logHash") as typeof import("../gameEngine/logHash");
 const { buildSandboxLogExport } = require("./logExport") as typeof import("./logExport");
 
 describe("SHA-256, against FIPS 180-4 and friends", () => {

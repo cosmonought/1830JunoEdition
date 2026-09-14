@@ -31,18 +31,23 @@ import { createServer, type Server as HttpServer } from "http";
 import { WebSocketServer, type WebSocket } from "ws";
 
 import { RoomSession, type ServerLogEntry } from "../../frontend/src/utils/roomSession";
-import { fieldDigests, stateDigest } from "../../frontend/src/utils/stateDigest";
-import { sandboxReplayProviders } from "../../frontend/src/utils/replayProviders";
-import type { ServerMessage } from "../../frontend/src/utils/serverProtocol";
-import type { GameplayExecuteMsg } from "../../frontend/src/utils/sessionKey";
+/* #1500: the game machine, through its front door. Everything this server knows about 1830 comes from
+   `frontend/src/gameEngine` -- one import, one surface, and no second implementation of any rule. */
 import {
   DEFAULT_SANDBOX_SCENARIO,
+  STANDARD_VARIANTS,
+  fieldDigests,
+  logHash,
+  sandboxReplayProviders,
   sandboxScenario,
   sandboxScenarioState,
   sandboxWaterfallState,
-} from "../../frontend/src/utils/sandboxState";
-import { waterfallForRoster, withEmptyRoster } from "../../frontend/src/utils/gameSetup";
-import { STANDARD_VARIANTS } from "../../frontend/src/utils/gameVariants";
+  stateDigest,
+  waterfallForRoster,
+  withEmptyRoster,
+} from "../../frontend/src/gameEngine";
+import type { ServerMessage } from "../../frontend/src/utils/serverProtocol";
+import type { GameplayExecuteMsg } from "../../frontend/src/utils/sessionKey";
 import type {
   ChatSendRequest,
   PresenceSetRequest,
@@ -71,7 +76,6 @@ import {
   type SandboxRoomSummary,
 } from "../../frontend/src/utils/sandboxRoomSummary";
 import type { LogStore } from "./fileLogStore";
-import { logHash } from "../../frontend/src/utils/logHash";
 
 /** Resolves the player behind a connection, or `null` to reject it.
  *

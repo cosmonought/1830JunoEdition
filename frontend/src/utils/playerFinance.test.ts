@@ -12,7 +12,7 @@
 // should not.
 
 import { playerFinances } from "./playerFinance";
-import type { GameStateResponse } from "./gameState";
+import type { GameStateResponse } from "../gameEngine/gameState";
 
 const ADA = "p-ada";
 const BEN = "p-ben";

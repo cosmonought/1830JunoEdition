@@ -133,7 +133,7 @@ describe("the answer travels, because a choice the log drops is not a choice", (
     return fs.readFileSync(path.join(__dirname, "..", relative), "utf8");
   };
   const APP = read("App.tsx");
-  const REDUCER = read("utils/sandboxSession.ts");
+  const REDUCER = read("gameEngine/sandboxSession.ts");
   const WIRE = read("utils/sessionKey.ts");
 
   it("adds the field #1 said did not exist", () => {

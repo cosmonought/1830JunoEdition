@@ -41,7 +41,7 @@
 // so it is an ordinary lay with an unusual legality rule and must keep ending the step. The two privates are
 // opposites and the pair is easy to conflate; that is why #548 spells both out.
 
-import type { GameplayExecuteMsg } from "./sessionKey";
+import type { GameplayExecuteMsg } from "../utils/sessionKey";
 
 /** The private whose lay is extra. Champlain & St. Lawrence, `private_id` 2. */
 export const BONUS_LAY_PRIVATE_ID = 2;

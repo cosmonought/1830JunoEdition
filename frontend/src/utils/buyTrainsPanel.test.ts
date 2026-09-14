@@ -34,7 +34,7 @@ import {
   STICKY_RELEASE_VIEWPORT_SHARE,
 } from "./stickyCollapse";
 import { purchaseWarnings, limitAfterNextPhase } from "./purchaseWarnings";
-import type { DepotTier, GamePhase } from "./gamePhase";
+import type { DepotTier, GamePhase } from "../gameEngine/gamePhase";
 
 /* #490a: every note below quotes the rule it explains, so the code assertions read a comment-stripped copy
    and the notes are checked separately against the raw text where that is the point. */

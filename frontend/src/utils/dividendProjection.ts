@@ -43,7 +43,7 @@
 //
 // See docs/ai_architecture/contract_economy.md, dividendProjection.ts #705.
 
-import type { PlayerShareEntry } from "./gameState";
+import type { PlayerShareEntry } from "../gameEngine/gameState";
 
 export interface DividendPayoutProjection {
   /** Design note #706: a shareholder, or the corporation itself collecting its bank pool's share. The renderer

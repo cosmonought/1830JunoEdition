@@ -159,8 +159,8 @@ describe("the bid minimum is one rule, read by the button and the board", () => 
      compute `face + 5`, both submit it, and both are accepted.
      THE THIRD TIME THIS CODEBASE HAS FOUND THIS SHAPE: #712's zone rules, #1172's purchase count, and now
      this. Each was a rule encoded where the control lives and never where the state moves. */
-  const ESCROW = readStripped("utils/auctionEscrow.ts");
-  const REDUCER = readStripped("utils/sandboxSession.ts");
+  const ESCROW = readStripped("gameEngine/auctionEscrow.ts");
+  const REDUCER = readStripped("gameEngine/sandboxSession.ts");
 
   it("keeps the increment in one module", () => {
     expect(ESCROW).toContain("export const MIN_BID_INCREMENT = 5;");
@@ -188,7 +188,7 @@ describe("the bid minimum is one rule, read by the button and the board", () => 
     /* Design note #22: a bid at face is worth what the lowest offer can be bought outright for, so it offers
        the seller nothing. Asserted as arithmetic rather than as source. */
     const { minimumBidFor, MIN_BID_INCREMENT } =
-      require("./auctionEscrow") as typeof import("./auctionEscrow");
+      require("../gameEngine/auctionEscrow") as typeof import("../gameEngine/auctionEscrow");
     expect(minimumBidFor({ faceValue: 100, bids: [] })).toBe(100 + MIN_BID_INCREMENT);
     expect(minimumBidFor({ faceValue: 100, bids: [{ bid_amount: "165" }] })).toBe(
       165 + MIN_BID_INCREMENT,
@@ -198,7 +198,7 @@ describe("the bid minimum is one rule, read by the button and the board", () => 
   it("counts the leader's own bid toward the high", () => {
     /* Excluding it would let whoever holds the high bid re-submit their current amount -- which is the
        reported symptom seen from one seat instead of two. */
-    const { minimumBidFor } = require("./auctionEscrow") as typeof import("./auctionEscrow");
+    const { minimumBidFor } = require("../gameEngine/auctionEscrow") as typeof import("../gameEngine/auctionEscrow");
     expect(minimumBidFor({ faceValue: 20, bids: [{ bid_amount: "45" }, { bid_amount: "40" }] })).toBe(50);
   });
 });

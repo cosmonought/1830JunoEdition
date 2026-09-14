@@ -30,7 +30,7 @@ import {
   silenceLabel,
   type FleetLossNotice,
 } from "./fleetLossNotice";
-import type { FleetLoss } from "./sandboxSession";
+import type { FleetLoss } from "../gameEngine/sandboxSession";
 import { readStripped, sliceBetween } from "./sourceScan";
 
 const PRR = 1;

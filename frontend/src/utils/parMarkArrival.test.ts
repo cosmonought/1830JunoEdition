@@ -31,11 +31,11 @@
 export {};
 
 const { readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
-const { reconcileParMarks } = require("./sandboxState") as typeof import("./sandboxState");
-const { buildOperatingOrder } = require("./sandboxSession") as typeof import("./sandboxSession");
-const { sandboxScenarioState } = require("./sandboxState") as typeof import("./sandboxState");
+const { reconcileParMarks } = require("../gameEngine/sandboxState") as typeof import("../gameEngine/sandboxState");
+const { buildOperatingOrder } = require("../gameEngine/sandboxSession") as typeof import("../gameEngine/sandboxSession");
+const { sandboxScenarioState } = require("../gameEngine/sandboxState") as typeof import("../gameEngine/sandboxState");
 
-type State = import("./gameState").GameStateResponse;
+type State = import("../gameEngine/gameState").GameStateResponse;
 
 describe("the rule: arrival breaks a price tie (#1221)", () => {
   /* TWO CORPORATIONS, ONE PRICE, AND THE ONE WITH THE HIGHER ID PARRED FIRST. That combination is the whole
@@ -140,7 +140,7 @@ describe("the wiring: the mark is the reducer's, and the shell no longer stands 
       player_addresses: ["p-a", "p-b"],
       market_positions: {},
     };
-    const { applySandboxAction } = require("./sandboxSession") as typeof import("./sandboxSession");
+    const { applySandboxAction } = require("../gameEngine/sandboxSession") as typeof import("../gameEngine/sandboxSession");
     const after = applySandboxAction(
       state,
       { SetBoPar: { par_value: "100", player: "p-a" } } as never,

@@ -35,17 +35,17 @@ const {
   markPayout,
   escalationTier,
   resolveFlavourLine,
-} = require("./yellowSign") as typeof import("./yellowSign");
+} = require("../gameEngine/yellowSign") as typeof import("../gameEngine/yellowSign");
 /* Design note #1051: the pre-#1051 die. Every case here was written against the FNV hash, so the fixture
    asks for it by name -- see `batch50.test.ts` for the claim about a real draw. */
-const { legacyTurnSeed } = require("./gameVariants") as typeof import("./gameVariants");
-const { countableTrainCount } = require("./trainLimit") as typeof import("./trainLimit");
-const { derivePhase } = require("./gamePhase") as typeof import("./gamePhase");
+const { legacyTurnSeed } = require("../gameEngine/gameVariants") as typeof import("../gameEngine/gameVariants");
+const { countableTrainCount } = require("../gameEngine/trainLimit") as typeof import("../gameEngine/trainLimit");
+const { derivePhase } = require("../gameEngine/gamePhase") as typeof import("../gameEngine/gamePhase");
 const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
 
 const APP = readStripped("App.tsx");
-const REDUCER = readStripped("utils/sandboxSession.ts");
-const PHASE = readStripped("utils/gamePhase.ts");
+const REDUCER = readStripped("gameEngine/sandboxSession.ts");
+const PHASE = readStripped("gameEngine/gamePhase.ts");
 
 const parts = (companyId: number) => ({
   macroRound: 3,
@@ -253,7 +253,7 @@ describe("a ghost train occupies no limit slot, for now", () => {
     /* #1006's SHAPE, which this project meets about once a batch. A new exempt kind of train that only some
        counting sites know about is a limit that disagrees with itself. */
     expect(APP).toContain("company?.ghost_trains,");
-    expect(readStripped("utils/trainPurchaseGate.ts")).toContain("company.ghost_trains");
+    expect(readStripped("gameEngine/trainPurchaseGate.ts")).toContain("company.ghost_trains");
     expect(readStripped("components/TrainPurchasePanel.tsx")).toContain("buyer?.ghost_trains");
     expect(readStripped("components/TrainBadges.tsx")).toContain("countableTrainCount(trains, reprieved, ghosts)");
     expect(readStripped("panels/ContextualActionBar.tsx")).toContain("activeCorporation?.ghostTrains");

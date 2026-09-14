@@ -19,7 +19,7 @@
 // keep it. Same shape as the "GAME END" tooltip on a cell that ended nothing
 // (#652). Prose cannot be tested; these predicates can.
 
-import { applySandboxAction } from "./sandboxSession";
+import { applySandboxAction } from "../gameEngine/sandboxSession";
 import {
   BAO_COMPANY_ID,
   BAO_PRIVATE_ID,
@@ -27,12 +27,12 @@ import {
   corporateSaleBlockReason,
   isSellableToCorporation,
   settleBaoPrivate,
-} from "./baltimorePrivate";
+} from "../gameEngine/baltimorePrivate";
 import {
   privatePurchaseBlockReason,
   purchasablePrivatesInPlay,
 } from "../components/PrivateTradePanel";
-import type { GameStateResponse, PrivateCompanyState, PublicCompanyState } from "./gameState";
+import type { GameStateResponse, PrivateCompanyState, PublicCompanyState } from "../gameEngine/gameState";
 
 const ALICE = "juno1alice";
 const BOB = "juno1bob";

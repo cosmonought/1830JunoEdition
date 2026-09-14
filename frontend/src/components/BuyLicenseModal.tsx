@@ -22,7 +22,7 @@
 import React from "react";
 import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { PickaxeIcon } from "./KanawhaBadge";
-import { KANAWHA_LICENSE_COST, KANAWHA_LICENSES_FOR_SALE } from "../utils/kanawhaLicense";
+import { KANAWHA_LICENSE_COST, KANAWHA_LICENSES_FOR_SALE } from "../gameEngine/kanawhaLicense";
 
 export interface BuyLicenseModalProps {
   open: boolean;

@@ -54,14 +54,14 @@ import {
   stationTickerColor,
 } from "../components/hexContractTypes";
 import { desaturatedLiveryInk } from "../styles/corporationLivery";
-import type { StationTokenSlot } from "../utils/stationTokens";
-import type { PrivateCompanyState } from "../utils/gameState";
-import type { RoundType, TileColor } from "../utils/gameState";
+import type { StationTokenSlot } from "../gameEngine/stationTokens";
+import type { PrivateCompanyState } from "../gameEngine/gameState";
+import type { RoundType, TileColor } from "../gameEngine/gameState";
 import {
   type GamePhase,
   type TierRustOutlook,
   type TrainTier,
-} from "../utils/gamePhase";
+} from "../gameEngine/gamePhase";
 import {
   isPlayingSurface,
   labelForTab,
@@ -74,8 +74,8 @@ import { TURN_HANDOFF_SWEEP_CSS } from "../styles/animations";
 import { CorporateLogo } from "../components/CorporateLogo";
 // Design note #552: the shipped crown, not a platform emoji.
 import { PresidentCrown, PRESIDENT_CROWN_GOLD } from "../components/PresidentCrown";
-import { NO_TRAIN_ROUTE_REASON } from "../utils/gameConstants";
-import { passButtonLabel, passButtonTitle } from "../utils/turnAction";
+import { NO_TRAIN_ROUTE_REASON } from "../gameEngine/gameConstants";
+import { passButtonLabel, passButtonTitle } from "../gameEngine/turnAction";
 import {
   canPinWithoutTrapping,
   restingHeight,
@@ -83,11 +83,11 @@ import {
   shouldReleasePin,
   stickyTopOffset,
 } from "../utils/stickyCollapse";
-import type { DepotTier } from "../utils/gamePhase";
+import type { DepotTier } from "../gameEngine/gamePhase";
 import { purchaseWarnings } from "../utils/purchaseWarnings";
 import { bankBreakWarning } from "../utils/bankBreak"; // #1410
 // Design note #1034: the one place that says a reprieved train occupies no limit slot.
-import { countableTrainCount } from "../utils/trainLimit";
+import { countableTrainCount } from "../gameEngine/trainLimit";
 import { dividendDeclaration, marketMoveDirection } from "../utils/dividendStep";
 // Design note #494: the per-train route ink, so the collapsed chips match
 // the lines on the map.
@@ -109,7 +109,7 @@ import CarcosaMark from "../components/CarcosaMark";
 import { PrivatePowerStar } from "../components/privatePowerStar";
 // Design note #1323: the Kanawha Licence's pickaxe, on the corporation badge and the button that buys one.
 import { KanawhaLicenseBadge, PickaxeIcon } from "../components/KanawhaBadge";
-import { numberedPrivate } from "../utils/privateOrdinal";
+import { numberedPrivate } from "../gameEngine/privateOrdinal";
 
 /* ------------------------------------------------------------------ */
 /* Contextual Top Action Bar -- see design note #8/item 5              */
@@ -1313,7 +1313,7 @@ export default function ContextualActionBar({
   /* Design note #500: `latestFeedItem` and `onOpenActivityLog` are GONE. They fed a one-line echo of
      `TopTicker`'s newest entry inside this panel, and the ticker is on the same screen. Removed rather than
      left unread -- an unused prop is an invitation to render it again.
-     Derived phase (`utils/gamePhase.ts`) for the far-right badge -- design note #40 for why it moved here. */
+     Derived phase (`gameEngine/gamePhase.ts`) for the far-right badge -- design note #40 for why it moved here. */
   phase?: GamePhase | null;
 }) {
   /* Design note #839: what the next purchase destroys, as badges rather than as hover text and rather than

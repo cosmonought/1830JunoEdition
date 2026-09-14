@@ -21,12 +21,12 @@
 // no writer looks exactly like an enforced rule from inside the test file. #736 was the same discovery about
 // private closure ("ten readers, no writer"); this is the mirror image, one reader and no writer.
 
-import { applySandboxAction, applySandboxMarketAction } from "./sandboxSession";
-import { shareSaleBlock, certificatesIn } from "./shareSale";
-import { settlePresidencies, presidentFor } from "./presidencyTransfer";
-import { certificateCount } from "./gameState";
+import { applySandboxAction, applySandboxMarketAction } from "../gameEngine/sandboxSession";
+import { shareSaleBlock, certificatesIn } from "../gameEngine/shareSale";
+import { settlePresidencies, presidentFor } from "../gameEngine/presidencyTransfer";
+import { certificateCount } from "../gameEngine/gameState";
 import { projectShareSaleMove, PRICE_GRID } from "../components/StockMarketRenderer";
-import type { GameStateResponse } from "./gameState";
+import type { GameStateResponse } from "../gameEngine/gameState";
 
 const PRR = 1;
 
@@ -334,11 +334,11 @@ describe("the rule reaches the authority, not only the button", () => {
   it("is asked by the reducer", () => {
     /* THE STRUCTURAL HALF, and the only one that would have caught this. Every behavioural test above can be
        satisfied by a rule module nobody consults -- which is exactly the state the app shipped in. */
-    expect(read("utils/sandboxSession.ts")).toContain("shareSaleBlock({");
+    expect(read("gameEngine/sandboxSession.ts")).toContain("shareSaleBlock({");
   });
 
   it("is asked by the market atom", () => {
-    expect(read("utils/sandboxSession.ts")).toContain("ctx?.saleRefused?.(protocol_id, percentage)");
+    expect(read("gameEngine/sandboxSession.ts")).toContain("ctx?.saleRefused?.(protocol_id, percentage)");
   });
 
   it("is still asked by the panel", () => {

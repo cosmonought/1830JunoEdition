@@ -13,7 +13,7 @@
 // FOUND BY AUDIT, NOT BY REPORT. That is the point of extracting before the next bug rather than after it.
 
 import { editRouteDraft, type RouteDraftEdit } from "./routeDraftEdit";
-import { UNLIMITED_REACH } from "./trainReach";
+import { UNLIMITED_REACH } from "../gameEngine/trainReach";
 import type { RoutePoint } from "./routeWaypoints";
 import type { MapGridResponse } from "../components/hexContractTypes";
 import { STATIC_BOARD_HEXES } from "../components/hexBoardData";

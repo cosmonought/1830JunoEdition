@@ -24,7 +24,7 @@
  * MULTIPLE MOVEMENTS ARE RETURNED IN ROSTER ORDER. A trade moves two treasuries in one action; the caller
  * shows the acting corporation's when it can tell which that is, and the first otherwise. */
 
-import type { GameStateResponse } from "./gameState";
+import type { GameStateResponse } from "../gameEngine/gameState";
 
 export interface TreasuryMovement {
   companyId: number;

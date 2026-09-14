@@ -15,7 +15,7 @@
 // (or the loop guard stops guarding) and must differ across turns (or the
 // guard outlives its turn and blocks the next one).
 
-import { operatingTurnKey, turnGuardKey } from "./turnGuardKey";
+import { operatingTurnKey, turnGuardKey } from "../gameEngine/turnGuardKey";
 
 /** OR 1.1, the second corporation in the operating order. */
 const OR_1_1_SECOND = {

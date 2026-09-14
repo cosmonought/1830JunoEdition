@@ -63,7 +63,7 @@
 import { terrainBuildFeeAt } from "../components/hexBoardData";
 import type { MapGridResponse } from "../components/hexContractTypes";
 import { pendingSpend, type PendingSpend } from "./pendingSpend";
-import { terrainFeeDue } from "./terrainFee";
+import { terrainFeeDue } from "../gameEngine/terrainFee";
 
 /** The cost of laying on `(q, r)`, given the board and the acting treasury.
  *

@@ -2,17 +2,17 @@
 //
 // Design note #1340 (harness): one dispatch, the whole transition -- and nothing outside the reducer moving money.
 
-import { applySandboxAction } from "./sandboxSession";
+import { applySandboxAction } from "../gameEngine/sandboxSession";
 import { describeAuctionTransition } from "./auctionTransition";
 import {
   DEFAULT_SANDBOX_SCENARIO,
   sandboxScenario,
   sandboxScenarioState,
   sandboxWaterfallState,
-} from "./sandboxState";
-import { waterfallForRoster, withEmptyRoster } from "./gameSetup";
+} from "../gameEngine/sandboxState";
+import { waterfallForRoster, withEmptyRoster } from "../gameEngine/gameSetup";
 import type { GameplayExecuteMsg } from "./sessionKey";
-import type { GameStateResponse } from "./gameState";
+import type { GameStateResponse } from "../gameEngine/gameState";
 import { readStripped } from "./sourceScan";
 
 const HOST = "p-host";
@@ -113,7 +113,7 @@ describe("#1340: the reducer settles the auction inside one call", () => {
 
   it("neither caller composes the auction any more", () => {
     const APP = readStripped("App.tsx");
-    const ENGINE = readStripped("utils/replayLog.ts");
+    const ENGINE = readStripped("gameEngine/replayLog.ts");
     for (const source of [APP, ENGINE]) {
       expect(source).not.toContain("applySandboxWaterfallAction(");
       expect(source).not.toContain("result.allPassed");

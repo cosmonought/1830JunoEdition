@@ -35,8 +35,8 @@ import {
   plusTilesTagFor,
   recommendedLengthFor,
   recommendedVariantsFor,
-} from "../utils/gameVariants";
-import { MIN_PLAYERS, maxPlayersFor } from "../utils/gameSetup";
+} from "../gameEngine/gameVariants";
+import { MIN_PLAYERS, maxPlayersFor } from "../gameEngine/gameSetup";
 import { DEFAULT_ROOM_SETUP, type RoomSetup, type RoomVisibility } from "../utils/sandboxRoomSummary";
 
 /** The type boxes' sentences, as asked. `GAME_TYPE_COPY`'s blurbs are the waiting room's and the Lobby's older

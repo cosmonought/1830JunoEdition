@@ -24,7 +24,7 @@
 
 export {};
 
-const { effectiveActions } = require("./logRevert") as typeof import("./logRevert");
+const { effectiveActions } = require("../gameEngine/logRevert") as typeof import("../gameEngine/logRevert");
 const { readStripped, readSource } = require("./sourceScan") as typeof import("./sourceScan");
 
 type Entry = { index: number; id: string; actor: string; payload: string };
@@ -85,7 +85,7 @@ describe("a collision no longer destroys the entry nobody undid", () => {
 
   it("keys the dead-set on identity, not on position", () => {
     /* THE MECHANISM, pinned. A `Set<number>` here is the bug; the type is the fix. */
-    const source = readStripped("utils/logRevert.ts");
+    const source = readStripped("gameEngine/logRevert.ts");
     expect(source).toContain("const dead = new Set<string>();");
     expect(source).toContain("dead.add(action.id);");
     expect(source).toContain("dead.add(other.id);");
@@ -95,8 +95,8 @@ describe("a collision no longer destroys the entry nobody undid", () => {
     /* AN OPTIONAL `id` WITH A FALLBACK TO `index` would reproduce the bug for every caller that forgot it,
        silently. Required turns each such caller into a type error -- which is what found the three fixtures
        this batch had to update. */
-    expect(readStripped("utils/logRevert.ts")).toContain("id: string;");
-    expect(readStripped("utils/logRevert.ts")).not.toContain("id?: string");
+    expect(readStripped("gameEngine/logRevert.ts")).toContain("id: string;");
+    expect(readStripped("gameEngine/logRevert.ts")).not.toContain("id?: string");
   });
 });
 

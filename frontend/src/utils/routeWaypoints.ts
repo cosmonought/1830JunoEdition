@@ -8,7 +8,7 @@
 import type { RouteWaypointDto } from "./sessionKey";
 import type { MapGridResponse } from "../components/hexContractTypes";
 import { HEX_NEIGHBOR_OFFSETS, cityExitEdges } from "../components/hexGeometry";
-import type { StationToken } from "./trackReach";
+import type { StationToken } from "../gameEngine/trackReach";
 
 /* ------------------------------------------------------------------ */
 /* Manual Route Point UI -- see design note #11                       */

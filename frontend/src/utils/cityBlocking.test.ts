@@ -21,8 +21,8 @@
 //   "every slot is filled"       instead of "filled by others"    -- blocks a corporation by its own token
 //   "no room"                    instead of "not a city"          -- blocks every town and every plain hex
 
-import { cityBlockerFor, cityBlocksThrough, type TokenHolder } from "./cityBlocking";
-import { reachableTrack } from "./trackReach";
+import { cityBlockerFor, cityBlocksThrough, type TokenHolder } from "../gameEngine/cityBlocking";
+import { reachableTrack } from "../gameEngine/trackReach";
 import type { MapGridResponse } from "../components/hexContractTypes";
 
 const ME = 1;

@@ -29,9 +29,9 @@ import {
   applySandboxAction,
   beginOperatingRound,
   operatingRoundsForPhase,
-} from "./sandboxSession";
-import { derivePhase } from "./gamePhase";
-import type { GameStateResponse, PublicCompanyState } from "./gameState";
+} from "../gameEngine/sandboxSession";
+import { derivePhase } from "../gameEngine/gamePhase";
+import type { GameStateResponse, PublicCompanyState } from "../gameEngine/gameState";
 
 /* ==================================================================
  *  DESIGN NOTE 642 (harness): "THE ROUND ENDED" IS A STATE, NOT A FLAG

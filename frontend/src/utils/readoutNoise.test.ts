@@ -22,7 +22,7 @@ export {};
 
 const { readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
 const { floatCostIn, FLOAT_THRESHOLD_PERCENT } =
-  require("./floatThreshold") as typeof import("./floatThreshold");
+  require("../gameEngine/floatThreshold") as typeof import("../gameEngine/floatThreshold");
 const { DEPOT_TOAST_MS } = require("../components/ActionToast") as typeof import("../components/ActionToast");
 
 const LOG = readStripped("utils/actionLog.ts");
@@ -118,7 +118,7 @@ describe("the float cost is arithmetic, and it is right", () => {
 
   it("reads the threshold rather than repeating it", () => {
     /* #749's rule: the card and the reducer must not hold two copies of the float condition. */
-    const source = readStripped("utils/floatThreshold.ts");
+    const source = readStripped("gameEngine/floatThreshold.ts");
     const fn = sliceBetween(source, "export function floatCostIn(", "\n}\n");
     expect(fn).toContain("FLOAT_THRESHOLD_PERCENT / 10");
     expect(fn).not.toContain("60");

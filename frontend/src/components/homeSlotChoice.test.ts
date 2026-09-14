@@ -144,7 +144,7 @@ describe("the renderer consults the rule rather than the marker", () => {
       const fs = require("fs") as typeof import("fs");
       const path = require("path") as typeof import("path");
       return fs
-        .readFileSync(path.join(__dirname, "..", "utils", "stationTokens.ts"), "utf8")
+        .readFileSync(path.join(__dirname, "..", "gameEngine", "stationTokens.ts"), "utf8")
         .replace(/\/\*[\s\S]*?\*\//g, "")
         .replace(/^\s*\/\/.*$/gm, "");
     })();

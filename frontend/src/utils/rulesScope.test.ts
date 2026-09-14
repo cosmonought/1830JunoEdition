@@ -29,7 +29,7 @@ const READERS = ["nextDerivedAction(", "filterSandboxPlacements("] as const;
 
 /** Files whose calls run with no render to put the board in effect: the engine, and the shell's dispatch. */
 const RENDER_FREE: ReadonlyArray<{ file: string; region?: [string, string] }> = [
-  { file: "utils/replayLog.ts" },
+  { file: "gameEngine/replayLog.ts" },
   /* The shell's dispatch only -- `runGameplayAction`'s body, which a rebuild runs 150 times before the first
      paint. The picker's and the veil's calls live elsewhere in the file and are render-time. */
   { file: "App.tsx", region: ["const gridBeforeAction = mapGridRef.current;", "if (\"LayTile\" in msg)"] },

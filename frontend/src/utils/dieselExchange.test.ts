@@ -3,10 +3,10 @@
 // RULED: "a 4-, 5- or 6-train may be traded in to purchase a D-train for $800." Treasury only -- an exchange
 // is an ordinary purchase by a corporation that already owns a train, so the emergency flow never applies.
 
-import { applySandboxAction, returnedTrainRefusal } from "./sandboxSession";
+import { applySandboxAction, returnedTrainRefusal } from "../gameEngine/sandboxSession";
 import { actionWasRefused, refusalReasonFor } from "./refusedAction";
 import { describeGameplayAction } from "./actionLog";
-import { depotInventory } from "./gamePhase";
+import { depotInventory } from "../gameEngine/gamePhase";
 import {
   DIESEL_EXCHANGE_COST,
   dieselAvailable,
@@ -14,9 +14,9 @@ import {
   dieselExchangeEnabled,
   dieselExchangeRefusal,
   exchangeableTrains,
-} from "./dieselExchange";
-import type { GameStateResponse } from "./gameState";
-import { MOCK_MAP_GRID } from "./mockFixtures";
+} from "../gameEngine/dieselExchange";
+import type { GameStateResponse } from "../gameEngine/gameState";
+import { MOCK_MAP_GRID } from "../gameEngine/mockFixtures";
 
 const NNH = 7;
 const BO = 4;

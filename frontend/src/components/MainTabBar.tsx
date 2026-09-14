@@ -9,7 +9,7 @@
 
 import React from "react";
 
-import type { RoundType } from "../utils/gameState";
+import type { RoundType } from "../gameEngine/gameState";
 import { styles } from "../styles/appStyles";
 
 export type MainTab = "phase" | "corps" | "map" | "stock" | "ledger" | "rules" | "tiles";

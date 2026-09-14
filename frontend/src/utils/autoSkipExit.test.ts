@@ -14,7 +14,7 @@
 // the end of the list. The guard then marked the turn handled, so it fired once, wrote a log line claiming a
 // skip, and never ran again. A reader of the Activity Log would have seen the feature working.
 
-import { autoSkipExit } from "./autoSkipExit";
+import { autoSkipExit } from "../gameEngine/autoSkipExit";
 import type { OperatingSubPhase } from "../components/OperatingSubPhaseStepper";
 
 /** The full sequence, and the one with `BuyPrivate` already spent -- both real. */

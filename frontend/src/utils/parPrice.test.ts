@@ -19,7 +19,7 @@
 // different prices, and only an assertion that compares two clients can
 // catch that coming back.
 
-import { parPriceFor, type GameStateResponse } from "./gameState";
+import { parPriceFor, type GameStateResponse } from "../gameEngine/gameState";
 
 const ERIE = 4;
 

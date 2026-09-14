@@ -8,7 +8,7 @@
 // two-slot city, the point `nextCitySlotPoint` promises is the point the draw pass's slot list hands back for
 // the token that then arrives.
 
-import { nextCitySlotPoint, tokenCityBucket } from "./stationTokens";
+import { nextCitySlotPoint, tokenCityBucket } from "../gameEngine/stationTokens";
 import { tileCitySlotCounts, tileCitySlotPoints } from "../components/TileGraphics";
 import type { MapGridResponse, StationTokenCompany } from "../components/hexContractTypes";
 

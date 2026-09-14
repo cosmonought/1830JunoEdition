@@ -24,11 +24,11 @@
 // jsdom renders no animation and drives no room, so what is checkable is WHICH DISPATCH changes state and
 // what the surfaces are handed. The reducer half is driven; the render half is a source scan.
 
-import { applyPhaseChange, applySandboxAction, describeReprieveExpiries } from "./sandboxSession";
-import { STANDARD_VARIANTS } from "./gameVariants";
-import { isTrainLocked } from "./trainLimit";
+import { applyPhaseChange, applySandboxAction, describeReprieveExpiries } from "../gameEngine/sandboxSession";
+import { STANDARD_VARIANTS } from "../gameEngine/gameVariants";
+import { isTrainLocked } from "../gameEngine/trainLimit";
 import { fleetLossNotices, noticeBody } from "./fleetLossNotice";
-import type { GameStateResponse } from "./gameState";
+import type { GameStateResponse } from "../gameEngine/gameState";
 import { readStripped, sliceBetween } from "./sourceScan";
 
 const GENTLE = { ...STANDARD_VARIANTS, gentleRust: true };
@@ -37,7 +37,7 @@ const BAR = readStripped("panels/ContextualActionBar.tsx");
 const CHIPS = readStripped("components/TrainBadges.tsx");
 const ANIM = readStripped("styles/animations.ts");
 const STYLES = readStripped("styles/appStyles.ts");
-const REDUCER = readStripped("utils/sandboxSession.ts");
+const REDUCER = readStripped("gameEngine/sandboxSession.ts");
 
 /** An Operating Round with one corporation acting, parked on whichever step the case needs. */
 const operating = (subPhase: string, over: Partial<GameStateResponse> = {}): GameStateResponse =>

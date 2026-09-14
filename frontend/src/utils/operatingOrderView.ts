@@ -1,4 +1,4 @@
-import type { GameStateResponse, PublicCompanyState } from "./gameState";
+import type { GameStateResponse, PublicCompanyState } from "../gameEngine/gameState";
 
 /* ==================================================================
  *  DESIGN NOTE 753: THE QUEUE IS DECIDED ONCE, SO THE TABLE MUST READ IT

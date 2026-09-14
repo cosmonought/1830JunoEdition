@@ -6,8 +6,8 @@
 // `summariseSandboxRoom` to build the public list -- imports that file as TYPES ONLY, on purpose. Nothing here
 // touches a window, a socket or storage.
 
-import type { GameVariants } from "./gameVariants";
-import { maxPlayersFor } from "./gameSetup";
+import type { GameVariants } from "../gameEngine/gameVariants";
+import { maxPlayersFor } from "../gameEngine/gameSetup";
 
 export type RoomVisibility = "public" | "private";
 

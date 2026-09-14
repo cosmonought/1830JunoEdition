@@ -23,12 +23,12 @@
 import React, { useMemo, useState } from "react";
 import { ACTION_GREEN, ACTION_GREEN_BORDER, ACTION_GREEN_INK } from "../styles/palette";
 
-import type { PrivateCompanyState } from "../utils/gameState";
+import type { PrivateCompanyState } from "../gameEngine/gameState";
 import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { STICKY_OPTIONAL } from "../utils/stickyCollapse";
-import { corporateSaleBlockReason } from "../utils/baltimorePrivate";
+import { corporateSaleBlockReason } from "../gameEngine/baltimorePrivate";
 import { PRIVATE_COMPANY_CATALOG, abilitySummary } from "../utils/privateCatalog";
-import { numberedPrivate } from "../utils/privateOrdinal";
+import { numberedPrivate } from "../gameEngine/privateOrdinal";
 
 /** A live proposal. Client-side only -- design note #0. */
 export interface PrivateTradeProposal {

@@ -44,13 +44,13 @@
 // THE BOARD IS THE REPORTED GAME. Room JUNO-Y8V's message log, replayed through `applySandboxLayTile` with
 // its reverts honoured -- see `dieselRouteCap.test.ts` for why the message log rather than the text one.
 
-import { applySandboxLayTile } from "./sandboxSession";
-import { effectiveActions } from "./logRevert";
-import { evaluateStationPlacement, stationSlotCount } from "./stationTokens";
-import { reachableCities, reachableNetwork } from "./trackReach";
+import { applySandboxLayTile } from "../gameEngine/sandboxSession";
+import { effectiveActions } from "../gameEngine/logRevert";
+import { evaluateStationPlacement, stationSlotCount } from "../gameEngine/stationTokens";
+import { reachableCities, reachableNetwork } from "../gameEngine/trackReach";
 import { STATIC_BOARD_HEXES } from "../components/hexBoardData";
 import type { MapGridResponse } from "../components/hexContractTypes";
-import type { StationToken } from "./trackReach";
+import type { StationToken } from "../gameEngine/trackReach";
 
 import FIXTURE from "./__fixtures__ooToken.json";
 

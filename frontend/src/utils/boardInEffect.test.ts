@@ -20,8 +20,8 @@ import {
   type BoardDefinition,
 } from "../components/hexBoardData";
 import { EXPANDED_BOARD } from "../components/hexBoardDataPlus";
-import { boardFor } from "./boardSelection";
-import { STANDARD_VARIANTS, resolveVariants } from "./gameVariants";
+import { boardFor } from "../gameEngine/boardSelection";
+import { STANDARD_VARIANTS, resolveVariants } from "../gameEngine/gameVariants";
 import { isBoardHex } from "../components/hexGeometry";
 
 const OTHER: BoardDefinition = { ...STANDARD_BOARD, id: "expanded", hexes: STANDARD_BOARD.hexes.slice(0, 3) };

@@ -18,7 +18,7 @@
 // second index to collide with, no ordering between appends, and no window for a snapshot to land inside.
 // That is a structural guarantee, and it is worth separating from the things below that are demonstrated.
 
-import { applySandboxAction } from "./sandboxSession";
+import { applySandboxAction } from "../gameEngine/sandboxSession";
 import { describeGameplayAction } from "./actionLog";
 import { dividendDeclaration } from "./dividendStep";
 import {
@@ -28,8 +28,8 @@ import {
   roundToTen,
   STANDARD_VARIANTS,
   legacyTurnSeed,
-} from "./gameVariants";
-import type { GameStateResponse } from "./gameState";
+} from "../gameEngine/gameVariants";
+import type { GameStateResponse } from "../gameEngine/gameState";
 import { readStripped, sliceBetween } from "./sourceScan";
 
 const BO = 6;

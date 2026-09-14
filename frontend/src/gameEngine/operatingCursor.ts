@@ -24,7 +24,7 @@ import {
   initialOrSubPhase,
   visibleSubPhases,
   type OperatingSubPhase,
-} from "../components/OperatingSubPhaseStepper";
+} from "./operatingSubPhase";
 import { derivePhase } from "./gamePhase";
 import type { GameStateResponse } from "./gameState";
 

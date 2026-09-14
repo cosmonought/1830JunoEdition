@@ -20,15 +20,15 @@
 // rather than found freely and thrown out at the join -- which is what left the old route starting at the
 // token instead of running through it.
 
-import { applySandboxLayTile } from "./sandboxSession";
-import { assignRouteSet } from "./routeAutoTrace";
-import { UNLIMITED_REACH } from "./trainReach";
+import { applySandboxLayTile } from "../gameEngine/sandboxSession";
+import { assignRouteSet } from "../gameEngine/routeAutoTrace";
+import { UNLIMITED_REACH } from "../gameEngine/trainReach";
 import { activateBoard, boardInEffect, STATIC_BOARD_HEXES } from "../components/hexBoardData";
-import { initialGridFor } from "./initialGrid";
-import { boardFor } from "./boardSelection";
-import { resolveVariants } from "./gameVariants";
+import { initialGridFor } from "../gameEngine/initialGrid";
+import { boardFor } from "../gameEngine/boardSelection";
+import { resolveVariants } from "../gameEngine/gameVariants";
 import type { MapGridResponse } from "../components/hexContractTypes";
-import type { StationToken } from "./trackReach";
+import type { StationToken } from "../gameEngine/trackReach";
 
 import FIXTURE from "./__fixtures__z6cBoard.json";
 
@@ -121,7 +121,7 @@ describe("B&O's D-train on JUNO-Z6C (design note #1399)", () => {
     // because the property is the rule itself rather than one board's outcome.
     const fs = require("fs") as typeof import("fs");
     const path = require("path") as typeof import("path");
-    const src = fs.readFileSync(path.join(__dirname, "routeAutoTrace.ts"), "utf8");
+    const src = fs.readFileSync(path.join(__dirname, "..", "gameEngine", "routeAutoTrace.ts"), "utf8");
     expect(src).toContain("if (visits.has(nextKey) || avoidVisits?.has(nextKey)) continue;");
     expect(src).toContain("const stop = arrivalEdge === null ? (startCity ?? 0) : stopForArrival(mapGrid, q, r, arrivalEdge);");
     // And the second arm searches away from the first arm's centres, the start excepted.

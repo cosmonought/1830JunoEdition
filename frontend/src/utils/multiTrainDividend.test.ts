@@ -17,8 +17,8 @@
 
 import { dividendDeclaration } from "./dividendStep";
 import { describeGameplayAction } from "./actionLog";
-import { STANDARD_VARIANTS } from "./gameVariants";
-import type { GameStateResponse } from "./gameState";
+import { STANDARD_VARIANTS } from "../gameEngine/gameVariants";
+import type { GameStateResponse } from "../gameEngine/gameState";
 
 describe("the dividend spends the reducer's own total (design note #934)", () => {
   /* ==================================================================

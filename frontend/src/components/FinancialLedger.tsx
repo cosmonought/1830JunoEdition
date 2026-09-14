@@ -20,11 +20,12 @@ import PresidentCrown, { PRESIDENT_CROWN_GOLD } from "./PresidentCrown";
 import { seatColor } from "../utils/playerLabels";
 import React from "react";
 
-import type { GameStateResponse, PlayerNetWorthResponse, QueryCapableClient } from "../utils/gameState";
+import type { GameStateResponse, PlayerNetWorthResponse } from "../gameEngine/gameState";
+import type { QueryCapableClient } from "../utils/gameStatePolling";
 // Design note #497: the local valuation, for when there is no chain to ask.
-import { estimatePlayerNetWorth, sharePriceFor } from "../utils/gameState";
-import { PRIORITY_DEAL_TOOLTIP } from "../utils/gameState";
-import { resolveVariants } from "../utils/gameVariants";
+import { estimatePlayerNetWorth, sharePriceFor } from "../gameEngine/gameState";
+import { PRIORITY_DEAL_TOOLTIP } from "../gameEngine/gameState";
+import { resolveVariants } from "../gameEngine/gameVariants";
 import { FONT_SIZE, RADIUS, VIEWPORT_RADIUS } from "../styles/typography";
 // `ContextualSubPanel` design note #170: a name beats a truncated hash, and this returns `null` for a real
 // wallet so live rooms are unchanged.
@@ -45,8 +46,8 @@ import {
   INK_VIEWPORT,
 } from "../styles/palette";
 import { corporationFullName, corporationTitle } from "../utils/corporationNames";
-import { depotInventory, derivePhase, rustOutlook, tileErasAt } from "../utils/gamePhase";
-import type { TrainTier } from "../utils/gamePhase";
+import { depotInventory, derivePhase, rustOutlook, tileErasAt } from "../gameEngine/gamePhase";
+import type { TrainTier } from "../gameEngine/gamePhase";
 import { EraHex } from "./EraHex";
 // Design note #1035: how close the privates are to closing, for the pills that show them.
 import { privateClosureAlert } from "../utils/purchaseWarnings";
@@ -55,9 +56,9 @@ import { stationTickerColor } from "./hexContractTypes";
 import { PrivateCompanyPills } from "./PrivateCompanyPills";
 import { CapacityPill, LastRoutePayout, lastRunFigure, TrainChips } from "./TrainBadges";
 // Design note #710: the Liquidity column, from the same rules the emergency-purchase plan reads.
-import { playerLiquidity } from "../utils/endgame";
+import { playerLiquidity } from "../gameEngine/endgame";
 import { marketZoneForPrice, type MarketGridResponse } from "./StockMarketRenderer";
-import { DEPOT_SCHEDULE, firstPurchaseEffects, rustLabel } from "../utils/depotSchedule";
+import { DEPOT_SCHEDULE, firstPurchaseEffects, rustLabel } from "../gameEngine/depotSchedule";
 import { showsCurseBesideName } from "../utils/carcosaCurse";
 import CarcosaMark from "./CarcosaMark";
 import {
@@ -66,9 +67,9 @@ import {
   playerCompanyHoldings,
   corporationPrivateCompanies,
   playerPrivateCompanies,
-  usePlayerNetWorths,
-} from "../utils/gameState";
-import { numberedPrivate } from "../utils/privateOrdinal";
+} from "../gameEngine/gameState";
+import { usePlayerNetWorths } from "../utils/gameStatePolling";
+import { numberedPrivate } from "../gameEngine/privateOrdinal";
 
 export interface FinancialLedgerProps {
   gameState: GameStateResponse | null;
@@ -415,7 +416,7 @@ export function PlayerAssetsSection({
   marketGrid,
   playerLabel,
 }: PlayerAssetsSectionProps) {
-  // Design note #7 in `utils/gameState.ts`: Yellow/Orange/Brown holdings
+  // Design note #7 in `gameEngine/gameState.ts`: Yellow/Orange/Brown holdings
   // are exempt from the certificate limit, which needs live prices.
   /* Design note #1035: the SAME pure function every other surface asks, on the same state. Two callers of
      one rule is not the drift #867 warns about -- two implementations would be. */

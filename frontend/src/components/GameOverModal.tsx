@@ -16,7 +16,7 @@ import type { CeremonyCue } from "../utils/ceremonySounds";
 import type { GameHistory } from "../utils/gameHistory";
 
 import { FONT_SIZE, RADIUS } from "../styles/typography";
-import type { PlayerStanding } from "../utils/endgame";
+import type { PlayerStanding } from "../gameEngine/endgame";
 import CarcosaMark from "./CarcosaMark";
 
 /** #1432: what the page tabs say. */

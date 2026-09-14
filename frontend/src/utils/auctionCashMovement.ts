@@ -20,7 +20,7 @@
 // THE LABEL IS THE THING BOUGHT. The private that changed hands into the viewer's this action names the
 // spend; income is named as what it is. `null` means the machine has nothing to show.
 
-import type { GameStateResponse } from "./gameState";
+import type { GameStateResponse } from "../gameEngine/gameState";
 import { cashByPlayer } from "./cashDelta";
 
 export interface AuctionCashMovement {

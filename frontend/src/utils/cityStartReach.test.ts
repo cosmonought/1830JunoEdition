@@ -31,7 +31,7 @@
 import { LANDMARK_TRACKS, STATIC_BOARD_HEXES } from "../components/hexBoardData";
 import { STATION_HOME_HEXES } from "../components/hexContractTypes";
 import { cityExitEdges, liveEdgesForHex } from "../components/hexGeometry";
-import { hexKey, layableHexes, reachableTrack, stationTokensOf } from "./trackReach";
+import { hexKey, layableHexes, reachableTrack, stationTokensOf } from "../gameEngine/trackReach";
 import type { MapGridResponse } from "../components/hexContractTypes";
 
 const BARE: MapGridResponse = { game_id: 1, tiles: [] };

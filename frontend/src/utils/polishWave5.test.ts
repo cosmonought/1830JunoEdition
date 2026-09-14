@@ -27,7 +27,7 @@ import {
   corporationLiveryColor,
   CORPORATION_LIVERY_COLORS,
 } from "../styles/corporationLivery";
-import { BO_LOCKED_CARD_NOTE, BO_LOCKED_REASON } from "./gameVariants";
+import { BO_LOCKED_CARD_NOTE, BO_LOCKED_REASON } from "../gameEngine/gameVariants";
 import { readStripped, sliceBetween } from "./sourceScan";
 
 const channels = (hex: string): [number, number, number] => [

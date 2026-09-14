@@ -17,7 +17,7 @@
 // see. That is the case worth having here.
 
 import { readStripped, sliceBetween } from "./sourceScan";
-import { summarisePrivateRevenueForPlayer } from "./sandboxSession";
+import { summarisePrivateRevenueForPlayer } from "../gameEngine/sandboxSession";
 import { PRIVATE_REVENUE_TOAST_MS, STANDARD_TOAST_MS } from "../components/ActionToast";
 
 const APP = readStripped("App.tsx");

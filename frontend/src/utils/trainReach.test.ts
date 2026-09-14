@@ -11,8 +11,8 @@
 // THE DIESEL CASE IS UNREACHABLE IN PLAY -- nobody clicks a thousand hexes -- which is exactly why it
 // survived, and why it is the first test here rather than a footnote.
 
-import { UNLIMITED_REACH, isUnlimitedReach, overrunsReach, reachForDrafting } from "./trainReach";
-import { SMALLEST_TRAIN_CAPACITY } from "./gameConstants";
+import { UNLIMITED_REACH, isUnlimitedReach, overrunsReach, reachForDrafting } from "../gameEngine/trainReach";
+import { SMALLEST_TRAIN_CAPACITY } from "../gameEngine/gameConstants";
 
 describe("the Diesel is unlimited, whoever asks", () => {
   it("never overruns", () => {
@@ -76,7 +76,7 @@ describe("nobody keeps a private copy of the rule", () => {
       .replace(/^\s*\/\/.*$/gm, "");
   };
   const APP = read("App.tsx");
-  const TRACE = read("utils/routeAutoTrace.ts");
+  const TRACE = read("gameEngine/routeAutoTrace.ts");
   /* Design note #882 moved the DRAWING end of this rule out of `App.tsx` and into the route-edit module, so
      two of the assertions below follow it. The rule did not change; only its address did. */
   const EDIT = read("utils/routeDraftEdit.ts");
@@ -127,7 +127,7 @@ describe("the 7-train is a known train (design note #1396)", () => {
   // REPORTED: "The Auto-router for 7-trains is treating them like D-trains, but then the Run Routes
   // correctly rejects it for being too many stops." An unknown model plans as unlimited and checks as the
   // smallest -- #881's deliberate asymmetry -- so the fix is for the catalog to know the 7.
-  const { MOCK_TRAIN_CATALOG } = require("./mockFixtures");
+  const { MOCK_TRAIN_CATALOG } = require("../gameEngine/mockFixtures");
   it("plans seven stops and checks seven stops", () => {
     const seven = MOCK_TRAIN_CATALOG.find((train: { modelType: string }) => train.modelType === "7");
     expect(seven).toEqual({ modelType: "7", costVgp: 710, maxDistance: 7, bankQuantity: 2 });

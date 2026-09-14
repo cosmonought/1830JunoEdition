@@ -18,7 +18,7 @@
 // the code as it then stood, which is precisely why a wrong rule reaches a player: the legend agreed with the
 // bug."
 
-import { VARIANT_COPY, STANDARD_VARIANTS, dividendStepsFor } from "./gameVariants";
+import { VARIANT_COPY, STANDARD_VARIANTS, dividendStepsFor } from "../gameEngine/gameVariants";
 import { COMPASS_ARMS, compassArmsFor } from "../components/StockMarketRenderer";
 import { readStripped } from "./sourceScan";
 

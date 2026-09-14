@@ -23,7 +23,7 @@ const {
   YELLOW_SIGN_BONUS_LINE,
   CARCOSA_FOG_LINE,
   NO_YELLOW_SIGN,
-} = require("./yellowSign") as typeof import("./yellowSign");
+} = require("../gameEngine/yellowSign") as typeof import("../gameEngine/yellowSign");
 
 const APP = readStripped("App.tsx");
 const ROOM = readStripped("utils/sandboxRoom.ts");

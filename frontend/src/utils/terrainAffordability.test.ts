@@ -19,9 +19,9 @@
 // OFFERS. A message built by hand, replayed from a stale tab, or dispatched by any second control written
 // later went straight through." One rule, one more door closed.
 
-import { applySandboxAction } from "./sandboxSession";
+import { applySandboxAction } from "../gameEngine/sandboxSession";
 import { terrainBuildFeeAt } from "../components/hexBoardData";
-import type { GameStateResponse, PublicCompanyState } from "./gameState";
+import type { GameStateResponse, PublicCompanyState } from "../gameEngine/gameState";
 
 const BO = 6;
 

@@ -21,8 +21,8 @@
 // pure state -> state function, so a `RevertTo` that rewinds past the break rebuilds a game that has not
 // ended. That is asserted too.
 
-import { applySandboxAction, operatingRoundSequenceLength } from "./sandboxSession";
-import type { GameStateResponse } from "./gameState";
+import { applySandboxAction, operatingRoundSequenceLength } from "../gameEngine/sandboxSession";
+import type { GameStateResponse } from "../gameEngine/gameState";
 
 /** A state on the LAST Operating Round of its set, with the bank wherever the case wants it.
  *

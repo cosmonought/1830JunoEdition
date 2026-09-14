@@ -27,7 +27,7 @@
 // forbade that. A fix that made every tile exclusive would pass every test above and quietly halve the
 // revenue of every corporation with two trains.
 
-import { traversalSegments } from "./trackSegments";
+import { traversalSegments } from "../gameEngine/trackSegments";
 import { TILE_CATALOG } from "../components/hexTileCatalog";
 import type { MapGridResponse } from "../components/hexContractTypes";
 

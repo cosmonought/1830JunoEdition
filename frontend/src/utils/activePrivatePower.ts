@@ -47,14 +47,14 @@
 // question instead of searching `App.tsx` for the sentence that implements it.
 
 import { privateAcronym } from "./privateCatalog";
-import type { GameStateResponse } from "./gameState";
+import type { GameStateResponse } from "../gameEngine/gameState";
 import {
   privatePowerFlow,
   type PowerAbilityKey,
   type PowerFlow,
   type StationOutcome,
 } from "./privatePowerFlow";
-import { privateHexFor } from "./privateReservations";
+import { privateHexFor } from "../gameEngine/privateReservations";
 
 /** Design note #727: whether the ACTING CORPORATION holds a private -- `owner_protocol_id`, not `owner`.
  *  A power belongs to the railroad, not to the president personally (#441), so the player's own certificate

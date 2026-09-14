@@ -30,9 +30,9 @@ import {
   heldByPlayersPercent,
   metFloatThreshold,
   soldFromIpoPercent,
-} from "./floatThreshold";
-import { applyFloatThreshold } from "./sandboxSession";
-import type { GameStateResponse } from "./gameState";
+} from "../gameEngine/floatThreshold";
+import { applyFloatThreshold } from "../gameEngine/sandboxSession";
+import type { GameStateResponse } from "../gameEngine/gameState";
 
 const PRR = 1;
 
@@ -187,7 +187,7 @@ describe("one definition, and both surfaces read it", () => {
     /* THE STRUCTURAL HALF. Two files each had a function called `soldToPlayersPercent`, computing the same
        wrong quantity by two different routes -- `100 - ipo - bank` in one, a sum of holdings in the other --
        and each read as obviously correct where it stood. That is what a rule with two spellings buys. */
-    for (const file of ["utils/sandboxSession.ts", "components/StockRoundPanel.tsx"]) {
+    for (const file of ["gameEngine/sandboxSession.ts", "components/StockRoundPanel.tsx"]) {
       expect(read(file)).not.toMatch(/function soldToPlayersPercent/);
     }
   });
@@ -199,7 +199,7 @@ describe("one definition, and both surfaces read it", () => {
   });
 
   it("is asked by the reducer", () => {
-    expect(read("utils/sandboxSession.ts")).toContain("if (!metFloatThreshold(company)) return company;");
+    expect(read("gameEngine/sandboxSession.ts")).toContain("if (!metFloatThreshold(company)) return company;");
   });
 
   it("is asked by the card", () => {

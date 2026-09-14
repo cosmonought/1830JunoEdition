@@ -46,9 +46,9 @@
  *
  * See docs/ai_architecture/state_machine.md, fleetLossNotice.ts #896. */
 
-import type { FleetLoss } from "./sandboxSession";
+import type { FleetLoss } from "../gameEngine/sandboxSession";
 // Design note #1100: numerals name tiers, words count trains -- one authority, two surfaces.
-import { capitalise, countedTrains, namedTrains, spellCount } from "./trainPhrasing";
+import { capitalise, countedTrains, namedTrains, spellCount } from "../gameEngine/trainPhrasing";
 // Design note #1032: `turnGuardKey` is no longer imported. It is still the right tool for a guard that SHOULD
 // reset each turn -- `App.tsx` uses it for two of those -- and was the wrong one here, where the thing being
 // remembered is an event rather than a showing. Its absence is the fix.

@@ -8,7 +8,7 @@ export {};
 const { movementToShow, treasuryMovements } =
   require("./treasuryMovement") as typeof import("./treasuryMovement");
 const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
-import type { GameStateResponse } from "./gameState";
+import type { GameStateResponse } from "../gameEngine/gameState";
 
 const PRR = 1;
 const BO = 4;

@@ -2,10 +2,10 @@
 //
 // Design note #1375 (harness): the Mark takes one train's route, not the whole run.
 
-import { applySandboxAction } from "./sandboxSession";
-import { runWithoutTrain, lowestValueTrain, markPayout } from "./yellowSign";
-import { rollTurnRevenue, STANDARD_VARIANTS, legacyTurnSeed } from "./gameVariants";
-import type { GameStateResponse } from "./gameState";
+import { applySandboxAction } from "../gameEngine/sandboxSession";
+import { runWithoutTrain, lowestValueTrain, markPayout } from "../gameEngine/yellowSign";
+import { rollTurnRevenue, STANDARD_VARIANTS, legacyTurnSeed } from "../gameEngine/gameVariants";
+import type { GameStateResponse } from "../gameEngine/gameState";
 
 const BO = 6;
 const SEED = legacyTurnSeed(3, 1, BO);

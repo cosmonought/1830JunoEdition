@@ -23,9 +23,9 @@
 // second one fails here rather than in somebody's game three rounds in.
 
 import { SEAT_COLORS, sandboxPlayerLabel, setRoomColors, setRoomNicknames } from "./playerLabels";
-import { SANDBOX_PLAYERS } from "./sandboxState";
-import { withEmptyRoster } from "./gameSetup";
-import type { GameStateResponse } from "./gameState";
+import { SANDBOX_PLAYERS } from "../gameEngine/sandboxState";
+import { withEmptyRoster } from "../gameEngine/gameSetup";
+import type { GameStateResponse } from "../gameEngine/gameState";
 
 afterEach(() => setRoomColors({}));
 

@@ -29,7 +29,7 @@ import {
   SANDBOX_TITLE,
   TURN_PULSE_INK_RGB,
 } from "./palette";
-import type { GamePhase } from "../utils/gamePhase";
+import type { GamePhase } from "../gameEngine/gamePhase";
 /* Design note #1273: the chrome scale is this browser's preference, resolved once at load. */
 import { resolveUiScale } from "../utils/uiScale";
 /* Design note #884 imported `PRIVATE_POWER_GLOW_STOPS` here, for the chip's gradient strip.

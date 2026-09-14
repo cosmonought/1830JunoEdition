@@ -15,8 +15,8 @@
 // #963 closes the gap that made the two indistinguishable on screen: the log line and the dividend now read
 // one field, so they can no longer name two different numbers.
 
-import { applySandboxAction } from "./sandboxSession";
-import { summarisePrivateRevenueForPlayer } from "./sandboxSession";
+import { applySandboxAction } from "../gameEngine/sandboxSession";
+import { summarisePrivateRevenueForPlayer } from "../gameEngine/sandboxSession";
 import { dividendDeclaration } from "./dividendStep";
 import {
   applyRevenuePercent,
@@ -25,8 +25,8 @@ import {
   roundToTen,
   STANDARD_VARIANTS,
   legacyTurnSeed,
-} from "./gameVariants";
-import type { GameStateResponse } from "./gameState";
+} from "../gameEngine/gameVariants";
+import type { GameStateResponse } from "../gameEngine/gameState";
 import { readStripped, sliceBetween } from "./sourceScan";
 
 /* A corporation whose turn actually rolls something -- corporation 4's seed is a 100% face, which would make

@@ -27,7 +27,7 @@ import {
   turnRevenueSentence,
   type RevenueRoll,
   legacyTurnSeed,
-} from "./gameVariants";
+} from "../gameEngine/gameVariants";
 
 /* ==================================================================
     DESIGN NOTE 1051 (harness): THESE FIXTURES ASK FOR THE OLD DIE ON PURPOSE

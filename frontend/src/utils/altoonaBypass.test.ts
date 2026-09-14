@@ -31,8 +31,8 @@ import {
   printedPathsForTraversal,
   printedTraversalVariants,
 } from "../components/TileGraphics";
-import { traversalSegments, traversalsFrom } from "./trackSegments";
-import { sandboxRouteBreakdown } from "./sandboxSession";
+import { traversalSegments, traversalsFrom } from "../gameEngine/trackSegments";
+import { sandboxRouteBreakdown } from "../gameEngine/sandboxSession";
 import type { MapGridResponse } from "../components/hexContractTypes";
 
 /** Altoona. A grey preprinted hex; nothing is ever laid on it. */

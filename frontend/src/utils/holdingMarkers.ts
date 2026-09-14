@@ -25,8 +25,8 @@
 // said "the presidency changed hands" when the rules say a challenger must EXCEED the incumbent. The old
 // arrangement was signalling something real with the wrong instrument; this is the right instrument.
 
-import type { PriceZone } from "./sharePurchase";
-import { atHoldingCap } from "./sharePurchase";
+import type { PriceZone } from "../gameEngine/sharePurchase";
+import { atHoldingCap } from "../gameEngine/sharePurchase";
 
 /** Just enough of a holding to judge it. Structural so the card, the ledger and a test can all pass what
  *  they have rather than a `RosterHolding` none of them share. */

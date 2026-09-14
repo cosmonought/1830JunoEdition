@@ -234,7 +234,7 @@ describe("the capacity pill stops counting the gift", () => {
   it("agrees with the gate that already exempts it", () => {
     /* THE TWO SURFACES, READ TOGETHER. Both call the same helper with the same three arguments, which is what
        makes them one answer rather than two that happen to match today. */
-    expect(readStripped("utils/trainPurchaseGate.ts"))
+    expect(readStripped("gameEngine/trainPurchaseGate.ts"))
       .toContain("countableTrainCount(owned, company.pending_rust_trains, company.ghost_trains)");
     expect(readStripped("components/TrainPurchasePanel.tsx"))
       .toContain("countableTrainCount(buyer?.owned_trains, buyer?.pending_rust_trains, buyer?.ghost_trains)");

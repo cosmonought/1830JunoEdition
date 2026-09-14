@@ -27,15 +27,15 @@
 import {
   applySandboxAction,
   type SandboxActionContext,
-} from "./sandboxSession";
-import type { GameStateResponse } from "./gameState";
+} from "../gameEngine/sandboxSession";
+import type { GameStateResponse } from "../gameEngine/gameState";
 import {
   isOpenStockRoundMsg,
   isPlaceHomeStationMsg,
   isSandboxOnlyMsg,
   isSetBoParMsg,
   isSetupGameMsg,
-} from "./gameSetup";
+} from "../gameEngine/gameSetup";
 
 const ADA = "p-ada";
 const BEN = "p-ben";

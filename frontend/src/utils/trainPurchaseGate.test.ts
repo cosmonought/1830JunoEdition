@@ -16,12 +16,12 @@
 export {};
 
 const { applySandboxAction } =
-  require("./sandboxSession") as typeof import("./sandboxSession");
+  require("../gameEngine/sandboxSession") as typeof import("../gameEngine/sandboxSession");
 const { trainPurchaseRefusal } =
-  require("./trainPurchaseGate") as typeof import("./trainPurchaseGate");
+  require("../gameEngine/trainPurchaseGate") as typeof import("../gameEngine/trainPurchaseGate");
 const { actionWasRefused, refusalReasonFor } =
   require("./refusedAction") as typeof import("./refusedAction");
-const { depotInventory } = require("./gamePhase") as typeof import("./gamePhase");
+const { depotInventory } = require("../gameEngine/gamePhase") as typeof import("../gameEngine/gamePhase");
 const { readStripped, sliceBetween } =
   require("./sourceScan") as typeof import("./sourceScan");
 

@@ -1,7 +1,7 @@
 // What to call a player. One answer, for every surface.
 //
 // Design note #559: there were TWO `sandboxPlayerLabel`s -- a room-aware one at
-// `App.tsx` module scope, and `utils/sandboxState.ts`'s fixture Alice/Bob table
+// `App.tsx` module scope, and `gameEngine/sandboxState.ts`'s fixture Alice/Bob table
 // under the same name. `FinancialLedger` and `ContextualSubPanel` imported the
 // fixture version, which has never heard of a room and correctly returns `null`
 // for a `p-` id, so those two panels fell back to `truncateAddress`.
@@ -14,7 +14,7 @@
 //
 // See docs/ai_architecture/ui_shell_layout.md, playerLabels.ts #559.
 
-import { sandboxPlayerLabel as fixturePlayerLabel } from "./sandboxState";
+import { sandboxPlayerLabel as fixturePlayerLabel } from "../gameEngine/sandboxState";
 
 /* Design note #535b: MODULE SCOPE, so no hook depends on it. The first cut was a
    `useCallback` in `AppShell`, and the linter named the cost immediately: twelve

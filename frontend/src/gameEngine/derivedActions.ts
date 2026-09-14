@@ -51,9 +51,9 @@
 //   just no longer a reason to guess.
 
 import type { GameStateResponse } from "./gameState";
-import type { GameplayExecuteMsg } from "./sessionKey";
+import type { GameplayExecuteMsg } from "../utils/sessionKey";
 import type { MapGridResponse } from "../components/hexContractTypes";
-import type { OperatingSubPhase } from "../components/OperatingSubPhaseStepper";
+import type { OperatingSubPhase } from "./operatingSubPhase";
 
 import { autoSkipExit } from "./autoSkipExit";
 import { DH_PRIVATE_ID, dhFreeStationAvailableFor } from "./dhPower";

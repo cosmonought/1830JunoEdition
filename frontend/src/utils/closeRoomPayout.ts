@@ -36,7 +36,7 @@
  *
  * See docs/ai_architecture/contract_economy.md, closeRoomPayout.ts #899. */
 
-import type { PlayerStanding } from "./endgame";
+import type { PlayerStanding } from "../gameEngine/endgame";
 
 /** What the settlement needs to know. Deliberately the standings rather than the game state: the split is
  *  already computed and already shown to the players, and re-deriving it here would be a second authority on

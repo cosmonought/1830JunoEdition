@@ -18,7 +18,7 @@
 
 import { roundStampFor, roundLabelFor } from "./roundLabel";
 import { describeGameplayAction } from "./actionLog";
-import type { GameStateResponse } from "./gameState";
+import type { GameStateResponse } from "../gameEngine/gameState";
 import { readStripped, sliceBetween } from "./sourceScan";
 
 const operating = (subPhase?: string): GameStateResponse =>

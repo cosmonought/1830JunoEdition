@@ -14,9 +14,9 @@ export {};
 
 const { describeGameplayAction, sentenceStatesTreasury } =
   require("./actionLog") as typeof import("./actionLog");
-const { describeFleetLosses } = require("./sandboxSession") as typeof import("./sandboxSession");
+const { describeFleetLosses } = require("../gameEngine/sandboxSession") as typeof import("../gameEngine/sandboxSession");
 const { readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
-import type { GameStateResponse } from "./gameState";
+import type { GameStateResponse } from "../gameEngine/gameState";
 import type { MapGridResponse } from "../components/hexContractTypes";
 
 const PRR = 1;

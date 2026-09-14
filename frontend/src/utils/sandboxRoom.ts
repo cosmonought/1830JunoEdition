@@ -17,7 +17,7 @@
 //
 // See docs/ai_architecture/firebase_middleware.md - sandboxRoom.ts #0, #1, #2
 
-import { STANDARD_VARIANTS, type GameVariants } from "./gameVariants";
+import { STANDARD_VARIANTS, type GameVariants } from "../gameEngine/gameVariants";
 // Design note #1215: the room document lives on the server. The routing is in this file so no caller has any.
 import { joinRoomDoc, roomDocOnServer, subscribeRoomDoc, writeRoomDoc } from "./roomDocLink";
 import { localPlayerId } from "./seatPin";
@@ -25,11 +25,11 @@ import { localPlayerId } from "./seatPin";
 /* Design note #530: `GameplayExecuteMsg` is no longer imported here --
    `SandboxLogMsg` is the union of it and the setup event, and this module
    only ever handles the union. */
-import type { SandboxLogMsg, SetupPlayer } from "./gameSetup";
+import type { SandboxLogMsg, SetupPlayer } from "../gameEngine/gameSetup";
 // #1415: the room's terms and their readers, in a module the server can import as values.
 import { DEFAULT_ROOM_SETUP, seatsNeeded, type RoomSetup, type RoomVisibility } from "./sandboxRoomSummary";
 // Design note #1128: the stage union is owned by the module that resolves it, not redeclared here.
-import type { ForcedSignStage } from "./yellowSign";
+import type { ForcedSignStage } from "../gameEngine/yellowSign";
 
 
 /* The alphabet drops 0/O, 1/I/L and 5/S because the code is read aloud; the JUNO- prefix is part of it. The harness asserts the PROPERTY, since the first draft kept 0 despite the rule written to remove it.

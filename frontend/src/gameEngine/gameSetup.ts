@@ -17,7 +17,7 @@
 // Design notes #530/#538/#542/#546/#550/#573/#591/#594/#611/#662:
 // see `docs/ai_architecture/sandbox_reducer.md`.
 
-import type { GameplayExecuteMsg } from "./sessionKey";
+import type { GameplayExecuteMsg } from "../utils/sessionKey";
 /* TYPE-ONLY, and deliberately: `gameState.ts` imports from here, so a value import would be a real cycle. A
    type import is erased at compile time, and it keeps the roster stripper exact about the shape it returns --
    a structural generic was the first attempt and it widened the corporation and private arrays to

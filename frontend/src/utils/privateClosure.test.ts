@@ -24,15 +24,15 @@
 // asks whether any private is still UNSOLD in the auction, which is a different question that happened to
 // give the right answer. Half-correct by coincidence is harder to doubt than plainly broken.
 
-import { applyPhaseChange, applyPrivateRevenue, describePrivateClosures } from "./sandboxSession";
+import { applyPhaseChange, applyPrivateRevenue, describePrivateClosures } from "../gameEngine/sandboxSession";
 import {
   certificateBreakdown,
   certificateCount,
   corporationPrivateCompanies,
   playerPrivateCompanies,
   type GameStateResponse,
-} from "./gameState";
-import { closesPrivateCompanies, DEPOT_SCHEDULE } from "./depotSchedule";
+} from "../gameEngine/gameState";
+import { closesPrivateCompanies, DEPOT_SCHEDULE } from "../gameEngine/depotSchedule";
 
 const ME = "me";
 const CO = 1;

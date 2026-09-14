@@ -39,7 +39,7 @@
 // Operating Round effects never learned it, and only a second browser could show the difference.
 
 import type { GameStateResponse } from "./gameState";
-import type { OperatingSubPhase } from "../components/OperatingSubPhaseStepper";
+import type { OperatingSubPhase } from "./operatingSubPhase";
 
 /** The step at which the pay-or-withhold choice belongs. */
 export const DIVIDEND_SUB_PHASE: OperatingSubPhase = "Dividends";

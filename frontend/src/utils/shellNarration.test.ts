@@ -12,7 +12,7 @@ export {};
 const { describeGameplayAction } = require("./actionLog") as typeof import("./actionLog");
 const { refusalReasonFor } = require("./refusedAction") as typeof import("./refusedAction");
 const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
-import type { GameStateResponse } from "./gameState";
+import type { GameStateResponse } from "../gameEngine/gameState";
 import type { MapGridResponse } from "../components/hexContractTypes";
 
 const BO = 2;

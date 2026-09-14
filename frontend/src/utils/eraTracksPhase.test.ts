@@ -19,8 +19,8 @@
 // is easy to break by accident while fixing the first, which is why both are
 // asserted here rather than only the one that changed.
 
-import { applySandboxAction } from "./sandboxSession";
-import type { GameStateResponse, PublicCompanyState } from "./gameState";
+import { applySandboxAction } from "../gameEngine/sandboxSession";
+import type { GameStateResponse, PublicCompanyState } from "../gameEngine/gameState";
 
 const ALICE = "juno1alice";
 const BOB = "juno1bob";

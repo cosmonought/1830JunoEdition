@@ -150,8 +150,10 @@ describe("same-cell tokens stack in the order the game plays them", () => {
 
   it("carries the ordinal through to the view", () => {
     /* THE FIELD EXISTED AND STOPPED AT THE VIEW BOUNDARY, which is why the board could only scatter. */
-    expect(readStripped("utils/sandboxState.ts")).toContain("enteredAt: mark.enteredAt");
-    expect(CHART).toContain("enteredAt?: number;");
+    expect(readStripped("gameEngine/sandboxState.ts")).toContain("enteredAt: mark.enteredAt");
+    /* #1501: `MarketPositionEntry` is declared in the engine now and re-exported by the renderer, so the
+       field is asserted where it is written. */
+    expect(readStripped("gameEngine/marketGeometry.ts")).toContain("enteredAt?: number;");
   });
 
   it("puts the earliest arrival on top of the pile", () => {

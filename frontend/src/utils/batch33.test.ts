@@ -12,9 +12,9 @@ export {};
 
 const { readSource, readStripped, sliceBetween } =
   require("./sourceScan") as typeof import("./sourceScan");
-const { VARIANT_COPY } = require("./gameVariants") as typeof import("./gameVariants");
+const { VARIANT_COPY } = require("../gameEngine/gameVariants") as typeof import("../gameEngine/gameVariants");
 const { earnableRevenueVerdict, skipReasonFor } =
-  require("./earnableRevenue") as typeof import("./earnableRevenue");
+  require("../gameEngine/earnableRevenue") as typeof import("../gameEngine/earnableRevenue");
 const { feedItemText } = require("../components/TopTicker") as typeof import("../components/TopTicker");
 const { MAP_TOUCH_ACTION } = require("./mapGesture") as typeof import("./mapGesture");
 const { SFX_VOLUME, RADIO_VOLUME } = require("./audio") as typeof import("./audio");
@@ -24,7 +24,7 @@ const {
   applyPrivateRevenue,
   openOperatingRound,
   beginOperatingRound,
-} = require("./sandboxSession") as typeof import("./sandboxSession");
+} = require("../gameEngine/sandboxSession") as typeof import("../gameEngine/sandboxSession");
 
 const APP = readStripped("App.tsx");
 const RENDERER = readStripped("components/HexGridRenderer.tsx");
@@ -56,7 +56,7 @@ describe("the lobby and the action bar agree on one word", () => {
     // #996's guard, unchanged by a copy edit: the numbers still come from the constants.
     // `no-template-curly-in-string` rightly objects to a literal `${...}`, so it is assembled -- #1007's dodge.
     const DOLLAR = String.fromCharCode(36);
-    expect(readSource("utils/gameVariants.ts")).toContain(
+    expect(readSource("gameEngine/gameVariants.ts")).toContain(
       DOLLAR + "{PAY_DOUBLE_JUMP_MULTIPLE}x the share price",
     );
   });
@@ -258,7 +258,7 @@ describe("the privates pay every Operating Round, not every set", () => {
     /* THE MECHANISM, pinned where it is decidable. `advanceCorporation` opens rounds two and three of a set
        and called `beginOperatingRound` directly, so they opened without paying -- which is why the toast that
        follows the payout appeared once and then never again. */
-    const reducer = readStripped("utils/sandboxSession.ts");
+    const reducer = readStripped("gameEngine/sandboxSession.ts");
     expect(reducer).toContain("...openOperatingRound(state, priceFor, markFor, true),");
     expect(reducer).toContain("...openOperatingRound(");
   });
@@ -266,7 +266,7 @@ describe("the privates pay every Operating Round, not every set", () => {
   it("leaves the empty-queue REPAIR unpaid", () => {
     /* AN OPENING AND A REPAIR LOOK ALIKE AND ARE NOT. `advanceCorporation`'s recovery rebuilds the order for a
        round already in progress; paying there would hand out a second round of income for one round. */
-    const reducer = readStripped("utils/sandboxSession.ts");
+    const reducer = readStripped("gameEngine/sandboxSession.ts");
     const recovery = sliceBetween(
       reducer,
       "const rebuilt = beginOperatingRound(state, priceFor, markFor);",

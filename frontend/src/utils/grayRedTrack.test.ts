@@ -22,7 +22,7 @@ import {
   OFFBOARD_STUB_TIP_FRACTION,
   printedArtworkEdgePairs,
 } from "../components/TileGraphics";
-import { traversalsFrom } from "./trackSegments";
+import { traversalsFrom } from "../gameEngine/trackSegments";
 import { GRAY_HEXES, OFFBOARD_TRACKS, STATIC_BOARD_HEXES } from "../components/hexBoardData";
 import { liveEdgesForHex } from "../components/hexGeometry";
 import type { MapGridResponse } from "../components/hexContractTypes";

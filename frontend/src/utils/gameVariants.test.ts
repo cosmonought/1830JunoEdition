@@ -32,7 +32,7 @@ import {
   STANDARD_VARIANTS,
   type GameVariants,
   legacyTurnSeed,
-} from "./gameVariants";
+} from "../gameEngine/gameVariants";
 
 /* ==================================================================
     DESIGN NOTE 1051 (harness): THESE FIXTURES ASK FOR THE OLD DIE ON PURPOSE
@@ -52,9 +52,9 @@ const seedFor = (macroRound: number, subRound: number, companyId: number) => ({
   turnSeed: legacyTurnSeed(macroRound, subRound, companyId),
 });
 
-import { applySandboxAction } from "./sandboxSession";
-import { dealSandboxGame } from "./gameSetup";
-import type { GameStateResponse } from "./gameState";
+import { applySandboxAction } from "../gameEngine/sandboxSession";
+import { dealSandboxGame } from "../gameEngine/gameSetup";
+import type { GameStateResponse } from "../gameEngine/gameState";
 
 describe("the config a game with no config reads as (design note #902)", () => {
   it("is the standard game", () => {

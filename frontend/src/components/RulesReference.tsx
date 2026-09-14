@@ -40,14 +40,14 @@ import { FONT_FAMILY, FONT_FAMILY_MONO, FONT_SIZE, RADIUS, VIEWPORT_RADIUS } fro
 import { PRIVATE_COMPANY_CATALOG, abilitySummary } from "../utils/privateCatalog";
 // Design note #640: which build the browser is actually running.
 import { UI_BUILD_LABEL } from "../utils/buildStamp";
-import type { GameVariants } from "../utils/gameVariants";
+import type { GameVariants } from "../gameEngine/gameVariants";
 /* The player-count limits the lobby deals from -- read, not retyped, so this page and the Stocks tab agree. */
 import {
   CERT_LIMIT_BY_PLAYER_COUNT,
   LPF_CERT_LIMIT_BY_PLAYER_COUNT,
   LPF_STARTING_CASH_BY_PLAYER_COUNT,
   STARTING_CASH_BY_PLAYER_COUNT,
-} from "../utils/gameSetup";
+} from "../gameEngine/gameSetup";
 /* Design note #1117: the one viewport ground, shared rather than retyped. */
 import {
   INK,

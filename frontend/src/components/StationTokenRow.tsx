@@ -17,7 +17,7 @@
 import React from "react";
 
 import { FONT_SIZE, RADIUS } from "../styles/typography";
-import type { StationTokenSlot } from "../utils/stationTokens";
+import type { StationTokenSlot } from "../gameEngine/stationTokens";
 
 export interface StationTokenRowProps {
   slots: readonly StationTokenSlot[];

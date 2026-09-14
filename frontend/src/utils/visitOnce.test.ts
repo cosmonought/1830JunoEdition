@@ -5,16 +5,16 @@
 // which would allow the same city to be scored however many times it's visited."
 
 import { editRouteDraft } from "./routeDraftEdit";
-import { stopForArrival } from "./trackReach";
-import { applySandboxAction, sandboxRouteBreakdown } from "./sandboxSession";
-import { UNLIMITED_REACH } from "./trainReach";
+import { stopForArrival } from "../gameEngine/trackReach";
+import { applySandboxAction, sandboxRouteBreakdown } from "../gameEngine/sandboxSession";
+import { UNLIMITED_REACH } from "../gameEngine/trainReach";
 import { STANDARD_BOARD, activateBoard } from "../components/hexBoardData";
 import { EXPANDED_BOARD } from "../components/hexBoardDataPlus";
 import { STANDARD_TRAY, activateTray } from "../components/tileTray";
 import { PLUS_TRAY } from "../components/tileTrayPlus";
 import type { MapGridResponse } from "../components/hexContractTypes";
 import type { RoutePoint } from "./routeWaypoints";
-import type { GameStateResponse } from "./gameState";
+import type { GameStateResponse } from "../gameEngine/gameState";
 
 const P = (label: string, q: number, r: number): RoutePoint => ({ q, r, hexLabel: label });
 const D12 = P("D12", 4, 3);

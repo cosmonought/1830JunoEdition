@@ -2,7 +2,7 @@
 //
 // 1830: a corporation owning NO trains must buy one; treasury first, then the
 // president's personal cash, then forced share sales, then bankruptcy.
-// `utils/endgame.ts` owns the cascade (#0) and the legality of each sale (#1);
+// `gameEngine/endgame.ts` owns the cascade (#0) and the legality of each sale (#1);
 // this renders those two IN ORDER, because the sequence is the sentence a
 // president needs and cannot be recovered from a total.
 //
@@ -18,12 +18,12 @@ import React from "react";
 
 import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { ACTION_GREEN, ACTION_GREEN_BORDER, ACTION_GREEN_INK } from "../styles/palette";
-import type { GameStateResponse, PublicCompanyState } from "../utils/gameState";
+import type { GameStateResponse, PublicCompanyState } from "../gameEngine/gameState";
 import {
   resolveEmergencyFunding,
   sellableHoldings,
   type SellableHolding,
-} from "../utils/endgame";
+} from "../gameEngine/endgame";
 
 export interface EmergencyPurchasePlan {
   /** The train the corporation is obliged to buy. */

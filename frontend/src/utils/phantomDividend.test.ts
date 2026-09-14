@@ -26,8 +26,8 @@
 // A rule corrected at one surface and left standing in the authority -- the same shape as #712, #723, #736
 // and #748, and the reason this file tests through `applySandboxAction` rather than through the helper.
 
-import { applySandboxAction } from "./sandboxSession";
-import type { GameStateResponse } from "./gameState";
+import { applySandboxAction } from "../gameEngine/sandboxSession";
+import type { GameStateResponse } from "../gameEngine/gameState";
 
 const PRR = 1;
 
@@ -157,7 +157,7 @@ describe("the shell and the reducer agree about a skipped Routes step", () => {
   it("no longer discards a declared zero", () => {
     /* THE STRUCTURAL HALF. Every behavioural test above passes against a build that simply moved the
        fallback somewhere else; this one is about the condition that caused it. */
-    expect(read("utils/sandboxSession.ts")).not.toMatch(
+    expect(read("gameEngine/sandboxSession.ts")).not.toMatch(
       /Number\.isFinite\(stated\) && stated > 0/,
     );
   });

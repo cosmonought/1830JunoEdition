@@ -1,4 +1,4 @@
-import type { GameStateResponse } from "./gameState";
+import type { GameStateResponse } from "../gameEngine/gameState";
 
 /* ==================================================================
  *  DESIGN NOTE 750: WHERE DID THE MONEY COME FROM

@@ -20,10 +20,10 @@
 // is easy to state and easy to invert, and a test that merely asserts "some
 // stable order" would pass on the version that was wrong.
 
-import { buildOperatingOrder } from "./sandboxSession";
-import { nextArrival, withArrival, placeParMark } from "./sandboxState";
-import type { SandboxMarketPrices } from "./sandboxState";
-import type { GameStateResponse, PublicCompanyState } from "./gameState";
+import { buildOperatingOrder } from "../gameEngine/sandboxSession";
+import { nextArrival, withArrival, placeParMark } from "../gameEngine/sandboxState";
+import type { SandboxMarketPrices } from "../gameEngine/sandboxState";
+import type { GameStateResponse, PublicCompanyState } from "../gameEngine/gameState";
 
 const ALICE = "juno1alice";
 

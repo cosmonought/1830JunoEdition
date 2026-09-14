@@ -66,6 +66,7 @@ import { withRules } from "./boardSelection";
 import { resolveVariants } from "./gameVariants";
 import { nextDerivedAction } from "./derivedActions";
 import { operatingCorporationId } from "./dividendGate";
+import { operatingIdentityRefusal } from "./operatingIdentity";
 import { turnGuardKey } from "./turnGuardKey";
 import { effectiveActions } from "./logRevert";
 import { derivePhase } from "./gamePhase";
@@ -351,6 +352,10 @@ export class RoomEngine {
 
   if ("LayTile" in msg) {
     const lay = msg.LayTile;
+    /* Design note #1510: the grid refuses what the reducer refuses for identity -- a lay naming a
+       corporation that is not operating lands on neither atom. Judged on the same snapshot as the tile
+       rule, for #766's reason. `App.tsx` folds the same check into its own predicate. */
+    const stateBefore = this.state;
     this.grid = applySandboxLayTile(
       gridBefore,
       lay.q,
@@ -358,6 +363,7 @@ export class RoomEngine {
       lay.tile_id,
       lay.orientation,
       (q: number, r: number, tileId: number, orientation: number) =>
+        operatingIdentityRefusal(stateBefore, msg) !== null ||
         this.providers.layRefused(gridBefore, q, r, tileId, orientation, eraBefore),
     );
   }

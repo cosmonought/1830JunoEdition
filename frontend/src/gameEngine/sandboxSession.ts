@@ -78,6 +78,8 @@ import { metFloatThreshold, FULL_CAPITALISATION_MULTIPLE } from "./floatThreshol
 // Design note #763: a float is not finished until its home token is on the board.
 import { homeTokenBlock } from "./homeTokenGate";
 import { dividendRefusal, dividendRefused } from "./dividendGate";
+import { operatingIdentityRefusal } from "./operatingIdentity";
+import { stationPlacementRefusal } from "./stationPlacementGate";
 // Design note #1019: the purchase gate the reducer never had.
 import { trainPurchaseRefusal } from "./trainPurchaseGate";
 import { dividendSplit } from "./dividendSplit";
@@ -2651,6 +2653,26 @@ function applySandboxActionCore(
    *
    * A REFUSAL RETURNS THE STATE UNCHANGED, on #712's reasoning: a replay must not halt on an entry the log
    * already contains. */
+  /* ==================================================================
+      DESIGN NOTE 1510/1511: WHO IS ACTING, AND WHERE THE TOKEN MAY GO -- ASKED BEFORE ANY ARM RUNS
+     ==================================================================
+     THE IDENTITY GATE FIRST, for every message that names the corporation it acts for at an Operating Turn
+     (`LayTile`, `PlaceStationToken`, `RunMultipleRoutes`, and the legacy `RunManualRoute`). The arms below
+     took `protocol_id` off the message and charged whichever treasury it named -- the "protocol_id comes off
+     the message, not the queue cursor" comment above them was a description, not a rule. #1182 restored this
+     comparison once and withdrew it while the operating order was chart-derived; #1196/#1197 made the order
+     a function of the log and #1205 gave it one judge, so the objection has expired (`operatingIdentity.ts`).
+     THEN THE STATION GATE, for #1019's reason and #757's: a refusal inside the arm still lets
+     `settleOperatingCursor` move the step to Routes for a token that never landed. Asked here, the state
+     comes back by identity, which is what `actionWasRefused` (#778) detects and what the replay needs
+     (#712: an entry the log already holds must no-op, never halt).
+     THE LAY'S OWN LEGALITY IS UNCHANGED: `layRefused` below still judges the tile, and nothing about track
+     rules moves in this note. */
+  if (operatingIdentityRefusal(state, msg) !== null) return state;
+  if ("PlaceStationToken" in msg) {
+    if (stationPlacementRefusal(state, msg.PlaceStationToken, ctx?.mapGrid) !== null) return state;
+  }
+
   if ("LayTile" in msg && ctx?.layRefused) {
     const { q, r, tile_id, orientation } = msg.LayTile;
     if (ctx.layRefused(q, r, tile_id, orientation)) return state;
@@ -4160,6 +4182,9 @@ function applyOneAction(
 
   // OR actions charge the acting CORPORATION and none of them end its turn -- only PassTurn does. protocol_id comes off the message, not the queue cursor.
   // See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #0
+  // Design note #1510: AND IT IS CHECKED AGAINST THE CURSOR before any of these arms run -- see
+  // `operatingIdentityRefusal` in `applySandboxActionCore`. The message still names the corporation; it no
+  // longer decides it.
 
   if ("LayTile" in msg) {
     /* The GROUND costs money, not the tile: $0 clear, $80 river, $120 mountain, by coordinate. The flat $20 was a placeholder the renderer had been contradicting on screen.

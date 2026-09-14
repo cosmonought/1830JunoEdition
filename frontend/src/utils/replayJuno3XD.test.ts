@@ -281,11 +281,17 @@ describe("JUNO-3XD replays headless", () => {
        NNH's 540 IS DELIBERATELY PINNED AS 540. It is the #1183 duplicate -- 270 twice -- and it is what the
        live game recorded. A golden master that quietly "corrected" it would be asserting a game nobody
        played. When #1183's refusal is applied to a rebuild the figure will change, and this line is exactly
-       where that change should announce itself. */
+       where that change should announce itself.
+       AND IT DID, FOR PRR -- design note #1510. The live game filed 210. Index 224 of this log is C&O laying
+       tile 8 on E13 while the log-derived queue had PRR operating (the #1196 client divergence: the two
+       tables sorted C&O and PRR the other way round, and the engine already refused C&O's train purchases
+       at 228/229 on the same cursor). #1510 refuses that lay on both atoms, so E13 stays plain, and PRR's
+       run at 307 -- E11, E13, F14 ... -- prices at 170 without it. Re-pinned to what the log-derived board
+       pays, for the reason the paragraph above gives: this line is where such a change announces itself. */
     expect(
       rows.map((row) => [row.ticker, row.filed] as const),
     ).toEqual([
-      ["PRR", "210"],
+      ["PRR", "170"],
       ["NYC", "140"],
       ["B&O", "240"],
       ["C&O", "290"],
@@ -297,6 +303,13 @@ describe("JUNO-3XD replays headless", () => {
        matters instead of failing on arithmetic nobody changed. */
     for (const row of rows) {
       const declarations = row.declarations.split(", ");
+      /* #1510: PRR is the one documented exception (see the re-pin above). The client declared 210 over a
+         tile the log-derived board no longer holds; the reducer files 170. Asserted as the pair, so the
+         exception is as loud as the rule. */
+      if (row.ticker === "PRR") {
+        expect([row.filed, declarations[declarations.length - 1]]).toEqual(["170", "210"]);
+        continue;
+      }
       expect(row.filed).toBe(declarations[declarations.length - 1]);
     }
 

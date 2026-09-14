@@ -28,8 +28,13 @@ import {
   homeReservationStands,
   stationHomeHexes,
   tokenCityIndex,
+  type HomeStationEntry,
   type StationTokenCompany,
 } from "../components/hexContractTypes";
+/* Design note #1511: the reservation's circle is decided by the SAME function the board's ring and click use
+   (#858's `homeSlotIndex`), read through the same marker point, so the circle the badge marks, the circle the
+   President may click, and the circle the authority holds against everybody else are one answer. */
+import { homeSlotIndex, stationMarkerPoint } from "../components/hexCanvasPrimitives";
 import type { MapGridResponse } from "../components/hexContractTypes";
 import {
   NEW_YORK_PRINTED_ARTWORK,
@@ -197,7 +202,16 @@ export function citySlotCount(
   const hex = STATIC_BOARD_HEXES.find((entry) => entry.q === q && entry.r === r);
   if (!hex) return 0;
   const cities = printedMarkersFor(hex.label).filter((marker) => marker.kind === "city");
-  return cities[cityIndex]?.slots ?? (cities.length > cityIndex ? 1 : 0);
+  if (cities.length > 0) return cities[cityIndex]?.slots ?? (cities.length > cityIndex ? 1 : 0);
+  /* Design note #1511: A BARE HEX WITH NO AUTHORED ARTWORK STILL HAS ITS PRINTED CIRCLES. The yellow OO
+     hexes (E11, D10, H18, E5) are not in the printed catalog -- they carry no track until a tile is laid --
+     and this returned 0 for both of their circles while `stationSlotCount`, one function up, answered 2 for
+     the hex. The same archetype answers here, so the per-circle count and the per-hex count agree, and a
+     hex-level "two slots" can never be split into two circles of none. */
+  const archetype = archetypeForHex(mapGrid, q, r);
+  if (archetype === "DoubleCity") return cityIndex === 0 || cityIndex === 1 ? 1 : 0;
+  if (archetype === "SingleCity") return cityIndex === 0 ? 1 : 0;
+  return 0;
 }
 
 export interface StationPlacementCompany {
@@ -205,6 +219,10 @@ export interface StationPlacementCompany {
   is_floated: boolean;
   station_token_hexes: ReadonlyArray<readonly [number, number]>;
   station_token_limit: number;
+  /** Design note #1511: the recorded `(q, r, city_index)` mirror, so occupancy can be counted per CIRCLE.
+   *  Optional for the same reason it is on `StationTokenCompany`: absent means "not recorded", and a token
+   *  with no recorded circle is bucketed to city 0 -- `tokenCityBucket`'s convention, not a new one. */
+  station_tokens?: ReadonlyArray<readonly [number, number, number]> | null;
 }
 
 export interface StationPlacementInput {
@@ -314,6 +332,75 @@ export function evaluateStationPlacement(
     };
   }
 
+  /* ==================================================================
+      DESIGN NOTE 1511: A TOKEN IS IN A CIRCLE, AND SO IS A RESERVATION
+     ==================================================================
+     REPORTED, from live play (JUNO-FCJ index 95): B&M placed a paid token in NNH's home station at New York.
+     NNH had not floated; its reservation stood; the placement was allowed by this function, and the arm
+     applied it. Three more tokens followed into the same one-slot circle over the game.
+
+     THE THREE ARMS ABOVE ARE HEX-LEVEL, and that is the whole fault. New York is two cities of one slot
+     each, so `slots` is 2. The reservation arm counts NNH's home as ONE slot held somewhere on the hex --
+     right for an OO hex, where the President chooses either circle (#43, #1283) -- and B&M's token in the
+     circle the badge is drawn in left "one slot for NNH" arithmetically true and physically false. #858
+     had already settled that NNH's home is LOCKED to one circle and made the click honour it; the gate that
+     judges everybody else's clicks had never been told. And once a circle is full, the occupancy arm above
+     still sees a hex with room, so the second, third and fourth tokens landed in the same circle too.
+
+     SO WHEN THE CALLER NAMES A CIRCLE, THE CIRCLE IS JUDGED: its own slot count, its own occupants, and any
+     home reservation locked to it. The hex-level arms stay, because they are still right about what they
+     measure -- an OO reservation really is "one slot somewhere on this hex" -- and because a caller that
+     cannot name a circle (the veil) needs a hex answer. That answer is refined below rather than replaced:
+     a multi-city hex is worth lighting when SOME circle on it may be taken, which is what a hex-level
+     question means when it is asked about a hex with more than one city. */
+  const cityCount = cityCountAt(mapGrid, q, r);
+  if (cityIndex === null || cityIndex === undefined) {
+    if (cityCount > 1) {
+      let firstRefusal: StationPlacementResult | null = null;
+      for (let index = 0; index < cityCount; index += 1) {
+        const verdict = evaluateStationPlacement({ ...input, cityIndex: index });
+        if (verdict.allowed) return verdict;
+        if (firstRefusal === null) firstRefusal = verdict;
+      }
+      return firstRefusal ?? NOT_REACHED;
+    }
+  } else {
+    const citySlots = citySlotCount(mapGrid, q, r, cityIndex);
+    if (citySlots === 0) {
+      return {
+        allowed: false,
+        reason: `There is no city ${cityIndex + 1} on this hex.`,
+      };
+    }
+    const occupiedInCity = allCompanies.reduce(
+      (count, entry) => count + (here(entry.station_token_hexes) && tokenCircleOf(entry, q, r) === cityIndex ? 1 : 0),
+      0,
+    );
+    if (occupiedInCity >= citySlots) {
+      return {
+        allowed: false,
+        reason:
+          citySlots === 1
+            ? "This city's only station slot is taken."
+            : `All ${citySlots} of this city's station slots are taken.`,
+      };
+    }
+    const lockedHere = stationHomeHexes().filter((home) => {
+      if (home.q !== q || home.r !== r) return false;
+      if (home.companyId === company.company_id) return false;
+      if (home.enforced === false) return false;
+      const owner = allCompanies.find((entry) => entry.company_id === home.companyId);
+      if (!homeReservationStands(owner, home)) return false;
+      return homeReservedCityIndex(mapGrid, home) === cityIndex;
+    });
+    if (occupiedInCity + lockedHere.length >= citySlots) {
+      return {
+        allowed: false,
+        reason: `This station is reserved as the home station for company #${lockedHere[0].companyId} and cannot be taken.`,
+      };
+    }
+  }
+
   /* Connectivity, LAST and deliberately. The three refusals above are properties of the CITY and are true for
      everybody; this one is about the acting corporation, and a player who has been told "that city is full" does
      not also need to be told their track does not reach it.
@@ -399,6 +486,51 @@ export function evaluateStationPlacement(
   }
 
   return ALLOWED;
+}
+
+/** How many cities this hex has -- `citySlotCount` split the other way. A laid tile knows; a preprinted hex
+ *  has one per printed city marker; a hex with no city has none. */
+export function cityCountAt(mapGrid: MapGridResponse, q: number, r: number): number {
+  const laid = mapGrid.tiles.find((tile) => tile.q === q && tile.r === r);
+  if (laid) return tileCitySlotCounts(laid.tile_id).length;
+  const hex = STATIC_BOARD_HEXES.find((entry) => entry.q === q && entry.r === r);
+  if (!hex) return 0;
+  const printed = printedMarkersFor(hex.label).filter((marker) => marker.kind === "city").length;
+  if (printed > 0) return printed;
+  const archetype = archetypeForHex(mapGrid, q, r);
+  return archetype === "DoubleCity" ? 2 : archetype === "SingleCity" ? 1 : 0;
+}
+
+/** Which circle a company's token on `(q, r)` sits in, for the gate -- `tokenCityBucket`'s rule (#698) over
+ *  the gate's own company shape: the recorded index, else city 0. */
+function tokenCircleOf(company: StationPlacementCompany, q: number, r: number): number {
+  const entry = company.station_tokens?.find(([tq, tr]) => tq === q && tr === r);
+  return entry ? entry[2] : 0;
+}
+
+/** Design note #1511: WHICH CIRCLE A HOME RESERVATION HOLDS, or `null` where it holds "one of them".
+ *
+ *  THE SAME ANSWER THE BOARD GIVES. `homeSlotIndex` (#858) is what lights the ring for a Place Home Station
+ *  prompt and what the click is checked against: `null` on an OO hex, where the President chooses either
+ *  circle (#742), and otherwise the circle nearest the reservation badge -- on New York, the first. It is
+ *  asked here through the same two readers (`cityNodePoints`, `stationMarkerPoint`) so the circle the badge
+ *  marks and the circle held against other corporations cannot drift apart.
+ *
+ *  THE SIZE IS NOMINAL. Both readers scale with it and the nearest-node question is invariant under scale,
+ *  so any positive size gives the index the renderer gives at its own. A hex with no city returns `null`:
+ *  there is no circle to hold, and the hex-level arms have already said so. */
+const RESERVATION_GEOMETRY_SIZE = 100;
+
+export function homeReservedCityIndex(mapGrid: MapGridResponse, home: HomeStationEntry): number | null {
+  const nodes = cityNodePoints(mapGrid, home.q, home.r, RESERVATION_GEOMETRY_SIZE);
+  if (nodes.length === 0) return null;
+  if (nodes.length === 1) return 0;
+  const laid = mapGrid.tiles.find((tile) => tile.q === home.q && tile.r === home.r);
+  return homeSlotIndex(
+    home.label,
+    nodes,
+    stationMarkerPoint(home.q, home.r, RESERVATION_GEOMETRY_SIZE, laid),
+  );
 }
 
 /** Every hex this corporation may place a token on right now, keyed by

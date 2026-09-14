@@ -512,6 +512,7 @@ import {
   type FleetLossNotice,
 } from "./utils/fleetLossNotice";
 import { dividendRefused, operatingCorporationId } from "./gameEngine/dividendGate";
+import { operatingIdentityRefusal } from "./gameEngine/operatingIdentity";
 import { dividendSplit } from "./gameEngine/dividendSplit";
 import {
   actionWasRefused,
@@ -5936,7 +5937,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
            check. The server's providers do this already; two callers judging one lay against two trays is the
            divergence class this project exists to end. */
         const rulesBeforeAction = resolveVariants(sandboxStateRef.current?.variants);
+        /* Design note #1510: THE GRID REFUSES WHAT THE REDUCER REFUSES FOR IDENTITY, TOO. The reducer now
+           refuses a `LayTile` naming a corporation that is not operating, and #757 is explicit that a lay
+           touches two atoms: refusing in one and applying in the other is the split it exists to prevent.
+           Folded into the one predicate both atoms share (the test below pins that they do), judged
+           against the state as it stood before this action, so the tile cannot land for a lay the fee and
+           the cursor refused. */
+        const stateBeforeAction = sandboxStateRef.current;
         const layRefused = (q: number, r: number, tileId: number, orientation: number) =>
+          (stateBeforeAction !== null &&
+            operatingIdentityRefusal(stateBeforeAction, msg as GameplayExecuteMsg) !== null) ||
           withRules(
             rulesBeforeAction,
             () =>

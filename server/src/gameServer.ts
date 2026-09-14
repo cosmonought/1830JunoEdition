@@ -37,12 +37,15 @@ import {
   DEFAULT_SANDBOX_SCENARIO,
   STANDARD_VARIANTS,
   fieldDigests,
+  isRecognisedClientFrame,
   logHash,
   sandboxReplayProviders,
   sandboxScenario,
   sandboxScenarioState,
   sandboxWaterfallState,
   stateDigest,
+  validateGameplayMessage,
+  validateSubmitEnvelope,
   waterfallForRoster,
   withEmptyRoster,
 } from "../../frontend/src/gameEngine";
@@ -824,13 +827,29 @@ export function createGameServer(options: GameServerOptions): {
 
     socket.on("message", (raw) => {
       inOrder = inOrder.then(async () => {
-        let frame: ClientFrame;
+        /* ==================================================================
+            DESIGN NOTE 1449: THE PARSE IS NOT THE CHECK
+           ==================================================================
+           `JSON.parse` answers "was that JSON", and the `as` answered nothing at all -- a cast is a promise
+           to the compiler that the wire never made. What followed was twelve `if (frame.kind === ...)`
+           tests, so a frame that was a number, an array, or an object with no `kind` fell through all
+           twelve and was dropped in silence: no answer to the client, no line in the window.
+           TWO CHECKS, AT DIFFERENT DEPTHS. This one is thin on purpose -- "is this addressed to something
+           that exists" -- because the lobby, chat and roster frames never reach the reducer or the log. The
+           gameplay frame gets the real one, at the `submit` branch below, where a malformed message would
+           otherwise become a permanent log entry. */
+        let parsed: unknown;
         try {
-          frame = JSON.parse(String(raw)) as ClientFrame;
+          parsed = JSON.parse(String(raw));
         } catch {
           send(socket, { kind: "error", reason: "unparseable frame" });
           return;
         }
+        if (!isRecognisedClientFrame(parsed)) {
+          send(socket, { kind: "error", reason: "unrecognised frame" });
+          return;
+        }
+        const frame = parsed as ClientFrame;
 
         /* ---- FIND MY SEATS BY PIN (#1355) ---- answered before any hello; the asker has no room yet. */
         if (frame.kind === "find-seats") {
@@ -1189,6 +1208,32 @@ export function createGameServer(options: GameServerOptions): {
             send(socket, { kind: "error", reason: "say hello first" });
             return;
           }
+          /* ==================================================================
+              DESIGN NOTE 1449: REFUSED BEFORE THE SESSION, NOT INSIDE IT
+             ==================================================================
+             MEASURED, not supposed: `{}`, `[]`, `{Nonsense:{}}`, `{BuyStock:{}}`, a `protocol_id` of
+             `"x"` or `NaN`, a `percentage` of `Infinity`, a fractional hex and two discriminants in one
+             object were every one of them answered `applied` and appended a permanent entry to the room's
+             log. The reducer no-opped most of them, which is why nobody noticed: the BOARD was unchanged and
+             the HISTORY was not, and `logHash` commits over the history.
+             SO THE REFUSAL HAS TO LAND HERE, above `roomFor`. Inside `RoomSession.submit` the append is
+             the commit point (#1209) and the authority runs before it -- but the authority asks whose turn
+             it is, which is a question about a message that has already been assumed to be one. A frame
+             that is not a move must not reach a function whose job is deciding whose move it is.
+             THE EXISTING TRANSPORT CARRIES IT. `refused` is what the shell already understands and already
+             surfaces (#1218), so a malformed frame is answered the same way an illegal one is. */
+          const envelope = validateSubmitEnvelope(frame);
+          const shape = envelope.ok ? validateGameplayMessage(frame.msg) : envelope;
+          if (!shape.ok) {
+            // eslint-disable-next-line no-console
+            console.log(
+              `  malformed: ${attached.actor} sent a frame that is not a move — ${shape.reason}\n` +
+                `    payload ${JSON.stringify(frame.msg)}`,
+            );
+            send(socket, { kind: "refused", reason: shape.reason, build: options.build });
+            return;
+          }
+
           const session = await roomFor(attached.room);
           const before = session.entries.length;
 

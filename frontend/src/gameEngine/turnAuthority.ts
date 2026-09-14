@@ -242,6 +242,40 @@ function roomMessageRefusal(input: TurnAuthorityInput, actor: string): string | 
     return state.current_round_type === "GameEnd" ? null : "The game is not over yet.";
   }
 
+  /* ==================================================================
+      DESIGN NOTE 1450: THE PROPOSER IS THE BUYER'S PRESIDENT, NOT THE OWNER BEING ASKED
+     ==================================================================
+     #1220 named this family "a real gap" and #1249 closed six of it. These two were missed, and the
+     consequence is exactly what that note warned of: both are seat-exempt through `isSandboxOnlyMsg`, and
+     `roomMessageRefusal` had no branch for either, so they fell to the `return null` at the foot of this
+     function. Verified before it was fixed -- a player who owned nothing could offer a private company
+     belonging to somebody else, or offer a train out of a corporation they did not preside over.
+
+     THE DIRECTION IS THE WHOLE OF IT, AND IT IS EASY TO GET BACKWARDS. #701 states it: "A corporation on
+     its turn OFFERS; the private's owner or the selling president ANSWERS." So on a PROPOSE the owner named
+     in the payload (`owner`, `seller_president`) is the RESPONDER -- the party whose consent is being
+     sought -- and binding authorization to them would refuse every legitimate offer and admit none. The
+     party who may initiate is the president of `buyer_protocol_id`, which both payloads carry and which
+     `App.tsx` fills from the operating cursor at both dispatch sites.
+
+     OWNERSHIP ONLY, on this layer's rule. Whether that corporation is the one operating, whether it is at a
+     step where it may buy, whether the price is payable, whether the private is for sale at all: every one
+     of those is the reducer's, and `consentAnswerRefusal` still owns the answering half. This asks the one
+     question a socket boundary can answer for itself -- "is this yours to send". */
+  if ("ProposePrivatePurchase" in msg || "ProposeTrainPurchase" in msg) {
+    const { buyer_protocol_id } = (
+      "ProposePrivatePurchase" in msg ? msg.ProposePrivatePurchase : msg.ProposeTrainPurchase
+    ) as { buyer_protocol_id: number };
+    const buyer = state.public_companies.find((entry) => entry.company_id === buyer_protocol_id);
+    /* #232: a corporation the board cannot name is "not said", and refusing on it would judge an offer by a
+       field nobody supplied. The reducer meets the same message and finds the same nothing. */
+    if (!buyer) return null;
+    if (buyer.president !== actor) {
+      return `Only ${buyer.ticker}'s president can make an offer on its behalf.`;
+    }
+    return null;
+  }
+
   /* Design note #1323: THE LICENCE IS THE OPERATING PRESIDENT'S TO BUY. It is sandbox-only (the chain has
      never heard of it) so it lands here rather than at the seat cursor, and its owner is the president of the
      corporation named -- the same test `PlaceHomeStation` makes. Whether that corporation is the one

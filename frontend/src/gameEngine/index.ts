@@ -96,6 +96,21 @@ export { sandboxReplayProviders } from "./replayProviders";
 export { effectiveActions } from "./logRevert";
 
 /* ------------------------------------------------------------------ */
+/* The wire's structural contract (#1449)                             */
+/* ------------------------------------------------------------------ */
+/* Shape only. What a message must LOOK like to be a message at all; whether the move is legal stays with
+   the reducer. The server enforces this before `RoomSession.submit`. */
+export {
+  validateGameplayMessage,
+  validateSubmitEnvelope,
+  isRecognisedClientFrame,
+  GAMEPLAY_MESSAGE_KINDS,
+  GAMEPLAY_MESSAGE_SCHEMA,
+  CLIENT_FRAME_KINDS,
+  type MessageValidation,
+} from "./messageSchema";
+
+/* ------------------------------------------------------------------ */
 /* Derivations a host needs to answer for a room                      */
 /* ------------------------------------------------------------------ */
 export { derivePhase, type GamePhase } from "./gamePhase";

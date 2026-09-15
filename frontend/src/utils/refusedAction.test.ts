@@ -89,7 +89,10 @@ describe("a real refusal is recognised", () => {
   it("leaves a real action alone", () => {
     /* THE CONTROL. A gate that also flagged legitimate actions would fill the log with false refusals, which
        is the same disease pointing the other way. */
+    /* Batch 6 (#1552, audit C1): the declared amount must equal what the trains ran, so the control board
+       carries the $100 run its declaration names -- a $100 declaration over a $0 run is now a real refusal. */
     const before = board();
+    before.public_companies[0].last_route_revenue = "100";
     const msg = {
       DeclareDividends: { game_id: 1, protocol_id: CO, revenue_amount: "100", distribute: true },
     } as never;

@@ -99,8 +99,9 @@ const edit = (points: readonly RoutePoint[], click: RoutePoint, maxDistance?: nu
 
 describe("where a route may start", () => {
   it("refuses a first click that is not a terminus", () => {
-    /* #256/#264: a route runs between two revenue CENTRES, and a town is not one. The first click is refused
-       outright; the last is left to the readout, because a player mid-draw has not finished yet. */
+    /* #256/#264: a route runs between two revenue CENTRES, and plain track (A17, a bare connector) is not one.
+       The first click is refused outright; the last is left to the readout, because a player mid-draw has not
+       finished yet. (#1555: a TOWN is a centre and a legal first click -- `routeAuthority.test.ts`.) */
     const result = edit([], THROUGH);
     expect(refusalOf(result)).toContain("cannot START a route");
   });

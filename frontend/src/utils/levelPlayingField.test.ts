@@ -220,7 +220,8 @@ describe("the warehouses (design note #1321)", () => {
   it("are stops a route may pass through OR end at, and never token (design note #1286)", () => {
     /* #1321 read them as small towns -- "never a terminus". RULED OTHERWISE: "unlike small towns the
        warehouses are also valid termini for routes". Passing through is still legal (`isOffboardTerminal`
-       is false), ending is legal now, and the slot count (a `town` marker in `GRAY_HEXES`) is still zero. */
+       is false), ending is legal now, and the slot count (a `town` marker in `GRAY_HEXES`) is still zero.
+       #1555 (S6-10): "unlike small towns" is withdrawn -- towns are termini under the base rule as well. */
     withRules(LPF, () => {
       for (const [label, edges] of Object.entries(LPF_WAREHOUSES)) {
         const hex = hexByLabel(label);
@@ -297,7 +298,8 @@ describe("Coal River, L8 (design note #1321)", () => {
       expect(l8.printedColor).toBe("Coal");
       expect(archetypeForHex(BARE, l8.q, l8.r)).toBe("SingleTown");
       expect(isRevenueCentreHex(BARE, COAL_RIVER_LABEL)).toBe(true);
-      expect(isRouteTerminusHex(BARE, COAL_RIVER_LABEL)).toBe(false);
+      // #1555 (S6-10): a town is a terminus, Coal River included; the Kanawha Licence stays the gate on it.
+      expect(isRouteTerminusHex(BARE, COAL_RIVER_LABEL)).toBe(true);
       expect(evaluateHexForTileLaying(l8.q, l8.r, BARE).eligible).toBe(false);
       // Design note #1282: the nameplate says "Coalfields"; Coal River stays the code name.
       expect(LPF_BOARD.namedHexLabels[COAL_RIVER_LABEL]).toBe("Coalfields");

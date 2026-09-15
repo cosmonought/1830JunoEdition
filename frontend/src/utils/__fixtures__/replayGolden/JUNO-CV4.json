@@ -7,7 +7,7 @@
     "creator": "juno1sandboxalice000000000000000000000000",
     "is_active": true,
     "total_juno_pool": "4000000",
-    "virtual_bank_vgp": "8266",
+    "virtual_bank_vgp": "8516",
     "virtual_bank_start": "12000",
     "max_players": 2,
     "player_addresses": [
@@ -31,11 +31,11 @@
     "player_cash": [
       {
         "player": "p-xj8g7vth",
-        "cash_vgp": "613"
+        "cash_vgp": "398"
       },
       {
         "player": "p-vmlqoi42",
-        "cash_vgp": "586"
+        "cash_vgp": "371"
       }
     ],
     "public_companies": [
@@ -80,7 +80,6 @@
             0
           ]
         ],
-        "last_run_turn_key": "5.2.1",
         "printed_route_revenue": "0",
         "last_run_breakdown": [],
         "routes_run_this_turn": 0,
@@ -126,15 +125,14 @@
         "company_id": 4,
         "ticker": "B&O",
         "is_floated": true,
-        "treasury": "320",
+        "treasury": "500",
         "total_shares_issued": 10,
         "par_value": "100",
         "last_route_revenue": "0",
         "owned_trains": [
           "2",
           "2",
-          "2",
-          "3"
+          "2"
         ],
         "president": "p-vmlqoi42",
         "ipo_pool_percentage": 0,
@@ -168,11 +166,10 @@
             0
           ]
         ],
-        "last_run_turn_key": "5.2.4",
         "printed_route_revenue": "0",
         "last_run_breakdown": [],
         "routes_run_this_turn": 0,
-        "last_completed_run_revenue": "170"
+        "last_completed_run_revenue": "90"
       },
       {
         "company_id": 5,
@@ -208,7 +205,6 @@
         ],
         "station_token_limit": 3,
         "station_tokens": [],
-        "last_run_turn_key": "5.2.5",
         "printed_route_revenue": "0",
         "last_run_breakdown": [],
         "routes_run_this_turn": 0,
@@ -381,21 +377,21 @@
         "price": 90,
         "x": 5,
         "y": 10,
-        "enteredAt": 18
+        "enteredAt": 15
       },
       "2": null,
       "3": null,
       "4": {
-        "price": 160,
-        "x": 10,
+        "price": 112,
+        "x": 7,
         "y": 10,
-        "enteredAt": 16
+        "enteredAt": 8
       },
       "5": {
         "price": 100,
         "x": 6,
         "y": 10,
-        "enteredAt": 17
+        "enteredAt": 14
       },
       "6": null,
       "7": null,
@@ -425,7 +421,8 @@
       "2,9",
       "4,8",
       "-1,5"
-    ]
+    ],
+    "last_run_turn_key": "5.2.1"
   },
   "waterfall": {
     "game_id": 0,

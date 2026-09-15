@@ -73,6 +73,27 @@ function engineBefore(upTo: number): RoomEngine {
   const engine = new RoomEngine(sandboxReplayProviders(), { state: seedState, waterfall: seedWaterfall });
   for (const entry of loadPrefix()) {
     if (entry.index >= upTo) break;
+    /* ==================================================================
+        DESIGN NOTE 1555 (fixture repair): THE PURCHASE THE LIVE TABLE WAS NEVER ASKED FOR
+       ==================================================================
+       Entry 74 is B&M, trainless at Buy Trains, passing its turn. The engine that recorded it saw no legal
+       route for B&M -- its only route ended on a town (E23-F24) and towns were not termini. Under the S6-10
+       ruling (rulebook 6.4: a small city is a city; a route may end at any city) that route IS legal, so the
+       Batch-4 obligation gate refuses the pass and the prefix would stall here, one entry before the placement
+       at 76 and twenty before the illegal placement at 95 this file exists for. THE CHOICE THE OLD ENGINE
+       NEVER REQUIRED IS SUPPLIED HERE, IN THE HARNESS ONLY: a 2-train purchase by B&M at $80 through the
+       ordinary arm, exactly what the live table would have been made to do. Nothing is appended to the
+       fixture; the prefix on disk is unchanged; B&M's treasury is $80 lighter than the live game's from here,
+       which no assertion in this file reads. The divergence is reported in the Batch 6 write-up. */
+    if (entry.index === 74) {
+      engine.apply({
+        index: 74,
+        id: `${entry.id}:s6-10-obligation`,
+        actor: entry.actor,
+        payload: JSON.stringify({ BuyHardwareFromPool: { game_id: 0, protocol_id: 8 } }),
+        derived: true,
+      });
+    }
     engine.apply(entry);
   }
   return engine;

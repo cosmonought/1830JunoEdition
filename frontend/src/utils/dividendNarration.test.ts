@@ -62,7 +62,9 @@ function board(over: Partial<GameStateResponse> = {}): GameStateResponse {
         ipo_pool_percentage: 20,
         bank_pool_percentage: 10,
         treasury: "300",
-        last_route_revenue: "0",
+        /* Batch 6 (#1552, audit C1): the reducer pays only a declaration that matches the run, so this board
+           carries the $100 the cases below declare. The narration cases read the same figure. */
+        last_route_revenue: "100",
         player_holdings: [
           { player: "p1", percentage: 60 },
           { player: "p2", percentage: 10 },

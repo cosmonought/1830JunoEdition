@@ -276,6 +276,9 @@ export type ReplayObserver = (event: {
   msg: GameplayExecuteMsg;
   /** The state the reducer is about to be handed -- after the grid and chart moved, before the arm ran. */
   stateBefore: GameStateResponse;
+  /** Batch 6: the grid the reducer is handed with it, so an observer can ask the route authority the same
+   *  question the arm is about to be asked. */
+  grid: MapGridResponse;
 }) => void;
 
 
@@ -427,7 +430,7 @@ export class RoomEngine {
   /* #1191: observed HERE -- after the this.grid and the chart have moved, before the arm runs -- because that
      is precisely the this.state the reducer is judged on. Observing earlier would report a board the reducer
      never saw. */
-  observe?.({ entry, msg, stateBefore: this.state });
+  observe?.({ entry, msg, stateBefore: this.state, grid: this.grid });
 
   this.state = applySandboxAction(this.state, msg, {
     ...this.providers.chartInjections(this.state),

@@ -57,6 +57,8 @@ import {
   fundingPrivateRescindRefusal,
 } from "./emergencyFunding";
 import type { MapGridResponse } from "../components/hexContractTypes";
+import { dividendAmountRefusal, routeSetRefusal, routeSkipRefusal } from "./routeAuthority";
+import { tileEraFor } from "./gameConstants";
 
 export interface TurnAuthorityInput {
   state: GameStateResponse;
@@ -228,11 +230,30 @@ export function turnRefusal(input: TurnAuthorityInput): string | null {
      the strength of a missing field rather than a broken rule". `actingAddress` returns `null` for an empty
      roster, an unseated president, or a corporation the queue cannot name -- none of which is evidence that
      THIS player is out of turn. */
-  if (acting === null) return null;
+  if (acting !== null && actor !== acting) return "It is not your turn.";
+  /* ==================================================================
+      DESIGN NOTE 1550 (ingress): THE ROUTE, THE DIVIDEND AND THE SKIP ARE ANSWERED WITH THEIR REASON
+     ==================================================================
+     Batch 6. The reducer refuses these by identity (`applySandboxActionCore`, the second lock); asked here
+     first, on the seat that is allowed to send them, so the submitter hears the sentence rather than a silent
+     no-op -- the #1530/#1540 shape. Same predicates, same grid, so the two locks cannot disagree. */
+  return operatingLegalityRefusal(state, msg, input.mapGrid);
+}
 
-  if (actor === acting) return null;
-
-  return "It is not your turn.";
+/** The Batch-6 authority questions, in the order the reducer asks them. `null` when nothing objects. */
+export function operatingLegalityRefusal(
+  state: GameStateResponse,
+  msg: GameplayExecuteMsg,
+  mapGrid: MapGridResponse | undefined,
+): string | null {
+  if ("RunMultipleRoutes" in msg) {
+    return routeSetRefusal(state, msg.RunMultipleRoutes, mapGrid, mapGrid ? tileEraFor(state) : undefined);
+  }
+  if ("RunManualRoute" in msg && typeof state.rules_engine_version === "number") {
+    return "RunManualRoute is a legacy replay message; a live game runs its trains with RunMultipleRoutes.";
+  }
+  if ("DeclareDividends" in msg) return dividendAmountRefusal(state, msg.DeclareDividends);
+  return routeSkipRefusal(state, msg, mapGrid);
 }
 
 /* ==================================================================

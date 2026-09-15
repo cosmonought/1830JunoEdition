@@ -18,7 +18,14 @@ describe("the log replayed as a timeline (design note #1411)", () => {
     expect(history.rounds[history.rounds.length - 1].label).toBe("Final");
     const labels = history.rounds.map((r) => r.label);
     expect(labels[0]).toBe("SR 1");
-    expect(labels).toContain("OR 9.1");
+    /* Batch 6 (#1550/#1552): this fixture is JUNO-Z6C, a legacy log whose entry 418 declared $180 on a run the
+       reducer had priced at $190 (and 428 / 433 the same, $10-$20 short -- the client's figure, not the
+       authority's). Version 4 refuses those declarations, the treasuries differ from there, the bank does not
+       break where it did, and the log-derived timeline no longer reaches OR 9 before the entries run out. It
+       used to assert `toContain("OR 9.1")`; the timeline's SHAPE is what #1411 is about, so that is what is
+       asserted -- a divergence reported in the Batch 6 write-up, not absorbed silently. */
+    expect(labels).toContain("OR 5.1");
+    expect(labels.filter((label) => label.startsWith("OR ")).length).toBeGreaterThan(10);
     // No two consecutive samples share a label -- a boundary is a change.
     for (let i = 1; i < labels.length; i += 1) expect(labels[i]).not.toBe(labels[i - 1]);
   });

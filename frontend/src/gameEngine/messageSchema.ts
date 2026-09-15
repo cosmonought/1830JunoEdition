@@ -66,12 +66,35 @@ type FieldKind =
   | "int|null"
   | "array"
   | "object"
+  | "waypoints"
+  | "routes"
+  | "ints"
+  | "strings"
   | `enum:${string}`;
 
 type FieldSpec = FieldKind | `${FieldKind}?`;
 
 /** `Record<string, never>` on the wire: a body that must be an object and carries nothing this file names. */
 const EMPTY: Readonly<Record<string, FieldSpec>> = {};
+
+/** #1553: transport sanity bounds on a run (see the `routes` arm below). Not rules. */
+export const MAX_ROUTES_PER_RUN = 64;
+export const MAX_WAYPOINTS_PER_ROUTE = 512;
+
+function waypointsComplaint(value: unknown): string | null {
+  if (!Array.isArray(value)) return "must be an array of waypoints";
+  if (value.length > MAX_WAYPOINTS_PER_ROUTE) return `has a route of more than ${MAX_WAYPOINTS_PER_ROUTE} waypoints`;
+  for (const waypoint of value) {
+    if (typeof waypoint !== "object" || waypoint === null || Array.isArray(waypoint)) {
+      return "has a waypoint that is not an object";
+    }
+    const { hex, city_node, bypass } = waypoint as { hex?: unknown; city_node?: unknown; bypass?: unknown };
+    if (typeof hex !== "string" || hex.length === 0 || hex.length > 16) return "has a waypoint with no hex label";
+    if (city_node !== undefined && !Number.isInteger(city_node)) return "has a waypoint whose city_node is not a whole number";
+    if (bypass !== undefined && typeof bypass !== "boolean") return "has a waypoint whose bypass is not true or false";
+  }
+  return null;
+}
 
 function checkField(value: unknown, spec: FieldSpec): string | null {
   const optional = spec.endsWith("?");
@@ -104,6 +127,35 @@ function checkField(value: unknown, spec: FieldSpec): string | null {
       return typeof value === "object" && value !== null && !Array.isArray(value)
         ? null
         : "must be an object";
+    /* ==================================================================
+        DESIGN NOTE 1553: A ROUTE'S SHAPE, AT THE DOOR -- ITS LEGALITY, IN THE REDUCER (Batch 6)
+       ==================================================================
+       `routes` was declared "array", which admitted `[[1, 2], "x", null]` and let the reducer discover the
+       shape by throwing. The element shape is protocol (`RouteWaypointDto`: `hex` string, optional integer
+       `city_node`, optional `bypass`), so it is checked here; whether the hexes exist, connect, or may be run
+       is 1830 and stays `routeAuthority.ts`'s. THE ONE BOUND IS A TRANSPORT SANITY LIMIT, NOT A RULE: no
+       corporation owns more than a handful of trains and no board has more than about a hundred hexes, so a
+       frame with 64 routes or a 512-waypoint route is not a move anybody made -- refused so the reducer's walk
+       is never asked to price a megabyte. The real limits (trains owned, the board) are the reducer's. */
+    case "waypoints":
+      return waypointsComplaint(value);
+    case "routes": {
+      if (!Array.isArray(value)) return "must be an array of routes";
+      if (value.length > MAX_ROUTES_PER_RUN) return `lists more than ${MAX_ROUTES_PER_RUN} routes`;
+      for (const route of value) {
+        const complaint = waypointsComplaint(route);
+        if (complaint !== null) return complaint;
+      }
+      return null;
+    }
+    case "ints":
+      return Array.isArray(value) && value.every((entry) => Number.isInteger(entry))
+        ? null
+        : "must be an array of whole numbers";
+    case "strings":
+      return Array.isArray(value) && value.every((entry) => typeof entry === "string")
+        ? null
+        : "must be an array of strings";
     default:
       /* An unreachable arm (#788) written as a real failure rather than a silent pass: a kind added to the
          union and forgotten here must refuse, not admit. */
@@ -152,13 +204,16 @@ export const GAMEPLAY_MESSAGE_SCHEMA: Readonly<Record<string, Readonly<Record<st
   RunManualRoute: {
     game_id: "int?",
     protocol_id: "int",
-    path: "array",
+    path: "waypoints",
     payout_strategy: "enum:DeclareDividends|Withhold",
   },
+  // #1553: the element shapes are protocol; `trains` / `train_indices` were undeclared (see the header).
   RunMultipleRoutes: {
     game_id: "int?",
     protocol_id: "int",
-    routes: "array",
+    routes: "routes",
+    trains: "strings?",
+    train_indices: "ints?",
     revenue_seed: "finite?",
     revenue_turn: "string?",
     payout_strategy: "enum:DeclareDividends|Withhold?",

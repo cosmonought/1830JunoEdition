@@ -67,27 +67,31 @@ export interface RouteDraftEditInput {
    *
    * OMITTED MEANS NO BLOCKING, which reproduces every pre-#1023 caller exactly. */
   blocksThrough?: (q: number, r: number, cityIndex: number) => boolean;
+  /** Design note #1554 (Batch 6): the corporation drawing, so its herald (#1302) is a place a route may start
+   *  and a stop it counts. Omitted keeps the corporation-blind answer, which is every pre-#1554 caller. */
+  forCompanyId?: number;
 }
 
 /** How many of these points pay. The cap counts revenue CENTRES, not hexes travelled (#156). */
-function centresIn(mapGrid: MapGridResponse, points: readonly RoutePoint[]): number {
+function centresIn(mapGrid: MapGridResponse, points: readonly RoutePoint[], forCompanyId?: number): number {
   return points.reduce(
-    (total, entry) => (isRevenueCentreHex(mapGrid, entry.hexLabel) ? total + 1 : total),
+    (total, entry) => (isRevenueCentreHex(mapGrid, entry.hexLabel, forCompanyId) ? total + 1 : total),
     0,
   );
 }
 
 export function editRouteDraft(input: RouteDraftEditInput): RouteDraftEdit {
-  const { mapGrid, points, click, displayLabel, maxDistance, blocksThrough } = input;
+  const { mapGrid, points, click, displayLabel, maxDistance, blocksThrough, forCompanyId } = input;
   const last = points[points.length - 1];
 
   /* RULE 1 -- WHERE A ROUTE MAY START. A route runs between two revenue centres, so the FIRST click is
      refused outright if it is not one; the LAST is left to the readout, because a player mid-draw has not
-     finished yet. Towns are not termini (#264). */
-  if (points.length === 0 && !isRouteTerminusHex(mapGrid, click.hexLabel)) {
+     finished yet. #264 said "towns are not termini"; #1555 (S6-10, rulebook §6.4) says they are, and the one
+     predicate answers for both. #1554: asked for the corporation drawing, so the PRR may start at its herald. */
+  if (points.length === 0 && !isRouteTerminusHex(mapGrid, click.hexLabel, forCompanyId)) {
     return {
       ok: false,
-      reason: `${displayLabel} cannot START a route. Routes begin at a city or a red off-board hex — towns and plain track are passed through.`,
+      reason: `${displayLabel} cannot START a route. Routes begin at a city, a town or a red off-board hex — plain track is passed through.`,
     };
   }
 
@@ -112,7 +116,7 @@ export function editRouteDraft(input: RouteDraftEditInput): RouteDraftEdit {
   const cap = reachForDrafting(maxDistance);
   const commit = (next: RoutePoint[]): RouteDraftEdit => {
     if (!isUnlimitedReach(cap)) {
-      const centres = centresIn(mapGrid, next);
+      const centres = centresIn(mapGrid, next, forCompanyId);
       if (centres > cap) {
         return {
           ok: false,

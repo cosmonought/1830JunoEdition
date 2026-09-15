@@ -151,16 +151,18 @@ describe("the whole turn arrives in one transition (design note #968)", () => {
     expect(runBulk(board(), 3).operating_sub_phase).toBe("Dividends");
   });
 
-  it("adds to a total already standing rather than replacing it", () => {
-    /* The UI does not offer a second run in one turn, but the reducer must not silently discard a prior
-       total if it ever does -- #777's turn-change clear is what bounds this, not an assumption about the
-       caller. */
+  it("refuses a second run in the same turn, by identity (Batch 6, #1550)", () => {
+    /* THIS CASE USED TO PIN THE OPPOSITE: "adds to a total already standing rather than replacing it", on the
+       reasoning that #777's turn-change clear bounded a double run. It did not bound it -- JUNO-3XD 318/319
+       ran NNH's two routes twice in one turn and 320 declared the doubled figure, and the #1183 key that was
+       meant to catch it never fired (see the corrected note in the arm). Rulebook 6.4: each train runs once
+       per operating turn. A second `RunMultipleRoutes` while `routes_run_this_turn > 0` is now refused by
+       identity, whatever key it carries; the accumulation arithmetic stays for the legacy `RunManualRoute`
+       arm, which is one message per train. */
     const first = runBulk(board(), 2);
     const twice = runBulk(first, 2);
-    expect(Number(twice.public_companies[0].printed_route_revenue)).toBe(
-      Number(first.public_companies[0].printed_route_revenue) * 2,
-    );
-    expect(twice.public_companies[0].routes_run_this_turn).toBe(4);
+    expect(twice).toBe(first);
+    expect(twice.public_companies[0].routes_run_this_turn).toBe(2);
   });
 
   it("still replays a log full of the old message", () => {

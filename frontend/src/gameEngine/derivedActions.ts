@@ -53,6 +53,7 @@
 import type { GameStateResponse } from "./gameState";
 import type { GameplayExecuteMsg } from "../utils/sessionKey";
 import type { MapGridResponse } from "../components/hexContractTypes";
+import type { TileColorTier } from "../components/hexTileCatalog";
 import type { OperatingSubPhase } from "./operatingSubPhase";
 
 import { autoSkipExit } from "./autoSkipExit";
@@ -349,6 +350,9 @@ export function maxRouteRevenueFor(
   state: GameStateResponse,
   companyId: number,
   mapGrid: MapGridResponse,
+  /** #1556: the era to price at, when the caller is comparing against a set priced at a known era. Defaults to
+   *  the board's own (`tileEraFor`), which is what every live caller and the reducer's context agree on. */
+  era?: TileColorTier,
 ): number | null {
   const company = state.public_companies.find((entry) => entry.company_id === companyId);
   /* #484a: NO TOKEN IS A FACT, NOT AN ABSENCE OF ONE -- but a corporation the board does not describe at all
@@ -398,6 +402,7 @@ export function maxRouteRevenueFor(
          have found. */
       maxRevenueCentres: reachForDrafting(train.maxDistance),
     })),
+    era,
   );
   return result.totalRevenue;
 }
@@ -414,6 +419,7 @@ function routeSearchFor(
   mapGrid: MapGridResponse,
   startHexes: ReturnType<typeof stationTokensOf>,
   trains: ReadonlyArray<{ trainIndex: number; maxRevenueCentres: number }>,
+  era: TileColorTier = tileEraFor(state), // #1312; #1556 lets the route authority name the era it priced at
 ) {
   const blocksThrough = cityBlockerFor({
     actingCompanyId: companyId,
@@ -425,7 +431,7 @@ function routeSearchFor(
   return assignRouteSet({
     blocksThrough,
     mapGrid,
-    era: tileEraFor(state), // #1312
+    era,
     startHexes,
     companyId, // #1302
     trains,

@@ -183,7 +183,7 @@ export function RouteChipDetail({
         <span style={styles.problem}>Too many stops for a {model}.</span>
       )}
       {draft.endsOffTerminus && (
-        <span style={styles.problem}>A route must finish at a city or a red off-board hex.</span>
+        <span style={styles.problem}>A route must finish at a city, a town or a red off-board hex.</span>
       )}
       {feedback && <span style={styles.problem}>{feedback}</span>}
 

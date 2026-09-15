@@ -62,7 +62,7 @@ import { effectiveActions } from "./logRevert";
 
 /** The rules engine this build carries. Bump it, and add a line below, when a deployment changes what a
  *  stored log replays to. Do NOT bump it for UI, protocol or narration changes. */
-export const RULES_ENGINE_VERSION = 3;
+export const RULES_ENGINE_VERSION = 4;
 
 /** Every version this engine can replay faithfully. One entry until somebody builds a versioned reducer;
  *  the point of the list is that "supported" is an explicit statement rather than "whatever is running". */
@@ -100,6 +100,24 @@ export const RULES_ENGINE_CHANGELOG: ReadonlyArray<{ version: number; note: stri
       "after the end. No new message type. A version-2 log has no forced sales, no president-only " +
       "authority on the emergency purchase and no reducer-recorded ending, so it is refused, never " +
       "reinterpreted.",
+  },
+  {
+    version: 4,
+    note:
+      "Batch 6 (2026-09-15, #1550-#1553): routes and revenue are authoritative. `RunMultipleRoutes` is " +
+      "judged by the engine's route evaluator (`routeAuthority.ts`, rulebook 6.4/6.4.1/6.4.2/6.3.3/6.5): " +
+      "every train named must be the corporation's, named once, no more routes than trains; each route is " +
+      "re-walked on the board's rail model (continuous, no reversal at a junction, no crossover change, no " +
+      "track reused within or between the corporation's routes, full cities not run through, red areas " +
+      "terminal only, a station of the corporation on the route, no city counted twice, at least two " +
+      "cities, no more than the train's number; a route begins and ends at any city -- large, small (a town) " +
+      "or a red area, per 6.4 / 6.4.2, S6-10); a run worth less than the combination the route search " +
+      "demonstrates for the same fleet is refused (6.4, S6-3 -- a lower bound, never a ceiling); revenue is " +
+      "the evaluator's, never the message's; one run per turn. `DeclareDividends.revenue_amount` must equal `last_route_revenue` (audit C1). At Run " +
+      "Trains, a skip or end of turn is refused while a paying route exists. `RunManualRoute` is refused on " +
+      "a pinned board (legacy replay only). `SetupGame` copies the pin onto the state " +
+      "(`rules_engine_version`). A version-3 log carries runs the reducer priced without judging and " +
+      "dividends it paid from the message, so it is refused, never reinterpreted.",
   },
 ];
 

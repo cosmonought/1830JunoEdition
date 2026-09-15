@@ -799,10 +799,13 @@ describe("the log (#1540, tests 20-22)", () => {
     expect(revived.state.bankrupt_president).toBeUndefined();
   });
 
-  it("22. RULES_ENGINE_VERSION is 3 and a version-2 room is refused before reducer replay", () => {
-    expect(RULES_ENGINE_VERSION).toBe(3);
-    expect(SUPPORTED_RULES_ENGINE_VERSIONS).toEqual([3]);
-    expect(RULES_ENGINE_CHANGELOG.map((row) => row.version)).toEqual([1, 2, 3]);
+  it("22. RULES_ENGINE_VERSION is at least 3 and a version-2 room is refused before reducer replay", () => {
+    /* Batch 6 bumped the pin to 4 (#1550); this case keeps asserting what Batch 5 introduced -- the version-3
+       row and the refusal of a version-2 room -- against whatever the current pin is, as Batch 5 itself
+       relaxed Batch 4.6's `2` to `>= 2`. */
+    expect(RULES_ENGINE_VERSION).toBeGreaterThanOrEqual(3);
+    expect(SUPPORTED_RULES_ENGINE_VERSIONS).toEqual([RULES_ENGINE_VERSION]);
+    expect(RULES_ENGINE_CHANGELOG.map((row) => row.version).slice(0, 3)).toEqual([1, 2, 3]);
     expect(RULES_ENGINE_CHANGELOG[2].note).toMatch(/forced|bankrupt/);
     const seedOf = () => ({
       state: withEmptyRoster(sandboxScenarioState(DEFAULT_SANDBOX_SCENARIO, 0, "default")),
@@ -810,7 +813,7 @@ describe("the log (#1540, tests 20-22)", () => {
     });
     const fresh = new RoomSession({ providers: sandboxReplayProviders(), seed: seedOf(), build: "b", mintId: () => "d" });
     expect(fresh.submit({ actor: P1, build: "b", msg: { SetupGame: { players: [{ id: P1, nickname: "A" }, { id: P2, nickname: "B" }], variants: {}, build: "b" } } as never, baseIndex: -1 }).kind).toBe("applied");
-    expect(fresh.rulesEngineVersion()).toBe(3);
+    expect(fresh.rulesEngineVersion()).toBe(RULES_ENGINE_VERSION);
     const versionTwo = fresh.entries.map((row) => {
       const parsed = JSON.parse(row.payload) as { SetupGame?: Record<string, unknown> };
       return parsed.SetupGame ? { ...row, payload: JSON.stringify({ ...parsed, SetupGame: { ...parsed.SetupGame, [RULES_ENGINE_VERSION_FIELD]: 2 } }) } : { ...row };
@@ -820,7 +823,7 @@ describe("the log (#1540, tests 20-22)", () => {
       const old = new RoomSession({ providers: sandboxReplayProviders(), seed: seedOf(), build: "b", mintId: () => "x" });
       old.restore(versionTwo as ServerLogEntry[]);
       expect(applySpy).not.toHaveBeenCalled();
-      expect(old.incompatible?.compatibility).toEqual({ kind: "incompatible", version: 2, supported: [3] });
+      expect(old.incompatible?.compatibility).toEqual({ kind: "incompatible", version: 2, supported: [RULES_ENGINE_VERSION] });
     } finally {
       applySpy.mockRestore();
     }

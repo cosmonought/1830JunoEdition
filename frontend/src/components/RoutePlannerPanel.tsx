@@ -540,7 +540,7 @@ function firstProblem(drafted: readonly TrainRouteDraft[]): string {
     return `Too many stops for the ${overLong.model}-train. Plain track between stops is free — only revenue centres count.`;
   }
   if (drafted.some((draft) => draft.endsOffTerminus)) {
-    return "A route ends somewhere it cannot. Extend it to a city or a red off-board hex — towns only add revenue in passing.";
+    return "A route ends somewhere it cannot. Extend it to a city, a town or a red off-board hex — plain track only carries a route.";
   }
   /* Design note #474: reported AFTER the geometric problems and before the generic "worth nothing", because a
      route that misses the corporation's tokens is usually a well-formed route in the wrong place -- the player

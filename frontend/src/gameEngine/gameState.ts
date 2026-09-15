@@ -456,6 +456,11 @@ export interface GameStateResponse {
    * SELF-SCOPING, so nothing clears it: a different turn mints a different key. That is why this is a key
    * rather than the counter #1172 needed. */
   last_run_turn_key?: string | null;
+  /** Design note #1551 (Batch 6): THE RULES ENGINE THIS BOARD IS A PROGRAM FOR, copied onto the state by the
+   *  `SetupGame` arm from the message the server stamped (#1520). Absent on a board dealt from a legacy
+   *  (unpinned) log -- #232's "the log does not say" -- which is the one population the legacy
+   *  `RunManualRoute` arm still serves; a pinned board refuses that message (`applySandboxActionCore`). */
+  rules_engine_version?: number | null;
   /** Design note #1314: TRAINS TRADED IN FOR A DIESEL AND BACK IN THE BANK'S DEPOT (Project 18XX+). RULED:
    *  "the traded-in train is not removed from the game. It must be returned to the Bank's Supply Depot, where
    *  it becomes available for any corporation to purchase at face value (provided it hasn't rusted)." One

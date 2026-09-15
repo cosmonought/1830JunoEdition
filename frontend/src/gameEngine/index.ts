@@ -152,3 +152,15 @@ export {
   type EmergencyFunding,
   type LegalForcedSale,
 } from "./emergencyFunding";
+/* #1550: route authority -- the one evaluator of what a corporation's trains may run and what it is worth. */
+export {
+  evaluateRouteSet,
+  routeSetRefusal,
+  routeSkipRefusal,
+  dividendAmountRefusal,
+  trainCapacityFor,
+  type AuthoritativeRun,
+  type RouteSetVerdict,
+  type RouteSetInput,
+  type ProposedWaypoint,
+} from "./routeAuthority";

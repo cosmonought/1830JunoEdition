@@ -553,16 +553,21 @@ describe("a legacy log's silent discard is supplied by the corpus policy, and by
       state: withEmptyRoster(sandboxScenarioState(DEFAULT_SANDBOX_SCENARIO, 0, "default")),
       waterfall: waterfallForRoster(sandboxWaterfallState(sandboxScenario(DEFAULT_SANDBOX_SCENARIO).phase, 0, true), []),
     });
+    /* Batch 6 (#1556, S6-3): the log-derived JUNO-3XD now parts from the played game at 175 (NNH's run is
+       short of the demonstrated combination, see `replayJuno3XD.test.ts`), and in the game the log derives
+       from there no corporation is ever over its train limit -- the 4 that put C&O over at 255 is bought on a
+       turn that no longer comes. So this log no longer exercises the adapter: under both policies nothing is
+       supplied and nothing is owed, and the two rebuild to one board. The adapter itself is proven by the
+       synthetic case above ("supplies the cheapest-first discard"); what this case keeps is the corpus fact
+       and the server policy's refusal. Re-pinned with the reason, not silently. */
     const supplied = replayLog(entries, sandboxReplayProviders(), seedFor(), undefined, DEVELOPMENT_CORPUS_POLICY);
-    expect(supplied.legacyDiscards).toEqual([{ afterIndex: 255, companyId: expect.any(Number), model: "3" }]);
+    expect(supplied.legacyDiscards).toEqual([]);
     expect(pendingTrainDiscards(supplied.state)).toBeNull();
-    expect(supplied.state.returned_trains).toContain("3");
 
     const refused = replayLog(entries, sandboxReplayProviders(), seedFor(), undefined, { legacyLogs: "development-corpus", legacyExcessTrains: "refuse" });
     expect(refused.legacyDiscards).toEqual([]);
-    expect(pendingTrainDiscards(refused.state)).not.toBeNull();
-    // Not replay-compatible, concretely: the board never got past the obligation.
-    expect(stateDigest(refused.state)).not.toBe(stateDigest(supplied.state));
+    expect(pendingTrainDiscards(refused.state)).toBeNull();
+    expect(stateDigest(refused.state)).toBe(stateDigest(supplied.state));
 
     // And the server's policy refuses the legacy log before its first entry, whatever the adapter says.
     expect(() => replayLog(entries, sandboxReplayProviders(), seedFor())).toThrow(/before rules-engine versioning/);

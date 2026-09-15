@@ -83,7 +83,7 @@ export function runTrainsRefusal(drafts: readonly RunnableDraftShape[]): string 
   const offTerminus = drafted.find((draft) => draft.endsOffTerminus);
   if (offTerminus) {
     const last = offTerminus.hexLabels[offTerminus.hexLabels.length - 1];
-    return `${last} cannot END a route. Routes finish at a city or a red off-board hex — click one to finish, or click ${last} again to step back.`;
+    return `${last} cannot END a route. Routes finish at a city, a town or a red off-board hex — click one to finish, or click ${last} again to step back.`;
   }
 
   /* THEN TOO LONG. Below the ending because a route that runs too far is at least going the right way, and

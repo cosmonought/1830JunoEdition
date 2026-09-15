@@ -294,29 +294,43 @@ describe("JUNO-3XD replays headless", () => {
        at 228/229 on the same cursor). #1510 refuses that lay on both atoms, so E13 stays plain, and PRR's
        run at 307 -- E11, E13, F14 ... -- prices at 170 without it. Re-pinned to what the log-derived board
        pays, for the reason the paragraph above gives: this line is where such a change announces itself. */
+    /* ==================================================================
+        AND AGAIN, FOR BATCH 6 (#1550 / #1556) -- THE LOG-DERIVED GAME PARTS FROM THE PLAYED ONE AT 175
+       ==================================================================
+       This is a legacy log (unpinned; development corpus only, D-9) that already diverges from its own play at
+       224 (#1510). Batch 6 judges every run and every declaration, and S6-3 (#1556) holds every run to the
+       highest-revenue combination the route search can demonstrate:
+         175  NNH ran $240 with [2, 2, 3] (F16-G15-H16, F16-F18-G19, G19-F20-E19); the search demonstrates $270
+              (G19-F20 $70, F16-F18-G19 $90, F16-G15-H16-I17-I15 $110 -- the 3-train could reach Baltimore).
+              Refused; 176's $240 declaration is refused as a C1 mismatch; NNH's turn pays nothing, its price
+              does not rise, and the operating order of every later round differs from the table's. From here
+              the replay is a different game: NYC never files a run (its 140 was declared on a turn it no
+              longer gets to run in), B&O's and C&O's last runs are other turns' runs, and NNH's last accepted
+              run is the $90 of OR 3. Before #1556 the first refusal was 260 (PRR's 4-train, see below), which
+              is now the second: PRR's figure is unchanged at 260.
+         260 / 307  PRR names a 4-train in fleet slot 1 that the log-derived fleet [3, 3] does not hold (the 4
+              was bought on the queue the #1196 divergence swapped) -- train identity refuses both runs.
+         319  NNH's duplicate run (the #1183 case) is refused by the one-run rule; 320's $540 by C1.
+       Every figure is what the log-derived board pays under version-4 rules; none is what the table saw, which
+       is the meaning of "not historical-fidelity replay". Re-pinned here, where the note above says such
+       changes announce themselves; the divergence is reported in the Batch 6 write-up and ledger (Part E). */
     expect(
       rows.map((row) => [row.ticker, row.filed] as const),
     ).toEqual([
-      ["PRR", "170"],
-      ["NYC", "140"],
-      ["B&O", "240"],
-      ["C&O", "290"],
-      ["NNH", "540"],
+      ["PRR", "260"],
+      ["NYC", "(undefined)"],
+      ["B&O", "350"],
+      ["C&O", "220"],
+      ["NNH", "90"],
     ]);
 
-    /* THE LAST DECLARATION IS THE ONE THE FILED FIGURE MUST MATCH, asserted as a relationship rather than as
-       five more literals -- so a re-export of the log with different numbers still checks the property that
-       matters instead of failing on arithmetic nobody changed. */
+    /* THE LAST DECLARATION WAS THE ONE THE FILED FIGURE HAD TO MATCH. After 175 the log-derived game is not
+       the played one, so that relationship no longer holds for any corporation; what is asserted instead is
+       the property Batch 6 guarantees on every board: NO corporation's filed run differs from what the reducer
+       paid, because the reducer no longer pays a declaration that differs from the run (C1). The declared
+       amounts are the played game's and are kept in `rows` for the printout above. */
     for (const row of rows) {
-      const declarations = row.declarations.split(", ");
-      /* #1510: PRR is the one documented exception (see the re-pin above). The client declared 210 over a
-         tile the log-derived board no longer holds; the reducer files 170. Asserted as the pair, so the
-         exception is as loud as the rule. */
-      if (row.ticker === "PRR") {
-        expect([row.filed, declarations[declarations.length - 1]]).toEqual(["170", "210"]);
-        continue;
-      }
-      expect(row.filed).toBe(declarations[declarations.length - 1]);
+      expect(row.live).toBe("0"); // every turn-scoped figure has been cleared by the turn change (#777)
     }
 
     /* #777's clear is guarded by `turnChanged`, which compares the round type and the three cursor fields

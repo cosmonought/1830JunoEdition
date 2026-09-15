@@ -147,7 +147,9 @@ const LPF_PRINTED_ARTWORK: Readonly<Record<string, PrintedArtwork>> = {
     emblem: { kind: "coal" },
   },
   /* Design note #1286: a warehouse draws as a city circle with a crate in it -- a terminus that cannot be
-     tokened (`GRAY_HEXES` keeps `marker: "town"`, which is what the slot count reads). */
+     tokened (`GRAY_HEXES` keeps `marker: "town"`, which is what the slot count reads). #1555: the ruling's
+     "unlike small towns" clause is withdrawn (S6-10, rulebook §6.4) -- towns are termini too; the warehouse
+     half stands. */
   ...Object.fromEntries(
     Object.entries(LPF_WAREHOUSES).map(([label, edges]) => [
       label,

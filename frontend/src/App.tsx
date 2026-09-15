@@ -38,6 +38,7 @@ import HexGridRenderer, {
   type StationPreviewMarker,
 } from "./components/HexGridRenderer";
 import { assignRouteSet } from "./gameEngine/routeAutoTrace";
+import { evaluateRouteSet } from "./gameEngine/routeAuthority"; // #1554: the authority's own preview
 import {
   cityEnteredFrom,
   layableHexes,
@@ -4091,6 +4092,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
              for #850's reason -- this is a click handler the canvas holds across renders, so a closure over
              `blocksThroughCity` would judge the board as it stood when the handler was built. */
           blocksThrough: blocksThroughCityRef.current,
+          // #1554: the corporation drawing, so its herald is a legal start (the PRR on 1830+ / LPF).
+          forCompanyId: actingProtocolId ?? undefined,
         });
         if (!edit.ok) {
           setRouteFeedback(edit.reason);
@@ -4101,9 +4104,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       });
     },
     // mapGrid joins for #186's track check; the draft and active train are read through refs so the canvas
-    // click prop is not rebuilt mid-draw.
+    // click prop is not rebuilt mid-draw. #1554: the acting corporation joins -- it changes between turns,
+    // never mid-draw.
     // See docs/ai_architecture/routing_pathfinding.md - App.tsx #232
-    [mapGrid],
+    [mapGrid, actingProtocolId],
   );
 
 /* routeHopCount is deleted: a 2-train is capped at two revenue centres, not two hexes of travel.
@@ -4162,10 +4166,22 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
            same question in four places and no two agreed. The sentinel was `!== 999` here and `>= 999` in
            `routeAutoTrace`; the click path below had no sentinel at all. */
         exceedsMaxDistance: overrunsReach(centres, train.maxDistance),
-        // Design note #256/#264: only meaningful once there is a route.
+        /* Design note #256/#264: only meaningful once there is a route.
+           ==================================================================
+            DESIGN NOTE 1554: THE PRR's $60 THAT PAID $30 (Batch 6, the LPF playtest report)
+           ==================================================================
+           REPORTED: two 2-trains, two routes drawn, each between a $20 city and the PRR home; the game showed
+           $30. THE ROUTE THAT ENDED ON THE HERALD WAS SILENTLY DROPPED HERE. `isRouteTerminusHex` answers the
+           herald hex (H12 on 1830+ / LPF) as a terminus only for its owner (#1302), and this line asked
+           without naming one -- so a PRR route ENDING at H12 was marked `endsOffTerminus`, `runnableDrafts`
+           skipped it ("invalid drafts are skipped, not refused", #275), and `handleRunTrains` dispatched the
+           other route alone. The route STARTING at H12 was fine (the tracer judged its start with the
+           corporation). Both chips stayed drawn; one was never sent. The reducer's total was right for what
+           it received; the message was wrong about what the player ran. Asked for the acting corporation now,
+           as the tracer, the pricing above and the authority (`routeAuthority.ts`) already do. */
         endsOffTerminus:
           points.length >= 2 && last !== undefined
-            ? !isRouteTerminusHex(mapGrid, last.hexLabel)
+            ? !isRouteTerminusHex(mapGrid, last.hexLabel, actingProtocolId ?? undefined)
             : false,
         /* A route must touch a city this corporation holds a token in - ANY token, anywhere on the run.
            See docs/ai_architecture/routing_pathfinding.md - App.tsx #474 */
@@ -4188,7 +4204,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           ),
       };
     });
-  }, [ownedTrainRoster, routeDrafts, mapGrid, currentPhase, ownsAnyTrain, routeTokenHexes]);
+  }, [ownedTrainRoster, routeDrafts, mapGrid, currentPhase, ownsAnyTrain, routeTokenHexes, actingProtocolId, tableVariants]);
 
   /* One overlay per drafted train, all in the corporation's colour. The hover cursor is shared by three surfaces and is deliberately not persisted.
      See docs/ai_architecture/routing_pathfinding.md - App.tsx #373 */
@@ -8988,6 +9004,31 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         trainIndex: entry.trainIndex,
         path: routePointsToWaypoints(entry.points),
       }));
+
+    /* ==================================================================
+        DESIGN NOTE 1554: THE AUTHORITY IS ASKED BEFORE THE DISPATCH, AND ITS SENTENCE IS SHOWN
+       ==================================================================
+       Batch 6 moved route legality into the reducer (`routeAuthority.ts`, #1550). The reducer's answer is a
+       refusal by identity, and in a room the server's `refused` frame lands in the room-error banner -- true,
+       but not where the player is looking. So the same evaluator is asked here, on the same board, and its
+       reason goes to the route panel instead. A PREVIEW, NEVER A VERDICT: the reducer asks again with the
+       authoritative state, and a draft this passes can still be refused there. */
+    const previewState = sandboxStateRef.current; // #1017: the ref, so `gameState` stays out of the deps.
+    if (turnRoutes.length > 0 && previewState && actingProtocolId !== null) {
+      const preview = evaluateRouteSet({
+        state: previewState,
+        mapGrid,
+        era: tileEraFor(previewState),
+        companyId: actingProtocolId,
+        routes: turnRoutes.map((entry) => entry.path),
+        trainIndices: turnRoutes.map((entry) => entry.trainIndex),
+        trains: turnRoutes.map((entry) => entry.train),
+      });
+      if (preview.kind === "refused") {
+        setRouteFeedback(preview.reason);
+        return;
+      }
+    }
 
     if (turnRoutes.length > 0) {
       await runGameplayAction("RunMultipleRoutes", {

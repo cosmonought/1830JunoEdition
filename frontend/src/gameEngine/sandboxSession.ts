@@ -96,6 +96,7 @@ import {
 // Design note #1019: the purchase gate the reducer never had.
 import { trainPurchaseRefusal } from "./trainPurchaseGate";
 import { dividendSplit } from "./dividendSplit";
+import { dividendAmountRefusal, evaluateRouteSet, routeSetRefusal, routeSkipRefusal } from "./routeAuthority";
 import { layEndsTrackStep } from "./bonusLay";
 import { stationTokenPrice } from "./stationTokens";
 // Design note #660: the B&O private's two rules, in one place.
@@ -524,13 +525,23 @@ export function isRouteTerminusHex(
   /* Design note #1320 said a warehouse is "a revenue centre, never a terminus". RULED OTHERWISE (design note
      #1286): "unlike small towns the warehouses are also valid termini for routes" -- and they must count as
      such. A warehouse can be run TO and run THROUGH (`isOffboardTerminal` excludes it, so passing stays
-     legal); what it can never be is tokened. So every red area is a terminus, warehouse or not. */
-  if (OFFBOARD_LABELS[hexLabel]) return true;
-  if (heraldValueFor(hexLabel, forCompanyId) !== null) return true;
-  const coords = hexCoordsByLabel().get(hexLabel);
-  if (!coords) return false;
-  const archetype = archetypeForHex(mapGrid, coords.q, coords.r);
-  return archetype === "SingleCity" || archetype === "DoubleCity";
+     legal); what it can never be is tokened. So every red area is a terminus, warehouse or not.
+     ==================================================================
+      DESIGN NOTE 1555: A TOWN IS A TERMINUS (S6-10, owner ruling 2026-09-15: follow the 2018 rulebook)
+     ==================================================================
+     THIS PREDICATE ANSWERED `SingleCity || DoubleCity` FOR YEARS, and "unlike small towns" in #1286 restated
+     that as though it were a rule. The rulebook says otherwise: §6.4 "for the purposes of running trains and
+     choosing routes, 'city' refers to a large city, a small city, or an off-board red hex", §6.4.2 a route "may
+     begin or end at any city". A small city is a town. #1286's warehouse half stands (a warehouse is a valid
+     terminus under the LPF rule); its "unlike small towns" clause is withdrawn -- towns are valid termini
+     under the base rule, and warehouses are as well, not instead.
+     ONE PREDICATE, EVERY READER: the auto-tracer records a run only where this is true, so it can now draft a
+     town-ended route; `hasLegalRouteFor` (the Batch-4 forced-purchase gate) and `maxRouteRevenueFor` (the
+     auto-skip and the Run-Trains skip refusal) search through the tracer, so they see one; the route authority
+     (`routeAuthority.ts`) judges endpoints by it; the shell's `endsOffTerminus` and the draft editor's first
+     click ask it. A terminus is therefore exactly a revenue centre: a stop that counts against the train's
+     number is a stop a route may end on. */
+  return isRevenueCentreHex(mapGrid, hexLabel, forCompanyId);
 }
 
 export function hexStopValue(
@@ -2920,6 +2931,40 @@ function applySandboxActionCore(
   ) {
     return state;
   }
+  /* ==================================================================
+      DESIGN NOTE 1550/1551/1552: THE ROUTES, THE DIVIDEND AND THE SKIP ARE JUDGED HERE (Batch 6)
+     ==================================================================
+     AUDIT C2: `routeSetRefusal` (`routeAuthority.ts`) re-walks every submitted route through the board's own
+     rail model and refuses by identity anything the rulebook's §6.4 / §6.4.2 forbid -- a train the corporation
+     does not own or names twice, more routes than trains, a route that is not continuous, reverses, reuses
+     track, runs through a full city or a red area, exceeds the train's number, lacks a station, counts a city
+     twice, or shares track with a sibling route -- and a second run in one turn. Judged with the same grid and
+     era the arm prices on; without a grid the gate has no opinion (#757), and the arm's nominal fallback stands.
+     #1551: `RunManualRoute` is a legacy replay message (#1051): nothing has dispatched it since #968, and a
+     pinned board (one dealt with a `rules_engine_version`) refuses it outright rather than letting a hand-built
+     copy add to `printed_route_revenue` once per message. Legacy (unpinned) logs keep the arm they were played
+     on.
+     AUDIT C1 / #1552: `dividendAmountRefusal` -- the declared amount must equal what the trains ran
+     (`last_route_revenue`), to the dollar; the field stays on the wire for narration.
+     AND THE STEP IS NOT SKIPPED PAST A PAYING ROUTE: `routeSkipRefusal` refuses `AdvanceOperatingSubPhase` /
+     `PassTurn` at Run Trains while the corporation holds a train and `maxRouteRevenueFor` finds a paying route
+     -- the shell's #414 obligation, asked of the authority. */
+  if (
+    "RunMultipleRoutes" in msg &&
+    routeSetRefusal(state, msg.RunMultipleRoutes, ctx?.mapGrid, ctx?.era ?? (ctx?.mapGrid ? "Yellow" : undefined)) !== null
+  ) {
+    return state;
+  }
+  if ("RunManualRoute" in msg && typeof state.rules_engine_version === "number") return state;
+  if ("DeclareDividends" in msg && dividendAmountRefusal(state, msg.DeclareDividends) !== null) return state;
+  /* ON A PINNED BOARD ONLY. A board dealt under this engine never records a skip this refuses (the server
+     derives skips with the same search and refuses a player's at ingress); a legacy log's recorded skips were
+     the old engine's own verdicts (JUNO-CV4 88, JUNO-3XD 226 -- both skipped a corporation the old count
+     thought trainless or rootless), and refusing them would strand that corporation at Run Trains for the rest
+     of the replay. Development-corpus compatibility, not historical fidelity (D-9). */
+  if (typeof state.rules_engine_version === "number" && routeSkipRefusal(state, msg, ctx?.mapGrid) !== null) {
+    return state;
+  }
   if ("LayTile" in msg) {
     const { protocol_id, q, r } = msg.LayTile;
     const key = (msg.LayTile as { ability_key?: unknown }).ability_key;
@@ -3659,6 +3704,11 @@ function applyOneAction(
     /* A ROSTER THAT CANNOT BE DEALT LEAVES THE STATE ALONE (#712's rule: a refusal never halts a replay).
        The shell says so to the player; the board simply does not move. */
     if (!dealt) return state;
+    /* Design note #1551: the pin travels onto the board, so the reducer can tell a pinned game from a legacy
+       one (the legacy `RunManualRoute` arm is closed to the former). `undefined` stays `undefined` (#232). */
+    const pinned = msg.SetupGame.rules_engine_version;
+    const rulesPin =
+      typeof pinned === "number" && Number.isInteger(pinned) ? { rules_engine_version: pinned } : {};
 
     /* ==================================================================
         DESIGN NOTE 1228: THE DELAYED AUCTION OPENED ON STOCK ROUND 1 -- IN THE SHELL ONLY
@@ -3687,6 +3737,7 @@ function applyOneAction(
 
     const dealtState: GameStateResponse = {
       ...state,
+      ...rulesPin,
       ...(opensOnStockRound
         ? {
             current_round_type: "StockRound" as const,
@@ -5109,11 +5160,29 @@ function applyOneAction(
       return state;
     }
     const variants = resolveVariants(state.variants);
-    const priced = routes.map((path) =>
-      ctx?.mapGrid
-        ? sandboxRouteRevenue(ctx.mapGrid, path, ctx.era ?? "Yellow", protocol_id)
-        : SANDBOX_NOMINAL_ROUTE_REVENUE,
-    );
+    /* ==================================================================
+        DESIGN NOTE 1550: PRICED FROM THE AUTHORITY'S ANSWER, NOT FROM THE MESSAGE
+       ==================================================================
+       With a grid, the routes have already passed `routeSetRefusal` in `applySandboxActionCore`; the same
+       evaluator is asked again here for its figures, so the revenue written to state is the revenue of the
+       routes AS THE BOARD READ THEM (a `bypass` the rails force is normalised on, a `bypass` the rails do not
+       offer was refused). The message can still say WHICH routes and WHICH trains; it can no longer say what
+       they are worth. Without a grid (a fixture) the nominal fallback stands, as it always has. */
+    const verdict = ctx?.mapGrid
+      ? evaluateRouteSet({
+          state,
+          mapGrid: ctx.mapGrid,
+          era: ctx.era ?? "Yellow",
+          companyId: protocol_id,
+          routes,
+          trainIndices: train_indices ?? null,
+          trains: trains ?? null,
+        })
+      : null;
+    if (verdict && verdict.kind === "refused") return state; // the gate already said so; this is the second lock.
+    const priced = verdict
+      ? verdict.runs.map((run) => run.revenue)
+      : routes.map(() => SANDBOX_NOMINAL_ROUTE_REVENUE);
     const printedThisMessage = priced.reduce((sum, value) => sum + value, 0);
     /* ==================================================================
         DESIGN NOTE 1031: THE BREAKDOWN WAS ALREADY COMPUTED AND THEN DISCARDED
@@ -5134,7 +5203,8 @@ function applyOneAction(
       train_indices && train_indices.length === routes.length
         ? routes.map((_path, at) => ({
             train_index: train_indices[at],
-            model: trains?.[at] ?? "",
+            // #1550: the model the fleet slot holds, when the authority read it; the message's word otherwise.
+            model: verdict?.runs[at]?.model ?? trains?.[at] ?? "",
             printed_revenue: String(priced[at]),
           }))
         : null;
@@ -5169,15 +5239,22 @@ function applyOneAction(
     const running = roll ? roll.adjusted : printedTotal;
     return {
       ...state,
+      /* Design note #1183, CORRECTED BY BATCH 6 (#1550): the turn this run belongs to, so a second copy of it
+         is refused above. IT WAS WRITTEN ON THE CORPORATION AND READ OFF THE STATE. The field is declared on
+         `GameStateResponse`, the check above reads `state.last_run_turn_key`, and this spread sat inside the
+         `public_companies.map` below -- so the key landed on the company entry, the state's own field stayed
+         `undefined`, and the refusal never fired once. `oneRunPerTurn.test.ts` asserted both strings and
+         could not see that they named different objects (#490a's warning, in a new shape). Found by the
+         Batch-6 corpus sweep: JUNO-3XD 319 -- the very duplicate the note was written for -- was applied in
+         every replay since, NNH's turn totalling 680 printed. The authoritative one-run-per-turn rule
+         (`routeSetRefusal`, on `routes_run_this_turn`) now refuses it whatever key it carries; this write is
+         moved to where the read is so the key's own undo semantics (#1183's second paragraph) hold as well. */
+      ...(typeof runTurnKey === "string" && runTurnKey !== "" ? { last_run_turn_key: runTurnKey } : {}),
       public_companies: state.public_companies.map((entry) =>
         entry.company_id === protocol_id
           ? {
               ...entry,
               last_route_revenue: String(running),
-              // Design note #1183: the turn this run belongs to, so a second copy of it is refused above.
-              ...(typeof runTurnKey === "string" && runTurnKey !== ""
-                ? { last_run_turn_key: runTurnKey }
-                : {}),
               printed_route_revenue: String(printedTotal),
               // Design note #1031: only when the log named the trains; otherwise the field keeps whatever it
               // held, because "this message could not say" is not "the previous answer was wrong".

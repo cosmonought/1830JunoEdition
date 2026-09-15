@@ -94,8 +94,21 @@ describe("the stop a rail arrives at", () => {
 });
 
 describe("a second train scores the same city again", () => {
-  it("prices each route on its own, so two trains through Cleveland both collect it", () => {
-    const grid: MapGridResponse = { game_id: 1, tiles: [] };
+  it("prices each route on its own, so two trains through the token city both collect it", () => {
+    /* Batch 6 (#1550): the reducer now judges the routes it prices, so the fixture has to be a board the
+       routes can actually run on. It used to run F4-F6 and E5-F6 across a bare grid on which Cleveland's
+       printed track reaches neither neighbour; the pricing did not care. Three yellow cities in a row on
+       plain hexes (C7, C9, C11 -- #57 straights, edges 0/3), the token on the middle one: two 2-trains run
+       C7-C9 and C11-C9, each collecting C9 ($20) plus its own end ($20), on separate track (the two stubs of
+       C9's straight are two sections, #669). */
+    const grid: MapGridResponse = {
+      game_id: 1,
+      tiles: [
+        { q: 2, r: 2, tile_id: 57, orientation: 0, landmark: null },
+        { q: 3, r: 2, tile_id: 57, orientation: 0, landmark: null },
+        { q: 4, r: 2, tile_id: 57, orientation: 0, landmark: null },
+      ],
+    };
     const state = {
       game_id: 1,
       current_round_type: "OperatingRound",
@@ -112,7 +125,8 @@ describe("a second train scores the same city again", () => {
           president: "p1",
           treasury: "100",
           owned_trains: ["2", "2"],
-          station_token_hexes: [[0, 5]],
+          station_token_hexes: [[3, 2]],
+          station_tokens: [[3, 2, 0]],
           station_token_limit: 3,
           is_floated: true,
         },
@@ -120,7 +134,6 @@ describe("a second train scores the same city again", () => {
       active_operating_order: [5],
       active_corporation_index: 0,
     } as unknown as GameStateResponse;
-    // Two 2-trains, each running Cleveland ($30) to a neighbouring city: Toledo (F4) and Detroit & Windsor (E5).
     const after = applySandboxAction(
       state,
       {
@@ -128,15 +141,16 @@ describe("a second train scores the same city again", () => {
           game_id: 1,
           protocol_id: 5,
           routes: [
-            [{ hex: "F4" }, { hex: "F6" }],
-            [{ hex: "E5" }, { hex: "F6" }],
+            [{ hex: "C7" }, { hex: "C9" }],
+            [{ hex: "C11" }, { hex: "C9" }],
           ],
           trains: ["2", "2"],
+          train_indices: [0, 1],
         },
       } as never,
       { mapGrid: grid, era: "Yellow" },
     );
     const co = after.public_companies.find((entry) => entry.company_id === 5)!;
-    expect(Number(co.last_route_revenue)).toBe(60); // $30 for Cleveland on each train's route; F4 and E5 print $0
+    expect(Number(co.last_route_revenue)).toBe(80); // $40 each: C9 is collected by both trains (#1319 (ii))
   });
 });

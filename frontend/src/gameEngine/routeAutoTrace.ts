@@ -573,7 +573,8 @@ function candidatePathsFrom(
     );
 
     /* A route needs two paying stops to be a route at all -- 1830's two-revenue-centre minimum, which the
-       contract enforces too -- and design note #3: it has to END somewhere it may end. Towns pay, so without the
+       contract enforces too -- and design note #3: it has to END somewhere it may end (#1555: since the S6-10
+       ruling that is any revenue centre, towns included -- the sentence below is history). Towns pay, so without the
        terminus test the best-paying prefix was routinely one that stopped on a town. */
     if (
       path.length >= 2 &&

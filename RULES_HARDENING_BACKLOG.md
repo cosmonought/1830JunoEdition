@@ -27,9 +27,9 @@ interpretation of, the 2018 rulebook (or a product ruling), recorded so it is ne
 | 4 | Train lifecycle / forced purchase | done (`53222c7`) |
 | 4.5 | Replay / rules-version pinning | done (`2aefe13`) |
 | 4.6 | Interactive excess-train discard | done (`6d55b84`) |
-| 5 | Emergency funding + bankruptcy | implemented, awaiting full-suite validation and commit |
-| 5.5 | Repository hygiene / backlog reconciliation | this ledger; cleanup proposal pending owner approval |
-| 6 | Route authority + revenue | Part B |
+| 5 | Emergency funding + bankruptcy | done (`78f8358`) |
+| 5.5 | Repository hygiene / backlog reconciliation | done (`b4f6d38`; this ledger) |
+| 6 | Route authority + revenue | implemented (Batch 6, #1550–#1554), awaiting full-suite validation and commit |
 | 7 | Transaction + cash authority / auction | Part B |
 | 8 | Stock / OR edge cases + timing | Part B |
 | 9 | Variants + map data + variant authority | Part B |
@@ -43,7 +43,9 @@ rulebook's. Owner-defined variants (Level Playing Field, Project 18XX+, Delayed 
 Unpredictable Revenue / Yellow Sign) have no rulebook counterpart and are judged against the owner's spec.
 
 **Replay / version boundary.** `RULES_ENGINE_VERSION` (`frontend/src/gameEngine/rulesVersion.ts`, #1520) is
-**3** in the Batch 5 working tree (1 = post-Batch-4 semantics, 2 = Batch 4.6, 3 = Batch 5). Any item below that
+**4** in the Batch 6 working tree (1 = post-Batch-4 semantics, 2 = Batch 4.6, 3 = Batch 5, 4 = Batch 6). Since
+Batch 6 the pin is also copied onto the state (`rules_engine_version`, #1551) so the reducer can tell a pinned
+board from a legacy one. Any item below that
 changes what a stored gameplay log *replays to* must bump it and add a `RULES_ENGINE_CHANGELOG` line; UI,
 protocol-shape and narration changes do not. `DEVELOPMENT_CORPUS_POLICY` (`legacyLogs: "development-corpus"`,
 `legacyExcessTrains: "engine-chose-cheapest"`) is a best-effort development-corpus mechanism only and is never a
@@ -111,6 +113,27 @@ Recorded for later → **S8-2 (presidency tie)**, S7-6, S7-1 (`adjustTreasury` f
 decisions). Replay: JUNO-Z6C differs from idx 614 (old engine applied a `PassTurn` on a `GameEnd` board; v3
 holds it).
 
+### Stage 6 — route authority + revenue (uncommitted, #1550–#1554), version 3 → 4
+`gameEngine/routeAuthority.ts`: one evaluator (`evaluateRouteSet`) re-walks every submitted route on the board's
+rail model (`trackSegments` / `trackReach` / `cityBlocking` / `sandboxRouteBreakdown`) and answers a legal run set
+with authoritative per-train revenues or one refusal; `routeSetRefusal` is asked in `applySandboxActionCore` and
+at ingress (`turnAuthority.operatingLegalityRefusal`), the arm prices from the evaluator's answer. Rules enforced:
+train identity (owned, once, ≤ trains, model from the slot), continuity, no reversal / crossover change, no track
+reused within or across the corporation's routes (cities and separate tracks of one hex may be shared), full cities
+not run through, red areas terminal only, a station of the corporation on the route (by circle), no city twice
+(the other city of a hex is allowed), ≥ 2 cities, ≤ the train's number (Diesel unlimited), one run per turn, at
+the Run Trains step. `DeclareDividends.revenue_amount` must equal `last_route_revenue` (audit C1). A skip / end
+of turn at Run Trains is refused while a paying route exists (pinned boards). `RunManualRoute` is refused on a
+pinned board. Ingress schema checks the shape of `routes` / `trains` / `train_indices` (#1553). The LPF PRR
+$60 → $30 defect was a shell filter (`endsOffTerminus` asked `isRouteTerminusHex` without the corporation, so
+the route ending on the herald was dropped before dispatch, #1554). Found and fixed: the #1183 one-run key was
+written on the corporation and read off the state — it never fired (S6-11). Audit C1, C2 closed.
+S6-10 (towns are termini, per the rulebook — ruled 2026-09-15, #1555) and S6-3 (the highest-revenue
+combination as a demonstrated lower bound — ruled 2026-09-15, #1556) closed in the same batch. Left behind → S6-13 (UI validators that
+duplicate the authority), S6-4 (herald "must" clause), S6-3 (optimum), U-17 (bypass control). Replay:
+JUNO-FCJ from 230, JUNO-Z6C from 418, JUNO-3XD from 260 (Part E); the CV4 golden fixture re-baselined for the
+#1183 key's relocation only.
+
 ### Stage 5.5 — repository hygiene / backlog reconciliation (2026-09-15, this pass)
 Inventory of every tracked planning/triage document, reconciliation of their unresolved items against code,
 tests, the audit and the write-ups (migrated below as S6-1's route-drafting debts, S9-3, S10-9, S10-10,
@@ -134,7 +157,16 @@ implementation**.
 ### Stage 6 — Route authority + revenue
 
 **S6-1. Routes are priced but never validated by the reducer.**
-Status `OPEN` — audit **C2**, the largest remaining job. Rulebook §6.4, §6.4.1, §6.4.2. Notes: `RunMultipleRoutes`
+Status `RESOLVED` — Batch 6 (#1550, `gameEngine/routeAuthority.ts`; `routeAuthority.test.ts` 38 cases). Every
+rule in the Detail below is enforced by `evaluateRouteSet` / `routeSetRefusal` in the reducer core and at
+ingress, and revenue is the evaluator's. Drafting debt (a): the authority judges blocked cities by arrival edge
+(`cityForArrival` / `stopEnteredFrom`); the shell's `routeBlockedCityReason` has judged by edge since #1022
+wherever `App.tsx` injects the resolver (it does), so the "recorded as known debt" sentence in #730a is stale
+prose, not a live gap. Debt (b): the reducer accepts either reading of a hex with a bow (`bypass: true` is
+honoured wherever the rails offer one, whether or not the city is shut); the waypoint control is U-17. NOT done:
+the UI validators were not moved to `gameEngine/routes/` — the authority reuses the rail primitives directly and
+the shell keeps its click-by-click validators for drafting feedback; retiring the duplicated halves is S6-13.
+Historical: audit **C2**, the largest remaining job. Rulebook §6.4, §6.4.1, §6.4.2. Notes: `RunMultipleRoutes`
 arm (`sandboxSession.ts`; refuses only a Coal River crossing and a duplicate `revenue_turn`); validators exist in
 the UI — `utils/runTrainsRules.ts`, `routeConnection.ts`, `routeWaypoints.ts`, `routeStep.ts`,
 `routeTruncate.ts`, `routeDraftEdit.ts`, `stationConnectivity.ts` (Batch 1 §6b lists them, ~1,400 lines) and
@@ -157,7 +189,12 @@ that *could* enter a city cannot choose the bypass by hand (the PRR skipping its
 needs a waypoint control; the reducer must accept either legal reading once it validates routes.
 
 **S6-2. The dividend amount is trusted from the message.**
-Status `OPEN` — audit **C1**. Rulebook §6.5. Notes: `DeclareDividends.revenue_amount` → `dividendSplit.ts`
+Status `RESOLVED` — Batch 6 (#1552, `dividendAmountRefusal`): the declared amount must equal
+`last_route_revenue` to the dollar (absent amount = pre-#752 log, judged by the same field; the derived $0
+withhold agrees by construction); refused by identity in the core and with its reason at ingress. Corpus
+evidence found by the Batch-6 sweep: JUNO-Z6C 418 / 428 / 433 declared $180 / $290 / $250 on runs the reducer
+had priced at $190 / $300 / $270 (LPF + Unpredictable Revenue; the client's figure, $10–$20 short each time) —
+the message paid, the authority did not. Historical: audit **C1**. Rulebook §6.5. Notes: `DeclareDividends.revenue_amount` → `dividendSplit.ts`
 (`dividendRevenue`); `last_route_revenue` written by `RunMultipleRoutes`; #752 chose the message so the toast and
 the reducer share one figure. Replay: refusal-added; bump. Detail: refuse in `applySandboxActionCore` when
 `Number(revenue_amount) !== Number(company.last_route_revenue)` (allow `"0"` when `routes_run_this_turn === 0`;
@@ -168,12 +205,29 @@ refuses the duplicate run but the declaration still pays the message's figure. T
 default server; dev-corpus only), so no `RevertTo` is owed — the fixture simply documents why C1 matters.
 
 **S6-3. "Highest-revenue combination if demonstrated" is neither chosen nor checked.**
-Status `DEFERRED` (rulebook makes it the opponents' burden to demonstrate; a digital game may leave it to the
-president). Rulebook §6.4. Notes: `maxRouteRevenueFor` exists for derived actions only. Detail: owner ruling
+Status `RESOLVED` — **owner ruling 2026-09-15, #1556** (`routeAuthority.demonstratedShortfall`, inside
+`routeSetRefusal`): the machine plays the demonstrating opponent. After a submitted set is judged legal and
+priced, `maxRouteRevenueFor` (the deterministic `assignRouteSet` search, same fleet, same blocking / licence /
+herald rules, same era) demonstrates a concrete legal combination; a set worth less is refused — "Route set
+earns $40; a legal combination worth $60 is available." — in the core by identity and at ingress with the
+sentence. A set worth as much or more is accepted, however the bounded search missed it (the search is a
+lower bound, never a ceiling — `routeAutoTrace.ts` #892 / #8 document it losing to greedy). Compared on the
+corporation's total (the rulebook's "combination"), printed figures both sides. The auto-tracer offers the same
+set, so a normal client never meets the refusal; `routeSkipRefusal` (a paying route may not be skipped) was the
+first half. Tests: `routeAuthority.test.ts` "the highest-revenue combination is a demonstrated lower bound"
+(suboptimal refused with the figure; equal accepted; a legal hand-drawn route the tracer cannot find — a
+crossover crossed twice — accepted above a $0 search; total not per-train; fleet and blocking honoured; replay /
+`RevertTo` / room restore deterministic). Corpus: four legacy logs held runs short of the demonstration — see
+Part E (JUNO-CV4 98, JUNO-Z6C 140 / 172, JUNO-3XD 175). Performance: S6-14. Detail: owner ruling
 whether the machine enforces the optimum; if not, record as an owner decision in Part D.
 
 **S6-4. LPF / 18XX+ PRR herald-home (Altoona, H12, $10) revenue and reach — verify the authority with S6-1.**
-Status `DEFERRED` (variant; tied to S6-1). Notes: #1302 (`heraldValueFor` prices the herald in the reducer only
+Status `DEFERRED` (variant). Batch 6 preserved the herald's existing rules in the authority without auditing
+them: it is a station root, a revenue centre and a terminus for its owner only, and its owner may cross it
+uncounted (`bypass: true`); nobody else counts it, ends on it or bypasses it (`routeAuthority.test.ts`, the #1554
+block, on both the 18XX+ and LPF boards). Not enforced: the "must count it in its first turns" clause; whether a
+bypassed herald still satisfies the station requirement (today it does, as before). JUNO-CV4 145 (two 2-trains,
+H16–H18 and H16–H14–H12*–H10) is judged legal by the authority. Notes: #1302 (`heraldValueFor` prices the herald in the reducer only
 for the running corporation — safe since Stage 3's identity gate), #1277 (herald counts as a network root in
 `trackReach.ts`), #1280 (herald persists through upgrades), #1332 (float modal), triage 2026-09-08 items 12/23
 (item 23 ruled "not a bug": the tracer bypassed Altoona correctly with two 2-trains), `hexBoardData.ts` Altoona
@@ -212,6 +266,67 @@ explicit refusal if it is absent.
 
 **S6-9. Off-board lesser/greater values switch at the first 5-train (Brown era).**
 Status `RESOLVED` (audit PASS; `offboardValueForEra`) — listed so the era switch is not re-audited. Rulebook §2.5 / §6.5.
+
+**S6-10. A route may begin or end at a small city (town) under the rulebook; the game has never allowed a town terminus.**
+Status `RESOLVED` — **owner ruling 2026-09-15: follow the rulebook** (#1555). `isRouteTerminusHex` now answers
+every revenue centre (large city, small city / town, double town, red area, the owner's herald), and since the
+tracer, `hasLegalRouteFor` (the Batch-4/5 forced-purchase gate), `maxRouteRevenueFor` (auto-skip and the Run
+Trains skip refusal), the draft editor, the shell's `endsOffTerminus` and the route authority all read that one
+predicate, preview, search and authority agree. #1286's "unlike small towns" clause is withdrawn in the code
+comments (`sandboxSession.ts`, `hexBoardDataLpf.ts`, `levelPlayingField.test.ts`); its warehouse half stands.
+Coal River (a town on the LPF board) is therefore a terminus for a licence holder. Tests:
+`routeAuthority.test.ts` "a town is a terminus" (town→city accepted and priced; town-city-town on a 3-train;
+tracer drafts a town-ended route; draft editor's first click; **a town terminus as the only legal route makes the
+forced purchase owed**, with the bare-board negative control). Corpus: **JUNO-FCJ 74** — B&M, trainless in its
+first Operating Round, passed at Buy Trains; its only route (E23–F24, $40) ends on a town, so under the ruling the
+Batch-4 obligation gate refuses the pass and the legacy log diverges from there. `stationLegality.test.ts`'s
+prefix-96 harness supplies the purchase the old engine never demanded (a documented fixture repair inside the
+test, nothing on disk). No other log changes. Found by Batch 6's rulebook verification. Rulebook §6.4.1: "for the purposes of
+running trains and choosing routes, 'city' refers to a large city, a small city, or an off-board red hex", a
+route "may begin or end at any city", and the train's number counts every city including small cities. The
+code has excluded towns from termini since the tracer's design note #3 (`isRouteTerminusHex`; `routeDraftEdit`
+rule 1 "towns are not termini (#264)"), and the owner's LPF ruling #1286 says "unlike small towns the
+warehouses are also valid termini" — a stated position. Batch 6 kept the ruling in the authority (one predicate,
+`isRouteTerminusHex`, shared by the tracer, the obligation gate `hasLegalRouteFor` and the evaluator) and
+flagged it rather than switching, because a town-terminus authority with a town-blind tracer would accept runs
+the auto-skip and the Batch-4 forced-purchase gate cannot see. Detail if the rulebook is adopted: widen
+`isRouteTerminusHex` to `SingleTown` / `DoubleTown` (towns still count against the number, still cannot be
+tokened or blocked), re-run the corpus (every "no legal route" auto-skip and forced purchase can change — replay-
+semantic, bump), and re-examine `routeRunObligation` / `runnableDrafts`' `value > 0` rule. If the ruling stands,
+record it in Part D.
+
+**S6-11. The #1183 one-run-per-turn key never fired.**
+Status `RESOLVED` — Batch 6 (#1550, corrected note in the arm). `last_run_turn_key` was declared on
+`GameStateResponse` and read as `state.last_run_turn_key`, but the arm wrote it inside `public_companies.map`,
+on the corporation; the state's field stayed `undefined` and the refusal was unreachable. `oneRunPerTurn.test.ts`
+asserted both strings and could not see they named different objects (#490a in a new shape). Evidence: JUNO-3XD
+319 — the very duplicate the note was written for — was applied in every replay since (NNH 680 printed / 540
+adjusted). The write now lands on the state; the authoritative rule is `routes_run_this_turn > 0` regardless of
+key. Consequence: every replayed log's digest changes where a run occurred (the key moved objects); the CV4
+golden fixture was re-baselined for exactly that and nothing else.
+
+**S6-12. `RunManualRoute` is retired from live play.**
+Status `RESOLVED` (recorded) — Batch 6 (#1551). Nothing has dispatched it since #968; its arm added to
+`printed_route_revenue` once per message with no per-turn bound and now no route judgement, so a hand-built copy
+was an unbounded revenue faucet. A pinned board (`state.rules_engine_version` is a number) refuses it in the
+core and at ingress; unpinned (legacy) logs keep the arm they were played on. The schema keeps the message so a
+legacy entry still parses.
+
+**S6-14. Route-search cost on submission.**
+Status `DEFERRED` (optimisation, not a rule). #1556 runs `maxRouteRevenueFor` once per submitted run (the
+auto-skip already runs it once per turn); on the corpus the whole 17-log sweep, searches included, takes ~1.7 s,
+and #892 measured ~250 ms for a Diesel on a dense Phase-D board. If a board ever makes the ingress + core pair
+of searches a functional timeout, memoise the search per (state digest, corporation) or pass the ingress verdict
+into the reducer context; until then no change. Replay: none.
+
+**S6-13. The shell's route validators duplicate the authority.**
+Status `DEFERRED` (cleanup, no rule change). `utils/runTrainsRules.ts`, `routeWaypoints.ts`
+(`routeTokenBlockReason`, `routeBlockedCityReason`), `routeConnection.ts`, `routeDraftEdit.ts`,
+`routeTruncate.ts` still judge drafts for click-by-click feedback; `handleRunTrains` now also asks
+`evaluateRouteSet` before dispatch (#1554) and the reducer judges again. Three answers to one question is
+#1184's shape. Detail: make the draft-time checks read the evaluator's refusal (a per-draft
+`evaluateRouteSet` on the single route) and delete the halves it makes redundant; keep only what a
+half-drawn route needs (rule 2–6 of `editRouteDraft`). Replay: none.
 
 ### Stage 7 — Transaction + cash authority / auction
 
@@ -446,8 +561,10 @@ Destination `frontend/src/gameEngine/board/`.
 ### Stage 10 — Replay / settlement / release hardening
 
 **S10-1. Refusal transport.** A reducer refusal is an identity no-op that `RoomSession.submit` still answers
-`applied` and appends (replays as a no-op); the ingress holds (#1530 / #1540) answer `refused` with a reason,
-every other reducer refusal is still appended. And `actionWasRefused` (#778) compares by identity while the chart
+`applied` and appends (replays as a no-op); the ingress holds (#1530 / #1540) and, since Batch 6, the route,
+dividend-amount and Run-Trains-skip refusals (#1550) answer `refused` with a reason (the shell shows it in the
+room banner; `handleRunTrains` previews the evaluator's sentence in the route panel, #1554), every other reducer
+refusal is still appended. And `actionWasRefused` (#778) compares by identity while the chart
 step (#1197) returns a new object for every charted state, so the shell's REFUSED receipt cannot fire in room
 play (Batch 3 §7). `OPEN`. Detail: answer `refused` keyed on `stateDigest(before) === stateDigest(after)` and
 make the shell's receipt use the same comparison. Replay: appended no-ops are harmless; removing them changes
@@ -545,8 +662,10 @@ files; `.git/worktrees/prefix` is a stale scratch worktree (`git worktree prune`
 `frontend/testrun.txt` is a stale UTF-16 test-run capture (253 / 4030) proposed for deletion. `OPEN` (owner).
 
 **S10-17. Message-carried facts the reducer could derive** (audit risk 4): `DeclareDividends.revenue_amount`
-(S6-2), `LayTile.bonus_lay` (S6-6), `BuyStock.par_value` (S8-9), `PlaceHomeStation` hex (S8-6),
-`RunMultipleRoutes` paths (S6-1). Cross-reference only.
+(S6-2 — validated against the authority since Batch 6), `LayTile.bonus_lay` (S6-6), `BuyStock.par_value`
+(S8-9), `PlaceHomeStation` hex (S8-6), `RunMultipleRoutes` paths (S6-1 — judged since Batch 6; `trains` is
+checked against the fleet slot, `revenue_seed` / `revenue_turn` remain message-carried by design, #1051 /
+#1183). Cross-reference only.
 
 **S10-18. Test gaps from the audit still without a machine-level test:** sold-out rise order (S8-4), first-SR sale
 refusal (S8-7), presidency tie (S8-2), auction escrow at the reducer (S7-4), terrain-fee-once for the
@@ -618,7 +737,8 @@ instrument* — a fit readout rendered outside the action bar to decide whether 
 into it. Decide, then remove it either way. `OPEN`.
 **U-17.** (sweep) `gameEngine/cityBypass.ts` #808 known debt: no control lets a corporation that *could* enter a
 one-slot city choose to bypass it (the PRR skipping its own home to save a stop) — new UI on one waypoint. The
-reducer half is in S6-1. `DEFERRED`.
+reducer half is done (Batch 6: a `bypass: true` waypoint is honoured wherever the rails offer a bow, shut city or
+not); only the control is missing. `DEFERRED`.
 **U-18.** (sweep) The "reservation" vocabulary (`privateReservations.ts`, seven exported symbols across four
 files) is a recorded misnomer; rename mechanically when nothing else is in flight. `DEFERRED` (naming only).
 
@@ -663,7 +783,8 @@ files) is a recorded misnomer; rename mechanically when nothing else is in fligh
 | (pre-pin, "legacy") | ≤ 4 | Stage 3 identity gate; Stage 4 pool destination; #1183/#1184 (one run per turn, bid minimum) | JUNO-3XD idx 224 refused (PRR run 210 → 170, re-pinned with reason); JUNO-3XD idx 255 `returned_trains` `["3"]`; JUNO-FCJ diverges from idx 95 (illegal token refused) — prefix-96 frozen as a fixture |
 | 1 | 4.5 | pin only; semantics = post-Stage-4 | all 16 legacy logs refused by default; identical under the corpus policy |
 | 2 | 4.6 | president's `DiscardTrain` replaces the automatic trim; limit-in-force at depot gates; §6.0 row key | JUNO-FCJ idx 474 (C&O's first 5 now allowed, then a discard); 3XD idx 255 supplied by the adapter; row key changes nothing observed |
-| 3 | 5 (uncommitted) | derived forced-purchase obligation, forced sales, funding offers, bankruptcy → `GameEnd`, holds, D-5 / D-6 | JUNO-Z6C from idx 614 (`PassTurn` on an ended board now held); historical `EmergencyBuyHardware` entries (FCJ ×3, Z6C ×3) identical |
+| 3 | 5 (`78f8358`) | derived forced-purchase obligation, forced sales, funding offers, bankruptcy → `GameEnd`, holds, D-5 / D-6 | JUNO-Z6C from idx 614 (`PassTurn` on an ended board now held); historical `EmergencyBuyHardware` entries (FCJ ×3, Z6C ×3) identical |
+| 4 | 6 (uncommitted) | route legality and revenue judged by `routeAuthority.ts`; a town is a terminus (S6-10 ruling, #1555); a run short of the search's demonstrated combination is refused (S6-3 ruling, #1556); one run per turn; dividend amount must equal the run (C1); Run Trains not skippable past a paying route (pinned boards); `RunManualRoute` refused on pinned boards; pin copied onto the state; #1183 key relocated to the state | 14 / 17 logs gameplay-identical to version 3 (every digest changes where a run occurred: the #1183 key moved from the corporation to the state — CV4 golden re-baselined for that alone). **JUNO-CV4 from 98** (S6-3: B&O with three 2-trains ran two of them, $90; the search demonstrates $130 — I15–J14 $50, I15–I17–I19 $40, J14–K13 $40 — so the run is refused, 99's $90 declaration mismatches, and the CV4 golden fixture is re-baselined for it; `replayJunoCV4.test.ts` unaffected). **JUNO-Z6C from 140** (S6-3: B&O ran three of four trains, $160 vs $220; also 172 C&O $70 vs $80 — the search adds the Akron & Canton town terminus G7–F6–G5–G3–F2, an S6-10 consequence; 396 N&W $340 vs $350 on the already-diverged board). **JUNO-3XD from 175** (S6-3: NNH ran $240 with [2, 2, 3]; the search demonstrates $270 — the 3-train could reach Baltimore, F16–G15–H16–I17–I15 $110; the operating order of every later round then differs; `replayJuno3XD`'s filed table re-pinned PRR 260, NYC none, B&O 350, C&O 220, NNH 90 with the reason; the idx-255 discard the Batch-4.6 adapter used to supply no longer falls due in the log-derived game, `trainDiscard.test.ts` re-pinned with the reason). **JUNO-FCJ from 74** (S6-10: B&M, trainless, passed at Buy Trains with a town-ended route E23–F24 that is now a legal route, so the Batch-4 forced purchase is owed and the pass is refused; before the ruling the first difference was **230**: B&M's second route touches no B&M station on the log-derived board — the idx-95 token Batch 3 refused; every later B&M dividend then mismatches; cascade). **JUNO-Z6C from 418** (NYC declared $180 on a $190 run; 428 PMQ $290 / $300; 433 NNH $250 / $270 — refused as C1 mismatches; treasuries differ, the bank no longer breaks at 613; `gameHistory.test.ts` relaxed from "reaches OR 9.1"). **JUNO-3XD from 260** (PRR's run names a 4-train in slot 1 that the log-derived fleet [3, 3] does not hold — a Stage-3 queue divergence now refused rather than priced; 307 the same; the OR-7 order then swaps and B&O's 313 is identity-refused; 319 NNH's duplicate run is refused by the one-run rule and 320's $540 by C1 — `replayJuno3XD` re-pinned PRR 170 → 260, B&O 240 → 270, NNH 540 → 340 with reasons) |
 
 Items above that carry "bump" must add a row here when they land. No golden or replay expectation is ever
 re-pinned silently: the re-pin, its index and its reason go in the batch write-up and in this table.

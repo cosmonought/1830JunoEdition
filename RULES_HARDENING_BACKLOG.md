@@ -479,7 +479,17 @@ same-president dispatch). Design §7.4 / §7.5. Replay: refusal-added; bump (FCJ
 board are affected — reported in §9 of the design).
 
 **S7-13. `BuyStock` / `SellStock` have no round gate, and the IPO price comes off the message.**
-Status `OPEN` — design pass, probe-proved. Both arms apply during an Operating Round (operating president) and
+Status `RESOLVED` — Batch 7.2 (#1570). `gameEngine/stockTransactionAuthority.ts`: `stockPurchaseRefusal` gates
+`BuyStock` on `current_round_type === "StockRound"` and `stockSaleRefusal` gates `SellStock` on the same, with
+the §6.6.3 forced sale as its one exception (Batch 5's `emergencyFundingFor` / `forcedSaleRefusal`, unchanged).
+`priceStockPurchase` prices an IPO share from the corporation's **stored** par, a pool share from
+`market_positions`, and the President's Certificate from a message par validated against the chart's own par
+boxes; a message `par_value` is narration everywhere else (D-17 / Q4). Asked in `applySandboxActionCore` (by
+identity, ahead of every stage — #1019), at ingress with its sentence (`turnAuthority`), and — for the sale —
+inside the market step's `saleRefused` closure so a refused sale moves no token (#748a). Corpus: the round gate
+is the ONLY 7.2 gameplay divergence — `server/JUNO-FCJ` 83 and `export/JUNO-3XD` 140, both `BuyStock` in an
+Operating Round (BATCH7.2 §12). Version bump stays Batch 7.5.
+*(Original finding, kept: design pass, probe-proved.)* Both arms apply during an Operating Round (operating president) and
 during the auction (the contest's current player); `BuyStock` prices an IPO share from `msg.par_value` (a $1 share
 on a parred corporation) and a president's purchase accepts any positive par (absorbs S8-9's par half, which the
 Stage-7 brief §5 owns). Design §7.2 / §7.3. Replay: refusal-added; corpus: no forged par anywhere, JUNO-Z6C 388 is a
@@ -498,18 +508,30 @@ Status `OPEN` — design pass. `WaterfallPass` / `WaterfallBuyLowest` / `Waterfa
 mid-contest. Detail: refuse the three while a contest is live. Design §7.7 (5). Replay: refusal-added; bump.
 
 **S7-16. `SellStock` accepts a percentage that is not a multiple of 10.**
-Status `OPEN` — design pass, probe-proved (`percentage: 15` leaves a 5 % holding). Schema keeps `finite`; the
-reducer refuses non-multiples (the double's 20 semantics unchanged). Replay: refusal-added; bump.
+Status `RESOLVED` — Batch 7.2 (#1570). `stockSaleRefusal` rule 2: the percentage must be a positive whole
+multiple of 10 (15, 5, 0, −10 and 12.5 all refuse); the schema keeps `finite` and the double's 20 semantics are
+untouched. No corpus entry is affected. Replay: refusal-added; bump stays 7.5.
+*(Original finding, kept: probe-proved — `percentage: 15` left a 5 % holding.)*
 
 **S7-17. Refusal-by-identity is dead on every board that carries `market_positions`.**
 Status `OPEN` (cross-reference S10-1) — design pass. `applySandboxActionAfterAuction` allocates `settled` before the
 core runs, so every reducer refusal on a pinned board returns a new object and `actionWasRefused` / `after !== before`
 cannot see it. Stage-7 tests assert refusals by `stateDigest` equality, never by identity. No gameplay change.
+**Batch 7.2 note:** its two new suites do exactly that (`stockTransactionAuthority.test.ts`,
+`stockRefusalAtomicity.test.ts`), and one thing is now stronger than the entry describes — because 7.2 asks its
+predicates in `applySandboxActionCore` AHEAD of every stage (#1019), a refused stock transaction is returned by
+identity after all, even on a stale board that the settle chain would otherwise normalise. `refusalAtomicity.test.ts`
+(7.1) is updated to assert that. The entry stays `OPEN`: the general property is still false for arms that refuse
+inside themselves.
 
 **S7-18. A Brown-zone second pool message need not name the corporation of the first.**
-Status `OPEN` — design pass. `allowsExtraPoolBuys(zone, source)` waives the one-purchase rule for any Brown pool
-share; rulebook 4.4 is "the bank pool of one corporation". Detail: `bought_this_turn_company` (cleared with
-`bought_this_turn`), design §11 Q9. Replay: refusal-added; bump.
+Status `RESOLVED` — Batch 7.2 (#1570), owner ruling Q9 / D-22. New optional state `bought_this_turn_company`
+(`gameState.ts`), written by the first purchase of the turn and cleared by all three sites that clear
+`bought_this_turn` (`advanceSeat`, `recordPass`, `openingStockRoundReset`); `stockPurchaseRefusal` rule 7 refuses
+a continuation that names a different corporation. The multi-message representation is preserved for replay, and
+**absent is "not said"** (#232) — a board rebuilt mid-turn from a log written before the field existed carries no
+continuation rule, so no legacy replay is refused by it. The Brown exception is not extended to Orange
+(`allowsExtraPoolBuys` unchanged). Replay: refusal-added; no corpus entry is affected; bump stays 7.5.
 
 **S7-19. `BidOnPrivate` advances the seat without the auction atom; the `AcceptTrainOffer` family is reachable on a pinned board.**
 Status `OPEN` (with S10-8) — design pass. `BidOnPrivate` is undispatched and absent from the corpus but its arm is
@@ -610,14 +632,25 @@ reader to reuse; validate against `home_hex_label`. Replay: refusal-only on hand
 claiming the corpus contains no wrong-hex placement — bump anyway if any stored entry would now be refused.
 
 **S8-7. No "no sales in the first Stock Round" rule in the reducer.**
-Status `OPEN` — **absorbed by Stage 7, Batch 7.2** (owner ruling Q2, 2026-09-15; design §7.2 `stockSaleRefusal` rule 3;
+Status `RESOLVED` — Batch 7.2 (#1570): `stockSaleRefusal` rule 3, `isFirstStockRound(state)` =
+`current_round_type === "StockRound" && macro_round_number === 1`, which is the first Stock Round on BOTH boards
+(standard: the auction is macro round 1 and `OpenStockRound` leaves the number where it is; delayed: the deal
+opens on SR1 with the same number and the inserted auction takes the next one, so the SR after it is macro round
+3 and sales are allowed). Tested both ways. No corpus entry is affected.
+*(Original finding: **absorbed by Stage 7, Batch 7.2**)* (owner ruling Q2, 2026-09-15; design §7.2 `stockSaleRefusal` rule 3;
 the Delayed-Auction SR1 counts as the first Stock Round). Audit **M7**. Rulebook §5.1. Notes: `shareSaleBlock` (`shareSale.ts`), `SellStock` arm; the
 Rules Reference already shows the ban only when `roundLabel` parses as SR1. Replay: refusal-added; bump.
 Detail: refuse when `macro_round_number === 1 && current_round_type === "StockRound"`; Delayed-Auction tables:
 refuse only the first SR, not the SR after the auction. Stage 5's forced sale cannot occur in SR1 (no OR yet).
 
 **S8-8. Shares of an unparred corporation (C&A's PRR 10%, M&H's NYC 10% before a president) can be sold, priced at the $67 nominal fallback.**
-Status `OPEN` — **the sale half absorbed by Stage 7, Batch 7.2** (owner ruling Q2: a C&A/M&H-granted share cannot be
+Status `OPEN` — **the sale half is RESOLVED by Batch 7.2** (#1570): `stockSaleRefusal` rule 4 refuses any sale of a
+corporation whose `par_value` is null, which closes the C&A/M&H case without a variant-specific duplicate rule —
+an unparred corporation has no price for a sale to be settled at, and that is true of every share of it however
+it was come by. Rule 5 additionally refuses a sale on a **pinned** board when the corporation has no
+`market_positions` entry, so the `priceOf` nominal is unreachable there; the `priceOf` fallback ITSELF, and the
+`sharePriceFor` projection that shares it, are still standing and stay Stage 8's.
+*(Original finding: the sale half absorbed by Stage 7, Batch 7.2)* (owner ruling Q2: a C&A/M&H-granted share cannot be
 sold before the corporation is parred — design §7.2 `stockSaleRefusal` rule 4); the `priceOf` fallback prose stays
 here for Stage 8. Audit **M8**. Rulebook p.15 (cannot be sold until the president's certificate is bought).
 Notes: `applySandboxMarketAction` `priceOf` fallback (`SANDBOX_NOMINAL_SHARE_PRICE`), `shareSaleBlock`. Stage 5's
@@ -626,7 +659,16 @@ therefore projectable today (refused only once this lands; note it in the emerge
 refusal-added; bump. Detail: refuse a sale when `par_value` is null; `priceOf` must not fall back on a sale.
 
 **S8-9. Par value from the message is not validated against the ladder; an IPO buy on an unparred corporation is silently converted to the president's purchase.**
-Status `OPEN` — **absorbed by Stage 7, Batch 7.2** (owner ruling Q2/Q4, 2026-09-15; design §7.2 rules 3–4: the
+Status `RESOLVED` — Batch 7.2 (#1570). `isPresidentPurchase` reads the CORPORATION (`source === "Ipo"`, no
+president, no established par) — never the message — and for that purchase `priceStockPurchase` requires a par
+that is present, whole, and a par cell of the chart in effect (`parLadderRefusal` / `parBoxCellFor`, one source
+for the ladder, the mark and the price), requires the 20 % card to be in the IPO, requires `quantity === 1` and
+refuses the LPF double, and charges exactly 2 × par against a cash check. **There is no $67 fallback**: an IPO
+purchase of an unparred corporation without a valid par is refused, never converted. `SetBoPar` is hardened with
+the same `parLadderRefusal` (rulebook p.27: the certificate is free, the par is still a par box) while keeping
+`boPresidencyRefusal`'s ownership and presidency preconditions and charging nobody. No corpus entry carries a
+forged or off-ladder par, so this costs nothing historically.
+*(Original finding: absorbed by Stage 7, Batch 7.2)* (owner ruling Q2/Q4, 2026-09-15; design §7.2 rules 3–4: the
 president's purchase requires an integer par on a legal par cell of the chart in use, the certificate in the IPO and
 exactly 2×par in cash; an ordinary IPO purchase prices from the stored par and ignores the payload; no $67
 fallback). Audit m8. Rulebook §4.2 / §5.2 (67/71/76/82/90/100). Notes: `BuyStock.par_value`,
@@ -937,11 +979,23 @@ waiting on X" surface. `OPEN`.
 panel's own `macroRoundNumber === 1` (#356) — a local restatement that must become a read of `stockSaleRefusal`
 (one predicate for the SR1, unparred and bundle rules) — and the tooltip reads "No selling in the first Stock Round
 — Project 18XX opens the market to sales from SR2 onward", presenting rulebook §5.1 as a house variant; correct
-the copy and the Rules Reference's Stock Round text; verify the Delayed-Auction SR1 shows the same. `OPEN`.
+the copy and the Rules Reference's Stock Round text; verify the Delayed-Auction SR1 shows the same.
+**Batch 7.2 outcome (LEGALITY SYNC, narrowed):** the authority now exists and is answered at ingress —
+`stockSaleRefusal` refuses an SR1 sale with "Certificates may not be sold in the first Stock Round." and
+`isFirstStockRound` is verified to read the Delayed-Auction SR1 as the first Stock Round and its post-auction SR3
+as an ordinary one (`stockTransactionAuthority.test.ts`). The ENGINE half of this item is closed and a crafted or
+racing client is refused with a sentence; what remains is the panel's own `macroRoundNumber === 1` restatement
+becoming a read of `stockSaleRefusal`, and the tooltip/Rules Reference copy correction (§5.1 is a rulebook rule,
+not a Project 18XX house variant). `OPEN` (UI only).
 
 **U-24.** (S8-8) **Unparred-share sale ban — LEGALITY SYNC.** The Sell control is live for the holder of a C&A/M&H
 granted share before the corporation is parred (no price to quote, the button still dispatches); it must read
-`stockSaleRefusal` and disable with the reason. `OPEN`.
+`stockSaleRefusal` and disable with the reason.
+**Batch 7.2 outcome (LEGALITY SYNC, narrowed):** the predicate exists and refuses — at the reducer by identity and
+at ingress with "NYC has not been started yet — a share of it cannot be sold until its President's Certificate has
+been bought and its par set." A player who presses the live control now meets a refusal sentence in the room
+banner instead of a silent no-op, so the failure mode is legible; the control is still offered, which is the
+remaining work. `OPEN` (UI only).
 
 **U-25.** (S8-9 / S7-1 / S7-13 / S7-16 / S7-18 / D-17 / D-22 / D-25) **Par ladder, president's cost, affordability,
 empty source, Brown-zone same-corporation continuation, bundle sizes — LEGALITY SYNC.** `PAR_BOX_PRICES`, the
@@ -955,7 +1009,19 @@ continuation control or a legacy-revision game would offer the wrong corporation
 **Batch 7.1 outcome (LEGALITY SYNC, unchanged in scope):** an unaffordable `BuyStock` is now refused by the
 ledger boundary instead of minting the difference (26 corpus entries, S7-1). The panel's own `cannotAfford`
 (#357) already stops the ordinary player from reaching it, so no control changes today; what is left is the
-sync — `purchaseBlockFor` reading `stockPurchaseRefusal` — and it stays 7.2's. `OPEN`.
+sync — `purchaseBlockFor` reading `stockPurchaseRefusal` — and it stays 7.2's.
+**Batch 7.2 outcome (LEGALITY SYNC; the predicates now exist, the panel work is still open):**
+`stockPurchaseRefusal` / `stockSaleRefusal` / `parLadderRefusal` are exported from
+`gameEngine/stockTransactionAuthority.ts` and answered at ingress, so every item on this list now HAS one
+authority to read: the par ladder (`parLadderRefusal` → `parBoxCellFor`, the same table `PAR_BOX_PRICES` is
+derived from — which answers the dynamic-market question by construction: the Dynamic Market adds a price ROW and
+no par boxes), affordability (`cash >= charged`, at the exact charge), source availability
+(`ordinaryPercentAvailable`, which refuses an undeliverable purchase OUTRIGHT rather than capping it — and which
+reserves the President's 20 % card in an unparred IPO), the Brown continuation (`bought_this_turn_company`, named
+in the refusal) and the bundle sizes (`percentage % 10`). **No frontend file was changed by Batch 7.2.** The
+concrete substitutions that remain: `App.purchaseBlockFor` (8577) and `App.saleBlockFor` (8612) become thin
+wrappers over the two predicates; `StockRoundPanel`'s `PAR_VALUE_LADDER` / `cannotAfford` (#357) / `multiBuyMax` /
+source toggle stop computing what the reducer now owns; and a 0 % source must stop offering Buy. `OPEN` (UI only).
 
 **U-26.** (S7-2 / S7-3 / S7-4 / S7-15 / D-16 / D-21) **Auction — LEGALITY SYNC + STATE VISIBILITY + RULES
 REFERENCE.** Verified NONE: escrow-aware affordability and minimum raise (`auctionFunds` / `bidRejectionReason` /
@@ -999,7 +1065,33 @@ panel's own `cannotAfford` (#357) and the private trade panel's band already sto
 dispatch), but a racing or reloading client can, and the failure mode is a control that appears to do nothing.
 Closed for ordinary play when Batch 7.2's `stockPurchaseRefusal` and Batch 7.4's `privatePurchaseRefusal` /
 `trainSaleRefusal` answer at ingress with their sentences (U-20, U-21, U-22, U-25); until then the gap is
-recorded here rather than left to be rediscovered as "the Buy button did nothing". `OPEN`.
+recorded here rather than left to be rediscovered as "the Buy button did nothing".
+**Batch 7.2 outcome: the STOCK half is closed for live play.** `turnRefusal` now answers `BuyStock`, `SellStock`
+and `SetBoPar` with the same predicates the reducer refuses by, inside a `withRules` scope so the two locks read
+one chart, so every stock refusal a live client can provoke reaches the room banner with a sentence. What the
+ingress layer still cannot reach is a refusal met during REPLAY of a stored entry — that is U-30. The private
+and train halves stay 7.4's. `OPEN` (narrowed to 7.4 + U-30).
+
+**U-30.** (S7-13 / S7-16 / S7-18 / S8-7 / S8-8 / S8-9; filed by Batch 7.2) **The Activity Log cannot say WHY a
+stock transaction was refused — LEGALITY SYNC.** `utils/refusedAction.ts` (#778) is the one place that turns "the
+reducer returned the board unchanged" into a sentence for the log, and for stock it asks `sharePurchaseBlock`
+(209) and `shareSaleBlock` (223) — the two predicates Batch 7.2 now COMPOSES, rather than the composing ones. So a
+purchase refused for the round, the par ladder, the price, the source, affordability or the Brown continuation,
+and a sale refused for the round, SR1, an unparred corporation or a fractional bundle, is still correctly reported
+as refused (the identity test is unchanged) but with **no reason** — the specific failure #778 exists to prevent.
+The fix is two substitutions —
+`stockPurchaseRefusal({ state: before, buy: purchaseIntentOf(msg.BuyStock), actor, ctx: chartContextFromState(before) })`
+and the sale's equivalent — deliberately not made in Batch 7.2, whose brief excludes frontend work. Scope note:
+this is about REPLAYED entries and legacy logs; a live refusal reaches the room banner from ingress, which 7.2
+does supply. `OPEN`.
+
+**U-31.** (S7-13 / D-17; filed by Batch 7.2) **`SandboxActionContext.parValue` is inert and still supplied — NONE
+(tech debt, recorded so it is not mistaken for a rule).** Batch 7.2 removed the last reader of `ctx.parValue`
+(#351/#579): the founding purchase is priced from the message's own validated par. Three callers still fill the
+field — `App.tsx` 6357 and 8839, `replayLog` 447 — and #777's warning applies to it in full: "an option the
+authority can never receive is worse than no option: it reads at the call site as a rule that is being enforced."
+The field is annotated in place rather than removed, because deleting it is a signature change across three
+callers for no rules reason. Retire it with S10-8's type cleanup. `OPEN` (no user-visible effect).
 
 ---
 
@@ -1096,6 +1188,19 @@ that player as the latest trader under the digital reading of §5.0); `bought_th
 consent answer, not a Stock Round turn); `stock_turn_stage` untouched. Owner, 2026-09-15. `OWNER DECISION`
 (recorded so no later code infers it from §5's certificate terminology).
 
+**D-28. The forced (§6.6.3 emergency) stock sale's refusal is VISIBLE at ingress, with the authority's own
+sentence (Batch 7.2 §14d, owner 2026-09-15).** An illegal emergency/forced `SellStock` returns the
+authoritative refusal reason to the acting president rather than a silent reducer no-op. This **does not move
+authority**: the reducer/core remains canonical; ingress surfaces the same rule RESULT and must never
+implement a competing rule; legal Batch-5 emergency sales remain legal and are answered `null` at both locks;
+only illegal attempts gain an explanatory response. Mechanically, `turnRefusal` makes exactly one call for a
+sale — to `stockSaleRefusal`, which asks `forcedSaleRefusal` last and unchanged — so the sentence a president
+hears is character-for-character the one the reducer refuses by, pinned by
+`stockTransactionAuthority.test.ts` "answers an ILLEGAL forced sale with the forced-sale predicate's own
+sentence, at both locks (D-28)". **Supersedes the previous expectation in `emergencyFunding.test.ts` case 7**
+("the owner may send it; the reducer refuses it"), which the owner has ruled was never a rule requirement.
+`OWNER DECISION`.
+
 ---
 
 ## Part E — Replay / version ledger (what a rebuilt room can differ by)
@@ -1107,6 +1212,9 @@ consent answer, not a Stock Round turn); `stock_turn_stage` untouched. Owner, 20
 | 2 | 4.6 | president's `DiscardTrain` replaces the automatic trim; limit-in-force at depot gates; §6.0 row key | JUNO-FCJ idx 474 (C&O's first 5 now allowed, then a discard); 3XD idx 255 supplied by the adapter; row key changes nothing observed |
 | 3 | 5 (`78f8358`) | derived forced-purchase obligation, forced sales, funding offers, bankruptcy → `GameEnd`, holds, D-5 / D-6 | JUNO-Z6C from idx 614 (`PassTurn` on an ended board now held); historical `EmergencyBuyHardware` entries (FCJ ×3, Z6C ×3) identical |
 | 4 | 6 (uncommitted) | route legality and revenue judged by `routeAuthority.ts`; a town is a terminus (S6-10 ruling, #1555); a run short of the search's demonstrated combination is refused (S6-3 ruling, #1556); one run per turn; dividend amount must equal the run (C1); Run Trains not skippable past a paying route (pinned boards); `RunManualRoute` refused on pinned boards; pin copied onto the state; #1183 key relocated to the state | 14 / 17 logs gameplay-identical to version 3 (every digest changes where a run occurred: the #1183 key moved from the corporation to the state — CV4 golden re-baselined for that alone). **JUNO-CV4 from 98** (S6-3: B&O with three 2-trains ran two of them, $90; the search demonstrates $130 — I15–J14 $50, I15–I17–I19 $40, J14–K13 $40 — so the run is refused, 99's $90 declaration mismatches, and the CV4 golden fixture is re-baselined for it; `replayJunoCV4.test.ts` unaffected). **JUNO-Z6C from 140** (S6-3: B&O ran three of four trains, $160 vs $220; also 172 C&O $70 vs $80 — the search adds the Akron & Canton town terminus G7–F6–G5–G3–F2, an S6-10 consequence; 396 N&W $340 vs $350 on the already-diverged board). **JUNO-3XD from 175** (S6-3: NNH ran $240 with [2, 2, 3]; the search demonstrates $270 — the 3-train could reach Baltimore, F16–G15–H16–I17–I15 $110; the operating order of every later round then differs; `replayJuno3XD`'s filed table re-pinned PRR 260, NYC none, B&O 350, C&O 220, NNH 90 with the reason; the idx-255 discard the Batch-4.6 adapter used to supply no longer falls due in the log-derived game, `trainDiscard.test.ts` re-pinned with the reason). **JUNO-FCJ from 74** (S6-10: B&M, trainless, passed at Buy Trains with a town-ended route E23–F24 that is now a legal route, so the Batch-4 forced purchase is owed and the pass is refused; before the ruling the first difference was **230**: B&M's second route touches no B&M station on the log-derived board — the idx-95 token Batch 3 refused; every later B&M dividend then mismatches; cascade). **JUNO-Z6C from 418** (NYC declared $180 on a $190 run; 428 PMQ $290 / $300; 433 NNH $250 / $270 — refused as C1 mismatches; treasuries differ, the bank no longer breaks at 613; `gameHistory.test.ts` relaxed from "reaches OR 9.1"). **JUNO-3XD from 260** (PRR's run names a 4-train in slot 1 that the log-derived fleet [3, 3] does not hold — a Stage-3 queue divergence now refused rather than priced; 307 the same; the OR-7 order then swaps and B&O's 313 is identity-refused; 319 NNH's duplicate run is refused by the one-run rule and 320's $540 by C1 — `replayJuno3XD` re-pinned PRR 170 → 260, B&O 240 → 270, NNH 540 → 340 with reasons) |
+
+| (5, owed) | 7.1 (`08a59ec`) | one money ledger; the three floored adjusters retired; auction proceeds and terrain fees credited to the Bank (D-15/Q1a); the Bank signed (Q1b); `bank_broken` latched by the debit that empties it (S7-20) | nine of twelve rooms differ in `virtual_bank_vgp` and nothing else; **JUNO-FCJ from 106**, **JUNO-Z6C from 193**, **JUNO-3XD from 28** (26 unaffordable purchases refused instead of minting). `RULES_ENGINE_VERSION` deliberately NOT bumped — the 4 → 5 bump is Batch 7.5's. Stale by design: `replayGolden` (CV4, G6J — bank only), `replayJuno3XD` ×2, `gameHistory`, `roundReplay` |
+| (5, owed) | 7.2 (uncommitted) | `stockTransactionAuthority.ts`: `BuyStock` / `SellStock` are Stock Round actions (the §6.6.3 forced sale excepted); the IPO price is the corporation's stored par and the pool price is `market_positions` (a message `par_value` is narration — D-17/Q4); the President's Certificate needs a ladder par, the 20 % card in the IPO, `quantity === 1`, not the double, and exactly 2 × par in cash — **no $67 fallback**; a purchase from a source that cannot deliver is refused outright (Q13/D-25); every purchase proves `cash >= charged`; sales must be whole 10 % bundles, are refused in the first Stock Round and on an unparred corporation, and take their price from the chart on a pinned board; the Brown Bank-Pool continuation must name `bought_this_turn_company` (new state field, Q9/D-22); `SetBoPar` validates the par ladder without charging | **Only three corpus files diverge from the 7.1 baseline, and all three for the same rule.** **JUNO-FCJ from 83** (`BuyStock` in an Operating Round; 21 entries newly refused, 246 newly applied on the cascaded board). **JUNO-3XD from 140** (same rule; 26 newly refused, 9 newly applied). **`JUNO-FCJ-prefix96` at 83** (the same entry; the prefix ends before any cascade, so exactly one entry differs). Every other room — 8E8, CV4 ×3, CW7, G6J ×2, JJD, QVC, 7NZ ×2, TQQ, Y8V, Z6C — is **gameplay-identical**, including all three goldens. Field-level comparisons additionally show the new `bought_this_turn_company` key on every log that has a Stock Round; `stateDigest` and the golden fixtures do not, because the key is written with the value `undefined` exactly as `stock_turn_stage` is (#1443). Nothing re-pinned; `RULES_ENGINE_VERSION` still 4 |
 
 Items above that carry "bump" must add a row here when they land. No golden or replay expectation is ever
 re-pinned silently: the re-pin, its index and its reason go in the batch write-up and in this table.

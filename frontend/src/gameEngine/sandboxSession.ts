@@ -135,9 +135,21 @@ import {
 } from "../components/hexBoardData";
 import { withRules } from "./boardSelection";
 import { stopEnteredFrom } from "./trackReach";
-// Design note #1324: the 20% standard certificate.
+/* Design note #1570 (Batch 7.2): the one authority for stock transaction legality and pricing. Asked by the
+   core (identity), by the market step's `saleRefused` closure (#748a) and at ingress (`turnAuthority`). */
 import {
-  DOUBLE_CERTIFICATE_PERCENT,
+  chartContextFromState,
+  parLadderRefusal,
+  priceStockPurchase,
+  purchaseIntentOf,
+  stockPurchaseRefusal,
+  stockSaleRefusal,
+  type StockChartContext,
+} from "./stockTransactionAuthority";
+/* Design note #1324: the 20% standard certificate. #1570: `DOUBLE_CERTIFICATE_PERCENT` left this import with
+   the arithmetic -- the BuyStock arm no longer computes a percentage, it is handed one by
+   `priceStockPurchase`, which is where the constant is read now. */
+import {
   doublePurchaseRefusal,
   doubleSaleEffect,
   withDoubleAt,
@@ -246,6 +258,8 @@ function advanceSeat(state: GameStateResponse): GameStateResponse {
     turn_action_taken: false,
     // Design note #1172: the purchase count has the same life and is cleared on the same rule.
     bought_this_turn: 0,
+    // Design note #1570: and the corporation it was spent on -- the Brown continuation's other half (S7-18).
+    bought_this_turn_company: undefined,
     stock_turn_stage: undefined, // #1443: the Sell-Buy-Sell stage clears with the seat
   };
 }
@@ -436,6 +450,7 @@ function recordPass(state: GameStateResponse): GameStateResponse {
     turn_action_taken: false,
     // Design note #1172: and the purchase count with it.
     bought_this_turn: 0,
+    bought_this_turn_company: undefined, // #1570: and the corporation it was spent on
     stock_turn_stage: undefined, // #1443: the Sell-Buy-Sell stage clears with the seat
   };
 
@@ -737,7 +752,15 @@ export interface SandboxActionContext {
   sharePrice?: number;
   /** Design note #351: the par ladder's current selection, for the founding
    *  purchase that sets it. Ignored on every other buy -- once
-   *  `par_value` is set the company has a price and the ladder is locked. */
+   *  `par_value` is set the company has a price and the ladder is locked.
+   *
+   *  DESIGN NOTE 1570: NOTHING READS THIS ANY MORE. Batch 7.2 prices the founding purchase from the message's
+   *  own `par_value`, validated against the chart's par boxes (`priceStockPurchase`), so the last reader of
+   *  this field is gone. It is left declared rather than deleted because three callers still supply it
+   *  (`App.tsx`, `replayLog`, the CLI) and removing it is a signature change for no rules reason -- but it is
+   *  now INERT, and #777's warning applies to it in full: "an option the authority can never receive is worse
+   *  than no option: it reads at the call site as a rule that is being enforced." Retiring it and its three
+   *  call sites is S10-8's kind of cleanup, recorded rather than smuggled into this batch. */
   parValue?: number;
   /** Design note #363: resolves a home hex label to `(q, r)`. Injected --
    *  the board table lives in `components/`, which `utils/` must not
@@ -891,6 +914,7 @@ export function openingStockRoundReset(
   | "last_trader_index"
   | "turn_action_taken"
   | "bought_this_turn"
+  | "bought_this_turn_company"
   | "active_player_index"
 > {
   return {
@@ -906,6 +930,7 @@ export function openingStockRoundReset(
     /* Design note #1172: the third clearing site, and the one #745's comment above predicted -- "the seat is
        being MOVED without going through either seat-moving function". */
     bought_this_turn: 0,
+    bought_this_turn_company: undefined, // #1570: and the corporation it was spent on
     stock_turn_stage: undefined, // #1443: the Sell-Buy-Sell stage clears with the seat
     // The Priority Deal holder opens the Stock Round -- design note #353.
     active_player_index: state.priority_deal_index,
@@ -2286,6 +2311,34 @@ export interface SandboxMarketContext {
   isCarcosanSale?: (sellerId: number, modelType: string) => boolean;
 }
 
+/** The chart facts Batch 7.2's stock authority reads, assembled from what this reducer was handed.
+ *
+ *  THE ZONE COMES FROM THE INJECTION AND FROM NOWHERE ELSE, and that is deliberate rather than lazy. #712's
+ *  rule is that an absent `marketZoneFor` means the zone rules are NOT asked -- "a caller with no chart cannot
+ *  tell a Normal price from an Orange one, and guessing would either forbid a legal purchase or wave an
+ *  illegal one through" -- so deriving one here from `market_positions` would quietly make every chartless
+ *  fixture stricter than the board it was written against. The PRICE is the opposite case: it is read off
+ *  `market_positions` (#1196), because that is the authoritative position and a purchase priced from anything
+ *  else is what S7-13 was.
+ *
+ *  `nominalPrice` is the chartless board's last resort, exactly the figure the arms charged before this
+ *  batch (`ctx.sharePrice`, else the nominal), so a fixture with no positions prices as it always did. */
+function stockChartContext(
+  state: GameStateResponse,
+  ctx?: SandboxActionContext,
+): StockChartContext {
+  const fromState = chartContextFromState(state);
+  return {
+    parCellFor: ctx?.parCellFor ?? fromState.parCellFor,
+    marketZoneFor: ctx?.marketZoneFor,
+    marketPricesByCompany: ctx?.marketPricesByCompany ?? null,
+    zoneForPrice: ctx?.zoneForPrice,
+    priceFor: fromState.priceFor,
+    pinnedBoard: fromState.pinnedBoard,
+    nominalPrice: ctx?.sharePrice ?? SANDBOX_NOMINAL_SHARE_PRICE,
+  };
+}
+
 export function applySandboxMarketAction(
   prices: SandboxMarketPrices,
   msg: GameplayExecuteMsg,
@@ -2558,14 +2611,28 @@ function applySandboxActionAfterAuction(
     const priced = applySandboxMarketAction(state.market_positions, msg, {
       ...ctx?.marketContext,
       dividendRefused: (companyId: number) => dividendRefused(state, companyId),
+      /* ==================================================================
+          DESIGN NOTE 1570: THE CHART ASKS THE SAME PREDICATE THE CORE WILL (Batch 7.2)
+         ==================================================================
+         #748a's rule, and the one part of Batch 7.2 that needed care. The chart atom advances BEFORE the
+         board (#272/#273), so a sale the core is about to refuse must be refused HERE by the SAME function,
+         or the token drops one row per certificate for a sale that never happened -- and "a price drop with
+         no matching change in anybody's holdings ... reads as a market bug rather than as a refused action".
+         It was `shareSaleBlock` plus the Batch-5 forced-sale rules; it is now `stockSaleRefusal`, which
+         contains both of those unchanged and adds the round gate, the first-Stock-Round ban, the unparred
+         corporation and the whole-certificate bundle. One predicate, three askers, no drift. */
       saleRefused: (companyId: number, percentage: number) => {
         const seller = ctx?.actor ?? null;
         if (!seller) return false;
-        if (shareSaleBlock({ state, seller, companyId, percentage }) !== null) return true;
-        /* #1540: a forced sale the core will refuse moves no token either -- the same question, asked here
-           so the chart and the cash cannot disagree about a sale that did not happen. */
-        const funding = emergencyFundingFor(state, ctx?.mapGrid);
-        return funding !== null && forcedSaleRefusal(state, funding, seller, companyId, percentage) !== null;
+        return (
+          stockSaleRefusal({
+            state,
+            sell: { companyId, percentage },
+            actor: seller,
+            mapGrid: ctx?.mapGrid,
+            ctx: stockChartContext(state, ctx),
+          }) !== null
+        );
       },
     });
     const settled: GameStateResponse = { ...state, market_positions: priced.prices };
@@ -2916,6 +2983,60 @@ function applySandboxActionCore(
      bad state into an unrecoverable one. */
   if (ctx?.homeHexToAxial) {
     if (homeTokenBlock({ state, homeHexToAxial: ctx.homeHexToAxial, msg }) !== null) return state;
+  }
+
+  /* ==================================================================
+      DESIGN NOTE 1570: THE STOCK TRANSACTION IS JUDGED HERE, FOR #1019's REASON (Batch 7.2)
+     ==================================================================
+     THE REDUCER IS CANONICAL LAW. `stockPurchaseRefusal` / `stockSaleRefusal` own the round gate, the
+     president/par rules and the ladder, the price (from the corporation and the chart, never from the
+     message), the physical availability of the card, the Brown continuation's corporation, the bundle's
+     shape, the first-Stock-Round ban, the unparred corporation and affordability -- and they COMPOSE the
+     existing predicates (`sharePurchaseBlock`, `shareSaleBlock`, `doubleSaleEffect`, `forcedSaleRefusal`)
+     rather than restating them.
+
+     ASKED BEFORE ANY STAGE RUNS, on #1019's rule: a refusal inside the arm still lets `settleRoundTransitions`
+     / `settleEra` / `settleOperatingCursor` run on the way out, so the state comes back a new object and a
+     caller checking identity cannot tell. Here the board is returned BY IDENTITY.
+
+     AFTER THE HOLDS, NOT BEFORE THEM. A discard owed, a train that must be funded, a home token not yet
+     placed: each of those is a board no rule was written against, and the reason a player is told must be the
+     one that explains why nothing works -- not a stock rule they would meet anyway.
+
+     THE SALE IS ALSO ASKED BY THE MARKET STEP (the `saleRefused` closure above, #748a), which runs FIRST and
+     therefore decides whether the token moves. Both call this same function so they cannot disagree. */
+  if ("BuyStock" in msg) {
+    if (
+      stockPurchaseRefusal({
+        state,
+        buy: purchaseIntentOf(msg.BuyStock),
+        actor: ctx?.actor ?? null,
+        ctx: stockChartContext(state, ctx),
+      }) !== null
+    ) {
+      return state;
+    }
+  }
+  if ("SellStock" in msg) {
+    if (
+      stockSaleRefusal({
+        state,
+        sell: { companyId: msg.SellStock.protocol_id, percentage: msg.SellStock.percentage },
+        actor: ctx?.actor ?? null,
+        mapGrid: ctx?.mapGrid,
+        ctx: stockChartContext(state, ctx),
+      }) !== null
+    ) {
+      return state;
+    }
+  }
+  /* #1570: the B&O's private grants its President's Certificate without a purchase and without a charge
+     (rulebook p.27) -- and still may not choose a price the board has no par box for (S8-9). The ownership
+     and presidency preconditions stay `boPresidencyRefusal`'s, asked by the arm as they always were. */
+  if (isSetBoParMsg(msg)) {
+    if (parLadderRefusal(msg.SetBoPar.par_value, stockChartContext(state, ctx), BO_TICKER) !== null) {
+      return state;
+    }
   }
 
   /* ==================================================================
@@ -4162,59 +4283,34 @@ function applyOneAction(
     // The share has to actually move: adjusting cash alone left the pool, the holding and the source button unchanged, which reads as a dead button. ONE certificate per message.
     // See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #273
     const { protocol_id, source } = msg.BuyStock;
-    /* The reducer reads the MESSAGE's par_value. ctx.parValue is assembled per browser and falls through to "100" on every replaying client -- the third instance of a shared fact derived from a per-browser value.
-       See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #579 */
-    const messagePar = Number(msg.BuyStock.par_value ?? NaN);
-    const parFromMessage = Number.isFinite(messagePar) && messagePar > 0 ? messagePar : null;
-
-    /* IPO buys are priced at par (design note #558), and par is on the
-       message -- so this needs no local state at all. A POOL buy is priced
-       by the chart, which is a genuinely shared atom, and keeps
-       `ctx.sharePrice`. */
-    const price =
-      source === "Ipo" && parFromMessage !== null
-        ? parFromMessage
-        : (ctx?.sharePrice ?? SANDBOX_NOMINAL_SHARE_PRICE);
-
-    /* The first IPO share is the 20% President's Certificate at twice par, and it sets the presidency and the par together. #587: the test is "has this corporation been started" (par_value), since the C&A grant makes holders-without-a-president a normal opening position.
-       See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #351 */
     const target = state.public_companies.find((c) => c.company_id === protocol_id);
-    const isPresidentBuy =
-      source !== "Bank" &&
-      !!target &&
-      target.president === null &&
-      (target.par_value === null || target.par_value === undefined) &&
-      !!actor;
 
-    /* Design note #712: QUANTITY, so a Brown-zone pool multi-buy settles as ONE action.
-       It settled as several before: `App.handleBuyShare` looped and dispatched N `BuyStock` messages, and the
-       tail of this branch calls `advanceSeat` -- so three pool shares passed the turn three times and shares
-       two and three were made by whoever the seat had moved to.
-       ABSENT MEANS ONE, which is what every message written before this field meant and must keep meaning on
-       replay. A president's certificate is never multiple: it is one 20% card and there is only ever one. */
-    const requested = Math.max(1, Math.floor(Number(msg.BuyStock.quantity ?? 1)));
-    /* CAPPED BEFORE THE CHARGE. `moveShares` already refuses to hand out more than the pool holds -- "taking
-       more than exists is capped to what exists" -- but the price is computed HERE, so a request for five
-       against a pool of three would have charged for five and delivered three. The cap has to be applied to
-       the figure the player pays, not only to the certificates they receive. */
-    const inSource = target
-      ? Math.floor(
-          (source === "Bank" ? target.bank_pool_percentage : target.ipo_pool_percentage) /
-            SANDBOX_SHARE_PERCENTAGE,
-        )
-      : 0;
-    /* Design note #1324: THE 20% STANDARD CERTIFICATE. One card, twenty percent, twice the price -- the
-       president's arithmetic without the presidency. Legality (is the double actually in that pool) is the
-       gate's below, through `sharePurchaseBlock`; here only the figures. */
-    const buysDouble = !isPresidentBuy && msg.BuyStock.certificate === "double";
-    const certificates = isPresidentBuy || buysDouble ? 1 : Math.max(1, Math.min(requested, inSource));
+    /* ==================================================================
+        DESIGN NOTE 1570: THE PRICE IS A FACT ABOUT THE BOARD (Batch 7.2, ruling Q4 / D-17)
+       ==================================================================
+       WHAT THIS ARM USED TO DO, and #579 was right about the half it fixed and wrong about the whole:
+       "The reducer reads the MESSAGE's par_value. `ctx.parValue` is assembled per browser and falls through
+       to '100' on every replaying client." Both are true, and the conclusion drawn from them -- price the
+       purchase from the message -- handed the price to whoever wrote the message. `{par_value: "1"}` bought a
+       parred corporation's share for $1 (S7-13); an unparred IPO buy with no par at all silently became the
+       President's Certificate purchase at $67 (m8/S8-9).
 
-    const percentage = isPresidentBuy
-      ? SANDBOX_PRESIDENT_PERCENTAGE
-      : buysDouble
-        ? DOUBLE_CERTIFICATE_PERCENT
-        : SANDBOX_SHARE_PERCENTAGE * certificates;
-    const charged = isPresidentBuy || buysDouble ? price * 2 : price * certificates;
+       THE THIRD OPTION IS THE CORPORATION ITSELF. An IPO share costs the par the corporation was STARTED at,
+       which is on the board and identical on every client; a Bank Pool share costs what the token stands on
+       (`market_positions`, #1196). The message's `par_value` prices exactly one purchase -- the one that sets
+       the par -- and `priceStockPurchase` validates it against the chart's own ladder before it is used.
+       Every other spelling of it is narration, ignored whether present, absent or forged.
+
+       AND THE PLAN IS THE GATE'S PLAN. `stockPurchaseRefusal` in `applySandboxActionCore` has already asked
+       this same function and refused everything below, so by the time this arm runs the pricing cannot fail;
+       it is re-asked rather than threaded through so the two can never be handed different figures (#273's
+       rule about the wallet and the chart), and a caller that reaches the arm another way still cannot
+       mis-price a share. */
+    const pricing = priceStockPurchase(state, purchaseIntentOf(msg.BuyStock), stockChartContext(state, ctx));
+    if (!pricing.ok) return state;
+    const { kind, certificates, percentage, charged, par } = pricing.plan;
+    const isPresidentBuy = kind === "president" && !!actor;
+    const buysDouble = kind === "double";
 
     /* Design note #712: THE REDUCER REFUSES TOO, and that is not belt-and-braces.
        The panel's gate is advice on one screen; this runs on every client that replays the log, so a purchase
@@ -4232,7 +4328,7 @@ function applyOneAction(
         buyer: actor,
         companyId: protocol_id,
         source,
-        quantity: certificates,
+        quantity: kind === "ordinary" ? certificates : 1,
         zone: ctx.marketZoneFor(protocol_id),
         marketPrices: ctx.marketPricesByCompany ?? null,
         zoneForPrice: ctx.zoneForPrice,
@@ -4271,11 +4367,11 @@ function applyOneAction(
        MINTED the other $50 -- audit C3, and the single most common non-conservation in the corpus (JUNO-3XD
        28/31/211/291-300, JUNO-Z6C 193/261/264/347-354/473-483, JUNO-FCJ 106/109/150/181-194/288-303/379).
 
-       Refused as one movement, so nothing is charged and no certificate moves. The PRICE this arm charges is
-       still the one it has always computed (the message's par for an IPO buy, the chart for a pool buy);
-       pricing from the corporation's own state, the par ladder and the round gate are Batch 7.2's
-       `stockPurchaseRefusal` (S7-13/D-17), and the affordability RULE belongs there too. This is the
-       boundary underneath it.
+       Refused as one movement, so nothing is charged and no certificate moves. The PRICE is no longer this
+       arm's own arithmetic: Batch 7.2 (#1570) put it on `priceStockPurchase` -- the corporation's stored par
+       for an IPO share, the chart for a pool share, a validated ladder par for the President's Certificate --
+       and `stockPurchaseRefusal` puts the affordability RULE, with its ingress sentence, in front of this
+       boundary (S7-13/D-17). The boundary stays: a later batch that adds a predicate must not remove it.
 
        NO ACTOR, NO MONEY. A bare harness board with no `actor` used to credit the bank anyway -- a purchase
        with no buyer that still made the bank richer. There is nobody to take it from, so nothing moves. */
@@ -4304,10 +4400,13 @@ function applyOneAction(
               ? {
                   ...company,
                   president: actor,
-                  /* Design note #579: from the MESSAGE first. `ctx.parValue`
-                     is the caller's ladder and is empty on every client but
-                     the one that clicked -- which is the reported bug. */
-                  par_value: company.par_value ?? String(parFromMessage ?? ctx?.parValue ?? price),
+                  /* Design note #1570: THE VALIDATED PAR, and only it. #579 took the figure from the message
+                     because `ctx.parValue` was a per-browser ladder selection; the message is no better a
+                     source on its own, so `priceStockPurchase` has already checked this par against the
+                     chart's own par boxes, checked that the buyer can pay twice it, and returned it. The
+                     presidency and the par are still written together, because a corporation cannot be
+                     presided over and priceless at the same time (#399). */
+                  par_value: company.par_value ?? String(par),
                 }
               : company,
           ),
@@ -4350,9 +4449,15 @@ function applyOneAction(
        between the two messages." Set here rather than on the `sellBuySellInForce` branch below so both
        early returns carry it -- that branch and #769's home-token hold. Under the old revision the buy falls
        through to `advanceSeat`, which clears the flag on its way past, so a pre-#1443 log replays unchanged. */
+    /* Design note #1570: AND WHICH CORPORATION IT WAS SPENT ON (S7-18, ruling Q9 / D-22). Rulebook §4.4's
+       Brown allowance is "any number of certificates from the bank pool of ONE corporation", and the engine
+       spells that allowance as several messages -- so the corporation of the FIRST purchase of the turn is
+       what the continuation is judged against. Written once and not overwritten by the continuation itself,
+       which names the same corporation anyway; cleared with `bought_this_turn` by all three seat sites. */
     const counted: GameStateResponse = {
       ...settlePresidencies(floated).state,
       bought_this_turn: (state.bought_this_turn ?? 0) + certificates,
+      bought_this_turn_company: state.bought_this_turn_company ?? protocol_id,
       turn_action_taken: true,
     };
     const settledBuy = markTrader(counted, actor);

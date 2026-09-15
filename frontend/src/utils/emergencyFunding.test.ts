@@ -256,7 +256,13 @@ describe("the forced sale (#1540, tests 4-10)", () => {
     expect(owed.canPurchase).toBe(true);
     expect(forcedSaleRefusal(state, owed, P1, PRR, 10)).toContain("no further sale is allowed");
     expect(same(apply(state, SELL(PRR, 10), P1), state)).toBe(true);
-    expect(turnRefusal({ state, waterfall: null, actor: P1, msg: SELL(PRR, 10), mapGrid: CORRIDOR })).toBeNull(); // the owner may send it; the reducer refuses it
+    /* Batch 7.2 (#1570): the owner may still SEND it -- the seat and owner rules are unchanged -- but ingress
+       now answers with the reason instead of leaving the reducer's silent no-op to be the whole reply
+       (S10-1 / U-29). `stockSaleRefusal` asks `forcedSaleRefusal` last and unchanged, so the sentence the
+       submitter hears is the one the reducer refuses by. */
+    expect(turnRefusal({ state, waterfall: null, actor: P1, msg: SELL(PRR, 10), mapGrid: CORRIDOR })).toContain(
+      "no further sale is allowed",
+    );
     // Negative control: the ordinary sale rule is untouched outside the obligation.
     const ordinary = { ...state, current_round_type: "StockRound" as const, operating_sub_phase: undefined };
     expect(same(apply(ordinary, SELL(PRR, 10), P1), ordinary)).toBe(false);

@@ -82,13 +82,34 @@ const payDividend = (state: GameStateResponse) =>
     DeclareDividends: { game_id: 0, protocol_id: 1, distribute: true, revenue_amount: "30" },
   } as never);
 
-/** The $100 receipt: p2 buys PRR's $100 IPO share, which pays the bank. */
-const buyShare = (state: GameStateResponse) =>
-  applySandboxAction(
-    state,
+/** The $100 receipt: p2 buys PRR's $100 IPO share, which pays the bank.
+ *
+ *  ==================================================================
+ *   BATCH 7.2 (#1570): THE RECEIPT HAPPENS WHERE A SHARE MAY BE BOUGHT
+ *  ==================================================================
+ *  A share purchase is a Stock Round action (rulebook §5.0, S7-13), and until Batch 7.2 this engine accepted
+ *  one in an Operating Round -- which is what this helper was quietly relying on. THE RULE UNDER TEST IS THE
+ *  BANK'S, not the calendar's: what the latch needs is a $100 credit reaching the bank between the payout
+ *  that broke it and the set boundary that ends the game. So the purchase is applied with the round set to
+ *  the one it belongs in and the calendar restored afterwards, and every assertion in this file -- the
+ *  balance, the latch, the conservation, the ending -- is unchanged.
+ *
+ *  The design's own regression (a) (§7.1a) spells this receipt as "a $100 train purchase", which needs a
+ *  depot, a tier, a limit and a step to be true of the fixture; the share keeps the arithmetic identical and
+ *  the fixture one board long. */
+const buyShare = (state: GameStateResponse) => {
+  const bought = applySandboxAction(
+    { ...state, current_round_type: "StockRound" } as GameStateResponse,
     { BuyStock: { game_id: 0, protocol_id: 1, source: "Ipo", par_value: "100", certificate: "single" } } as never,
     { actor: "p2" },
   );
+  return {
+    ...bought,
+    current_round_type: state.current_round_type,
+    sub_round_index: state.sub_round_index,
+    macro_round_number: state.macro_round_number,
+  } as GameStateResponse;
+};
 
 const endTurn = (state: GameStateResponse) =>
   applySandboxAction(state, { PassTurn: { game_id: 0 } } as never);
@@ -162,11 +183,7 @@ describe("what latches, and what does not", () => {
        moving upward out of the negative range. */
     const broke = payDividend(operating({ virtual_bank_vgp: "10" }));
     const once = buyShare(broke);
-    const twice = applySandboxAction(
-      once,
-      { BuyStock: { game_id: 0, protocol_id: 1, source: "Ipo", par_value: "100", certificate: "single" } } as never,
-      { actor: "p1" },
-    );
+    const twice = buyShare(once); // #1570: p2 is out of cash by now, so this receipt is refused and the bank stands
     expect(Number(twice.virtual_bank_vgp)).toBeGreaterThan(0);
     expect(twice.bank_broken).toBe(true);
     expect(bankIsBroken(twice)).toBe(true);

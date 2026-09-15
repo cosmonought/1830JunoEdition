@@ -59,6 +59,17 @@ import {
 import type { MapGridResponse } from "../components/hexContractTypes";
 import { dividendAmountRefusal, routeSetRefusal, routeSkipRefusal } from "./routeAuthority";
 import { tileEraFor } from "./gameConstants";
+/* Design note #1570 (Batch 7.2): the SAME predicates the reducer's core asks, so the two locks cannot
+   disagree about a stock transaction. Ingress answers with the sentence; the reducer remains the law. */
+import {
+  chartContextFromState,
+  parLadderRefusal,
+  purchaseIntentOf,
+  stockPurchaseRefusal,
+  stockSaleRefusal,
+} from "./stockTransactionAuthority";
+import { withRules } from "./boardSelection";
+import { resolveVariants } from "./gameVariants";
 
 export interface TurnAuthorityInput {
   state: GameStateResponse;
@@ -193,7 +204,17 @@ export function turnRefusal(input: TurnAuthorityInput): string | null {
      and it is recorded in the migration plan as one." #1249 closes it -- see `roomMessageRefusal`. The
      exemption from the SEAT stands; what each message gets instead is its own owner. */
   if (isSandboxOnlyMsg(msg)) {
-    return roomMessageRefusal(input, actor);
+    const owner = roomMessageRefusal(input, actor);
+    if (owner !== null) return owner;
+    /* #1570: `roomMessageRefusal` asks "is this yours to send" and deliberately nothing else. The B&O par is
+       the one legality question in that family that a socket boundary should answer, because the alternative
+       is a silent reducer no-op on a message the player believes started their corporation (S8-9 / U-29). */
+    if ("SetBoPar" in msg) {
+      return stockChartRefusal(state, () =>
+        parLadderRefusal(msg.SetBoPar.par_value, chartContextFromState(state), BO_TICKER),
+      );
+    }
+    return null;
   }
 
   /* ==================================================================
@@ -232,12 +253,57 @@ export function turnRefusal(input: TurnAuthorityInput): string | null {
      THIS player is out of turn. */
   if (acting !== null && actor !== acting) return "It is not your turn.";
   /* ==================================================================
+      DESIGN NOTE 1570 (ingress): THE STOCK TRANSACTION IS ANSWERED WITH ITS REASON (Batch 7.2)
+     ==================================================================
+     The reducer refuses these by identity (`applySandboxActionCore`, the second lock); asked here first, on
+     the seat that is allowed to send them, so the submitter hears the sentence rather than meeting a control
+     that appears to do nothing (S10-1 / U-29) -- the #1530/#1540/#1550 shape.
+
+     THE SAME PREDICATES AND THE SAME CHART, so the two locks cannot disagree: the context is built from
+     `state.market_positions` by the same function the reducer uses, and the whole call is scoped with
+     `withRules` (#1300) because the par ladder and the zone table are the TABLE's chart and this boundary,
+     unlike the reducer, is not already standing inside it.
+
+     SEAT AUTHORITY STAYS HERE AND ONLY HERE (ruling Q10 / D-9): the predicates below add round and action
+     legality, never historical seat authority. */
+  if ("BuyStock" in msg) {
+    return stockChartRefusal(state, () =>
+      stockPurchaseRefusal({
+        state,
+        buy: purchaseIntentOf(msg.BuyStock),
+        actor,
+        ctx: chartContextFromState(state),
+      }),
+    );
+  }
+  if ("SellStock" in msg) {
+    return stockChartRefusal(state, () =>
+      stockSaleRefusal({
+        state,
+        sell: { companyId: msg.SellStock.protocol_id, percentage: msg.SellStock.percentage },
+        actor,
+        mapGrid: input.mapGrid,
+        ctx: chartContextFromState(state),
+      }),
+    );
+  }
+  /* ==================================================================
       DESIGN NOTE 1550 (ingress): THE ROUTE, THE DIVIDEND AND THE SKIP ARE ANSWERED WITH THEIR REASON
      ==================================================================
      Batch 6. The reducer refuses these by identity (`applySandboxActionCore`, the second lock); asked here
      first, on the seat that is allowed to send them, so the submitter hears the sentence rather than a silent
      no-op -- the #1530/#1540 shape. Same predicates, same grid, so the two locks cannot disagree. */
   return operatingLegalityRefusal(state, msg, input.mapGrid);
+}
+
+/** Ask a chart-reading refusal with THIS TABLE's board, tray and market chart in effect (#1300).
+ *
+ *  THE REDUCER IS ALREADY INSIDE ONE -- `applySandboxAction` opens a `withRules` scope before any arm runs --
+ *  and this boundary is not: `RoomSession.submit` calls `turnRefusal` directly. A par ladder or a price zone
+ *  read outside the scope is read off whichever chart was last activated, which on a server with two rooms is
+ *  the other table's. One line, so the two locks read one chart. */
+function stockChartRefusal(state: GameStateResponse, ask: () => string | null): string | null {
+  return withRules(resolveVariants(state.variants), ask);
 }
 
 /** The Batch-6 authority questions, in the order the reducer asks them. `null` when nothing objects. */

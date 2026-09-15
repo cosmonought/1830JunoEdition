@@ -487,6 +487,24 @@ export interface GameStateResponse {
    * IN STATE FOR #723'S REASON, like the two records above it: Undo replays the log, so anything the reducer
    * must decide travels in the state the reducer replays. */
   bought_this_turn?: number;
+  /** ==================================================================
+   *   DESIGN NOTE 1570: WHICH CORPORATION THE TURN'S PURCHASE OPENED WITH (Batch 7.2, S7-18)
+   *  ==================================================================
+   *
+   * Rulebook §4.4's Brown-zone allowance is "any number of certificates from the bank pool of ONE
+   * corporation". The engine represents that allowance as SEVERAL `BuyStock` messages in one turn (#712/#1172
+   * kept `bought_this_turn` as a running certificate count for exactly this), and the multi-message
+   * representation is preserved so every stored log keeps replaying -- so the "one corporation" half of the
+   * printed rule has nowhere to live but the state.
+   *
+   * WRITTEN BY THE FIRST PURCHASE OF THE TURN and cleared by all three sites that clear `bought_this_turn`
+   * (`advanceSeat`, `recordPass`, `openingStockRoundReset`), because it has exactly that life: it is a fact
+   * about the turn now in progress and it dies with the turn.
+   *
+   * ABSENT IS "NOT SAID" (#232), never "any corporation may continue". A board rebuilt mid-turn from a log
+   * written before this field existed carries no continuation rule, which is what keeps a legacy replay
+   * replaying rather than refusing a purchase the old engine allowed. */
+  bought_this_turn_company?: number;
   /** #1443: the Stock Round turn's stage under Sell-Buy-Sell. Absent is "sell" (the opening stage); `"buy"`
    *  once the player has declined to sell further; the third stage ("sell again") is implied by
    *  `bought_this_turn > 0`. Cleared wherever the seat moves. */

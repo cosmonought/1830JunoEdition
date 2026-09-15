@@ -288,7 +288,37 @@ const refusal = (actor: string, msg: unknown) =>
 describe("a player cannot act as somebody else (#1450)", () => {
   it("refuses an ordinary action from a seat that is not acting", () => {
     expect(refusal("p-b", { BuyStock: { protocol_id: 1, source: "Ipo" } })).toContain("not your turn");
-    expect(refusal("p-a", { BuyStock: { protocol_id: 1, source: "Ipo" } })).toBeNull();
+    /* Batch 7.2 (#1570): the acting seat gets PAST the seat rule and meets the round rule -- `board()` is an
+       Operating Round, and a share cannot be bought in one (S7-13). The seat gate is what this case is about,
+       so the acting seat's "null" is pinned on a board where the purchase is actually legal. */
+    expect(refusal("p-a", { BuyStock: { protocol_id: 1, source: "Ipo" } })).toContain("Stock Round");
+    const inStockRound = (actor: string) =>
+      turnRefusal({
+        state: board({
+          current_round_type: "StockRound",
+          macro_round_number: 2,
+          public_companies: [
+            {
+              company_id: 1,
+              ticker: "PRR",
+              president: "p-a",
+              is_floated: true,
+              par_value: "100",
+              ipo_pool_percentage: 80,
+              bank_pool_percentage: 0,
+              player_holdings: [{ player: "p-a", percentage: 20 }],
+              station_token_hexes: [],
+            },
+          ],
+        } as unknown as Partial<GameStateResponse>),
+        waterfall: null,
+        actor,
+        msg: { BuyStock: { protocol_id: 1, source: "Ipo" } } as never,
+        host: "p-a",
+        log: [],
+      });
+    expect(inStockRound("p-b")).toContain("not your turn");
+    expect(inStockRound("p-a")).toBeNull();
   });
 
   it("refuses a payload that names a player other than the sender", () => {

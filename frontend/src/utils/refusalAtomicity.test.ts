@@ -152,6 +152,10 @@ describe("an unaffordable stock purchase changes nothing at all", () => {
       [
         "active_player_index",
         "bought_this_turn",
+        /* Batch 7.2 (#1570): the corporation the turn's purchase opened with, for the Brown-zone Bank Pool
+           continuation's "certificates of ONE corporation" half (S7-18 / D-22). Written by a purchase that
+           happens; the refusal case above still differs in no field at all. */
+        "bought_this_turn_company",
         "last_trader_index",
         "player_cash",
         "public_companies",
@@ -210,10 +214,27 @@ describe("an unaffordable stock purchase changes nothing at all", () => {
       return rest as GameStateResponse;
     };
 
-    it("the refused purchase differs in that one derived field", () => {
+    /* ==================================================================
+        BATCH 7.2 (#1570): THE REFUSED PURCHASE NO LONGER REACHES THE SETTLE CHAIN
+       ==================================================================
+       WHAT CHANGED, AND WHY IT IS A STRENGTHENING RATHER THAN A RE-PIN. In Batch 7.1 the unaffordable
+       purchase was refused by the LEDGER, inside the arm -- so `settleEra` and `settleOperatingCursor` ran
+       after it on the way out and stamped `current_global_era` onto this stale board. #1019 says in advance
+       that this is the wrong shape ("a refusal inside the arm still lets `settleOperatingCursor` end the
+       turn"), and Batch 7.2 puts the RULE -- `stockPurchaseRefusal` -- in `applySandboxActionCore` ahead of
+       every stage. The board now comes back BY IDENTITY, so even a stale board differs in no field at all.
+
+       THE TWO CONTROLS BELOW ARE UNCHANGED AND STILL LOAD-BEARING: the neutral message and the affordable
+       purchase both still normalise the stale field, which is what proves the normalisation was never a
+       consequence of the rejected transaction. 7.1's finding stands; what has changed is that the refusal
+       now happens one layer earlier, where nothing downstream of it can run. */
+    it("is returned by identity -- the settle chain does not even run (Batch 7.2)", () => {
       const before = stale();
       expect("current_global_era" in before).toBe(false);
-      expect(differingFields(before, buy(before, "p1"))).toEqual(["current_global_era"]);
+      const after = buy(before, "p1");
+      expect(differingFields(before, after)).toEqual([]);
+      expect(after).toBe(before);
+      expect("current_global_era" in after).toBe(false);
     });
 
     it("...and so does a NEUTRAL message that cannot have mutated anything (the control)", () => {
@@ -226,9 +247,11 @@ describe("an unaffordable stock purchase changes nothing at all", () => {
     });
 
     it("...and an AFFORDABLE purchase normalises it to the same value (the second control)", () => {
-      // Not refusal-specific either: the era is a function of the board, and the board's fleet is unchanged.
+      /* Not refusal-specific either: the era is a function of the board, and the board's fleet is unchanged.
+         Batch 7.2: the unaffordable buyer's line is gone from this control because his message no longer
+         reaches the settle chain -- that IS the case above, and asserting both here would be asserting the
+         old behaviour twice. */
       expect(buy(stale(), "p2").current_global_era).toBe("Yellow");
-      expect(buy(stale(), "p1").current_global_era).toBe("Yellow");
     });
 
     it("no gameplay or transaction state moves on the stale board either", () => {

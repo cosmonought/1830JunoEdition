@@ -184,3 +184,25 @@ export {
   type LedgerResult,
   type MoneyAccount,
 } from "./cashLedger";
+
+/* Design note #1570 (Batch 7.2): the stock transaction's one authority, on the engine's surface for the same
+   reason the ledger is -- the server, the CLI and the shell must all be able to ask the rule rather than
+   restate it. */
+export {
+  chartContextFromState,
+  isFirstStockRound,
+  isLegalPar,
+  isPresidentPurchase,
+  messagePar,
+  ordinaryPercentAvailable,
+  parLadderRefusal,
+  priceStockPurchase,
+  purchaseIntentOf,
+  stockPurchaseRefusal,
+  stockSaleRefusal,
+  type StockChartContext,
+  type StockPurchaseIntent,
+  type StockPurchaseKind,
+  type StockPurchasePlan,
+  type StockPurchasePricing,
+} from "./stockTransactionAuthority";

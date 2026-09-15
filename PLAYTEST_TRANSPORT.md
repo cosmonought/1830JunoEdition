@@ -260,7 +260,7 @@ Lay **F16 using the D&H's power**, then reload the tab (`Ctrl+Shift+R` — it ke
 
 ### 10. The log is clean
 
-`Ctrl+Shift+L` (host tab). In the JSON: `duplicateIndices` should be `[]` and `index` should run 0,1,2,…
+`Ctrl+Shift+L` (any seat since #1334). In the JSON: `duplicateIndices` should be `[]` and `index` should run 0,1,2,…
 with no gaps or repeats. The server allocates these now.
 
 ---
@@ -268,16 +268,23 @@ with no gaps or repeats. The server allocates these now.
 
 ## Not broken — just not built yet
 
-Please do not report these:
+Please do not report these (refreshed 2026-09-15, Stage 5.5 — the ledger `RULES_HARDENING_BACKLOG.md` tracks
+the rest):
 
 - **Chat does not work.** It is the one thing still on Firestore (#644), and Firestore is unreachable. Not
-  worth its own transport today; it degrades quietly rather than breaking the game.
-- **Restarting the server empties the room.** The log store is not wired up; rooms are in memory. The roster
-  goes with it — same reason, same fix later.
-- **No reconnection.** If the socket drops, that tab is stuck until you reload. Deliberate — resilience comes
-  after the happy path is proven.
-- **Any client can claim any name.** That is what `--insecure-local-identity` means.
-- **`Ctrl+Shift+L` only works for the host.** Known, unrelated, and on the list.
+  worth its own transport today; it degrades quietly rather than breaking the game (ledger S10-11).
+- **Any client can claim any name.** That is what `--insecure-local-identity` means; session-key signatures
+  are the settlement track's 2.5b (ledger S10-10).
+- **A room dealt before the rules-version pin (#1520) is held, not rebuilt,** by a server started without
+  `--legacy-logs development-corpus`. Every room in `server/data/` from before Batch 4.5 is in that state;
+  the banner says so. Development only — never the production restore policy.
+
+Since this file was written these have been built and are worth exercising rather than avoiding: **restarting
+the server no longer empties the room** — the log is a synced JSONL file per room under `server/data/`
+(#1250) and a restart restores every room, roster included; **a dropped socket reconnects with catch-up**
+(#1253) — a banner shows between sockets and a move clicked during the gap lands or is told to try again;
+**every seat can export its own log** with `Ctrl+Shift+L` (#1334; `Ctrl+Shift+Y` keeps its host gate). The
+browser-level checks for the first two are still owed (ledger S10-10).
 
 ---
 

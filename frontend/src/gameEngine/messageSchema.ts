@@ -182,6 +182,11 @@ export const GAMEPLAY_MESSAGE_SCHEMA: Readonly<Record<string, Readonly<Record<st
   EmergencyBuyHardware: { game_id: "int?", protocol_id: "int" },
   ExchangeTrainForDiesel: { game_id: "int?", protocol_id: "int", model_type: "string" },
   DiscardTrain: { game_id: "int?", protocol_id: "int", model_type: "string" }, // #1530
+  // #1541: the emergency private sale and the bankruptcy declaration.
+  OfferPrivateForFunding: { game_id: "int?", private_id: "int", buyer_protocol_id: "int", price: "int" },
+  AnswerFundingPrivateOffer: { game_id: "int?", private_id: "int", accept: "bool" },
+  RescindFundingPrivateOffer: { game_id: "int?", private_id: "int" },
+  DeclareBankruptcy: { game_id: "int?" },
   BuyTrainFromCorporation: {
     game_id: "int?",
     buyer_protocol_id: "int",

@@ -82,6 +82,14 @@ export const GAMEPLAY_MESSAGE_KEYS = [
   /* Design note #1530: the president's choice of which excess train to discard after a phase change. Pure
      VGP/gameplay state: a train leaves a fleet for the Bank Pool, no money moves. */
   "DiscardTrain",
+  /* Design note #1541: the emergency private sale (rulebook 6.6.3) -- the obligated president offers a private
+     he owns to a corporation; that corporation's president answers; the seller may withdraw. And the one
+     declaration the rules leave to the player: bankruptcy, when only an optional private sale could still help.
+     Pure VGP/gameplay state. */
+  "OfferPrivateForFunding",
+  "AnswerFundingPrivateOffer",
+  "RescindFundingPrivateOffer",
+  "DeclareBankruptcy",
   "AcceptTrainOffer",
   "RejectTrainOffer",
   "RescindTrainOffer",
@@ -454,6 +462,14 @@ export type GameplayExecuteMsg =
    *  meet a train limit a phase change just lowered. Refused unless that corporation is the one that must
    *  decide next (rulebook 6.6.1 order) and the sender is its president. */
   | { DiscardTrain: { game_id: number; protocol_id: number; model_type: string } }
+  /** Design note #1541: the obligated president offers `private_id` to `buyer_protocol_id` for `price`. */
+  | { OfferPrivateForFunding: { game_id: number; private_id: number; buyer_protocol_id: number; price: number } }
+  /** The buying corporation's president accepts (the transfer settles at once) or rejects. */
+  | { AnswerFundingPrivateOffer: { game_id: number; private_id: number; accept: boolean } }
+  /** The seller withdraws an unanswered funding offer. */
+  | { RescindFundingPrivateOffer: { game_id: number; private_id: number } }
+  /** The obligated president, with no legal share sale left and only an optional private sale remaining. */
+  | { DeclareBankruptcy: { game_id: number } }
   | { PassTurn: { game_id: number } }
   | { UndoLastAction: { game_id: number } }
   // Pre-Game Waterfall Auction (`waterfall.rs`) -- mirrors `msg.rs`'s five

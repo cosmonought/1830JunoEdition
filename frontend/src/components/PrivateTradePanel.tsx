@@ -44,19 +44,10 @@ export interface PrivateTradeProposal {
   price: number;
 }
 
-/** The band the contract enforces, mirrored -- design note #1. */
-export const PRIVATE_PRICE_MIN_FACTOR = 0.5;
-export const PRIVATE_PRICE_MAX_FACTOR = 2;
-
-export function privatePriceBounds(faceValue: number): { min: number; max: number } {
-  // Integer VGP either side. `ceil` on the floor and `floor` on the ceiling, so a rounded bound can never fall
-  // OUTSIDE the band the contract checks -- rounding the other way would offer a price that looks legal here and
-  // is rejected on chain, which is the one failure this mirror exists to prevent.
-  return {
-    min: Math.ceil(faceValue * PRIVATE_PRICE_MIN_FACTOR),
-    max: Math.floor(faceValue * PRIVATE_PRICE_MAX_FACTOR),
-  };
-}
+/** The band the contract enforces, mirrored -- design note #1. #1541: the band lives in the engine now
+ *  (`gameEngine/privatePriceBand.ts`), shared with the emergency private sale; re-exported here for its callers. */
+export { PRIVATE_PRICE_MIN_FACTOR, PRIVATE_PRICE_MAX_FACTOR, privatePriceBounds } from "../gameEngine/privatePriceBand";
+import { privatePriceBounds } from "../gameEngine/privatePriceBand";
 
 /* Design note #660a: `eligiblePrivatesForPurchase` DELETED. Found while adding the B&O sale ban to it: nothing
    called it. The modal renders from the LOOSE list and decides what may be proposed by resolving the selection

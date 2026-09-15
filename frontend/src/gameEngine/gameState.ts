@@ -309,6 +309,11 @@ export interface PrivatePurchaseOffer {
    *  arm on an accept; cleared -- with the whole offer -- by the `BuyPrivateCompany` that settles it, which
    *  `nextDerivedAction` generates from this flag. Absent means "awaiting an answer", as it always did. */
   accepted?: true;
+  /** Design note #1541: a SELLER-initiated offer made to fund a forced train purchase (rulebook 6.6.3). The
+   *  direction is reversed -- the owner offered, and the BUYING corporation's president answers with
+   *  `AnswerFundingPrivateOffer`; acceptance settles the transfer in the same arm. Absent on every ordinary
+   *  (corporation-initiated) offer. */
+  funding?: true;
 }
 
 /** Design note #701: the train-trade offer awaiting the seller president's answer. The train equivalent of
@@ -487,6 +492,11 @@ export interface GameStateResponse {
   active_operating_order: number[];
   active_corporation_index: number;
   current_round_type: RoundType;
+  /** Design note #1540: the president whose forced train purchase could not be funded, written by the
+   *  reducer in the same transition that moves the round to `GameEnd` (rulebook 6.7: "he goes bankrupt and
+   *  the game ends"). The one fact the ended board must carry -- the obligation that proved it is gone with
+   *  the round. Absent on every board that ended any other way, and on every board still being played. */
+  bankrupt_president?: string;
   macro_round_number: number;
   sub_round_index: number;
   operating_round_sequence_length: number;

@@ -66,7 +66,7 @@ import type { MapGridResponse, MapTileEntry } from "../components/hexContractTyp
 import { homeHexesFor } from "../components/hexContractTypes";
 import { TILE_CATALOG_BY_ID, type TileColorTier } from "../components/hexTileCatalog";
 import { archetypeForHex, hexValueForEra } from "../components/hexGeometry";
-import { depotInventory, derivePhase, openDepotTiers, TIER_ORDER, trainTier, type GamePhase } from "./gamePhase";
+import { depotCostFor, depotInventory, derivePhase, openDepotTiers, TIER_ORDER, trainTier, type GamePhase, type TrainTier } from "./gamePhase";
 // Design note #712: the market-zone purchase rules, shared with the Stock Round panel.
 import { sharePurchaseBlock, type PriceZone } from "./sharePurchase";
 import { hasActedThisTurn } from "./turnAction";
@@ -82,6 +82,17 @@ import { operatingIdentityRefusal } from "./operatingIdentity";
 import { stationPlacementRefusal } from "./stationPlacementGate";
 import { cheapestPurchasableTrain, trainObligationRefusal } from "./trainAvailability";
 import { discardTrainRefusal, pendingDiscardBlock } from "./trainDiscard";
+import {
+  declareBankruptcyRefusal,
+  emergencyFundingBlock,
+  emergencyFundingFor,
+  emergencyPurchaseRefusal,
+  forcedSaleRefusal,
+  fundedTradeRefusal,
+  fundingPrivateAnswerRefusal,
+  fundingPrivateOfferRefusal,
+  fundingPrivateRescindRefusal,
+} from "./emergencyFunding";
 // Design note #1019: the purchase gate the reducer never had.
 import { trainPurchaseRefusal } from "./trainPurchaseGate";
 import { dividendSplit } from "./dividendSplit";
@@ -2529,7 +2540,11 @@ function applySandboxActionAfterAuction(
       saleRefused: (companyId: number, percentage: number) => {
         const seller = ctx?.actor ?? null;
         if (!seller) return false;
-        return shareSaleBlock({ state, seller, companyId, percentage }) !== null;
+        if (shareSaleBlock({ state, seller, companyId, percentage }) !== null) return true;
+        /* #1540: a forced sale the core will refuse moves no token either -- the same question, asked here
+           so the chart and the cash cannot disagree about a sale that did not happen. */
+        const funding = emergencyFundingFor(state, ctx?.mapGrid);
+        return funding !== null && forcedSaleRefusal(state, funding, seller, companyId, percentage) !== null;
       },
     });
     const settled: GameStateResponse = { ...state, market_positions: priced.prices };
@@ -2669,6 +2684,46 @@ function applySandboxActionCore(
     const { protocol_id, model_type } = msg.DiscardTrain;
     if (discardTrainRefusal(state, { protocol_id, model_type }, ctx?.actor) !== null) return state;
   }
+  /* ==================================================================
+      DESIGN NOTE 1540: WHILE THE TRAIN MUST BE FUNDED, NOTHING ELSE HAPPENS -- AND AFTER THE END, NOTHING
+     ==================================================================
+     Rulebook 6.6.2/6.6.3/6.7 (`emergencyFunding.ts`). Asked here, ahead of every arm: a held message is
+     refused by identity; the president's forced `SellStock` is judged by 6.6.3's three rules on top of the
+     ordinary ones; the `EmergencyBuyHardware` is refused until treasury and cash cover the price, and
+     refused outright when no forced purchase is owed (the president's money is only ever spent on one).
+     After `GameEnd` only `CloseRoom` passes. */
+  if (emergencyFundingBlock(state, msg, ctx?.mapGrid) !== null) return state;
+  if ("SellStock" in msg && ctx?.actor) {
+    const funding = emergencyFundingFor(state, ctx.mapGrid);
+    if (funding !== null) {
+      const { protocol_id, percentage } = msg.SellStock;
+      if (forcedSaleRefusal(state, funding, ctx.actor, protocol_id, Math.round(percentage)) !== null) return state;
+    }
+  }
+  if ("EmergencyBuyHardware" in msg) {
+    if (emergencyPurchaseRefusal(state, msg.EmergencyBuyHardware.protocol_id, ctx?.mapGrid, ctx?.actor) !== null) {
+      return state;
+    }
+  }
+  /* #1541: the emergency private sale and the declaration -- each judged against the standing obligation. */
+  if ("OfferPrivateForFunding" in msg) {
+    const funding = emergencyFundingFor(state, ctx?.mapGrid);
+    if (funding === null || fundingPrivateOfferRefusal(state, funding, msg.OfferPrivateForFunding, ctx?.actor) !== null) {
+      return state;
+    }
+  }
+  if ("AnswerFundingPrivateOffer" in msg && fundingPrivateAnswerRefusal(state, msg.AnswerFundingPrivateOffer, ctx?.actor, ctx?.mapGrid) !== null) {
+    return state; // an acceptance is re-validated in full at settlement (#1541)
+  }
+  if ("RescindFundingPrivateOffer" in msg && fundingPrivateRescindRefusal(state, msg.RescindFundingPrivateOffer, ctx?.actor) !== null) {
+    return state;
+  }
+  if ("DeclareBankruptcy" in msg) {
+    /* Without a grid the obligation cannot be judged (#757): the declaration is refused rather than admitted
+       on a guess -- fail closed, because it ends the game. */
+    const funding = ctx?.mapGrid === undefined ? null : emergencyFundingFor(state, ctx.mapGrid);
+    if (declareBankruptcyRefusal(funding, ctx?.actor) !== null) return state;
+  }
   if (operatingIdentityRefusal(state, msg) !== null) return state;
   /* Design note #1513: THE TURN DOES NOT END WHILE A TRAIN IS OWED. `PassTurn` and `AdvanceOperatingSubPhase`
      at the Buy Trains step are refused for a corporation with no train, a legal route, and a train for sale
@@ -2776,6 +2831,25 @@ function applySandboxActionCore(
       }
     }
   }
+  /* OWNER-DEFINED SIMPLIFICATION (#1541 header): while the buyer owes a forced purchase, a trade it cannot
+     complete from treasury plus its president's cash is refused -- and, like the limit gate above, an accepted
+     offer that cannot be settled is retired so the board does not owe it again. */
+  if ("BuyTrainFromCorporation" in msg) {
+    const { buyer_protocol_id, seller_protocol_id, model_type, price } = msg.BuyTrainFromCorporation;
+    const funding = emergencyFundingFor(state, ctx?.mapGrid);
+    if (funding !== null) {
+      const face = depotCostFor(state, model_type as TrainTier);
+      if (fundedTradeRefusal(state, funding, buyer_protocol_id, Number(price) || 0, Number.isFinite(face) ? face : null) !== null) {
+        const offer = state.train_purchase_offer ?? null;
+        const matches =
+          offer !== null &&
+          offer.seller_protocol_id === seller_protocol_id &&
+          offer.buyer_protocol_id === buyer_protocol_id &&
+          offer.model_type === model_type;
+        return matches ? { ...state, train_purchase_offer: null } : state;
+      }
+    }
+  }
   const depotPurchase =
     "BuyHardwareFromPool" in msg && msg.BuyHardwareFromPool.returned_model_type === undefined
       ? { companyId: msg.BuyHardwareFromPool.protocol_id, requireFunds: true }
@@ -2863,19 +2937,45 @@ function applySandboxActionCore(
     if (!company || doublePurchaseRefusal(company, pool) !== null) return state;
   }
 
-  return settleOperatingCursor(
-    state,
-    /* Design note #660: the B&O private closes the moment the B&O
-       corporation owns a train. Settled here beside the era for the same
-       reason (#657) -- it is a function of the board, so no message can
-       change the fleet and forget it. */
-    settleBaoPrivate(settleEra(settleRoundTransitions(applyOneAction(state, msg, ctx), ctx))),
-    msg,
+  return settleBankruptcy(
+    settleOperatingCursor(
+      state,
+      /* Design note #660: the B&O private closes the moment the B&O
+         corporation owns a train. Settled here beside the era for the same
+         reason (#657) -- it is a function of the board, so no message can
+         change the fleet and forget it. */
+      settleBaoPrivate(settleEra(settleRoundTransitions(applyOneAction(state, msg, ctx), ctx))),
+      msg,
+    ),
+    ctx,
   );
 }
 
 /* The era is SETTLED from the trains after every action, never assigned per-arm. It was stamped at seed time and never written, so a Phase 6 game still reported Yellow. The OR count is deliberately untouched (#511).
    See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #657 */
+/* ==================================================================
+    DESIGN NOTE 1540: BANKRUPTCY ENDS THE GAME, IN THE REDUCER, THE MOMENT IT IS TRUE
+   ==================================================================
+   Rulebook 6.7: "If there is not enough money after the president sells all of his shares that he is allowed
+   to, he goes bankrupt and the game ends." Derived after every action from the standing obligation
+   (`emergencyFundingFor`): a positive shortfall and no legal forced sale left. Not a message -- a client
+   cannot declare it early, and nobody can decline to. Written as the round's end plus the one fact the
+   ended board must carry, `bankrupt_president`, for the scoring (6.6.3) and the modal. #898 keeps the
+   bank's ending at the round boundary; this one is immediate, for the reason #898 itself gives. Idempotent
+   on replay, and undone by a `RevertTo` past the sale that made it unavoidable, because it is a function of
+   the board. */
+function settleBankruptcy(state: GameStateResponse, ctx?: SandboxActionContext): GameStateResponse {
+  if (state.current_round_type !== "OperatingRound") return state;
+  const funding = emergencyFundingFor(state, ctx?.mapGrid);
+  if (funding === null || !funding.bankrupt) return state;
+  return {
+    ...state,
+    current_round_type: "GameEnd" as const,
+    bankrupt_president: funding.president,
+    operating_sub_phase: undefined,
+  };
+}
+
 function settleEra(state: GameStateResponse): GameStateResponse {
   const phase = derivePhase(state);
   /* Unknown phase -- no corporation has reported a fleet at all -- leaves the
@@ -3463,6 +3563,64 @@ function abilitySpentBy(msg: GameplayExecuteMsg): string | null {
   return null;
 }
 
+/** The one transfer every corporate purchase of a private goes through -- the ordinary `BuyPrivateCompany` and
+ *  the accepted emergency offer (#1541): treasury to the player, the private to the corporation for good. */
+function transferPrivateToCorporation(
+  state: GameStateResponse,
+  protocol_id: number,
+  private_id: number,
+  paid: number,
+): GameStateResponse {
+    /* The B&O private may never be sold to a corporation. Enforced here as well as in the offer filter, because a remote client replays MESSAGES, not button states. A no-op, not a throw.
+       See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #660 */
+    if (!isSellableToCorporation(private_id)) return state;
+    const target = state.private_companies.find((entry) => entry.private_id === private_id);
+    /* #1247: IDEMPOTENT ON THE OWNER. A replay applies and never generates (#1203), so a log written before
+       this note -- the shell's own `BuyPrivateCompany` after an accepted answer -- still buys exactly once.
+       This guard is for the other copy: a Firestore-path client that dispatched from its drain a moment after
+       the on-turn client did. The private is already this corporation's; paying for it twice is the bug. */
+    if (target?.owner_protocol_id === protocol_id) return state;
+    const seller = target?.owner ?? null;
+
+    const charged = adjustTreasury(state, protocol_id, -paid);
+    const settled = seller ? adjustCash(charged, seller, paid) : charged;
+
+    const owned: GameStateResponse = {
+      ...settled,
+      private_companies: settled.private_companies.map((entry) =>
+        entry.private_id === private_id
+          ? {
+              ...entry,
+              // `owner` and `owner_protocol_id` are MUTUALLY EXCLUSIVE --
+              // `msg.rs::PrivateCompanyState` says so, and the readouts
+              // branch on which one is set. Clearing the first while
+              // setting the second is the whole transfer.
+              owner: null,
+              owner_protocol_id: protocol_id,
+            }
+          : entry,
+      ),
+    };
+    /* Design note #1323: "The first corporation to purchase the JK private company from a player immediately
+       receives one Kanawha License for free." ONCE, game-wide -- the flag is on the state, so a second sale
+       of the JK between corporations grants nothing -- and outside the four the Bank sells. */
+    const grantsLicence =
+      kanawhaLicensesInPlay(owned) &&
+      private_id === JK_PRIVATE_ID &&
+      seller !== null &&
+      owned.jk_license_granted !== true;
+    if (!grantsLicence) return owned;
+    return {
+      ...owned,
+      jk_license_granted: true,
+      public_companies: owned.public_companies.map((company) =>
+        company.company_id === protocol_id
+          ? { ...company, kanawha_licenses: licensesHeldBy(company) + 1 }
+          : company,
+      ),
+    };
+}
+
 function applyOneAction(
   state: GameStateResponse,
   msg: GameplayExecuteMsg,
@@ -3678,8 +3836,8 @@ function applyOneAction(
     /* #662: answering an offer that is no longer there is NOT an error -- the first answer settles it and
        the second finds nothing. A replayed duplicate takes this arm and changes nothing. */
     const offer = state.private_purchase_offer ?? null;
-    if (!offer || offer.accepted || offer.private_id !== msg.AnswerPrivatePurchase.private_id) {
-      return state;
+    if (!offer || offer.accepted || offer.funding || offer.private_id !== msg.AnswerPrivatePurchase.private_id) {
+      return state; // #1541: a funding offer is not this arm's to settle
     }
     // #1247: a yes is recorded, not acted on; the purchase it owes is derived. A no clears the question.
     return msg.AnswerPrivatePurchase.accept
@@ -4432,6 +4590,57 @@ function applyOneAction(
   }
 
   /* ==================================================================
+      DESIGN NOTE 1541: THE EMERGENCY PRIVATE SALE AND THE DECLARATION (arms)
+     ==================================================================
+     Each was judged in `applySandboxActionCore` against the standing obligation; here they only move state.
+     The offer is the ordinary `private_purchase_offer` marked `funding`, so every prompt that reads the
+     register sees it; acceptance settles through `transferPrivateToCorporation`, the one transfer every
+     corporate purchase of a private uses, and the shortfall is simply re-read afterwards. */
+  if ("OfferPrivateForFunding" in msg) {
+    const { private_id, buyer_protocol_id, price } = msg.OfferPrivateForFunding;
+    const priv = state.private_companies.find((entry) => entry.private_id === private_id);
+    const buyer = state.public_companies.find((entry) => entry.company_id === buyer_protocol_id);
+    if (!priv || !priv.owner || !buyer) return state;
+    return {
+      ...state,
+      private_purchase_offer: {
+        private_id,
+        private_name: priv.name,
+        owner: priv.owner,
+        buyer_protocol_id,
+        buyer_ticker: buyer.ticker,
+        price,
+        funding: true,
+      },
+    };
+  }
+  if ("AnswerFundingPrivateOffer" in msg) {
+    const offer = state.private_purchase_offer ?? null;
+    if (!offer || !offer.funding || offer.private_id !== msg.AnswerFundingPrivateOffer.private_id) return state;
+    const cleared: GameStateResponse = { ...state, private_purchase_offer: null };
+    if (!msg.AnswerFundingPrivateOffer.accept) return cleared;
+    return transferPrivateToCorporation(cleared, offer.buyer_protocol_id, offer.private_id, offer.price);
+  }
+  if ("RescindFundingPrivateOffer" in msg) {
+    const offer = state.private_purchase_offer ?? null;
+    if (!offer || !offer.funding || offer.private_id !== msg.RescindFundingPrivateOffer.private_id) return state;
+    return { ...state, private_purchase_offer: null };
+  }
+  if ("DeclareBankruptcy" in msg) {
+    /* Rulebook 6.7, declared rather than derived only because an optional private sale was still possible
+       (#1541). The core refused every premature declaration; the ending is written exactly as
+       `settleBankruptcy` writes it. */
+    const funding = emergencyFundingFor(state, ctx?.mapGrid);
+    if (funding === null) return state;
+    return {
+      ...state,
+      current_round_type: "GameEnd" as const,
+      bankrupt_president: funding.president,
+      operating_sub_phase: undefined,
+    };
+  }
+
+  /* ==================================================================
       DESIGN NOTE 1530: THE PRESIDENT'S DISCARD
      ==================================================================
      Rulebook 6.6.1, the half the trim used to decide. Exactly the named train leaves the fleet (the first
@@ -4521,7 +4730,16 @@ function applyOneAction(
         : state;
     /* Design note #1513: the buyer's limit (rulebook 6.6, audit M14) is asked in `applySandboxActionCore`,
        before this arm, so the refusal is by identity. */
-    return settleTrainSale(settling, buyer_protocol_id, seller_protocol_id, model_type, price);
+    /* #1541 (owner rule): under a forced obligation the treasury pays first and the president pays the rest
+       -- through the treasury, exactly as the emergency purchase does, so `settleTrainSale`'s single charge is
+       right. The core has already refused a trade the two cannot cover. */
+    const funding = emergencyFundingFor(settling, ctx?.mapGrid);
+    const paid = Number(price) || 0;
+    const funded =
+      funding !== null && funding.companyId === buyer_protocol_id && paid > funding.treasury
+        ? adjustTreasury(adjustCash(settling, funding.president, -(paid - funding.treasury)), buyer_protocol_id, paid - funding.treasury)
+        : settling;
+    return settleTrainSale(funded, buyer_protocol_id, seller_protocol_id, model_type, price);
   }
 
   if ("BuyPrivateCompany" in msg) {
@@ -4533,55 +4751,7 @@ function applyOneAction(
     if (pending !== null && pending.private_id === private_id) {
       state = { ...state, private_purchase_offer: null };
     }
-    /* The B&O private may never be sold to a corporation. Enforced here as well as in the offer filter, because a remote client replays MESSAGES, not button states. A no-op, not a throw.
-       See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #660 */
-    if (!isSellableToCorporation(private_id)) return state;
-    const paid = Number(price) || 0;
-    const target = state.private_companies.find((entry) => entry.private_id === private_id);
-    /* #1247: IDEMPOTENT ON THE OWNER. A replay applies and never generates (#1203), so a log written before
-       this note -- the shell's own `BuyPrivateCompany` after an accepted answer -- still buys exactly once.
-       This guard is for the other copy: a Firestore-path client that dispatched from its drain a moment after
-       the on-turn client did. The private is already this corporation's; paying for it twice is the bug. */
-    if (target?.owner_protocol_id === protocol_id) return state;
-    const seller = target?.owner ?? null;
-
-    const charged = adjustTreasury(state, protocol_id, -paid);
-    const settled = seller ? adjustCash(charged, seller, paid) : charged;
-
-    const owned: GameStateResponse = {
-      ...settled,
-      private_companies: settled.private_companies.map((entry) =>
-        entry.private_id === private_id
-          ? {
-              ...entry,
-              // `owner` and `owner_protocol_id` are MUTUALLY EXCLUSIVE --
-              // `msg.rs::PrivateCompanyState` says so, and the readouts
-              // branch on which one is set. Clearing the first while
-              // setting the second is the whole transfer.
-              owner: null,
-              owner_protocol_id: protocol_id,
-            }
-          : entry,
-      ),
-    };
-    /* Design note #1323: "The first corporation to purchase the JK private company from a player immediately
-       receives one Kanawha License for free." ONCE, game-wide -- the flag is on the state, so a second sale
-       of the JK between corporations grants nothing -- and outside the four the Bank sells. */
-    const grantsLicence =
-      kanawhaLicensesInPlay(owned) &&
-      private_id === JK_PRIVATE_ID &&
-      seller !== null &&
-      owned.jk_license_granted !== true;
-    if (!grantsLicence) return owned;
-    return {
-      ...owned,
-      jk_license_granted: true,
-      public_companies: owned.public_companies.map((company) =>
-        company.company_id === protocol_id
-          ? { ...company, kanawha_licenses: licensesHeldBy(company) + 1 }
-          : company,
-      ),
-    };
+    return transferPrivateToCorporation(state, protocol_id, private_id, Number(price) || 0);
   }
 
   if ("PlaceStationToken" in msg) {

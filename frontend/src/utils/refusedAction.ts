@@ -36,6 +36,7 @@
 
 import type { GameplayExecuteMsg } from "./sessionKey";
 import type { GameStateResponse } from "../gameEngine/gameState";
+import type { MapGridResponse } from "../components/hexContractTypes";
 import { sharePurchaseBlock, type PriceZone } from "../gameEngine/sharePurchase";
 import { shareSaleBlock } from "../gameEngine/shareSale";
 import { dividendRefusal } from "../gameEngine/dividendGate";
@@ -46,6 +47,16 @@ import { boPresidencyRefusal, returnedTrainRefusal } from "../gameEngine/sandbox
 import { BO_TICKER } from "../gameEngine/gameConstants";
 import { dieselExchangeRefusal } from "../gameEngine/dieselExchange";
 import { discardTrainRefusal, pendingDiscardBlock } from "../gameEngine/trainDiscard";
+import {
+  declareBankruptcyRefusal,
+  emergencyFundingBlock,
+  emergencyFundingFor,
+  emergencyPurchaseRefusal,
+  forcedSaleRefusal,
+  fundingPrivateAnswerRefusal,
+  fundingPrivateOfferRefusal,
+  fundingPrivateRescindRefusal,
+} from "../gameEngine/emergencyFunding";
 
 /** Messages that legitimately leave sandbox state untouched, so an unchanged board is not a refusal.
  *  Kept as an explicit list for the reason in the note: an exemption should be a decision. */
@@ -141,6 +152,8 @@ export function refusedActionLine(label: string): string {
  * three investigations. */
 export interface RefusalContext {
   actor?: string | null;
+  /** #1540: the board's grid, for the forced-purchase obligation's reasons (a route walk). */
+  mapGrid?: MapGridResponse;
   marketZoneFor?: (companyId: number) => PriceZone;
   marketPricesByCompany?: Readonly<Record<number, number>> | null;
   zoneForPrice?: (price: number | null | undefined) => PriceZone;
@@ -161,6 +174,33 @@ export function refusalReasonFor(
   if ("DiscardTrain" in msg) {
     const { protocol_id, model_type } = (msg as { DiscardTrain: { protocol_id: number; model_type: string } }).DiscardTrain;
     return discardTrainRefusal(before, { protocol_id, model_type }, ctx?.actor ?? null);
+  }
+  /* #1540/#1541: the forced-purchase hold and its own actions, each with the reducer's reason. */
+  {
+    const heldByFunding = emergencyFundingBlock(before, msg as GameplayExecuteMsg, ctx?.mapGrid);
+    if (heldByFunding !== null) return heldByFunding;
+    const funding = ctx?.mapGrid === undefined ? null : emergencyFundingFor(before, ctx.mapGrid);
+    if (funding !== null && "SellStock" in msg && ctx?.actor) {
+      const sell = (msg as { SellStock: { protocol_id: number; percentage: number } }).SellStock;
+      const forced = forcedSaleRefusal(before, funding, ctx.actor, sell.protocol_id, sell.percentage);
+      if (forced !== null) return forced;
+    }
+    if ("EmergencyBuyHardware" in msg && ctx?.mapGrid !== undefined) {
+      const { protocol_id } = (msg as { EmergencyBuyHardware: { protocol_id: number } }).EmergencyBuyHardware;
+      const refusal = emergencyPurchaseRefusal(before, protocol_id, ctx.mapGrid, ctx?.actor ?? null);
+      if (refusal !== null) return refusal;
+    }
+    if ("OfferPrivateForFunding" in msg) {
+      if (funding === null) return "No forced train purchase is owed, so no private company can be offered to fund one.";
+      return fundingPrivateOfferRefusal(before, funding, (msg as { OfferPrivateForFunding: { private_id: number; buyer_protocol_id: number; price: number } }).OfferPrivateForFunding, ctx?.actor ?? null);
+    }
+    if ("AnswerFundingPrivateOffer" in msg) {
+      return fundingPrivateAnswerRefusal(before, (msg as { AnswerFundingPrivateOffer: { private_id: number; accept?: boolean } }).AnswerFundingPrivateOffer, ctx?.actor ?? null, ctx?.mapGrid);
+    }
+    if ("RescindFundingPrivateOffer" in msg) {
+      return fundingPrivateRescindRefusal(before, (msg as { RescindFundingPrivateOffer: { private_id: number } }).RescindFundingPrivateOffer, ctx?.actor ?? null);
+    }
+    if ("DeclareBankruptcy" in msg) return declareBankruptcyRefusal(funding, ctx?.actor ?? null);
   }
 
   if ("BuyStock" in msg && ctx?.actor && ctx.marketZoneFor) {

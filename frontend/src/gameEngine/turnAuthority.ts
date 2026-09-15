@@ -48,6 +48,15 @@ import { BO_PRIVATE_ID, BO_TICKER } from "./gameConstants";
 import { DH_PRIVATE_ID } from "./dhPower";
 import { effectiveActions, type RevertableAction } from "./logRevert";
 import { pendingDiscardBlock, pendingTrainDiscards } from "./trainDiscard";
+import {
+  declareBankruptcyRefusal,
+  emergencyFundingBlock,
+  emergencyFundingFor,
+  emergencyPurchaseRefusal,
+  fundingPrivateOfferRefusal,
+  fundingPrivateRescindRefusal,
+} from "./emergencyFunding";
+import type { MapGridResponse } from "../components/hexContractTypes";
 
 export interface TurnAuthorityInput {
   state: GameStateResponse;
@@ -64,6 +73,9 @@ export interface TurnAuthorityInput {
   /** #1249: the log as it stands, for `RevertTo` -- the one message whose authority is about history rather
    *  than about the board. Same rule as `undoReachFor`; `undefined` skips it for the same reason as `host`. */
   log?: readonly RevertableAction[];
+  /** #1540: the board's grid, for the one obligation that needs a route walk (the forced train purchase).
+   *  `undefined` -- a test, a caller without a grid -- skips that hold, on #757's rule. */
+  mapGrid?: MapGridResponse;
 }
 
 /** Why this actor may not send this message now, or `null` if they may. */
@@ -93,6 +105,46 @@ export function turnRefusal(input: TurnAuthorityInput): string | null {
   if (!("DiscardTrain" in msg) && !("RevertTo" in msg) && !("CloseRoom" in msg)) {
     const held = pendingDiscardBlock(state, msg);
     if (held !== null) return held;
+  }
+
+  /* ---- THE SECOND HOLD (#1540): A TRAIN THAT MUST BE FUNDED, AND A GAME THAT HAS ENDED ----
+     Rulebook 6.6.2-6.7 (`emergencyFunding.ts`). While the operating corporation must buy a train it cannot
+     pay for, only the messages that resolve it pass; after `GameEnd`, only `CloseRoom`. The forced sale and
+     the emergency purchase have one owner -- the rescued corporation's president -- checked here by name,
+     narrowly, so the seat rule below is not the only thing standing between another player and somebody
+     else's shares. */
+  {
+    const held = emergencyFundingBlock(state, msg, input.mapGrid);
+    if (held !== null) return held;
+    if ("SellStock" in msg || "EmergencyBuyHardware" in msg) {
+      const funding = emergencyFundingFor(state, input.mapGrid);
+      if (funding !== null && actor !== funding.president) {
+        return `Only ${funding.ticker}'s president can resolve its train purchase.`;
+      }
+    }
+    /* The emergency purchase is an obligation's action, so its standing is answered here with its reason
+       (owed at all; the right corporation; funded) rather than appended as a no-op the reducer declines. */
+    if ("EmergencyBuyHardware" in msg && input.mapGrid !== undefined) {
+      const refusal = emergencyPurchaseRefusal(state, msg.EmergencyBuyHardware.protocol_id, input.mapGrid, actor);
+      if (refusal !== null) return refusal;
+    }
+    /* #1541: the funding offer, its withdrawal and the declaration are the obligated president's, by name,
+       and each is answered with its standing. The offer's ANSWER is the buying president's -- exemption 3. */
+    if ("OfferPrivateForFunding" in msg) {
+      const funding = input.mapGrid === undefined ? null : emergencyFundingFor(state, input.mapGrid);
+      if (funding === null) return "No forced train purchase is owed, so no private company can be offered to fund one.";
+      const refusal = fundingPrivateOfferRefusal(state, funding, msg.OfferPrivateForFunding, actor);
+      if (refusal !== null) return refusal;
+    }
+    if ("RescindFundingPrivateOffer" in msg) {
+      const refusal = fundingPrivateRescindRefusal(state, msg.RescindFundingPrivateOffer, actor);
+      if (refusal !== null) return refusal;
+    }
+    if ("DeclareBankruptcy" in msg) {
+      const funding = input.mapGrid === undefined ? null : emergencyFundingFor(state, input.mapGrid);
+      const refusal = declareBankruptcyRefusal(funding, actor);
+      if (refusal !== null) return refusal;
+    }
   }
 
   /* ---- EXEMPTION 3: consent answers on a two-party trade (#701) ----
@@ -345,9 +397,20 @@ function consentAnswerRefusal(
        the second finds nothing. The reducer's arm returns the state unchanged; refusing here would turn a
        harmless duplicate into an error message on somebody's screen. */
     if (!offer) return null;
+    // #1541: a funding offer is the seller's own; its answer belongs to the buying president, not to this arm.
+    if (offer.funding) return "That offer is answered by the buying corporation's president (AnswerFundingPrivateOffer).";
     return offer.owner === actor
       ? null
       : "Only the private company's owner can answer that offer.";
+  }
+
+  /* #1541: the funding private offer is answered by the BUYING corporation's president -- the reverse of the
+     ordinary private offer above, and off-turn like every consent answer. */
+  if ("AnswerFundingPrivateOffer" in msg) {
+    const offer = state.private_purchase_offer ?? null;
+    if (!offer || !offer.funding) return null; // settled or withdrawn already: a harmless duplicate (#662)
+    const buyer = state.public_companies.find((company) => company.company_id === offer.buyer_protocol_id);
+    return buyer?.president === actor ? null : `Only ${offer.buyer_ticker}'s president can answer this offer.`;
   }
 
   if ("AnswerTrainPurchase" in msg) {

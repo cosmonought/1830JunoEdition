@@ -1416,6 +1416,59 @@ export function TrainTradePrompt({
 /* ------------------------------------------------------------------ */
 
 /* ==================================================================
+    DESIGN NOTE 1541: THE FUNDING PRIVATE OFFER PROMPT (the buyer's side)
+   ==================================================================
+   A president funding a forced train purchase has offered a private company to a corporation (rulebook 6.6.3);
+   that corporation's president answers here, off-turn, like every consent answer. Everybody else sees who the
+   table is waiting on. The engine froze the board behind it (`emergencyFundingBlock`). */
+export interface FundingPrivateOfferPromptProps {
+  offer: { privateId: number; privateName: string; sellerLabel: string; buyerTicker: string; buyerPresidentLabel: string; price: number } | null;
+  viewerIsBuyerPresident: boolean;
+  onAnswer: (privateId: number, accept: boolean) => void;
+}
+
+export function FundingPrivateOfferPrompt({ offer, viewerIsBuyerPresident, onAnswer }: FundingPrivateOfferPromptProps) {
+  if (!offer) return null;
+  return (
+    <div style={styles.promptRoot} role="alertdialog" aria-label="Private company offered">
+      <div style={styles.promptHeader}>
+        <span style={styles.promptDot} aria-hidden="true" />
+        <span style={styles.promptTitle}>Private company offered</span>
+      </div>
+      <p style={styles.promptBody}>
+        <strong>{offer.sellerLabel}</strong> offers <strong>{offer.privateName}</strong> to{" "}
+        <strong>{offer.buyerTicker}</strong> for <strong>${offer.price}</strong>, to fund a forced train purchase.
+        {offer.buyerTicker} pays from its treasury and keeps the company for good.
+      </p>
+      <p style={styles.promptWho}>
+        {viewerIsBuyerPresident
+          ? `This is ${offer.buyerPresidentLabel}'s decision.`
+          : `Waiting on ${offer.buyerPresidentLabel} — nothing else can happen until they answer.`}
+      </p>
+      <div style={styles.promptActions}>
+        <button
+          type="button"
+          onClick={() => onAnswer(offer.privateId, false)}
+          disabled={!viewerIsBuyerPresident}
+          style={{ ...styles.promptButton, ...(viewerIsBuyerPresident ? styles.promptReject : styles.buttonDisabled) }}
+        >
+          Reject
+        </button>
+        <button
+          type="button"
+          onClick={() => onAnswer(offer.privateId, true)}
+          disabled={!viewerIsBuyerPresident}
+          style={{ ...styles.promptButton, ...(viewerIsBuyerPresident ? styles.promptAccept : styles.buttonDisabled) }}
+          title={viewerIsBuyerPresident ? `Buy ${offer.privateName} for $${offer.price}.` : `Only ${offer.buyerPresidentLabel} can answer.`}
+        >
+          Accept
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ==================================================================
     DESIGN NOTE 1530: THE DISCARD PROMPT
    ==================================================================
    The minimal surface for the excess-train obligation (`trainDiscard.ts`). The required corporation's

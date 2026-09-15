@@ -62,7 +62,7 @@ import { effectiveActions } from "./logRevert";
 
 /** The rules engine this build carries. Bump it, and add a line below, when a deployment changes what a
  *  stored log replays to. Do NOT bump it for UI, protocol or narration changes. */
-export const RULES_ENGINE_VERSION = 2;
+export const RULES_ENGINE_VERSION = 3;
 
 /** Every version this engine can replay faithfully. One entry until somebody builds a versioned reducer;
  *  the point of the list is that "supported" is an explicit statement rather than "whatever is running". */
@@ -86,6 +86,20 @@ export const RULES_ENGINE_CHANGELOG: ReadonlyArray<{ version: number; note: stri
       "highest share value decides first; the train goes to the Bank Pool). A version-1 log carries no such " +
       "choices -- its excess trains were removed by the reducer, not by an entry -- so it is not replay-" +
       "compatible with this semantics and is refused, never reinterpreted.",
+  },
+  {
+    version: 3,
+    note:
+      "Batch 5 (2026-09-14, #1540): the forced train purchase is an interactive, derived obligation " +
+      "(rulebook 6.6.2/6.6.3/6.7). The president's contribution is authoritative (the corporation spends " +
+      "all its money, the president covers the difference); forced stock sales are the ordinary SellStock " +
+      "under 6.6.3's rules (the rescued corporation's presidency may not change; only enough is sold; no " +
+      "sale once treasury and cash cover the price); bankruptcy is derived when no legal forced sale " +
+      "remains and ends the game at once (`GameEnd`, `bankrupt_president`); the bankrupt player is scored " +
+      "by the shares he could not sell and may win; ordinary play is held while the obligation stands and " +
+      "after the end. No new message type. A version-2 log has no forced sales, no president-only " +
+      "authority on the emergency purchase and no reducer-recorded ending, so it is refused, never " +
+      "reinterpreted.",
   },
 ];
 

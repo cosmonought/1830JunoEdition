@@ -544,6 +544,29 @@ export function describeGameplayAction(
     return `${buyer_ticker} offers $${price} for ${private_name}. ${context.labelForAddress(owner)} must answer.`;
   }
 
+  /* #1541: the emergency private sale, and the declaration. */
+  if ("OfferPrivateForFunding" in msg) {
+    const { private_id, buyer_protocol_id, price } = msg.OfferPrivateForFunding;
+    const priv = gameState?.private_companies.find((entry) => entry.private_id === private_id);
+    return `${priv?.owner ? context.labelForAddress(priv.owner) : "The president"} offers ${priv?.name ?? "a private company"} to ${corp(gameState, buyer_protocol_id)} for $${price} to fund a forced train purchase. ${corp(gameState, buyer_protocol_id)}'s president must answer.`;
+  }
+  if ("AnswerFundingPrivateOffer" in msg) {
+    const offer = gameState?.private_purchase_offer ?? null;
+    if (!offer) return null;
+    const { accept } = msg.AnswerFundingPrivateOffer;
+    return accept
+      ? `${offer.buyer_ticker} bought ${offer.private_name} from ${context.labelForAddress(offer.owner)} for $${offer.price} — emergency funding.`
+      : `${offer.buyer_ticker} declined ${offer.private_name} at $${offer.price}.`;
+  }
+  if ("RescindFundingPrivateOffer" in msg) {
+    const offer = gameState?.private_purchase_offer ?? null;
+    return offer ? `${context.labelForAddress(offer.owner)} withdrew the offer of ${offer.private_name} to ${offer.buyer_ticker}.` : null;
+  }
+  if ("DeclareBankruptcy" in msg) {
+    const president = context.afterState?.bankrupt_president ?? null;
+    return `${president ? context.labelForAddress(president) : "The president"} could not fund the forced train purchase and is bankrupt. The game ends.`;
+  }
+
   if ("AnswerPrivatePurchase" in msg) {
     const offer = gameState?.private_purchase_offer ?? null;
     if (!offer) return null;

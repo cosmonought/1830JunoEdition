@@ -142,3 +142,13 @@ export {
   type PendingTrainDiscards,
   type TrainDiscardDue,
 } from "./trainDiscard";
+/* #1540: the forced train purchase -- the president's money, the forced sales, bankruptcy. */
+export {
+  emergencyFundingFor,
+  forcedSaleRefusal,
+  emergencyFundingBlock,
+  emergencyPurchaseRefusal,
+  legalForcedSales,
+  type EmergencyFunding,
+  type LegalForcedSale,
+} from "./emergencyFunding";

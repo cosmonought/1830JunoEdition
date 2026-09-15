@@ -422,6 +422,8 @@ export class RoomSession {
          rewrite. `undefined` host (no document) skips the host-only checks rather than refusing everyone. */
       host: input.host,
       log: this.log,
+      // #1540: the grid, for the forced-purchase hold (the route walk needs it).
+      mapGrid: this.engine.snapshot.grid,
     });
     if (refusal !== null) {
       /* A REFUSAL STILL REPORTS THE REPAIR. The board moved before the refusal, so a client told only "not

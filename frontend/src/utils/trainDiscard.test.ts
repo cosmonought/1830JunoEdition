@@ -643,10 +643,11 @@ describe("DiscardTrain at the ingress (#1530, Batch 2 machinery)", () => {
   });
 
   it("14. RULES_ENGINE_VERSION is 2, the changelog says why, and a version-1 room is refused before replay", () => {
-    expect(RULES_ENGINE_VERSION).toBe(2);
-    expect(SUPPORTED_RULES_ENGINE_VERSIONS).toEqual([2]);
-    expect(RULES_ENGINE_CHANGELOG.map((row) => row.version)).toEqual([1, 2]);
-    expect(RULES_ENGINE_CHANGELOG[1].note).toContain("DiscardTrain");
+    // Batch 4.6 pinned 2; Batch 5 (#1540) bumped to 3. The DiscardTrain semantics are version >= 2's.
+    expect(RULES_ENGINE_VERSION).toBeGreaterThanOrEqual(2);
+    expect(SUPPORTED_RULES_ENGINE_VERSIONS).toEqual([RULES_ENGINE_VERSION]);
+    expect(RULES_ENGINE_CHANGELOG.map((row) => row.version)).toContain(2);
+    expect(RULES_ENGINE_CHANGELOG.find((row) => row.version === 2)?.note).toContain("DiscardTrain");
 
     // A room dealt today is pinned to 2; the same log re-pinned to 1 is held, and its history is never applied.
     const fresh = new RoomSession({
@@ -665,7 +666,7 @@ describe("DiscardTrain at the ingress (#1530, Batch 2 machinery)", () => {
       baseIndex: -1,
     });
     expect(dealt.kind).toBe("applied");
-    expect(fresh.rulesEngineVersion()).toBe(2);
+    expect(fresh.rulesEngineVersion()).toBe(RULES_ENGINE_VERSION);
     const versionOne = fresh.entries.map((row) => {
       const parsed = JSON.parse(row.payload) as { SetupGame?: Record<string, unknown> };
       if (!parsed.SetupGame) return { ...row };
@@ -676,7 +677,7 @@ describe("DiscardTrain at the ingress (#1530, Batch 2 machinery)", () => {
       const old = new RoomSession({ providers: sandboxReplayProviders(), seed: seedOf(), build: "b", mintId: () => "x" });
       old.restore(versionOne as ServerLogEntry[]);
       expect(applySpy).not.toHaveBeenCalled();
-      expect(old.incompatible?.compatibility).toEqual({ kind: "incompatible", version: 1, supported: [2] });
+      expect(old.incompatible?.compatibility).toEqual({ kind: "incompatible", version: 1, supported: [RULES_ENGINE_VERSION] });
       expect(old.catchUp(-1).kind).toBe("incompatible");
       expect(old.submit({ actor: P1, build: "b", msg: DISCARD(CO, "4"), baseIndex: old.nextIndex - 1 }).kind).toBe("incompatible");
     } finally {

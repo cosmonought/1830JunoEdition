@@ -229,6 +229,7 @@ import TrainTradePanel from "./components/TrainTradePanel";
    and no longer renders it. `TrainTradePrompt` still mounts here: it is the
    offer LEDGER, not the purchase control, and it never moved. */
 import {
+  FundingPrivateOfferPrompt,
   TrainDiscardPrompt,
   TrainTradePrompt,
   type TrainTradeProposal,
@@ -516,6 +517,7 @@ import { dividendRefused, operatingCorporationId } from "./gameEngine/dividendGa
 import { operatingIdentityRefusal } from "./gameEngine/operatingIdentity";
 import { cheapestPurchasableTrain } from "./gameEngine/trainAvailability";
 import { pendingTrainDiscards } from "./gameEngine/trainDiscard"; // #1530
+import { emergencyFundingFor } from "./gameEngine/emergencyFunding"; // #1540
 import { dividendSplit } from "./gameEngine/dividendSplit";
 import {
   actionWasRefused,
@@ -1737,35 +1739,18 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   const mustBuyTrain = trainlessAndReported && couldRunARouteIfItHadATrain;
 
   const emergencyPurchasePlan = useMemo(() => {
-    /* Three conditions, not one: an Operating Round, the Hardware step, and a treasury below the cheapest depot train.
-       See docs/ai_architecture/contract_economy.md - App.tsx #358 */
-    if (!mustBuyTrain || !gameState) return null;
-    if (gameState.current_round_type !== "OperatingRound") return null;
-    if (orSubPhase !== "Hardware") return null;
-    const corporation = gameState.public_companies.find(
-      (entry) => entry.company_id === actingProtocolId,
-    );
-    if (!corporation) return null;
-
-    /* Design note #1512: THE SAME QUESTION THE REDUCER'S EMERGENCY ARM ASKS -- the cheapest train the bank
-       will sell, from the depot or the Bank Pool -- so the plan the president is shown is the purchase the
-       authority will make. This read `depotInventory` with its own filter, a third reading of one shelf. */
-    const cheapest = cheapestPurchasableTrain(gameState);
-    if (!cheapest) return null;
-
-    const treasury = Number(corporation.treasury) || 0;
-    // No shortfall, no emergency: the ordinary Buy Trains panel handles it.
-    if (treasury >= cheapest.cost) return null;
-
+    /* Design note #1540: THE REDUCER'S OBLIGATION, NOT A PLAN OF THIS SHELL'S. `emergencyFundingFor` is what
+       the authority derives -- the required train, the treasury, the president's cash, the shortfall, every
+       legal forced sale and whether bankruptcy has become unavoidable -- read off the same state and grid
+       the reducer reads. #358's three conditions and #1512's cheapest-train question are inside it. */
+    if (!gameState) return null;
+    const funding = emergencyFundingFor(gameState, mapGrid);
+    if (!funding) return null;
     return buildEmergencyPurchasePlan({
-      state: gameState,
-      corporation,
-      trainModel: cheapest.tier,
-      trainCost: cheapest.cost,
-      priceForCompany: (companyId) => (sandbox ? (sandboxMarketPrices[companyId] ?? null) : null),
+      funding,
       labelForAddress: (address) => sandboxPlayerLabel(address) ?? truncateAddress(address),
     });
-  }, [mustBuyTrain, gameState, orSubPhase, actingProtocolId, sandbox, sandboxMarketPrices]);
+  }, [gameState, mapGrid]);
 
   /* ==================================================================
    *  DESIGN NOTE 751b: THE PLAN IS NO LONGER THE MOUNT CONDITION
@@ -1797,7 +1782,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   /* Two endings, both derived: bankruptcy is read off the emergency plan and wins over a broken bank.
      See docs/ai_architecture/state_machine.md - App.tsx #359 */
   const derivedEndReason = useMemo<GameEndReason | null>(() => {
-    if (emergencyPurchasePlan?.bankrupt) return "bankruptcy";
+    /* #1540: BANKRUPTCY IS THE REDUCER'S ENDING NOW, like the bank's. `settleBankruptcy` moves the round to
+       `GameEnd` and writes `bankrupt_president` the moment no legal forced sale remains; the shell reads it
+       rather than deciding it from a plan of its own. */
+    if (gameState?.current_round_type === "GameEnd" && gameState.bankrupt_president) return "bankruptcy";
     /* ==================================================================
         DESIGN NOTE 898: THE ROUND SAYS SO, NOT THE BANK BALANCE
        ==================================================================
@@ -1811,15 +1799,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
        produces most, and the bank balance is still sitting right there to be asked. */
     if (gameState?.current_round_type === "GameEnd") return "bank-broken";
     return null;
-  }, [emergencyPurchasePlan, gameState]);
+  }, [gameState]);
   /* #1425: while the replay cursor shows an earlier round, the verdict is the LIVE one, latched -- the
      derivation above is reading a board on which the game had not ended. */
   const latchedEndReasonRef = useRef<GameEndReason | null>(null);
   if (!scrubbing) latchedEndReasonRef.current = derivedEndReason;
   const gameEndReason = scrubbing ? latchedEndReasonRef.current : derivedEndReason;
 
-  const derivedBankruptLabel = emergencyPurchasePlan?.bankrupt
-    ? emergencyPurchasePlan.presidentLabel
+  const derivedBankruptLabel = gameState?.bankrupt_president
+    ? (sandboxPlayerLabel(gameState.bankrupt_president) ?? truncateAddress(gameState.bankrupt_president))
     : null;
   const latchedBankruptRef = useRef<string | null>(null);
   if (!scrubbing) latchedBankruptRef.current = derivedBankruptLabel;
@@ -1834,12 +1822,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       state: gameState,
       priceForCompany: (companyId) => (sandbox ? (sandboxMarketPrices[companyId] ?? null) : null),
       labelForAddress: (address) => sandboxPlayerLabel(address) ?? truncateAddress(address),
-      bankruptAddress: emergencyPurchasePlan?.bankrupt
-        ? emergencyPurchasePlan.presidentAddress
-        : null,
+      bankruptAddress: gameState.bankrupt_president ?? null, // #1540: the reducer's fact
       totalAnte: PLACEHOLDER_TOTAL_ANTE,
     });
-  }, [gameEndReason, gameState, sandbox, sandboxMarketPrices, emergencyPurchasePlan]);
+  }, [gameEndReason, gameState, sandbox, sandboxMarketPrices]);
   /* #1425: the standings are the FINAL board's, latched while an earlier round is being shown -- the modal
      and the strip must not re-rank the table on a board from OR 4. */
   const latchedStandingsRef = useRef<PlayerStanding[]>([]);
@@ -7494,6 +7480,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         const refusalReason = refusalWasRefused
           ? refusalReasonFor(before, gameplay, {
               actor: options?.actor ?? viewerAddressRef.current,
+              mapGrid: mapGridRef.current, // #1540: the forced-purchase reasons need the route walk
               marketZoneFor: (companyId: number) =>
                 marketZoneForPrice(marketPriceForCompany(companyId)),
               /* Design note #1177: the same ref the refusal itself was judged against. This read `marketGrid`
@@ -9809,6 +9796,34 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
    *  its own `useState`. The dispatch was right and its AUTHOR was wrong -- the seller had never seen the
    *  offer, so "accepted" meant the buyer had agreed with themselves. The transfer still goes through the
    *  ordinary purchase message; it is now the drain that sends it, once the seller has answered. */
+  /* #1541: the funding private offer as the BUYING president sees it -- read off the register, never kept here. */
+  const fundingPrivateOffer = useMemo(() => {
+    const offer = gameState?.private_purchase_offer;
+    if (!offer || !offer.funding) return null;
+    const buyer = gameState?.public_companies.find((company) => company.company_id === offer.buyer_protocol_id);
+    const label = (address: string | null | undefined) => (address ? (sandboxPlayerLabel(address) ?? truncateAddress(address)) : "its president");
+    return {
+      privateId: offer.private_id,
+      privateName: offer.private_name,
+      sellerLabel: label(offer.owner),
+      buyerTicker: offer.buyer_ticker,
+      buyerPresident: buyer?.president ?? null,
+      buyerPresidentLabel: label(buyer?.president),
+      price: offer.price,
+    };
+  }, [gameState]);
+
+  const handleAnswerFundingPrivateOffer = useCallback(
+    (privateId: number, accept: boolean) => {
+      runGameplayAction(
+        accept ? "Accepted a private company to fund a train" : "Declined a private company",
+        { AnswerFundingPrivateOffer: { game_id: 0, private_id: privateId, accept } },
+        { offTurn: true }, // #1541: the buying president answers off-turn, like every consent answer (#701)
+      );
+    },
+    [runGameplayAction],
+  );
+
   /* #1530: the president's discard, dispatched off-turn for #701's reason. `pendingDiscard` is derived above. */
   const handleDiscardTrain = useCallback(
     (modelType: string) => {
@@ -12370,6 +12385,21 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             SellStock: { game_id: gameId, protocol_id: companyId, percentage },
           });
         }}
+        /* #1541: the seller-initiated private offer, its withdrawal, and the declaration. Each is the
+           obligated president's own message; the reducer and the authority judge it. */
+        onOfferPrivate={(privateId, buyerProtocolId, price) => {
+          void runGameplayAction("Offered a private company to fund a train", {
+            OfferPrivateForFunding: { game_id: gameId, private_id: privateId, buyer_protocol_id: buyerProtocolId, price },
+          });
+        }}
+        onRescindPrivateOffer={(privateId) => {
+          void runGameplayAction("Withdrew the private company offer", {
+            RescindFundingPrivateOffer: { game_id: gameId, private_id: privateId },
+          });
+        }}
+        onDeclareBankruptcy={() => {
+          void runGameplayAction("Declared bankruptcy", { DeclareBankruptcy: { game_id: gameId } });
+        }}
         onConfirm={() => {
           const plan = emergencyModalPlan;
           if (!plan) return;
@@ -13956,6 +13986,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       />
       {/* #1530: the excess-train discard the game is waiting for. Same slot as the trade prompt; the two cannot
          stand at once (an offer cannot be made while a discard is owed). */}
+      {/* #1541: the emergency private offer, answered by the buying corporation's president. */}
+      <FundingPrivateOfferPrompt
+        offer={fundingPrivateOffer}
+        viewerIsBuyerPresident={fundingPrivateOffer !== null && fundingPrivateOffer.buyerPresident === viewerAddress}
+        onAnswer={handleAnswerFundingPrivateOffer}
+      />
       <TrainDiscardPrompt
         due={pendingDiscard}
         viewerIsPresident={pendingDiscard !== null && pendingDiscard.president === viewerAddress}

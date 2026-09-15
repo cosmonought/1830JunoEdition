@@ -18,12 +18,9 @@ import React from "react";
 
 import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { ACTION_GREEN, ACTION_GREEN_BORDER, ACTION_GREEN_INK } from "../styles/palette";
-import type { GameStateResponse, PublicCompanyState } from "../gameEngine/gameState";
-import {
-  resolveEmergencyFunding,
-  sellableHoldings,
-  type SellableHolding,
-} from "../gameEngine/endgame";
+import { SHARE_BLOCK_PERCENT, type SellableHolding } from "../gameEngine/endgame";
+import type { EmergencyFunding, LegalPrivateSale } from "../gameEngine/emergencyFunding";
+import type { PrivatePurchaseOffer } from "../gameEngine/gameState";
 
 export interface EmergencyPurchasePlan {
   /** The train the corporation is obliged to buy. */
@@ -49,56 +46,61 @@ export interface EmergencyPurchasePlan {
   /** Design note #2 in `endgame.ts`: cash plus sellable assets still cannot
    *  cover it, so the game ends. */
   bankrupt: boolean;
+  /** #1541: the privates the president may offer, each with its band and the corporations that could buy. */
+  privateSales: LegalPrivateSale[];
+  /** #1541: the offer awaiting the buying president's answer, if one stands. */
+  privateOffer: PrivatePurchaseOffer | null;
+  /** #1541: no legal share sale remains but a private could still be offered -- the president may declare. */
+  canDeclareBankruptcy: boolean;
 }
 
+/* ==================================================================
+    DESIGN NOTE 1540: THE PLAN IS THE AUTHORITY'S OBLIGATION, RENDERED
+   ==================================================================
+   This used to build the cascade itself (`resolveEmergencyFunding`, `sellableHoldings`): a static sum of
+   cash plus a ceiling of what could be sold, with `bankrupt` decided once from that snapshot and the rescued
+   corporation's shares excluded wholesale. The reducer now derives the obligation (`emergencyFundingFor`,
+   rulebook 6.6.2/6.6.3/6.7) after every real action, and this function only shapes it for the modal: the
+   legal sales are the reducer's (bundle by bundle, the rescued corporation's shares included where the crown
+   would not move), the shortfall is what forced sales must still raise, and `bankrupt` is what the reducer
+   will end the game on -- which it does in the same transition, so a bankrupt plan is never actually shown. */
 export function buildEmergencyPurchasePlan(args: {
-  state: GameStateResponse;
-  corporation: PublicCompanyState;
-  trainModel: string;
-  trainCost: number;
-  /** Market price per 10% certificate by `company_id`. Injected because the
-   *  chart lives in `StockMarketRenderer` and `utils/` must not import it --
-   *  the same one-way rule `sandboxSession.ts` follows. */
-  priceForCompany: (companyId: number) => number | null;
+  funding: EmergencyFunding;
   labelForAddress: (address: string) => string;
 }): EmergencyPurchasePlan {
-  const { state, corporation, trainModel, trainCost, priceForCompany, labelForAddress } = args;
-
-  const presidentAddress = corporation.president;
-  const presidentCash = presidentAddress
-    ? Number(state.player_cash.find((row) => row.player === presidentAddress)?.cash_vgp ?? 0) || 0
-    : 0;
-
-  /* The corporation being rescued is excluded from its own rescue: its
-     president cannot sell its shares to fund its train, and the presidency
-     question makes the general case a contract matter. */
-  const holdings = presidentAddress
-    ? sellableHoldings(state, presidentAddress, priceForCompany, corporation.company_id)
-    : [];
-
-  const funding = resolveEmergencyFunding({
-    trainCost,
-    treasury: Number(corporation.treasury) || 0,
-    playerCash: presidentCash,
-    holdings,
-  });
-
+  const { funding, labelForAddress } = args;
+  const shortfallAfterTreasury = Math.max(0, funding.train.cost - funding.treasury);
+  const fromPlayerCash = Math.min(funding.presidentCash, shortfallAfterTreasury);
+  const holdings: SellableHolding[] = funding.legalSales.map((sale) => ({
+    companyId: sale.companyId,
+    ticker: sale.ticker,
+    heldPercent: sale.heldPercent,
+    sellablePercent: sale.maxPercent,
+    sellsPresidency: false,
+    sellableCertificates: sale.maxPercent / SHARE_BLOCK_PERCENT,
+    pricePerShare: sale.pricePerShare,
+    proceeds: sale.pricePerShare * (sale.maxPercent / SHARE_BLOCK_PERCENT),
+    restriction: sale.restriction,
+  }));
   return {
-    trainModel,
-    trainCost,
-    corporationId: corporation.company_id,
-    corporationTicker: corporation.ticker,
-    treasuryContribution: funding.fromTreasury,
-    treasury: Number(corporation.treasury) || 0,
-    shortfall: trainCost - funding.fromTreasury,
-    presidentAddress,
-    presidentLabel: presidentAddress ? labelForAddress(presidentAddress) : "No president",
-    presidentCash,
-    fromPlayerCash: funding.fromPlayerCash,
-    mustRaiseBySelling: funding.mustRaiseBySelling,
-    holdings: funding.holdings,
-    maxSaleProceeds: funding.maxSaleProceeds,
+    trainModel: funding.train.tier,
+    trainCost: funding.train.cost,
+    corporationId: funding.companyId,
+    corporationTicker: funding.ticker,
+    treasuryContribution: funding.treasury,
+    treasury: funding.treasury,
+    shortfall: shortfallAfterTreasury,
+    presidentAddress: funding.president,
+    presidentLabel: labelForAddress(funding.president),
+    presidentCash: funding.presidentCash,
+    fromPlayerCash,
+    mustRaiseBySelling: funding.shortfall,
+    holdings,
+    maxSaleProceeds: holdings.reduce((sum, holding) => sum + holding.proceeds, 0),
     bankrupt: funding.bankrupt,
+    privateSales: funding.legalPrivateSales,
+    privateOffer: funding.privateOffer,
+    canDeclareBankruptcy: funding.canDeclareBankruptcy,
   };
 }
 
@@ -111,6 +113,10 @@ export interface EmergencyTrainPurchaseModalProps {
    *  cash already covers the shortfall, because that is the one path this
    *  build can complete end to end. */
   onConfirm: () => void;
+  /** #1541: the seller-initiated private offer, its withdrawal, and the declaration. */
+  onOfferPrivate?: (privateId: number, buyerProtocolId: number, price: number) => void;
+  onRescindPrivateOffer?: (privateId: number) => void;
+  onDeclareBankruptcy?: () => void;
   /** Design note #1: sandbox-only, and the modal says so. */
   sandbox: boolean;
 }
@@ -119,6 +125,9 @@ export function EmergencyTrainPurchaseModal({
   plan,
   onSellShares,
   onConfirm,
+  onOfferPrivate,
+  onRescindPrivateOffer,
+  onDeclareBankruptcy,
   sandbox,
 }: EmergencyTrainPurchaseModalProps) {
   /* Design note #751e: the DRAFT sale, per corporation. React state rather than the log because nothing has
@@ -126,6 +135,8 @@ export function EmergencyTrainPurchaseModal({
      the shell narrates") puts an unsubmitted intention squarely on this side of the line. The moment Sell
      Shares is pressed it becomes ordinary `SellStock` messages and stops living here. */
   const [saleCounts, setSaleCounts] = React.useState<Record<number, number>>({});
+  /* #1541: the private offer being composed -- buyer and price per private. Draft state, like `saleCounts`. */
+  const [privateDrafts, setPrivateDrafts] = React.useState<Record<number, { buyer: number | null; price: string }>>({});
 
   const saleTotal = Object.values(saleCounts).reduce((sum, count) => sum + count, 0);
   const saleProceedsTotal = (plan?.holdings ?? []).reduce((sum, holding) => {
@@ -312,6 +323,111 @@ export function EmergencyTrainPurchaseModal({
               of that corporation and the Bank Pool has room for the whole 20% block. No
               corporation may hold more than 50% of its shares in the Bank Pool.
             </span>
+          </div>
+        )}
+
+        {/* ---- #1541: the emergency private sale (rulebook 6.6.3), optional and seller-initiated. ---- */}
+        {plan.mustRaiseBySelling > 0 && plan.privateOffer && (
+          <div style={styles.section}>
+            <span style={styles.sectionTitle}>Private company on offer</span>
+            <p style={styles.emptyHoldings}>
+              {plan.privateOffer.private_name} offered to <strong>{plan.privateOffer.buyer_ticker}</strong> for $
+              {plan.privateOffer.price} — waiting on {plan.privateOffer.buyer_ticker}&#39;s president. Nothing
+              else can happen until they answer or the offer is withdrawn.
+            </p>
+            {sandbox && (
+              <div style={styles.sellFooter}>
+                <button type="button" style={styles.sellAllButton} onClick={() => onRescindPrivateOffer?.(plan.privateOffer!.private_id)}>
+                  Withdraw offer
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+        {plan.mustRaiseBySelling > 0 && !plan.privateOffer && plan.privateSales.length > 0 && (
+          <div style={styles.section}>
+            <span style={styles.sectionTitle}>Private companies {plan.presidentLabel} may offer</span>
+            <p style={styles.emptyHoldings}>
+              A corporation may buy a private company for half to twice its face value (rulebook 3.1). The
+              buying corporation&#39;s president must accept. Optional — never required before bankruptcy.
+            </p>
+            <div style={styles.holdingsTable}>
+              {plan.privateSales.map((sale) => {
+                const draft = privateDrafts[sale.privateId] ?? { buyer: sale.buyers[0]?.companyId ?? null, price: String(sale.minPrice) };
+                const price = Number(draft.price);
+                const buyer = sale.buyers.find((entry) => entry.companyId === draft.buyer) ?? null;
+                const problem =
+                  !Number.isInteger(price) || price < sale.minPrice || price > sale.maxPrice
+                    ? `Whole number between $${sale.minPrice} and $${sale.maxPrice}.`
+                    : buyer === null
+                      ? "Choose a corporation."
+                      : buyer.treasury < price
+                        ? `${buyer.ticker}'s treasury holds $${buyer.treasury}.`
+                        : null;
+                return (
+                  <div key={sale.privateId} style={styles.holdingRow}>
+                    <span style={styles.holdingTicker}>{sale.name}</span>
+                    <span style={styles.holdingMeta}>face ${sale.faceValue}</span>
+                    <select
+                      style={styles.sellSelect}
+                      value={draft.buyer ?? ""}
+                      disabled={!sandbox}
+                      aria-label={`Corporation to buy ${sale.name}`}
+                      onChange={(event) =>
+                        setPrivateDrafts((prev) => ({ ...prev, [sale.privateId]: { ...draft, buyer: Number(event.target.value) } }))
+                      }
+                    >
+                      {sale.buyers.map((entry) => (
+                        <option key={entry.companyId} value={entry.companyId}>
+                          {entry.ticker} (${entry.treasury})
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      style={styles.sellSelect}
+                      type="number"
+                      min={sale.minPrice}
+                      max={sale.maxPrice}
+                      step={1}
+                      value={draft.price}
+                      disabled={!sandbox}
+                      aria-label={`Price for ${sale.name}`}
+                      onChange={(event) =>
+                        setPrivateDrafts((prev) => ({ ...prev, [sale.privateId]: { ...draft, price: event.target.value } }))
+                      }
+                    />
+                    <button
+                      type="button"
+                      style={{ ...styles.sellAllButton, ...(problem !== null || !sandbox ? styles.sellButtonDisabled : {}) }}
+                      disabled={problem !== null || !sandbox}
+                      title={problem ?? `Offer ${sale.name} to ${buyer?.ticker} for $${price}.`}
+                      onClick={() => {
+                        if (buyer === null) return;
+                        onOfferPrivate?.(sale.privateId, buyer.companyId, price);
+                      }}
+                    >
+                      Offer
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+        {plan.canDeclareBankruptcy && !plan.privateOffer && sandbox && (
+          <div style={styles.section}>
+            <span style={styles.sectionTitle}>No share can be sold</span>
+            <p style={styles.emptyHoldings}>
+              {plan.presidentLabel} has no legal share sale left and still needs ${plan.mustRaiseBySelling}.
+              {plan.privateSales.length > 0
+                ? " A private company may still be offered above; otherwise the president may declare bankruptcy."
+                : " The president may declare bankruptcy."}
+            </p>
+            <div style={styles.sellFooter}>
+              <button type="button" style={styles.confirmButton} onClick={onDeclareBankruptcy}>
+                Declare bankruptcy — the game ends
+              </button>
+            </div>
           </div>
         )}
 
@@ -539,6 +655,7 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: RADIUS.card,
   },
   holdingRow: { display: "flex", alignItems: "center", gap: "10px" },
+  holdingMeta: { fontSize: FONT_SIZE.small, color: "#8a8a86" }, // #1541
   holdingTicker: {
     flex: "0 0 56px",
     fontSize: FONT_SIZE.small,

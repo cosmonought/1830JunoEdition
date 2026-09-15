@@ -208,8 +208,9 @@ describe("the answer is owed by a player who is not on turn", () => {
     /* #662's private flow has the same hole, reached the same way -- which is the whole lesson of this note.
        Four call sites: accept and decline, trains and privates. */
     const marked = source.match(/\{ offTurn: true \}/g) ?? [];
-    // #1530: a fifth off-turn dispatch, the excess-train discard -- an answer the game waits for, like these.
-    expect(marked).toHaveLength(5);
+    // #1530: a fifth off-turn dispatch, the excess-train discard; #1541: a sixth, the funding private offer's
+    // answer by the buying president -- answers the game waits for, like these.
+    expect(marked).toHaveLength(6);
   });
 
   it("does not reach for `automatic` instead", () => {

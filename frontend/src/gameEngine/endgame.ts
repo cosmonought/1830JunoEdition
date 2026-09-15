@@ -346,30 +346,37 @@ export function rankPlayers(args: {
       0,
     );
 
+    const isBankrupt = address === bankruptAddress;
+    /* ==================================================================
+        DESIGN NOTE 1540: THE BANKRUPT PLAYER IS SCORED BY THE RULEBOOK AND RANKED WITH EVERYBODY
+       ==================================================================
+       6.6.3: "The bankrupt president's final score (i.e., wealth) is the value of all of the shares that he
+       could not sell. It is possible, but unlikely, that a bankrupt player can win." So: the shares he still
+       holds, at market; NOT his cash, which was "put aside" for the purchase that could not be made; and no
+       special rank. #5 below used to pass the title to the highest-ranked player who was NOT bankrupt --
+       the audit found that wrong, and the rulebook says so in as many words. Private companies are not
+       named by the sentence and are not counted for him; every other player scores as before (#3). */
+    const worth = isBankrupt
+      ? Math.round(stockValue)
+      : (Number.isFinite(cash) ? cash : 0) + Math.round(stockValue) + privateValue;
     return {
       address,
       label: labelForAddress(address),
-      cash: Number.isFinite(cash) ? cash : 0,
+      cash: isBankrupt ? 0 : Number.isFinite(cash) ? cash : 0,
       stockValue: Math.round(stockValue),
-      privateValue,
-      netWorth: (Number.isFinite(cash) ? cash : 0) + Math.round(stockValue) + privateValue,
-      isBankrupt: address === bankruptAddress,
+      privateValue: isBankrupt ? 0 : privateValue,
+      netWorth: worth,
+      isBankrupt,
     };
   });
 
   const sorted = [...rows].sort((a, b) => b.netWorth - a.netWorth);
   const total = sorted.reduce((sum, row) => sum + Math.max(0, row.netWorth), 0);
 
-  /* Design note #5: somebody still wins. Expressing "the bankrupt cannot win" as
-     `rank === 1 && not bankrupt` quietly produced games with NO winner whenever
-     the bankrupt president also held the largest portfolio -- not a rare corner,
-     because bankruptcy is about LIQUIDITY (#1) and the player most likely to be
-     caught by a mandatory train is the one who spent everything on shares.
-
-     The title passes to the highest-ranked player who is NOT bankrupt. Found by a
-     harness assertion counting WINNER and BANKRUPT tags and getting one where it
-     expected two. */
-  const champion = sorted.find((row) => !row.isBankrupt) ?? null;
+  /* Design note #5, SUPERSEDED BY #1540 above: the winner is the wealthiest player (7.0), bankrupt or not.
+     Somebody still wins -- the first row after sorting -- and a bankrupt president whose unsellable paper
+     outranks the table wins with it, as 6.6.3 allows. */
+  const champion = sorted[0] ?? null;
 
   return sorted.map((row, index) => {
     // Ties share a rank: two players on $900 are both first.
@@ -381,11 +388,7 @@ export function rankPlayers(args: {
     return {
       ...row,
       rank,
-      /* The bankrupt player never wins, even if their paper still ranks first --
-         bankruptcy is about liquidity (design note #1), and a president can be unable
-         to raise $180 while holding the largest portfolio at the table. Ranking them
-         first and also telling them they lost would be two contradictory sentences in
-         one modal. */
+      // #1540: the wealthiest player wins, bankrupt or not (6.6.3, 7.0).
       isWinner: champion !== null && row.address === champion.address,
       expectedPayout:
         total <= 0 ? 0 : Math.round((Math.max(0, row.netWorth) / total) * totalAnte * 100) / 100,

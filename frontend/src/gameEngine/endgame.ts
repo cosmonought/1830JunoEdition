@@ -396,9 +396,29 @@ export function rankPlayers(args: {
   });
 }
 
-/** The bank has broken -- 1830's other ending. */
+/* ==================================================================
+    DESIGN NOTE 1561: THE BANK HAS BROKEN -- LATCH FIRST, BALANCE SECOND
+   ==================================================================
+   This was `virtual_bank_vgp <= 0` and nothing else, and that is S7-20: the fact was RE-DERIVED at the set
+   boundary from a balance that had moved on. `settleRoundTransitions` asks once, in the
+   `operating_round_just_ended` branch (#898), so a bank emptied by a payout in the middle of an Operating
+   Round set and refilled by the same set's train, token and share purchases was solvent when the question was
+   finally put, and the game played on. The owner's example is `$10 -> pays $30 -> receives $100 -> $80`.
+
+   THE LATCH IS THE ANSWER AND THE BALANCE IS THE FALLBACK. `cashLedger.debitBank` writes `bank_broken` the
+   moment a payout leaves the balance at or below zero and nothing ever clears it (design note #1560/#1561);
+   the balance test stays as the second half for the population that carries no field -- every fixture, every
+   legacy log, every hand-built test board -- where it is exactly the rule those boards were written under.
+   On a board built by this engine the second half is redundant: a non-positive balance can only have been
+   reached through a debit that set the latch.
+
+   ONE FUNCTION, TWO CALLERS, AND THAT IS DELIBERATE. `settleRoundTransitions` ends the game with it and
+   `App.tsx` draws the "bank broken" badge with it; adding a second notion of "broken" for the badge is how
+   the two would come to disagree. Batch 7.1's regression pins that they are the same call. */
+/** The bank has broken -- 1830's other ending. Latched (`bank_broken`), or a non-positive legacy balance. */
 export function bankIsBroken(state: GameStateResponse | null): boolean {
   if (!state) return false;
+  if (state.bank_broken === true) return true;
   const bank = Number(state.virtual_bank_vgp);
   return Number.isFinite(bank) && bank <= 0;
 }

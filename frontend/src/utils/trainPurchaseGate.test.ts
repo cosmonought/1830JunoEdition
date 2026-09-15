@@ -48,7 +48,10 @@ function board(overrides: Record<string, unknown> = {}): State {
       { player: "p1", cash_vgp: "500" },
       { player: "p2", cash_vgp: "500" },
     ],
-    bank_cash_vgp: "8000",
+    /* #1560: WAS `bank_cash_vgp`, a field `GameStateResponse` does not have, so this board carried NO bank at
+       all and the retired `adjustBank` invented one out of nothing on every credit -- which is how a purchase
+       could be "charged" against a bank that was not on the board. Renamed to the real field. */
+    virtual_bank_vgp: "8000",
     private_companies: [],
     public_companies: [
       {

@@ -22,6 +22,14 @@ import type {
 } from "./gameState";
 import { bankIsBroken } from "./endgame";
 import {
+  BANK,
+  creditPlayer,
+  creditTreasury,
+  debitBank,
+  transfer,
+  type LedgerResult,
+} from "./cashLedger";
+import {
   DELAYED_AUCTION_TRIGGER_TIER,
   /* Design note #1051: the pre-#1051 die, for logs written before the roll was recorded. The reducer never
      DRAWS -- it runs on every client for every replay, so a draw here would be four boards and a fifth on
@@ -190,47 +198,29 @@ export const WATERFALL_PASS_MARKDOWN = 5;
  *  comes from `pathfinding.rs`'s search over actual laid track. */
 export const SANDBOX_NOMINAL_ROUTE_REVENUE = 90;
 
-/** Cash is a decimal string on the wire; parse, adjust, re-serialise, floor at zero.
- *  See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #0 */
-function adjustCash(
-  state: GameStateResponse,
-  player: string,
-  delta: number,
-): GameStateResponse {
-  return {
-    ...state,
-    player_cash: state.player_cash.map((entry) => {
-      if (entry.player !== player) return entry;
-      const current = Number(entry.cash_vgp);
-      const next = Number.isFinite(current) ? Math.max(0, current + delta) : 0;
-      return { ...entry, cash_vgp: String(next) };
-    }),
-  };
-}
+/* ==================================================================
+    DESIGN NOTE 1560 (here): THE THREE FLOORED ADJUSTERS ARE GONE
+   ==================================================================
+   `adjustCash`, `adjustBank` and `adjustTreasury` lived here and all three ended `Math.max(0, current +
+   delta)`. That clamp minted money on every unaffordable purchase, hid every debit with no recipient, and
+   made the bank's balance a fiction after the break. Every movement below now goes through `cashLedger.ts`,
+   which is the whole of Batch 7.1: one debit, one matching credit, whole non-negative amounts, and a REFUSAL
+   -- never a floor, never a throw -- when an account cannot cover what it is asked for.
 
-/** Adds `delta` to the bank's cash, flooring at zero. */
-function adjustBank(state: GameStateResponse, delta: number): GameStateResponse {
-  const current = Number(state.virtual_bank_vgp);
-  const next = Number.isFinite(current) ? Math.max(0, current + delta) : 0;
-  return { ...state, virtual_bank_vgp: String(next) };
-}
+   THE CALL SHAPE CHANGED ON PURPOSE. `adjustTreasury(state, id, -cost)` could be written anywhere and always
+   returned a state; `transfer(state, { corporation: id }, BANK, cost)` returns a RESULT the caller must
+   handle, so a new money movement cannot be added without deciding, at the call site, what happens when it
+   cannot be made. That is the property the old helpers could not have.
 
-/** Corporate treasury, same string arithmetic and same zero floor as adjustCash.
- *  See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #0 */
-function adjustTreasury(
-  state: GameStateResponse,
-  companyId: number,
-  delta: number,
-): GameStateResponse {
-  return {
-    ...state,
-    public_companies: state.public_companies.map((company) => {
-      if (company.company_id !== companyId) return company;
-      const current = Number(company.treasury);
-      const next = Number.isFinite(current) ? Math.max(0, current + delta) : 0;
-      return { ...company, treasury: String(next) };
-    }),
-  };
+   WHERE A GATE ALREADY STANDS IN FRONT (the depot and pool train purchases #1019/#1512, the station gate
+   #1511, the terrain fee #891, the Kanawha licence #1323, the Diesel exchange, the Batch-5 emergency paths),
+   the ledger's refusal is UNREACHABLE and the game is unchanged. Where one does not exist yet -- the stock
+   purchase, the ordinary private purchase, the intercorporate train sale -- the ledger refuses instead of
+   minting, and Batches 7.2 and 7.4 put the rule in front of it. */
+
+/** The ledger's answer, or the board we were handed. #778's identity refusal, spelled once. */
+function settleMoney(fallback: GameStateResponse, result: LedgerResult): GameStateResponse {
+  return result.ok ? result.state : fallback;
 }
 
 /** Advance the seat and clear the pass streak -- mirrors trading::advance_turn.
@@ -1586,7 +1576,8 @@ function namedTrains(models: readonly string[]): string {
     DESIGN NOTE 1019: ALL OR NOTHING, AND IN THE AUTHORITY
    ==================================================================
    This function had no gate of any kind: it charged, banked, delivered and turned the phase whatever the
-   board said. `adjustTreasury` floors at zero, so an unaffordable purchase took every dollar there was, gave
+   board said. `adjustTreasury` floored at zero (Batch 7.1 retired it, #1560), so an unaffordable purchase
+   took every dollar there was, gave
    the train anyway, and -- because #778's refusal detector works by identity and this mutated -- reported
    success. See `trainPurchaseGate.ts` for the log that shows all three consequences in three lines.
 
@@ -1636,8 +1627,11 @@ function buyDepotTrain(
     return state;
   }
 
-  const charged = adjustTreasury(state, companyId, -tier.cost);
-  const banked = adjustBank(charged, tier.cost);
+  /* #1560: the gate above has already required the funds (or waived them for the emergency path, which
+     funded the treasury first), so this refusal is unreachable in play -- it is the boundary, not the rule. */
+  const paid = transfer(state, { corporation: companyId }, BANK, tier.cost);
+  if (!paid.ok) return state;
+  const banked = paid.state;
   const before = derivePhase(state)?.tier ?? null;
   const delivered = withTrains(banked, companyId, (trains) => [...trains, tier.tier]);
   const after = derivePhase(delivered)?.tier ?? null;
@@ -1689,9 +1683,10 @@ function buyReturnedTrain(
   const cost = depotInventory(state).find((row) => row.tier === modelType)?.cost ?? 0;
   const returned = [...(state.returned_trains ?? [])];
   returned.splice(returned.indexOf(modelType), 1);
-  const charged = adjustTreasury({ ...state, returned_trains: returned }, companyId, -cost);
-  const banked = adjustBank(charged, cost);
-  return withTrains(banked, companyId, (trains) => [...trains, modelType]);
+  // #1560: all or nothing -- a refused charge leaves the returned list alone as well as the treasury.
+  const paid = transfer({ ...state, returned_trains: returned }, { corporation: companyId }, BANK, cost);
+  if (!paid.ok) return state;
+  return withTrains(paid.state, companyId, (trains) => [...trains, modelType]);
 }
 
 /** Moves one train and the price the other way. Exported so the consent flow settles a trade the same way the reducer does. Absent model is a no-op, not a throw.
@@ -1710,15 +1705,20 @@ export function settleTrainSale(
   const paid = Number(price);
   const amount = Number.isFinite(paid) && paid > 0 ? paid : 0;
 
-  const removed = withTrains(state, sellerId, (trains) => {
+  /* Design note #1560: THE MONEY MOVES FIRST, so a price the buyer cannot cover refuses the whole sale
+     rather than delivering the train and flooring the payment (which minted the difference at the seller).
+     Corporation to corporation: the bank is not involved, so this is one debit and one matching credit.
+     Whether the price is LEGAL -- rulebook 6.6's $1 minimum, the operating/step/consent rules -- is Batch
+     7.4's predicate (S7-5); this batch only declines to invent the money. A price of $0 or less is still
+     normalised to a free transfer above, exactly as before. */
+  const settledPrice = transfer(state, { corporation: buyerId }, { corporation: sellerId }, amount);
+  if (!settledPrice.ok) return state;
+  const removed = withTrains(settledPrice.state, sellerId, (trains) => {
     const next = [...trains];
     next.splice(index, 1);
     return next;
   });
-  const added = withTrains(removed, buyerId, (trains) => [...trains, modelType]);
-  // Corporation to corporation: the bank is not involved, so this is one
-  // debit and one matching credit rather than a mint.
-  const settled = adjustTreasury(adjustTreasury(added, buyerId, -amount), sellerId, amount);
+  const settled = withTrains(removed, buyerId, (trains) => [...trains, modelType]);
 
   /* ==================================================================
       DESIGN NOTE 1090: THE BLOOD PRICE, AND WHAT ELSE MOVES WITH THE TRAIN
@@ -2441,15 +2441,25 @@ function applyAuctionStep(state: GameStateResponse, msg: GameplayExecuteMsg): Ga
   const result = applySandboxWaterfallAction(state.waterfall, msg, state.player_addresses ?? []);
   let next: GameStateResponse = { ...state, waterfall: result.waterfall };
 
+  /* ==================================================================
+      DESIGN NOTE 1560 (auction): THE MONEY PAID FOR A PRIVATE GOES TO THE BANK
+     ==================================================================
+     This loop was an inline `Math.max(0, cash - amount)` and CREDITED NOBODY. Both halves were wrong and in
+     opposite directions: an unaffordable buy minted the difference, and every affordable one destroyed the
+     whole price, so the bank was short by the entire auction in every game ever played on this engine and
+     broke early because of it (S7-10; the owner's ruling D-15/Q1a). The private auction's counterparty is the
+     Bank, like every other purchase in 1830, so the charge is a TRANSFER.
+
+     A $0 acquisition -- the Schuylkill Valley marked down to nothing and taken by the next seat (#271) --
+     transfers $0 and is therefore unchanged, which is the point of routing it through the same call.
+
+     ALL OR NOTHING FOR THE WHOLE STEP. A charge the buyer cannot cover refuses the auction message outright
+     (the atom does not advance), rather than handing over a private for less than its price. Escrow-aware
+     affordability as a RULE, asked before the atom moves, is Batch 7.3 (S7-4); this is the boundary. */
   for (const { player, amount } of result.charges) {
-    next = {
-      ...next,
-      player_cash: next.player_cash.map((entry) =>
-        entry.player === player
-          ? { ...entry, cash_vgp: String(Math.max(0, (Number(entry.cash_vgp) || 0) - amount)) }
-          : entry,
-      ),
-    };
+    const paid = transfer(next, { player }, BANK, amount);
+    if (!paid.ok) return state;
+    next = paid.state;
   }
 
   for (const { privateId, player, price } of result.won) {
@@ -3625,10 +3635,40 @@ function transferPrivateToCorporation(
        This guard is for the other copy: a Firestore-path client that dispatched from its drain a moment after
        the on-turn client did. The private is already this corporation's; paying for it twice is the bug. */
     if (target?.owner_protocol_id === protocol_id) return state;
-    const seller = target?.owner ?? null;
 
-    const charged = adjustTreasury(state, protocol_id, -paid);
-    const settled = seller ? adjustCash(charged, seller, paid) : charged;
+    /* ==================================================================
+        DESIGN NOTE 1563: A SALE HAS TWO ENDS, AND BOTH HAVE TO BE THERE
+       ==================================================================
+       This read `const seller = target?.owner ?? null` and then `seller ? adjustCash(charged, seller, paid)
+       : charged`, so THE MISSING-SELLER CASE WAS WRITTEN OUT AS AN OPTION: the treasury was debited and
+       nobody was paid. Two boards reach it -- a private owned by another CORPORATION (`owner` is null and
+       `owner_protocol_id` is set), which is also rulebook 3.1's "private companies may be bought by railroad
+       corporations but not sold by them", and a private the state holds with no owner at all. Both destroyed
+       the price (S7-12).
+
+       SO THE SELLER IS NOW A PRECONDITION. The private must belong to a PLAYER: that is the only sale
+       rulebook 3.1 describes, it is what makes the payment have a payee, and it is what the emergency sale
+       (D-5) has always been -- a player -> corporation directed offer -- so nothing about Batch 5 changes
+       here. A corporation-owned or unowned private refuses, transferring nothing and paying nothing.
+
+       AND THE PRICE IS A PRICE. `paid` reached the treasury as a raw `Number(price) || 0`, so `price:
+       "-500"` ran the transfer BACKWARDS -- $500 into the buyer's treasury and the owner zeroed by the cash
+       floor. `transfer` takes a non-negative whole amount and refuses anything else, so a negative or
+       fractional price is a refusal rather than a reversal.
+
+       WHAT IS DELIBERATELY NOT HERE: the phase, the 1/2-2x band, the operating-corporation check, the
+       consent and the `closed` test. Those are rules (S7-6/S7-7/S7-12), they belong to Batch 7.4's
+       `privatePurchaseRefusal`, and adding them here would change which purchases are legal in a batch whose
+       brief is the money. This is the ledger boundary: the transaction either moves money honestly between
+       two real parties or it does not happen. */
+    const seller = target?.owner ?? null;
+    const corporateSeller =
+      target?.owner_protocol_id !== null && target?.owner_protocol_id !== undefined;
+    if (!target || seller === null || corporateSeller) return state;
+
+    const paidOver = transfer(state, { corporation: protocol_id }, { player: seller }, paid);
+    if (!paidOver.ok) return state;
+    const settled = paidOver.state;
 
     const owned: GameStateResponse = {
       ...settled,
@@ -3947,7 +3987,9 @@ function applyOneAction(
   if (isBuyKanawhaLicenseMsg(msg)) {
     const companyId = msg.BuyKanawhaLicense.protocol_id;
     if (kanawhaLicenseRefusal(state, companyId) !== null) return state;
-    const charged = adjustBank(adjustTreasury(state, companyId, -KANAWHA_LICENSE_COST), KANAWHA_LICENSE_COST);
+    const paid = transfer(state, { corporation: companyId }, BANK, KANAWHA_LICENSE_COST);
+    if (!paid.ok) return state; // #1560: unreachable -- `kanawhaLicenseRefusal` already required the funds.
+    const charged = paid.state;
     return {
       ...charged,
       kanawha_licenses_sold: (charged.kanawha_licenses_sold ?? 0) + 1,
@@ -4222,8 +4264,26 @@ function applyOneAction(
     if (buysDouble && (!target || doublePurchaseRefusal(target, source === "Bank" ? "Bank" : "Ipo") !== null)) {
       return state;
     }
-    const spent = actor ? adjustCash(state, actor, -charged) : state;
-    const banked = adjustBank(spent, charged);
+    /* ==================================================================
+        DESIGN NOTE 1560 (BuyStock): THE BUYER PAYS, OR THE PURCHASE DOES NOT HAPPEN
+       ==================================================================
+       `adjustCash` floored, so a $100 share bought with $50 in hand took the $50, credited the bank $100 and
+       MINTED the other $50 -- audit C3, and the single most common non-conservation in the corpus (JUNO-3XD
+       28/31/211/291-300, JUNO-Z6C 193/261/264/347-354/473-483, JUNO-FCJ 106/109/150/181-194/288-303/379).
+
+       Refused as one movement, so nothing is charged and no certificate moves. The PRICE this arm charges is
+       still the one it has always computed (the message's par for an IPO buy, the chart for a pool buy);
+       pricing from the corporation's own state, the par ladder and the round gate are Batch 7.2's
+       `stockPurchaseRefusal` (S7-13/D-17), and the affordability RULE belongs there too. This is the
+       boundary underneath it.
+
+       NO ACTOR, NO MONEY. A bare harness board with no `actor` used to credit the bank anyway -- a purchase
+       with no buyer that still made the bank richer. There is nobody to take it from, so nothing moves. */
+    const settlement = actor === null || actor === undefined
+      ? null
+      : transfer(state, { player: actor }, BANK, charged);
+    if (settlement !== null && !settlement.ok) return state;
+    const banked = settlement === null ? state : settlement.state;
     const movedShares = moveShares(
       banked,
       protocol_id,
@@ -4366,9 +4426,15 @@ function applyOneAction(
 
     const takings = ctx?.sharePrice ?? SANDBOX_NOMINAL_SHARE_PRICE;
 
-    const proceeds = actor ? adjustCash(state, actor, takings) : state;
+    /* #1560: the bank funds the sale and its balance may go NEGATIVE doing it (D-15/Q1b) -- the old floor
+       made the bank's figure a fiction the moment it broke, and `debitBank` latches `bank_broken` instead
+       (#1561). No actor, no movement: there is nobody to pay. */
+    const takingsPaid = actor === null || actor === undefined
+      ? null
+      : transfer(state, BANK, { player: actor }, takings);
+    if (takingsPaid !== null && !takingsPaid.ok) return state;
     const returnedShares = moveShares(
-      adjustBank(proceeds, -takings),
+      takingsPaid === null ? state : takingsPaid.state,
       protocol_id,
       actor,
       "Bank",
@@ -4493,8 +4559,8 @@ function applyOneAction(
        ==================================================================
        REPORTED: "B&O had $0 in its treasury and was able to lay a track tile on a terrain hex costing $80.
        Its treasury stayed $0."
-       BOTH HALVES OF THAT SENTENCE HAVE ONE CAUSE, and it is `adjustTreasury`, which ends
-       `Math.max(0, current + delta)`. That floor is right for its other callers -- a treasury must not go
+       BOTH HALVES OF THAT SENTENCE HAD ONE CAUSE, and it was `adjustTreasury`, which ended
+       `Math.max(0, current + delta)`. That floor was right for its other callers -- a treasury must not go
        negative -- and here it turned an unaffordable charge into a SILENT no-op: the debit was issued, the
        clamp swallowed it, the tile landed, and nothing anywhere said no. #723 taught this arm to charge the
        fee once; nobody had asked whether it could be charged at all.
@@ -4589,7 +4655,18 @@ function applyOneAction(
         };
       }),
     };
-    return fee > 0 ? adjustTreasury(merged, protocol_id, -fee) : merged;
+    /* ==================================================================
+        DESIGN NOTE 1560 (terrain): THE GROUND IS PAID FOR TO SOMEBODY
+       ==================================================================
+       #891 made the fee unaffordable-proof; what nobody asked was where the money WENT. `adjustTreasury(-fee)`
+       stood alone, so every terrain lay in every game destroyed the fee (S7-10). The Bank is the counterparty
+       of a terrain cost as it is of every other purchase (owner ruling D-15/Q1a), so this is a transfer.
+       The legality and affordability gates above are untouched: the fee is still the authoritative
+       `terrainFeeDue`, still charged once per hex (#723), and a corporation that cannot pay still may not
+       build. A refused transfer refuses the WHOLE lay -- `state`, not `merged` -- which is #891's own rule. */
+    if (fee <= 0) return merged;
+    const paid = transfer(merged, { corporation: protocol_id }, BANK, fee);
+    return paid.ok ? paid.state : state;
   }
 
   if ("BuyHardwareFromPool" in msg) {
@@ -4619,8 +4696,9 @@ function applyOneAction(
     if (dieselExchangeRefusal(state, protocol_id, model_type) !== null) return state;
 
     const exchangeCost = dieselExchangeCostFor(state); // #1326: $750 under the Level Playing Field
-    const charged = adjustTreasury(state, protocol_id, -exchangeCost);
-    const banked = adjustBank(charged, exchangeCost);
+    const paidCost = transfer(state, { corporation: protocol_id }, BANK, exchangeCost);
+    if (!paidCost.ok) return state; // #1560: unreachable -- `dieselExchangeRefusal` asked `trainPurchaseRefusal`.
+    const banked = paidCost.state;
     const before = derivePhase(state)?.tier ?? null;
     const exchanged = withTrains(banked, protocol_id, (trains) => {
       const at = trains.indexOf(model_type);
@@ -4741,7 +4819,8 @@ function applyOneAction(
     /* ==================================================================
         DESIGN NOTE 1513: THE PRESIDENT PAYS WHAT THE PRESIDENT HAS
        ==================================================================
-       `adjustCash` floors at zero, so a president with $100 against a $360 shortfall used to pay $100 and the
+       `adjustCash` floored at zero (retired by #1560), so a president with $100 against a $360 shortfall used
+       to pay $100 and the
        corporation got the train anyway -- money minted by a clamp (audit C4c). Refused instead, by identity:
        the obligation then stands (#1513 in `trainAvailability.ts`), which is the honest state and the one
        Batch 5's funding cascade -- share sales, then bankruptcy -- is written to resolve. Nothing here
@@ -4751,14 +4830,11 @@ function applyOneAction(
     );
     if (!Number.isFinite(presidentCash) || presidentCash < shortfall) return state;
     // The president's contribution passes THROUGH the treasury, which is
-    // what makes `buyDepotTrain`'s single `adjustTreasury(-cost)` correct
+    // what makes `buyDepotTrain`'s single treasury -> Bank transfer correct
     // for both the ordinary and the emergency case.
-    const funded = adjustTreasury(
-      adjustCash(state, company.president, -shortfall),
-      companyId,
-      shortfall,
-    );
-    return buy(funded);
+    const funded = transfer(state, { player: company.president }, { corporation: companyId }, shortfall);
+    if (!funded.ok) return state; // #1560: unreachable -- the cash check above is #1513's own gate.
+    return buy(funded.state);
   }
 
   if ("BuyTrainFromCorporation" in msg) {
@@ -4786,10 +4862,20 @@ function applyOneAction(
        right. The core has already refused a trade the two cannot cover. */
     const funding = emergencyFundingFor(settling, ctx?.mapGrid);
     const paid = Number(price) || 0;
-    const funded =
+    /* #1560: the contribution is a transfer like any other. A refusal here leaves the OFFER cleared and the
+       money alone, and `settleTrainSale` then refuses the sale for want of a treasury -- which is the same
+       outcome, without #1247's derived-action loop. `fundedTradeRefusal` has already refused a trade the
+       treasury and the president cannot cover between them (D-6), so it does not fire in play. */
+    const contribution =
       funding !== null && funding.companyId === buyer_protocol_id && paid > funding.treasury
-        ? adjustTreasury(adjustCash(settling, funding.president, -(paid - funding.treasury)), buyer_protocol_id, paid - funding.treasury)
-        : settling;
+        ? transfer(
+            settling,
+            { player: funding.president },
+            { corporation: buyer_protocol_id },
+            paid - funding.treasury,
+          )
+        : null;
+    const funded = contribution !== null && contribution.ok ? contribution.state : settling;
     return settleTrainSale(funded, buyer_protocol_id, seller_protocol_id, model_type, price);
   }
 
@@ -4845,7 +4931,10 @@ function applyOneAction(
           : company,
       ),
     };
-    return adjustBank(adjustTreasury(placed, protocol_id, -cost), cost);
+    // #1560: `stationPlacementGate` (#1511) has already required `treasury >= cost`, so this cannot refuse
+    // in play; a refusal refuses the whole placement rather than landing a token nobody paid for.
+    const paidToken = transfer(placed, { corporation: protocol_id }, BANK, cost);
+    return paidToken.ok ? paidToken.state : state;
   }
 
   if ("RunManualRoute" in msg) {
@@ -5320,7 +5409,8 @@ function applyOneAction(
     const { revenue } = settlement;
 
     if (!distribute) {
-      return adjustTreasury(adjustBank(state, -revenue), protocol_id, revenue);
+      // #1560/#1561: the bank funds the withhold and may go negative doing it, latching the break.
+      return settleMoney(state, transfer(state, BANK, { corporation: protocol_id }, revenue));
     }
 
     /* Design note #706: THE TWO POOLS WERE EXACTLY SWAPPED.
@@ -5336,15 +5426,25 @@ function applyOneAction(
        THE BANK FUNDS EXACTLY WHAT IT PAID -- players plus the pool's slice, summed rather than reconstructed
        from `revenue` minus other slices. The old expression had to stay in step with two figures computed
        elsewhere, and did not. */
-    let next = state;
+    /* #1560: ONE BANK DEBIT FOR THE WHOLE PAYOUT, kept from #329/#376 -- and now it is exact rather than
+       floored, so the bank's balance after a payout it could not fund is the shortfall it actually owes and
+       `bank_broken` latches on the way past zero (#1561). `totalPaid` is the players' shares plus the pool
+       slice by construction, so the debit and the credits below are the same money. */
+    const funded = debitBank(state, settlement.totalPaid);
+    if (!funded.ok) return state;
+    let next = funded.state;
     for (const share of settlement.players) {
-      next = adjustCash(next, share.player, share.amount);
+      const paidShare = creditPlayer(next, share.player, share.amount);
+      if (!paidShare.ok) return state;
+      next = paidShare.state;
     }
     if (settlement.poolSlice > 0) {
-      next = adjustTreasury(next, protocol_id, settlement.poolSlice);
+      const pooled = creditTreasury(next, protocol_id, settlement.poolSlice);
+      if (!pooled.ok) return state;
+      next = pooled.state;
     }
     // `ipo_pool_percentage` is deliberately absent: unsold shares pay nobody.
-    return adjustBank(next, -settlement.totalPaid);
+    return next;
   }
 
   if (
@@ -5428,11 +5528,13 @@ export function applyFloatThreshold(
   });
 
   if (!changed) return state;
-  // Design note #376: one debit for the whole pass, for the same reason
-  // design note #329's payout banks once -- `adjustBank` floors at zero and
-  // several separate calls against a nearly-empty bank would floor
-  // differently from one call for the sum.
-  return adjustBank({ ...state, public_companies: companies }, -capitalised);
+  /* Design note #376: one debit for the whole pass, for the same reason design note #329's payout banks once.
+     #1560: the reason has changed from "several calls would floor differently" to "several calls would latch
+     at different moments"; the shape is the same and so is the arithmetic. The treasuries above were credited
+     in the map, so this debit is the matching half and the pass conserves. A refused debit floats nobody --
+     a corporation capitalised out of a bank that never paid would be the mint this batch exists to end. */
+  const capitalisation = debitBank({ ...state, public_companies: companies }, capitalised);
+  return capitalisation.ok ? capitalisation.state : state;
 }
 
 /** A corporation that has floated and still owes its home station token.
@@ -5613,18 +5715,21 @@ export function applyPrivateRevenue(state: GameStateResponse | null): PrivatePay
 
   if (payouts.length === 0) return { state, payouts, total: 0 };
 
-  let next = state;
-  let total = 0;
+  /* Design note #329: the bank funds it, in ONE write rather than one per private. #1560: the debit comes
+     first now, so the bank is the single source of the money the credits below hand out and the pass
+     conserves exactly; #1561 latches the break on the way past zero. A refusal pays nobody and reports
+     nothing owed, so the caller's narration and the board agree. */
+  const total = payouts.reduce((sum, payout) => sum + payout.amount, 0);
+  const funded = debitBank(state, total);
+  if (!funded.ok) return { state, payouts: [], total: 0 };
+  let next = funded.state;
   for (const payout of payouts) {
-    total += payout.amount;
-    next = payout.toPlayer
-      ? adjustCash(next, payout.toPlayer, payout.amount)
-      : adjustTreasury(next, payout.toCompanyId as number, payout.amount);
+    const paidOut = payout.toPlayer
+      ? creditPlayer(next, payout.toPlayer, payout.amount)
+      : creditTreasury(next, payout.toCompanyId as number, payout.amount);
+    if (!paidOut.ok) return { state, payouts: [], total: 0 };
+    next = paidOut.state;
   }
-  // Design note #329: the bank funds it, in one write rather than one per
-  // private -- `adjustBank` floors at zero, and four separate calls against
-  // a nearly-empty bank would floor differently from one call for the sum.
-  next = adjustBank(next, -total);
 
   return { state: next, payouts, total };
 }

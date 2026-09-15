@@ -288,7 +288,10 @@ describe("the privates pay every Operating Round, not every set", () => {
       active_player_index: 0,
       player_addresses: ["p1"],
       player_cash: [{ player: "p1", cash_vgp: "100" }],
-      bank_cash_vgp: "12000",
+      /* #1560: WAS `bank_cash_vgp`, a field `GameStateResponse` does not have, so this board carried NO bank
+         at all and the retired `adjustBank` invented one out of nothing on every credit. Renamed to the real
+         field so the fixture describes a board the game could actually deal. */
+      virtual_bank_vgp: "12000",
       public_companies: [],
       private_companies: [
         {

@@ -12,6 +12,11 @@ discovered deferred work; mark completed items `RESOLVED` (with the batch and de
 never delete them); record every deliberate rules deviation or owner decision under Part D; never drop an item
 merely because its batch ended. The batch write-up may summarise; this file is the record.
 
+**Standing rule (owner, 2026-09-15, UI parity): every engine-hardening item, when resolved (Stage 7 onward, Stages
+8–10 included), is classified by its frontend consequence — `NONE` / `LEGALITY SYNC` / `NEW ACTION` /
+`STATE VISIBILITY` / `RULES REFERENCE` — in its batch write-up, and every non-`NONE` result becomes a Part C entry
+linked to its S-item. See Part F's Playtest Readiness gate.**
+
 **Status vocabulary.** `OPEN` — a confirmed defect or rule gap, not yet scheduled beyond its stage. `DEFERRED` —
 known, scheduled for a named stage, or blocked on a decision. `OWNER DECISION` — a deliberate deviation from, or
 interpretation of, the 2018 rulebook (or a product ruling), recorded so it is never mistaken for a bug.
@@ -30,7 +35,7 @@ interpretation of, the 2018 rulebook (or a product ruling), recorded so it is ne
 | 5 | Emergency funding + bankruptcy | done (`78f8358`) |
 | 5.5 | Repository hygiene / backlog reconciliation | done (`b4f6d38`; this ledger) |
 | 6 | Route authority + revenue | implemented (Batch 6, #1550–#1554), awaiting full-suite validation and commit |
-| 7 | Transaction + cash authority / auction | Part B |
+| 7 | Transaction + cash authority / auction | **7.1 implemented** (money ledger, bank crediting, signed bank, `bank_broken` latch — `BATCH7.1_MONEY_LEDGER_2026-09-15.md`, uncommitted, awaiting full-suite validation); 7.2–7.5 in Part B |
 | 8 | Stock / OR edge cases + timing | Part B |
 | 9 | Variants + map data + variant authority | Part B |
 | 10 | Replay / settlement / release hardening | Part B |
@@ -331,7 +336,24 @@ half-drawn route needs (rule 2–6 of `editRouteDraft`). Replay: none.
 ### Stage 7 — Transaction + cash authority / auction
 
 **S7-1. Zero floors act as implicit refusals: `adjustCash`, `adjustBank`, `adjustTreasury` clamp at 0.**
-Status `OPEN` — audit **C3** (architectural risk 3). Rulebook: cash required for every purchase (§5.2 implicit,
+Status **`RESOLVED` (the floors) / `OPEN` (the rules in front of them)** — Batch 7.1 (#1560,
+`gameEngine/cashLedger.ts`). All three adjusters are deleted. Every debit and credit in the engine now goes
+through one ledger: whole non-negative amounts, one debit matched by one credit, a player/treasury debit the
+balance cannot cover REFUSES (identity, never a throw — the server appends before it applies), a negative or
+fractional amount refuses rather than reversing the movement, and an unknown payee refuses rather than
+absorbing the money. The bank is signed (D-15/Q1b) and latches (S7-20). The corpus now conserves money after
+every replayed entry in all thirteen logs, with the two by-design exceptions only (`SetupGame`,
+`YellowSignEvent` — S9-1); `moneyConservation.test.ts` is the sweep, `cashLedger.test.ts` the unit suite.
+m9's "charged for nothing" is NOT closed here: the ledger stops the mint, but refusing an undeliverable
+purchase outright is D-25 and belongs to Batch 7.2. **What remains open is the RULE half**: affordability
+must be an explicit predicate in front of the transaction (`stockPurchaseRefusal` 7.2, `privatePurchaseRefusal`
+/ `trainSaleRefusal` 7.4, escrow-aware auction refusals 7.3). The ledger is the boundary those predicates are
+checked against, not a substitute for them. Corpus consequence (reported, NOT re-pinned — Batch 7.5's sweep):
+twenty-five unaffordable `BuyStock` entries and one unaffordable `BuyPrivateCompany` are now refused —
+JUNO-3XD 28, 31, 204, 205, 208, 209, 211, 212, 216, 285, 289–295, 297, 299, 300 and 112
+(`BuyPrivateCompany`, NNH's treasury $0 against $70); JUNO-FCJ 106, 109, 181; JUNO-Z6C 193, 264 — each with
+the cascade that follows it.
+Historical: audit **C3** (architectural risk 3). Rulebook: cash required for every purchase (§5.2 implicit,
 §1.2.1, §6.3.2, §3.1, §6.6). Notes: `sandboxSession.ts` adjusters (~line 204/213/229); only `LayTile` (#891),
 depot / pool / emergency train purchases (#1513), the station gate (#1511) and the Stage 5 emergency paths check
 funds; `transferPrivateToCorporation` relies on the gate in front of it (Batch 5 §6). Replay: refusal-added;
@@ -399,8 +421,133 @@ phase) exactly as `fundingPrivateAnswerRefusal` does, rather than at proposal. T
 S10-10 (negotiation flows on the server path) is the acceptance test.
 
 **S7-9. Player-to-player private sales (§3.1, not in the first SR) — no message located.**
-Status `OPEN` (UNCLEAR). Rulebook §3.1. Detail: confirm whether the product intends player↔player private trades;
-if yes, a new message pair through the Stage-2 machinery with its own owner rule; if no, record in Part D.
+Status `DEFERRED` → owned by **Batch 7.4** (owner ruling Q12, 2026-09-15, D-24). Rulebook §3.1: "Private companies may
+be sold between players for any mutually agreed price at any time during the buyer's or the seller's turn of a stock
+round (other than the first)" — a private-company rule, not a certificate rule; the ½–2× band of the corporation
+sentence does not apply. Detail: the third bilateral offer kind on the Stage-7 pending-offer machinery
+(`ProposePrivateTrade` / `AnswerPrivateTrade` / `RescindPrivateTrade`, `private_trade_offer`): Stock Round, not the
+first, the seat is the buyer or the seller, seller owns the open private, distinct players, integer price ≥ 0,
+buyer cash ≥ price, other party consents, payment player → player, legality re-derived at proposal / answer /
+settlement, the one-offer hold, proposer may rescind, `RevertTo` rebuilds it; **and the buyer must remain within
+the overall certificate limit after the acquisition** (rulebook §4.3 counts a private as one certificate;
+`certificateBreakdown` already counts open privates as counted certificates) — checked at proposal, answer and
+settlement, a stale board refusing/retiring without moving money or ownership (owner, 2026-09-15). What travels
+with the card is D-26; the Stock Round bookkeeping is D-27. Design
+`BATCH7_TRANSACTION_AUTHORITY_DESIGN_2026-09-15.md` §7.6a, with the required 7.4 tests (limit ± 1, stale-limit
+retirement, seller's count, the N1 and N2 matrices). Replay: new messages and field — bump (version 5).
+
+**S7-10. Auction proceeds and terrain fees are never credited to the bank.**
+Status `RESOLVED` — Batch 7.1 (#1560). `applyAuctionStep`'s inline `Math.max(0, cash - amount)` is a
+`transfer(player -> BANK)` (a $0 Schuylkill Valley acquisition still moves $0), and the `LayTile` terrain fee
+is a `transfer(treasury -> BANK)` behind #891's unchanged affordability gate. Proved on the frozen JUNO-CV4
+log: the seven auction charges credit the bank $755 in total (idx 1 +$20 … idx 10 +$220, the mini-auction win
+at idx 8 +$135 included) and the three terrain lays at idx 27 / 78 / 163 each move $80 from the treasury to
+the bank. Corpus consequence (reported, not re-pinned): the bank figure differs in every log that holds an
+auction or a terrain lay, from the first auction purchase onward — see the Batch 7.1 report's
+first-difference table. Historical: found by the Batch 7 design pass (2026-09-15, `BATCH7_TRANSACTION_AUTHORITY_DESIGN_2026-09-15.md` §4).
+`applyAuctionStep` debits the buyer/winner with an inline `Math.max(0, cash − amount)` and credits nobody; the
+`LayTile` terrain fee is `adjustTreasury(−fee)` alone. A conservation probe (bank + every cash + every treasury after
+every replayed entry) shows the bank constant through every private purchase in each of the six server logs that hold an auction, so the bank
+is short by the whole auction and breaks early in every game. Rulebook: every purchase is paid to the bank. Replay:
+replay-semantic for the bank field of every log — bump. Owner ruling owed (design §11 Q1a/Q1b: credit the bank;
+allow a signed bank after the break in place of the m11 floor).
+
+**S7-11. Offer counterparties are trusted from the payload.**
+Status `OPEN` — design pass, probe-proved. `ProposePrivatePurchase.owner` and `ProposeTrainPurchase.seller_president`
+are copied into the offer and `consentAnswerRefusal` checks the actor against them, so the proposer can name himself,
+answer his own offer, and the derived `BuyPrivateCompany` / `BuyTrainFromCorporation` settles (another player's
+private taken for $1). Detail: the answerer is the private's *current* owner / the seller's *current* president,
+re-derived from the state; the payload names become narration. Design §7.6. Replay: refusal-added; bump.
+
+**S7-12. Direct settlements need no consent, no funds and no sane price.**
+Status **partially `RESOLVED` (the money) / `OPEN` (consent, phase, step, band, operating corporation)** —
+Batch 7.1 (#1563) closed the half that destroys or invents money: `transferPrivateToCorporation` now requires
+a PLAYER seller (a corporation-owned or unowned private refuses instead of debiting the buyer and paying
+nobody — rulebook 3.1's "bought by railroad corporations but not sold by them"), pays that player through the
+ledger, and refuses a negative or fractional price instead of running the payment backwards; `settleTrainSale`
+moves the money first, so a price the buyer's treasury cannot cover refuses the whole sale rather than
+delivering the train and flooring the payment. The $1 minimum, the band, the phase, the step, the operating
+check and consent are rules and stay with Batch 7.4. Batch-5's D-5 emergency sale is unaffected: it is a
+player -> corporation directed offer and its gates already stood in front of the same transfer.
+Historical: design pass, probe-proved. A client-sent `BuyTrainFromCorporation` with no offer takes any
+corporation's train for $0 (a negative price is discarded); a client-sent `BuyPrivateCompany` takes any player's
+private at any price (a negative price pays the treasury and zeroes the owner), in any phase, at any step, from a
+buyer that is not operating; a corporation-owned or unowned private transfers with the price paid to nobody
+(`transferPrivateToCorporation` credits only a player `owner`). Detail: one predicate per transaction reused at
+proposal, answer and settlement; a direct message is legal only when the actor is both principals (the shell's
+same-president dispatch). Design §7.4 / §7.5. Replay: refusal-added; bump (FCJ's direct trades on the log-derived
+board are affected — reported in §9 of the design).
+
+**S7-13. `BuyStock` / `SellStock` have no round gate, and the IPO price comes off the message.**
+Status `OPEN` — design pass, probe-proved. Both arms apply during an Operating Round (operating president) and
+during the auction (the contest's current player); `BuyStock` prices an IPO share from `msg.par_value` (a $1 share
+on a parred corporation) and a president's purchase accepts any positive par (absorbs S8-9's par half, which the
+Stage-7 brief §5 owns). Design §7.2 / §7.3. Replay: refusal-added; corpus: no forged par anywhere, JUNO-Z6C 388 is a
+Stock Round sale inside an OR, JUNO-FCJ 83/150/153/282/285/366/369 are OR-time buys (already-diverged board) — bump.
+
+**S7-14. No ordinary-offer rescission; offers outlive the turn and the round; a proposal overwrites a standing offer; nothing blocks progression while one waits.**
+Status `OPEN` — design pass. `RescindTrainOffer` / `AcceptTrainOffer` / `RejectTrainOffer` are chain-era no-ops
+(`offer_id`); nothing clears `private_purchase_offer` / `train_purchase_offer` at turn or round end (JUNO-FCJ 232
+was proposed at Tokens and declined at 234 in the following Stock Round; 273/274 both in a Stock Round). Detail:
+design §7.6 — one offer at a time, the hold, two new rescission messages, settlement-time revalidation. Replay:
+refusal-added; bump.
+
+**S7-15. Main-rotation auction messages are applied during a live mini-auction.**
+Status `OPEN` — design pass. `WaterfallPass` / `WaterfallBuyLowest` / `WaterfallBidHigher` do not check
+`mini_auction`; the contest's current player (who passes the ingress seat check) can move the main rotation
+mid-contest. Detail: refuse the three while a contest is live. Design §7.7 (5). Replay: refusal-added; bump.
+
+**S7-16. `SellStock` accepts a percentage that is not a multiple of 10.**
+Status `OPEN` — design pass, probe-proved (`percentage: 15` leaves a 5 % holding). Schema keeps `finite`; the
+reducer refuses non-multiples (the double's 20 semantics unchanged). Replay: refusal-added; bump.
+
+**S7-17. Refusal-by-identity is dead on every board that carries `market_positions`.**
+Status `OPEN` (cross-reference S10-1) — design pass. `applySandboxActionAfterAuction` allocates `settled` before the
+core runs, so every reducer refusal on a pinned board returns a new object and `actionWasRefused` / `after !== before`
+cannot see it. Stage-7 tests assert refusals by `stateDigest` equality, never by identity. No gameplay change.
+
+**S7-18. A Brown-zone second pool message need not name the corporation of the first.**
+Status `OPEN` — design pass. `allowsExtraPoolBuys(zone, source)` waives the one-purchase rule for any Brown pool
+share; rulebook 4.4 is "the bank pool of one corporation". Detail: `bought_this_turn_company` (cleared with
+`bought_this_turn`), design §11 Q9. Replay: refusal-added; bump.
+
+**S7-19. `BidOnPrivate` advances the seat without the auction atom; the `AcceptTrainOffer` family is reachable on a pinned board.**
+Status `OPEN` (with S10-8) — design pass. `BidOnPrivate` is undispatched and absent from the corpus but its arm is
+`advanceSeat` while `applySandboxWaterfallAction` ignores it, desynchronising the seat from `waterfall.current_turn`.
+Detail: refuse all four on pinned boards (design §11 Q11 — ruled YES, D-23); the type/schema retirement stays S10-8.
+
+**S7-20. The bank break is not latched.**
+Status `RESOLVED` — Batch 7.1 (#1561). `bank_broken?: true` is written by `cashLedger.debitBank` the first
+time a payout leaves the balance at or below zero (a zero debit never latches: the bank is exhausted by a
+payout, not by a message that pays nobody), and is cleared by nothing — no credit, no arm, no settlement.
+`bankIsBroken` is now `state.bank_broken === true || Number(virtual_bank_vgp) <= 0`, the second half kept for
+fixtures and legacy boards that carry no field (#232). **Review addendum (2026-09-15):** both writes of the
+balance go through one `withBankBalance`, which also MATERIALISES the field on any write to a board
+`bankIsBroken` already answered `true` for. Without it the invariant held only for boards dealt after 7.1: on a
+legacy board the sole record of the break is the balance, so a receipt lifting −$20 to $80 erased it and
+`bankIsBroken` went true → false across a credit. Not a reinterpretation (the predicate's answer is unchanged
+before and after; only its durability changes) and not a corpus change (no stored bank reaches zero — the
+re-run sweep is step-for-step identical). A solvent legacy board and an unreadable balance still acquire
+nothing. `settleRoundTransitions`' single ask and #898's timing
+are unchanged in shape, and the `App.tsx` badge is correct with no UI change because it reads the same
+function (U-27, now pinned by test). `RevertTo` past the breaking payout rebuilds a board without the field
+by construction — no revert-specific code exists. Regression: `bankBreakLatch.test.ts` (fourteen cases,
+including the owner's `$10 -> pays $30 -> -$20 latched -> receives $100 -> $80 still latched -> GameEnd`, the
+exact-zero latch, the deeper payout, the recovering receipt, the legacy board with no field, the `RevertTo`
+rebuild through `replayLog`, conservation across the whole sequence, and the badge/reducer shared predicate).
+Corpus: **no log latches** — the bank's lowest point across all thirteen is $8,050 under the old engine and
+$8,800 under 7.1 (the auction and terrain money it never used to receive), so no stored game's ending moves.
+Historical: found by the Batch 7 design pass, revision 2 (owner's Q1b check). `endgame.bankIsBroken` is
+`Number(virtual_bank_vgp) <= 0`, asked once, in `settleRoundTransitions`' `operating_round_just_ended` branch (#898):
+the ending is re-derived from the balance at the set boundary. Nothing records that the bank ran out, so a bank that
+a payout empties and the same set's train / token / share purchases refill has, at the boundary, a positive balance
+and the game plays on — under today's floor and under signed accounting alike. `App.tsx` 12548 draws the badge from
+the same live predicate. Detail (Batch 7.1, design §7.1a): `bank_broken?: true` written by the ledger's bank debit the
+first time the balance leaves `≤ 0`, never cleared by a mutation (only a `RevertTo` past the payout rebuilds without
+it); `bankIsBroken` = latch, else the legacy balance test; the single ask in `settleRoundTransitions` and the badge
+unchanged in shape. Regression: bank crosses zero → later receives enough to be positive → the end condition remains
+triggered at the set boundary. Replay: replay-semantic (a recovered bank now ends the game; the field joins the
+digest) — bump; the 7.5 sweep reports the first-latch index per log.
 
 ### Stage 8 — Stock / OR edge cases + timing
 
@@ -463,20 +610,26 @@ reader to reuse; validate against `home_hex_label`. Replay: refusal-only on hand
 claiming the corpus contains no wrong-hex placement — bump anyway if any stored entry would now be refused.
 
 **S8-7. No "no sales in the first Stock Round" rule in the reducer.**
-Status `OPEN` — audit **M7**. Rulebook §5.1. Notes: `shareSaleBlock` (`shareSale.ts`), `SellStock` arm; the
+Status `OPEN` — **absorbed by Stage 7, Batch 7.2** (owner ruling Q2, 2026-09-15; design §7.2 `stockSaleRefusal` rule 3;
+the Delayed-Auction SR1 counts as the first Stock Round). Audit **M7**. Rulebook §5.1. Notes: `shareSaleBlock` (`shareSale.ts`), `SellStock` arm; the
 Rules Reference already shows the ban only when `roundLabel` parses as SR1. Replay: refusal-added; bump.
 Detail: refuse when `macro_round_number === 1 && current_round_type === "StockRound"`; Delayed-Auction tables:
 refuse only the first SR, not the SR after the auction. Stage 5's forced sale cannot occur in SR1 (no OR yet).
 
 **S8-8. Shares of an unparred corporation (C&A's PRR 10%, M&H's NYC 10% before a president) can be sold, priced at the $67 nominal fallback.**
-Status `OPEN` — audit **M8**. Rulebook p.15 (cannot be sold until the president's certificate is bought).
+Status `OPEN` — **the sale half absorbed by Stage 7, Batch 7.2** (owner ruling Q2: a C&A/M&H-granted share cannot be
+sold before the corporation is parred — design §7.2 `stockSaleRefusal` rule 4); the `priceOf` fallback prose stays
+here for Stage 8. Audit **M8**. Rulebook p.15 (cannot be sold until the president's certificate is bought).
 Notes: `applySandboxMarketAction` `priceOf` fallback (`SANDBOX_NOMINAL_SHARE_PRICE`), `shareSaleBlock`. Stage 5's
 `sharePriceFor` uses the same `?? 67` fallback for legal-sale projection — a forced sale of an unparred share is
 therefore projectable today (refused only once this lands; note it in the emergency tests). Replay:
 refusal-added; bump. Detail: refuse a sale when `par_value` is null; `priceOf` must not fall back on a sale.
 
 **S8-9. Par value from the message is not validated against the ladder; an IPO buy on an unparred corporation is silently converted to the president's purchase.**
-Status `OPEN` — audit m8. Rulebook §4.2 / §5.2 (67/71/76/82/90/100). Notes: `BuyStock.par_value`,
+Status `OPEN` — **absorbed by Stage 7, Batch 7.2** (owner ruling Q2/Q4, 2026-09-15; design §7.2 rules 3–4: the
+president's purchase requires an integer par on a legal par cell of the chart in use, the certificate in the IPO and
+exactly 2×par in cash; an ordinary IPO purchase prices from the stored par and ignores the payload; no $67
+fallback). Audit m8. Rulebook §4.2 / §5.2 (67/71/76/82/90/100). Notes: `BuyStock.par_value`,
 `ctx.parValue ?? 67`, `PAR_VALUE_LADDER` (`marketGeometry.ts`). Replay: refusal-added; bump. Detail: refuse
 `par_value ∉ PAR_VALUE_LADDER`; require it on a president's purchase.
 
@@ -742,6 +895,112 @@ not); only the control is missing. `DEFERRED`.
 **U-18.** (sweep) The "reservation" vocabulary (`privateReservations.ts`, seven exported symbols across four
 files) is a recorded misnomer; rename mechanically when nothing else is in flight. `DEFERRED` (naming only).
 
+**UI-parity entries from the Batch 7 design pass (2026-09-15; design §12b; owner's standing requirement).** Each is
+`OPEN` until fixed, verified obsolete or adjudicated — the Playtest Readiness gate (Part F) holds them.
+
+**U-19.** (S7-9 / D-24) **Player ↔ player private-company sale — NEW ACTION + STATE VISIBILITY + RULES REFERENCE.**
+No UI exists: initiation by either party on an eligible Stock Round turn (not SR1), counterparty and price entry,
+the counterparty's accept/reject prompt (off-turn, the `FundingPrivateOfferPrompt` shape), the proposer's rescind,
+the pending-offer line and hold on every seat, and a Rules Reference sentence for §3.1's player-to-player rule.
+`OPEN`.
+
+**U-20.** (S7-6 / S7-7 / S7-12 / D-18) **Ordinary player → corporation private purchase — LEGALITY SYNC + NEW ACTION +
+STATE VISIBILITY.** Verified: the `ProposePrivatePurchase` panel opens for the acting president in phases 3–4 at any
+Operating step (not step-gated — correct under D-18), with a typed price inside the ½–2× band and the owner's
+accept/reject prompt; the same-president case settles at once. Not read from the authority: treasury ≥ price,
+`closed`, player-owned seller (a corporation-owned private is offered today), buyer = operating corporation — the
+panel must read `privatePurchaseRefusal`. No withdraw control for the proposer (`RescindPrivatePurchase`, Batch
+7.4's new message; U-6 already asks for a visible withdrawal); the proposer's "awaiting" line and the hold need a
+surface. **Batch 7.1 outcome (LEGALITY SYNC, unchanged in scope):** the reducer now REFUSES a purchase whose
+treasury cannot cover the price, whose private has no player seller (corporation-owned or unowned), or whose
+price is negative or fractional — silently, by identity (S10-1), so the panel still offers all four. The
+predicate the panel must read is still Batch 7.4's `privatePurchaseRefusal`; 7.1 only means the illegal
+version now does nothing instead of moving money. `OPEN`.
+
+**U-21.** (S7-5 / S7-8 / S7-12 / D-18 / D-20 / D-23) **Intercorporate train sale — LEGALITY SYNC + NEW ACTION +
+STATE VISIBILITY.** Verified: the proposal panel renders at `Hardware` only (timing already right); price ≥ $1,
+treasury and the same-president shortcut are not read from `trainSaleRefusal`; the answer prompt exists. The
+on-chain `TrainTradePanel`'s "Rescind" dispatches `RescindTrainOffer { offer_id }` — a sandbox no-op that D-23 now
+refuses on pinned boards — so the sandbox needs its withdraw wired to `RescindTrainPurchase` and the chain-era
+Accept/Reject/Rescind controls retired from room play (S10-8 keeps the types). **Batch 7.1 outcome (LEGALITY
+SYNC, unchanged in scope):** `settleTrainSale` moves the money before the train, so a purchase the buyer's
+treasury cannot cover is now refused outright rather than delivered with a floored payment; the panel still
+offers it, because the price and treasury predicate is 7.4's. `OPEN`.
+
+**U-22.** (S7-8 / S7-14 / D-19) **Pending-offer global hold — STATE VISIBILITY.** While an ordinary offer of any
+kind waits, End Turn / Pass / Skip / every purchase control must be disabled on every seat with the hold's sentence
+("X is on offer to Y; nothing else can happen until …"), the way the Batch-5 funding freeze is surfaced; the
+ingress `refused` sentence must reach the banner for every Stage-7 refusal (S10-1). Folds U-6's "the table is
+waiting on X" surface. `OPEN`.
+
+**U-23.** (S8-7) **First-Stock-Round sale ban — LEGALITY SYNC + RULES REFERENCE.** Sell is disabled in SR1 by the
+panel's own `macroRoundNumber === 1` (#356) — a local restatement that must become a read of `stockSaleRefusal`
+(one predicate for the SR1, unparred and bundle rules) — and the tooltip reads "No selling in the first Stock Round
+— Project 18XX opens the market to sales from SR2 onward", presenting rulebook §5.1 as a house variant; correct
+the copy and the Rules Reference's Stock Round text; verify the Delayed-Auction SR1 shows the same. `OPEN`.
+
+**U-24.** (S8-8) **Unparred-share sale ban — LEGALITY SYNC.** The Sell control is live for the holder of a C&A/M&H
+granted share before the corporation is parred (no price to quote, the button still dispatches); it must read
+`stockSaleRefusal` and disable with the reason. `OPEN`.
+
+**U-25.** (S8-9 / S7-1 / S7-13 / S7-16 / S7-18 / D-17 / D-22 / D-25) **Par ladder, president's cost, affordability,
+empty source, Brown-zone same-corporation continuation, bundle sizes — LEGALITY SYNC.** `PAR_BOX_PRICES`, the
+panel's own `cannotAfford` (#357), the source toggle and `multiBuyMax` (computed from the panel's own reading of the
+pool percentages — whether a 0 % source still offers Buy is decided locally) and `SELL_PERCENTAGE_OPTIONS` are local
+restatements of rules the reducer now owns; the quantity/continuation control knows nothing of
+`bought_this_turn_company` (today no continuation message is dispatched under Sell-Buy-Sell, but any future
+continuation control or a legacy-revision game would offer the wrong corporation). `purchaseBlockFor` /
+`saleBlockFor` become thin wrappers over `stockPurchaseRefusal` / `stockSaleRefusal`; the ladder control reads
+`parCellFor` (verify the dynamic-market par row); an undeliverable purchase is never offered.
+**Batch 7.1 outcome (LEGALITY SYNC, unchanged in scope):** an unaffordable `BuyStock` is now refused by the
+ledger boundary instead of minting the difference (26 corpus entries, S7-1). The panel's own `cannotAfford`
+(#357) already stops the ordinary player from reaching it, so no control changes today; what is left is the
+sync — `purchaseBlockFor` reading `stockPurchaseRefusal` — and it stays 7.2's. `OPEN`.
+
+**U-26.** (S7-2 / S7-3 / S7-4 / S7-15 / D-16 / D-21) **Auction — LEGALITY SYNC + STATE VISIBILITY + RULES
+REFERENCE.** Verified NONE: escrow-aware affordability and minimum raise (`auctionFunds` / `bidRejectionReason` /
+`minimumBidFor` — the helpers the reducer will share) and Buy-only on the lowest card. To sync: the mini-auction
+button is "Drop-out" and the passer vanishes from the contest — under S7-3 the passer stays, is re-prompted on his
+turn, and the passes-since-raise count decides the end; "One bid per private company" refuses the own-bid raise the
+owner ruled legal (D-16). To show: the all-pass narration marks down only the SV and pays revenue only when the SV
+is sold (D-21). Rules Reference auction text (owner's WIP, U-11): SV-only markdown, re-entry, escrow, no bid on the
+lowest. `OPEN`.
+
+**U-27.** (S7-10 / S7-20 / D-15) **Bank crediting, signed bank, bank-break latch — badge NONE (confirmed); narrow
+STATE VISIBILITY + RULES REFERENCE.** Verified: `App.tsx` 12548 renders the "bank broken" badge from the shared
+`bankIsBroken(gameState)` imported from `gameEngine/endgame` — the same function `settleRoundTransitions` asks —
+so once that function reads the latch the badge is correct with no UI change and no duplicate logic (7.1's
+regression (d) pins the shared call). **Batch 7.1 outcome: the badge is confirmed NONE and needs no
+implementation** — `bankBreakLatch.test.ts` "the badge and the ending read the same predicate (U-27)" asserts
+both halves (the source reads `bankIsBroken(gameState)` from `gameEngine/endgame` and names no second notion of
+"broken"; and the one board where a duplicate rule would disagree — a latched bank with a solvent balance —
+answers the badge and the reducer identically). Remaining, narrow, and now with the exact call sites verified
+against the signed bank: `utils/bankBreak.ts` `bankBreakWarning` clamps with `Math.max(0, ...)`, so a bank at
+-$20 renders "Bank Break: $0 remaining" and keeps the countdown's amber/crimson wording rather than saying the
+bank has broken; `components/FinancialLedger.tsx` 184 prints `$-20` and its "Paid Out So Far" percentage (160)
+exceeds 100%. Render "Bank broken — owes $N" in both, and check the Rules Reference's bank-break timing text.
+`OPEN` (narrow).
+
+**U-28.** (Playtest Readiness task; owner, 2026-09-15) **Retrospective Batch 1–6 UI-parity audit.** Not performed in
+the Batch 7 design session. Inspect the completed Batch 1 … 6 reports (`BATCH1_…` through `BATCH6_…`) and the
+current frontend, classify every authoritative rule they introduced or changed under the UI-parity standing rule,
+and add every missed Part C item — including board legality such as the private-company hex blocking (S6-7), the
+Batch-3 station gate, the Batch-4/4.6 train-limit and discard flows, the Batch-5 emergency surfaces (U-4) and the
+Batch-6 route refusals (S6-13's duplicated validators). `OPEN` (gate item).
+
+**U-29.** (S7-1 / S7-10 / S7-12 / D-15; filed by Batch 7.1) **A ledger refusal is invisible — STATE
+VISIBILITY.** Batch 7.1 turned four silent money faults into silent refusals: an unaffordable stock purchase,
+an unaffordable corporate private purchase or intercorporate train purchase, a private with no player seller,
+and a malformed (negative or fractional) price now leave the board untouched instead of minting or destroying
+money. All four refuse INSIDE the reducer, by identity, with no ingress counterpart — 7.1 adds no rule
+predicate, so there is no sentence for the room banner to show (S10-1), and the reducer's no-op is
+indistinguishable on screen from a dropped message. The ordinary player rarely meets one (the Stock Round
+panel's own `cannotAfford` (#357) and the private trade panel's band already stop the common cases before
+dispatch), but a racing or reloading client can, and the failure mode is a control that appears to do nothing.
+Closed for ordinary play when Batch 7.2's `stockPurchaseRefusal` and Batch 7.4's `privatePurchaseRefusal` /
+`trainSaleRefusal` answer at ingress with their sentences (U-20, U-21, U-22, U-25); until then the gap is
+recorded here rather than left to be rediscovered as "the Buy button did nothing". `OPEN`.
+
 ---
 
 ## Part D — Deliberate rules deviations and owner decisions (never to be "fixed" as bugs)
@@ -774,6 +1033,69 @@ files) is a recorded misnomer; rename mechanically when nothing else is in fligh
 
 **D-14. Under Unpredictable Revenue, "Last Run" reports the variant-adjusted figure, not the printed route value** (#903; `printed_route_revenue` accumulates within a turn, #968). TRIAGE_2026-09-05 item 24 — answered by the headless replay (MIGRATION_PLAN "Item 24 — answered", #1195): not corruption; three correct behaviours compounding. `RESOLVED`; recorded so the card's figure is not reported as a desync again.
 
+**D-15. Money paid to the bank increases the bank; the bank is signed after it breaks; the break is latched.** Owner,
+2026-09-15 (Batch 7 design Q1a/Q1b). Auction proceeds and terrain fees credit the bank (they never did — S7-10);
+after the bank runs out its balance goes negative rather than flooring (m11 withdrawn as "paper tracking"); a
+`bank_broken` latch written at the first non-positive balance is never un-set by a receipt (S7-20). `OWNER DECISION`.
+
+**D-16. A player may raise his own standing bid during the initial buy/bid sequence.** Owner, 2026-09-15 (Q3): the
+§1.2.3 note that a player gains little benefit from bidding twice on the same company supports repeated bids on one
+company. `OWNER DECISION` (rulebook reading).
+
+**D-17. Ordinary IPO purchases are priced from the corporation's stored par; a message-carried `par_value` is narration.
+The president's purchase requires the par on the message and validates it against the legal par cells of the chart in
+use; there is no fallback par.** Owner, 2026-09-15 (Q4). `OWNER DECISION` (authority placement).
+
+**D-18. Offer timing: a corporation's private-company proposal may be made at any step of its Operating Turn (§3.0
+"at any time"); an intercorporate train-sale proposal only at Buy Trains, so an acceptance can never deliver a train
+before Run Trains.** Owner, 2026-09-15 (Q5). `OWNER DECISION` (interpretation of §6.6 / §6.4 note).
+
+**D-19. A pending ordinary transaction offer freezes progression until it is answered, rescinded or settled; `RevertTo`
+and `CloseRoom` still pass.** Owner, 2026-09-15 (Q6). One offer at a time, of any kind, never beside a funding offer.
+`OWNER DECISION` (digital rule; the physical game answers at the table).
+
+**D-20. A voluntary intercorporate train purchase is paid entirely from the buying corporation's treasury; presidential
+cash enters only through the forced-purchase rules (D-6).** Owner, 2026-09-15 (Q7). `OWNER DECISION` (§6.1 note +
+§6.6.2 reading).
+
+**D-21. The all-pass markdown applies only to the Schuylkill Valley, under every roster; under LPF the JK or any other
+lowest unsold private does not inherit it.** Owner, 2026-09-15 (Q8). `OWNER DECISION` (rulebook-literal §1.2.3).
+
+**D-22. A Brown-zone Bank Pool purchase may still be expressed as several `BuyStock` messages in one turn; every
+continuation must name the corporation recorded in `bought_this_turn_company`; it is one purchase for turn purposes.**
+Owner, 2026-09-15 (Q9). `OWNER DECISION` (representation).
+
+**D-23. Seat/turn authority stays at the ingress only; reducer transaction rules add round/action legality and never
+duplicate historical seat authority (JUNO-3XD's SR1 is seated by the pre-#1235 constant). `BidOnPrivate`,
+`AcceptTrainOffer`, `RejectTrainOffer`, `RescindTrainOffer` are refused on pinned boards from Stage 7; their
+type/schema retirement stays S10-8.** Owner, 2026-09-15 (Q10/Q11). `OWNER DECISION` (engineering).
+
+**D-24. Player ↔ player private-company sales are implemented (§3.1) as the third bilateral offer kind, without the
+½–2× band.** Owner, 2026-09-15 (Q12) — see S7-9 for the semantics. `OWNER DECISION` (product; rulebook-consistent).
+
+**D-25. A stock purchase from a source that cannot deliver every certificate asked is refused outright — never capped,
+never charged less, never charged for nothing.** Owner, 2026-09-15 (Q13; audit m9). `OWNER DECISION`.
+
+**D-26. What travels with a private company sold player → player (Batch 7 N1, accepted).** Ownership of the private
+transfers with every still-unexercised ownership-dependent power: the M&H's exchange ability follows the M&H (it
+belongs to the current owner until exercised); CS / D&H / JK and comparable still-live abilities follow the private
+(a used ability stays used — `used_private_abilities` is per private). Already-vested one-time benefits neither
+transfer nor trigger again: the C&A's already-issued PRR share stays with whoever holds that share and a later sale
+of the C&A issues nothing; the B&O's already-issued president's certificate / par stay with the auction winner and
+a later sale of the BO private retriggers nothing. The BO private itself **may** be sold player → player — the
+printed prohibition (§3.1) is against selling it to a corporation. Owner, 2026-09-15. `OWNER DECISION`
+(authoritative Batch-7 ruling).
+
+**D-27. A player ↔ player private-company transaction counts as Stock Round transaction activity by the
+current-turn player (Batch 7 N2, overridden).** It does not consume the one corporation-stock purchase. Exact
+bookkeeping on settlement (inside the answer arm, on `accept: true`, nothing on a refusal/rejection/rescind):
+`turn_action_taken: true` for the current-turn player (End Turn is then `advanceSeat`, never `recordPass`);
+`consecutive_passes: 0`; `last_trader_index` = the current-turn player (`markTrader` — the priority deal treats
+that player as the latest trader under the digital reading of §5.0); `bought_this_turn` and
+`bought_this_turn_company` untouched; the seat cursor untouched (the counterparty's acceptance is an off-turn
+consent answer, not a Stock Round turn); `stock_turn_stage` untouched. Owner, 2026-09-15. `OWNER DECISION`
+(recorded so no later code infers it from §5's certificate terminology).
+
 ---
 
 ## Part E — Replay / version ledger (what a rebuilt room can differ by)
@@ -801,3 +1123,12 @@ auction rewrite as one function (S7-2…S7-4), the Stage-8 ordering repairs (S8-
 settlement items follow `MIGRATION_PLAN.md` #1254 (2.5b → 2.5d → 2.5g → 3a → 3b → 3c → 4). UI/polish items in
 Part C run in parallel and never gate a stage. The owner's roadmap governs; this paragraph is a recommendation
 inside it.
+
+**Playtest Readiness gate (owner, 2026-09-15).** Before substantive playtesting resumes, every authoritative rule
+introduced or changed during Batches 1–10 must either have a correct normal UI path/representation or a resolved
+Part C item. A legal ordinary action must not require crafted messages, and common illegal actions should not be
+presented as apparently legal where the client can determine legality. Every Part C UI-parity item (U-19 … U-28
+and every successor filed under the UI-parity standing rule, U-28's retrospective audit included) must be
+**fixed, verified obsolete, or explicitly adjudicated by the owner** — never merely deferred to a final polish pass.
+Part C is the one UI backlog: no batch report substitutes for it and no second competing list is kept. A batch
+that resolves an engine item without filing its UI-parity classification has not finished.

@@ -164,3 +164,23 @@ export {
   type RouteSetInput,
   type ProposedWaypoint,
 } from "./routeAuthority";
+/* #1560: the money ledger -- the one boundary every debit and credit in the engine goes through, and the
+   conservation harness the corpus is swept with (Batch 7.1; `RULES_HARDENING_BACKLOG.md` S7-1 / S7-10). */
+export {
+  BANK,
+  bankFundsOf,
+  creditBank,
+  creditPlayer,
+  creditTreasury,
+  debitBank,
+  debitPlayer,
+  debitTreasury,
+  playerCashOf,
+  transfer,
+  treasuryOf,
+  moneyTotal,
+  moneyConservationBreach,
+  assertMoneyConserved,
+  type LedgerResult,
+  type MoneyAccount,
+} from "./cashLedger";

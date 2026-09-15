@@ -502,6 +502,23 @@ export interface GameStateResponse {
    *  the game ends"). The one fact the ended board must carry -- the obligation that proved it is gone with
    *  the round. Absent on every board that ended any other way, and on every board still being played. */
   bankrupt_president?: string;
+  /** ==================================================================
+   *   DESIGN NOTE 1561: THE BANK BROKE, AND IT STAYS BROKEN (S7-20)
+   *  ==================================================================
+   *
+   * Written by `cashLedger.debitBank` the first time a payout leaves the Bank's balance at or below zero, and
+   * cleared by nothing: no receipt, no arm, no settlement. `bankIsBroken` reads it first and falls back to the
+   * live balance test only for boards that carry no field -- #232's "the log does not say", which is every
+   * fixture and every legacy log written before this batch.
+   *
+   * Absent means "never broken". `false` is never written: a board either says it broke or says nothing, so
+   * the field joins the digest only where the fact exists.
+   *
+   * IT IS NOT A DATE. #898 established that "the game ends when the first OR SET COMPLETES at or after the
+   * break", which needs no `bank_broke_at` and no macro-round comparison -- `settleRoundTransitions` asks at
+   * the boundary and this says whether the break has ever happened. `RevertTo` past the breaking payout
+   * rebuilds a board without the field, because state is a function of the log (#1026). */
+  bank_broken?: true;
   macro_round_number: number;
   sub_round_index: number;
   operating_round_sequence_length: number;

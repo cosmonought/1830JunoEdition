@@ -206,3 +206,19 @@ export {
   type StockPurchasePlan,
   type StockPurchasePricing,
 } from "./stockTransactionAuthority";
+
+/* Design note #1580 (Batch 7.3): the private auction's one authority, on the engine's surface for the reason
+   the other two are -- the server, the CLI and the dashboard must ask the rule rather than restate it. */
+export {
+  auctionActor,
+  auctionRefusal,
+  isAuctionMessage,
+  legacyBidRefusal,
+  lowestOffered,
+  miniPassRefusal,
+  miniRaiseRefusal,
+  standingBidOn,
+  waterfallBidRefusal,
+  waterfallBuyRefusal,
+  waterfallPassRefusal,
+} from "./auctionAuthority";

@@ -292,19 +292,30 @@ describe("mini-auction rotation", () => {
     }
   });
 
-  it("passes to the lowest bidder still in after a drop-out", () => {
+  it("passes to the next bidder after the passer -- who stays in the contest (Batch 7.3)", () => {
     /* The `nextSeat` accident this replaced: it was handed the SHRUNKEN list
        plus the departing player, so `indexOf` returned -1 and the cursor
        jumped to index 0 every time. That agreed with the rule often enough
-       to look correct. Asserted as the intent now. */
-    const wf = threeWay(); // queue [DOT, BEN, ADA], cursor DOT
+       to look correct. Asserted as the intent now.
+
+       BATCH 7.3 (#1581) CHANGED WHAT A PASS IS, and this case is where the old meaning was pinned. It used
+       to assert `bidders` had SHRUNK to [BEN, ADA] -- the passer expelled and his bid deleted. Rulebook
+       §1.2.2 says the opposite: a bidder "may pass and still bid later if the auction does not end", and the
+       contest ends when "all of the bidders pass consecutively". So the queue keeps DOT, DOT keeps his $120,
+       the pass is counted in `passes_since_raise`, and the CURSOR behaviour this case is really about is
+       unchanged -- the next bidder after the passer, skipping the leader. */
+    const wf = threeWay(); // queue [DOT, BEN, ADA], cursor DOT, leader ADA
     const after = applySandboxWaterfallAction(
       wf,
       { WaterfallMiniAuctionPass: {} } as never,
       SEATS,
     ).waterfall;
-    expect(after.mini_auction?.bidders).toEqual([BEN, ADA]);
+    expect(after.mini_auction?.bidders).toEqual([DOT, BEN, ADA]);
     expect(after.mini_auction?.current_turn).toBe(BEN);
+    expect(after.mini_auction?.passes_since_raise).toBe(1);
+    // ...and his money is still on the card, which is what lets him come back in.
+    const contested = after.privates.find((entry) => entry.private_id === after.mini_auction?.private_id);
+    expect(contested?.bids.some((bid) => bid.bidder === DOT)).toBe(true);
   });
 
   it("only ever points at somebody still in the contest", () => {

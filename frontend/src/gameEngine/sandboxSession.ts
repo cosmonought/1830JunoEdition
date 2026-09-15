@@ -67,7 +67,10 @@ import {
   isSetupGameMsg,
   waterfallForRoster,
 } from "./gameSetup";
-import { BO_TICKER, eraForPhase } from "./gameConstants";
+import { BO_TICKER, SV_PRIVATE_ID, eraForPhase } from "./gameConstants";
+/* Design note #1580 (Batch 7.3): the private auction's one authority. Asked ABOVE the auction atom, because
+   that atom runs before the board -- see `applySandboxActionOnBoard`. */
+import { auctionRefusal, isAuctionMessage } from "./auctionAuthority";
 import { CA_BONUS_TICKER, CA_PRIVATE_ID, applyPrivateExchange } from "./privateExchange";
 import type { MapGridResponse, MapTileEntry } from "../components/hexContractTypes";
 // Design note #1325: a corporation's home hexes on the board in effect (two for the LPF's C&O).
@@ -79,7 +82,7 @@ import { depotCostFor, depotInventory, derivePhase, openDepotTiers, TIER_ORDER, 
 import { sharePurchaseBlock, type PriceZone } from "./sharePurchase";
 import { hasActedThisTurn } from "./turnAction";
 // Design note #1184: the bid minimum, in one place the button and the board both read.
-import { minimumBidFor } from "./auctionEscrow";
+import { MIN_BID_INCREMENT, minimumBidFor } from "./auctionEscrow";
 import { roundEndSoldOutRises } from "./soldOutRise";
 import { shareSaleBlock } from "./shareSale";
 import { metFloatThreshold, FULL_CAPITALISATION_MULTIPLE } from "./floatThreshold";
@@ -2070,10 +2073,34 @@ export function applySandboxWaterfallAction(
     const passes = waterfall.consecutive_waterfall_passes + 1;
     const wholeTablePassed = players.length > 0 && passes >= players.length;
 
-    /* A full round of passes marks the cheapest private down $5; a private marked to $0 is taken, which is also what guarantees the loop terminates.
-       See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #271 */
+    /* ==================================================================
+        DESIGN NOTE 1580: BOTH HALVES OF THE ALL-PASS BELONG TO THE SCHUYLKILL VALLEY (Batch 7.3, audit C5)
+       ==================================================================
+       #271 wrote this as "a full round of passes marks the cheapest private down $5", and the rulebook says
+       something narrower twice. §1.2.3: "If all players pass and the Schuylkill Valley is UNSOLD, reduce its
+       price by $5" -- the SV by name, not whichever card happens to be cheapest. And, separately: "If all
+       players pass and the Schuylkill Valley HAS been sold, each of the private companies already bought pays
+       revenue. Then the buy-bid-turn sequence resumes."
+
+       TWO RULES, ONE TRIGGER, AND THE ENGINE RAN BOTH EVERY TIME. It marked down whatever was lowest -- the
+       B&O from $220 to $215 in JUNO-Z6C, the James River & Kanawha from $120 to $115 under the Level Playing
+       Field -- and paid private income on every all-pass whether the SV was sold or not.
+
+       SO THE TWO CONDITIONS ARE SEPARATED AND BOTH NAMED. The markdown happens when the private on offer IS
+       the SV; the revenue happens when the SV is no longer in the auction at all. In a game those are the two
+       faces of one fact (the SV is the cheapest private, so it is on offer for exactly as long as it is
+       unsold), and stating them separately is what makes the LPF case right without a variant branch: the JK
+       is never the SV, so it is never marked down, and an all-pass while the SV is still unsold pays nobody
+       (ruling D-21 / Q8).
+
+       THE $0 BRANCH IS STILL A PURCHASE, not a payout: the SV reaching zero means it is TAKEN by the next
+       seat, and it is still unsold at the moment everybody passed -- so no revenue is owed then either. */
+    const svStillUnsold = waterfall.privates.some((entry) => entry.private_id === SV_PRIVATE_ID);
     if (wholeTablePassed) {
-      const target = waterfall.privates.find((entry) => entry.is_lowest_offered);
+      const offered = waterfall.privates.find((entry) => entry.is_lowest_offered);
+      /* Only the SV marks down. A non-SV private on offer (possible only on a board whose SV has been sold,
+         or a fixture that lists no SV) keeps its price, and the all-pass is the REVENUE kind below. */
+      const target = offered && offered.private_id === SV_PRIVATE_ID ? offered : null;
       if (target) {
         const marked = Math.max(0, (Number(target.face_value) || 0) - WATERFALL_PASS_MARKDOWN);
         const taker = nextSeat(players, waterfall.current_turn);
@@ -2096,11 +2123,12 @@ export function applySandboxWaterfallAction(
               { privateId: target.private_id, name: target.name, player: taker, price: 0 },
               ...freed.won,
             ],
-            // Design note #337: this branch IS an all-pass -- the round of
-            // passes that marked the price to zero. The privates pay here
-            // too, and forgetting that would make the payout depend on
-            // whether the markdown happened to land on a round number.
-            allPassed: true,
+            /* Design note #337 reversed by #1580: this branch IS an all-pass, and an all-pass pays private
+               income only when the SV has already been SOLD (§1.2.3). Here it manifestly has not -- it is the
+               card being marked to zero and taken -- so nobody is paid. #337's reasoning was that the payout
+               must not "depend on whether the markdown happened to land on a round number", and that is still
+               true: neither markdown branch pays, for the same reason. */
+            allPassed: false,
             markdown: {
               privateId: target.private_id,
               name: target.name,
@@ -2125,8 +2153,8 @@ export function applySandboxWaterfallAction(
           },
           charges: [],
           won: [],
-          // Design note #337: the two halves of the all-pass rule, together.
-          allPassed: true,
+          // #1580: the SV is unsold -- that is what this markdown is -- so no private income is paid.
+          allPassed: false,
           markdown: {
             privateId: target.private_id,
             name: target.name,
@@ -2137,15 +2165,20 @@ export function applySandboxWaterfallAction(
       }
     }
 
+    /* #1580: the SV has been sold and the table has passed all the way round -- §1.2.3's OTHER all-pass.
+       Every private already bought pays its revenue, nothing is marked down, and the buy-bid-turn sequence
+       resumes. The streak resets for the same reason the markdown branch resets it: the sequence begins
+       again, and the passes that ended it are spent. */
+    const revenueAllPass = wholeTablePassed && !svStillUnsold;
     return {
       waterfall: {
         ...waterfall,
         current_turn: nextSeat(players, waterfall.current_turn),
-        consecutive_waterfall_passes: passes,
+        consecutive_waterfall_passes: revenueAllPass ? 0 : passes,
       },
       charges: [],
       won: [],
-      allPassed: false,
+      allPassed: revenueAllPass,
       markdown: null,
     };
   }
@@ -2154,6 +2187,11 @@ export function applySandboxWaterfallAction(
     const mini = waterfall.mini_auction;
     if (!mini) return unchanged;
     const amount = Number(msg.WaterfallMiniAuctionRaise.bid_amount) || 0;
+    /* Design note #1581: the $5 increment, asked where the state moves -- #1184's lesson, applied to the
+       contest arm it was not applied to. `auctionAuthority.miniRaiseRefusal` states the rule with its
+       sentence and the escrow behind it; this is the same arithmetic standing underneath, so a caller that
+       reaches this sub-reducer directly (a test, a fixture) cannot raise by a dollar either. */
+    if (amount < (Number(mini.high_bid) || 0) + MIN_BID_INCREMENT) return unchanged;
     return {
       waterfall: {
         ...waterfall,
@@ -2177,6 +2215,10 @@ export function applySandboxWaterfallAction(
           // the leader now, so the skip in `nextMiniTurn` is what stops the
           // cursor coming back to them on the lap.
           current_turn: nextMiniTurn(mini.bidders, actor, actor),
+          /* Design note #1581: a raise restarts the count. §1.2.2 ends the contest on passes that are
+             CONSECUTIVE, so the table has to answer this bid from scratch -- including everybody who had
+             already passed against the previous one. */
+          passes_since_raise: 0,
         },
       },
       charges: [],
@@ -2189,14 +2231,29 @@ export function applySandboxWaterfallAction(
   if ("WaterfallMiniAuctionPass" in msg) {
     const mini = waterfall.mini_auction;
     if (!mini) return unchanged;
-    const remaining = mini.bidders.filter((bidder) => bidder !== actor);
 
-    // One bidder left: the mini-auction is over and they take the private at
-    // their standing high bid. Removing the last competitor is bookkeeping;
-    // WHEN a mini-auction may end is the contract's, and this only reflects
-    // the shape the response would then have.
-    if (remaining.length <= 1) {
-      const winner = remaining[0] ?? mini.high_bidder;
+    /* ==================================================================
+        DESIGN NOTE 1581: A PASS IS A COUNT, NOT AN ELIMINATION (Batch 7.3, audit M1)
+       ==================================================================
+       THIS ARM USED TO REMOVE THE BIDDER AND DELETE HIS BID. Design note #313 argued for deleting the bid --
+       "dropping out removes the BID, not just the bidder -- escrow is derived from priv.bids, so the money
+       stayed locked for the rest of the auction" -- and that reasoning is sound about ESCROW and wrong about
+       the RULE it was attached to: §1.2.2 says a bidder "may pass and still bid later if the auction does not
+       end", so there is no dropping out to model. The escrow it was worried about releases anyway, one
+       resolution later, when the private leaves `privates`.
+
+       SO THE BIDDER STAYS, HIS BID STAYS, AND THE PASS IS COUNTED. The contest ends when the count reaches
+       `bidders.length - 1` -- every bidder except the high bidder, who is never asked (`nextMiniTurn` skips
+       him, #544). On a two-bidder contest that is one pass, which is what every contest in the corpus is and
+       why their digests do not move.
+
+       THE WINNER IS THE HIGH BIDDER, always, and at his own `high_bid`. The old arm computed
+       `remaining[0] ?? high_bidder`, which was the same player only because elimination had removed everyone
+       else first. */
+    const passes = (mini.passes_since_raise ?? 0) + 1;
+
+    if (passes >= Math.max(1, mini.bidders.length - 1)) {
+      const winner = mini.high_bidder;
       const target = waterfall.privates.find((entry) => entry.private_id === mini.private_id);
       const price = Number(mini.high_bid) || 0;
       // Design note #271: resolving one contest can immediately expose
@@ -2221,26 +2278,19 @@ export function applySandboxWaterfallAction(
           ...resolved.won,
         ],
         allPassed: false,
-      markdown: null,
+        markdown: null,
       };
     }
 
-    /* Dropping out removes the BID, not just the bidder -- escrow is derived from priv.bids, so the money stayed locked for the rest of the auction.
-       See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #313 */
+    /* Not resolved: the count stands, every bid stands, and the cursor moves to the next bidder after the
+       actor -- skipping the high bidder, as it always has. */
     return {
       waterfall: {
         ...waterfall,
-        privates: waterfall.privates.map((entry) =>
-          entry.private_id === mini.private_id
-            ? { ...entry, bids: entry.bids.filter((bid) => bid.bidder !== actor) }
-            : entry,
-        ),
         mini_auction: {
           ...mini,
-          bidders: remaining,
-          /* The departed player is no longer in `remaining`, so the search starts at the front -- the lowest bidder still in, stated rather than nextSeat's -1 accident.
-             See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #544 */
-          current_turn: nextMiniTurn(remaining, mini.high_bidder, actor),
+          current_turn: nextMiniTurn(mini.bidders, mini.high_bidder, actor),
+          passes_since_raise: passes,
         },
       },
       charges: [],
@@ -2577,6 +2627,27 @@ function applySandboxActionOnBoard(
   msg: GameplayExecuteMsg,
   ctx?: SandboxActionContext,
 ): GameStateResponse {
+  /* ==================================================================
+      DESIGN NOTE 1580: THE AUCTION IS JUDGED HERE, AND HERE IS HIGHER THAN THE OTHER GATES (Batch 7.3)
+     ==================================================================
+     Batches 7.2's stock gates live in `applySandboxActionCore`, on #1019's rule -- ahead of every settle
+     stage. THE AUCTION NEEDS ONE LAYER HIGHER, because #1340 put the auction atom in front of the board:
+     `applyAuctionStep` charges the buyer and writes the winner BEFORE `applySandboxActionAfterAuction` runs,
+     and the board arm then advances the seat (`applyOneAction`'s `WaterfallPass` -> `recordPass`,
+     `WaterfallBuyLowest` -> `advanceSeat`). A refusal asked in the core would therefore arrive after the
+     money had moved, or -- when the 7.1 ledger declined the charge and `applyAuctionStep` returned the board
+     it was handed -- would leave the seat advanced for a purchase that did not happen. Both are the partial
+     application #1019 and #757 are about, one atom further up.
+
+     SO THE WHOLE MESSAGE IS REFUSED, BY IDENTITY, before either atom sees it: no auction state, no cash, no
+     ownership, no priority deal, no pass streak, no seat. `settleAuctionLifecycle` does not run either, which
+     is correct -- it arms and closes the atom, and a message that did not happen cannot have closed it.
+
+     THE PREDICATE IS `auctionAuthority`'s, the same one ingress asks (`turnRefusal`), and the actor it judges
+     is the atom's own cursor -- the player `applySandboxWaterfallAction` would have applied the action as. */
+  if (isAuctionMessage(msg) && auctionRefusal(state, state.waterfall ?? null, msg) !== null) {
+    return state;
+  }
   // #1340: the auction first, as `App.tsx` always ran it -- its charges land before the board is judged.
   const afterAuction = applyAuctionStep(state, msg);
   return settleAuctionLifecycle(applySandboxActionAfterAuction(afterAuction, msg, ctx), msg);

@@ -28,9 +28,14 @@ export interface AuctionTransition {
   won: Array<{ privateId: number; name: string; player: string; price: number }>;
   /** The offered private whose price fell, when everyone passed. */
   markdown: { privateId: number; name: string; from: number; to: number } | null;
-  /** Whether this action was the all-pass that paid private income. */
+  /** Whether this action was the all-pass -- the pass that ended a full round of them.
+   *
+   *  #1580: this is no longer the same question as "was income paid". Rulebook §1.2.3 pays private income on
+   *  an all-pass only once the Schuylkill Valley has been SOLD; before that an all-pass marks the SV down and
+   *  pays nobody. Both are all-passes and both say "everyone passed" on screen; `payouts` is what carries the
+   *  money, and it is read off the boards rather than assumed from this flag. */
   allPassed: boolean;
-  /** The income paid on the all-pass, per private -- empty otherwise. */
+  /** The income actually paid on this action, per private -- empty when none was. */
   payouts: PrivatePayout[];
 }
 
@@ -84,7 +89,27 @@ export function describeAuctionTransition(
     isWaterfallPass(msg) &&
     auctionBefore.consecutive_waterfall_passes > 0 &&
     auctionAfter.consecutive_waterfall_passes === 0;
-  const payouts = allPassed ? applyPrivateRevenue(after)?.payouts ?? [] : [];
+  /* ==================================================================
+      DESIGN NOTE 1580 (narration): PRESENTATION SYNCHRONISED WITH THE AUTHORITATIVE BOARD
+     ==================================================================
+     THIS IS NOT A RULE, AND THE DISTINCTION IS THE WHOLE OF THE NOTE. §1.2.3 decides when private income is
+     paid, and that decision belongs to the reducer alone (`applySandboxWaterfallAction`, #1580): an all-pass
+     with the Schuylkill Valley still unsold marks the SV down and pays nobody; only an all-pass after the SV
+     has sold pays income. Nothing here re-decides any of that, and nothing here may.
+
+     WHAT CHANGED IS THAT THIS MODULE STOPPED ASSUMING. `applyPrivateRevenue(after)` was computed on EVERY
+     all-pass, which was a faithful reading of the board only while the reducer paid on every all-pass. Once
+     it gained a branch that pays nothing, the same line became a claim rather than an observation -- it would
+     have printed a payout for money that never moved, which is #778's failure shape ("a log that cannot
+     distinguish 'did it' from 'declined it'") in the narration layer.
+
+     SO IT IS SYNCHRONISED WITH THE BOARD, the way #1340a says everything here is: private income is funded by
+     the bank in one write (#329/#1560), so a bank that did not fall did not pay. The before/after pair is the
+     evidence, and no rule is restated to read it -- a markdown all-pass and the $0 taker move no money at all
+     and therefore report no payout, whatever the rule behind them happens to be. */
+  const bankPaid =
+    (Number(before.virtual_bank_vgp) || 0) - (Number(after.virtual_bank_vgp) || 0) > 0;
+  const payouts = allPassed && bankPaid ? applyPrivateRevenue(after)?.payouts ?? [] : [];
 
   return { won, markdown, allPassed, payouts };
 }

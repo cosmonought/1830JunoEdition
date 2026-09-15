@@ -1066,6 +1066,26 @@ export interface WaterfallMiniAuctionStatus {
   current_turn: string;
   high_bid: string;
   high_bidder: string;
+  /** ==================================================================
+   *   DESIGN NOTE 1581: HOW MANY BIDDERS HAVE PASSED SINCE THE LAST RAISE (Batch 7.3, S7-3)
+   *  ==================================================================
+   *
+   * Rulebook §1.2.2 ends a contest when "all of the bidders pass consecutively" -- which is a COUNT, and the
+   * engine had nowhere to keep one. It resolved the contest by ELIMINATION instead: a pass removed the bidder
+   * from `bidders` and deleted his bid, so the last player standing won. That is a different game. §1.2.2 is
+   * explicit that a bidder "may pass and still bid later if the auction does not end", and under elimination
+   * a player who passed once could never come back -- audit M1.
+   *
+   * SO THE PASS BECOMES A COUNTER AND THE BIDDER STAYS. Incremented by `WaterfallMiniAuctionPass`, reset to
+   * zero by any legal `WaterfallMiniAuctionRaise`, and the contest resolves the moment it reaches
+   * `bidders.length - 1` -- every bidder but the high bidder, who is never asked to outbid himself
+   * (`nextMiniTurn`, #544).
+   *
+   * ABSENT MEANS ZERO (#232), which is what keeps every stored log replaying: a contest rebuilt from a log
+   * written before this field existed has had no passes since its last raise, because it has had no passes
+   * at all. Every mini-auction in the corpus is a two-bidder contest, where `bidders.length - 1` is 1 and
+   * one pass resolves it under both rules -- so the repaired machine reproduces them exactly. */
+  passes_since_raise?: number;
 }
 
 /** `QueryMsg::GetWaterfallState`'s response -- mirrors `msg.rs`'s

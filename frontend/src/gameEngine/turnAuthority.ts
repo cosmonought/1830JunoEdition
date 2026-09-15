@@ -70,6 +70,9 @@ import {
 } from "./stockTransactionAuthority";
 import { withRules } from "./boardSelection";
 import { resolveVariants } from "./gameVariants";
+/* Design note #1580 (Batch 7.3): the private auction's rules, from the one module that owns them. Not a
+   second implementation -- `turnAuthority` states no auction rule of its own. */
+import { auctionRefusal, isAuctionMessage } from "./auctionAuthority";
 
 export interface TurnAuthorityInput {
   state: GameStateResponse;
@@ -286,6 +289,21 @@ export function turnRefusal(input: TurnAuthorityInput): string | null {
         ctx: chartContextFromState(state),
       }),
     );
+  }
+  /* ==================================================================
+      DESIGN NOTE 1580 (ingress): THE AUCTION IS ANSWERED WITH ITS REASON (Batch 7.3)
+     ==================================================================
+     The reducer refuses these by identity, above the auction atom (`applySandboxActionOnBoard`); asked here
+     first so the submitter hears the sentence -- S10-1/U-29's shape, and it matters more here than anywhere
+     because three of these refusals answer a control the dashboard currently DRAWS as available (a bid on
+     the lowest card, a sub-$5 raise, a main-rotation action during a contest).
+
+     THE SEAT RULE HAS ALREADY RUN, and during a contest it named the contest's current player
+     (`actingAddress` reads `mini_auction.current_turn`, #1232) -- which is exactly why S7-15 was reachable:
+     the player moving the main rotation mid-contest passes the seat check. The auction's own rules are what
+     refuse it, and they are asked here and nowhere else in this file. */
+  if (isAuctionMessage(msg)) {
+    return auctionRefusal(state, waterfall, msg);
   }
   /* ==================================================================
       DESIGN NOTE 1550 (ingress): THE ROUTE, THE DIVIDEND AND THE SKIP ARE ANSWERED WITH THEIR REASON

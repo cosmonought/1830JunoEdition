@@ -365,7 +365,17 @@ charged before the clamp — a buy from an empty pool charges for a share it doe
 only): `adjustBank` floors after the break — acceptable "paper tracking"; `bankIsBroken` still fires.
 
 **S7-2. Auction all-pass marks down whichever private is lowest-offered and pays private revenue on every all-pass.**
-Status `OPEN` — audit **C5**. Rulebook §1.2.3: only the **SV** is marked down, only while unsold; revenue is paid
+Status `RESOLVED` — Batch 7.3 (#1580). §1.2.3's two rules are separated and both named: the markdown fires only
+when the private on offer IS the Schuylkill Valley (`SV_PRIVATE_ID`, `gameConstants.ts`), and private income is
+paid only when the SV is no longer in the auction at all. The $0 branch is a purchase, not a payout — the SV is
+still unsold at the moment the table passed — so it pays nobody either. m12 disappears with it, and the LPF case
+needs no variant branch: the James River & Kanawha is never the SV, so it is never marked down (ruling D-21/Q8).
+`auctionTransition.ts` reads the payout off the BANK rather than assuming it from the all-pass, so the shell
+cannot narrate income the reducer did not pay. **Corpus: this is the batch's only end-state divergence** —
+JUNO-Z6C from idx 9 (the B&O no longer 220 → 215; the whole game then differs) and JUNO-G6J from idx 7 (the JK
+no longer 120 → 115; $5 of player cash and the bank). Delayed Auction re-checked: its auction is a later round
+with the same atom and the same rule, and nothing in either branch reads the calendar.
+*(Original finding: audit **C5**.)* Rulebook §1.2.3: only the **SV** is marked down, only while unsold; revenue is paid
 only once the SV has sold, with no markdown. Notes: `applySandboxWaterfallAction` `WaterfallPass` branch
 (`is_lowest_offered`, `WATERFALL_PASS_MARKDOWN`), #271, #337, #1281 (`RoomEngine` pays the all-pass income),
 #1340 (auction atom in the reducer). Replay: **replay-semantic** (prices and cash differ in any log with a
@@ -375,13 +385,32 @@ owner; m12 (revenue on an all-pass with SV unsold) disappears with it. Delayed A
 must be re-checked: its auction runs after the OR set of the first 3-train.
 
 **S7-3. Mini-auction pass removes the bidder permanently.**
-Status `OPEN` — audit **M1**. Rulebook §1.2.2 ("may pass and still bid later"). Notes: `WaterfallMiniAuctionPass`;
+Status `RESOLVED` — Batch 7.3 (#1581). A pass now increments `mini_auction.passes_since_raise` (new optional
+field; absent = 0, which is what keeps every stored log replaying) and keeps both the bidder and his bid; any
+legal raise resets it to 0; the contest resolves when it reaches `bidders.length - 1` — every bidder but the
+high bidder, who is never asked (`nextMiniTurn`, #544). The winner is the high bidder at his own high bid,
+stated rather than arrived at by elimination. Both frozen sequences are pinned in
+`auctionAuthority.test.ts`: A raises / B passes / C raises / A passes / **B raises** (legal — B's pass did not
+remove him), and A raises / B passes / C passes / **A wins**. Deliberately tested with THREE bidders: every
+contest in the corpus is a two-bidder one, where `bidders.length - 1` is 1 and one pass resolves it under both
+the old rule and the new, which is why the corpus outcomes do not move. `miniAuctionTurn.test.ts`'s
+drop-out case is re-pinned with the reason.
+*(Original finding: audit **M1**.)* Rulebook §1.2.2 ("may pass and still bid later"). Notes: `WaterfallMiniAuctionPass`;
 `miniAuctionTurn.test.ts` pins the current behaviour. Replay: replay-semantic — bump. Detail: passes do not
 remove bidders; track consecutive passes since the last raise; the auction ends when they reach
 `bidders.length − 1`. Tests: A raise, B pass, C raise, B raise accepted; A raise, B pass, C pass → A wins.
 
 **S7-4. Bidding gaps: a bid on the lowest-offered private is accepted; bids are not escrow-aware; the mini-auction raise has no $5 minimum.**
-Status `OPEN` — audit **M2** + matrix rows. Rulebook §1.2 (3), §1.2.1, §1.2.2. Notes: `WaterfallBidHigher`,
+Status `RESOLVED` — Batch 7.3 (#1580), in `gameEngine/auctionAuthority.ts`. A bid on `is_lowest_offered` is
+refused (the cheapest card is a BUY decision, §1.2); every bid, raise and face-value purchase is escrow-aware
+through `auctionEscrow.ts`'s **existing** `auctionFunds` / `bidRejectionReason` / `minimumBidFor` — the same
+functions the dashboard has always called, so the button and the board cannot disagree; a raise must beat the
+high bid by $5; amounts must be whole dollars. Raising one's OWN standing bid stays legal (D-16/Q3) and is
+charged only the increment (`amount − ownStandingBid ≤ availableCash`), so a leader can defend his own bid.
+The probe's two findings are closed by test: $9,999 bid on $1,160 of cash, and the same dollar standing on two
+private companies. Corpus: no stored bid is affected, and the one stored sub-minimum re-bid (JUNO-3XD 6) was
+already refused by #1184 — 7.3 stops the SEAT advancing for it as well (see Part E).
+*(Original finding: audit **M2** + matrix rows.)* Rulebook §1.2 (3), §1.2.1, §1.2.2. Notes: `WaterfallBidHigher`,
 `WaterfallMiniAuctionRaise`, `auctionEscrow.ts` (`minimumBidFor` — reducer-enforced since #1184;
 `availableCash` — UI arithmetic today). Replay: refusal-added — bump after a sweep. Detail: refuse a bid on
 `is_lowest_offered`; refuse when `amount − ownStandingBid > availableCash`; refuse a raise below high bid + $5;
@@ -503,9 +532,13 @@ design §7.6 — one offer at a time, the hold, two new rescission messages, set
 refusal-added; bump.
 
 **S7-15. Main-rotation auction messages are applied during a live mini-auction.**
-Status `OPEN` — design pass. `WaterfallPass` / `WaterfallBuyLowest` / `WaterfallBidHigher` do not check
-`mini_auction`; the contest's current player (who passes the ingress seat check) can move the main rotation
-mid-contest. Detail: refuse the three while a contest is live. Design §7.7 (5). Replay: refusal-added; bump.
+Status `RESOLVED` — Batch 7.3 (#1580). `contestBlock` refuses `WaterfallBuyLowest`, `WaterfallBidHigher` and
+`WaterfallPass` while `mini_auction` is live, at both locks, with the sentence naming the contested private.
+The seat rule could never have caught this and the entry says why: during a contest `actingAddress` names the
+CONTEST's current player (#1232), so the one player who can move the main rotation mid-contest is exactly the
+one the seat check waves through. No corpus entry is affected.
+*(Original finding: design pass. `WaterfallPass` / `WaterfallBuyLowest` / `WaterfallBidHigher` did not check
+`mini_auction`.)*
 
 **S7-16. `SellStock` accepts a percentage that is not a multiple of 10.**
 Status `RESOLVED` — Batch 7.2 (#1570). `stockSaleRefusal` rule 2: the percentage must be a positive whole
@@ -534,7 +567,13 @@ continuation rule, so no legacy replay is refused by it. The Brown exception is 
 (`allowsExtraPoolBuys` unchanged). Replay: refusal-added; no corpus entry is affected; bump stays 7.5.
 
 **S7-19. `BidOnPrivate` advances the seat without the auction atom; the `AcceptTrainOffer` family is reachable on a pinned board.**
-Status `OPEN` (with S10-8) — design pass. `BidOnPrivate` is undispatched and absent from the corpus but its arm is
+Status `PARTIAL` — **the `BidOnPrivate` half is RESOLVED by Batch 7.3** (#1580): `legacyBidRefusal` refuses it on
+a board carrying a `rules_engine_version`, at both locks, so it can no longer desynchronise the seat from
+`waterfall.current_turn`; a legacy board keeps the arm it was played on (D-9), exactly as `RunManualRoute` does,
+and the schema and the type stay until S10-8. The `AcceptTrainOffer` / `RejectTrainOffer` / `RescindTrainOffer`
+family is offer machinery and stays **Batch 7.4's** (ruling D-23 covers all four; 7.3 deliberately did not
+broaden into offers). `OPEN` for that half.
+*(Original finding: design pass.)* `BidOnPrivate` is undispatched and absent from the corpus but its arm is
 `advanceSeat` while `applySandboxWaterfallAction` ignores it, desynchronising the seat from `waterfall.current_turn`.
 Detail: refuse all four on pinned boards (design §11 Q11 — ruled YES, D-23); the type/schema retirement stays S10-8.
 
@@ -1030,7 +1069,36 @@ button is "Drop-out" and the passer vanishes from the contest — under S7-3 the
 turn, and the passes-since-raise count decides the end; "One bid per private company" refuses the own-bid raise the
 owner ruled legal (D-16). To show: the all-pass narration marks down only the SV and pays revenue only when the SV
 is sold (D-21). Rules Reference auction text (owner's WIP, U-11): SV-only markdown, re-entry, escrow, no bid on the
-lowest. `OPEN`.
+lowest.
+**Batch 7.3 outcome (LEGALITY SYNC + STATE VISIBILITY; the predicates now exist, the dashboard work is open).**
+Every rule on this list is an authority now — `gameEngine/auctionAuthority.ts` — answered at ingress with its
+sentence, and the items below are what the dashboard still states for itself:
+  * **NONE, confirmed and now genuinely shared.** Escrow-aware affordability and the minimum bid are the SAME
+    functions the dashboard calls (`auctionFunds` / `bidRejectionReason` / `minimumBidFor`, `auctionEscrow.ts`),
+    so the button's arithmetic and the board's are one implementation rather than two — #1184's shape, closed by
+    construction rather than by care.
+  * **LEGALITY SYNC — the own-standing-bid raise, on the MAIN bid control.** `WaterfallAuctionDashboard` 480
+    calls `bidRejectionReason(funds, bidAmount, minimumBid)` with **no `raisingFrom`**, and a `repeatBidReason`
+    ("One bid per private company") refuses the own-bid raise outright — while the contest's raise control at
+    481 does pass `ownRaiseEscrow`. The engine allows the own-bid raise everywhere (D-16/Q3) and charges only
+    the increment, so the main control is stricter than the rule in two separate ways.
+  * **LEGALITY SYNC — the mini-auction pass.** The button is "Drop-out" and the passer vanishes from the contest
+    card; under the repaired rule he stays, keeps his bid, is re-prompted on his next turn, and the contest ends
+    on `passes_since_raise`. The label, the semantics and the card's bidder list all follow.
+  * **STATE VISIBILITY — `passes_since_raise`.** Nothing renders how close a contest is to resolving.
+  * **STATE VISIBILITY — the contest freeze.** Buy / Bid / Pass must be disabled on every seat while a contest
+    is live, with the hold's sentence; the engine refuses them now, so today the failure mode is a control that
+    answers with a refusal rather than one that is greyed.
+  * **NONE for the lowest card** (it offers Buy only — verified) and **RULES REFERENCE** for the auction text:
+    SV-only markdown, income only once the SV has sold, re-entry after a pass, escrow, no bid on the cheapest.
+  * **NONE — the all-pass narration, corrected in 7.3 rather than deferred.** `utils/auctionTransition.ts`
+    derives the shell's auction sentences from the two boards (#1340a) and was computing
+    `applyPrivateRevenue(after)` on every all-pass — a faithful reading only while the reducer paid on every
+    all-pass. It now reads whether a payout OCCURRED from the before/after bank, so a markdown-only all-pass
+    no longer narrates a payout that never happened. **It decides nothing:** §1.2.3's condition stays the
+    reducer's, and this module is presentation synchronised with the authoritative board. No UI work remains
+    and no separate Part C item is owed for it.
+`OPEN` (UI only).
 
 **U-27.** (S7-10 / S7-20 / D-15) **Bank crediting, signed bank, bank-break latch — badge NONE (confirmed); narrow
 STATE VISIBILITY + RULES REFERENCE.** Verified: `App.tsx` 12548 renders the "bank broken" badge from the shared
@@ -1215,6 +1283,8 @@ sentence, at both locks (D-28)". **Supersedes the previous expectation in `emerg
 
 | (5, owed) | 7.1 (`08a59ec`) | one money ledger; the three floored adjusters retired; auction proceeds and terrain fees credited to the Bank (D-15/Q1a); the Bank signed (Q1b); `bank_broken` latched by the debit that empties it (S7-20) | nine of twelve rooms differ in `virtual_bank_vgp` and nothing else; **JUNO-FCJ from 106**, **JUNO-Z6C from 193**, **JUNO-3XD from 28** (26 unaffordable purchases refused instead of minting). `RULES_ENGINE_VERSION` deliberately NOT bumped — the 4 → 5 bump is Batch 7.5's. Stale by design: `replayGolden` (CV4, G6J — bank only), `replayJuno3XD` ×2, `gameHistory`, `roundReplay` |
 | (5, owed) | 7.2 (uncommitted) | `stockTransactionAuthority.ts`: `BuyStock` / `SellStock` are Stock Round actions (the §6.6.3 forced sale excepted); the IPO price is the corporation's stored par and the pool price is `market_positions` (a message `par_value` is narration — D-17/Q4); the President's Certificate needs a ladder par, the 20 % card in the IPO, `quantity === 1`, not the double, and exactly 2 × par in cash — **no $67 fallback**; a purchase from a source that cannot deliver is refused outright (Q13/D-25); every purchase proves `cash >= charged`; sales must be whole 10 % bundles, are refused in the first Stock Round and on an unparred corporation, and take their price from the chart on a pinned board; the Brown Bank-Pool continuation must name `bought_this_turn_company` (new state field, Q9/D-22); `SetBoPar` validates the par ladder without charging | **Only three corpus files diverge from the 7.1 baseline, and all three for the same rule.** **JUNO-FCJ from 83** (`BuyStock` in an Operating Round; 21 entries newly refused, 246 newly applied on the cascaded board). **JUNO-3XD from 140** (same rule; 26 newly refused, 9 newly applied). **`JUNO-FCJ-prefix96` at 83** (the same entry; the prefix ends before any cascade, so exactly one entry differs). Every other room — 8E8, CV4 ×3, CW7, G6J ×2, JJD, QVC, 7NZ ×2, TQQ, Y8V, Z6C — is **gameplay-identical**, including all three goldens. Field-level comparisons additionally show the new `bought_this_turn_company` key on every log that has a Stock Round; `stateDigest` and the golden fixtures do not, because the key is written with the value `undefined` exactly as `stock_turn_stage` is (#1443). Nothing re-pinned; `RULES_ENGINE_VERSION` still 4 |
+
+| (5, owed) | 7.3 (uncommitted) | `auctionAuthority.ts`: no bid on the lowest-offered private; escrow-aware bids, raises and face-value purchases; the $5 minimum raise; main-rotation actions refused while a contest is live; `BidOnPrivate` refused on pinned boards. `passes_since_raise` on `mini_auction` (absent = 0): a contest pass keeps the bidder and his bid and is counted, a raise resets it, and the contest ends at `bidders.length - 1`. §1.2.3 split in two: the markdown is the SV's while it is unsold; private income is paid only once the SV has sold | **Measured against the committed 7.2 baseline `a927e5f`, not against 7.1 or Batch 6.** Two rooms change their END state, both C5: **JUNO-Z6C from idx 9** (`WaterfallPass`; the B&O was marked 220 → 215 with the SV already sold — it stays 220, and the whole game then differs) and **JUNO-G6J from idx 7** (`WaterfallPass`; the LPF's James River & Kanawha was marked 120 → 115 — it stays 120, so its buyer pays $5 more: `player_cash` 985 → 980 and the bank 9550 → 10305 on the golden). Three rooms differ TRANSIENTLY and end identically: `server/JUNO-8E8` 8, `server/JUNO-CV4` 7 and `export`/`golden`/`JUNO-CV4` 7 carry `passes_since_raise: 0` on a live `mini_auction` that then resolves to `null`; and **`export/JUNO-3XD` 6** (`WaterfallBidHigher` at $165 against that player's own $165 standing bid — already refused by #1184's minimum, but 7.2 still ran `advanceSeat` for it, so 7.3's whole-message refusal leaves `active_player_index` behind until the rotation re-converges). Untouched: 7NZ ×2, CW7, FCJ, TQQ, JJD, QVC, Y8V, the FCJ prefix fixture. Nothing re-pinned; `RULES_ENGINE_VERSION` still 4 |
 
 Items above that carry "bump" must add a row here when they land. No golden or replay expectation is ever
 re-pinned silently: the re-pin, its index and its reason go in the batch write-up and in this table.

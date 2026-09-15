@@ -24,6 +24,21 @@ import { resolveVariants, type GameVariants } from "./gameVariants";
 export const BO_PRIVATE_ID = 6;
 export const BO_TICKER = "B&O";
 
+/** The Schuylkill Valley -- the cheapest private, and the ONLY one the all-pass markdown touches.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 1580: THE MARKDOWN IS THE SV's, NOT THE CHEAPEST'S (Batch 7.3, audit C5)
+ *  ==================================================================
+ *  Rulebook §1.2.3 names it: "if all players pass and the Schuylkill Valley is unsold, reduce its price by
+ *  $5"; and, separately, "if all players pass and the Schuylkill Valley HAS been sold, each of the private
+ *  companies already bought pays revenue". The engine read both halves as "whichever private is currently
+ *  lowest", which marked the B&O down 220 -> 215 in JUNO-Z6C and the James River & Kanawha down 120 -> 115
+ *  under the Level Playing Field, and paid private income on every all-pass whether the SV was sold or not.
+ *  NAMED HERE beside `BO_PRIVATE_ID` for its reason: this is the same kind of CROSS-TABLE join -- private #1
+ *  in the auction's roster is the Schuylkill Valley in the catalog -- and a bare `1` at the rule site reads
+ *  as an arbitrary index. Owner ruling D-21 (Q8): the LPF's extra private does not inherit the markdown. */
+export const SV_PRIVATE_ID = 1;
+
 /** Design note #250: one sentence, three refusal sites. Stated once so the
  *  builder, the auto-drafter and the dispatch cannot describe the same
  *  situation three slightly different ways. */

@@ -64,10 +64,8 @@ import { boardInEffect } from "../components/hexBoardData";
 import { initialGridFor } from "./initialGrid";
 import { withRules } from "./boardSelection";
 import { resolveVariants } from "./gameVariants";
-import { nextDerivedAction } from "./derivedActions";
-import { operatingCorporationId } from "./dividendGate";
+import { derivedEntryKey, nextDerivedAction } from "./derivedActions";
 import { operatingIdentityRefusal } from "./operatingIdentity";
-import { turnGuardKey } from "./turnGuardKey";
 import { effectiveActions } from "./logRevert";
 import {
   ReplayIncompatibleError,
@@ -418,13 +416,16 @@ export class RoomEngine {
      applied to. So the key is recomputable from the history, and the guard survives a restart with nothing
      persisted beside it. #1145 keyed it that way for a different reason; this is the first thing to need it.
      COMPUTED BEFORE THE ARM RUNS, against the board the game was looking at when it decided -- the same
-     instant `nextDerivedAction` used. Afterwards the cursor has moved and the key names a different turn. */
+     instant `nextDerivedAction` used. Afterwards the cursor has moved and the key names a different turn.
+     Design note #1598 (Batch 7.4, O1): THE KEY IS THE ONE THE ENTRY WAS DERIVED UNDER. This used to record
+     the turn key for every derived entry, including an accepted-offer settlement, whose own key is the
+     offer's instance (#1597) -- so the settlement spent the step's turn key and the End Turn the filled
+     fleet then owed was never derived, where the same fleet bought from the depot ended the turn at once.
+     `derivedEntryKey` answers with the offer key for a settlement and the turn key for everything else, and
+     the live loop's `settleOwed` records the very same string, so a rebuild and a running room agree. */
   if (entry.derived) {
-    const owed = operatingCorporationId(this.state);
-    const step = this.state.operating_sub_phase;
-    if (owed !== null && step !== undefined) {
-      this.emitted.add(turnGuardKey(this.state, owed, step));
-    }
+    const key = derivedEntryKey(this.state, msg);
+    if (key !== null) this.emitted.add(key);
   }
 
   /* #1191: observed HERE -- after the this.grid and the chart have moved, before the arm runs -- because that

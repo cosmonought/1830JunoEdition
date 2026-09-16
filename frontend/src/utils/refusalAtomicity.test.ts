@@ -268,12 +268,18 @@ describe("an unaffordable stock purchase changes nothing at all", () => {
 });
 
 describe("an unaffordable corporate private purchase changes nothing but the offer it settles", () => {
+  /* Batch 7.4 (#1591): the purchase now has an authority in front of the ledger, so the board is a LEGAL one --
+     PRR operating (the queue names it), phase 3 (a 3-train is in play), a $60 private priced inside its band --
+     and the only thing wrong with it in the first two cases is the money. The era is supplied as the phase
+     derives it, for the reason at the top of this file. */
   const operating = (over: Partial<GameStateResponse> = {}): GameStateResponse =>
     ({
       current_round_type: "OperatingRound",
       // Both derived fields supplied up front -- see the note at the top of this file.
-      current_global_era: "Yellow",
+      current_global_era: "Green",
       operating_sub_phase: "Track",
+      active_operating_order: [1],
+      active_corporation_index: 0,
       virtual_bank_vgp: "5000",
       player_addresses: ["p1", "p2"],
       player_cash: [
@@ -287,7 +293,7 @@ describe("an unaffordable corporate private purchase changes nothing but the off
           treasury: "0",
           is_floated: true,
           president: "p1",
-          owned_trains: [],
+          owned_trains: ["3"],
           station_token_hexes: [],
         },
       ],
@@ -295,7 +301,7 @@ describe("an unaffordable corporate private purchase changes nothing but the off
         {
           private_id: 1,
           name: "Schuylkill Valley",
-          face_value: "20",
+          cost: "60",
           revenue_per_or: "5",
           owner: "p2",
           owner_protocol_id: null,
@@ -359,7 +365,7 @@ describe("an unaffordable corporate private purchase changes nothing but the off
           treasury: "300",
           is_floated: true,
           president: "p1",
-          owned_trains: [],
+          owned_trains: ["3"],
           station_token_hexes: [],
         },
       ],

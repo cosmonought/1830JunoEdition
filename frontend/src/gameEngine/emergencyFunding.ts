@@ -480,6 +480,7 @@ export function resolvesEmergencyFunding(msg: GameplayExecuteMsg): boolean {
     "ProposeTrainPurchase" in msg ||
     "AnswerTrainPurchase" in msg ||
     "RescindTrainOffer" in msg ||
+    "RescindTrainPurchase" in msg || // #1594: the sandbox's own withdrawal of the trade family's offer
     "OfferPrivateForFunding" in msg ||
     "AnswerFundingPrivateOffer" in msg ||
     "RescindFundingPrivateOffer" in msg ||

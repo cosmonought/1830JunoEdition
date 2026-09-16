@@ -44,7 +44,7 @@ import { terrainFeeDue, withTerrainPaid } from "./terrainFee";
 // Design note #736: which arriving tier closes the private companies.
 import { closesPrivateCompanies } from "./depotSchedule";
 // Design note #979: which train the limit takes is a rule, and it lives with the other train-limit rules.
-import { countableTrainCount, isTrainLocked, trimToTrainLimit } from "./trainLimit";
+import { trimToTrainLimit } from "./trainLimit";
 // actingSeatIndex lives in gameState.ts, not here: it asks about CONTRACT state and the
 // live dashboard needs it too. See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #0
 import type { GameplayExecuteMsg } from "../utils/sessionKey";
@@ -55,6 +55,7 @@ import { namedTrains as sayTrains } from "./trainPhrasing";
 import {
   dealSandboxGame,
   isAnswerPrivatePurchaseMsg,
+  isAnswerPrivateTradeMsg,
   isAnswerTrainPurchaseMsg,
   isBuyKanawhaLicenseMsg,
   isCloseRoomMsg,
@@ -62,7 +63,11 @@ import {
   isOpenStockRoundMsg,
   isPlaceHomeStationMsg,
   isProposePrivatePurchaseMsg,
+  isProposePrivateTradeMsg,
   isProposeTrainPurchaseMsg,
+  isRescindPrivatePurchaseMsg,
+  isRescindPrivateTradeMsg,
+  isRescindTrainPurchaseMsg,
   isSetBoParMsg,
   isSetupGameMsg,
   waterfallForRoster,
@@ -71,13 +76,43 @@ import { BO_TICKER, SV_PRIVATE_ID, eraForPhase } from "./gameConstants";
 /* Design note #1580 (Batch 7.3): the private auction's one authority. Asked ABOVE the auction atom, because
    that atom runs before the board -- see `applySandboxActionOnBoard`. */
 import { auctionRefusal, isAuctionMessage } from "./auctionAuthority";
+/* Design notes #1590-#1595 (Batch 7.4): the ordinary offers' one hold and their three authorities -- the
+   corporation's private purchase, the intercorporate train sale, and the player <-> player private trade --
+   asked here by identity and at ingress with the sentence, the #1570/#1580 shape. */
+import {
+  allocateOfferInstance,
+  legacyOfferMessageRefusal,
+  pendingOfferBlock,
+  privateSettlementMatches,
+  trainSettlementMatches,
+} from "./pendingOfferHold";
+import {
+  answerPrivatePurchaseRefusal,
+  currentPrivateOwner,
+  privatePurchaseRefusal,
+  proposePrivatePurchaseRefusal,
+  rescindPrivatePurchaseRefusal,
+} from "./privatePurchaseAuthority";
+import {
+  answerTrainPurchaseRefusal,
+  proposeTrainPurchaseRefusal,
+  rescindTrainPurchaseRefusal,
+  sellerPresident,
+  trainSaleRefusal,
+} from "./trainSaleAuthority";
+import {
+  answerPrivateTradeRefusal,
+  proposePrivateTradeRefusal,
+  rescindPrivateTradeRefusal,
+  stockRoundSeat,
+} from "./privateTradeAuthority";
 import { CA_BONUS_TICKER, CA_PRIVATE_ID, applyPrivateExchange } from "./privateExchange";
 import type { MapGridResponse, MapTileEntry } from "../components/hexContractTypes";
 // Design note #1325: a corporation's home hexes on the board in effect (two for the LPF's C&O).
 import { homeHexesFor } from "../components/hexContractTypes";
 import { TILE_CATALOG_BY_ID, type TileColorTier } from "../components/hexTileCatalog";
 import { archetypeForHex, hexValueForEra } from "../components/hexGeometry";
-import { depotCostFor, depotInventory, derivePhase, openDepotTiers, TIER_ORDER, trainTier, type GamePhase, type TrainTier } from "./gamePhase";
+import { depotInventory, derivePhase, openDepotTiers, TIER_ORDER, trainTier, type GamePhase } from "./gamePhase";
 // Design note #712: the market-zone purchase rules, shared with the Stock Round panel.
 import { sharePurchaseBlock, type PriceZone } from "./sharePurchase";
 import { hasActedThisTurn } from "./turnAction";
@@ -99,7 +134,6 @@ import {
   emergencyFundingFor,
   emergencyPurchaseRefusal,
   forcedSaleRefusal,
-  fundedTradeRefusal,
   fundingPrivateAnswerRefusal,
   fundingPrivateOfferRefusal,
   fundingPrivateRescindRefusal,
@@ -2778,7 +2812,54 @@ function applySandboxActionInner(
     : { ...settledBoard, market_positions: positions };
 }
 
+/* ==================================================================
+    DESIGN NOTE 1596: A REFUSED SETTLEMENT RETIRES THE OFFER IT WAS SETTLING -- THE ONE DELIBERATE MUTATION
+   ==================================================================
+   Batch 7.4. An accepted ordinary offer is a purchase the board OWES (#1247): `nextDerivedAction` derives the
+   `BuyPrivateCompany` / `BuyTrainFromCorporation` from the `accepted` flag, and the purchase arm retires the
+   offer it settles. When the settlement is REFUSED -- by any gate in the core, on a board that went stale
+   between acceptance and settlement -- the arm never runs, the refusal returns the board by identity, and the
+   offer would stay accepted: owed again by every rebuild, re-derived once per server lifetime, and holding
+   the whole table under #1590's freeze with no way out but `RevertTo`.
+
+   SO THIS IS THE ONE PLACE A REFUSAL MUTATES, AND IT MUTATES EXACTLY ONE FIELD. When the core hands back the
+   state it was given for a message that is the settlement of the standing accepted offer -- same private /
+   buyer / price, or same seller / buyer / model / price -- the offer is cleared and nothing else moves: no
+   money, no ownership, no train, no treasury, no cash, no seat, no step, no round, no Stock Round marker.
+   #1513 and #1541 already did this inside their own two gates; here it is one rule for every gate, which is
+   the only way "a refused accepted settlement cannot become permanently re-owed" can be true of gates added
+   later. Every other refusal in this function is a true no-op: `applySandboxActionCore` returns the state it
+   was handed, which is what `actionWasRefused` (#778) and the atomicity harnesses detect.
+
+   NOT for the funding offer: its settlement is its own answer arm (#1541) and its refusal leaves the offer
+   standing for a rescind, by design. `standing` below reads only the ordinary offers. */
+function retireRefusedSettlement(state: GameStateResponse, msg: GameplayExecuteMsg): GameStateResponse {
+  if ("BuyPrivateCompany" in msg) {
+    const offer = state.private_purchase_offer ?? null;
+    if (offer !== null && offer.funding !== true && offer.accepted === true && privateSettlementMatches(offer, msg.BuyPrivateCompany)) {
+      return { ...state, private_purchase_offer: null };
+    }
+  }
+  if ("BuyTrainFromCorporation" in msg) {
+    const offer = state.train_purchase_offer ?? null;
+    if (offer !== null && offer.accepted === true && trainSettlementMatches(offer, msg.BuyTrainFromCorporation)) {
+      return { ...state, train_purchase_offer: null };
+    }
+  }
+  return state;
+}
+
 function applySandboxActionCore(
+  state: GameStateResponse,
+  msg: GameplayExecuteMsg,
+  ctx?: SandboxActionContext,
+): GameStateResponse {
+  const judged = applySandboxActionCoreJudged(state, msg, ctx);
+  // #1596: a refusal (identity) of the settlement an accepted offer owes retires that offer, and only that.
+  return judged === state ? retireRefusedSettlement(state, msg) : judged;
+}
+
+function applySandboxActionCoreJudged(
   state: GameStateResponse,
   msg: GameplayExecuteMsg,
   ctx?: SandboxActionContext,
@@ -2877,6 +2958,55 @@ function applySandboxActionCore(
   if ("RescindFundingPrivateOffer" in msg && fundingPrivateRescindRefusal(state, msg.RescindFundingPrivateOffer, ctx?.actor) !== null) {
     return state;
   }
+  /* ==================================================================
+      DESIGN NOTE 1590: WHILE AN ORDINARY OFFER STANDS, NOTHING ELSE HAPPENS (Batch 7.4)
+     ==================================================================
+     The third hold, after the discard's and the funding's -- so a board under one of those reports THAT
+     reason -- and ahead of every arm, on the #1530/#1540 rule: a held message is refused by identity. One
+     ordinary bilateral offer at a time (a corporation's for a private, a corporation's for a train, or a
+     player's trade of a private, ruled Q6); while it stands, awaiting its answer or accepted and awaiting its
+     derived settlement, only that answer, that rescission, that settlement, `RevertTo` and `CloseRoom` pass.
+     The Batch-5 funding offer keeps its own freeze above; `pendingOfferBlock` never reads it.
+     THE CHAIN-ERA OFFER MESSAGES (`AcceptTrainOffer` / `RejectTrainOffer` / `RescindTrainOffer`, an
+     `offer_id` register the sandbox never had) are refused on a pinned board first (ruled Q11 / D-23); a
+     legacy board keeps the no-op arm it was played on (D-9). */
+  if (legacyOfferMessageRefusal(state, msg) !== null) return state;
+  if (pendingOfferBlock(state, msg) !== null) return state;
+  /* ==================================================================
+      DESIGN NOTE 1595: THE OFFER MESSAGES ARE JUDGED AGAINST THE BOARD, NOT THE PAYLOAD (Batch 7.4, S7-11)
+     ==================================================================
+     Each proposal runs the transaction's own predicate (`privatePurchaseRefusal`, `trainSaleRefusal`,
+     `privateTradeRefusal`) on the current board; each answer re-derives WHO may answer from the board (the
+     private's current owner, the seller's current president, the trade's other party) and, on a yes,
+     re-runs the predicate; each rescission belongs to the current proposer. The payload's `owner` and
+     `seller_president` are narration from here on. Refused by identity, for #1019's reason. */
+  if (isProposePrivatePurchaseMsg(msg)) {
+    if (proposePrivatePurchaseRefusal(state, msg.ProposePrivatePurchase, ctx?.actor) !== null) return state;
+  }
+  if (isAnswerPrivatePurchaseMsg(msg)) {
+    if (answerPrivatePurchaseRefusal(state, msg.AnswerPrivatePurchase, ctx?.actor) !== null) return state;
+  }
+  if (isRescindPrivatePurchaseMsg(msg)) {
+    if (rescindPrivatePurchaseRefusal(state, msg.RescindPrivatePurchase, ctx?.actor) !== null) return state;
+  }
+  if (isProposeTrainPurchaseMsg(msg)) {
+    if (proposeTrainPurchaseRefusal(state, msg.ProposeTrainPurchase, ctx?.actor, ctx?.mapGrid) !== null) return state;
+  }
+  if (isAnswerTrainPurchaseMsg(msg)) {
+    if (answerTrainPurchaseRefusal(state, msg.AnswerTrainPurchase, ctx?.actor, ctx?.mapGrid) !== null) return state;
+  }
+  if (isRescindTrainPurchaseMsg(msg)) {
+    if (rescindTrainPurchaseRefusal(state, msg.RescindTrainPurchase, ctx?.actor) !== null) return state;
+  }
+  if (isProposePrivateTradeMsg(msg)) {
+    if (proposePrivateTradeRefusal(state, msg.ProposePrivateTrade, ctx?.actor) !== null) return state;
+  }
+  if (isAnswerPrivateTradeMsg(msg)) {
+    if (answerPrivateTradeRefusal(state, msg.AnswerPrivateTrade, ctx?.actor) !== null) return state;
+  }
+  if (isRescindPrivateTradeMsg(msg)) {
+    if (rescindPrivateTradeRefusal(state, msg.RescindPrivateTrade, ctx?.actor) !== null) return state;
+  }
   if ("DeclareBankruptcy" in msg) {
     /* Without a grid the obligation cannot be judged (#757): the declaration is refused rather than admitted
        on a guess -- fail closed, because it ends the game. */
@@ -2970,43 +3100,40 @@ function applySandboxActionCore(
       if (!company?.president || !Number.isFinite(presidentCash) || presidentCash < shortfall) return state;
     }
   }
-  /* Design note #1513: THE BUYER'S LIMIT ON A TRADE, gated here for the same reason. A trade that settles an
-     accepted offer still retires the offer (#1247) -- an offer the board would otherwise owe again -- and a
-     direct trade with no offer behind it is refused by identity. */
-  if ("BuyTrainFromCorporation" in msg) {
-    const { buyer_protocol_id, seller_protocol_id, model_type } = msg.BuyTrainFromCorporation;
-    const buyer = state.public_companies.find((entry) => entry.company_id === buyer_protocol_id);
-    if (buyer && buyer.owned_trains != null) {
-      const limit = depotInventory(state).find((row) => row.isCurrent)?.trainLimit ?? null;
-      const countable = countableTrainCount(buyer.owned_trains, buyer.pending_rust_trains, buyer.ghost_trains);
-      if (isTrainLocked(countable, limit)) {
-        const offer = state.train_purchase_offer ?? null;
-        const matches =
-          offer !== null &&
-          offer.seller_protocol_id === seller_protocol_id &&
-          offer.buyer_protocol_id === buyer_protocol_id &&
-          offer.model_type === model_type;
-        return matches ? { ...state, train_purchase_offer: null } : state;
-      }
-    }
-  }
-  /* OWNER-DEFINED SIMPLIFICATION (#1541 header): while the buyer owes a forced purchase, a trade it cannot
-     complete from treasury plus its president's cash is refused -- and, like the limit gate above, an accepted
-     offer that cannot be settled is retired so the board does not owe it again. */
+  /* ==================================================================
+      DESIGN NOTE 1592 (core): THE INTERCORPORATE SALE IS JUDGED HERE, FOR #1019's REASON (Batch 7.4)
+     ==================================================================
+     This was two gates -- #1513's train limit and #1541's D-6 funded-trade rule -- each of which also retired
+     a matching accepted offer on refusal so the board would not owe it again (#1247). `trainSaleRefusal`
+     contains both, in the same order (D-6 first, exactly where it was), and adds the Operating turn, the
+     Purchase Trains step, the seller's ownership, the $1 minimum, the treasury-only rule (ruled Q7) and
+     consent (a matching accepted offer, or one president over both). The refusal is by identity; the
+     retirement of a refused accepted settlement is `applySandboxActionCore`'s one deliberate mutation (#1596). */
   if ("BuyTrainFromCorporation" in msg) {
     const { buyer_protocol_id, seller_protocol_id, model_type, price } = msg.BuyTrainFromCorporation;
-    const funding = emergencyFundingFor(state, ctx?.mapGrid);
-    if (funding !== null) {
-      const face = depotCostFor(state, model_type as TrainTier);
-      if (fundedTradeRefusal(state, funding, buyer_protocol_id, Number(price) || 0, Number.isFinite(face) ? face : null) !== null) {
-        const offer = state.train_purchase_offer ?? null;
-        const matches =
-          offer !== null &&
-          offer.seller_protocol_id === seller_protocol_id &&
-          offer.buyer_protocol_id === buyer_protocol_id &&
-          offer.model_type === model_type;
-        return matches ? { ...state, train_purchase_offer: null } : state;
-      }
+    if (
+      trainSaleRefusal(
+        state,
+        { buyerId: buyer_protocol_id, sellerId: seller_protocol_id, model: model_type, price },
+        ctx?.actor,
+        ctx?.mapGrid,
+        "settlement",
+      ) !== null
+    ) {
+      return state;
+    }
+  }
+  /* Design note #1591 (core): and the corporation's purchase of a private company, by the same rule -- the
+     Operating turn, phases 3-4, an open player-owned private the B&O ban allows, the printed band, a floated
+     presided buyer with the price in its treasury, and consent. The B&O ban and the player-seller rule are
+     ALSO inside `transferPrivateToCorporation` (#660/#1563), where the funding sale needs them; that is the
+     ledger's boundary, not a second rule. */
+  if ("BuyPrivateCompany" in msg) {
+    const { protocol_id, private_id, price } = msg.BuyPrivateCompany;
+    if (
+      privatePurchaseRefusal(state, { buyerId: protocol_id, privateId: private_id, price }, ctx?.actor, "settlement") !== null
+    ) {
+      return state;
     }
   }
   const depotPurchase =
@@ -4099,18 +4226,34 @@ function applyOneAction(
      DERIVED action (#1203): `nextDerivedAction` generates it from that flag, the server appends it once, and
      every client applies it from the log. The purchase arm clears the offer it settles, so a rebuilt board
      owes nothing. Same mechanism as an auto-skip: the board says what it owes, one writer writes it. */
+  /* ==================================================================
+      DESIGN NOTE 1595 (arms): THE OFFER NAMES THE COUNTERPARTY THE BOARD NAMES (Batch 7.4)
+     ==================================================================
+     The core has already judged each of these (#1595) -- the transaction's legality, the one-offer rule, and
+     who may propose, answer or withdraw -- so the arms only move state. The offer RECORDS the private's
+     current owner and the seller's current president as the board has them at proposal; the payload's
+     `owner` / `seller_president` are narration and are not written. Every later moment re-derives the
+     counterparty from the board again rather than trusting even this record (`answerPrivatePurchaseRefusal`,
+     `answerTrainPurchaseRefusal`, the settlement predicates). */
   if (isProposePrivatePurchaseMsg(msg)) {
-    const { private_id, private_name, owner, buyer_protocol_id, buyer_ticker, price } =
-      msg.ProposePrivatePurchase;
+    const { private_id, private_name, buyer_protocol_id, buyer_ticker, price } = msg.ProposePrivatePurchase;
+    const priv = state.private_companies.find((entry) => entry.private_id === private_id);
+    const buyer = state.public_companies.find((entry) => entry.company_id === buyer_protocol_id);
+    const owner = currentPrivateOwner(state, private_id);
+    if (!priv || !buyer || owner === null) return state;
+    // #1597: numbered as it is written -- the settlement's identity is this instance, not the transaction.
+    const { instance, offer_serial } = allocateOfferInstance(state);
     return {
       ...state,
+      offer_serial,
       private_purchase_offer: {
         private_id,
-        private_name,
+        private_name: priv.name ?? private_name,
         owner,
         buyer_protocol_id,
-        buyer_ticker,
+        buyer_ticker: buyer.ticker ?? buyer_ticker,
         price,
+        instance,
       },
     };
   }
@@ -4128,26 +4271,33 @@ function applyOneAction(
       : { ...state, private_purchase_offer: null };
   }
 
+  /* #1594: the withdrawal. The core has established it is the buyer's current president's. Clears the offer;
+     moves nothing; ends no turn (S7-14). */
+  if (isRescindPrivatePurchaseMsg(msg)) {
+    const offer = state.private_purchase_offer ?? null;
+    if (!offer || offer.funding || offer.private_id !== msg.RescindPrivatePurchase.private_id) return state;
+    return { ...state, private_purchase_offer: null };
+  }
+
   if (isProposeTrainPurchaseMsg(msg)) {
-    const {
-      seller_protocol_id,
-      seller_ticker,
-      seller_president,
-      buyer_protocol_id,
-      buyer_ticker,
-      model_type,
-      price,
-    } = msg.ProposeTrainPurchase;
+    const { seller_protocol_id, seller_ticker, buyer_protocol_id, buyer_ticker, model_type, price } =
+      msg.ProposeTrainPurchase;
+    const seller = state.public_companies.find((entry) => entry.company_id === seller_protocol_id);
+    const buyer = state.public_companies.find((entry) => entry.company_id === buyer_protocol_id);
+    if (!seller || !buyer) return state;
+    const { instance, offer_serial } = allocateOfferInstance(state); // #1597
     return {
       ...state,
+      offer_serial,
       train_purchase_offer: {
         seller_protocol_id,
-        seller_ticker,
-        seller_president,
+        seller_ticker: seller.ticker ?? seller_ticker,
+        seller_president: sellerPresident(state, seller_protocol_id),
         buyer_protocol_id,
-        buyer_ticker,
+        buyer_ticker: buyer.ticker ?? buyer_ticker,
         model_type,
         price,
+        instance,
       },
     };
   }
@@ -4166,6 +4316,77 @@ function applyOneAction(
     return msg.AnswerTrainPurchase.accept
       ? { ...state, train_purchase_offer: { ...offer, accepted: true } }
       : { ...state, train_purchase_offer: null };
+  }
+
+  if (isRescindTrainPurchaseMsg(msg)) {
+    const offer = state.train_purchase_offer ?? null;
+    if (!offer || offer.seller_protocol_id !== msg.RescindTrainPurchase.seller_protocol_id) return state;
+    return { ...state, train_purchase_offer: null };
+  }
+
+  /* ==================================================================
+      DESIGN NOTE 1593 (arms): THE PLAYER <-> PLAYER TRADE, SETTLED IN ITS ANSWER (Batch 7.4, D-26 / D-27)
+     ==================================================================
+     The core judged the proposal (rulebook 3.1 through `privateTradeRefusal`: a Stock Round after the first,
+     the buyer's or the seller's turn, a distinct seated buyer, an open private the seller owns, a whole price
+     of $0 or more, the buyer's cash, the certificate limit) and, on the answer, the answerer and the same
+     predicate again on the board of that moment. Here the offer is written, or cleared, or settled.
+
+     WHAT MOVES ON A YES (owner ruling N1, D-26): `price` from the buyer to the seller through the ledger --
+     conserved, and $0 is a legal transfer of nothing -- and the card's `owner`. NOTHING ELSE IS TOUCHED,
+     which is the whole of N1: every still-unexercised ownership-dependent power follows the card because
+     every one of them is read off `owner` at the moment it is used (the M&H exchange asks `priv.owner`; the
+     D&H / C&SL / JK lays and the D&H station ask the same); `used_private_abilities` is per private and is
+     not rewritten, so a used ability stays used; the C&A's PRR share was granted at the auction and lives in
+     `player_holdings`, so a later sale of the C&A grants nothing; the B&O's certificate and par were
+     established by `SetBoPar` and live on the corporation, so a later sale of the BO private re-owes nothing
+     (`boPresidencyRefusal` still refuses a second par). The BO private itself is saleable here -- 3.1's ban is
+     on selling it to a CORPORATION, and `isSellableToCorporation` is deliberately not consulted.
+
+     WHAT THE STOCK ROUND RECORDS (owner ruling N2, D-27): the trade is transaction activity by the CURRENT-TURN
+     player -- the buyer or the seller whose turn it is, never the answerer as such. `turn_action_taken: true`,
+     so the End Turn that follows is `advanceSeat` and not `recordPass` (#745); `consecutive_passes: 0` (the
+     sale arm's own reset); `last_trader_index` = the seat, through `markTrader` (#352), so the Priority Deal
+     treats that player as the latest trader. `bought_this_turn` / `bought_this_turn_company` are untouched
+     (a private changing hands is not the turn's certificate purchase); the seat cursor is untouched (the
+     counterparty's acceptance is an off-turn consent answer, not a turn); `stock_turn_stage` is untouched.
+     All five writes are this arm's on `accept: true`; a refusal, a rejection or a rescind writes none. */
+  if (isProposePrivateTradeMsg(msg)) {
+    const { private_id, seller, buyer, price } = msg.ProposePrivateTrade;
+    const priv = state.private_companies.find((entry) => entry.private_id === private_id);
+    if (!priv) return state;
+    const proposer = ctx?.actor ?? stockRoundSeat(state) ?? seller;
+    const { instance, offer_serial } = allocateOfferInstance(state); // #1597: one counter for all three kinds
+    return {
+      ...state,
+      offer_serial,
+      private_trade_offer: { private_id, private_name: priv.name, seller, buyer, price, proposer, instance },
+    };
+  }
+
+  if (isAnswerPrivateTradeMsg(msg)) {
+    const offer = state.private_trade_offer ?? null;
+    if (!offer || offer.private_id !== msg.AnswerPrivateTrade.private_id) return state; // #662's duplicate
+    const cleared: GameStateResponse = { ...state, private_trade_offer: null };
+    if (!msg.AnswerPrivateTrade.accept) return cleared;
+    const paid = transfer(cleared, { player: offer.buyer }, { player: offer.seller }, offer.price);
+    if (!paid.ok) return state; // the core has already refused this; the ledger is the last line, not the rule
+    const seat = stockRoundSeat(state);
+    const traded: GameStateResponse = {
+      ...paid.state,
+      private_companies: paid.state.private_companies.map((entry) =>
+        entry.private_id === offer.private_id ? { ...entry, owner: offer.buyer, owner_protocol_id: null } : entry,
+      ),
+      turn_action_taken: true,
+      consecutive_passes: 0,
+    };
+    return markTrader(traded, seat);
+  }
+
+  if (isRescindPrivateTradeMsg(msg)) {
+    const offer = state.private_trade_offer ?? null;
+    if (!offer || offer.private_id !== msg.RescindPrivateTrade.private_id) return state;
+    return { ...state, private_trade_offer: null };
   }
 
   /* ==================================================================

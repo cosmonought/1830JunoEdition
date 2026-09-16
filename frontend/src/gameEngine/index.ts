@@ -222,3 +222,48 @@ export {
   waterfallBuyRefusal,
   waterfallPassRefusal,
 } from "./auctionAuthority";
+
+/* Design notes #1590-#1595 (Batch 7.4): the ordinary offers' one hold and their three authorities, on the
+   engine's surface for the same reason as the stock and auction authorities. */
+export {
+  anyOfferStands,
+  describeStandingOffer,
+  isLegacyOfferMessage,
+  legacyOfferMessageRefusal,
+  passesOfferHold,
+  pendingOfferBlock,
+  privateSettlementMatches,
+  standingOrdinaryOffer,
+  trainSettlementMatches,
+  type OrdinaryOfferKind,
+  type StandingOrdinaryOffer,
+} from "./pendingOfferHold";
+export {
+  answerPrivatePurchaseRefusal,
+  buyerPresident,
+  currentPrivateOwner,
+  ordinaryPrivateOffer,
+  privatePurchaseRefusal,
+  proposePrivatePurchaseRefusal,
+  rescindPrivatePurchaseRefusal,
+  type PrivatePurchaseIntent,
+  type PrivatePurchaseMoment,
+} from "./privatePurchaseAuthority";
+export {
+  answerTrainPurchaseRefusal,
+  proposeTrainPurchaseRefusal,
+  rescindTrainPurchaseRefusal,
+  sellerPresident,
+  trainSaleRefusal,
+  type TrainSaleIntent,
+  type TrainSaleMoment,
+} from "./trainSaleAuthority";
+export {
+  answerPrivateTradeRefusal,
+  privateTradeRefusal,
+  proposePrivateTradeRefusal,
+  rescindPrivateTradeRefusal,
+  stockRoundSeat,
+  tradeCounterparty,
+  type PrivateTradeIntent,
+} from "./privateTradeAuthority";

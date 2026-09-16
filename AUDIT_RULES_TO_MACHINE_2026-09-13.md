@@ -327,7 +327,7 @@ Columns: Rule · Rulebook § · Implementation · Enforcement point · Tests (by
 | No tile on player-owned private hex | 6.2.1 (4) | none | — | — | MISSING | M5 |
 | City count/size match; labels OO/B/NY | 6.2.1 (5,7) | `hexCentres`/`tileCentres`, `hexLabelRestriction` | `filterSandboxPlacements` | `tileUpgrades.test.ts`, `plusTiles.test.ts` | PASS | |
 | Yellow on tan; green on yellow; brown on green; phase availability | 6.2/2.x | `TIER_RANK`, `existingRank + 1`, `eraRank` | `filterSandboxPlacements` | `eraTracksPhase.test.ts` | PASS | |
-| Upgrade preserves all segments and stations | 6.2.2 (3,4) | `preservesRouting` (segment superset), token migration in arm | `filterSandboxPlacements` | `tileUpgrades.test.ts`, `homeReservationClears` | PASS | 59's spurs treated as terminus-may-connect ✓ |
+| Upgrade preserves all segments and stations | 6.2.2 (3,4) | `preservesRouting` (segment superset), token migration in arm | `filterSandboxPlacements` | `tileUpgrades.test.ts`, `homeReservationClears` | PARTIAL (re-annotated 2026-09-16; was PASS) | 59's spurs treated as terminus-may-connect ✓. Proved only the laid-tile segment superset and token migration: board-printed track is not preserved, #59's two systems are not proved separate, and explicitly legal expanded / LPF topology changes are not modelled — see `RULES_HARDENING_BACKLOG.md` S9-10; Stage 9 re-audits topology-sensitive upgrades |
 | Tile supply counts | p.28 | `inTray`, `trayCountOf` vs board | `filterSandboxPlacements` | `tileSupply.test.ts` | PASS | |
 | No tiles on gray/red | 6.2 | red/gray have no `archetype` centres path…; not explicitly refused | — | `grayRedTrack.test.ts` | UNCLEAR | could not confirm an explicit refusal in the engine for a bare `LayTile` on a gray hex |
 

@@ -417,7 +417,14 @@ already refused by #1184 — 7.3 stops the SEAT advancing for it as well (see Pa
 whole dollars (schema already requires integers).
 
 **S7-5. Inter-corporate train sale: buyer must be operating at Buy Trains; price ≥ $1; treasury covers the price.**
-Status `OPEN` — audit **M14** (buyer limit closed by Stage 4). Rulebook §6.6. Notes: `settleTrainSale`,
+Status `RESOLVED` — Batch 7.4 (#1592, `gameEngine/trainSaleAuthority.ts`). One predicate, `trainSaleRefusal`, asked
+at proposal (Hardware-only, D-18/Q5), at answer and at settlement, in the core (identity) and at ingress (sentence):
+D-6's `fundedTradeRefusal` first (unchanged), then the buyer's Operating turn at the Purchase Trains step, two
+distinct corporations, the seller owning the train, a whole price ≥ $1, the buyer's treasury alone (D-20/Q7 — the
+president's money only through D-6), the limit in force, and consent (a matching accepted offer, or one president
+over both). JUNO-FCJ 468/768/784/975 are direct $1–$10 trades whose actor presides over one side only on the
+log-derived board: refused (they were already no-ops there under 7.1's ledger). *(Original finding: audit **M14**
+(buyer limit closed by Stage 4).)* Rulebook §6.6. Notes: `settleTrainSale`,
 `BuyTrainFromCorporation` (derived after `AnswerTrainPurchase`), #1450, Batch 4 §2, Stage 5's
 `fundedTradeRefusal` (owner rule D-6) covers only the obligation case. Replay: refusal-added — bump after a
 sweep (JUNO-FCJ idx 468/768/784 are $1–$10 trades; confirm they pass). Detail: refuse unless
@@ -425,7 +432,13 @@ sweep (JUNO-FCJ idx 468/768/784 are $1–$10 trades; confirm they pass). Detail:
 authority (S7-8).
 
 **S7-6. Ordinary `BuyPrivateCompany` checks only "not the B&O" and "not already this corporation's".**
-Status `OPEN` — audit **M13**; Stage 5 built the pieces (`privatePriceBand.ts`: `privatePriceBounds`,
+Status `RESOLVED` — Batch 7.4 (#1591, `gameEngine/privatePurchaseAuthority.ts`). `privatePurchaseRefusal` at
+proposal, answer and settlement, both locks: an Operating Round, the operating corporation at any step of its turn
+(D-18), phase 3 or 4, an open player-owned private the B&O ban allows, a whole price inside the printed ½–2× band,
+a floated presided buyer whose treasury holds the price, and consent (a matching accepted ordinary offer whose
+owner is still the private's CURRENT owner, or one principal on both sides). The corpus keeps every historical
+purchase that was legal; JUNO-FCJ 309 (a direct purchase in a Stock Round) is the first refused. *(Original
+finding: audit **M13**; Stage 5 built the pieces (`privatePriceBand.ts`: `privatePriceBounds`,
 `privatePurchasePhaseOpen`) and applied them to the *emergency* sale only. Rulebook §3.0 (phases 3–4, during the
 corporation's turn), §3.1 (½–2× face, declared price), "bought by railroads but not sold by them". Notes:
 `BuyPrivateCompany` arm (~4745), `transferPrivateToCorporation` (#1541), `ProposePrivatePurchase` /
@@ -434,11 +447,18 @@ within the band, buyer is the operating corporation (S7-7), seller is a **player
 `owner_protocol_id` of another corporation), treasury ≥ price; reuse `fundingPrivateSaleRefusal`'s shape.
 
 **S7-7. `BuyPrivateCompany.protocol_id` has no operating-corporation check.**
-Status `OPEN`. Rulebook §3.0 ("during its turn in an operating round"). Notes: Batch 3 §3 reported-not-fixed;
+Status `RESOLVED` — Batch 7.4 (#1591): rule 2 of `privatePurchaseRefusal` (the buyer is `operatingCorporationId`),
+asked of the direct message, the proposal and the derived settlement alike. *(Original status `OPEN`.)* Rulebook §3.0 ("during its turn in an operating round"). Notes: Batch 3 §3 reported-not-fixed;
 `operatingIdentity.ts` is the family to extend. Replay: refusal-added; bump after a sweep.
 
 **S7-8. Pending-offer authority: `ProposePrivatePurchase` / `ProposeTrainPurchase.buyer_protocol_id` — the socket checks the buyer's president (#1450), nothing checks the buyer is the operating corporation; an ordinary offer is not revalidated at acceptance and may outlive the turn.**
-Status `OPEN`. Rulebook §6.6 (during the buyer's turn), §3.0. Notes: Batch 3 §3; `turnAuthority.ts`
+Status `RESOLVED` — Batch 7.4 (#1590 `pendingOfferHold.ts`, #1595). A proposal runs the transaction's own predicate
+on the current board; an acceptance re-runs it (a stale board refuses the answer by identity and leaves the offer
+standing for a rescind); the derived settlement runs it once more and a failure RETIRES the offer without moving
+anything (#1596 — the one deliberate mutation of a refusal). An offer cannot outlive the turn because the turn cannot
+end while it stands (`pendingOfferBlock`, D-19/Q6); no turn-end clearing code was added because it would be dead.
+`RevertTo` rebuilds every offer state from the log (tests: before the proposal → none; between proposal and answer →
+pending and held; through acceptance → exactly one settlement). *(Original status `OPEN`.)* Rulebook §6.6 (during the buyer's turn), §3.0. Notes: Batch 3 §3; `turnAuthority.ts`
 (`roomMessageRefusal`, `consentAnswerRefusal`), `derivedActions.ts` (`BuyTrainFromCorporation` /
 `BuyPrivateCompany` after an accepted answer), `private_purchase_offer` / `train_purchase_offer` on the state,
 Stage 5's funding offers (which *do* freeze the board and revalidate at settlement — the shape to copy).
@@ -450,7 +470,18 @@ phase) exactly as `fundingPrivateAnswerRefusal` does, rather than at proposal. T
 S10-10 (negotiation flows on the server path) is the acceptance test.
 
 **S7-9. Player-to-player private sales (§3.1, not in the first SR) — no message located.**
-Status `DEFERRED` → owned by **Batch 7.4** (owner ruling Q12, 2026-09-15, D-24). Rulebook §3.1: "Private companies may
+Status `RESOLVED` — Batch 7.4 (#1593, `gameEngine/privateTradeAuthority.ts`; #1594 `ProposePrivateTrade` /
+`AnswerPrivateTrade` / `RescindPrivateTrade`, `private_trade_offer`). Implemented exactly as ruled: a Stock Round other
+than the first, on the buyer's or the seller's turn, the seat holder proposes and must be a party, only the other party
+answers, only the proposer withdraws; distinct seated players, an open private the seller owns, a whole price ≥ $0 (no
+band), the buyer's cash, and the overall certificate limit (`certificateBreakdown(...).counted + 1 > limit` refuses) —
+re-derived at proposal, answer and settlement; the acceptance settles in its arm (buyer → seller through the ledger,
+`owner` rewritten). N1 (D-26): the card and every unexercised power travel because every power reads `owner` at use;
+`used_private_abilities` is not rewritten; the C&A's share and the B&O's par are not retriggered; the BO private is
+saleable player → player. N2 (D-27): `turn_action_taken: true`, `consecutive_passes: 0`, `last_trader_index` = the seat
+via `markTrader`; `bought_this_turn` / `bought_this_turn_company` / the seat / `stock_turn_stage` untouched. Focused
+tests in `offerAuthority.test.ts`; the exhaustive ±one-fact matrix is the follow-on Opus batch's. *(Original status
+`DEFERRED` → owned by **Batch 7.4** (owner ruling Q12, 2026-09-15, D-24).)* Rulebook §3.1: "Private companies may
 be sold between players for any mutually agreed price at any time during the buyer's or the seller's turn of a stock
 round (other than the first)" — a private-company rule, not a certificate rule; the ½–2× band of the corporation
 sentence does not apply. Detail: the third bilateral offer kind on the Stage-7 pending-offer machinery
@@ -482,14 +513,23 @@ replay-semantic for the bank field of every log — bump. Owner ruling owed (des
 allow a signed bank after the break in place of the m11 floor).
 
 **S7-11. Offer counterparties are trusted from the payload.**
-Status `OPEN` — design pass, probe-proved. `ProposePrivatePurchase.owner` and `ProposeTrainPurchase.seller_president`
+Status `RESOLVED` — Batch 7.4 (#1595). The proposal arm records the private's current owner / the seller's current
+president as the BOARD has them (the payload's `owner` / `seller_president` are narration and are not written); the
+answerer is re-derived from the board again at answer time (`answerPrivatePurchaseRefusal`, `answerTrainPurchaseRefusal`)
+and the settlement predicate requires the accepted offer's owner to still be the private's owner. A proposer can no
+longer answer his own offer unless he is genuinely the counterparty, in which case the direct same-principal
+transaction is independently legal. *(Original finding: design pass, probe-proved. `ProposePrivatePurchase.owner` and `ProposeTrainPurchase.seller_president`
 are copied into the offer and `consentAnswerRefusal` checks the actor against them, so the proposer can name himself,
 answer his own offer, and the derived `BuyPrivateCompany` / `BuyTrainFromCorporation` settles (another player's
 private taken for $1). Detail: the answerer is the private's *current* owner / the seller's *current* president,
 re-derived from the state; the payload names become narration. Design §7.6. Replay: refusal-added; bump.
 
 **S7-12. Direct settlements need no consent, no funds and no sane price.**
-Status **partially `RESOLVED` (the money) / `OPEN` (consent, phase, step, band, operating corporation)** —
+Status `RESOLVED` — Batch 7.4 closed the remaining half (#1591/#1592): a direct `BuyPrivateCompany` /
+`BuyTrainFromCorporation` is legal only with a matching accepted offer on the board or one principal on both sides,
+and only when the whole transaction predicate holds (phase or step, band or $1 floor, operating corporation,
+treasury). Batch 7.1's money half stands unchanged. *(Batch 7.1 status: partially `RESOLVED` (the money) / `OPEN`
+(consent, phase, step, band, operating corporation) —
 Batch 7.1 (#1563) closed the half that destroys or invents money: `transferPrivateToCorporation` now requires
 a PLAYER seller (a corporation-owned or unowned private refuses instead of debiting the buyer and paying
 nobody — rulebook 3.1's "bought by railroad corporations but not sold by them"), pays that player through the
@@ -525,7 +565,12 @@ Stage-7 brief §5 owns). Design §7.2 / §7.3. Replay: refusal-added; corpus: no
 Stock Round sale inside an OR, JUNO-FCJ 83/150/153/282/285/366/369 are OR-time buys (already-diverged board) — bump.
 
 **S7-14. No ordinary-offer rescission; offers outlive the turn and the round; a proposal overwrites a standing offer; nothing blocks progression while one waits.**
-Status `OPEN` — design pass. `RescindTrainOffer` / `AcceptTrainOffer` / `RejectTrainOffer` are chain-era no-ops
+Status `RESOLVED` — Batch 7.4 (#1590, #1594). `RescindPrivatePurchase { private_id }` and `RescindTrainPurchase
+{ seller_protocol_id }` (the buyer's CURRENT president; clears the offer, moves nothing, ends no turn) and
+`RescindPrivateTrade { private_id }` (the proposer); one ordinary offer of any of the three kinds at a time, never
+beside a funding offer (a second proposal is refused, never overwrites); `pendingOfferBlock` freezes everything but the
+answer, the rescission, the derived settlement, `RevertTo` and `CloseRoom` while an offer stands, awaiting its
+answer or accepted and awaiting settlement. Schema 44 → 49. *(Original finding: design pass. `RescindTrainOffer` / `AcceptTrainOffer` / `RejectTrainOffer` are chain-era no-ops
 (`offer_id`); nothing clears `private_purchase_offer` / `train_purchase_offer` at turn or round end (JUNO-FCJ 232
 was proposed at Tokens and declined at 234 in the following Stock Round; 273/274 both in a Stock Round). Detail:
 design §7.6 — one offer at a time, the hold, two new rescission messages, settlement-time revalidation. Replay:
@@ -567,7 +612,10 @@ continuation rule, so no legacy replay is refused by it. The Brown exception is 
 (`allowsExtraPoolBuys` unchanged). Replay: refusal-added; no corpus entry is affected; bump stays 7.5.
 
 **S7-19. `BidOnPrivate` advances the seat without the auction atom; the `AcceptTrainOffer` family is reachable on a pinned board.**
-Status `PARTIAL` — **the `BidOnPrivate` half is RESOLVED by Batch 7.3** (#1580): `legacyBidRefusal` refuses it on
+Status `RESOLVED` — the `AcceptTrainOffer` / `RejectTrainOffer` / `RescindTrainOffer` half by Batch 7.4 (#1590,
+`legacyOfferMessageRefusal`): refused on a board carrying a `rules_engine_version`, at both locks, with a sentence
+naming the sandbox message that replaces each; a legacy board keeps the no-op arm (D-9). Types and schema stay until
+S10-8. *(Batch 7.3 status: `PARTIAL` — **the `BidOnPrivate` half is RESOLVED by Batch 7.3** (#1580): `legacyBidRefusal` refuses it on
 a board carrying a `rules_engine_version`, at both locks, so it can no longer desynchronise the seat from
 `waterfall.current_turn`; a legacy board keeps the arm it was played on (D-9), exactly as `RunManualRoute` does,
 and the schema and the type stay until S10-8. The `AcceptTrainOffer` / `RejectTrainOffer` / `RescindTrainOffer`
@@ -609,6 +657,55 @@ it); `bankIsBroken` = latch, else the legacy balance test; the single ask in `se
 unchanged in shape. Regression: bank crosses zero → later receives enough to be positive → the end condition remains
 triggered at the set boundary. Replay: replay-semantic (a recovered bank now ends the game; the field joins the
 digest) — bump; the 7.5 sweep reports the first-latch index per log.
+
+**S7-21. R74-B — the derived train-settlement key named a tuple of board facts that legal play can bring back, so a later distinct offer between the same parties was never settled and the pending-offer hold froze the table.**
+Status `RESOLVED` — Batch 7.4 follow-up (#1597, `gameEngine/pendingOfferHold.ts` `allocateOfferInstance`,
+`gameEngine/derivedActions.ts` `privateOfferKey` / `trainOfferKey`, the three proposal arms in `sandboxSession.ts`,
+`GameStateResponse.offer_serial`). Found by the Opus exhaustive matrix (`offerMatrix74Settlement.test.ts` §14, five
+legal `RoomSession` reproductions R74-B.1–B.4 and B.5b: same-turn rust after a depot purchase, rust caused by
+another corporation, an intercorporate sale, rust then a purchase, a discard as one step of a chain — and B.2 at
+an IDENTICAL price, which is why adding the price to the key was ruled out). The old key
+`offer:train:<seller>:<model>:<buyer>:<fleet size>` was consumed once per server lifetime; the second offer derived
+the same key, `settleOwed` derived nothing, and the accepted offer stood under #1590's hold with no legal exit.
+Repair: **every ordinary offer is numbered when it is proposed** — one strictly monotonic counter `offer_serial` on
+the board (absent = none yet, #232), written only by the three proposal arms (`(offer_serial ?? 0) + 1`), never
+decremented or cleared by an answer, a rescission, a settlement, a turn end or a round end; the number travels on
+the offer as `instance`; the derived settlement key is `offer:private:<instance>` / `offer:train:<instance>` and
+nothing else. Deterministic and log-derived like every other field: a replay assigns the same numbers in the same
+order, `RevertTo` rebuilds without the reverted offers and their numbers (no undo code), a restart recomputes the
+guard from the surviving log (#1208). No UUID, no clock, no server-side sequence, no property that can cycle. The
+Batch-5 funding offer is not an ordinary offer and takes no number (D-5 / D-6 untouched). The private key was
+proved safe under the current lifecycle (R74-B.6) and moved to the instance anyway so both families share one
+identity. Exactly-once preserved: one acceptance → one derived settlement; repeated `settleOwed` pays nothing
+twice; restore / replay / a duplicated entry land once; a refused stale settlement retires the offer and is not
+re-derived; a later offer is a new instance and is never suppressed by a completed one (§12, §14, §15 of the
+Settlement matrix; `offerAuthority.test.ts` G). **O4 (characterization only, no fix):** if a private's owner could
+change between proposal and answer, the new owner's acceptance is recorded and the settlement retires paying
+nothing (design §7.4 rule 7 literally; trains differ by §7.5 rule 6) — unreachable in play because the hold
+freezes every ownership change; pinned in the stale-at-answer rows and left as the documented asymmetry.
+Corpus: the field appears wherever a stored ordinary proposal is applied — **`server/JUNO-CW7` from idx 122**
+(the proposal at 121 numbers itself: `offer_serial: 1`, `train_purchase_offer.instance: 1`) and **`export/JUNO-QVC`
+from idx 60** (the proposal at 59); no other field, no applied/dropped count, no money total and no bank balance
+differs in any of the seventeen files; FCJ is untouched because 7.4 refuses all four of its stored proposals.
+Replay: replay-semantic (a new digest field) — folded into the already-owed Batch-7 version 4 → 5 bump (7.5); nothing
+re-pinned here.
+
+**S7-22. O1 — a derived accepted-offer settlement was recorded under the step's turn-guard key, so the automatic End Turn a filled fleet owes was derived from the depot path and not from the offer path.**
+Status `RESOLVED` — Batch 7.4 follow-up (#1598, `derivedActions.derivedEntryKey`, `RoomEngine.apply`). Pre-existing
+(#1208 × #1247): `apply` recorded `turnGuardKey(board, operating, step)` for EVERY `derived` entry; a train
+settlement that filled the buyer to its limit at Hardware therefore spent the key the step's own `PassTurn` would
+use, the loop derived nothing, and the turn stayed open until the president ended it by hand — where the same fleet
+bought from the depot ended the turn at once. Repair: one function, `derivedEntryKey(state, msg)`, answers "what key
+does this derived entry consume" for the replay and the live loop alike — the offer's instance key for the
+settlement of the standing accepted offer, the turn key for every other derived entry, nothing for a settlement
+that matches no standing offer (a stored proposal a later engine refused, FCJ 147). The post-settlement board is
+then re-asked and derives whatever a depot purchase would: equivalent boards, equivalent progression, no "offer ⇒
+End Turn" special case. Pinned both ways (`offerMatrix74Settlement.test.ts` §14 companion): the offer path's burst
+is `[AnswerTrainPurchase, BuyTrainFromCorporation*, PassTurn*]` and lands on the same cursor as the depot path's
+`[BuyHardwareFromPool, PassTurn*]`; a restore records the same keys and owes nothing; a restore cut between the
+settlement and the End Turn derives the End Turn once; R74-B.5 and B.7's limit-filling boards end the turn.
+Corpus: none (replay applies; only `settleOwed` after a restore changes, and no stored log ends between such a
+settlement and its End Turn).
 
 ### Stage 8 — Stock / OR edge cases + timing
 
@@ -725,6 +822,16 @@ m5 divestment debt blocks buying and passing until sold down (stricter than §4.
 not incorrect); m11 bank floor after the break. Status `OWNER DECISION` pending only if the owner wants
 rulebook-literal timing; otherwise leave.
 
+**S8-12. O6 — ingress does not mirror the home-token hold, so a held ordinary proposal is appended to the log and then no-op'd by the core.**
+Status `OPEN` — recorded by the Opus 7.4 matrix (R74-C item (A): "the home-token hold (as a room engine runs it)"
+refuses a proposal in the reducer, but `turnRefusal` has no equivalent sentence, so the entry lands in the log as
+an identity no-op rather than being `refused` at ingress — S10-1's shape). Not fixed in 7.4 by owner ruling: the
+core makes the proposal inert, so no board is wrong; the log carries a dead entry. **Cross-reference S8-5 / S8-6:**
+the home-token obligation's timing and validation are this stage's, and ingress and reducer must be repaired
+together so the hold's sentence, its pass list and its ordering against the discard, funding and offer holds
+(#1530 / #1540 / #1590) are one rule at both locks. Replay: refusal-added at ingress only (the reducer already
+refuses) — no board changes; sweep anyway before claiming no stored proposal sits under a home-token hold.
+
 ### Stage 9 — Variants + map data + variant authority
 
 **S9-1. `YellowSignEvent` is client-authoritative.**
@@ -791,6 +898,58 @@ Status `DEFERRED` (map-data architecture; do with the legality batch, S6-5…S6-
 the move is pure; **collapsing an injection changes what happens when a caller omits it** (a missing injection
 today means *no rule*), so do it with tests that assert the reducer answers the rule with no context at all.
 Destination `frontend/src/gameEngine/board/`.
+
+**S9-10. Authoritative tile-upgrade topology preservation.**
+Status `OPEN` — NOT implemented in Batch 7.4. First recorded 2026-09-15 from the visual-flourish VF-5 work as
+"preprinted-track preservation"; **wording corrected 2026-09-16 (Batch 7.4 final review, owner ruling)** after the
+full 48-page 1830 rulebook with the expanded / LPF tile sets showed the first generalisation was too broad. This
+entry must NOT be read as "every old city needs a one-to-one successor" or "any change in city topology is illegal".
+
+*Found case.* Today's preservation check (`preservesRouting` behind `sandboxTileLegality` / `layRefused`) compares a
+candidate tile against the LAID tile it replaces, so on a board hex whose track is printed on the map — expanded /
+LPF Baltimore — a #53 / #592 facing that cuts printed track is offered and accepted (tile numbers as the
+implementation's catalog carries them; the manifest audit below verifies the old / new mapping).
+
+**Requirement.** Stage 9 audits tile-upgrade legality against the ACTIVE RULESET's explicit upgrade families and
+topology rules.
+
+*Universal:*
+- pre-existing track required by the source position is preserved as the rules require;
+- track printed on the underlying board hex does not disappear merely because preservation looks only at a laid tile;
+- existing station / token connectivity remains valid through the upgrade;
+- the destination tile and facing belong to a rules-legal upgrade transition.
+
+*Not universal — topology-changing rules belong to specific upgrade families; apply the constraint the active
+ruleset actually defines:*
+- fixed OO, old tile #59: the two original city / track systems are preserved, and the upgrade may not connect them;
+- Variable OO Cities is NOT enabled in this implementation and must not be used to legalise #59 mergers;
+- the expanded 1830+ / LPF tile manifests contain explicitly legal unusual topology changes, including two small
+  cities upgrading to one small city — explicitly defined variant topology changes / merges remain legal;
+- do not infer a blanket "cities may never merge" rule;
+- do not infer legality merely from geometric compatibility, or from the current placement filter accepting a facing.
+
+*Tile numbers.* Project-facing code comments, tests and reports use the old / original 18xx numbers. The fuller
+Lookout rulebook's new numbers may appear only as a cross-reference; where both are shown, the implementation uses
+the old number.
+
+*Order of work (manifest audit BEFORE any change to `preservesRouting`):*
+1. cross-check the implementation's expanded / LPF tile catalog against the full rulebook manifest;
+2. verify each tile's cities, station slots, track, edge connections and permitted upgrade families;
+3. verify the old-number / new-number mapping;
+4. only then tighten orientation / topology preservation.
+
+*Planned tests must distinguish:* (a) Baltimore / preprinted-track loss (every legal and illegal facing, at both
+locks, refusals digest-equal); (b) fixed-OO #59 illegal reconnection; (c) ordinary multi-city preservation; (d)
+explicitly legal expanded / LPF topology-changing upgrades (accepted). Plus at least one non-Baltimore
+preprinted-track hex on each board that has one.
+
+*Supersedes a prior PASS.* `AUDIT_RULES_TO_MACHINE_2026-09-13.md` §F "Upgrade preserves all segments and stations"
+was marked PASS; that audit proved only part of the invariant (laid-tile segment superset and token migration) and
+is re-annotated `PARTIAL — see S9-10`. Stage 9 re-audits every topology-sensitive upgrade.
+
+Replay: refusal-added (a stored lay that cut printed track, or reconnected #59's systems, would be refused), and
+possibly acceptance-added for a legal variant merge the filter refuses today — sweep both directions before
+claiming none exists — bump. No visual-flourish code is touched by the eventual fix; VF-5 only surfaced it.
 
 ### Stage 10 — Replay / settlement / release hardening
 
@@ -912,6 +1071,18 @@ valuation moves to the server's appraisal; G-5 on-chain tile inventory is moot).
 Part-1 items concern `escrow.rs` / `contract.rs` (which stay on chain) and carry them into the 3a contract
 revision. `DEFERRED` (Phase 4 pre-check).
 
+**S10-20. O2 — an UNATTRIBUTED duplicate `BuyTrainFromCorporation` skips the consent rule and takes the seller's second train; the private purchase is idempotent, the train sale is not.**
+Status `OPEN` (derived-action / ingress hardening). Found by the Opus 7.4 matrix (`offerMatrix74Settlement.test.ts`
+§12 "residual #549b", pinned as a decision). The settlement predicate skips consent for a `null` actor (#549b, the
+7.2 shape: rules about a player are not asked of nobody), so a second, author-less copy of a settlement applied
+after the first finds no offer, skips consent, and — because the seller still owns a train of that model — sells
+another one. Unreachable through the server path (every server and replay entry carries its author; a straggler
+with an author is refused by consent) and through the shell; reachable only by a fixture or solo play. The R74-B
+instance identity (S7-21) does not eliminate it (it is an arm-level consent gap, not a derived-key one), so it is
+retained here rather than widened into 7.4. Candidate fix for this stage: refuse a `null`-actor settlement that
+matches no standing accepted offer, or require an author at ingress for every settlement message (S10-1's
+transport). Replay: refusal-added on hand-crafted entries only; no stored entry lacks an author.
+
 ---
 
 ## Part C — Accumulated playtest UX backlog (shell only; no reducer change; no replay effect; not a numbered stage)
@@ -983,7 +1154,15 @@ files) is a recorded misnomer; rename mechanically when nothing else is in fligh
 No UI exists: initiation by either party on an eligible Stock Round turn (not SR1), counterparty and price entry,
 the counterparty's accept/reject prompt (off-turn, the `FundingPrivateOfferPrompt` shape), the proposer's rescind,
 the pending-offer line and hold on every seat, and a Rules Reference sentence for §3.1's player-to-player rule.
-`OPEN`.
+**Batch 7.4 outcome (classification unchanged: NEW ACTION + STATE VISIBILITY + RULES REFERENCE):** the engine half
+exists — `ProposePrivateTrade` / `AnswerPrivateTrade` / `RescindPrivateTrade`, `private_trade_offer`,
+`privateTradeRefusal` (SR ≠ 1, the seat is a party, distinct seated players, the seller's open private, integer price
+≥ $0, buyer cash, the certificate limit) answered at ingress with its sentence and by identity in the core. The
+frontend has no initiation, prompt, price entry, answer, rescind or pending line for it; the panel that is built must
+read `privateTradeRefusal` and the `standingOrdinaryOffer` hold, and the counterparty's prompt must go to
+`tradeCounterparty(offer)` (the party who did not propose). Rules Reference: §3.1's sentence and D-26/D-27 (what
+travels with the card; the trade counts as the seat's Stock Round activity without consuming the stock purchase).
+`OPEN` (UI only).
 
 **U-20.** (S7-6 / S7-7 / S7-12 / D-18) **Ordinary player → corporation private purchase — LEGALITY SYNC + NEW ACTION +
 STATE VISIBILITY.** Verified: the `ProposePrivatePurchase` panel opens for the acting president in phases 3–4 at any
@@ -996,7 +1175,14 @@ surface. **Batch 7.1 outcome (LEGALITY SYNC, unchanged in scope):** the reducer 
 treasury cannot cover the price, whose private has no player seller (corporation-owned or unowned), or whose
 price is negative or fractional — silently, by identity (S10-1), so the panel still offers all four. The
 predicate the panel must read is still Batch 7.4's `privatePurchaseRefusal`; 7.1 only means the illegal
-version now does nothing instead of moving money. `OPEN`.
+version now does nothing instead of moving money. **Batch 7.4 outcome (LEGALITY SYNC + NEW ACTION + STATE
+VISIBILITY, unchanged in scope):** `privatePurchaseRefusal` (#1591) now exists and is answered at ingress, so every
+purchase the panel offers that the authority refuses (treasury, `closed`, a corporation-owned seller, a buyer that is
+not operating, phase, band, consent) is refused with a sentence rather than silently; the panel still computes its
+own availability. `RescindPrivatePurchase` exists with no control (NEW ACTION). The offer now records the board's
+owner, so the prompt can keep reading `private_purchase_offer.owner` — but the answer control should be shown to the
+private's CURRENT owner (`currentPrivateOwner`), because that is who the engine lets answer. The hold (U-22) applies.
+`OPEN` (UI only).
 
 **U-21.** (S7-5 / S7-8 / S7-12 / D-18 / D-20 / D-23) **Intercorporate train sale — LEGALITY SYNC + NEW ACTION +
 STATE VISIBILITY.** Verified: the proposal panel renders at `Hardware` only (timing already right); price ≥ $1,
@@ -1006,13 +1192,25 @@ refuses on pinned boards — so the sandbox needs its withdraw wired to `Rescind
 Accept/Reject/Rescind controls retired from room play (S10-8 keeps the types). **Batch 7.1 outcome (LEGALITY
 SYNC, unchanged in scope):** `settleTrainSale` moves the money before the train, so a purchase the buyer's
 treasury cannot cover is now refused outright rather than delivered with a floored payment; the panel still
-offers it, because the price and treasury predicate is 7.4's. `OPEN`.
+offers it, because the price and treasury predicate is 7.4's. **Batch 7.4 outcome (LEGALITY SYNC + NEW ACTION +
+STATE VISIBILITY, unchanged in scope):** `trainSaleRefusal` (#1592) exists and is answered at ingress; the panel
+should read it for price (≥ $1), treasury-only affordability (D-20), the seller's fleet, the limit and the same-president
+shortcut. `RescindTrainPurchase { seller_protocol_id }` exists (#1594) and the sandbox's withdraw must dispatch it;
+`RescindTrainOffer` / `AcceptTrainOffer` / `RejectTrainOffer` are now REFUSED on pinned boards (D-23), so the
+`TrainTradePanel` chain-era controls must be retired from room play. The answer prompt must go to the seller's
+CURRENT president (`sellerPresident`), not `train_purchase_offer.seller_president` (narration). `OPEN` (UI only).
 
 **U-22.** (S7-8 / S7-14 / D-19) **Pending-offer global hold — STATE VISIBILITY.** While an ordinary offer of any
 kind waits, End Turn / Pass / Skip / every purchase control must be disabled on every seat with the hold's sentence
 ("X is on offer to Y; nothing else can happen until …"), the way the Batch-5 funding freeze is surfaced; the
 ingress `refused` sentence must reach the banner for every Stage-7 refusal (S10-1). Folds U-6's "the table is
-waiting on X" surface. `OPEN`.
+waiting on X" surface. **Batch 7.4 outcome (STATE VISIBILITY, unchanged in scope):** the hold exists —
+`pendingOfferBlock(state, msg)` (#1590) refuses everything but the answer, the rescission, the derived settlement,
+`RevertTo` and `CloseRoom` while an ordinary offer of any of the three kinds stands (unanswered, or accepted and
+awaiting settlement), and `standingOrdinaryOffer(state)` / `describeStandingOffer` give the surface its one sentence.
+Today every held control is refused at ingress with that sentence rather than disabled; the shell must disable
+progression controls on every seat from `standingOrdinaryOffer` and render the proposer's "awaiting" line, the
+accepted-awaiting-settlement state (momentary on the server path) and the rescind control. `OPEN` (UI only).
 
 **U-23.** (S8-7) **First-Stock-Round sale ban — LEGALITY SYNC + RULES REFERENCE.** Sell is disabled in SR1 by the
 panel's own `macroRoundNumber === 1` (#356) — a local restatement that must become a read of `stockSaleRefusal`
@@ -1285,6 +1483,8 @@ sentence, at both locks (D-28)". **Supersedes the previous expectation in `emerg
 | (5, owed) | 7.2 (uncommitted) | `stockTransactionAuthority.ts`: `BuyStock` / `SellStock` are Stock Round actions (the §6.6.3 forced sale excepted); the IPO price is the corporation's stored par and the pool price is `market_positions` (a message `par_value` is narration — D-17/Q4); the President's Certificate needs a ladder par, the 20 % card in the IPO, `quantity === 1`, not the double, and exactly 2 × par in cash — **no $67 fallback**; a purchase from a source that cannot deliver is refused outright (Q13/D-25); every purchase proves `cash >= charged`; sales must be whole 10 % bundles, are refused in the first Stock Round and on an unparred corporation, and take their price from the chart on a pinned board; the Brown Bank-Pool continuation must name `bought_this_turn_company` (new state field, Q9/D-22); `SetBoPar` validates the par ladder without charging | **Only three corpus files diverge from the 7.1 baseline, and all three for the same rule.** **JUNO-FCJ from 83** (`BuyStock` in an Operating Round; 21 entries newly refused, 246 newly applied on the cascaded board). **JUNO-3XD from 140** (same rule; 26 newly refused, 9 newly applied). **`JUNO-FCJ-prefix96` at 83** (the same entry; the prefix ends before any cascade, so exactly one entry differs). Every other room — 8E8, CV4 ×3, CW7, G6J ×2, JJD, QVC, 7NZ ×2, TQQ, Y8V, Z6C — is **gameplay-identical**, including all three goldens. Field-level comparisons additionally show the new `bought_this_turn_company` key on every log that has a Stock Round; `stateDigest` and the golden fixtures do not, because the key is written with the value `undefined` exactly as `stock_turn_stage` is (#1443). Nothing re-pinned; `RULES_ENGINE_VERSION` still 4 |
 
 | (5, owed) | 7.3 (uncommitted) | `auctionAuthority.ts`: no bid on the lowest-offered private; escrow-aware bids, raises and face-value purchases; the $5 minimum raise; main-rotation actions refused while a contest is live; `BidOnPrivate` refused on pinned boards. `passes_since_raise` on `mini_auction` (absent = 0): a contest pass keeps the bidder and his bid and is counted, a raise resets it, and the contest ends at `bidders.length - 1`. §1.2.3 split in two: the markdown is the SV's while it is unsold; private income is paid only once the SV has sold | **Measured against the committed 7.2 baseline `a927e5f`, not against 7.1 or Batch 6.** Two rooms change their END state, both C5: **JUNO-Z6C from idx 9** (`WaterfallPass`; the B&O was marked 220 → 215 with the SV already sold — it stays 220, and the whole game then differs) and **JUNO-G6J from idx 7** (`WaterfallPass`; the LPF's James River & Kanawha was marked 120 → 115 — it stays 120, so its buyer pays $5 more: `player_cash` 985 → 980 and the bank 9550 → 10305 on the golden). Three rooms differ TRANSIENTLY and end identically: `server/JUNO-8E8` 8, `server/JUNO-CV4` 7 and `export`/`golden`/`JUNO-CV4` 7 carry `passes_since_raise: 0` on a live `mini_auction` that then resolves to `null`; and **`export/JUNO-3XD` 6** (`WaterfallBidHigher` at $165 against that player's own $165 standing bid — already refused by #1184's minimum, but 7.2 still ran `advanceSeat` for it, so 7.3's whole-message refusal leaves `active_player_index` behind until the rotation re-converges). Untouched: 7NZ ×2, CW7, FCJ, TQQ, JJD, QVC, Y8V, the FCJ prefix fixture. Nothing re-pinned; `RULES_ENGINE_VERSION` still 4 |
+
+| (5, owed) | 7.4 (uncommitted) | `pendingOfferHold.ts`, `privatePurchaseAuthority.ts`, `trainSaleAuthority.ts`, `privateTradeAuthority.ts`: one ordinary offer at a time and a global hold while it stands (D-19/Q6); the corporate private purchase judged at proposal, answer and settlement (OR, operating buyer, phases 3–4, open player-owned non-B&O private, band, treasury, consent); the intercorporate sale likewise (Hardware-only proposal D-18/Q5, ≥ $1, treasury-only D-20/Q7, limit, consent; D-6 unchanged and asked first); counterparties re-derived from the board (S7-11); a refused accepted settlement retires its offer (#1596); `RescindPrivatePurchase` / `RescindTrainPurchase`; the player ↔ player trade (`ProposePrivateTrade` / `AnswerPrivateTrade` / `RescindPrivateTrade`, `private_trade_offer`, D-24/D-26/D-27); `AcceptTrainOffer` / `RejectTrainOffer` / `RescindTrainOffer` refused on pinned boards (D-23). Schema 44 → 49 | **Measured against the committed 7.3 baseline `d0a0792`.** Sixteen of seventeen files are digest-identical at every entry and at the end (3XD, CV4 ×3, JJD, QVC, Y8V, 7NZ ×2, 8E8, CW7, G6J ×2, TQQ, Z6C, the FCJ prefix). **`server/JUNO-FCJ`** is the one room that differs: entries **145** (`ProposeTrainPurchase` — the B&O owns no 2-train on the log-derived board, an inherited 7.1 consequence, so the 7.4 predicate refuses the offer; 146/147 then find nothing), **205**, **273** (`ProposePrivatePurchase` by a corporation that is not operating), **232** (a proposal in a Stock Round) and their answers **209 / 234 / 274** are refused; through **308** the only field difference is the offer fields carried as `null` by the old engine versus absent under 7.4 — no gameplay difference. The first GAMEPLAY difference is **idx 309**: a direct `BuyPrivateCompany` (B&O buys private 7 for $60) sent during a Stock Round, applied by the old engine and refused by 7.4's round rule; from 310 the cash, treasuries, `private_companies` and `jk_license_granted` differ and every later step cascades (the room ends with 8 differing fields; money total identical, 20000). Direct trades 163/177/279/314/468/614/768/784/975 were already no-ops under 7.1 and remain so. Nothing re-pinned; `RULES_ENGINE_VERSION` still 4; the five suites stale since 7.1–7.3 (`replayGolden` ×2, `replayJuno3XD` ×2, `gameHistory` ×4, `roundReplay` ×1, `moneyConservation` ×1) are unchanged in number. **Follow-up (R74-B / O1 repair, #1597 / #1598, uncommitted):** `offer_serial` on the board and `instance` on every ordinary offer, the derived settlement key `offer:<kind>:<instance>`, and `derivedEntryKey` for the replay's guard record. Measured against the pre-repair 7.4 tree: fifteen of seventeen files are digest-identical at every entry and at the end; **`server/JUNO-CW7` from idx 122** and **`export/JUNO-QVC` from idx 60** differ ONLY in `offer_serial` (1) and `train_purchase_offer.instance` (1), written by the stored proposals at 121 / 59; applied / dropped counts, money totals and bank balances identical everywhere; FCJ unchanged (its four stored proposals are refused by 7.4). The ten stale cases are unchanged in number |
 
 Items above that carry "bump" must add a row here when they land. No golden or replay expectation is ever
 re-pinned silently: the re-pin, its index and its reason go in the batch write-up and in this table.

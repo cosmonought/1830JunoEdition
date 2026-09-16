@@ -121,9 +121,15 @@ describe("the exemptions, each one a move a player would otherwise lose", () => 
 
   it("lets the private's owner answer an offer while somebody else is on turn", () => {
     /* #701: a corporation on its turn OFFERS; the owner ANSWERS, and the owner is by definition not the one
-       operating. Refusing this would make every private-company negotiation in the game unanswerable. */
+       operating. Refusing this would make every private-company negotiation in the game unanswerable.
+       Batch 7.4 (#1595): the owner is the private's CURRENT owner on the BOARD, not the name the offer
+       carries -- so the fixture puts the D&H in BOB's hands, and a rejection (which needs no transaction) is
+       what proves the exemption; an acceptance is additionally judged as a purchase. */
     const state = board({
       active_player_index: 0,
+      private_companies: sandboxScenarioState("start", 0, "default").private_companies.map((entry) =>
+        entry.private_id === 3 ? { ...entry, owner: BOB } : entry,
+      ),
       private_purchase_offer: {
         private_id: 3,
         private_name: "Delaware & Hudson",
@@ -133,22 +139,33 @@ describe("the exemptions, each one a move a player would otherwise lose", () => 
         price: 70,
       },
     } as Partial<State>);
-    const answer = { AnswerPrivatePurchase: { private_id: 3, accept: true } };
-    expect(refusal(state, BOB, answer)).toBeNull();
-    expect(refusal(state, CAROL, answer)).toBe(
+    const reject = { AnswerPrivatePurchase: { private_id: 3, accept: false } };
+    expect(refusal(state, BOB, reject)).toBeNull();
+    expect(refusal(state, CAROL, reject)).toBe(
       "Only the private company's owner can answer that offer.",
     );
+    // The recorded name is narration: with the card in CAROL's hands, CAROL answers and BOB cannot.
+    const moved = board({ ...state, private_companies: state.private_companies.map((entry) => (entry.private_id === 3 ? { ...entry, owner: CAROL } : entry)) });
+    expect(refusal(moved, CAROL, reject)).toBeNull();
+    expect(refusal(moved, BOB, reject)).toBe("Only the private company's owner can answer that offer.");
+    // An acceptance is the purchase's own question (this is a Stock Round board, so it is refused as one).
+    expect(refusal(state, BOB, { AnswerPrivatePurchase: { private_id: 3, accept: true } })).toContain("Operating Round");
   });
 
   it("lets the selling president answer a train offer, and it is the buyer who is on turn", () => {
     /* #701 states the direction explicitly. Getting it backwards would refuse every train trade in the
-       game, which is why the case asserts the seller passes AND the buyer does not. */
+       game, which is why the case asserts the seller passes AND the buyer does not. Batch 7.4 (#1595): the
+       seller's president is the corporation's CURRENT president on the board; the offer's `seller_president`
+       is narration, so the fixture makes CAROL preside over the B&O. */
     const state = board({
       active_player_index: 0,
+      public_companies: sandboxScenarioState("start", 0, "default").public_companies.map((entry) =>
+        entry.company_id === 4 ? { ...entry, president: CAROL } : entry,
+      ),
       train_purchase_offer: {
         seller_protocol_id: 4,
         seller_ticker: "B&O",
-        seller_president: CAROL,
+        seller_president: "a-name-the-proposer-wrote",
         buyer_protocol_id: 1,
         buyer_ticker: "PRR",
         model_type: "3",
@@ -157,11 +174,12 @@ describe("the exemptions, each one a move a player would otherwise lose", () => 
         price: "150",
       },
     } as Partial<State>);
-    const answer = { AnswerTrainPurchase: { seller_protocol_id: 4, accept: true } };
-    expect(refusal(state, CAROL, answer)).toBeNull();
-    expect(refusal(state, ALICE, answer)).toBe(
+    const reject = { AnswerTrainPurchase: { seller_protocol_id: 4, accept: false } };
+    expect(refusal(state, CAROL, reject)).toBeNull();
+    expect(refusal(state, ALICE, reject)).toBe(
       "Only the selling corporation's president can answer that offer.",
     );
+    expect(refusal(state, CAROL, { AnswerTrainPurchase: { seller_protocol_id: 4, accept: true } })).toContain("Operating Round");
   });
 
   it("does not turn a duplicate answer into an error", () => {
@@ -244,6 +262,14 @@ describe("the shell-owned messages, #1220", () => {
       "AnswerPrivatePurchase",
       "ProposeTrainPurchase",
       "AnswerTrainPurchase",
+      // #1594 (Batch 7.4): the two ordinary withdrawals (the proposer's) and the player <-> player trade's
+      // three (the seat holder's, the counterparty's, the proposer's) -- each with its own owner in
+      // `roomMessageRefusal` / `consentAnswerRefusal`, none a seat's move.
+      "RescindPrivatePurchase",
+      "RescindTrainPurchase",
+      "ProposePrivateTrade",
+      "AnswerPrivateTrade",
+      "RescindPrivateTrade",
     ];
     const source = require("fs").readFileSync(
       require("path").join(__dirname, "..", "gameEngine", "gameSetup.ts"),

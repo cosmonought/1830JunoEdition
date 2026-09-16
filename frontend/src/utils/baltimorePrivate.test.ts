@@ -264,8 +264,17 @@ describe("the corporate sale ban", () => {
 
   it("still allows an ordinary private to be sold", () => {
     /* The ban must be narrow. A fix that blocked every corporate purchase
-       would pass every assertion above. */
-    const before = boardBeforeTheFirstTrain();
+       would pass every assertion above.
+       Batch 7.4 (#1591): the purchase has an authority in front of it now, so the ordinary sale is made on a
+       board where it is legal -- PRR operating, phase 3 (a 3-train in play), the D&H's $100 face inside the
+       band -- and the ban's own board above stays exactly as it was. */
+    const legal = boardBeforeTheFirstTrain();
+    const before: GameStateResponse = {
+      ...legal,
+      current_global_era: "Green",
+      active_corporation_index: 1, // PRR operates
+      public_companies: legal.public_companies.map((c) => (c.company_id === 1 ? { ...c, owned_trains: ["3"] } : c)),
+    };
     const after = applySandboxAction(before, {
       BuyPrivateCompany: { game_id: 1, protocol_id: 1, private_id: 3, price: "70" },
     } as Msg);

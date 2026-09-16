@@ -26,42 +26,53 @@
 export {};
 
 const { applySandboxAction } = require("../gameEngine/sandboxSession") as typeof import("../gameEngine/sandboxSession");
-const { sandboxScenarioState } = require("../gameEngine/sandboxState") as typeof import("../gameEngine/sandboxState");
 const { nextDerivedAction } = require("../gameEngine/derivedActions") as typeof import("../gameEngine/derivedActions");
 const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
+const { operatingBoard, P2, PRR, NYC, DH } = require("./offerFixtures74") as typeof import("./offerFixtures74");
 import type { MapGridResponse } from "../components/hexContractTypes";
 
 type State = import("../gameEngine/gameState").GameStateResponse;
 
-const base = (): State => sandboxScenarioState("start", 0, "default");
+/* Batch 7.4 (#1591/#1592): the offers now have an authority in front of them -- an Operating Round, the buyer
+   operating (at Hardware for a train), phase 3, a player-owned open private inside its band, a seller that owns
+   the train -- so the board these arms are exercised on is a LEGAL one, and the counterparty they record is
+   the BOARD's (the D&H's owner P2; NYC's president P2), never the payload's. Without a chart, so the identity
+   assertions below (`toBe`) still hold as they did on the opening scenario. */
+const base = (): State => operatingBoard({ over: { market_positions: undefined } });
 const GRID = { game_id: 1, tiles: [] } as unknown as MapGridResponse;
 
 const PRIVATE_OFFER = {
-  private_id: 3,
+  private_id: DH,
   private_name: "Delaware & Hudson",
-  owner: "p-alice",
-  buyer_protocol_id: 7,
-  buyer_ticker: "NNH",
-  price: 70,
+  owner: P2,
+  buyer_protocol_id: PRR,
+  buyer_ticker: "PRR",
+  price: 100,
 };
 
 const TRAIN_OFFER = {
-  seller_protocol_id: 4,
-  seller_ticker: "B&O",
-  seller_president: "p-bob",
-  buyer_protocol_id: 1,
+  seller_protocol_id: NYC,
+  seller_ticker: "NYC",
+  seller_president: P2,
+  buyer_protocol_id: PRR,
   buyer_ticker: "PRR",
   model_type: "3",
   // See turnAuthority.test.ts: the two offer types disagree about this field's type.
   price: "150",
 };
 
+/* #1597 (Batch 7.4, R74-B): the proposal arm numbers every ordinary offer -- `instance` on the offer, `offer_serial`
+   on the board -- so the recorded offer is the payload's narration plus its lifecycle identity. */
+const RECORDED_PRIVATE_OFFER = { ...PRIVATE_OFFER, instance: 1 };
+const RECORDED_TRAIN_OFFER = { ...TRAIN_OFFER, instance: 1 };
+
 describe("the private negotiation, #662 / #1247", () => {
   it("records the offer on the board so every client sees the same one", () => {
     const after = applySandboxAction(base(), {
       ProposePrivatePurchase: PRIVATE_OFFER,
     } as never);
-    expect(after.private_purchase_offer).toEqual(PRIVATE_OFFER);
+    expect(after.private_purchase_offer).toEqual(RECORDED_PRIVATE_OFFER);
+    expect(after.offer_serial).toBe(1);
   });
 
   it("a no clears the offer; a yes records it as accepted", () => {
@@ -69,13 +80,13 @@ describe("the private negotiation, #662 / #1247", () => {
       ProposePrivatePurchase: PRIVATE_OFFER,
     } as never);
     const declined = applySandboxAction(offered, {
-      AnswerPrivatePurchase: { private_id: 3, accept: false },
+      AnswerPrivatePurchase: { private_id: DH, accept: false },
     } as never);
     expect(declined.private_purchase_offer).toBeNull();
     const accepted = applySandboxAction(offered, {
-      AnswerPrivatePurchase: { private_id: 3, accept: true },
+      AnswerPrivatePurchase: { private_id: DH, accept: true },
     } as never);
-    expect(accepted.private_purchase_offer).toEqual({ ...PRIVATE_OFFER, accepted: true });
+    expect(accepted.private_purchase_offer).toEqual({ ...RECORDED_PRIVATE_OFFER, accepted: true });
   });
 
   it("treats a second answer as nothing to do rather than as an error", () => {
@@ -83,12 +94,12 @@ describe("the private negotiation, #662 / #1247", () => {
        and change nothing -- a refusal that threw would kill a rebuild. And an answer to an ACCEPTED offer is
        a second answer too. */
     const settled = applySandboxAction(base(), {
-      AnswerPrivatePurchase: { private_id: 3, accept: true },
+      AnswerPrivatePurchase: { private_id: DH, accept: true },
     } as never);
     expect(settled.private_purchase_offer ?? null).toBeNull();
     const offered = applySandboxAction(base(), { ProposePrivatePurchase: PRIVATE_OFFER } as never);
-    const accepted = applySandboxAction(offered, { AnswerPrivatePurchase: { private_id: 3, accept: true } } as never);
-    expect(applySandboxAction(accepted, { AnswerPrivatePurchase: { private_id: 3, accept: false } } as never)).toBe(accepted);
+    const accepted = applySandboxAction(offered, { AnswerPrivatePurchase: { private_id: DH, accept: true } } as never);
+    expect(applySandboxAction(accepted, { AnswerPrivatePurchase: { private_id: DH, accept: false } } as never)).toBe(accepted);
   });
 
   it("ignores an answer aimed at a different private", () => {
@@ -98,7 +109,7 @@ describe("the private negotiation, #662 / #1247", () => {
     const answered = applySandboxAction(offered, {
       AnswerPrivatePurchase: { private_id: 99, accept: true },
     } as never);
-    expect(answered.private_purchase_offer).toEqual(PRIVATE_OFFER);
+    expect(answered.private_purchase_offer).toEqual(RECORDED_PRIVATE_OFFER);
   });
 });
 
@@ -107,12 +118,13 @@ describe("the train negotiation, #701 / #1247", () => {
     const offered = applySandboxAction(base(), {
       ProposeTrainPurchase: TRAIN_OFFER,
     } as never);
-    expect(offered.train_purchase_offer).toEqual(TRAIN_OFFER);
+    expect(offered.train_purchase_offer).toEqual(RECORDED_TRAIN_OFFER);
+    expect(offered.offer_serial).toBe(1);
 
     const answered = applySandboxAction(offered, {
-      AnswerTrainPurchase: { seller_protocol_id: 4, accept: true },
+      AnswerTrainPurchase: { seller_protocol_id: NYC, accept: true },
     } as never);
-    expect(answered.train_purchase_offer).toEqual({ ...TRAIN_OFFER, accepted: true });
+    expect(answered.train_purchase_offer).toEqual({ ...RECORDED_TRAIN_OFFER, accepted: true });
   });
 
   it("ignores an answer aimed at a different seller", () => {
@@ -122,7 +134,7 @@ describe("the train negotiation, #701 / #1247", () => {
     const answered = applySandboxAction(offered, {
       AnswerTrainPurchase: { seller_protocol_id: 99, accept: false },
     } as never);
-    expect(answered.train_purchase_offer).toEqual(TRAIN_OFFER);
+    expect(answered.train_purchase_offer).toEqual(RECORDED_TRAIN_OFFER);
   });
 });
 
@@ -175,7 +187,7 @@ describe("the boundary itself, #1247", () => {
   const offeredPrivate = () =>
     applySandboxAction(base(), { ProposePrivatePurchase: PRIVATE_OFFER } as never);
   const acceptedPrivate = () =>
-    applySandboxAction(offeredPrivate(), { AnswerPrivatePurchase: { private_id: 3, accept: true } } as never);
+    applySandboxAction(offeredPrivate(), { AnswerPrivatePurchase: { private_id: DH, accept: true } } as never);
 
   it("the answer arm never buys; it records", () => {
     /* #576: "a consequence is DERIVED by every client, not appended by each of them". The arm leaves the
@@ -192,43 +204,47 @@ describe("the boundary itself, #1247", () => {
     const owed = nextDerivedAction({ state: acceptedPrivate(), mapGrid: GRID, emitted: new Set() });
     expect(owed?.kind).toBe("accepted-offer");
     expect(owed?.msg).toEqual({
-      BuyPrivateCompany: { game_id: 0, protocol_id: 7, private_id: 3, price: "70" },
+      BuyPrivateCompany: { game_id: 0, protocol_id: PRR, private_id: DH, price: "100" },
     });
     // A pending, unanswered offer owes nothing; a declined one owes nothing.
     expect(nextDerivedAction({ state: offeredPrivate(), mapGrid: GRID, emitted: new Set() })).toBeNull();
-    const declined = applySandboxAction(offeredPrivate(), { AnswerPrivatePurchase: { private_id: 3, accept: false } } as never);
+    const declined = applySandboxAction(offeredPrivate(), { AnswerPrivatePurchase: { private_id: DH, accept: false } } as never);
     expect(nextDerivedAction({ state: declined, mapGrid: GRID, emitted: new Set() })).toBeNull();
   });
 
   it("the purchase settles the offer, so a rebuilt board owes nothing", () => {
     const accepted = acceptedPrivate();
     const owed = nextDerivedAction({ state: accepted, mapGrid: GRID, emitted: new Set() })!;
-    const bought = applySandboxAction(accepted, owed.msg as never);
+    const bought = applySandboxAction(accepted, owed.msg as never, { actor: P2 });
     expect(bought.private_purchase_offer).toBeNull();
+    expect(bought.private_companies.find((entry) => entry.private_id === DH)?.owner_protocol_id).toBe(PRR);
     expect(nextDerivedAction({ state: bought, mapGrid: GRID, emitted: new Set() })).toBeNull();
-    // And applying the purchase a second time -- a straggler's copy -- changes nothing.
-    expect(applySandboxAction(bought, owed.msg as never)).toBe(bought);
+    // And applying the purchase a second time -- a straggler's copy -- changes nothing: the card is already
+    // PRR's, there is no offer, and the actor has no consent to give (#1591).
+    expect(applySandboxAction(bought, owed.msg as never, { actor: P2 })).toBe(bought);
   });
 
   it("the train trade owes and settles the same way, keyed per settlement", () => {
     const offered = applySandboxAction(base(), { ProposeTrainPurchase: TRAIN_OFFER } as never);
-    const accepted = applySandboxAction(offered, { AnswerTrainPurchase: { seller_protocol_id: 4, accept: true } } as never);
+    const accepted = applySandboxAction(offered, { AnswerTrainPurchase: { seller_protocol_id: NYC, accept: true } } as never);
     const owed = nextDerivedAction({ state: accepted, mapGrid: GRID, emitted: new Set() });
     expect(owed?.kind).toBe("accepted-offer");
     expect(owed?.msg).toEqual({
       BuyTrainFromCorporation: {
         game_id: 0,
-        buyer_protocol_id: 1,
-        seller_protocol_id: 4,
+        buyer_protocol_id: PRR,
+        seller_protocol_id: NYC,
         model_type: "3",
         price: "150",
       },
     });
-    /* THE OFFER COMES OFF THE BOARD EVEN WHEN THE SALE CANNOT BE MADE. B&O in the opening scenario owns no
-       3-train, so `settleTrainSale` refuses -- and the offer must still be retired, or the board would owe the
-       same purchase on every look until the burst cap. */
-    const settled = applySandboxAction(accepted, owed!.msg as never);
+    /* THE OFFER COMES OFF THE BOARD EVEN WHEN THE SALE CANNOT BE MADE. NYC's 3-train is gone by the time the
+       settlement lands (the board is made stale by hand), so the sale is refused -- and the offer must still
+       be retired (#1596), or the board would owe the same purchase on every look until the burst cap. */
+    const stale = { ...accepted, public_companies: accepted.public_companies.map((entry) => (entry.company_id === NYC ? { ...entry, owned_trains: ["2"] } : entry)) };
+    const settled = applySandboxAction(stale, owed!.msg as never, { actor: P2 });
     expect(settled.train_purchase_offer).toBeNull();
+    expect(settled.public_companies.find((entry) => entry.company_id === PRR)?.owned_trains).toEqual(["2"]);
     expect(nextDerivedAction({ state: settled, mapGrid: GRID, emitted: new Set() })).toBeNull();
     // A key already emitted is not owed again.
     expect(nextDerivedAction({ state: accepted, mapGrid: GRID, emitted: new Set([owed!.key]) })).toBeNull();

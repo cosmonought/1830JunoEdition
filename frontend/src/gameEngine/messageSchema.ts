@@ -170,7 +170,8 @@ function checkField(value: unknown, spec: FieldSpec): string | null {
 /** Every gameplay discriminant the reducer dispatches on, with the fields it declares.
  *
  *  THIRTY-NINE, AND THE COUNT IS THE POINT. `applyOneAction` has 27 arms; the sandbox-only family
- *  (`isSandboxOnlyMsg`) adds 12 more that are handled before it or beside it. A discriminant absent from
+ *  (`isSandboxOnlyMsg`) adds 12 more that are handled before it or beside it. (Later batches have grown the
+ *  table -- Batch 5's four, Batch 7.4's five (#1594) -- and `messageSchema.test.ts` pins the live count.) A discriminant absent from
  *  this table is refused, so adding an arm to the reducer without adding it here makes the message
  *  unreachable rather than unvalidated -- which is the failure direction worth having.
  *
@@ -324,6 +325,15 @@ export const GAMEPLAY_MESSAGE_SCHEMA: Readonly<Record<string, Readonly<Record<st
     price: "string",
   },
   AnswerTrainPurchase: { game_id: "int?", seller_protocol_id: "int", accept: "bool" },
+  /* #1594 (Batch 7.4): the two ordinary rescissions (S7-14) and the player <-> player private-company trade
+     (S7-9, ruled Q12). Shape only, as ever: who may send each, and whether the trade is legal, are
+     `turnAuthority`'s and the reducer's (`privateTradeRefusal`). `price` is an INT because the rule is "any
+     mutually agreed price" in whole dollars and $0 is legal; the reducer refuses a negative one. */
+  RescindPrivatePurchase: { game_id: "int?", private_id: "int" },
+  RescindTrainPurchase: { game_id: "int?", seller_protocol_id: "int" },
+  ProposePrivateTrade: { game_id: "int?", private_id: "int", seller: "string", buyer: "string", price: "int" },
+  AnswerPrivateTrade: { game_id: "int?", private_id: "int", accept: "bool" },
+  RescindPrivateTrade: { game_id: "int?", private_id: "int" },
   BuyKanawhaLicense: { game_id: "int?", protocol_id: "int" },
 };
 

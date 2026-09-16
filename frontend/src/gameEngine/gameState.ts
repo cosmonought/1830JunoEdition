@@ -308,6 +308,11 @@ export interface PrivatePurchaseOffer {
   /** Design note #1247: the owner said yes and the purchase is OWED. Set by the reducer's `AnswerPrivatePurchase`
    *  arm on an accept; cleared -- with the whole offer -- by the `BuyPrivateCompany` that settles it, which
    *  `nextDerivedAction` generates from this flag. Absent means "awaiting an answer", as it always did. */
+  /** Design note #1597 (Batch 7.4, R74-B): WHICH offer this is -- its instance id, `offer_serial`'s value at the
+   *  moment the proposal arm wrote it. Two later offers between the same parties for the same asset at the same
+   *  price are two instances; the derived settlement is keyed on this and nothing else. Absent on an offer a
+   *  fixture wrote by hand (`nextDerivedAction` keys such an offer on its transaction instead). */
+  instance?: number;
   accepted?: true;
   /** Design note #1541: a SELLER-initiated offer made to fund a forced train purchase (rulebook 6.6.3). The
    *  direction is reversed -- the owner offered, and the BUYING corporation's president answers with
@@ -331,8 +336,36 @@ export interface TrainPurchaseOffer {
   model_type: string;
   /** String, matching the contract's `Uint128` -- see `ProposeTrainPurchaseMsg`. */
   price: string;
+  /** Design note #1597 (Batch 7.4, R74-B): WHICH offer this is -- its instance id, `offer_serial`'s value at the
+   *  moment the proposal arm wrote it. Two later offers between the same parties for the same asset at the same
+   *  price are two instances; the derived settlement is keyed on this and nothing else. Absent on an offer a
+   *  fixture wrote by hand (`nextDerivedAction` keys such an offer on its transaction instead). */
+  instance?: number;
   /** Design note #1247: the seller's president said yes and the trade is OWED -- see `PrivatePurchaseOffer`. */
   accepted?: true;
+}
+
+/** Design note #1593 (Batch 7.4): the player <-> player private-company sale awaiting the counterparty's answer
+ *  (rulebook 3.1; ruled Q12 / D-24). A THIRD FIELD beside the two corporation-buyer offers rather than a
+ *  discriminator on `PrivatePurchaseOffer`, whose shape is a corporation buyer. Either party may propose on
+ *  their own Stock Round turn; `proposer` records which, so the OTHER party is the one who answers and only
+ *  the proposer may withdraw. Settlement is the answer arm's (`accept: true`), so there is no `accepted` flag
+ *  here: an accepted trade is a settled one. Sandbox-only, like its two siblings. */
+export interface PrivateTradeOffer {
+  private_id: number;
+  /** Carried for every client's prompt, exactly as `PrivatePurchaseOffer.private_name` is. */
+  private_name: string;
+  seller: string;
+  buyer: string;
+  /** Whole VGP, $0 allowed ("any mutually agreed price"). */
+  price: number;
+  /** Design note #1597 (Batch 7.4, R74-B): WHICH offer this is -- its instance id, `offer_serial`'s value at the
+   *  moment the proposal arm wrote it. Two later offers between the same parties for the same asset at the same
+   *  price are two instances; the derived settlement is keyed on this and nothing else. Absent on an offer a
+   *  fixture wrote by hand (`nextDerivedAction` keys such an offer on its transaction instead). */
+  instance?: number;
+  /** The party who made the offer -- the seller or the buyer. */
+  proposer: string;
 }
 
 export interface GameStateResponse {
@@ -406,6 +439,31 @@ export interface GameStateResponse {
   /** Design note #701: the train-trade offer awaiting its seller's answer. Sandbox-only, for the reason on
    *  `TrainPurchaseOffer` -- online this lives in the contract's offer register. */
   train_purchase_offer?: TrainPurchaseOffer | null;
+  /** Design note #1593 (Batch 7.4): the player <-> player private-company trade awaiting its answer. The third
+   *  ordinary offer field; at most one of the three (and never beside a funding offer) stands at a time --
+   *  `pendingOfferHold.ts` is the one reader of "is an offer standing". Absent on every log written before
+   *  Batch 7.4 (#232). */
+  private_trade_offer?: PrivateTradeOffer | null;
+  /** ==================================================================
+   *   DESIGN NOTE 1597: THE OFFER SERIAL -- ONE IDENTITY PER ORDINARY OFFER LIFECYCLE (Batch 7.4, R74-B)
+   *  ==================================================================
+   *  The instance id of the most recent ordinary offer this board has carried (private purchase, train
+   *  purchase or player trade); absent means none has been proposed (#232). Written by the three proposal
+   *  arms and by nothing else: each successful proposal takes `(offer_serial ?? 0) + 1`, records it as the
+   *  offer's `instance` and stores it here. NEVER decremented, never cleared -- not by an answer, a rescission,
+   *  a settlement, a turn end or a round end -- so the sequence is strictly monotonic over the log and a
+   *  completed offer's number is never reused.
+   *  WHY A COUNTER AND NOT A TUPLE. The derived settlement (`nextDerivedAction`, #1247) is de-duplicated by a
+   *  key; the key used to name a tuple of board facts (seller, model, buyer, the buyer's fleet size), and
+   *  Opus's R74-B matrix proved five legal sequences in which rust, an intercorporate sale or a depot purchase
+   *  bring the tuple back to a value already settled -- the second, distinct, legal offer then derived nothing
+   *  and the hold froze the table. A tuple of game properties can recur; a lifecycle serial cannot. Adding the
+   *  price would not have helped (R74-B.2 is a same-price collision).
+   *  LOG-DERIVED, LIKE EVERY OTHER FIELD: a replay assigns the same numbers in the same order, `RevertTo`
+   *  rebuilds the board without the reverted offers and their numbers, and a restart recomputes the guard
+   *  from the surviving log (#1208). No UUID, no clock, no server-side sequence. The Batch-5 FUNDING offer
+   *  (#1541) is not an ordinary offer, is never derived, and takes no number. */
+  offer_serial?: number;
   /** Design note #723: every hex whose TERRAIN FEE has already been charged, as `"q,r"` keys.
    *
    *  In state rather than derived from the tile grid, because the grid is a separate atom that this reducer

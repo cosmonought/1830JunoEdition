@@ -160,7 +160,16 @@ describe("Kanawha licences (design note #1323)", () => {
   });
 
   it("is granted free, once, to the first corporation that buys the JK from a player", () => {
-    const owned = lpfOperating({ operating_sub_phase: "BuyPrivate" });
+    /* Batch 7.4 (#1591): the purchase now has an authority in front of it -- phase 3 (PRR holds a 3-train here,
+       so the era is Green), the operating corporation, a player-owned private inside its band. The consent
+       rule is skipped for these attribution-less fixture calls (#549b). */
+    const owned = lpfOperating({
+      operating_sub_phase: "BuyPrivate",
+      current_global_era: "Green",
+    });
+    owned.public_companies = owned.public_companies.map((company) =>
+      company.company_id === PRR ? { ...company, owned_trains: ["3"] } : company,
+    );
     owned.private_companies = owned.private_companies.map((entry) =>
       entry.private_id === JK_PRIVATE_ID ? { ...entry, owner: P2 } : entry,
     );
@@ -176,11 +185,22 @@ describe("Kanawha licences (design note #1323)", () => {
     // And the Bank still sells this corporation nothing more -- it already holds one.
     expect(kanawhaLicenseRefusal({ ...bought, operating_sub_phase: "Track" }, PRR)).toContain("already holds");
 
-    // A second grant never happens: the flag stands even after the JK changes hands again.
+    // A second grant never happens: the flag stands even after the JK changes hands again -- here N&W, floated
+    // and operating (7.4's authority), buys it back from P2 and receives no licence.
+    const resold = {
+      ...bought,
+      active_operating_order: [NW_COMPANY_ID],
+      active_corporation_index: 0,
+      private_companies: bought.private_companies.map((e) => (e.private_id === JK_PRIVATE_ID ? { ...e, owner: P2, owner_protocol_id: null } : e)),
+      public_companies: bought.public_companies.map((c) =>
+        c.company_id === NW_COMPANY_ID ? { ...c, is_floated: true, president: P1, treasury: "500", owned_trains: ["3"] } : c,
+      ),
+    };
     const again = applySandboxAction(
-      { ...bought, private_companies: bought.private_companies.map((e) => (e.private_id === JK_PRIVATE_ID ? { ...e, owner: P2, owner_protocol_id: null } : e)) },
+      resold,
       { BuyPrivateCompany: { game_id: 1, protocol_id: NW_COMPANY_ID, private_id: JK_PRIVATE_ID, price: "120" } } as never,
     );
+    expect(again.private_companies.find((e) => e.private_id === JK_PRIVATE_ID)?.owner_protocol_id).toBe(NW_COMPANY_ID);
     expect(licensesHeldBy(corp(again, NW_COMPANY_ID))).toBe(0);
   });
 

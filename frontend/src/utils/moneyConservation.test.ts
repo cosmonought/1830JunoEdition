@@ -263,9 +263,15 @@ describe("a corporate private purchase has a seller, and pays him (S7-12)", () =
      band, the operating-corporation check and consent are rules, and they are Batch 7.4's. What is fixed
      here is that the payment cannot vanish and cannot run backwards. */
   const SV = 1;
+  /* Batch 7.4 (#1591) put the purchase's authority in front of the ledger, so the board is a legal one -- PRR
+     operating (the queue names it), phase 3 (NYC holds a 3-train), the SV's $20 face inside its $10-$40 band.
+     The consent rule is skipped for these attribution-less calls (#549b); what each case asks is the money. */
   const board = (over: Partial<GameStateResponse> = {}): GameStateResponse =>
     ({
       current_round_type: "OperatingRound",
+      current_global_era: "Green",
+      active_operating_order: [1, 2],
+      active_corporation_index: 0,
       virtual_bank_vgp: "5000",
       player_addresses: ["p1", "p2"],
       player_cash: [
@@ -274,10 +280,10 @@ describe("a corporate private purchase has a seller, and pays him (S7-12)", () =
       ],
       public_companies: [
         { company_id: 1, ticker: "PRR", treasury: "300", is_floated: true, president: "p1", owned_trains: [] },
-        { company_id: 2, ticker: "NYC", treasury: "300", is_floated: true, president: "p2", owned_trains: [] },
+        { company_id: 2, ticker: "NYC", treasury: "300", is_floated: true, president: "p2", owned_trains: ["3"] },
       ],
       private_companies: [
-        { private_id: SV, name: "Schuylkill Valley", face_value: "20", revenue_per_or: "5", owner: "p2", owner_protocol_id: null },
+        { private_id: SV, name: "Schuylkill Valley", cost: "20", revenue_per_or: "5", owner: "p2", owner_protocol_id: null },
       ],
       ...over,
     }) as unknown as GameStateResponse;
@@ -315,7 +321,7 @@ describe("a corporate private purchase has a seller, and pays him (S7-12)", () =
   it("refuses when the private has no owner at all, rather than paying nobody", () => {
     const before = board({
       private_companies: [
-        { private_id: SV, name: "Schuylkill Valley", face_value: "20", revenue_per_or: "5", owner: null, owner_protocol_id: null },
+        { private_id: SV, name: "Schuylkill Valley", cost: "20", revenue_per_or: "5", owner: null, owner_protocol_id: null },
       ],
     } as unknown as Partial<GameStateResponse>);
     const after = buy(before, "40");
@@ -327,7 +333,7 @@ describe("a corporate private purchase has a seller, and pays him (S7-12)", () =
        arm debited the buyer and credited nobody, because only a PLAYER `owner` was ever paid. */
     const before = board({
       private_companies: [
-        { private_id: SV, name: "Schuylkill Valley", face_value: "20", revenue_per_or: "5", owner: null, owner_protocol_id: 2 },
+        { private_id: SV, name: "Schuylkill Valley", cost: "20", revenue_per_or: "5", owner: null, owner_protocol_id: 2 },
       ],
     } as unknown as Partial<GameStateResponse>);
     const after = buy(before, "40");
@@ -355,19 +361,27 @@ describe("a corporate private purchase has a seller, and pays him (S7-12)", () =
     const before = board({
       public_companies: [
         { company_id: 1, ticker: "PRR", treasury: "0", is_floated: true, president: "p1", owned_trains: [] },
-        { company_id: 2, ticker: "NYC", treasury: "300", is_floated: true, president: "p2", owned_trains: [] },
+        { company_id: 2, ticker: "NYC", treasury: "300", is_floated: true, president: "p2", owned_trains: ["3"] },
       ],
     } as unknown as Partial<GameStateResponse>);
-    const after = buy(before, "70");
+    const after = buy(before, "40");
     expect(moneyDigest(after)).toBe(moneyDigest(before));
     expect(after.player_cash[1].cash_vgp).toBe("0");
     expect(after.private_companies[0].owner).toBe("p2");
   });
 
-  it("still allows a $0 sale, which is a movement of no money between two real parties", () => {
+  it("the ledger allows a $0 movement; the corporate purchase's band (7.4) is what refuses it", () => {
+    /* Batch 7.1 pinned that a $0 corporate sale moved no money between two real parties. Batch 7.4's authority
+       (#1591) now refuses it one layer up -- rulebook 3.1's half-face floor -- so the ledger's $0 allowance is
+       exercised by the one transaction that prices at $0, the player <-> player trade (offerAuthority.test.ts),
+       and here the band's own floor is the smallest corporate purchase that moves: $10 for a $20 face. */
     const before = board();
-    const after = buy(before, "0");
+    const refused = buy(before, "0");
+    expect(moneyDigest(refused)).toBe(moneyDigest(before));
+    const after = buy(before, "10");
     expect(after.private_companies[0].owner_protocol_id).toBe(1);
+    expect(after.public_companies[0].treasury).toBe("290");
+    expect(after.player_cash[1].cash_vgp).toBe("10");
     expect(moneyConservationBreach(before, after)).toBeNull();
   });
 });

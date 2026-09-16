@@ -113,6 +113,19 @@ const ADVANCE = (id: number) => ({ AdvanceOperatingSubPhase: { game_id: 1, proto
 const BUY = (id: number) => ({ BuyHardwareFromPool: { game_id: 1, protocol_id: id } }) as never;
 const BUY_POOL = (id: number, model: string) => ({ BuyHardwareFromPool: { game_id: 1, protocol_id: id, returned_model_type: model } }) as never;
 const EMERGENCY = (id: number) => ({ EmergencyBuyHardware: { game_id: 1, protocol_id: id } }) as never;
+/* Batch 7.4 (#1592): a sale between two presidents needs the seller's consent, so the trades below arrive as
+   they do in play -- the buyer's president proposes at Hardware, the seller's accepts, the board owes the
+   settlement -- and the settlement is then the same `BuyTrainFromCorporation` these cases always sent. */
+const CONSENTED = (state: GameStateResponse, buyer: number, seller: number, model: string, price: string, buyerPresident: string, sellerPresident: string) =>
+  applySandboxAction(
+    applySandboxAction(
+      state,
+      { ProposeTrainPurchase: { game_id: 1, seller_protocol_id: seller, seller_ticker: "x", seller_president: null, buyer_protocol_id: buyer, buyer_ticker: "x", model_type: model, price } } as never,
+      { actor: buyerPresident, mapGrid: CORRIDOR },
+    ),
+    { AnswerTrainPurchase: { game_id: 1, seller_protocol_id: seller, accept: true } } as never,
+    { actor: sellerPresident, mapGrid: CORRIDOR },
+  );
 const TRADE = (buyer: number, seller: number, model: string, price: string) =>
   ({ BuyTrainFromCorporation: { game_id: 1, buyer_protocol_id: buyer, seller_protocol_id: seller, model_type: model, price } }) as never;
 
@@ -343,7 +356,12 @@ describe("a corporation-to-corporation sale", () => {
       operating: CO,
     });
     const depotBefore = depotInventory(state).map((row) => row.remaining);
-    const after = applySandboxAction(state, TRADE(CO, NYC, "4", "150"), { actor: P1, mapGrid: CORRIDOR });
+    // Unconsented, refused (7.4); consented, the sale it always was.
+    expect(applySandboxAction(state, TRADE(CO, NYC, "4", "150"), { actor: P1, mapGrid: CORRIDOR })).toBe(state);
+    const consented = CONSENTED(state, CO, NYC, "4", "150", P1, P2);
+    expect(consented.train_purchase_offer?.accepted).toBe(true);
+    const after = applySandboxAction(consented, TRADE(CO, NYC, "4", "150"), { actor: P2, mapGrid: CORRIDOR });
+    expect(after.train_purchase_offer).toBeNull();
     expect(company(after, CO).owned_trains).toEqual(["3", "4"]);
     expect(company(after, NYC).owned_trains).toEqual(["3"]);
     expect(company(after, CO).treasury).toBe("350");
@@ -365,6 +383,8 @@ describe("a corporation-to-corporation sale", () => {
     });
     expect(depotInventory(state).find((row) => row.isCurrent)?.trainLimit).toBe(3);
     expect(applySandboxAction(state, TRADE(CO, NYC, "4", "1"), { actor: P1, mapGrid: CORRIDOR })).toBe(state);
+    // 7.4: the limit is asked of the OFFER too, so the proposal itself is refused.
+    expect(applySandboxAction(state, { ProposeTrainPurchase: { game_id: 1, seller_protocol_id: NYC, seller_ticker: "x", seller_president: null, buyer_protocol_id: CO, buyer_ticker: "x", model_type: "4", price: "1" } } as never, { actor: P1, mapGrid: CORRIDOR })).toBe(state);
   });
 });
 
@@ -455,7 +475,8 @@ describe("JUNO-FCJ 413 and 468: the discard was real and the sale was not one", 
     const overLimit = applySandboxAction(beforeFive, BUY(NYC), { actor: P2, mapGrid: CORRIDOR });
     const afterFive = applySandboxAction(overLimit, DISCARD_3, { actor: P1, mapGrid: CORRIDOR });
     const sale = TRADE(NYC, CO, "4", "1");
-    const afterSale = applySandboxAction(afterFive, sale, { actor: P2, mapGrid: CORRIDOR });
+    // 7.4: with C&O's president's consent (the $1 sale FCJ 468 recorded was one both presidents agreed to).
+    const afterSale = applySandboxAction(CONSENTED(afterFive, NYC, CO, "4", "1", P2, P1), sale, { actor: P1, mapGrid: CORRIDOR });
     expect(company(afterSale, CO).owned_trains).toEqual(["3"]);
     expect(company(afterSale, NYC).owned_trains).toEqual(["5", "4"]);
     expect(describeFleetLosses(afterFive, afterSale, sale)).toEqual([]);

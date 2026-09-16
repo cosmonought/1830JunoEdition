@@ -460,6 +460,73 @@ export interface AnswerTrainPurchaseMsg {
   };
 }
 
+/* ==================================================================
+    DESIGN NOTE 1594: THE ORDINARY OFFERS GAIN A WITHDRAWAL, AND THE PLAYERS GAIN A TRADE (Batch 7.4)
+   ==================================================================
+   S7-14: no ordinary-offer rescission existed -- the chain-era `RescindTrainOffer { offer_id }` addresses a
+   register the sandbox never had, and is now refused on a pinned board (ruled Q11 / D-23). These two are the
+   sandbox's own: `RescindPrivatePurchase { private_id }` and `RescindTrainPurchase { seller_protocol_id }`,
+   each sent by the buying corporation's CURRENT president, each clearing the matching unanswered offer and
+   nothing else. Sandbox-only, for #662's reason. */
+export interface RescindPrivatePurchaseMsg {
+  RescindPrivatePurchase: {
+    game_id?: number;
+    private_id: number;
+  };
+}
+
+export interface RescindTrainPurchaseMsg {
+  RescindTrainPurchase: {
+    game_id?: number;
+    seller_protocol_id: number;
+  };
+}
+
+/* The third ordinary offer kind (design §7.6a; ruled Q12 / D-24): a private company sold between players, on the
+   buyer's or the seller's Stock Round turn, other than the first. Either party proposes; only the other party
+   answers; only the proposer withdraws. Acceptance SETTLES in the answer arm (the D-5 shape). */
+export interface ProposePrivateTradeMsg {
+  ProposePrivateTrade: {
+    game_id?: number;
+    private_id: number;
+    seller: string;
+    buyer: string;
+    /** Whole VGP; $0 is legal ("any mutually agreed price"). */
+    price: number;
+  };
+}
+
+export interface AnswerPrivateTradeMsg {
+  AnswerPrivateTrade: {
+    game_id?: number;
+    private_id: number;
+    accept: boolean;
+  };
+}
+
+export interface RescindPrivateTradeMsg {
+  RescindPrivateTrade: {
+    game_id?: number;
+    private_id: number;
+  };
+}
+
+export function isRescindPrivatePurchaseMsg(msg: unknown): msg is RescindPrivatePurchaseMsg {
+  return typeof msg === "object" && msg !== null && "RescindPrivatePurchase" in msg;
+}
+export function isRescindTrainPurchaseMsg(msg: unknown): msg is RescindTrainPurchaseMsg {
+  return typeof msg === "object" && msg !== null && "RescindTrainPurchase" in msg;
+}
+export function isProposePrivateTradeMsg(msg: unknown): msg is ProposePrivateTradeMsg {
+  return typeof msg === "object" && msg !== null && "ProposePrivateTrade" in msg;
+}
+export function isAnswerPrivateTradeMsg(msg: unknown): msg is AnswerPrivateTradeMsg {
+  return typeof msg === "object" && msg !== null && "AnswerPrivateTrade" in msg;
+}
+export function isRescindPrivateTradeMsg(msg: unknown): msg is RescindPrivateTradeMsg {
+  return typeof msg === "object" && msg !== null && "RescindPrivateTrade" in msg;
+}
+
 /** Everything the sandbox log can carry -- the contract's own message set,
  *  plus the sandbox-only round events. A PRECISE union rather than an
  *  index signature: a loose type here would let any object into the replay
@@ -476,6 +543,12 @@ export type SandboxLogMsg =
   | AnswerPrivatePurchaseMsg
   | ProposeTrainPurchaseMsg
   | AnswerTrainPurchaseMsg
+  // Design note #1594: the two ordinary rescissions and the player <-> player trade.
+  | RescindPrivatePurchaseMsg
+  | RescindTrainPurchaseMsg
+  | ProposePrivateTradeMsg
+  | AnswerPrivateTradeMsg
+  | RescindPrivateTradeMsg
   | BuyKanawhaLicenseMsg
   | RevertToMsg;
 
@@ -548,11 +621,24 @@ export function isSandboxOnlyMsg(
     // Design note #701: and the train negotiation, which is the same shape.
     | ProposeTrainPurchaseMsg
     | AnswerTrainPurchaseMsg
+    // Design note #1594 (Batch 7.4): the ordinary rescissions and the player <-> player trade. Off-turn or
+    // seat-exempt by construction (a rescission is the proposer's, an answer the counterparty's, and the
+    // trade proposal is judged by its own party-and-seat rule at ingress), so they land here with the rest.
+    | RescindPrivatePurchaseMsg
+    | RescindTrainPurchaseMsg
+    | ProposePrivateTradeMsg
+    | AnswerPrivateTradeMsg
+    | RescindPrivateTradeMsg
     // Design note #1323: the licence purchase, which the chain has never heard of.
     | BuyKanawhaLicenseMsg
     | RevertToMsg {
   return (
     isBuyKanawhaLicenseMsg(msg) ||
+    isRescindPrivatePurchaseMsg(msg) ||
+    isRescindTrainPurchaseMsg(msg) ||
+    isProposePrivateTradeMsg(msg) ||
+    isAnswerPrivateTradeMsg(msg) ||
+    isRescindPrivateTradeMsg(msg) ||
     isSetupGameMsg(msg) ||
     isOpenStockRoundMsg(msg) ||
     isCloseRoomMsg(msg) ||

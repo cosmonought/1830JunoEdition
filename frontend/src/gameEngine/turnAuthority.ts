@@ -73,6 +73,26 @@ import { resolveVariants } from "./gameVariants";
 /* Design note #1580 (Batch 7.3): the private auction's rules, from the one module that owns them. Not a
    second implementation -- `turnAuthority` states no auction rule of its own. */
 import { auctionRefusal, isAuctionMessage } from "./auctionAuthority";
+/* Design notes #1590-#1595 (Batch 7.4): the ordinary offers' hold and their three authorities -- the same
+   predicates the reducer's core asks, so the two locks cannot disagree; ingress answers with the sentence. */
+import { legacyOfferMessageRefusal, pendingOfferBlock } from "./pendingOfferHold";
+import {
+  answerPrivatePurchaseRefusal,
+  privatePurchaseRefusal,
+  proposePrivatePurchaseRefusal,
+  rescindPrivatePurchaseRefusal,
+} from "./privatePurchaseAuthority";
+import {
+  answerTrainPurchaseRefusal,
+  proposeTrainPurchaseRefusal,
+  rescindTrainPurchaseRefusal,
+  trainSaleRefusal,
+} from "./trainSaleAuthority";
+import {
+  answerPrivateTradeRefusal,
+  proposePrivateTradeRefusal,
+  rescindPrivateTradeRefusal,
+} from "./privateTradeAuthority";
 
 export interface TurnAuthorityInput {
   state: GameStateResponse;
@@ -163,6 +183,17 @@ export function turnRefusal(input: TurnAuthorityInput): string | null {
     }
   }
 
+  /* ---- THE THIRD HOLD (#1590, Batch 7.4): ONE ORDINARY OFFER, AND NOTHING ELSE WHILE IT STANDS ----
+     After the discard's and the funding's, so a board under one of those reports that reason; before the
+     consent exemption, whose messages the hold itself lets through. And the chain-era offer messages are
+     refused on a pinned board (ruled Q11 / D-23) rather than appended and no-op'd. */
+  {
+    const legacy = legacyOfferMessageRefusal(state, msg);
+    if (legacy !== null) return legacy;
+    const held = pendingOfferBlock(state, msg);
+    if (held !== null) return held;
+  }
+
   /* ---- EXEMPTION 3: consent answers on a two-party trade (#701) ----
      THE OWED ANSWER IS ALWAYS OFF-TURN, BY CONSTRUCTION. A corporation on its turn OFFERS; the private's
      owner or the selling president ANSWERS, and that player is by definition not the one operating. The
@@ -170,7 +201,7 @@ export function turnRefusal(input: TurnAuthorityInput): string | null {
      ASKED AGAINST THE BOARD, NOT AGAINST A FLAG. #1198 put both offers on the state, so "is this actor the
      counterparty of an open offer" is a state read rather than something the sender asserts about itself --
      which matters when the sender is a network client rather than the shell's own code. */
-  const consent = consentAnswerRefusal(state, actor, msg);
+  const consent = consentAnswerRefusal(state, actor, msg, input.mapGrid);
   if (consent !== "not-a-consent-answer") return consent;
 
   /* ==================================================================
@@ -311,7 +342,7 @@ export function turnRefusal(input: TurnAuthorityInput): string | null {
      Batch 6. The reducer refuses these by identity (`applySandboxActionCore`, the second lock); asked here
      first, on the seat that is allowed to send them, so the submitter hears the sentence rather than a silent
      no-op -- the #1530/#1540 shape. Same predicates, same grid, so the two locks cannot disagree. */
-  return operatingLegalityRefusal(state, msg, input.mapGrid);
+  return operatingLegalityRefusal(state, msg, input.mapGrid, actor);
 }
 
 /** Ask a chart-reading refusal with THIS TABLE's board, tray and market chart in effect (#1300).
@@ -329,6 +360,8 @@ export function operatingLegalityRefusal(
   state: GameStateResponse,
   msg: GameplayExecuteMsg,
   mapGrid: MapGridResponse | undefined,
+  /** #1591/#1592: the sender, for the consent half of the two direct settlements. Absent skips it (#549b). */
+  actor?: string | null,
 ): string | null {
   if ("RunMultipleRoutes" in msg) {
     return routeSetRefusal(state, msg.RunMultipleRoutes, mapGrid, mapGrid ? tileEraFor(state) : undefined);
@@ -337,6 +370,24 @@ export function operatingLegalityRefusal(
     return "RunManualRoute is a legacy replay message; a live game runs its trains with RunMultipleRoutes.";
   }
   if ("DeclareDividends" in msg) return dividendAmountRefusal(state, msg.DeclareDividends);
+  /* Design notes #1591/#1592 (ingress, Batch 7.4): the two direct settlements are answered with their reason.
+     The seat rule has already run (the operating president); what is asked here is the transaction -- the
+     Operating turn, the phase or the step, the card or the train, the price, the treasury and CONSENT: a
+     matching accepted offer, or one principal on both sides. The reducer asks the same predicate by identity. */
+  if ("BuyPrivateCompany" in msg) {
+    const { protocol_id, private_id, price } = msg.BuyPrivateCompany;
+    return privatePurchaseRefusal(state, { buyerId: protocol_id, privateId: private_id, price }, actor, "settlement");
+  }
+  if ("BuyTrainFromCorporation" in msg) {
+    const { buyer_protocol_id, seller_protocol_id, model_type, price } = msg.BuyTrainFromCorporation;
+    return trainSaleRefusal(
+      state,
+      { buyerId: buyer_protocol_id, sellerId: seller_protocol_id, model: model_type, price },
+      actor,
+      mapGrid,
+      "settlement",
+    );
+  }
   return routeSkipRefusal(state, msg, mapGrid);
 }
 
@@ -457,18 +508,40 @@ function roomMessageRefusal(input: TurnAuthorityInput, actor: string): string | 
      step where it may buy, whether the price is payable, whether the private is for sale at all: every one
      of those is the reducer's, and `consentAnswerRefusal` still owns the answering half. This asks the one
      question a socket boundary can answer for itself -- "is this yours to send". */
-  if ("ProposePrivatePurchase" in msg || "ProposeTrainPurchase" in msg) {
-    const { buyer_protocol_id } = (
-      "ProposePrivatePurchase" in msg ? msg.ProposePrivatePurchase : msg.ProposeTrainPurchase
-    ) as { buyer_protocol_id: number };
-    const buyer = state.public_companies.find((entry) => entry.company_id === buyer_protocol_id);
-    /* #232: a corporation the board cannot name is "not said", and refusing on it would judge an offer by a
-       field nobody supplied. The reducer meets the same message and finds the same nothing. */
-    if (!buyer) return null;
-    if (buyer.president !== actor) {
-      return `Only ${buyer.ticker}'s president can make an offer on its behalf.`;
-    }
-    return null;
+  /* Design note #1595 (ingress, Batch 7.4): AND NOW THE WHOLE TRANSACTION, not ownership only. #1450's
+     "is this yours to send" is the first line of each proposal predicate (the buyer's CURRENT president);
+     the rest -- the Operating turn, the phase or the step, the card or the train, the band or the $1 floor,
+     the treasury, the one-offer rule -- is the same predicate the reducer's core asks by identity, so the
+     submitter hears the sentence (S10-1). The payload's `owner` / `seller_president` are not read. */
+  if ("ProposePrivatePurchase" in msg) {
+    return proposePrivatePurchaseRefusal(state, msg.ProposePrivatePurchase as { private_id: number; buyer_protocol_id: number; price: number }, actor);
+  }
+  if ("ProposeTrainPurchase" in msg) {
+    return proposeTrainPurchaseRefusal(
+      state,
+      msg.ProposeTrainPurchase as { seller_protocol_id: number; buyer_protocol_id: number; model_type: string; price: string },
+      actor,
+      input.mapGrid,
+    );
+  }
+  /* #1594: the withdrawals are the buyer's current president's; the trade's is its proposer's. */
+  if ("RescindPrivatePurchase" in msg) {
+    return rescindPrivatePurchaseRefusal(state, msg.RescindPrivatePurchase as { private_id: number }, actor);
+  }
+  if ("RescindTrainPurchase" in msg) {
+    return rescindTrainPurchaseRefusal(state, msg.RescindTrainPurchase as { seller_protocol_id: number }, actor);
+  }
+  if ("RescindPrivateTrade" in msg) {
+    return rescindPrivateTradeRefusal(state, msg.RescindPrivateTrade as { private_id: number }, actor);
+  }
+  /* #1593: the player <-> player trade is proposed by the seat holder, who must be the buyer or the seller;
+     the predicate says so, and the rest of the rule (3.1) with it. */
+  if ("ProposePrivateTrade" in msg) {
+    return proposePrivateTradeRefusal(
+      state,
+      msg.ProposePrivateTrade as { private_id: number; seller: string; buyer: string; price: number },
+      actor,
+    );
   }
 
   /* Design note #1323: THE LICENCE IS THE OPERATING PRESIDENT'S TO BUY. It is sandbox-only (the chain has
@@ -495,6 +568,7 @@ function consentAnswerRefusal(
   state: GameStateResponse,
   actor: string,
   msg: GameplayExecuteMsg,
+  mapGrid?: MapGridResponse,
 ): string | null | "not-a-consent-answer" {
   if ("AnswerPrivatePurchase" in msg) {
     const offer = state.private_purchase_offer ?? null;
@@ -504,9 +578,15 @@ function consentAnswerRefusal(
     if (!offer) return null;
     // #1541: a funding offer is the seller's own; its answer belongs to the buying president, not to this arm.
     if (offer.funding) return "That offer is answered by the buying corporation's president (AnswerFundingPrivateOffer).";
-    return offer.owner === actor
-      ? null
-      : "Only the private company's owner can answer that offer.";
+    /* #1595 (Batch 7.4): the answerer is the private's CURRENT owner, re-derived from the board -- the offer's
+       `owner` is what the proposal recorded and is not the authority -- and a yes is re-validated against the
+       board of this moment. Same function as the reducer's core. */
+    return answerPrivatePurchaseRefusal(state, msg.AnswerPrivatePurchase as { private_id: number; accept: boolean }, actor);
+  }
+
+  /* #1593: the trade's answer is the OTHER party's -- whichever of buyer and seller did not propose. */
+  if ("AnswerPrivateTrade" in msg) {
+    return answerPrivateTradeRefusal(state, msg.AnswerPrivateTrade as { private_id: number; accept: boolean }, actor);
   }
 
   /* #1541: the funding private offer is answered by the BUYING corporation's president -- the reverse of the
@@ -522,10 +602,9 @@ function consentAnswerRefusal(
     const offer = state.train_purchase_offer ?? null;
     if (!offer) return null;
     /* THE SELLER'S PRESIDENT ANSWERS, and it is the BUYER who is on turn -- #701 states the direction
-       explicitly, and getting it backwards would refuse every train trade in the game. */
-    return offer.seller_president === actor
-      ? null
-      : "Only the selling corporation's president can answer that offer.";
+       explicitly, and getting it backwards would refuse every train trade in the game. #1595: the seller's
+       CURRENT president, re-derived from the board; the offer's `seller_president` is narration. */
+    return answerTrainPurchaseRefusal(state, msg.AnswerTrainPurchase as { seller_protocol_id: number; accept: boolean }, actor, mapGrid);
   }
 
   return "not-a-consent-answer";

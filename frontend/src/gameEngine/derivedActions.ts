@@ -74,6 +74,8 @@ import { MOCK_TRAIN_CATALOG } from "./mockFixtures";
 import { tileEraFor } from "./gameConstants";
 import { depotInventory, derivePhase } from "./gamePhase";
 import { pendingTrainDiscards } from "./trainDiscard";
+import { privateSettlementMatches, trainSettlementMatches } from "./pendingOfferHold";
+import type { PrivatePurchaseOffer, TrainPurchaseOffer } from "./gameState";
 import { tokenCityIndex } from "../components/hexContractTypes";
 import { STATIC_BOARD_HEXES } from "../components/hexBoardData";
 
@@ -143,31 +145,54 @@ export function nextDerivedAction(input: DerivedActionInput): DerivedAction | nu
      the step, because an accepted offer is owed whatever else the board is doing.
      THE KEY NEEDS NO TURN. `emitted` guards a restarted server against re-sending what the log already
      holds, and the purchase arms clear the offer they settle, so a rebuilt board that already bought owes
-     nothing and never reaches this branch. The key is still unique per settlement -- a private is bought once;
-     a train key counts the buyer's fleet, which grows by one with each trade -- so two trades of the same
-     model in one turn are two keys. */
+     nothing and never reaches this branch. */
+  /* Design note #1596 (Batch 7.4): THE SETTLEMENT ALWAYS RETIRES THE OFFER, applied or refused -- the purchase
+     arm clears it on success, and `applySandboxActionCore` clears it when any gate refuses the settlement on a
+     stale board -- so the board can never present the same accepted offer to this function twice, and the
+     loop in `settleOwed` cannot spin on one. The funding offer (#1541) is never derived: its settlement is its
+     own answer arm. */
+  /* ==================================================================
+      DESIGN NOTE 1597: THE KEY IS THE OFFER'S INSTANCE, NOT ITS TRANSACTION (Batch 7.4, R74-B)
+     ==================================================================
+     The key used to be a tuple of board facts -- the private, its owner, the buyer and the price; the seller,
+     the model, the buyer and the buyer's FLEET SIZE -- on the reasoning that a private is bought once and a
+     fleet grows by one per trade. Opus's matrix proved the reasoning wrong for trains in five legal sequences
+     (R74-B.1-B.4, B.5b): rust, an intercorporate sale, a discard in a chain, or rust followed by a depot
+     purchase bring the fleet back to a size already settled, a later DISTINCT offer between the same parties
+     for the same model then derives a key the room's `emitted` set already holds, `settleOwed` derives
+     nothing, and #1590's hold freezes the whole table around an accepted offer nobody can settle. The price
+     would not have saved it: B.2 collides at an identical price.
+     SO THE KEY NAMES THE LIFECYCLE. Every ordinary offer is numbered by its proposal arm (`offer_serial`,
+     `allocateOfferInstance`), the number travels on the offer as `instance`, and the key is
+     `offer:<kind>:<instance>` and nothing else. Two later offers identical in every game property are two
+     instances; the same offer re-derived after a `RevertTo` past its settlement is the same instance, on a
+     rebuilt engine whose set is fresh (#1233) -- which is exactly the exactly-once property `emitted` protects.
+     The number is log-derived like every other field, so a restart recomputes the same key (#1208), and
+     `derivedEntryKey` below is how the replay records it.
+     AN OFFER WITHOUT A NUMBER exists only where a fixture wrote it by hand; it is keyed on its transaction so
+     that such a board still settles once per engine lifetime, as it always did. */
   const privateOffer = state.private_purchase_offer ?? null;
-  if (privateOffer?.accepted === true && !emitted.has(`offer:private:${privateOffer.private_id}`)) {
-    return {
-      msg: {
-        BuyPrivateCompany: {
-          game_id: 0,
-          protocol_id: privateOffer.buyer_protocol_id,
-          private_id: privateOffer.private_id,
-          price: String(privateOffer.price),
-        },
-      } as GameplayExecuteMsg,
-      key: `offer:private:${privateOffer.private_id}`,
-      reason: "the owner accepted the offer",
-      kind: "accepted-offer",
-    };
+  if (privateOffer?.accepted === true && privateOffer.funding !== true) {
+    const key = privateOfferKey(privateOffer);
+    if (!emitted.has(key)) {
+      return {
+        msg: {
+          BuyPrivateCompany: {
+            game_id: 0,
+            protocol_id: privateOffer.buyer_protocol_id,
+            private_id: privateOffer.private_id,
+            price: String(privateOffer.price),
+          },
+        } as GameplayExecuteMsg,
+        key,
+        reason: "the owner accepted the offer",
+        kind: "accepted-offer",
+      };
+    }
   }
   const trainOffer = state.train_purchase_offer ?? null;
   if (trainOffer?.accepted === true) {
-    const fleet =
-      state.public_companies.find((entry) => entry.company_id === trainOffer.buyer_protocol_id)
-        ?.owned_trains?.length ?? 0;
-    const key = `offer:train:${trainOffer.seller_protocol_id}:${trainOffer.model_type}:${trainOffer.buyer_protocol_id}:${fleet}`;
+    const key = trainOfferKey(trainOffer, state);
     if (!emitted.has(key)) {
       return {
         msg: {
@@ -286,6 +311,59 @@ export function nextDerivedAction(input: DerivedActionInput): DerivedAction | nu
         reason: skipReason,
         kind: "skip",
       };
+}
+
+/** The derived settlement's idempotency key for an accepted ordinary private offer (#1597). */
+export function privateOfferKey(offer: PrivatePurchaseOffer): string {
+  return typeof offer.instance === "number"
+    ? `offer:private:${offer.instance}`
+    : `offer:private:unnumbered:${offer.private_id}:${offer.owner}:${offer.buyer_protocol_id}:${offer.price}`;
+}
+
+/** The derived settlement's idempotency key for an accepted train offer (#1597). The unnumbered fallback names the
+ *  transaction (the pre-#1597 tuple plus the price) for hand-written fixtures only; no board a proposal arm wrote
+ *  ever reaches it. */
+export function trainOfferKey(offer: TrainPurchaseOffer, state: GameStateResponse): string {
+  if (typeof offer.instance === "number") return `offer:train:${offer.instance}`;
+  const fleet =
+    state.public_companies.find((entry) => entry.company_id === offer.buyer_protocol_id)?.owned_trains?.length ?? 0;
+  return `offer:train:unnumbered:${offer.seller_protocol_id}:${offer.model_type}:${offer.buyer_protocol_id}:${offer.price}:${fleet}`;
+}
+
+/* ==================================================================
+    DESIGN NOTE 1598: A DERIVED ENTRY IS RECORDED UNDER THE KEY IT WAS DERIVED UNDER (Batch 7.4, O1)
+   ==================================================================
+   `RoomEngine.apply` records a key for every `derived` entry so a rebuild knows what the game already sent
+   (#1208). It recorded `turnGuardKey(board, operating, step)` for ALL of them -- which is the right key for a
+   skip, an end-turn and a forced withhold, and the WRONG key for an accepted-offer settlement, whose key is
+   the offer's (#1247) and which is not a turn-progression action at all. The consequence (Opus, O1): a derived
+   train settlement that fills the buyer to its limit at Hardware consumed the step's turn key, so the End Turn
+   the board then owed -- the one a depot purchase filling the same fleet derives at once -- was never derived
+   and the turn stayed open until the president ended it by hand. Two equivalent boards, two progressions.
+   THIS FUNCTION IS THE ONE ANSWER TO "WHAT KEY DOES THIS ENTRY CONSUME", for the replay and the live loop
+   alike: an entry that is the settlement of the standing accepted offer consumes that offer's instance key
+   and no turn key; any other derived entry consumes the turn key of the board it was derived on. Computed
+   BEFORE the arm runs, on the board `nextDerivedAction` looked at (the same instant as before). A settlement
+   that matches no standing offer -- a stored log whose proposal a later engine refuses, FCJ 147 -- consumes
+   nothing: it was never a turn's action, and recording a turn key for it would suppress a skip the rebuilt
+   board still owes. After the fix the loop re-asks the post-settlement board and derives what a depot
+   purchase would have: equivalent boards, equivalent progression, no special case for "offer => End Turn". */
+export function derivedEntryKey(state: GameStateResponse, msg: GameplayExecuteMsg): string | null {
+  if ("BuyPrivateCompany" in msg) {
+    const offer = state.private_purchase_offer ?? null;
+    return offer !== null && offer.funding !== true && offer.accepted === true && privateSettlementMatches(offer, msg.BuyPrivateCompany)
+      ? privateOfferKey(offer)
+      : null;
+  }
+  if ("BuyTrainFromCorporation" in msg) {
+    const offer = state.train_purchase_offer ?? null;
+    return offer !== null && offer.accepted === true && trainSettlementMatches(offer, msg.BuyTrainFromCorporation)
+      ? trainOfferKey(offer, state)
+      : null;
+  }
+  const owed = operatingCorporationId(state);
+  const step = state.operating_sub_phase;
+  return owed !== null && step !== undefined ? turnGuardKey(state, owed, step) : null;
 }
 
 /** `autoSkipReason`, transcribed from `App.tsx` minus the spectator guard.

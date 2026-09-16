@@ -71,7 +71,9 @@ describe("the discriminant", () => {
     expect(GAMEPLAY_MESSAGE_KINDS).toContain("DiscardTrain"); // #1530
     expect(GAMEPLAY_MESSAGE_KINDS).toContain("OfferPrivateForFunding"); // #1541
     expect(GAMEPLAY_MESSAGE_KINDS).toContain("DeclareBankruptcy"); // #1541
-    expect(GAMEPLAY_MESSAGE_KINDS.length).toBe(44);
+    expect(GAMEPLAY_MESSAGE_KINDS).toContain("ProposePrivateTrade"); // #1594
+    expect(GAMEPLAY_MESSAGE_KINDS).toContain("RescindTrainPurchase"); // #1594
+    expect(GAMEPLAY_MESSAGE_KINDS.length).toBe(49); // 44 + Batch 7.4's five (#1594)
   });
 });
 
@@ -359,8 +361,13 @@ describe("a player cannot act as somebody else (#1450)", () => {
     };
     expect(refusal("p-b", priv)).toContain("PRR's president");
     expect(refusal("p-b", train)).toContain("PRR's president");
-    expect(refusal("p-a", priv)).toBeNull();
-    expect(refusal("p-a", train)).toBeNull();
+    /* Batch 7.4 (#1595): ownership is the FIRST question and no longer the only one -- the president's offer
+       is then judged as a transaction, and this Stock Round board refuses it as one. The claim here stays
+       what it was: the president is not refused for WHO he is. */
+    expect(refusal("p-a", priv)).not.toContain("president");
+    expect(refusal("p-a", priv)).toContain("phases 3 and 4");
+    expect(refusal("p-a", train)).not.toContain("president");
+    expect(refusal("p-a", train)).toContain("Purchase Trains step");
   });
 });
 
@@ -379,20 +386,25 @@ describe("the between-turn actions keep the authority they had", () => {
   it("lets the offer's counterparty answer it, off turn", () => {
     /* #701: the buyer is on turn and the SELLER answers, so an authority that asked "is it your turn" of an
        answer would refuse every trade in the game. */
+    /* Batch 7.4 (#1595): the answerer is the selling corporation's CURRENT president on the board (PRR's is
+       p-a here), and the offer's `seller_president` is narration -- so it is p-a who answers and p-b, the name
+       the proposer wrote, who cannot. A rejection needs no transaction; an acceptance is judged as one. */
     const state = board({
       train_purchase_offer: { seller_president: "p-b", seller_protocol_id: 1 },
     } as Partial<GameStateResponse>);
-    const ask = (actor: string) =>
+    const ask = (actor: string, accept = false) =>
       turnRefusal({
         state,
         waterfall: null,
         actor,
-        msg: { AnswerTrainPurchase: { seller_protocol_id: 1, accept: true } } as never,
+        msg: { AnswerTrainPurchase: { seller_protocol_id: 1, accept } } as never,
         host: "p-a",
         log: [],
       });
-    expect(ask("p-b")).toBeNull();
-    expect(ask("p-a")).toContain("selling corporation's president");
+    expect(ask("p-a")).toBeNull();
+    expect(ask("p-b")).toContain("selling corporation's president");
+    expect(ask("p-a", true)).not.toContain("president");
+    expect(ask("p-a", true)).not.toBeNull();
   });
 });
 

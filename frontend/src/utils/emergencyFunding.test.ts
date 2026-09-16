@@ -710,11 +710,25 @@ describe("the intercorporate train purchase during a forced obligation (owner-de
       cash: { [P1]: cash, [P2]: 300, [P3]: 300 },
     });
 
+  /* Batch 7.4 (#1592): the trade now needs the selling president's CONSENT like every intercorporate sale, so
+     the settlement below arrives the way it does in play -- C&O's president proposes at the Purchase Trains
+     step, PRR's president accepts, and the board owes the purchase (#1247). The D-6 money rule is unchanged:
+     treasury first, the president the rest, capped at face value when he contributes. */
+  const PROPOSE = (seller: number, buyer: number, model: string, price: string) =>
+    ({ ProposeTrainPurchase: { game_id: 1, seller_protocol_id: seller, seller_ticker: "x", seller_president: null, buyer_protocol_id: buyer, buyer_ticker: "x", model_type: model, price } }) as never;
+  const ACCEPT = (seller: number) => ({ AnswerTrainPurchase: { game_id: 1, seller_protocol_id: seller, accept: true } }) as never;
+  const consented = (state: GameStateResponse, price: string) => apply(apply(state, PROPOSE(PRR, CO, "3", price), P1), ACCEPT(PRR), P3);
+
   it("is permitted when treasury plus the president's cash covers the agreed price: treasury first, president the rest", () => {
     const state = trade(200);
     expect(funding(state)?.shortfall).toBe(0); // the bank's 3 is affordable with the president's cash
     expect(fundedTradeRefusal(state, funding(state)!, CO, 150, 180)).toBeNull();
-    const done = apply(state, TRADE(CO, PRR, "3", "150"), P1);
+    // Unconsented, the direct trade is refused (7.4); through the offer it is the D-6 purchase it always was.
+    expect(same(apply(state, TRADE(CO, PRR, "3", "150"), P1), state)).toBe(true);
+    const accepted = consented(state, "150");
+    expect(accepted.train_purchase_offer?.accepted).toBe(true);
+    const done = apply(accepted, TRADE(CO, PRR, "3", "150"), P3);
+    expect(done.train_purchase_offer).toBeNull();
     expect(company(done, CO).owned_trains).toEqual(["3"]);
     expect(company(done, PRR).owned_trains).toEqual(["3"]);
     expect(Number(company(done, CO).treasury)).toBe(0);
@@ -725,7 +739,7 @@ describe("the intercorporate train purchase during a forced obligation (owner-de
     // A trade the treasury alone covers is the ordinary rule, face value or not.
     const rich = { ...state, public_companies: state.public_companies.map((entry) => (entry.company_id === CO ? { ...entry, treasury: "400" } : entry)) };
     expect(funding(rich)).toBeNull();
-    expect(company(apply(rich, TRADE(CO, PRR, "3", "250"), P1), CO).owned_trains).toEqual(["3"]);
+    expect(company(apply(consented(rich, "250"), TRADE(CO, PRR, "3", "250"), P3), CO).owned_trains).toEqual(["3"]);
   });
 
   it("is refused when completing it would need a share or private sale, and the accepted offer is retired", () => {
@@ -750,6 +764,10 @@ describe("the intercorporate train purchase during a forced obligation (owner-de
     const state = trade(400);
     expect(fundedTradeRefusal(state, funding(state)!, CO, 200, 180)).toContain("may not cost more than its $180 face value");
     expect(same(apply(state, TRADE(CO, PRR, "3", "200"), P1), state)).toBe(true);
+    // 7.4: the cap is asked FIRST by the sale's authority, so the offer itself is refused at both locks.
+    expect(same(apply(state, PROPOSE(PRR, CO, "3", "200"), P1), state)).toBe(true);
+    expect(turnRefusal({ state, waterfall: null, actor: P1, msg: PROPOSE(PRR, CO, "3", "200"), mapGrid: CORRIDOR })).toContain("face value");
+    expect(turnRefusal({ state, waterfall: null, actor: P1, msg: PROPOSE(PRR, CO, "3", "180"), mapGrid: CORRIDOR })).toBeNull();
     expect(fundedTradeRefusal(state, funding(state)!, CO, 180, 180)).toBeNull();
     // Another corporation's trade is not this obligation's business.
     expect(fundedTradeRefusal(state, funding(state)!, NYC, 999, 180)).toBeNull();

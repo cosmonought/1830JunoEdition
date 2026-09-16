@@ -7900,6 +7900,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
 
     autoSkippedRef.current = new Set();
     forcedWithholdRef.current = new Set();
+    /* Batch 7.4 final verification (#1597 x #887): the Firestore-path settlement guard belongs to the history just
+       discarded too. Offer instances are numbered by the log, so a divergent history after an undo reuses a number
+       this browser already sent; left standing, `offer:<kind>:<n>` would suppress the new accepted offer's
+       settlement under the pending-offer hold. The server rebuilds a fresh RoomEngine (#1233); this is its twin. */
+    acceptedOfferSentRef.current = new Set();
   }, [seedSandboxState, sandboxPhase, gameId, sandboxIsZeroState, sandboxScenarioId]);
 
   useEffect(() => {

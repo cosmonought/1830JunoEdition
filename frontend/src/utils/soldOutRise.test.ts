@@ -270,7 +270,16 @@ describe("the reducer raises before it orders the Operating Round", () => {
    * thing nobody attributes correctly from a playthrough.
    */
 
-  /** Two corporations one cell apart, the lower one sold out. */
+  /* ==================================================================
+   *  DESIGN NOTE 1600 (harness): THE SAME PROPERTY, ON THE CHART THE REDUCER COMMITS
+   * ==================================================================
+   *
+   * These cases used to hand the reducer a POSITIONLESS board plus `marketPriceFor` / `marketMarkFor` resolvers,
+   * and passed on #746a's overlay: the queue sorted on a rise nothing committed. That overlay is retired (Stage 8.1,
+   * S8-1) because on every board that carries `market_positions` -- every room, replay and the shell -- the queue
+   * ignored it and locked on the pre-rise chart. The property is unchanged; the board now carries the chart, so the
+   * rise is COMMITTED to `market_positions` and the queue is settled from what was committed. */
+  /** Two corporations one cell apart, the lower one sold out -- on a charted board. */
   function twoCorps(): GameStateResponse {
     return board({
       consecutive_passes: 1,
@@ -278,6 +287,10 @@ describe("the reducer raises before it orders the Operating Round", () => {
         company({ company_id: BO, ticker: "B&O", ipo_pool_percentage: 40 }),
         company(),
       ],
+      market_positions: {
+        [BO]: { ...cellFor(BO), enteredAt: 1 },
+        [PRR]: { ...cellFor(PRR), enteredAt: 2 },
+      },
     } as never);
   }
 
@@ -298,10 +311,11 @@ describe("the reducer raises before it orders the Operating Round", () => {
     return null;
   })();
 
-  const cellFor = (companyId: number) =>
-    companyId === BO
+  function cellFor(companyId: number) {
+    return companyId === BO
       ? { x: OVERTAKE!.rival.x, y: OVERTAKE!.rival.y, price: OVERTAKE!.rival.price }
       : { x: OVERTAKE!.start.x, y: OVERTAKE!.start.y, price: OVERTAKE!.start.price };
+  }
 
   it("has a rise that genuinely overtakes, so the fixture tests what it claims", () => {
     /* The premise, read back. If this chart had no such triple the ordering tests below would silently be
@@ -314,11 +328,11 @@ describe("the reducer raises before it orders the Operating Round", () => {
   it("puts the risen corporation ahead of the rival it passed", () => {
     const after = applySandboxAction(twoCorps(), { PassTurn: { game_id: 1 } } as never, {
       actor: "p1",
-      marketPriceFor: (id) => cellFor(id).price,
-      marketMarkFor: (id) => cellFor(id) as never,
       projectRise: projectRiseMove,
     });
     expect(after.current_round_type).toBe("OperatingRound");
+    // #1600: the rise is on the committed chart, and the queue was read off that chart.
+    expect(after.market_positions?.[PRR]?.price).toBe(OVERTAKE!.up.price);
     expect(after.active_operating_order[0]).toBe(PRR);
   });
 
@@ -327,17 +341,134 @@ describe("the reducer raises before it orders the Operating Round", () => {
        id -- would pass the test above and prove nothing. */
     const after = applySandboxAction(twoCorps(), { PassTurn: { game_id: 1 } } as never, {
       actor: "p1",
-      marketPriceFor: (id) => cellFor(id).price,
-      marketMarkFor: (id) => cellFor(id) as never,
       // No traversal injected, so no rise is computed and the queue sees the prices as they stand.
-      });
+    });
+    expect(after.market_positions?.[PRR]?.price).toBe(OVERTAKE!.start.price);
     expect(after.active_operating_order[0]).toBe(BO);
   });
 
   it("agrees with a queue built directly from the risen prices", () => {
-    // Same ordering function, same inputs: the overlay must not be a second sorting rule.
-    const risen = buildOperatingOrder(twoCorps(), (id) => (id === PRR ? 100 : 90));
+    /* Same ordering function, same inputs: the settle must not be a second sorting rule. #1600: the "risen prices"
+       are a chart carrying PRR's risen cell, which is exactly what the reducer committed before it settled. */
+    const risenBoard = {
+      ...twoCorps(),
+      market_positions: { ...twoCorps().market_positions, [PRR]: { ...OVERTAKE!.up, enteredAt: 3 } },
+    } as GameStateResponse;
+    const risen = buildOperatingOrder(risenBoard);
     expect(risen[0]).toBe(PRR);
+    const opened = applySandboxAction(twoCorps(), { PassTurn: { game_id: 1 } } as never, {
+      actor: "p1",
+      projectRise: projectRiseMove,
+    });
+    expect(opened.market_positions).toEqual(risenBoard.market_positions);
+    expect(opened.active_operating_order).toEqual(risen);
+  });
+});
+
+describe("the risers move in share-value order, not catalog order (#1601, S8-4)", () => {
+  /* ==================================================================
+   *  DESIGN NOTE 1601 (harness): 4.5'S ORDER, ON THE CHART THE REDUCER COMMITS
+   * ==================================================================
+   *
+   * "Tokens are moved in share value order, with the highest priced corporation's token being moved first." The rise
+   * list used to come back in `public_companies` order and was committed in that order, each riser stamped as the
+   * next arrival -- so two risers from one cell swapped places in the stack whenever the catalog listed the lower one
+   * first. Every case below closes a Stock Round through the reducer on a charted board and reads the committed
+   * chart, and every case is run in BOTH catalog orders. Cells are real cells of the standard chart, checked. */
+
+  const cell = (x: number, y: number) => {
+    const found = PRICE_GRID.find((entry) => entry.x === x && entry.y === y);
+    if (!found) throw new Error(`no chart cell at (${x}, ${y})`);
+    return { x, y, price: found.price };
+  };
+  const NYC = 3; // any corporation id distinct from PRR and B&O will do; the ticker is what the log prints
+  const BM = 8;
+
+  /** Close a Stock Round in which every listed corporation is sold out; `catalog` fixes `public_companies` order. */
+  function closeRound(
+    tokens: Array<{ id: number; ticker: string; x: number; y: number; enteredAt: number }>,
+    catalog: number[],
+  ) {
+    const byId = new Map(tokens.map((token) => [token.id, token]));
+    const before = board({
+      consecutive_passes: 1,
+      public_companies: catalog.map((id) => company({ company_id: id, ticker: byId.get(id)!.ticker })),
+      market_positions: Object.fromEntries(
+        tokens.map((token) => [token.id, { ...cell(token.x, token.y), enteredAt: token.enteredAt }]),
+      ),
+    } as never);
+    const rises = roundEndSoldOutRises(before, (id) => before.market_positions?.[id] ?? null, projectRiseMove);
+    const after = applySandboxAction(before, { PassTurn: { game_id: 1 } } as never, {
+      actor: "p1",
+      projectRise: projectRiseMove,
+    });
+    return { before, rises, after };
+  }
+
+  const PRICED = [
+    { id: PRR, ticker: "PRR", x: 7, y: 8, enteredAt: 1 }, // $90
+    { id: NYC, ticker: "NYC", x: 9, y: 8, enteredAt: 2 }, // $111
+  ];
+
+  it("raises two sold-out corporations in one Stock Round close", () => {
+    const { before, after } = closeRound(PRICED, [PRR, NYC]);
+    expect([before.market_positions?.[PRR]?.price, before.market_positions?.[NYC]?.price]).toEqual([90, 111]);
+    expect(after.current_round_type).toBe("OperatingRound");
+    expect(after.market_positions?.[PRR]).toMatchObject({ x: 7, y: 9, price: 100 });
+    expect(after.market_positions?.[NYC]).toMatchObject({ x: 9, y: 9, price: 126 });
+  });
+
+  it("moves the higher-priced riser first -- in the rise list and in the arrivals it is stamped with", () => {
+    const { rises, after } = closeRound(PRICED, [PRR, NYC]); // the catalog lists the cheaper one first
+    expect(rises.map((rise) => rise.ticker)).toEqual(["NYC", "PRR"]);
+    expect(after.market_positions?.[NYC]?.enteredAt).toBe(3);
+    expect(after.market_positions?.[PRR]?.enteredAt).toBe(4);
+    // Equal share values: 6.0's positional order decides which moves first -- the rightmost column.
+    const tied = closeRound(
+      [
+        { id: PRR, ticker: "PRR", x: 8, y: 8, enteredAt: 1 }, // $100, column 8
+        { id: NYC, ticker: "NYC", x: 9, y: 7, enteredAt: 2 }, // $100, column 9
+      ],
+      [PRR, NYC],
+    );
+    expect([tied.before.market_positions?.[PRR]?.price, tied.before.market_positions?.[NYC]?.price]).toEqual([100, 100]);
+    expect(tied.rises.map((rise) => rise.ticker)).toEqual(["NYC", "PRR"]);
+  });
+
+  it("gives the same chart, the same rise list and the same operating queue whichever order the catalog lists them in", () => {
+    const one = closeRound(PRICED, [PRR, NYC]);
+    const other = closeRound(PRICED, [NYC, PRR]);
+    expect(other.rises).toEqual(one.rises);
+    expect(other.after.market_positions).toEqual(one.after.market_positions);
+    expect(other.after.active_operating_order).toEqual(one.after.active_operating_order);
+    expect(one.after.active_operating_order).toEqual([NYC, PRR]);
+  });
+
+  /** B&M sits on top of PRR on the $100 cell; both are sold out. */
+  const STACKED = [
+    { id: PRR, ticker: "PRR", x: 8, y: 8, enteredAt: 5 },
+    { id: BM, ticker: "B&M", x: 8, y: 8, enteredAt: 2 },
+  ];
+
+  it("lands two risers from one cell in one cell", () => {
+    const { before, after } = closeRound(STACKED, [PRR, BM]);
+    expect(before.market_positions?.[PRR]?.price).toBe(100);
+    expect(projectRiseMove(before.market_positions![PRR]!)).toEqual({ x: 8, y: 9, price: 112 });
+    expect(after.market_positions?.[PRR]).toMatchObject({ x: 8, y: 9, price: 112 });
+    expect(after.market_positions?.[BM]).toMatchObject({ x: 8, y: 9, price: 112 });
+  });
+
+  it("keeps the stack's order through the rise -- the token on top moves first and stays on top, in either catalog order", () => {
+    for (const catalog of [[PRR, BM], [BM, PRR]]) {
+      const { rises, after } = closeRound(STACKED, catalog);
+      expect(rises.map((rise) => rise.ticker)).toEqual(["B&M", "PRR"]);
+      // Arrivals 6 and 7 on the new cell: B&M arrived first, so it is on top (4.5: the newcomer goes to the bottom).
+      expect(after.market_positions?.[BM]?.enteredAt).toBe(6);
+      expect(after.market_positions?.[PRR]?.enteredAt).toBe(7);
+      // And the Operating Round the close opened reads that stack: B&M first -- not company id, not catalog.
+      expect(after.active_operating_order).toEqual([BM, PRR]);
+      expect(after.active_operating_order).toEqual(buildOperatingOrder(after));
+    }
   });
 });
 
@@ -364,7 +495,10 @@ describe("every arm of the compass names a movement the code performs", () => {
   })();
 
   it("has a rise the reducer performs", () => {
-    expect(marketSource).toContain("roundEndSoldOutRises(");
+    /* #1600: the reducer's one call is the COMMIT (`soldOutRises(` in `applySandboxActionInner`); the second call,
+       #746a's overlay in the round transition, is retired -- the queue is settled from the committed chart. */
+    expect(marketSource).toContain("soldOutRises(");
+    expect(marketSource).not.toContain("roundEndSoldOutRises(");
   });
 
   it("has a right and a left the market atom performs", () => {

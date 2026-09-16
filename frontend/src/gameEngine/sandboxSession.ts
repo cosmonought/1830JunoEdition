@@ -118,7 +118,6 @@ import { sharePurchaseBlock, type PriceZone } from "./sharePurchase";
 import { hasActedThisTurn } from "./turnAction";
 // Design note #1184: the bid minimum, in one place the button and the board both read.
 import { MIN_BID_INCREMENT, minimumBidFor } from "./auctionEscrow";
-import { roundEndSoldOutRises } from "./soldOutRise";
 import { shareSaleBlock } from "./shareSale";
 import { metFloatThreshold, FULL_CAPITALISATION_MULTIPLE } from "./floatThreshold";
 // Design note #763: a float is not finished until its home token is on the board.
@@ -304,21 +303,9 @@ function advanceSeat(state: GameStateResponse): GameStateResponse {
 /* Design note #1530: `buildOperatingOrder` lives in `operatingOrder.ts` now (the discard module needs it and
    cannot import this file); re-exported so every caller keeps its import. */
 export { buildOperatingOrder } from "./operatingOrder";
-import { buildOperatingOrder } from "./operatingOrder";
-
-/** Keep the seat pointer in step during an OR so actingSeatIndex and the raw pointer agree. Left untouched when the presidency cannot be resolved.
- *  See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #411 */
-function syncSeatToActingCorporation(state: GameStateResponse): GameStateResponse {
-  const companyId = state.active_operating_order[state.active_corporation_index];
-  if (companyId === undefined) return state;
-  const president = state.public_companies.find(
-    (company) => company.company_id === companyId,
-  )?.president;
-  if (!president) return state;
-  const seat = state.player_addresses.indexOf(president);
-  if (seat === -1 || seat === state.active_player_index) return state;
-  return { ...state, active_player_index: seat };
-}
+/* Design note #1600: `syncSeatToActingCorporation` (#411) moved to `operatingOrder.ts`, unchanged, beside the queue
+   settle that also needs it; `settleOperatingQueue` is the one writer of the order after it is built. */
+import { buildOperatingOrder, settleOperatingQueue, syncSeatToActingCorporation } from "./operatingOrder";
 
 /* 1830's OR counts by phase: Yellow 1, Green 2, Brown 3. Derived from the TRAINS in play, not from current_global_era. null yields 1 -- the safe direction.
    See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #431 */
@@ -2741,7 +2728,7 @@ function applySandboxActionAfterAuction(
       },
     });
     const settled: GameStateResponse = { ...state, market_positions: priced.prices };
-    return applySandboxActionInner(
+    const applied = applySandboxActionInner(
       settled,
       msg,
       priced.tradePrice === null
@@ -2751,6 +2738,21 @@ function applySandboxActionAfterAuction(
          the board settles -- the same order `App.tsx` runs it in. */
       ctx?.parCellFor,
     );
+    /* ==================================================================
+        DESIGN NOTE 1600: THE OPERATING QUEUE IS SETTLED HERE, AND ONLY HERE (Stage 8.1: S8-1, S8-3)
+       ==================================================================
+       THE LAST GAMEPLAY STEP OF THE ENTRY, and the order of the steps before it is the whole point: the chart
+       step above (a dividend, a forced sale, a Blood Price), then the core -- the arm, the round transition
+       that may BUILD a queue, the cursor -- then, inside `applySandboxActionInner`, the sold-out rises
+       COMMITTED to `market_positions` and the par marks reconciled. Only now is the chart final, so only now can
+       the order be read off it. Before #1600 the opening queue was frozen inside the round transition, one step
+       before the rise was committed, on an overlay `buildOperatingOrder` ignored (S8-1), and nothing re-sorted
+       the waiting corporations when a token moved mid-round (S8-3).
+       `state` IS THE BOARD BEFORE THE CHART STEP, so "did a token move this entry" includes the chart step's
+       own move. The rule itself -- frozen membership, frozen operated / current prefix, re-sorted waiting tail,
+       the whole queue on the entry that opens a round -- is `settleOperatingQueue`'s (`operatingOrder.ts`).
+       A board without a chart never reaches this branch: nothing is settled on a positionless fixture. */
+    return settleOperatingQueue(state, applied);
   }
 
   return applySandboxActionInner(state, msg, ctx);
@@ -2780,7 +2782,10 @@ function applySandboxActionInner(
      reducer has run.
      THE SAME `soldOutRises` CALL, with the marks read off the state rather than through an injected resolver.
      Transcribed, not reimplemented: #1194 is what happens when this file writes its own version of something
-     `App.tsx` already does. */
+     `App.tsx` already does.
+     Design note #1600: #746b's "the reducer has already USED these rises -- #746a overlays them" is no longer
+     true either. The overlay is retired; the queue is settled from the positions committed HERE, one layer up
+     (`applySandboxActionAfterAuction`), after this function returns. */
   const risen = ctx?.projectRise
     ? soldOutRises({
         before: state,
@@ -2791,6 +2796,10 @@ function applySandboxActionInner(
     : [];
 
   let positions = settledBoard.market_positions;
+  /* Design note #1601 (S8-4): IN SHARE-VALUE ORDER. `roundEndSoldOutRises` returns the risers highest-priced
+     first (then 6.0's positional order), and each commit below is stamped as the next arrival -- so two risers
+     that meet in one cell keep the 4.5 stack order ("the highest priced corporation's token being moved first",
+     "the newly arriving token is placed at the bottom of the stack"), whatever `public_companies` order says. */
   for (const rise of risen) {
     // #646: a rise is an arrival like any other, so it is stamped like one.
     positions = {
@@ -3714,7 +3723,7 @@ function settleRoundTransitions(
 ): GameStateResponse {
   if (state.stock_round_just_ended) {
     /* ==================================================================
-     *  DESIGN NOTE 746a: THE RISE HAPPENS BEFORE THE QUEUE IS ORDERED
+     *  DESIGN NOTE 746a: THE RISE HAPPENS BEFORE THE QUEUE IS ORDERED   [superseded by #1600]
      * ==================================================================
      *
      * The operating order sorts floated corporations by market price, and the sold-out rise is an end-of-
@@ -3729,19 +3738,23 @@ function settleRoundTransitions(
      *
      * THE SHELL STILL COMMITS THE MOVE to the market atom, because that atom is not part of
      * `GameStateResponse` -- it derives the rises from the same pure function with the same injected
-     * traversal, so the queue and the chart cannot disagree about where a token landed. */
-    const rises = roundEndSoldOutRises(state, ctx?.marketMarkFor, ctx?.projectRise);
-    const risenPrice = new Map(rises.map((rise) => [rise.companyId, rise.to]));
-    const risenMark = new Map(rises.map((rise) => [rise.companyId, { x: rise.x, y: rise.y }]));
+     * traversal, so the queue and the chart cannot disagree about where a token landed.
+     *
+     * ------------------------------------------------------------------
+     * SUPERSEDED BY #1600 (Stage 8.1, S8-1). The premise the overlay rested on stopped being true at #1196: the
+     * positions are on the state, `buildOperatingOrder` reads them FIRST and consults these resolvers only when
+     * they are absent, and every server, replay and shell board carries them -- so the overlay was computed and
+     * ignored, and the queue locked here on the PRE-rise chart while the rise was committed afterwards
+     * (`applySandboxActionInner`). The rule the note states is kept, and the mechanism moved to where the chart is
+     * final: this transition builds the queue (membership, and an opening order on the chart as it stands), and
+     * `settleOperatingQueue` re-sorts the whole of it on the committed post-rise chart at the end of the same entry.
+     * The overlay is removed rather than preferred, so there is one source for the order, not two.
+     */
 
     /* The queue is built here; leaving it to the caller is what produced an OR with an empty order that advanceCorporation then "recovered" back to 1.1.
        See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #411 */
     const opened = {
-      ...openOperatingRound(
-        state,
-        (companyId) => risenPrice.get(companyId) ?? ctx?.marketPriceFor?.(companyId) ?? null,
-        (companyId) => risenMark.get(companyId) ?? ctx?.marketMarkFor?.(companyId) ?? null,
-      ),
+      ...openOperatingRound(state, ctx?.marketPriceFor, ctx?.marketMarkFor),
       stock_round_just_ended: false,
     };
 

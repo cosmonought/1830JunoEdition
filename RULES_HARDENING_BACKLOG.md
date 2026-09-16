@@ -36,7 +36,7 @@ interpretation of, the 2018 rulebook (or a product ruling), recorded so it is ne
 | 5.5 | Repository hygiene / backlog reconciliation | done (`b4f6d38`; this ledger) |
 | 6 | Route authority + revenue | implemented (Batch 6, #1550–#1554), awaiting full-suite validation and commit |
 | 7 | Transaction + cash authority / auction | done in five slices — 7.1 `08a59ec` (money ledger), 7.2 `a927e5f` (stock / par), 7.3 `d0a0792` (auction), 7.4 `6ecdfb1` (offers, consent, replay-safe settlement identity); **7.5** (`RULES_ENGINE_VERSION` 4 → 5, replay / golden / corpus reconciliation — `BATCH7.5_REPLAY_VERSION_CLOSURE_2026-09-16.md`, uncommitted, awaiting the owner's full-suite gate) |
-| 8 | Stock / OR edge cases + timing | Part B |
+| 8 | Stock / OR edge cases + timing | Part B — design pass done 2026-09-16 (`STAGE8_AUTHORITY_DESIGN_2026-09-16.md`: five slices 8.1 → 8.5, one 5 → 6 bump at closure); **owner rulings R1–R4 recorded 2026-09-16** (design §0, D-29 … D-32); Opus is the default model for every Stage-8 slice; **Slice 8.1 implemented 2026-09-16 — S8-1 / S8-3 / S8-4 `RESOLVED` (uncommitted, awaiting owner review; design §2.8)** |
 | 9 | Variants + map data + variant authority | Part B |
 | 10 | Replay / settlement / release hardening | Part B |
 
@@ -726,7 +726,8 @@ settlement and its End Turn).
 ### Stage 8 — Stock / OR edge cases + timing
 
 **S8-1. The operating order is snapshotted before the end-of-Stock-Round sold-out rise.**
-Status `OPEN` (confirmed bug). Rulebook §6.0 (order by share value at the start of the OR), §4.5 (sold-out rise
+Status `RESOLVED` — **Stage 8 Slice 8.1** (2026-09-16, Opus, design note #1600; uncommitted, awaiting owner review).
+*(Was `OPEN` (confirmed bug).)* Rulebook §6.0 (order by share value at the start of the OR), §4.5 (sold-out rise
 at the end of the SR). Notes: #746a, #1196, Batch 4.6 §2b; `gameEngine/operatingOrder.ts`
 (`buildOperatingOrder`), `sandboxSession.ts` (`beginOperatingRound`, `roundEndSoldOutRises`,
 `applySandboxActionInner`). Replay: **replay-semantic — bump the version.**
@@ -742,6 +743,25 @@ tie decided on the pre-rise cell). No other opening in the 17 logs disagrees. Re
 (#1530) is unaffected — it asks mid-OR with positions already risen. Test: a charted board where a sold-out
 rise reorders two corporations; assert the OR queue and the digest; sweep the corpus and report the three
 indices above as the expected divergences.
+**Stage-8 design pass (2026-09-16, `STAGE8_AUTHORITY_DESIGN_2026-09-16.md` §2).** Confirmed by code; on the version-5 corpus the three
+indices above **no longer exist** (3XD is refused from 140 and frozen from 290; FCJ diverges from 83) and the one
+surviving sold-out rise at an OR opening — server/JUNO-FCJ 885, PRR 90 → 100 — leaves the queue unchanged because PRR
+already led, so the repair moves nothing in the present corpus. The mechanism is proved on every OR-bearing final
+board by handing `buildOperatingOrder` an overlay pricing the leader at $1: positions win, the overlay is ignored.
+Repair frozen as **Slice 8.1** with S8-3 / S8-4: one `settleOperatingQueue` at the end of `applySandboxActionInner`,
+after the rise is committed to `market_positions` — frozen operated prefix, not-yet-operated tail re-sorted on current
+positions, membership fixed at the opening; the #746a overlays retire. ~~Fable High (cursor semantics)~~ **Opus** (owner
+model policy, 2026-09-16: Opus is the default for every Stage-8 slice).
+**RESOLVED by Slice 8.1 (2026-09-16, #1600; `STAGE8_AUTHORITY_DESIGN_2026-09-16.md` §2.8).** One settle point —
+`applySandboxActionAfterAuction`, immediately after the chart step, the core (arm, round transition, cursor), the
+committed sold-out rise and the par reconcile — calls `settleOperatingQueue(before, after)` (`operatingOrder.ts`). On the
+entry that opens a round (a non-OR round closing into one, the next OR of a set, or a queue rebuilt in place —
+`operatingRoundOpenedBetween`) the whole new queue is re-sorted by the exported §6.0 comparator on the COMMITTED chart
+and the table is re-seated at the new head (`syncSeatToActingCorporation`, moved into `operatingOrder.ts` unchanged). The
+#746a overlay is removed rather than preferred, so there is one source for the order. Proved by
+`operatingQueueSettle.test.ts` cases 1–5 and 14b (overtake by a rise; queue = §6.0 sort of the committed positions;
+rightmost; uppermost; one-cell stack; replay and seat). Corpus: digest-identical at every entry of all 18 files; FCJ 885
+settles to PRR, B&O, B&M as stored. Replay-semantic in principle — the 5 → 6 bump stays owed at Slice 8.5. UI: U-34.
 
 **S8-2. Presidency tie among equal challengers is decided by `player_holdings` order, not clockwise from the incumbent.**
 Status `OPEN`. Rulebook §5.4. Notes: audit M10; `gameEngine/presidencyTransfer.ts` (`presidentFor`,
@@ -752,22 +772,59 @@ the incumbent; ties *with* the incumbent keep the incumbent (unchanged). Stage 5
 (`forcedSaleRefusal` case c) projects `presidentFor` and inherits the fix automatically. Test: three holders at
 20/20/20 after a president's sale with the incumbent at 10 — the clockwise-next seat takes it. Audit test gap:
 `presidencyTransfer.test.ts` has no tie-order case.
+**Stage-8 design pass (`STAGE8_AUTHORITY_DESIGN_2026-09-16.md` §4).** Helper frozen: `presidentFor(company, seating)` with
+`seating = state.player_addresses`; challengers strictly above the incumbent; among tied top challengers the smallest
+clockwise seat distance from the incumbent; `settlePresidencies` and Stage 5's `presidentAfterSale` both pass the
+roster. No stored log contains a two-challenger tie (every presidency change in the corpus has one challenger), so
+the repair is replay-semantic only on a tie. Also found: the `ExchangePrivate` arm never calls `settlePresidencies`
+(recorded under S8-10). **Slice 8.3, Opus.**
 
 **S8-3. Operating order is fixed at OR open; §6.1's note (a not-yet-operated railroad whose share value changes uses the new value) is not applied mid-round.**
-Status `DEFERRED`. Rulebook §6.1 note. Notes: audit m2; `active_operating_order` /
+Status `RESOLVED` — **Slice 8.1** (2026-09-16, #1600; uncommitted, awaiting owner review). *(Was `DEFERRED`.)*
+Rulebook §6.1 note. Notes: audit m2; `active_operating_order` /
 `active_corporation_index`. Replay: replay-semantic — bump. Detail: decide whether the queue is re-derived for
 the not-yet-operated tail after each price movement (dividend step, forced sale during an OR). Interacts with
 S8-1 (same code), with the discard queue (#1530, which relies on no price moving while pending — still true),
 and with the market-token "operated stack" drawing (#1296), which derives "operated" from the index.
+**Stage-8 design pass (`STAGE8_AUTHORITY_DESIGN_2026-09-16.md` §2.4–2.6).** Decided — **owner ruling R4 (2026-09-16) confirms the representation** (frozen round membership + frozen operated / current prefix + dynamically sorted not-yet-operated tail; `active_operating_order` / `active_corporation_index` kept; D-32): the not-yet-operated tail
+is re-sorted from `market_positions` at one settle point after every entry; the operated prefix and the operating
+corporation are never displaced; the round's membership is frozen at the opening (a corporation that floats between
+turns via the M&H exchange joins the next OR, §5.3). #1296's "operated = prefix" stays true. The corpus contains no
+mid-OR price movement of a not-yet-operated corporation (the only engine path is Stage 5's forced sale of another
+corporation's shares). **Slice 8.1.**
+**RESOLVED by Slice 8.1 (#1600).** During a round the prefix `order[0 .. index]` (every corporation that has operated,
+plus the one operating) is immutable and only the not-yet-operated tail is re-sorted on the current chart — on every
+entry in which a token moved (the forced sale today, a Blood Price under Yellow Sign, any future mover), and never on an
+entry that moved no token and opened no round (so a refusal stays a no-op, S8-13's latent chart-step shape excepted until
+Slice 8.2). Membership is fixed when the queue is built:
+the settle only permutes, so a corporation floated between turns joins the next round (§5.3). Proved by
+`operatingQueueSettle.test.ts` cases 6–13 and 14a: a forced sale moves a waiting corporation ahead of / behind another;
+the operating corporation's own payout or withhold never displaces it; an operated corporation's price fall leaves the
+prefix byte-identical; a walked round operates each member once, the re-sorted head next; a mid-round float is not
+inserted; a no-change settle is an identity; the cursor, seat and `turnGuardKey` are stable; two `RoomEngine` replays and
+the live reducer agree on queue, cursor, seat, turn key and derived key after every entry. Corpus: 779 Operating Round
+boards, every waiting tail already in §6.0 order — no gameplay or digest change.
 
 **S8-4. Sold-out rise iterates `public_companies` in company order; §4.5 says highest-priced token first.**
-Status `OPEN` (test gap; outcome differs only when two risers meet in one cell). Rulebook §4.5. Notes: audit m3;
+Status `RESOLVED` — **Slice 8.1** (2026-09-16, #1601; uncommitted, awaiting owner review). *(Was `OPEN` (test gap;
+outcome differs only when two risers meet in one cell).)* Rulebook §4.5. Notes: audit m3;
 `soldOutRise.ts` (`roundEndSoldOutRises`). Replay: replay-semantic only when two risers land in one cell — bump.
 Detail: sort risers by current price desc (then §6.0 tie-break) before moving; pin with a two-riser test
-(`soldOutRise.test.ts` covers one riser only).
+(`soldOutRise.test.ts` covers one riser only). **Stage-8 design pass:** confirmed — `withArrival` stamps the arrival
+in walk order, so two risers into one cell stack in `public_companies` order; no two risers share a cell anywhere in
+the corpus. **Slice 8.1** (mechanical; Opus-safe on its own).
+**RESOLVED by Slice 8.1 (#1601).** `roundEndSoldOutRises` sorts the risers by the §6.0 comparator on their PRE-rise marks
+(share value desc, then rightmost column, uppermost row, earliest arrival, company id) and the reducer commits them in
+that order, so the highest-priced token moves first and two risers from one cell keep their stack order whatever
+`public_companies` says. Pinned in `soldOutRise.test.ts` "the risers move in share-value order, not catalog order (#1601,
+S8-4)": two risers in one close; higher price first (and rightmost first on a tie); identical chart, rise list and queue
+with the catalog order reversed; two risers from one cell land in one cell; the top token stays on top in both catalog
+orders. Closes S10-18's rise-order gap. No corpus log has two risers in one cell.
 
 **S8-5. Home token is placed at float during the Stock Round, not at the start of the corporation's first operating turn.**
-Status `DEFERRED` — needs an owner ruling (keep as a documented house rule, or move). Rulebook §6.3.1;
+Status `OPEN` — **owner ruling 2026-09-16 (Stage-8 brief): move the obligation to the start of the corporation's
+first operating turn** (was `DEFERRED` pending that ruling). Design: `STAGE8_AUTHORITY_DESIGN_2026-09-16.md` §5 (state model), §8 (corpus
+divergence table), §9 (replay strategy) — **Slice 8.2, Opus** (owner model policy, 2026-09-16; was Fable High), absorbing S8-6, S8-12 and S8-13. Rulebook §6.3.1;
 §6.3.2 ("may not block the home station of a railroad that has not yet operated"). Notes: audit M15; #769
 `pendingHomeTokens`, `homeTokenBlock`, `homeReservationStands` (UI side), `placeHomeStationToken`. Batch 3 §2
 proved the FCJ idx-95 fix does not depend on timing. Replay: moving the obligation is replay-semantic (every
@@ -775,6 +832,23 @@ stored log carries `PlaceHomeStation` during the SR) — bump; keeping it is a d
 Detail if moved: the obligation becomes "first message of the corporation's first OR turn" (`openingSubPhase`
 gate), Erie's slot choice moves with it, and blocking through the home city can no longer happen one OR-turn
 early. Delayed-Auction and herald-home (#1302) paths must be re-checked with whichever choice is made.
+**Stage-8 design pass — corpus facts (sweep `_to_delete/stage8_sweep.json`).** All 44 stored `kind: "home"`
+entries are Stock Round entries on the corporation's own home hex; the 19 applied ones sit immediately after the
+float; between each applied placement and that corporation's first OR turn **no entry lays, tokens or runs through
+the home hex**, so re-timing the token changes no route or station legality and no OR order anywhere in the corpus.
+Frozen model: the obligation is derived on the cursor (OR ∧ operating corporation ∧ floated ∧ non-herald ∧ no token);
+the hold is turn-local (only that president's controls; nothing in a Stock Round; `nextDerivedAction` silent);
+#769 / #769a seat mechanics retire; the four holds move in front of the chart step (S8-13); reservation code
+(`homeReservationStands`) is already rulebook-correct and unchanged. Replay: version-6 reducer refuses an SR-time
+placement outright; the development corpus replays through a `legacyHomeTokens: "defer-to-first-turn"` adapter
+(4.6's `legacyExcessTrains` shape, D-9) that supplies the players' recorded hex / circle at the first turn — CV4
+goldens re-baseline field-only (tokens absent between float and first turn), Z6C's 7.5 freeze lifts at 34 and 3XD's
+at 290 (re-pins with reasons at Slice 8.2). Without the adapter every completed-game fixture would freeze at its
+first OR turn (CV4 at 27). **Owner ruling R3 (2026-09-16, D-31):** the adapter is approved in its "last recorded
+historical choice on a legal home hex" form; the remembered choice is DATA only — the synthetic first-turn placement
+must pass the CURRENT authoritative home-placement predicate on the then-current board, an obsolete / now-illegal
+choice is never forced through (no placement is synthesized; the normal home hold stays in force); development-corpus
+only, never production compatibility; the CV4 field-only re-baseline and the Z6C / 3XD corrections are accepted.
 
 **S8-6. `PlaceHomeStation` hex and circle are not validated in the reducer.**
 Status `OPEN` (independent of S8-5; can be done first). Rulebook §6.3.1. Notes: Batch 3 §3; `sandboxSession.ts`
@@ -782,6 +856,11 @@ Status `OPEN` (independent of S8-5; can be done first). Rulebook §6.3.1. Notes:
 recorded") and does not check the circle against occupancy / #858's lock; `homeReservedCityIndex` (#1511) is the
 reader to reuse; validate against `home_hex_label`. Replay: refusal-only on hand-crafted messages; sweep before
 claiming the corpus contains no wrong-hex placement — bump anyway if any stored entry would now be refused.
+**Stage-8 design pass:** swept — **no stored placement is off its home hex** (44 / 44 on `homeHexesFor`), so the
+validation refuses nothing historical. Predicate frozen (`STAGE8_AUTHORITY_DESIGN_2026-09-16.md` §5.4): hex ∈ `homeHexesFor`; circle = the
+hex's one city, or for Erie **either** free circle (not only the badge-nearest one `homeReservedCityIndex` holds
+against others); no tile required on E11 / E19 (§6.3.1 note); the D&H free station (`kind: "dh"`, 3XD 115) shares the
+arm and is exempt from the home rules (and should stop being prepended at `station_token_hexes[0]`). **Slice 8.2.**
 
 **S8-7. No "no sales in the first Stock Round" rule in the reducer.**
 Status `RESOLVED` — Batch 7.2 (#1570): `stockSaleRefusal` rule 3, `isFirstStockRound(state)` =
@@ -831,6 +910,39 @@ fallback). Audit m8. Rulebook §4.2 / §5.2 (67/71/76/82/90/100). Notes: `BuySto
 Status `OPEN` — audit m6. Rulebook p.11 ("from the bank or the pool"). Notes: `resolvePrivateExchange`,
 `ExchangePrivate` arm. Replay: replay-semantic if a `source` is added (default must reproduce today's choice) —
 bump. Detail: add `source: "ipo" | "pool"` to `ExchangePrivate`; default IPO for legacy entries.
+**Stage-8 design pass (2026-09-16, `STAGE8_AUTHORITY_DESIGN_2026-09-16.md` §6) — the finding is wider than the source.** The message
+**already carries `source: "Ipo" | "Bank"`** (`messageSchema.ts`; 3XD 288 records `Ipo`), so no default is needed.
+What is wrong is that the reducer's arm (`sandboxSession.ts` `isExchangePrivateMsg`) applies the message and
+re-derives nothing: ownership, the 60 % cap, the certificate limit, share availability (`applyPrivateExchange` clamps
+with `Math.max(0, …)`, so an empty pile **mints** a share), the corporation (`company_id` is message-carried),
+`keep_open` (on the wire — a client could keep the M&H open), the timing window (rulebook p.27: the owner's own SR
+turn or between turns in either round), the float threshold (`applyFloatThreshold` runs only in the `BuyStock` arm —
+**corpus: 3XD 288 takes NYC's IPO 50 → 40 %, 60 % out, and NYC does not float until 289's purchase**) and the
+presidency (`settlePresidencies` not called; §5.4 "immediately"). Ingress asks only "is the M&H yours"
+(`roomMessageRefusal`). Frozen design: `privateExchangeRefusal` asked by the reducer and by `turnRefusal`; the arm
+then exchanges, settles the float through a shared `settleFloat`, and settles the presidency with the S8-2 helper;
+no seat, pass-streak or purchase change (owner ruling R1 — ~~proposed default~~ **ruled 2026-09-16**: an interjection); pool offered as a
+choice (owner ruling R2). Replay: 3XD 288 transient only (NYC floats one entry earlier). **Slice 8.4, Opus** once
+R1 / R2 are ruled ~~(Fable if R1 ≠ default)~~ — **both ruled 2026-09-16** (design §0; D-29 / D-30).
+**Owner rulings R1 / R2 (2026-09-16).** *R1:* the exchange is a free interjection — it does not consume the Stock Round
+certificate purchase, does not set or consume `bought_this_turn`, does not change the Sell → Buy → Sell structure, does
+not reset or alter the consecutive-pass streak, does not move Priority Deal or the seat, and is not the player's
+normal Stock Round action. *Timing:* the rulebook's "between turns" is supplied by the players at a table, but **the
+server has no persistent between-turns state** (it advances from one turn to the next at once), so: a request made on
+the owner's own Stock Round turn or at a genuine server-visible turn boundary executes immediately if legal; a request
+made while another player's or corporation's turn is already underway is **queued** as a pending M&H exchange request —
+never executed mid-turn, never interrupting the actor — and executes automatically at the **next legal between-turns
+boundary**, where the whole exchange is **revalidated** against the authoritative board and retired / refused cleanly if
+no longer legal. **No transition-time M&H prompt** is wanted: the request is player-initiated and the game never pauses
+a transition to ask. Mandatory holds and atomic resolution (discard, funding, pending bilateral offer, home obligation,
+any other hold) take precedence; a queued exchange settles after the blocking obligation resolves, at the next valid
+boundary. This supersedes the design pass's earlier "in an Operating Round, any time" wording. If the turn state cannot
+identify the boundary without a small explicit field, Slice 8.4 proposes the smallest deterministic addition. *R2:*
+when both the IPO and the Bank Pool hold a legal 10 % NYC share the owner chooses the source; if only one is legal, only
+that one is offered; no silent IPO-first. STATE VISIBILITY and the source choice are U-35's. *Queuing vests nothing
+(owner, 2026-09-16; D-29, U-35's gotcha):* Slice 8.4 must pin that a request queued during another corporation's turn
+expires without effect when that turn's first 5-train purchase closes the M&H before the next boundary — no NYC share
+is delivered — and likewise when the NYC share or another legality condition is gone by settlement.
 
 **S8-11. Timing notes, not defects (recorded so they are not re-audited):** m4 float capitalisation is paid on the
 purchase that crosses 60 % rather than at the end of the SR (harmless — treasury unspendable before the OR);
@@ -847,6 +959,25 @@ the home-token obligation's timing and validation are this stage's, and ingress 
 together so the hold's sentence, its pass list and its ordering against the discard, funding and offer holds
 (#1530 / #1540 / #1590) are one rule at both locks. Replay: refusal-added at ingress only (the reducer already
 refuses) — no board changes; sweep anyway before claiming no stored proposal sits under a home-token hold.
+**Stage-8 design pass: absorbed into Slice 8.2** (`STAGE8_AUTHORITY_DESIGN_2026-09-16.md` §5.7) — the hold's new definition (turn-local, on
+the cursor) and its ingress sentence are one predicate (`homeStationHold`) consumed by the reducer, `turnRefusal`
+(fourth hold, after the offer hold) and `nextDerivedAction`. Swept: no stored proposal sits under a home-token hold;
+the entries that DO sit under one are S8-13's sales.
+
+**S8-13. The chart step runs before the holds, so a held `SellStock` moves `market_positions` for a sale the core refuses.**
+Status `OPEN` — **newly proven by the Stage-8 design pass (2026-09-16)**. Notes: `applySandboxActionAfterAuction`
+runs `applySandboxMarketAction` before `applySandboxActionCore` (#1197); the chart's `saleRefused` asks
+`stockSaleRefusal`, which contains no hold; the discard (#1530), funding (#1540), offer (#1590) and home (#763) holds
+are asked only in the core. Corpus: **server/JUNO-FCJ 904, 911, 918, 932** — `SellStock` entries sent after N&W
+floated at 902 with its home owed; each changes `market_positions` and nothing else (the core refused the sale). The
+same shape is latent for a player ↔ player trade offer standing in a Stock Round (D-24) and for a discard owed. Rule:
+a refused message moves nothing (#748a / #1019). Repair (Slice 8.2): the four holds move in front of the chart step,
+in their existing order, and return the board by identity before the chart is asked. Replay: replay-semantic on FCJ
+(the four moves disappear) — part of the Stage-8 bump. Test: a held `SellStock` leaves `market_positions` identical.
+**Slice 8.1 interaction (2026-09-16).** The 8.1 queue settle follows the chart, so until this repair lands the latent
+Operating Round form of the defect (a forced sale sent under a hold its predicate does not ask, e.g. an ordinary offer
+standing at Hardware) would also re-sort the waiting tail on the refused entry. Not reached by the corpus — FCJ 904 /
+911 / 918 / 932 are Stock Round entries, where the queue is not settled — and removed with this repair.
 
 ### Stage 9 — Variants + map data + variant authority
 
@@ -967,6 +1098,16 @@ Replay: refusal-added (a stored lay that cut printed track, or reconnected #59's
 possibly acceptance-added for a legal variant merge the filter refuses today — sweep both directions before
 claiming none exists — bump. No visual-flourish code is touched by the eventual fix; VF-5 only surfaced it.
 
+**S9-11. The Blood Price landing is not stamped as an arrival.**
+Status `OPEN` (found by Slice 8.1, 2026-09-16; Yellow Sign / Unpredictable Revenue only). `applySandboxMarketAction`'s
+`BuyTrainFromCorporation` arm writes `projectBloodPriceMove`'s cell straight into `market_positions` instead of through
+`withArrival` (#646: "every place a marker moves goes through here"), so the seller's token carries no arrival ordinal
+after the move. §6.0's stack tie-break then treats it as unstamped: it sorts after every stamped token in its new cell,
+`nextArrival` ignores it, and a LATER stamped arrival into the same cell would sort above it. The Slice 8.1 settle orders
+a waiting corporation moved by the Blood Price deterministically, like any other move, but its stack position is not
+§4.5's. Repair: stamp the landing with `withArrival`. Replay: replay-semantic for Yellow-Sign rooms with a Blood Price
+into an occupied cell — bump with Stage 9.
+
 ### Stage 10 — Replay / settlement / release hardening
 
 **S10-1. Refusal transport.** A reducer refusal is an identity no-op that `RoomSession.submit` still answers
@@ -1076,7 +1217,8 @@ files; `.git/worktrees/prefix` is a stale scratch worktree (`git worktree prune`
 checked against the fleet slot, `revenue_seed` / `revenue_turn` remain message-carried by design, #1051 /
 #1183). Cross-reference only.
 
-**S10-18. Test gaps from the audit still without a machine-level test:** sold-out rise order (S8-4), first-SR sale
+**S10-18. Test gaps from the audit still without a machine-level test:** ~~sold-out rise order (S8-4)~~ *(closed by
+Slice 8.1, `soldOutRise.test.ts`, 2026-09-16)*, first-SR sale
 refusal (S8-7), presidency tie (S8-2), auction escrow at the reducer (S7-4), terrain-fee-once for the
 upgrade-of-preprinted case, all-pass private income through `replayLog` (S10-4). Cross-reference.
 
@@ -1121,7 +1263,10 @@ Detail: capture — or construct through legal play on a version-5 engine — a 
 (Unpredictable Revenue) enabled that includes a Mark, rust, a Bagholder and a Little Engine, commit it beside the
 golden logs, and restore the displaced assertions against it. Not captured in 7.5. Cross-reference S9-1 (the Mark's
 award still mints; `moneyConservation.test.ts` now pins that on a hand-built board) and S8-5 (moving the home token
-to the first OR turn would change Z6C's replay again — the characterization will announce it).
+to the first OR turn would change Z6C's replay again — the characterization will announce it). **Stage-8 design pass
+(`STAGE8_AUTHORITY_DESIGN_2026-09-16.md` §8):** under Slice 8.2 with the deferral adapter, the freeze lifts at 34 (B&O floated at 33 owes
+nothing in a Stock Round) and the recorded 32 choice is supplied at B&O's first OR turn; how far Z6C then replays is
+measured at implementation and the characterization is re-pinned there.
 
 ---
 
@@ -1399,6 +1544,68 @@ authority can never receive is worse than no option: it reads at the call site a
 The field is annotated in place rather than removed, because deleting it is a signature change across three
 callers for no rules reason. Retire it with S10-8's type cleanup. `OPEN` (no user-visible effect).
 
+**U-32.** (S8-5 / S8-6 / S8-12 / S8-13; filed by the Stage-8 design pass, 2026-09-16 — pending Slice 8.2) **Home
+station at the start of the corporation's first OR turn — STATE VISIBILITY + LEGALITY SYNC + RULES REFERENCE.**
+The home-station prompt (`HomeStationPrompt`, raised from `pendingHomeTokens` in `App.tsx`) moves from the Stock
+Round purchase that floated the corporation to the opening of that corporation's first Operating turn; the Stock
+Round no longer waits on it and no other seat is held. While the operating president owes the token, every control
+of that seat except the placement is disabled with the hold's sentence (the same surface as the discard / funding /
+offer holds, U-5 / U-4 / U-22) and the Activity Log names whose home is owed; the lit hexes / circles come from
+`homePlacementRefusal` (Erie: either free circle of E11; LPF C&O: either home hex; no tile needed on E11 / E19).
+The Rules Reference's home-station paragraph must say "at the start of its first operating turn" and drop any
+"when it floats" wording. `OPEN` (UI, after Slice 8.2).
+
+**U-33.** (S8-2; filed by the Stage-8 design pass — pending Slice 8.3) **Presidency clockwise tie-break — STATE
+VISIBILITY + RULES REFERENCE.** When two or more challengers tie above the outgoing president, the presidency-change
+line says who took it and why ("closest clockwise from the former president", U-30's WHY family); the Rules
+Reference §5.4 paragraph states the tie rule. `OPEN` (UI, after Slice 8.3).
+
+**U-34.** (S8-1 / S8-3 / S8-4; filed by the Stage-8 design pass — engine side landed in Slice 8.1, 2026-09-16) **Dynamic operating order —
+STATE VISIBILITY.** The turn-order strip, the "next corporation" read (`App.tsx` 1300) and the market-token operated
+/ active stacks (#1296) re-render from the settled queue after every action: the operated prefix never moves, the
+not-yet-operated tail may. No new control; verify no shell code caches the opening order (the re-entrancy key
+`utils/turnGuard` reads the state's index and is unaffected). **Slice 8.1 check (engine side):** the Operating Round
+Corporations table (`utils/operatingOrderView.ts` `operatingOrderRanks`, `ContextualSubPanel`) and the other readers take
+the order from `active_operating_order`, so they follow the settle with no second rule; #753's note there ("that queue
+is frozen for the whole round") is now true of the operated / operating prefix only and wants its wording refreshed with
+the UI pass. See also U-36 (the rise's Activity Log line). `OPEN` (UI verification).
+
+**U-35.** (S8-10; filed by the Stage-8 design pass — pending Slice 8.4) **M&H exchange window and source — LEGALITY
+SYNC + RULES REFERENCE / GOTCHA + STATE VISIBILITY (+ NEW ACTION under ruling R2).** The powers panel / flow modal must ask the reducer's
+`privateExchangeRefusal` (not the client-side `resolvePrivateExchange` alone) so an exchange refused at the lock —
+outside the window, under a hold, over the certificate limit, no share in the named pile — is never presented as
+live; under R2 the modal offers Bank Pool as an alternative source when both piles hold a share; the Rules
+Reference's M&H card states the window ("your own Stock Round turn, or between turns in either round") and the
+no-sale-before-par rule already enforced by U-24. **Owner rulings R1 / R2 (2026-09-16):** the NEW ACTION is required —
+the owner picks the source when both the IPO and the Bank Pool hold a legal share (only the legal source is offered
+otherwise; no silent IPO-first); and **STATE VISIBILITY for a queued exchange** — a request made while another turn is
+underway queues until the next legal boundary, so it needs an immediate requester-facing acknowledgment and a
+table-visible pending indication that persists until execution or cancellation (exact presentation TBD here; the
+Activity Log alone is not sufficient). No transition-time prompt is ever raised. **RULES REFERENCE — GOTCHA (owner,
+2026-09-16; documentation only, not implemented).** A queued M&H exchange is only a request to exercise the power at
+the next legal between-turn opening. Queuing it does NOT vest, reserve, or lock in the exchange: at settlement the
+entire exchange is revalidated against the then-current authoritative state. The future Rules Reference "Gotchas" must
+call out this edge case explicitly: the player queues M&H during another corporation's Operating Round; before that
+corporation's turn ends, it purchases the first 5-train; Phase 5 begins immediately and all private companies,
+including M&H, close immediately; at the next between-turn boundary the queued M&H request is no longer legal and
+expires without effect; the player does NOT receive the NYC share merely because the request was submitted before the
+5-train purchase. The same general rule applies if the requested NYC share or another legality condition ceases to be
+available before settlement. Suggested player-facing wording: "Gotcha — Queuing M&H doesn't reserve the exchange. If you
+request the M&H power during another turn, it waits for the next legal between-turn opening and is checked again then.
+If the first 5-train is bought before that opening, M&H closes and the exchange is lost." Classified here as
+**RULES REFERENCE / GOTCHA** and **STATE VISIBILITY** for the queued → executed / canceled status. The visual
+presentation is not designed yet. `OPEN` (UI, after Slice 8.4).
+
+**U-36.** (S8-4 / #1211; found by Slice 8.1, 2026-09-16, by reading the code — not reproduced in a browser) **The
+sold-out-rise Activity Log line is built from the chart AFTER the rise was committed — STATE VISIBILITY.** In
+`App.tsx`'s dispatch the reducer's `after.market_positions` is first copied into `sandboxMarketRef` (#1211, "the mirror,
+written from the board"), and only afterwards is the "Market Move" line built with `soldOutRises({ before, after,
+markFor: marketMarkForCompany, projectRise })` -- whose `markFor` reads that ref. Each riser's mark is therefore already
+its RISEN cell, so the sentence describes a further, hypothetical rise one row higher (and a riser that reached the top
+of its column is not narrated at all). The board is right; the sentence is not. Shell fix: narrate from
+`before.market_positions`, or from the before / after position diff, not from the live mirror. Slice 8.1 changed only the
+ORDER of that list (highest-priced first). `OPEN` (UI; `App.tsx` is owner-modified and was not touched by 8.1).
+
 ---
 
 ## Part D — Deliberate rules deviations and owner decisions (never to be "fixed" as bugs)
@@ -1507,6 +1714,39 @@ sentence, at both locks (D-28)". **Supersedes the previous expectation in `emerg
 ("the owner may send it; the reducer refuses it"), which the owner has ruled was never a rule requirement.
 `OWNER DECISION`.
 
+**D-29. The M&H exchange is a free interjection, and an off-turn request is queued to the next legal between-turns
+boundary (Stage-8 review R1, owner 2026-09-16).** The exchange consumes nothing of the Stock Round turn: not the one
+certificate purchase, not `bought_this_turn` / `bought_this_turn_company`, not the Sell → Buy → Sell stage, not the
+consecutive-pass streak, not Priority Deal, not the seat, not `turn_action_taken`. Timing: immediate when requested on
+the owner's own Stock Round turn or at a genuine server-visible turn boundary; otherwise recorded as a pending request
+(never executed mid-turn, never interrupting the actor, never a transition-time prompt), executed automatically at the
+next legal between-turns boundary after revalidating the whole exchange against the authoritative board, and retired
+cleanly if no longer legal. Mandatory holds and atomic resolution take precedence. The server has no persistent
+physical-game "between turns" pause, which is why the queue exists. Not "any time in the middle of another
+corporation's turn". Queuing vests nothing (owner, 2026-09-16): the request is revalidated in full at settlement and
+expires without effect if it is no longer legal — a first 5-train bought before the boundary closes the M&H (Phase 5),
+so no NYC share is received; likewise if the NYC share or another legality condition is no longer available (Rules
+Reference gotcha, U-35). STATE VISIBILITY per U-35. Implementation: Slice 8.4. `OWNER DECISION` (digital timing of a
+rulebook permission).
+
+**D-30. The M&H owner chooses the exchanged share's source (Stage-8 review R2, owner 2026-09-16).** When both the NYC
+IPO (Bank) and the Bank Pool hold a legal 10 % share, the owner chooses; when only one is legal / available, only that
+one is offered. No silent IPO-first rule. Implementation: Slice 8.4 + U-35 (NEW ACTION). `OWNER DECISION`
+(rulebook-literal p. 27 "from the bank or the bank pool").
+
+**D-31. The development corpus's home-token adapter replays the last recorded legal home choice as DATA, through the
+current predicate (Stage-8 review R3, owner 2026-09-16).** For Slice 8.2 the development-corpus-only deferral adapter
+remembers the last recorded historical home choice on a legal home hex and applies it at the corporation's first OR
+turn — but the synthetic placement must pass the current authoritative home-placement predicate on the then-current
+board; an obsolete / now-illegal choice is never forced through (no placement is synthesized and the normal home hold
+stays in force). Development-corpus-only (D-9's shape), never production compatibility. The CV4 field-only
+re-baseline and the Z6C / 3XD replay corrections are accepted consequences. `OWNER DECISION` (replay policy).
+
+**D-32. The operating order is frozen round membership + a frozen operated / current prefix + a dynamically sorted
+not-yet-operated tail (Stage-8 review R4, owner 2026-09-16).** `active_operating_order` and `active_corporation_index`
+are kept; no operated-set representation. Implementation: Slice 8.1 (S8-1 / S8-3 / S8-4). `OWNER DECISION`
+(representation).
+
 ---
 
 ## Part E — Replay / version ledger (what a rebuilt room can differ by)
@@ -1527,6 +1767,7 @@ sentence, at both locks (D-28)". **Supersedes the previous expectation in `emerg
 | 5 (owed until 7.5) | 7.4 (`6ecdfb1`) | `pendingOfferHold.ts`, `privatePurchaseAuthority.ts`, `trainSaleAuthority.ts`, `privateTradeAuthority.ts`: one ordinary offer at a time and a global hold while it stands (D-19/Q6); the corporate private purchase judged at proposal, answer and settlement (OR, operating buyer, phases 3–4, open player-owned non-B&O private, band, treasury, consent); the intercorporate sale likewise (Hardware-only proposal D-18/Q5, ≥ $1, treasury-only D-20/Q7, limit, consent; D-6 unchanged and asked first); counterparties re-derived from the board (S7-11); a refused accepted settlement retires its offer (#1596); `RescindPrivatePurchase` / `RescindTrainPurchase`; the player ↔ player trade (`ProposePrivateTrade` / `AnswerPrivateTrade` / `RescindPrivateTrade`, `private_trade_offer`, D-24/D-26/D-27); `AcceptTrainOffer` / `RejectTrainOffer` / `RescindTrainOffer` refused on pinned boards (D-23). Schema 44 → 49 | **Measured against the committed 7.3 baseline `d0a0792`.** Sixteen of seventeen files are digest-identical at every entry and at the end (3XD, CV4 ×3, JJD, QVC, Y8V, 7NZ ×2, 8E8, CW7, G6J ×2, TQQ, Z6C, the FCJ prefix). **`server/JUNO-FCJ`** is the one room that differs: entries **145** (`ProposeTrainPurchase` — the B&O owns no 2-train on the log-derived board, an inherited 7.1 consequence, so the 7.4 predicate refuses the offer; 146/147 then find nothing), **205**, **273** (`ProposePrivatePurchase` by a corporation that is not operating), **232** (a proposal in a Stock Round) and their answers **209 / 234 / 274** are refused; through **308** the only field difference is the offer fields carried as `null` by the old engine versus absent under 7.4 — no gameplay difference. The first GAMEPLAY difference is **idx 309**: a direct `BuyPrivateCompany` (B&O buys private 7 for $60) sent during a Stock Round, applied by the old engine and refused by 7.4's round rule; from 310 the cash, treasuries, `private_companies` and `jk_license_granted` differ and every later step cascades (the room ends with 8 differing fields; money total identical, 20000). Direct trades 163/177/279/314/468/614/768/784/975 were already no-ops under 7.1 and remain so. Nothing re-pinned; `RULES_ENGINE_VERSION` still 4; the five suites stale since 7.1–7.3 (`replayGolden` ×2, `replayJuno3XD` ×2, `gameHistory` ×4, `roundReplay` ×1, `moneyConservation` ×1) are unchanged in number. **Follow-up (R74-B / O1 repair, #1597 / #1598, uncommitted):** `offer_serial` on the board and `instance` on every ordinary offer, the derived settlement key `offer:<kind>:<instance>`, and `derivedEntryKey` for the replay's guard record. Measured against the pre-repair 7.4 tree: fifteen of seventeen files are digest-identical at every entry and at the end; **`server/JUNO-CW7` from idx 122** and **`export/JUNO-QVC` from idx 60** differ ONLY in `offer_serial` (1) and `train_purchase_offer.instance` (1), written by the stored proposals at 121 / 59; applied / dropped counts, money totals and bank balances identical everywhere; FCJ unchanged (its four stored proposals are refused by 7.4). The ten stale cases are unchanged in number |
 
 | **5** | **7.5** (uncommitted) | **The bump.** `RULES_ENGINE_VERSION` 4 → 5, `SUPPORTED_RULES_ENGINE_VERSIONS` [5], changelog row 5 (Batch 7). No engine semantics changed in 7.5; a version-4 room is refused before replay under every policy; unpinned logs keep the #1520 boundary (server refuses, development corpus admits). | **Cumulative Batch-6 (`215eb29`) → version 5, 18 files / 12 rooms / 3,103 replayed entries, each slice measured against the committed tree before it.** Bank-only (7.1 auction / terrain credit, no gameplay change): `golden`+`server`+`export` JUNO-CV4, `golden`+`server` JUNO-G6J (plus 7.3), JUNO-8E8, JUNO-CW7, JUNO-JJD, JUNO-QVC, the FCJ prefix; identical: JUNO-7NZ ×2, JUNO-TQQ, JUNO-Y8V. **JUNO-G6J** final: bank +$755 (7.1 $750, 7.3 $5), `player_cash` 985 → 980 (7.3 C5, idx 7). **JUNO-CV4** final: bank 8516 → 9511 (7.1). Transient only (end identical): 7.3's `passes_since_raise` on CV4 ×3 idx 7 / 8E8 idx 8, 3XD idx 6's refused sub-minimum bid; 7.2's `bought_this_turn_company` written during a purchase turn (every Stock Round). **JUNO-3XD** from 28 (7.1 unaffordable NNH buys; NNH never floats in SR 1) and 140 (7.2 OR `BuyStock`); only B&O's run at 61 is ever accepted; filed table PRR —, NYC —, B&O 50, C&O —, NNH —. **JUNO-Z6C** (store and 494 fixture) from 193 (7.1) then, under 7.3, from **9** (C5): B&O stays $220, 31 unaffordable, B&O floats at 33 after its stored home placement, and the home-token hold freezes the log from **34** — timeline `[SR 1, Final]`; the Yellow Sign at 203 is never reached. **JUNO-FCJ** from 106 (7.1), 83 (7.2 OR `BuyStock`), 145 / 205 / 232 / 273 (7.4 proposals) and 309 (7.4 direct Stock-Round private purchase). **JUNO-CW7** 121 / **JUNO-QVC** 59: `offer_serial` 1 / `instance` 1 only (7.4 #1597). Money conservation: zero non-`SetupGame` breaches in all 3,103 entries (Batch 6: 163 across the 18 files); no log writes `bank_broken`. Version-5 tree vs committed 7.4: digest-identical at every entry of every file, and deterministic across repeated replays. **Re-pinned with reasons:** golden `JUNO-CV4.json` (bank), `JUNO-G6J.json` (bank, cash); `replayJuno3XD` cursor table and filed table; `moneyConservation` Yellow Sign case (corpus list empty for the Z6C freeze, the mint pinned on a hand-built board); `routeAuthority` 23 (version-only). **Re-homed (owner ruling):** the completed-game cases of `gameHistory` / `roundReplay` / `accolades` / `gameOutro` to the JUNO-CV4 golden log, one Z6C characterization added, Z6C-only accolade coverage deferred to S10-21. `accolades` ×5 and `gameOutro` ×1 had been stale since 7.3 without being listed in the 7.3 / 7.4 stale sets. |
+| 6 (owed until 8.5) | 8.1 (uncommitted) | `settleOperatingQueue` (#1600): the queue that opens an Operating Round is the §6.0 order of the COMMITTED post-rise chart and the table is seated at its head (S8-1); during a round the not-yet-operated tail is re-sorted whenever a token moves, the operated / operating prefix never moves, membership is fixed when the queue is built (S8-3); sold-out risers committed highest-priced first, keeping stack order (S8-4, #1601); the #746a resolver overlay removed | **Measured against the working tree immediately before Slice 8.1** (committed `7c5f29c` plus the owner's uncommitted non-8.1 edits, so the comparison isolates 8.1), 18 files / 3,103 replayed entries under `DEVELOPMENT_CORPUS_POLICY`: **digest-identical at every entry and at the end in every file**, with identical `active_operating_order`, `active_corporation_index`, operating corporation, seat and turn key after every entry; deterministic in-process and across processes. 779 Operating Round boards all carry a §6.0-ordered waiting tail; all 60 openings equal the sort of their committed chart; FCJ 885 (the only opening rise) settles to PRR, B&O, B&M as stored. No corpus log has a mid-round move of a waiting corporation or two risers in one cell (non-regression evidence only). `JUNO-Y8V` replays **zero** entries (668 raw rows; no entry identity survives `effectiveActions`). Corpus files byte-unchanged (sha256). Nothing re-pinned; `RULES_ENGINE_VERSION` still 5 |
 
 Items above that carry "bump" must add a row here when they land. No golden or replay expectation is ever
 re-pinned silently: the re-pin, its index and its reason go in the batch write-up and in this table.

@@ -1,4 +1,6 @@
 import type { GameStateResponse } from "./gameState";
+// Design note #1601: the 6.0 key and comparator the operating queue sorts by -- one statement of the tie-break.
+import { compareOperatingOrder, operatingOrderKey, type OperatingOrderKey } from "./operatingOrder";
 
 /* ==================================================================
  *  DESIGN NOTE 746: THE FOURTH ARROW HAD NO WRITER
@@ -72,6 +74,8 @@ export interface RiseCell {
   x: number;
   y: number;
   price: number;
+  /** #646's arrival ordinal, when the caller's mark carries one -- the stack position #1601 orders risers by. */
+  enteredAt?: number;
 }
 
 export interface SoldOutRise {
@@ -105,12 +109,9 @@ export function isSoldOut(company: {
 
 function riseFor(
   company: { company_id: number; ticker: string },
-  markFor: MarkFor | undefined,
-  projectRise: ProjectRise | undefined,
+  mark: RiseCell,
+  projectRise: ProjectRise,
 ): SoldOutRise | null {
-  if (!markFor || !projectRise) return null;
-  const mark = markFor(company.company_id);
-  if (!mark) return null;
   const landed = projectRise(mark);
   /* A token at the top of its column STAYS THERE and reports nothing. `projectRiseMove` clamps rather than
      inventing a cell (#434's rule for the other three directions), so an unchanged cell means "already at the
@@ -130,18 +131,40 @@ function riseFor(
  *
  *  CALLED FROM EXACTLY ONE PLACE, which is the rule rather than an optimisation -- #746c. The contract states
  *  the consequence of getting this wrong: "two calls in one round would double-raise every sold-out company." */
+/* ==================================================================
+    DESIGN NOTE 1601: THE RISERS MOVE IN SHARE-VALUE ORDER, NOT CATALOG ORDER (Stage 8.1: S8-4)
+   ==================================================================
+   Rulebook 4.5: "Tokens are moved in share value order, with the highest priced corporation's token being moved
+   first." This walked `public_companies` and returned the rises in that order, and the reducer commits them in
+   the order returned, stamping each as the next arrival (#646) -- so two risers that met in one cell stacked in
+   company / catalog order. Right only when the lower-numbered corporation happened to be the higher-priced one.
+   SORTED HERE, ON THE PRE-RISE MARKS, BY THE OPERATING QUEUE'S OWN COMPARATOR: share value descending, then 6.0's
+   positional order for equal values -- rightmost column, uppermost row, then the token on top of a shared cell
+   (earliest arrival), then company id to keep it total. Reusing `compareOperatingOrder` rather than writing a
+   second tie-break is the point: the market's stack and the turn order read one statement of the rule.
+   WHAT IT DECIDES. A rise is one row up in the same column (`projectRiseMove`), so two risers share a destination
+   only when they shared an origin cell; moved top token first, each arrives at the bottom of the new stack (4.5),
+   and the stack keeps its order. Every caller of this function -- the reducer's commit, the shell's Activity Log
+   line -- now lists the rises in the order they happen. No corpus log has two risers in one cell (Stage-8 sweep),
+   so nothing stored replays differently; replay-semantic only there, part of the Stage-8 bump. */
 export function roundEndSoldOutRises(
   state: GameStateResponse,
   markFor: MarkFor | undefined,
   projectRise: ProjectRise | undefined,
 ): readonly SoldOutRise[] {
-  const rises: SoldOutRise[] = [];
+  if (!markFor || !projectRise) return [];
+  const risers: Array<{ rise: SoldOutRise; key: OperatingOrderKey }> = [];
   for (const company of state.public_companies) {
     if (!isSoldOut(company)) continue;
-    const rise = riseFor(company, markFor, projectRise);
-    if (rise) rises.push(rise);
+    const mark = markFor(company.company_id);
+    if (!mark) continue;
+    const rise = riseFor(company, mark, projectRise);
+    if (rise) {
+      risers.push({ rise, key: operatingOrderKey(company.company_id, mark.price, company.par_value, mark) });
+    }
   }
-  return rises;
+  risers.sort((a, b) => compareOperatingOrder(a.key, b.key));
+  return risers.map((entry) => entry.rise);
 }
 
 export interface SoldOutRiseInput {

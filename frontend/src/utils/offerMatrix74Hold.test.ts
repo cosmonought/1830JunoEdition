@@ -30,7 +30,7 @@ const S = require("./offerMatrix74Support") as typeof import("./offerMatrix74Sup
 type GameStateResponse = import("../gameEngine/gameState").GameStateResponse;
 
 const { P1, P2, P3, PRR, NYC, CO, DH, CA, MH, board, operatingBoard, stockRoundBoard } = F;
-const { apply, applyAsRoom, ingress, same, differing, withCorp, withState, guarded, trains, M, GRID, CORRIDOR, fundingBoard } = S;
+const { apply, applyAsRoom, ingress, same, differing, withCorp, withState, guarded, trains, M, GRID, corridor, fundingBoard } = S;
 
 const homeHexToAxial = (state: GameStateResponse) => sandboxReplayProviders().chartInjections(state).homeHexToAxial!;
 
@@ -254,18 +254,18 @@ describe("§9 R74-C (A): while an earlier mandatory hold stands, no ordinary off
 
   it("the funding hold: the private offer and the trade are refused at both locks; the train offer is the designed D-6 intersection", () => {
     const held = fundingBoard(100, { privates: [{ id: DH, owner: P2, cost: "70" }] });
-    expect(emergencyFundingFor(held, CORRIDOR)).not.toBeNull();
+    expect(emergencyFundingFor(held, corridor())).not.toBeNull();
     const fundingSentence = "C&O must buy a 3-train ($180) and cannot pay for it; its president must fund the purchase before anything else happens.";
     for (const [label, msg, actor] of [
       ["a private purchase offer by the rescued corporation", M.proposePrivate(DH, CO, 70), P1],
       ["a private purchase offer by another corporation", M.proposePrivate(DH, NYC, 70), P2],
       ["a player trade", M.proposeTrade(DH, P2, P1, 10), P1],
     ] as Array<[string, unknown, string]>) {
-      expect([label, emergencyFundingBlock(held, msg as never, CORRIDOR)]).toEqual([label, fundingSentence]);
-      expect([label, ingress(held, actor, msg, CORRIDOR)]).toEqual([label, fundingSentence]);
-      expect([label, same(apply(held, msg, actor, CORRIDOR), held)]).toEqual([label, true]);
+      expect([label, emergencyFundingBlock(held, msg as never, corridor())]).toEqual([label, fundingSentence]);
+      expect([label, ingress(held, actor, msg, corridor())]).toEqual([label, fundingSentence]);
+      expect([label, same(apply(held, msg, actor, corridor()), held)]).toEqual([label, true]);
     }
-    expect(emergencyFundingBlock(held, M.proposeTrain(PRR, CO, "3", "130", null) as never, CORRIDOR)).toBeNull();
+    expect(emergencyFundingBlock(held, M.proposeTrain(PRR, CO, "3", "130", null) as never, corridor())).toBeNull();
   });
 
   it("a finished game and the auction round: every proposal refused at both locks", () => {
@@ -404,9 +404,9 @@ describe("§9 R74-C (B): while an ordinary offer stands, nothing that passes its
   });
 
   it("the one designed coexistence -- a D-6 train offer beside the funding obligation -- has the intersection of the two pass lists and nothing more", () => {
-    const offered = apply(fundingBoard(100), M.proposeTrain(PRR, CO, "3", "130", null), P1, CORRIDOR);
-    expect(emergencyFundingFor(offered, CORRIDOR)).not.toBeNull();
-    const both = (msg: unknown) => emergencyFundingBlock(offered, msg as never, CORRIDOR) === null && pendingOfferBlock(offered, msg as never) === null;
+    const offered = apply(fundingBoard(100), M.proposeTrain(PRR, CO, "3", "130", null), P1, corridor());
+    expect(emergencyFundingFor(offered, corridor())).not.toBeNull();
+    const both = (msg: unknown) => emergencyFundingBlock(offered, msg as never, corridor()) === null && pendingOfferBlock(offered, msg as never) === null;
     const candidates: Array<[string, unknown]> = [
       ["answer", M.answerTrain(PRR, true)],
       ["rescind", M.rescindTrain(PRR)],
@@ -421,8 +421,8 @@ describe("§9 R74-C (B): while an ordinary offer stands, nothing that passes its
       ["PassTurn", M.pass],
     ];
     expect(candidates.filter(([, msg]) => both(msg)).map(([label]) => label)).toEqual(["answer", "rescind", "RevertTo", "CloseRoom"]);
-    const accepted = apply(offered, M.answerTrain(PRR, true), P3, CORRIDOR);
-    const bothAccepted = (msg: unknown) => emergencyFundingBlock(accepted, msg as never, CORRIDOR) === null && pendingOfferBlock(accepted, msg as never) === null;
+    const accepted = apply(offered, M.answerTrain(PRR, true), P3, corridor());
+    const bothAccepted = (msg: unknown) => emergencyFundingBlock(accepted, msg as never, corridor()) === null && pendingOfferBlock(accepted, msg as never) === null;
     expect(candidates.filter(([, msg]) => bothAccepted(msg)).map(([label]) => label)).toEqual(["rescind", "settle (only once accepted)", "RevertTo", "CloseRoom"]);
   });
 });

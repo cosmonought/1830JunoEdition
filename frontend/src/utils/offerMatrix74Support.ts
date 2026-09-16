@@ -226,17 +226,26 @@ export const entry = (index: number, actor: string, msg: unknown, derived = fals
 
 /* ---- the Batch-5 corridor (D-6 needs a legal route for the trainless corporation) --------------------------- */
 
-const hexAt = (label: string) => STATIC_BOARD_HEXES.find((entry) => entry.label === label)!;
-const H16 = hexAt("H16");
-const I17 = hexAt("I17");
+/* Design note #1300: the board tables are read when a case asks, never at module load -- `STATIC_BOARD_HEXES` is a
+   live binding `activateBoard` rebinds, so a hex captured at import time would be whichever board happened to be in
+   effect then, for the life of the process. The lookup, the corridor grid and `fundingBoard`'s token hex are all
+   derived inside the calls that need them. */
+function hexAt(label: string) {
+  return STATIC_BOARD_HEXES.find((entry) => entry.label === label)!;
+}
 
-export const CORRIDOR = {
-  game_id: 1,
-  tiles: [
-    { q: H16.q, r: H16.r, tile_id: 57, orientation: 2 },
-    { q: I17.q, r: I17.r, tile_id: 7, orientation: 2 },
-  ],
-} as unknown as MapGridResponse;
+/** The corridor grid: tile 57 on H16 and tile 7 on I17, derived from the board in effect at the call. */
+export function corridor(): MapGridResponse {
+  const H16 = hexAt("H16");
+  const I17 = hexAt("I17");
+  return {
+    game_id: 1,
+    tiles: [
+      { q: H16.q, r: H16.r, tile_id: 57, orientation: 2 },
+      { q: I17.q, r: I17.r, tile_id: 7, orientation: 2 },
+    ],
+  } as unknown as MapGridResponse;
+}
 
 /** `emergencyFunding.test.ts`'s intercorporate board: C&O (P1) operating at Hardware with no train, a legal route
  *  through the corridor and $30; PRR (P3) holds two 3-trains (face $180, so the bank's required train is a 3 at
@@ -258,6 +267,7 @@ export function fundingBoard(
     { id: PRR, ticker: "PRR", president: P3, trains: over.prrTrains ?? ["3", "3"], treasury: "500", holdings: [[P3, 40]] as Array<[string, number]>, price: 50, x: 3, y: 6 },
   ];
   const order = corps.map((entry) => entry.id);
+  const H16 = hexAt("H16");
   return {
     player_addresses: [P1, P2, P3],
     player_cash: [

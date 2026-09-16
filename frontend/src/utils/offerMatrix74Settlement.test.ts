@@ -801,11 +801,11 @@ describe("§15 (#1597) the offer instance is a function of the log: replay, Reve
   it("the funding offer takes no number and does not move the serial (Batch-5 semantics untouched)", () => {
     // C&O (P1) owes a train it cannot pay for; its president offers his own private to NYC (rulebook 6.6.3).
     const held = S.fundingBoard(100, { privates: [{ id: DH, owner: P1, cost: "70" }] });
-    const offered = apply(held, M.fundingOffer(DH, NYC, 70), P1, S.CORRIDOR);
+    const offered = apply(held, M.fundingOffer(DH, NYC, 70), P1, S.corridor());
     expect(offered.private_purchase_offer).toMatchObject({ funding: true, private_id: DH });
     expect(offered.private_purchase_offer?.instance).toBeUndefined();
     expect("offer_serial" in offered).toBe(false);
-    expect(nextDerivedAction({ state: { ...offered, private_purchase_offer: { ...offered.private_purchase_offer!, accepted: true } }, mapGrid: S.CORRIDOR, emitted: new Set() })?.kind).not.toBe("accepted-offer");
+    expect(nextDerivedAction({ state: { ...offered, private_purchase_offer: { ...offered.private_purchase_offer!, accepted: true } }, mapGrid: S.corridor(), emitted: new Set() })?.kind).not.toBe("accepted-offer");
   });
 });
 

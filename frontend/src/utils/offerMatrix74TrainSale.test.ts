@@ -29,7 +29,7 @@ const S = require("./offerMatrix74Support") as typeof import("./offerMatrix74Sup
 type GameStateResponse = import("../gameEngine/gameState").GameStateResponse;
 
 const { P1, P2, P3, PRR, NYC, CO, operatingBoard } = F;
-const { apply, ingress, same, differing, withCorp, withState, withCash, atPhase, cash, treasury, trains, guarded, M, GRID, CORRIDOR, fundingBoard } = S;
+const { apply, ingress, same, differing, withCorp, withState, withCash, atPhase, cash, treasury, trains, guarded, M, GRID, corridor, fundingBoard } = S;
 
 const STEP = "PRR may buy a train only at its Purchase Trains step, and an offer is made there too — a train may not run on the turn it is bought (rulebook 6.4).";
 const PRICE = "The price must be a whole number of at least $1 (rulebook 6.6).";
@@ -380,15 +380,15 @@ describe("§13 (train) R74-A: the buyer's current president may withdraw an acce
 /* ================================================================== */
 
 describe("§4 D-6 preserved: the forced purchase's money, beside and apart from the voluntary rule", () => {
-  const applyC = (state: GameStateResponse, msg: unknown, actor: string) => apply(state, msg, actor, CORRIDOR);
-  const ingressC = (state: GameStateResponse, actor: string, msg: unknown) => ingress(state, actor, msg, CORRIDOR);
-  const funding = (state: GameStateResponse) => emergencyFundingFor(state, CORRIDOR);
+  const applyC = (state: GameStateResponse, msg: unknown, actor: string) => apply(state, msg, actor, corridor());
+  const ingressC = (state: GameStateResponse, actor: string, msg: unknown) => ingress(state, actor, msg, corridor());
+  const funding = (state: GameStateResponse) => emergencyFundingFor(state, corridor());
   const proposeD6 = (price: string, model = "3") => M.proposeTrain(PRR, CO, model, price, null);
 
   it("shortfall 0 (the president can fund the bank's train): the D-6 trade through a room pays treasury first, the president the rest, exactly once", () => {
     const seed = fundingBoard(200);
     expect(funding(seed)).toMatchObject({ shortfall: 0, canPurchase: true, treasury: 30, presidentCash: 200 });
-    const { room, submit, kinds, logged } = S.roomFor(seed, CORRIDOR);
+    const { room, submit, kinds, logged } = S.roomFor(seed, corridor());
     expect(kinds(submit(P1, proposeD6("150")))).toEqual(["ProposeTrainPurchase"]);
     expect(submit(P1, M.emergency(CO)).kind).toBe("refused"); // the offer freezes the other exit
     expect(kinds(submit(P3, M.answerTrain(PRR, true)))).toEqual(["AnswerTrainPurchase", "BuyTrainFromCorporation*"]);
@@ -404,11 +404,11 @@ describe("§4 D-6 preserved: the forced purchase's money, beside and apart from 
     const payloadOf = (kind: string) => JSON.parse(logged(kind)[0].payload);
     const once = replayLog(
       [S.entry(0, P1, proposeD6("150")), S.entry(1, P3, M.answerTrain(PRR, true)), S.entry(2, P3, payloadOf("BuyTrainFromCorporation"), true)],
-      { ...sandboxReplayProviders(), initialGrid: CORRIDOR }, { state: seed, waterfall: null }, undefined, DEVELOPMENT_CORPUS_POLICY,
+      { ...sandboxReplayProviders(), initialGrid: corridor() }, { state: seed, waterfall: null }, undefined, DEVELOPMENT_CORPUS_POLICY,
     );
     const twice = replayLog(
       [S.entry(0, P1, proposeD6("150")), S.entry(1, P3, M.answerTrain(PRR, true)), S.entry(2, P3, payloadOf("BuyTrainFromCorporation"), true), S.entry(3, P3, payloadOf("BuyTrainFromCorporation"), true)],
-      { ...sandboxReplayProviders(), initialGrid: CORRIDOR }, { state: seed, waterfall: null }, undefined, DEVELOPMENT_CORPUS_POLICY,
+      { ...sandboxReplayProviders(), initialGrid: corridor() }, { state: seed, waterfall: null }, undefined, DEVELOPMENT_CORPUS_POLICY,
     );
     expect(stateDigest(twice.state)).toBe(stateDigest(once.state));
     expect(cash(twice.state, P1)).toBe(80);
@@ -434,7 +434,7 @@ describe("§4 D-6 preserved: the forced purchase's money, beside and apart from 
 
   it("the ordinary treasury rule does not leak into D-6: price above the treasury is legal when the president's cash covers it", () => {
     const seed = fundingBoard(200);
-    expect(trainSaleRefusal(seed, { buyerId: CO, sellerId: PRR, model: "3", price: "150" }, P1, CORRIDOR, "proposal")).toBeNull();
+    expect(trainSaleRefusal(seed, { buyerId: CO, sellerId: PRR, model: "3", price: "150" }, P1, corridor(), "proposal")).toBeNull();
     // Without the obligation's grid the same board is judged as voluntary and refused -- the reducer fails closed.
     expect(trainSaleRefusal(seed, { buyerId: CO, sellerId: PRR, model: "3", price: "150" }, P1, undefined, "proposal")).toBe(
       "C&O's treasury holds $30 — it cannot pay $150; the president's money is never used for a voluntary purchase.",
@@ -514,12 +514,12 @@ describe("§4 D-6 preserved: the forced purchase's money, beside and apart from 
         expect(ingressC(offered, P1, msg)).not.toBeNull();
         expect(same(applyC(offered, msg, P1), offered)).toBe(true);
       }
-      expect(emergencyFundingBlock(offered, M.answerTrain(PRR, true) as never, CORRIDOR)).toBeNull();
+      expect(emergencyFundingBlock(offered, M.answerTrain(PRR, true) as never, corridor())).toBeNull();
       expect(pendingOfferBlock(offered, M.answerTrain(PRR, true) as never)).toBeNull();
       expect(ingressC(offered, P3, M.answerTrain(PRR, true))).toBeNull();
       const accepted = applyC(offered, M.answerTrain(PRR, true), P3);
       const settlement = M.buyTrain(CO, PRR, "3", "150");
-      expect(emergencyFundingBlock(accepted, settlement as never, CORRIDOR)).toBeNull();
+      expect(emergencyFundingBlock(accepted, settlement as never, corridor())).toBeNull();
       expect(pendingOfferBlock(accepted, settlement as never)).toBeNull();
       // R74-A under D-6: the accepted-but-unsettled D-6 offer can still be withdrawn by the obligated president.
       expect(ingressC(accepted, P1, M.rescindTrain(PRR))).toBeNull();

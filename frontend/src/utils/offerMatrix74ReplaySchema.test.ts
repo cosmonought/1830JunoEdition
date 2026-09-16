@@ -32,7 +32,7 @@ type GameStateResponse = import("../gameEngine/gameState").GameStateResponse;
 type GameplayExecuteMsg = import("./sessionKey").GameplayExecuteMsg;
 
 const { P1, P2, P3, PRR, NYC, CO, DH, operatingBoard, stockRoundBoard } = F;
-const { apply, ingress, same, differing, withCorp, withPriv, withState, withCash, priv, cash, treasury, trains, guarded, M, GRID, CORRIDOR, fundingBoard } = S;
+const { apply, ingress, same, differing, withCorp, withPriv, withState, withCash, priv, cash, treasury, trains, guarded, M, GRID, corridor, fundingBoard } = S;
 
 const providers = (grid = GRID) => ({ ...sandboxReplayProviders(), initialGrid: grid });
 const replay = (seed: GameStateResponse, entries: unknown[], grid = GRID) =>
@@ -337,9 +337,9 @@ describe("§17 conservation: each transfer family moves exactly its accounts, by
 
   it("president -> treasury -> treasury (the D-6 funded train sale): the contribution once, the price once", () => {
     const seed = fundingBoard(200);
-    const offered = apply(seed, M.proposeTrain(PRR, CO, "3", "150", null), P1, CORRIDOR);
-    const accepted = apply(offered, M.answerTrain(PRR, true), P3, CORRIDOR);
-    const settled = apply(accepted, M.buyTrain(CO, PRR, "3", "150"), P3, CORRIDOR);
+    const offered = apply(seed, M.proposeTrain(PRR, CO, "3", "150", null), P1, corridor());
+    const accepted = apply(offered, M.answerTrain(PRR, true), P3, corridor());
+    const settled = apply(accepted, M.buyTrain(CO, PRR, "3", "150"), P3, corridor());
     expect(movements(seed, settled)).toEqual({ "cash:p1": -120, "treasury:C&O": -30, "treasury:PRR": 150 });
     expect(moneyTotal(settled)).toBe(moneyTotal(seed));
   });

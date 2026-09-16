@@ -1,13 +1,39 @@
 /** @jest-environment node */
 // frontend/src/utils/gameHistory.test.ts -- design note #1411.
+import { readFileSync } from "fs";
+import { join } from "path";
+
 import { gameHistoryFrom } from "./gameHistory";
 import { readStripped } from "./sourceScan";
 import { activateBoard, STANDARD_BOARD } from "../components/hexBoardData";
+import { replayLog, entriesFromExport, type ExportedEntry } from "../gameEngine/replayLog";
+import { sandboxReplayProviders } from "../gameEngine/replayProviders";
+import { DEVELOPMENT_CORPUS_POLICY } from "../gameEngine/rulesVersion";
+import { DEFAULT_SANDBOX_SCENARIO, sandboxScenario, sandboxScenarioState, sandboxWaterfallState } from "../gameEngine/sandboxState";
+import { waterfallForRoster, withEmptyRoster } from "../gameEngine/gameSetup";
+import { stateDigest } from "../gameEngine/stateDigest";
+import { homeTokenBlock } from "../gameEngine/homeTokenGate";
+import type { GameStateResponse } from "../gameEngine/gameState";
 import FIXTURE from "./__fixtures__z6cLog.json";
 
-/* JUNO-Z6C's own log through OR 9.3 -- the room the epilogue was asked for, and the only thing this
-   function reads. */
-const LOG = FIXTURE.entries as ReadonlyArray<{ index: number; id: string; actor: string; payload: string; at: number }>;
+/* ==================================================================
+    BATCH 7.5: THE COMPLETED GAME THESE TESTS READ IS JUNO-CV4, NOT JUNO-Z6C
+   ==================================================================
+   These cases were written against JUNO-Z6C's own log through OR 9.3 -- the room the epilogue was asked for.
+   Under rules engine version 5 that log no longer derives a completed game: Batch 7.3's C5 correction starts a
+   cascade that leaves the board frozen at index 33 behind the authoritative home-token hold, and its timeline is
+   `[SR 1, Final]` (pinned, with every step of the cause, in the characterization at the end of this file). That
+   is an expected historical-log incompatibility, not a gameplay failure, and the stored log is not rewritten.
+   So the completed-game behaviour moves to the frozen golden copy of JUNO-CV4 (committed beside the golden
+   master): fourteen samples, seven Operating Rounds, dividends, fleets and every core accolade, and Batch 7 changes
+   nothing about it but the Bank's balance. Z6C-only coverage (the Yellow Sign's Mark, rust) is recorded as a
+   fixture task in the ledger (S10-21), not asserted against a frozen board. */
+const CV4_GOLDEN = join(__dirname, "__fixtures__", "replayGolden", "logs", "JUNO-CV4.log.jsonl");
+const LOG = readFileSync(CV4_GOLDEN, "utf8")
+  .split("\n")
+  .filter((line) => line.trim().length > 0)
+  .map((line) => JSON.parse(line)) as ReadonlyArray<{ index: number; id: string; actor: string; payload: string; at: number }>;
+const Z6C_LOG = FIXTURE.entries as ReadonlyArray<{ index: number; id: string; actor: string; payload: string; at: number }>;
 
 describe("the log replayed as a timeline (design note #1411)", () => {
   afterAll(() => activateBoard(STANDARD_BOARD));
@@ -18,14 +44,14 @@ describe("the log replayed as a timeline (design note #1411)", () => {
     expect(history.rounds[history.rounds.length - 1].label).toBe("Final");
     const labels = history.rounds.map((r) => r.label);
     expect(labels[0]).toBe("SR 1");
-    /* Batch 6 (#1550/#1552): this fixture is JUNO-Z6C, a legacy log whose entry 418 declared $180 on a run the
-       reducer had priced at $190 (and 428 / 433 the same, $10-$20 short -- the client's figure, not the
-       authority's). Version 4 refuses those declarations, the treasuries differ from there, the bank does not
-       break where it did, and the log-derived timeline no longer reaches OR 9 before the entries run out. It
-       used to assert `toContain("OR 9.1")`; the timeline's SHAPE is what #1411 is about, so that is what is
-       asserted -- a divergence reported in the Batch 6 write-up, not absorbed silently. */
-    expect(labels).toContain("OR 5.1");
-    expect(labels.filter((label) => label.startsWith("OR ")).length).toBeGreaterThan(10);
+    /* Batch 7.5: on JUNO-CV4 the whole timeline is pinned, because the golden log is frozen and replays to the
+       same rounds under versions 4 and 5 -- including a two-OR set (OR 5.1 / OR 5.2) and the phase-3 sets after it.
+       (Batch 6's relaxation of the Z6C timeline to "OR 5.1 and more than ten ORs" is superseded by the move.) */
+    expect(labels).toEqual([
+      "SR 1", "OR 1.1", "SR 2", "OR 2.1", "SR 3", "OR 3.1", "SR 4", "OR 4.1",
+      "SR 5", "OR 5.1", "OR 5.2", "SR 6", "OR 6.1", "Final",
+    ]);
+    expect(labels.filter((label) => label.startsWith("OR ")).length).toBe(7);
     // No two consecutive samples share a label -- a boundary is a change.
     for (let i = 1; i < labels.length; i += 1) expect(labels[i]).not.toBe(labels[i - 1]);
   });
@@ -153,5 +179,78 @@ describe("dividends per player per round (design note #1434)", () => {
     for (const r of history.rounds.filter((r) => r.label.startsWith("SR "))) {
       for (const p of r.players) expect(p.dividends).toBe(0);
     }
+  });
+});
+
+/* ==================================================================
+    BATCH 7.5 CHARACTERIZATION: JUNO-Z6C NO LONGER REACHES A COMPLETED GAME UNDER VERSION 5
+   ==================================================================
+   An expected historical-log incompatibility under rules engine version 5, pinned so it stays visible and is
+   never "fixed" by weakening the rule that causes it:
+     9 / 12  WaterfallPass (Batch 7.3, C5 / S7-2 / D-21): the all-pass markdown is the Schuylkill Valley's alone.
+             The SV is already sold and the B&O ($220) is the private on offer, so it is NOT marked down (the
+             version-4 engine marked it to $215, then $210).
+     14      p-lzjh2r6u buys the B&O at $220, $10 more than the table paid.
+     31      he then holds $95 and cannot pay $100 for his B&O share: refused, and B&O does not float.
+     32      his stored home placement arrives while B&O is unfloated -- no longer timely -- and places nothing.
+     33      p-je0gw2v0's B&O share floats it, one entry later than the table did.
+     34+     the authoritative home-token hold owes B&O's home station, which no later entry in the log places, so
+             every remaining stored entry is a reducer no-op and the log-derived timeline is `[SR 1, Final]`.
+   The stored log is not rewritten, and the completed-game tests above read JUNO-CV4 instead. */
+describe("JUNO-Z6C under rules engine version 5: an expected historical-log incompatibility (Batch 7.5)", () => {
+  afterAll(() => activateBoard(STANDARD_BOARD));
+
+  it("freezes at index 33 behind the home-token hold, for the reason the auction correction at 9 starts", () => {
+    expect(gameHistoryFrom(Z6C_LOG as never).rounds.map((round) => round.label)).toEqual(["SR 1", "Final"]);
+
+    const providers = sandboxReplayProviders();
+    const before: Record<number, GameStateResponse> = {};
+    const result = replayLog(
+      entriesFromExport(Z6C_LOG as unknown as ExportedEntry[]),
+      providers,
+      {
+        state: withEmptyRoster(sandboxScenarioState(DEFAULT_SANDBOX_SCENARIO, 0, "default")),
+        waterfall: waterfallForRoster(sandboxWaterfallState(sandboxScenario(DEFAULT_SANDBOX_SCENARIO).phase, 0, true), []),
+      },
+      ({ entry, stateBefore }) => {
+        before[entry.index] = stateBefore;
+      },
+      DEVELOPMENT_CORPUS_POLICY,
+    );
+    const BO_PRIVATE = 6;
+    const BO = 4;
+    const BUYER = "p-lzjh2r6u";
+    const offered = (state: GameStateResponse) =>
+      (state as GameStateResponse & { waterfall?: { privates: Array<{ private_id: number; face_value: string; is_lowest_offered: boolean }> } })
+        .waterfall?.privates.find((entry) => entry.is_lowest_offered);
+    const cash = (state: GameStateResponse, player: string) => Number(state.player_cash.find((entry) => entry.player === player)?.cash_vgp);
+    const bo = (state: GameStateResponse) => state.public_companies.find((entry) => entry.company_id === BO)!;
+
+    // 9 / 12: the SV is sold, the B&O is on offer, and neither all-pass marks it down.
+    expect(before[9].private_companies.find((entry) => entry.private_id === 1)?.owner).not.toBeNull();
+    for (const index of [9, 12, 14]) {
+      expect(offered(before[index])?.private_id).toBe(BO_PRIVATE);
+      expect(offered(before[index])?.face_value).toBe("220");
+    }
+    // 14: the buyer pays the unmarked $220.
+    expect(cash(before[14], BUYER) - cash(before[15], BUYER)).toBe(220);
+    expect(before[15].private_companies.find((entry) => entry.private_id === BO_PRIVATE)?.owner).toBe(BUYER);
+    // 31: $95 against a $100 share -- refused, B&O unfloated.
+    expect(cash(before[31], BUYER)).toBe(95);
+    expect(bo(before[31]).is_floated).toBe(false);
+    expect(stateDigest(before[32])).toBe(stateDigest(before[31]));
+    // 32: the stored home placement finds B&O unfloated and places nothing.
+    expect(bo(before[33]).is_floated).toBe(false);
+    expect(stateDigest(before[33])).toBe(stateDigest(before[32]));
+    // 33: B&O floats on the other player's share.
+    expect(bo(before[34]).is_floated).toBe(true);
+    const hold = homeTokenBlock({ state: before[34], homeHexToAxial: providers.chartInjections(before[34]).homeHexToAxial! });
+    expect(hold).toMatch(/^B&O has floated and its home station is not on the board yet\. p-lzjh2r6u must place it on I15/);
+    // 34+: nothing the log still holds moves the board.
+    const frozen = stateDigest(before[34]);
+    for (const [index, state] of Object.entries(before)) {
+      if (Number(index) >= 34) expect(stateDigest(state)).toBe(frozen);
+    }
+    expect(stateDigest(result.state)).toBe(frozen);
   });
 });

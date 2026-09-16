@@ -4,9 +4,18 @@ import { gameHistoryFrom, roundLabelOf } from "./gameHistory";
 import { replaySnapshotAtRound, roundEndExclusive } from "./roundReplay";
 import { activateBoard, STANDARD_BOARD } from "../components/hexBoardData";
 import { readStripped } from "./sourceScan";
-import FIXTURE from "./__fixtures__z6cLog.json";
+import { readFileSync } from "fs";
+import { join } from "path";
 
-const LOG = FIXTURE.entries as never;
+/* Batch 7.5: the completed game these cases replay is the frozen golden copy of JUNO-CV4. JUNO-Z6C's log -- the
+   fixture they were written on -- no longer reaches a completed game under rules engine version 5 (it freezes at
+   index 33 behind the home-token hold; characterized in `gameHistory.test.ts`), and a board frozen in SR 1 has no
+   Operating Round to scrub to. The round below was Z6C's OR 7.2; CV4's OR 4.1 has the same shape -- an Operating
+   Round whose next sample opens a Stock Round, with tiles still to be laid after it. */
+const LOG = readFileSync(join(__dirname, "__fixtures__", "replayGolden", "logs", "JUNO-CV4.log.jsonl"), "utf8")
+  .split("\n")
+  .filter((line) => line.trim().length > 0)
+  .map((line) => JSON.parse(line)) as never;
 
 describe("the board at the end of a round (design note #1425)", () => {
   afterAll(() => activateBoard(STANDARD_BOARD));
@@ -18,18 +27,18 @@ describe("the board at the end of a round (design note #1425)", () => {
   });
 
   it("replays to a board still labelled with that round, and its prices match the next sample's opening", () => {
-    const at = history.rounds.findIndex((r) => r.label === "OR 7.2");
+    const at = history.rounds.findIndex((r) => r.label === "OR 4.1");
     expect(at).toBeGreaterThan(0);
     const snapshot = replaySnapshotAtRound(LOG, history.rounds, at)!;
-    expect(snapshot.label).toBe("OR 7.2");
-    expect(roundLabelOf(snapshot.state)).toBe("OR 7.2");
+    expect(snapshot.label).toBe("OR 4.1");
+    expect(roundLabelOf(snapshot.state)).toBe("OR 4.1");
     /* The next round's sample was taken one entry later -- the entry that flipped the round, which moves no
        token on the chart -- so the prices agree. */
     const next = history.rounds[at + 1];
     for (const corp of next.corporations) {
       expect(snapshot.state.market_positions?.[corp.companyId]?.price ?? null).toBe(corp.price);
     }
-    // And tiles do not un-lay: the grid at OR 7.2 is a subset of the final grid.
+    // And tiles do not un-lay: the grid at OR 4.1 is a subset of the final grid.
     const final = replaySnapshotAtRound(LOG, history.rounds, history.rounds.length - 1)!;
     expect(snapshot.grid.tiles.length).toBeLessThanOrEqual(final.grid.tiles.length);
     expect(final.grid.tiles.length).toBeGreaterThan(snapshot.grid.tiles.length);

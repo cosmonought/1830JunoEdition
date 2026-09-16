@@ -241,7 +241,50 @@ describe("JUNO-3XD replays headless", () => {
     // eslint-disable-next-line no-console
     console.log("\nTRAIN PURCHASE ATTEMPTS\n", JSON.stringify(buyAttempts, null, 2));
     expect(turnKeyChecks.length).toBeGreaterThan(20);
-    expect(mismatches).toEqual([]);
+    /* ==================================================================
+        BATCH 7.5 (version 5) -- THE LOG-DERIVED CALENDAR PARTS FROM THE TABLE'S AT 28, SO THE CURSOR CLAIMS
+        ARE PINNED AS A TABLE RATHER THAN AS "NONE"
+       ==================================================================
+       Up to Batch 6 every one of the 29 claims reproduced. Batch 7.1's ledger (S7-1, #1560) refuses the Stock
+       Round 1 purchases the played game made with money the buyer did not have: 28 and 31 are p-h96t6pld
+       buying NNH at $100 while holding $60 (the old engine minted the difference). NNH therefore never floats
+       in SR 1 (32, its home station, finds nothing to place), the first Operating Round's queue is [B&O, PRR]
+       instead of [B&O, NNH, PRR], every NNH turn the table played (43-54, 64-65, ...) is refused on a queue
+       without it, and the log-derived calendar runs one set ahead of the table's from the run at 71. Batch 7.2
+       (S7-13, #1570) then refuses 140, a `BuyStock` sent during an Operating Round, which moves the later
+       claims again (175 and after). Batches 7.3 / 7.4 change nothing here at the end: 7.3's idx-6 difference (a
+       sub-minimum bid no longer advances the seat) re-converges within the auction, and 7.4 touches no entry.
+       So "the replay agrees with the live game" now holds only for the runs before the divergence -- 61, 81,
+       86, 102, 108 -- and every other claim is pinned exactly, with the replayed key, so that any further change
+       to this log's calendar announces itself here. Not historical-fidelity replay (D-9); the divergence is
+       reported in BATCH7.5_REPLAY_VERSION_CLOSURE_2026-09-16.md and the ledger's Part E. */
+    expect(mismatches.map((check) => `${check.index} ${check.logged} -> ${check.replayed}`)).toEqual([
+      "71 2.1.1 -> 3.0.1",
+      "117 4.1.7 -> 5.0.7",
+      "123 4.2.4 -> 5.0.4",
+      "131 4.2.1 -> 5.0.1",
+      "137 4.2.7 -> 5.1.7",
+      "154 5.1.4 -> 6.0.4",
+      "160 5.1.1 -> 6.1.1",
+      "175 5.1.7 -> 7.0.7",
+      "182 5.2.4 -> 7.0.4",
+      "189 5.2.1 -> 7.0.1",
+      "195 5.2.5 -> 7.1.5",
+      "201 5.2.7 -> 7.1.7",
+      "234 6.1.4 -> 9.1.4",
+      "240 6.1.7 -> 9.1.7",
+      "246 6.1.1 -> 10.0.1",
+      "260 6.2.1 -> 10.0.1",
+      "265 6.2.4 -> 10.1.4",
+      "270 6.2.7 -> 10.1.7",
+      "276 6.2.5 -> 11.0.5",
+      "281 6.2.2 -> 11.0.2",
+      "307 7.1.1 -> 11.0.1",
+      "313 7.1.4 -> 11.0.4",
+      "318 7.1.7 -> 11.0.7",
+      "319 7.1.7 -> 11.0.7",
+    ]);
+    expect(turnKeyChecks.filter((check) => check.logged === check.replayed).map((check) => check.index)).toEqual([61, 81, 86, 102, 108]);
   });
 
   it("prints filed run against declared amount for every corporation that ran", () => {
@@ -314,14 +357,29 @@ describe("JUNO-3XD replays headless", () => {
        Every figure is what the log-derived board pays under version-4 rules; none is what the table saw, which
        is the meaning of "not historical-fidelity replay". Re-pinned here, where the note above says such
        changes announce themselves; the divergence is reported in the Batch 6 write-up and ledger (Part E). */
+    /* ==================================================================
+        AND AGAIN, FOR BATCH 7 (version 5) -- THE LOG-DERIVED GAME PARTS FROM THE PLAYED ONE AT 28
+       ==================================================================
+       Batch 6's table (PRR 260, NYC none, B&O 350, C&O 220, NNH 90) was the version-4 board. Under version 5:
+         28 / 31  7.1 (S7-1, #1560): p-h96t6pld holds $60 and cannot pay $100 for NNH; the old engine minted the
+                  $40. NNH does not float in SR 1, and the whole operating calendar after it differs (see the
+                  cursor table in the case above). Twenty BuyStock and one BuyPrivateCompany in this log are
+                  unaffordable on the board the log derives (7.1 report 7c).
+         140      7.2 (S7-13, #1570): a BuyStock during an Operating Round, refused.
+       On the board that results exactly one run in the log is ever accepted: B&O's at 61 ($50). Every later run
+       arrives on a turn or step the log-derived calendar does not hold -- 71 is PRR's run while PRR owns no
+       train there, 81 is B&O's run arriving at the Tokens step of PRR's turn -- and is refused, so PRR, C&O and
+       NNH never write a `last_completed_run_revenue` and NYC still files none. 7.2's 140 changes no figure in
+       this table, and 7.3 and 7.4 leave it unchanged (each measured against the committed tree before it). Every figure is what the log-derived board pays under version-5 rules; re-pinned here,
+       where the notes above say such changes announce themselves. */
     expect(
       rows.map((row) => [row.ticker, row.filed] as const),
     ).toEqual([
-      ["PRR", "260"],
+      ["PRR", "(undefined)"],
       ["NYC", "(undefined)"],
-      ["B&O", "350"],
-      ["C&O", "220"],
-      ["NNH", "90"],
+      ["B&O", "50"],
+      ["C&O", "(undefined)"],
+      ["NNH", "(undefined)"],
     ]);
 
     /* THE LAST DECLARATION WAS THE ONE THE FILED FIGURE HAD TO MATCH. After 175 the log-derived game is not

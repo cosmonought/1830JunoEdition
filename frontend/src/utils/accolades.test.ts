@@ -14,9 +14,20 @@ import {
 import { gameHistoryFrom } from "./gameHistory";
 import { activateBoard, STANDARD_BOARD } from "../components/hexBoardData";
 import { readStripped } from "./sourceScan";
-import FIXTURE from "./__fixtures__z6cLog.json";
+import { readFileSync } from "fs";
+import { join } from "path";
 
-const LOG = FIXTURE.entries as ReadonlyArray<{ index: number; id: string; actor: string; payload: string; at: number }>;
+/* Batch 7.5: the played game these tallies are read off is the frozen golden copy of JUNO-CV4. They were
+   written on JUNO-Z6C's log, which no longer reaches a completed game under rules engine version 5 (it freezes
+   at index 33 behind the home-token hold -- an expected historical-log incompatibility, characterized in
+   `gameHistory.test.ts`). Only the cases CV4 genuinely exercises moved; the Z6C-only ones (the Yellow Sign's
+   Carcosan / Redeemer, the Gravedigger and Rust Belt, the Farmhand, and the Bagholder / Little Engine formats CV4
+   never awards) are listed in the ledger as S10-21 and wait for a completed version-5 Yellow Sign game. No award
+   is re-pinned to "nobody". */
+const LOG = readFileSync(join(__dirname, "__fixtures__", "replayGolden", "logs", "JUNO-CV4.log.jsonl"), "utf8")
+  .split("\n")
+  .filter((line) => line.trim().length > 0)
+  .map((line) => JSON.parse(line)) as ReadonlyArray<{ index: number; id: string; actor: string; payload: string; at: number }>;
 
 const won = (key: AccoladeKey, holder: string, value: number, runnerUp: number | null = null, extra: Partial<Accolade> = {}): Accolade => ({
   ...unearned(key),
@@ -226,21 +237,11 @@ describe("the tallies on a played game (design note #1416)", () => {
     expect(by["early-adopter"].detail).toMatch(/bought the first Diesel \((OR|SR) /);
   });
 
-  it("Z6C's C&O president is a Carcosan -- the Mark, never redeemed (#1421)", () => {
-    expect(by["carcosan-railways"].holder).not.toBeNull();
-    expect(by["carcosan-railways"].detail).toBe("Marked by an Outer God");
-    expect(by.redeemer.holder).toBeNull();
-  });
-
-  it("obsolescence is two awards in dollars: the Gravedigger sent, the Rust Belt lost (#1422)", () => {
-    expect(by.gravedigger.detail).toMatch(/^Laid waste to \$[\d,]+ of trains through rust and limits\.$/);
-    expect(by["rust-belt"].detail).toMatch(/^Lost \$[\d,]+ worth of trains to obsolescence\.$/);
-    /* Every scrapped train has a loser and a cause, so the two tallies sum to the same dollars -- and the
-       old single tally, which skipped every Diesel trade-in, undercounted: the 4-trains a traded-in D rusted
-       were never scored. Z6C's figure went from $520 to $860 for exactly that reason. */
-    expect(by["rust-belt"].value).toBeGreaterThan(0);
-    expect(by.gravedigger.value).toBeGreaterThan(0);
-  });
+  /* Batch 7.5 -- DISPLACED, NOT RE-PINNED (S10-21). Two cases lived here that only JUNO-Z6C's completed game could
+     exercise, and CV4 cannot: "Z6C's C&O president is a Carcosan -- the Mark, never redeemed (#1421)" (Carcosan
+     Railways "Marked by an Outer God", no Redeemer) and "obsolescence is two awards in dollars: the Gravedigger
+     sent, the Rust Belt lost (#1422)" (both detail formats, both values > 0 -- CV4 ends in phase 3 and rusts
+     nothing). They return when a completed version-5 Yellow Sign game is captured as a fixture. */
 
   it("the Mark's train is the sign's, not the Rust Belt's (#1422)", () => {
     // C&O lost its 3-train to the Mark at OR 6.1 ($180 at the time); a loser tally that counted it would put
@@ -262,7 +263,7 @@ describe("the tallies on a played game (design note #1416)", () => {
     // #1438: the Golden Goose counts payouts; the Dividend Machine is the shareholders' total, never above the autopsy's gross.
     expect(by["golden-goose"].detail).toMatch(/paid out (once|\d+ times)$/);
     expect(by["dividend-machine"].value).toBeLessThanOrEqual(Math.max(...history.autopsy.map((c) => c.dividendsPaid)));
-    // The Capitalist Pig: somebody made money on prices in a bank-break game.
+    // The Capitalist Pig: somebody made money on prices.
     expect(by["capitalist-pig"].scope).toBe("player");
     expect(by["capitalist-pig"].holder).not.toBeNull();
     // The Railroad Baron ran at least as many corporations as Mr. Monopoly holds at the end.
@@ -272,8 +273,10 @@ describe("the tallies on a played game (design note #1416)", () => {
     // The White Elephant is the worst per-round return on the fleet; the Little Engine earned its float back.
     if (by["white-elephant"].holder !== null) expect(by["white-elephant"].detail).toMatch(/fell \$[\d,]+ short of paying for its trains$/);
     if (by["little-engine"].holder !== null) expect(by["little-engine"].detail).toMatch(/floated at \$\d+ and earned it back$/);
-    // Z6C played Unpredictable Revenue, so the wildlife was out.
-    expect(by.farmhand.holder).not.toBeNull();
+    /* Batch 7.5: "Z6C played Unpredictable Revenue, so the wildlife was out" -- the Farmhand assertion is displaced
+       to S10-21 with the cases above (CV4 did not play Unpredictable Revenue). So are the two conditional formats
+       above that only Z6C exercised: CV4 awards neither a Bagholder nor a Little Engine, so those lines hold
+       vacuously here and their coverage is listed in the ledger, not claimed. */
   });
 
   it("the ceremony is a subset of the accolades, in show order, ending on the Robber Baron", () => {

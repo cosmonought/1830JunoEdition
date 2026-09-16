@@ -7,7 +7,7 @@
     "creator": "juno1sandboxalice000000000000000000000000",
     "is_active": true,
     "total_juno_pool": "4000000",
-    "virtual_bank_vgp": "9550",
+    "virtual_bank_vgp": "10305",
     "virtual_bank_start": "12000",
     "max_players": 2,
     "player_addresses": [
@@ -27,7 +27,7 @@
     "player_cash": [
       {
         "player": "p-lzjh2r6u",
-        "cash_vgp": "985"
+        "cash_vgp": "980"
       },
       {
         "player": "p-fdsq3jbg",

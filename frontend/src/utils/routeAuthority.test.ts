@@ -849,10 +849,14 @@ describe("the log (21-23)", () => {
     expect(revenue(again.state)).toBe(90);
   });
 
-  it("23. RULES_ENGINE_VERSION is 4, the changelog says why, and a version-3 room is refused before reducer replay", () => {
-    expect(RULES_ENGINE_VERSION).toBe(4);
-    expect(SUPPORTED_RULES_ENGINE_VERSIONS).toEqual([4]);
-    expect(RULES_ENGINE_CHANGELOG.map((row) => row.version)).toEqual([1, 2, 3, 4]);
+  it("23. RULES_ENGINE_VERSION is at least 4, the changelog says why, and a version-3 room is refused before reducer replay", () => {
+    /* Batch 7.5 bumped the pin to 5 (Batch 7's transaction authority, #1560-#1598); this case keeps asserting
+       what Batch 6 introduced -- the version-4 row and the refusal of a version-3 room -- against whatever the
+       current pin is, as Batch 6 itself relaxed Batch 5's `3` to `>= 3`. A version-only edit: nothing about the
+       route authority's replay meaning changed. */
+    expect(RULES_ENGINE_VERSION).toBeGreaterThanOrEqual(4);
+    expect(SUPPORTED_RULES_ENGINE_VERSIONS).toEqual([RULES_ENGINE_VERSION]);
+    expect(RULES_ENGINE_CHANGELOG.map((row) => row.version).slice(0, 4)).toEqual([1, 2, 3, 4]);
     expect(RULES_ENGINE_CHANGELOG[3].note).toMatch(/route|revenue|dividend/i);
     const seedOf = () => ({
       state: withEmptyRoster(sandboxScenarioState(DEFAULT_SANDBOX_SCENARIO, 0, "default")),
@@ -860,8 +864,8 @@ describe("the log (21-23)", () => {
     });
     const fresh = new RoomSession({ providers: sandboxReplayProviders(), seed: seedOf(), build: "b", mintId: () => "d" });
     expect(fresh.submit({ actor: P1, build: "b", msg: { SetupGame: { players: [{ id: P1, nickname: "A" }, { id: P2, nickname: "B" }], variants: {}, build: "b" } } as never, baseIndex: -1 }).kind).toBe("applied");
-    expect(fresh.rulesEngineVersion()).toBe(4);
-    expect(fresh.state.rules_engine_version).toBe(4); // #1551: the pin is on the board
+    expect(fresh.rulesEngineVersion()).toBe(RULES_ENGINE_VERSION);
+    expect(fresh.state.rules_engine_version).toBe(RULES_ENGINE_VERSION); // #1551: the pin is on the board
     const versionThree = fresh.entries.map((row) => {
       const parsed = JSON.parse(row.payload) as { SetupGame?: Record<string, unknown> };
       return parsed.SetupGame ? { ...row, payload: JSON.stringify({ ...parsed, SetupGame: { ...parsed.SetupGame, [RULES_ENGINE_VERSION_FIELD]: 3 } }) } : { ...row };
@@ -871,7 +875,7 @@ describe("the log (21-23)", () => {
       const old = new RoomSession({ providers: sandboxReplayProviders(), seed: seedOf(), build: "b", mintId: () => "x" });
       old.restore(versionThree as ServerLogEntry[]);
       expect(applySpy).not.toHaveBeenCalled();
-      expect(old.incompatible?.compatibility).toEqual({ kind: "incompatible", version: 3, supported: [4] });
+      expect(old.incompatible?.compatibility).toEqual({ kind: "incompatible", version: 3, supported: [RULES_ENGINE_VERSION] });
     } finally {
       applySpy.mockRestore();
     }

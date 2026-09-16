@@ -47,8 +47,15 @@ describe("the outro plays on the ending's edge and hands off to the modal (desig
 describe("the second pass (design note #1420)", () => {
   it("the OR's runs land on the OR's own sample, so the revenue chart has figures", () => {
     const { gameHistoryFrom } = require("./gameHistory") as typeof import("./gameHistory");
-    const FIXTURE = require("./__fixtures__z6cLog.json") as { entries: unknown[] };
-    const history = gameHistoryFrom(FIXTURE.entries as never);
+    /* Batch 7.5: a completed game is read off the frozen golden copy of JUNO-CV4; JUNO-Z6C's log no longer reaches
+       one under rules engine version 5 (see `gameHistory.test.ts`). */
+    const { readFileSync } = require("fs") as typeof import("fs");
+    const { join } = require("path") as typeof import("path");
+    const entries = readFileSync(join(__dirname, "__fixtures__", "replayGolden", "logs", "JUNO-CV4.log.jsonl"), "utf8")
+      .split("\n")
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line) as unknown);
+    const history = gameHistoryFrom(entries as never);
     const ors = history.rounds.filter((r) => r.label.startsWith("OR "));
     expect(ors.length).toBeGreaterThan(3);
     const withRevenue = ors.filter((r) => r.corporations.some((c) => c.revenue > 0));

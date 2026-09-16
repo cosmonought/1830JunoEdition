@@ -62,7 +62,7 @@ import { effectiveActions } from "./logRevert";
 
 /** The rules engine this build carries. Bump it, and add a line below, when a deployment changes what a
  *  stored log replays to. Do NOT bump it for UI, protocol or narration changes. */
-export const RULES_ENGINE_VERSION = 4;
+export const RULES_ENGINE_VERSION = 5;
 
 /** Every version this engine can replay faithfully. One entry until somebody builds a versioned reducer;
  *  the point of the list is that "supported" is an explicit statement rather than "whatever is running". */
@@ -118,6 +118,28 @@ export const RULES_ENGINE_CHANGELOG: ReadonlyArray<{ version: number; note: stri
       "a pinned board (legacy replay only). `SetupGame` copies the pin onto the state " +
       "(`rules_engine_version`). A version-3 log carries runs the reducer priced without judging and " +
       "dividends it paid from the message, so it is refused, never reinterpreted.",
+  },
+  {
+    version: 5,
+    note:
+      "Batch 7 (7.1-7.5, 2026-09-15/16, #1560-#1598): transactions, cash and the auction are authoritative. " +
+      "7.1: one money ledger (`cashLedger.ts`) -- no floored adjuster mints or destroys money; auction " +
+      "proceeds and terrain fees are credited to the Bank; the Bank is signed and `bank_broken` is latched by " +
+      "the debit that empties it and never cleared by a receipt; a purchase the payer cannot cover is refused. " +
+      "7.2: `BuyStock` / `SellStock` are Stock Round actions (the 6.6.3 forced sale excepted); the IPO price " +
+      "is the corporation's par and the pool price the chart's; the President's Certificate needs a ladder " +
+      "par; an undeliverable source is refused; first-Stock-Round and unparred sales are refused; the Brown " +
+      "continuation names `bought_this_turn_company`. 7.3: no bid on the lowest private; escrow-aware bids " +
+      "and a $5 minimum raise; the main rotation is frozen during a contest; a contest pass keeps the bidder " +
+      "(`passes_since_raise`); the all-pass markdown is the Schuylkill Valley's alone and private income is " +
+      "paid only once the SV has sold; a refused auction message is refused whole. 7.4: one ordinary offer " +
+      "at a time under a global hold; corporate private purchases, intercorporate train sales and the " +
+      "player-to-player private trade are judged at proposal, answer and settlement, with consent and " +
+      "counterparties re-derived from the board; direct unconsented settlements are refused; every ordinary " +
+      "offer carries a log-derived `instance` (`offer_serial`) that keys its derived settlement; " +
+      "`BidOnPrivate` and the `AcceptTrainOffer` family are refused on pinned boards. A version-4 log carries " +
+      "purchases, auction steps and settlements the reducer let through without these rules, so it is " +
+      "refused, never reinterpreted.",
   },
 ];
 

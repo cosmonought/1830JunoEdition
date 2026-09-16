@@ -185,18 +185,65 @@ describe("the whole corpus conserves money after every replayed entry", () => {
   }
 
   it("the Yellow Sign award is still the one minting rule left, and it is Stage 9's (S9-1)", () => {
-    /* Recorded as a POSITIVE assertion rather than as a silent exemption: JUNO-Z6C 203 awards the C&O half
-       the taken train's depot value with no payer, and Batch 7.1 deliberately does not fix it. If S9-1 is
-       ever closed, this case fails and the exemption above comes out with it. */
+    /* Recorded as a POSITIVE assertion rather than as a silent exemption. Batch 7.1 wrote it on JUNO-Z6C 203,
+       where the Mark awards the C&O half the taken train's depot value with no payer.
+
+       BATCH 7.5 (version 5): THE CORPUS NO LONGER REACHES THAT ENTRY, SO THE TRIPWIRE MOVES TO A BOARD THAT
+       DOES. On the board JUNO-Z6C's log derives under version 5 nothing changes after index 33:
+         9   7.3 (C5, S7-2, D-21): the all-pass with the SV already sold no longer marks the B&O down, so it stays
+             $220 and p-lzjh2r6u pays $220 for it at 14 instead of $210;
+         31  that player then holds $95 and cannot pay $100 for his B&O share (7.1 ledger / 7.2 affordability);
+             32, his home station, finds B&O unfloated; and 33 (p-je0gw2v0's B&O share) floats it one entry
+             later than the table did;
+         34+ the pre-existing home-token hold (`homeTokenGate.ts`) now owes B&O's home station, which no
+             later entry in the log places, so every later entry -- 203's Mark included -- is a reducer no-op.
+       So the stored corpus mints nothing at all under version 5: not because S9-1 was fixed (it was not), but
+       because the one log that exercised it stops at 34. What this case pins is therefore both halves: the
+       corpus list is empty for the reason above, AND the Mark still mints on a board that reaches it. If S9-1
+       is ever closed the second half fails and the exemption in `MINTS_BY_DESIGN` comes out with it. The freeze
+       itself is characterized step by step in `gameHistory.test.ts` (Batch 7.5). */
     const z6c = logs.find((entry) => entry.name === "server/JUNO-Z6C");
-    if (!z6c) return; // the log is a development fixture, not a requirement of the suite
-    const steps = walk(z6c.entries);
-    const minted = steps
-      .map((step, i) => ({ step, next: steps[i + 1] }))
-      .filter(({ step, next }) => next && next.money !== step.money && step.kind !== "SetupGame");
-    expect(minted.map(({ step, next }) => `${step.index} ${step.kind} +${next.money - step.money}`)).toEqual([
-      "203 YellowSignEvent +90",
-    ]);
+    if (z6c) {
+      const steps = walk(z6c.entries);
+      const minted = steps
+        .map((step, i) => ({ step, next: steps[i + 1] }))
+        .filter(({ step, next }) => next && next.money !== step.money && step.kind !== "SetupGame");
+      expect(minted.map(({ step, next }) => `${step.index} ${step.kind} +${next.money - step.money}`)).toEqual([]);
+      const digestAt = (index: number) => {
+        const i = steps.findIndex((step) => step.index === index);
+        return JSON.stringify(steps[i].state);
+      };
+      const frozen = digestAt(34);
+      expect(JSON.stringify(steps[steps.length - 1].state)).toBe(frozen);
+      expect(digestAt(203)).toBe(frozen);
+    }
+
+    const BO = 6;
+    const board = {
+      current_round_type: "OperatingRound",
+      macro_round_number: 3,
+      sub_round_index: 1,
+      operating_sub_phase: "Routes",
+      active_operating_order: [BO],
+      active_corporation_index: 0,
+      player_addresses: ["p1"],
+      player_cash: [{ player: "p1", cash_vgp: "0" }],
+      active_player_index: 0,
+      priority_deal_index: 0,
+      consecutive_passes: 0,
+      virtual_bank_vgp: "5000",
+      private_companies: [],
+      variants: { unpredictableRevenue: true },
+      public_companies: [
+        { company_id: BO, ticker: "B&O", president: "p1", treasury: "340", last_route_revenue: "0", owned_trains: ["3", "4"] },
+      ],
+    } as unknown as GameStateResponse;
+    const marked = applySandboxAction(board, {
+      YellowSignEvent: { game_id: 0, protocol_id: BO, stage: "mark", model: "3", cash: "90" },
+    } as never);
+    expect(marked.public_companies[0].owned_trains).toEqual(["4"]);
+    expect(moneyTotal(marked) - moneyTotal(board)).toBe(90);
+    expect(moneyConservationBreach(board, marked)).not.toBeNull();
   });
 });
 

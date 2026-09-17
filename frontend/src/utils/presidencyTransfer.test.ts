@@ -128,7 +128,7 @@ describe("when the crown does not move", () => {
   it("does not crown a holder under 20%", () => {
     // Nobody can hold a 20% certificate on 10% of the company.
     const state = board([[P2, 10]], null);
-    expect(presidentFor(state.public_companies[0])).toBeNull();
+    expect(presidentFor(state.public_companies[0], state.player_addresses)).toBeNull();
   });
 });
 
@@ -158,11 +158,13 @@ describe("selling out of a presidency", () => {
     expect(settlePresidencies(state).state.public_companies[0].president).toBe(P3);
   });
 
-  it("breaks a tie among challengers by seating order", () => {
-    /* Design note #596b is explicit that this is a STAND-IN for 1830's real
-       rule ("whoever reached that level most recently"), which needs history
-       this function cannot see. Pinned so the substitution is visible rather
-       than discovered. */
+  it("breaks a tie among challengers clockwise from the former president", () => {
+    /* Design note #1620 (Slice 8.3, S8-2): THE PRINTED RULE, not a stand-in. This case used to be pinned
+       with a comment saying §5.4's tie-break "needs history this function cannot see" -- it needs the
+       seating circle, which the state has always carried. P1 is displaced at seat 0; P2 at seat 1 is one seat
+       clockwise and P3 at seat 2 is two, so P2 takes it. The ANSWER is unchanged and the reason is not: the
+       old code reached it through `player_holdings` order, which agrees with the circle here only because
+       this fixture lists the holders in seat order. `presidencyAuthority.test.ts` pulls the two apart. */
     const state = board(
       [
         [P1, 10],

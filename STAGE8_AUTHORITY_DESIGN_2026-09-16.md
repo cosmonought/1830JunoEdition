@@ -121,7 +121,7 @@ are updated to match.
 | Item | Ledger status today | Finding of this pass | Disposition in Stage 8 |
 |---|---|---|---|
 | **S8-1** OR order snapshotted before the sold-out rise | OPEN (confirmed bug) | Confirmed by code (§2). The three corpus indices the ledger cites (3XD 303, FCJ 699, FCJ 398) **no longer exist on the version-5 corpus** — 3XD is refused from 140 / frozen from 290 and FCJ diverges from 83; the one surviving rise at an OR opening (FCJ 885, PRR 90 → 100) leaves the queue unchanged because PRR already led. The mechanism is proved on every OR-bearing board by the resolver-overlay probe (§2.3). | **Slice 8.1** (with S8-3, S8-4) — **IMPLEMENTED 2026-09-16 (Opus, uncommitted; §2.8)** |
-| **S8-2** presidency tie by `player_holdings` order | OPEN | Confirmed by code (§4). No stored log contains a tie between two challengers (every presidency change in the corpus has exactly one challenger). Additional gap found: the `ExchangePrivate` arm never calls `settlePresidencies` (§6). | **Slice 8.3** (Opus, after the helper is frozen here) |
+| **S8-2** presidency tie by `player_holdings` order | RESOLVED | Confirmed by code (§4). No stored log contains a tie between two challengers (every presidency change in the corpus has exactly one challenger). Additional gap found: the `ExchangePrivate` arm never calls `settlePresidencies` (§6). | **Slice 8.3** — **IMPLEMENTED 2026-09-17 (#1620, §4.4)**; measured corpus-neutral (18 logs / 3,131 entries / 7 presidency changes / 0 ties / 0 disagreements) |
 | **S8-3** order fixed at OR open; §6.1 note not applied | DEFERRED | Confirmed by code; no mid-OR price movement of a not-yet-operated corporation occurs anywhere in the corpus (the only engine path that can produce one is Stage 5's forced sale of another corporation's shares during an OR). Design in §2. | **Slice 8.1** — **IMPLEMENTED 2026-09-16 (§2.8)** |
 | **S8-4** sold-out rise iterates in company order | OPEN (test gap) | Confirmed by code (`roundEndSoldOutRises` walks `public_companies`; `withArrival` stamps arrival in walk order, so two risers landing in one cell stack in company order, not §4.5's). No two risers share a cell anywhere in the corpus (one rise at an opening in 18 files). | **Slice 8.1** — **IMPLEMENTED 2026-09-16 (§2.8)** |
 | **S8-5** home token placed at float, not at the first operating turn | DEFERRED (owner ruling owed) | **Owner ruling received in the Stage-8 brief (2026-09-16): move it.** Full lifecycle audit in §5; corpus consequences in §8. | **Slice 8.2** (Fable High) |
@@ -134,6 +134,8 @@ are updated to match.
 | **S8-12** ingress does not mirror the home-token hold | OPEN | Confirmed by code (`turnRefusal` has three holds, no home hold). **Absorbed into Slice 8.2** — the hold's sentence, pass list and ordering are one rule at both locks (§5.7). | **Slice 8.2** |
 | **S8-13 (new, proven)** the chart step runs before the holds | — | Newly proven on the corpus: **FCJ 904 / 911 / 918 / 932** are `SellStock` entries sent while N&W (floated at 902) owed its home token; the core refuses each sale, but `applySandboxMarketAction` had already walked the seller's token down, so `market_positions` moves for a sale that never happened (§5.8). The same shape is latent for the discard and offer holds. Filed as S8-13. | **Slice 8.2** (the hold moves in front of the chart step) |
 | **S8-14 (new, Slice 8.2)** the Erie's OO home hex once it is tiled | — | Found by Slice 8.2 checking the brief against the full 48-page rulebook: its base game 7.3.2 (p. 20) closes the Erie's hex to other railroads' stations once a tile is on it, until the Erie's home is placed; the implementation held one circle, tiled or not (§5.1). **Owner ruling 2026-09-17 (§0):** that conditional form, for the Erie on E-11 and the PMQ on E-5. | **Slice 8.2** — **IMPLEMENTED 2026-09-17 (#1617, §5.9)** |
+| **S8-15 (new, Slice 8.3)** the presidency exchange cannot represent a Scenario-D successor who holds the other 20 % | RESOLVED | Found by Slice 8.3 tracing §5.4's physical exchange against `doubleCertificate.ts`. `settlePresidencies` wrote only `president` (#596a) and let `certificateCount` derive the cards -- exact in the printed game, where the successor always has two 10 % cards to hand over. Under Scenario D a successor can hold the other 20 % and LESS than 20 % besides, and then §5.4's swap is the other-20 card FOR the President's card. **Owner ruling 2026-09-17: this belongs in Slice 8.3.** Implemented as #1622: `withPresidencyCertificateExchange` in `doubleCertificate.ts` (the module that owns the field), asked by `settlePresidencies` before the crown moves; criterion is `ordinaryPercentHeld(successor) < 20`, never the total percentage. WHO is still `presidentFor`'s and only `presidentFor`'s. Corpus: 0 boards where it fires. | **Slice 8.3** — **IMPLEMENTED 2026-09-17 (#1622, §4.5)** |
+| **S9-14 (filed and resolved in Slice 8.3)** the half-sale gate did not see the exchange the sale itself forces | RESOLVED | Filed by Slice 8.3 while settling S8-15, then **absorbed into Slice 8.3 by owner ruling 2026-09-17**. V-7.2's 10 % exchange certificate must ALREADY be in the Bank Pool before a half-sale of the other-20, and a president who must first receive that card during the presidency transfer is subject to the same requirement — so the sale cannot supply its own prerequisite. `doubleSaleRefusal` judged the seller's current cards, when the card was still the successor's. Repaired as #1624 inside `shareSaleBlock`, asking the same #1324 authority of the board the exchange will leave, on PRE-SALE pools. Corpus: 15 stored sales re-judged, 0 newly refused. | **Slice 8.3** — **IMPLEMENTED 2026-09-17 (#1624, §4.6)** |
 
 Absorbed and not to be re-implemented: S8-7, S8-8 (sale half), S8-9. Residual wording only: S8-8's `?? 67` fallback in
 `priceOf` / `sharePriceFor` (helper hygiene, no gameplay path reaches it on a pinned board).
@@ -444,6 +446,241 @@ forced-sale projection agrees with the settlement.
 UI parity: **STATE VISIBILITY** — the presidency-change narration already names the successor; the reason ("clockwise
 from the former president") belongs in the Activity Log line (U-30's WHY family) and in the Rules Reference §5.4
 paragraph. Filed as U-33 (§13).
+
+### 4.4 Implementation record — Slice 8.3 (Opus, 2026-09-17; uncommitted, awaiting owner review)
+
+S8-2 is implemented to §4.3's frozen design, unchanged in substance. Design note **#1620** carries the reasoning in
+source; `RULES_ENGINE_VERSION` stays **5** (the single Stage-8 bump remains owed at Slice 8.5).
+
+**Files.** `frontend/src/gameEngine/presidencyTransfer.ts` — `presidentFor(company, seating)`; new module-private
+`closestClockwise(candidates, seating, incumbent)`; `settlePresidencies` passes `state.player_addresses ?? []`; the
+two holdings-order rules that stood here (`challengers.find(...)` and the `eligible.reduce(...)` fallback beside it)
+are both gone, the second having been unreachable as well. `frontend/src/gameEngine/emergencyFunding.ts` —
+`presidentAfterSale` gains `seating` and is **exported** so the prediction can be asserted equal to the settlement
+rather than inferred from a refusal string; its one caller (`forcedSaleRefusal`) supplies `state.player_addresses`.
+Tests: `presidencyAuthority.test.ts` (new, 24), `presidencyLpf.test.ts` (new, 10), `presidencyCorpus.test.ts` (new, 4),
+and two call-site updates plus one corrected rationale in `presidencyTransfer.test.ts` / `presidentCertificateSale.test.ts`.
+**No certificate mechanics were modified:** `doubleCertificate.ts`, `shareSale.ts`, `gameState.ts` and
+`sandboxSession.ts` are byte-identical to `efe4098`.
+
+**Selection, as implemented.** Percentage first, always; the circle only breaks a tie.
+1. holders > 0 %; eligible = ≥ 20 %; none eligible → `null` (#748b's unstarted corporation, and
+   `settlePresidencies` leaves a should-not-exist board's incumbent standing).
+2. challengers = eligible strictly above the incumbent's percentage. **None → the incumbent**, who is then
+   necessarily still eligible: every eligible holder is at ≥ 20 % and none exceeds the incumbent, so the incumbent is
+   at ≥ 20 % too. That is the proof the old `eligible.reduce(...)` arm was dead.
+3. top = the highest challenger percentage; one holder at it → that holder.
+4. several tied at it → `closestClockwise`: `d(p) = (seat(p) − seat(incumbent) + n) mod n`, smallest `d` wins. The
+   incumbent is never a candidate (strictly more), so a finite `d` is always ≥ 1 with an incumbent.
+5. **The incumbent's SEAT outlives their percentage.** A president sold down to 10 % is not eligible but is still the
+   player §5.4 measures "closest to you" from, so the origin is their seat — not the leader's, not seat 0.
+6. No incumbent at all (a fixture's board): origin = seat 0, so the rule reads as "highest percentage, ties by
+   earliest seat".
+
+**Seating robustness (§4 of the brief) — what the source guarantees.** Every holder `player_holdings` can name is
+seated: `applySandboxActionInner` resolves its actor as `logged !== null && state.player_addresses.includes(logged) ?
+logged : null` (#549) and `moveShares` writes a holding only `if (holder)`; the M&H grant's holder is the private's
+owner (`resolvePrivateExchange` requires `priv.owner === player`) and the B&O auction grant's is a bidder. A holder
+absent from the roster is therefore constructible only by hand. The helper is kept simple and the invariant pinned
+(`presidencyAuthority.test.ts` §5: an unseated actor's `BuyStock` is digest-identical and delivers nothing). The
+explicit malformed-state arms exist so a hand-built fixture cannot make a REPLAY diverge, and they are stated rather
+than implied: an unseated challenger has no clockwise distance and sorts last; an unseated incumbent gives no origin,
+so the circle is counted from seat 0 exactly as with no incumbent; a board that seats nobody has no circle and the
+answer is by address — **log-derived, and never `player_holdings` order**, which is the one ordering this slice exists
+to remove.
+
+**Every asker, re-traced at `efe4098` (not the design pass's line numbers).** `settlePresidencies` is called in exactly
+two places, both in `sandboxSession.ts`: the `BuyStock` arm (4832, after `applyFloatThreshold`) and the `SellStock` arm
+(4948, after the chart/double effects) — and Stage 5's forced sale is that same `SellStock` arm, so it inherits the
+repair with no second path. `presidentAfterSale` (`emergencyFunding.ts`) is the only projection and it calls
+`presidentFor` on its projected company, so there never was a second clockwise implementation in emergency funding to
+retire. `forcedSaleRefusal` asks it and nothing else. `shareSaleBlock`'s successor check is an EXISTENCE test
+(`!successor` over "any other holder at ≥ 20 %"), so no ordering reaches it and it is unchanged and consistent: where
+the seller drops below 20 % and another holder is at ≥ 20 %, `presidentFor` returns a non-null successor.
+`ExchangePrivate` still does not settle the presidency — **left for Slice 8.4** (§6), which now has a canonical helper
+to call after the exchange rather than a rule to duplicate. The C&A / PRR auction grant needs nothing, as the design
+pass concluded: PRR is unparred there and `settlePresidencies` skips unparred corporations. `App.tsx` was not touched.
+
+**Scenario D (printed, full rulebook 5.0 p. 34) — verified, not assumed.** The Erie and the N&W each print the
+President's 20 %, one **non-president** 20 % and six 10 %s: eight pieces of card, not nine. `presidentFor` reads no
+`double_certificate` at all, which is exactly right — the other 20 % is a 20 % HOLDING and qualifies its holder no more
+and no less than two 10 %s would, and presidency is decided on percentage plus §5.4. Pinned both ways in
+`presidencyLpf.test.ts`: a president on the President's 20 % alone versus a holder of the other 20 % alone is 20 v 20 and
+does **not** transfer; a challenger at 20 % holding one 20 % card and a challenger at 20 % holding two 10 %s are decided
+by the seating circle and by nothing about their cards (the same board, two rosters, two different winners); the
+exchange leaves `double_certificate` where it was and does not rewrite the other 20 % into a President's Certificate.
+
+**Certificate-count audit (§13 of the brief).** `certificateCardsHeld` (`doubleCertificate.ts` #1324) is the one place
+the arithmetic lives — president (1) + double (1) + the remainder in tens — and `certificateCount` /
+`certificateBreakdown` / the limit and the panels all read it (#1374). A non-president 20 % Erie / N&W certificate
+counts as **ONE** physical certificate, from the card representation and never inferred from the percentage.
+**Correct; left alone; pinned** (`presidencyLpf.test.ts` §0 and §2, and the M4 mutation below). One boundary is wrong
+and is **not** S8-2's: see **S8-15** in §1.
+
+**Corpus (§16 of the brief) — read-only, nothing repinned.** `presidencyCorpus.test.ts` replays every log the local
+development corpus offers under `DEVELOPMENT_CORPUS_POLICY` and asks the **pre-8.3 selector** (copied verbatim from
+`efe4098`) and the repaired one about the same board at every entry — one engine, two rules, which answers "does any
+stored board distinguish them" exactly and costs no second build. Measured: **18 logs / 3,131 applied entries / 15,054
+parred company-boards; 7 presidency changes; 0 tied-challenger boards; 0 Scenario-D corporations among the changes;
+0 disagreements.** The seven changes are FCJ 46 / 183 / 388 (B&O ×2, NYC), 3XD 25 / 213 / 290 (PRR, NYC ×2) and FCJ-96
+46 (the prefix's copy of FCJ 46). **ZERO replay differences**, so every digest and every golden stands:
+`replayGolden`, `replayJuno3XD`, `replayJunoCV4`, `stateDigest`, `moneyConservation` and `batch75Closure` all pass
+unchanged.
+
+**Mutation checks (§20), each restored byte-for-byte (`sha256sum -c` verified).** M1 insertion-order tie restored →
+13 failures; M2 seat 0 instead of clockwise-from-incumbent → 3; M3 a tie with the incumbent transfers → 8; M4 the
+other 20 % counted as two 10 % cards → 6 (across `presidencyLpf` and `levelPlayingFieldRules`). No mutant survives.
+
+### 4.5 S8-15 — the Scenario-D presidency exchange (owner ruling 2026-09-17; implemented in Slice 8.3, #1622)
+
+**Owner ruling.** S8-15 belongs in Slice 8.3 and was resolved before its commit. The durable rule, as ruled:
+
+> **Scenario-D Erie / N&W presidency transfer:** use two ordinary 10 %s for the normal exchange when the successor has
+> them; if the successor instead needs the physical other-20 certificate to provide the required 20 % back to the
+> former president, transfer that certificate one-for-one for the President's Certificate; **percentages do not change
+> because of the presidency exchange itself.** The other 20 % is a real one-card 20 % certificate and is never two
+> imaginary 10 %s.
+
+**What the representation is** (traced, preserved, not extended — no per-certificate inventory was added):
+
+| Fact | Where it lives |
+|---|---|
+| Percentage ownership | `player_holdings` (`PlayerShareEntry[]`, 0 % holders omitted) |
+| The President's 20 % certificate | `company.president` — one name, so exactly one such card, and never a pool |
+| The printed other-20 % certificate (Erie, N&W) | `company.double_certificate: { at }` — a player address, `"Ipo"` or `"Bank"`; read and written only by `doubleCertificate.ts` (#1324) |
+| Ordinary 10 % certificates | **derived**: the remainder of a holder's percentage after the two cards above (`ordinaryPercentHeld`), counted as cards by `certificateCardsHeld` / `certificateCardsInPool` (#1374) |
+
+**Settlement algorithm** (`settlePresidencies`, per corporation, unchanged except for the marked step):
+1. skip an unparred corporation; 2. `next = presidentFor(company, seating)` — **selection, percentages and seats only**;
+3. nothing to do when `next` is `null` or already the incumbent; 4. **new:**
+`exchanged = withPresidencyCertificateExchange(company, next)`, asked while `company.president` is still the OUTGOING
+president; 5. return `{ ...exchanged, president: next }` — one object, so the two halves are atomic; 6. identity when no
+crown moved.
+
+**The criterion** (`doubleCertificate.ts`, from the card representation and never from a percentage):
+- successor does not hold the other-20 → **normal exchange**, nothing moves (every printed-game board);
+- `ordinaryPercentHeld(successor) >= 20` → **normal exchange**, two 10 %s go back, the other-20 stays;
+- `ordinaryPercentHeld(successor) < 20` → **special 20 %-for-20 %**: the other-20 leaves the successor, to the former
+  president when they hold ≥ 20 % and can physically hold a 20 % card.
+
+**One shape the ruling's example does not cover, confirmed reachable from source rather than assumed.**
+`settlePresidencies` runs *after* the holdings have moved, so on a `SellStock` the former president can already be
+under 20 % (`shareSaleBlock` permits selling under the block when somebody can take the crown). They cannot hold a
+20 % card. The printed sequence for that turn is exchange-then-sell — they took the other-20 and sold it — so the card
+is in the **Bank Pool**, alongside the percentage they sold, guarded by the pool holding ≥ 20 points. Pinned
+(`presidencyLpf.test.ts` §4, the seat-then-card case). Where neither can hold it, nothing moves: that board is one the
+printed rules refuse before it exists (**S9-14**, filed), and inventing a home for the card would be #748b's
+accommodation rather than a repair.
+
+**Results.** Erie, outgoing on the President's 20 % alone, successor on other-20 + one 10 % (30 %): successor presides,
+the other-20 is the former president's, percentages stay 20 / 30, cards are 1 / 2, inventory eight, no phantom ninth.
+Erie, outgoing on President 20 + one 10 % (30 %), successor on other-20 + two 10 %s (40 %): successor presides and
+**retains** the other-20, the outgoing president ends on three ordinary 10 %s, percentages stay 30 / 40, cards 3 / 2.
+N&W: identical on the same code path, with its own regression case. Successor without the other-20, and the tie at
+20 v 20: unchanged in every respect. Through the reducer: one `BuyStock` (the other-20 holder buys a 10 %, reaches 30 %,
+takes the crown and hands the card back in that dispatch — the only percentage that moves is the 10 % bought) and one
+naturally legal `SellStock` (the incumbent sells two 10 %s down to the block at 20 % and receives the card).
+
+**Forced-sale / emergency audit (ruling item 10): no change, and why.** No forced-sale legality reads the
+post-transfer physical decomposition. The shortfall is treasury + cash against the train's price; `shareSaleBlock`
+asks `doubleSaleRefusal` of the **seller's own pre-sale** cards; "only enough" is price × `certificatesIn(percentage)`,
+bundle arithmetic that never consults card identity; and 6.6.3's presidency guard is `presidentAfterSale`, which is
+**selection only** — it builds the projected board and asks `presidentFor`, so #1622 cannot reach it and a projection
+can never settle a certificate it is merely judging. `emergencyFunding.ts` therefore got nothing beyond S8-2's roster
+parameter, which is what its own #1540 note already said: the double certificate "happens exactly as in a Stock Round,
+because it is the same arm." Pinned in `presidencyLpf.test.ts` §5a (the prediction equals the settlement on the board
+where the card also moves; the rescued corporation's refusal is unchanged).
+
+**Invariants asserted after every exchange:** percentages identical across the exchange itself (`player_holdings`
+compared before and after); exactly one President's Certificate, always a player, never a pool; exactly one other-20
+per Erie / N&W, moved and never created; no holder credited with more certificate percentage than their
+`player_holdings`; the corporation's physical inventory stays **eight** cards.
+
+**Corpus (re-run, read-only, nothing repinned).** Same sweep, extended to the card half: **18 logs / 3,131 applied
+entries / 15,054 parred company-boards; 7 presidency changes; 0 tied-challenger boards; 0 Scenario-D corporations
+among the changes; 0 boards where the special exchange fires; 0 legacy-vs-repaired disagreements.** **ZERO corpus
+state/digest changes** for both halves of the slice; `RULES_ENGINE_VERSION` stays 5.
+
+**Mutations (restored byte-for-byte, `sha256sum -c` verified).** M5 move the card on every presidency change → 4
+failures; M6 read the criterion off the total percentage instead of the ordinary cards → 5. Neither survives.
+
+**Filed while settling S8-15, both LPF-only and neither reached by any stored log: S9-13 and S9-14.** The owner's
+follow-up ruling (2026-09-17) **absorbed S9-14 into this slice** — §4.6 — and left **S9-13 explicitly out**: "Do NOT
+touch S9-13. The chart-movement treatment of a sold other-20 remains Stage 9." S9-13 is that the market walks one row
+per 10 % rather than one per certificate, so the one-card other-20 sold as a block drops the token two rows; the
+proceeds are already right (twice the share price).
+
+### 4.6 S9-14 — the half-sale prerequisite of a card the seller does not hold yet (owner ruling 2026-09-17; #1624)
+
+**Owner ruling, recorded verbatim.** *V-7.2 requires the 10 % exchange certificate to have been in the Bank Pool before
+a half-sale of the other-20. A president who must first receive that other-20 during a presidency transfer is subject
+to the same requirement. The current sale cannot supply its own prerequisite.*
+
+**The printed sequence, and where the engine read the wrong board.** §5.4 settles the presidency the moment the
+announced sale would cause it, so the order is: (1) the announced sale would move the crown; (2) the certificates are
+exchanged; (3) the outgoing president gives the President's 20 %; (4) the successor, having no two ordinary 10 %s, gives
+the other-20 (§4.5); (5) the outgoing president completes the announced sale **out of that card**; (6) selling only half
+of it is legal only against a 10 % certificate **already** in the Bank Pool. The gate asked the right question of the
+wrong board: `doubleSaleRefusal` judges the seller's current cards (#1324), and at that moment the card is still the
+successor's — so nothing was refused, the arm moved the percentages, and the 10 % the sale itself put in the pool looked
+like the prerequisite.
+
+**The predicate** (`shareSale.ts` `shareSaleBlock`, inside the existing president branch, after the successor-existence
+test — which it is deliberately independent of, because a sale that leaves the seller **on** 20 % can still be exceeded
+and still trigger the exchange):
+
+1. `company.president === seller`; 2. `successor = presidentAfterSale(company, seller, percentage,
+state.player_addresses ?? [])` is non-null and not the seller — the announced sale moves the crown;
+3. `needsDoubleForPresidencyExchange(company, successor)` — the successor holds the other-20 and has under 20 % in
+ordinary 10 %s, so the card is what comes back (§4.5's own criterion, not a second copy);
+4. `doubleSaleRefusal({ ...company, president: successor, double_certificate: { at: seller } }, seller, percentage)` —
+**the same V-7.2 authority, asked of the board the exchange will leave, built from the PRE-SALE company so the pools
+are the pre-sale pools**; 5. non-null → refuse, with a sentence naming both facts that would change it (a 10 % in the
+pool, or selling the whole 20 %) per #619.
+
+Nothing is restated: #1324 answers all three shapes — the sale that never reaches the card, the block sale of the whole
+card, and the half-sale — and `presidentAfterSale` moved to `presidencyTransfer.ts` (#1624) so the selection projection
+has one home for its two askers (Stage 5's forced-sale guard and this gate).
+
+**Parity and atomicity come for free, and are asserted.** `shareSaleBlock` is the canonical share-sale authority: the
+reducer's `SellStock` arm asks it before any mutation, `stockSaleRefusal` asks it (so the ingress does), the chart
+step's `saleRefused` asks `stockSaleRefusal` **before** the token walks (#1570, S8-13's ordering), and `App.tsx` and
+`refusedAction.ts` ask it for the button and the explanation. One implementation, five askers. A refused S9-14 sale
+therefore moves no holding, no pool, no presidency, no `double_certificate` and no `market_positions` — pinned by
+digest equality plus an explicit `market_positions` comparison, and the ingress sentence is pinned **identical** to the
+gate's.
+
+**Results.** Canonical board: A presides on the President's 20 % alone, B's only certificate is the other-20, also 20 %
+— tied, so A is still president until A announces a sale. *A sells 10 %, empty pool:* **refused**, state digest
+unchanged, chart unmoved. *A sells 10 %, one ordinary 10 % already pooled:* **accepted**; B takes the President's 20 %,
+A takes the other-20 and trades it for the pool's 10 %, so A ends on 10 % holding one ordinary card, the pool ends on
+20 % holding the other-20, B is president on 20 % with one card, the IPO keeps five — eight cards. *A sells the whole
+20 %, empty pool:* **accepted** (a block sale has no prerequisite); A ends on 0 %, the pool on 20 % holding the card.
+*A on President 20 + one 10 % sells the ordinary 10 %:* **accepted** on an empty pool, and because A is still on 20 %
+the returned card **stays with A**. The buy path, a corporation printing no other-20, and the N&W all behave as
+required.
+
+**Exhaustiveness (ruling item 8/12).** With S9-14 authoritative, every accepted action has a determinate destination
+for the other-20. Over an accepted sale by a president whose crown moves to a successor needing the card, the seller's
+own 10 %s go first (#1324), so: `percentage <= ordinary` → the card is untouched and the seller is on ≥ 20 %, so **they**
+hold it; `percentage − ordinary >= 20` → the whole card is sold and the pool gains ≥ 20, so the **pool** holds it;
+`percentage − ordinary == 10` → the half-sale, now legal only with a pre-existing pool 10 %, after which the pool is on
+≥ 20, so the **pool** holds it. On the buy side the outgoing president's holding is untouched by the buyer and a
+president always holds the 20 % certificate, so **they** can always take it. The only shape that left neither able to
+hold a 20 % card was the third one without its prerequisite, and that action is now refused rather than settled — so
+#1622's "move nothing" arm is **unreachable through reducer authority** and exists for a hand-built board. Pinned as a
+property over the reachable matrix (`presidencyLpf.test.ts` §7), not argued.
+
+**Corpus (re-run, read-only, nothing repinned).** Both halves of the slice, plus the new refusal: **18 logs / 3,131
+applied entries / 15,054 parred company-boards; 7 presidency changes; 0 tied-challenger boards; 1,096 company-boards
+carrying a Scenario-D other-20; 0 Scenario-D corporations among the changes; 0 boards where the special exchange
+fires; 15 stored `SellStock` entries re-judged by the new gate, 0 newly refused; 0 legacy-vs-repaired disagreements.**
+The 1,096 matters: the zero is measured on LPF boards rather than on their absence. **ZERO corpus state/digest
+changes.**
+
+**Mutations (restored byte-for-byte).** M7 read the POST-sale pool, letting the sale supply its own prerequisite → 3
+failures; M8 drop the "successor needs the card" guard, over-blocking every presidency-moving sale → 9 failures across
+three suites. Neither survives.
 
 ---
 
@@ -1097,8 +1334,8 @@ No competing UI document is created; Part C is the one list.
   (a legacy log with an SR placement replays to a board whose first-turn token equals the stored choice; an
   unfloated-at-the-time placement is not remembered); corpus sweep asserting the §8 table.
 
-### Slice 8.3 — Presidency tie-break (S8-2) — **Opus** (design frozen in §4.3)
-- Ledger: S8-2 → RESOLVED; S10-18's tie gap closed.
+### Slice 8.3 — Presidency tie-break (S8-2) + the Scenario-D presidency exchange (S8-15) + its half-sale prerequisite (S9-14) — **Opus** (design frozen in §4.3; S8-15 and then S9-14 ruled into this slice 2026-09-17) — **IMPLEMENTED 2026-09-17, uncommitted (§4.4, §4.5, §4.6)**
+- Ledger: S8-2 → RESOLVED; **S8-15 → RESOLVED** (#1622); **S9-14 → RESOLVED, absorbed** (#1624); S10-18's tie gap closed; **S9-13 filed and left OPEN by the same ruling** (the chart walks one row per 10 %, not per certificate — Stage 9).
 - Invariant: strictly-more to challenge; among tied top challengers, closest clockwise from the incumbent; forced-sale
   projection agrees with settlement.
 - Files: `presidencyTransfer.ts`, `emergencyFunding.ts` (441), callers' signatures, tests.

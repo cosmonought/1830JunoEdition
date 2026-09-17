@@ -310,7 +310,7 @@ describe("a crown is never vacated", () => {
     /* The one case `presidentFor`'s `null` is really for. Kept so the return type does not get narrowed on
        the strength of #748b -- an unparred corporation genuinely has no president. */
     const unstarted = board({ president: null, par_value: null, player_holdings: [] });
-    expect(presidentFor(unstarted.public_companies[0])).toBeNull();
+    expect(presidentFor(unstarted.public_companies[0], unstarted.player_addresses)).toBeNull();
     expect(settlePresidencies(unstarted).state).toBe(unstarted);
   });
 

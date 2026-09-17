@@ -169,6 +169,94 @@ export function doubleSaleRefusal(company: CompanyLike, holder: string, percenta
   return effect.kind === "refused" ? effect.reason : null;
 }
 
+/* ---- the presidency exchange ------------------------------------------------------ */
+
+/** ==================================================================
+ *   DESIGN NOTE 1622 (Slice 8.3, S8-15): THE 20%-FOR-20% SWAP
+ *  ==================================================================
+ *
+ * RULED (owner, 2026-09-17): "if the successor instead needs the physical other-20 certificate to provide
+ * the required 20% back to the former president, transfer that certificate one-for-one for the President's
+ * Certificate; percentages do not change because of the presidency exchange itself."
+ *
+ * §5.4 SPELLS THE EXCHANGE IN CARDS, and #596a modelled it as "two ordinary 10% certificates" because in the
+ * printed game that is the only decomposition there is: "He gives you two of his certificates for that
+ * corporation." Under Scenario D the ERIE and the N&W print an "other" 20% certificate as well, and a
+ * successor can hold it while holding LESS than 20% in ordinary 10%s besides -- at which point they have no
+ * two 10%s to give and the only 20% they can hand back is that one card.
+ *
+ * SO THE EXCHANGE HAS TWO SHAPES AND THE BOARD PICKS, NOT THE PLAYER. Printed rules give no choice here:
+ *
+ *   ordinary 10% holdings >= 20  ->  the normal exchange. Two 10%s go back, the other-20 stays put, and this
+ *                                    function changes nothing -- which is every board in the printed game.
+ *   ordinary 10% holdings <  20  ->  the other-20 card IS the 20% handed back. It leaves the successor and
+ *                                    the successor keeps their 10%s.
+ *
+ * ORDINARY MEANS ORDINARY. The test is `ordinaryPercentHeld`, the same helper the sale gate uses, NEVER the
+ * total percentage: a successor on 30% holding the other-20 plus one 10% and a successor on 30% holding three
+ * 10%s are the same percentage and a different exchange. Inferring cards from a percentage is exactly the
+ * error #1374 fixed in the panel.
+ *
+ * WHERE THE CARD GOES is the former president, whose own 20% it now is -- they gave a 20% card and received
+ * one, so nobody's percentage moved, which is invariant 3 of the ruling.
+ *
+ * AND THE ONE CASE WHERE IT CANNOT BE THEM. `settlePresidencies` runs AFTER the holdings have moved, so on a
+ * `SellStock` the former president can already be below 20% (`shareSaleBlock` permits selling under the block
+ * when somebody can take it). The printed sequence for that turn is exchange-then-sell: they took the other-20
+ * and sold it, so the card is in the Bank Pool, which is where the percentage they sold went too. Hence the
+ * second destination, and its guard: the pool must have 20 points for a 20% card to sit in.
+ *
+ * WHICH LEAVES EXACTLY THREE DESTINATIONS, AND THE THIRD ARM IS FOR FIXTURES ONLY. Over an accepted action
+ * whose crown moves to a successor needing this card, the seller's own 10%s go first (below), so: a sale that
+ * does not reach the card leaves the seller on 20% or more and THEY hold it; a sale of the whole card puts at
+ * least 20 points in the pool and the POOL holds it; and the half-sale -- the only shape that could leave
+ * neither able to hold a 20% card -- is now refused unless the pool already had a 10% to exchange against
+ * (`shareSale.ts` #1624, S9-14), after which the pool is again on 20 or more. On the buy side the outgoing
+ * president's holding is untouched by the buyer and a president always holds the 20% certificate, so they can
+ * always take it. So `return company` below is unreachable through reducer authority and exists for a
+ * hand-built board; moving nothing is the honest answer there rather than putting a card somewhere impossible
+ * -- #748b's rule that an accommodation is not a repair. `presidencyLpf.test.ts` §7 pins the exhaustiveness.
+ *
+ * ASKED BEFORE THE CROWN MOVES. `company.president` must still be the OUTGOING president when this is
+ * called: it is what identifies the recipient, and `ordinaryPercentHeld` reads it to know the successor does
+ * not hold the President's Certificate yet. `presidencyTransfer.ts` calls it and then writes `president`, in
+ * that order, into one object. */
+export function withPresidencyCertificateExchange<T extends CompanyLike>(
+  company: T,
+  successor: string,
+): T {
+  /* No other-20 on this corporation, or it is not the successor's: the normal exchange, and nothing about the
+     card identity moves. Every printed-game board takes this return. */
+  if (!holdsDouble(company, successor)) return company;
+  /* The successor has two ordinary 10%s to hand back, so §5.4's normal exchange applies and the other-20
+     stays exactly where it is. */
+  if (ordinaryPercentHeld(company, successor) >= SANDBOX_PRESIDENT_PERCENTAGE) return company;
+
+  const outgoing = company.president;
+  const outgoingHolding =
+    outgoing === null
+      ? 0
+      : (company.player_holdings.find((entry) => entry.player === outgoing)?.percentage ?? 0);
+  if (outgoing !== null && outgoingHolding >= DOUBLE_CERTIFICATE_PERCENT) {
+    return { ...company, double_certificate: { at: outgoing } };
+  }
+  if (company.bank_pool_percentage >= DOUBLE_CERTIFICATE_PERCENT) {
+    return { ...company, double_certificate: { at: "Bank" } };
+  }
+  return company;
+}
+
+/** Whether the presidency exchange to `successor` is the special 20%-for-20% one rather than §5.4's two
+ *  ordinary 10%s -- the predicate behind `withPresidencyCertificateExchange`, exported so a caller can SAY
+ *  so (the Activity Log's reason, U-33) without re-deriving the card arithmetic. Asked of the board before
+ *  the crown moves, as above. */
+export function needsDoubleForPresidencyExchange(company: CompanyLike, successor: string): boolean {
+  return (
+    holdsDouble(company, successor) &&
+    ordinaryPercentHeld(company, successor) < SANDBOX_PRESIDENT_PERCENTAGE
+  );
+}
+
 /* ---- state writes ---------------------------------------------------------------- */
 
 /** The corporation with its double recorded at `at`. */

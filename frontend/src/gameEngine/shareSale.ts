@@ -41,7 +41,8 @@ import {
   SHARE_BLOCK_PERCENT,
 } from "./endgame";
 import type { GameStateResponse } from "./gameState";
-import { doubleSaleRefusal } from "./doubleCertificate";
+import { doubleSaleRefusal, needsDoubleForPresidencyExchange } from "./doubleCertificate";
+import { presidentAfterSale } from "./presidencyTransfer";
 
 export interface ShareSaleInput {
   state: GameStateResponse;
@@ -88,6 +89,50 @@ export function shareSaleBlock(input: ShareSaleInput): string | null {
       );
       if (!successor) {
         return `Selling ${percentage}% would leave you under the ${PRESIDENT_BLOCK_PERCENT}% President's Certificate, and no other player holds ${PRESIDENT_BLOCK_PERCENT}% to take it.`;
+      }
+    }
+
+    /* ==================================================================
+        DESIGN NOTE 1624 (Slice 8.3, S9-14): THE CARD YOU DO NOT HOLD YET
+       ==================================================================
+       RULED (owner, 2026-09-17, absorbing S9-14 into Slice 8.3): "V-7.2 requires the 10% exchange certificate
+       to have been in the Bank Pool before a half-sale of the other-20. A president who must first receive
+       that other-20 during a presidency transfer is subject to the same requirement. The current sale cannot
+       supply its own prerequisite."
+
+       THE PRINTED SEQUENCE PUTS THE EXCHANGE BEFORE THE SALE. §5.4 settles the presidency the moment the
+       announced sale would cause it -- so a president whose sale hands the crown to a holder of the
+       Scenario-D other-20 who has no two ordinary 10%s (#1622) receives that card FIRST, and then completes
+       the announced sale out of it. Selling only 10% of a 20% card is V-7.2's half-sale, legal only when the
+       Bank Pool ALREADY holds a 10% certificate to exchange against.
+
+       AND THE ENGINE COULD NOT SEE IT, because it asked the right question of the wrong board. `doubleSaleRefusal`
+       above judges the seller's CURRENT cards (#1324), and at that moment the other-20 is still the
+       successor's -- so the gate found nothing to refuse, the arm moved the percentages, and the 10% the sale
+       itself put in the pool looked like the prerequisite. A sale may not supply its own precondition.
+
+       SO THE SAME AUTHORITY IS ASKED OF THE BOARD THE EXCHANGE WILL LEAVE: the seller holding the other-20
+       and no longer the president, on the PRE-SALE pools. `doubleSaleRefusal` then answers all three shapes
+       for free and no arithmetic is restated here -- the sale that never reaches the card (the seller keeps
+       it), the block sale of the whole card (no prerequisite, rulebook-legal, and the pool cap above already
+       judged it), and the half-sale that needs the pool's 10%.
+
+       NOT ON THE BUY SIDE. A challenger who BUYS to exceed the president performs no sale and no half-sale;
+       this is a `SellStock` condition and it lives in the sale gate, which the reducer, the ingress
+       (`stockSaleRefusal`), the chart step's `saleRefused` and the panel all already ask -- one implementation,
+       and a refusal therefore lands before the chart moves (S8-13's rule). */
+    const successor = presidentAfterSale(company, seller, percentage, state.player_addresses ?? []);
+    if (successor !== null && successor !== seller && needsDoubleForPresidencyExchange(company, successor)) {
+      const returned = { ...company, president: successor, double_certificate: { at: seller } };
+      if (doubleSaleRefusal(returned, seller, percentage) !== null) {
+        /* #619: the reason names the fact that would change it -- a 10% certificate in the pool, or selling
+           the whole 20%. Both are things the player can act on. */
+        return (
+          `Selling ${percentage}% would hand the presidency to a player whose only ${PRESIDENT_BLOCK_PERCENT}% is the ` +
+          `${PRESIDENT_BLOCK_PERCENT}% certificate, so you would take that certificate in exchange for your President's ` +
+          `Certificate and be selling ${percentage}% of it — which needs a ${SHARE_BLOCK_PERCENT}% share already in the ` +
+          `Bank Pool to exchange it for, and there is none. Sell the whole ${PRESIDENT_BLOCK_PERCENT}% instead.`
+        );
       }
     }
   }

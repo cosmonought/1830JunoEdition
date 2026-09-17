@@ -131,7 +131,10 @@ import { operatingCorporationId } from "./dividendGate";
 import { cheapestPurchasableTrain, trainObligationFor, type PurchasableTrain } from "./trainAvailability";
 import { TRAIN_PURCHASE_SUB_PHASE } from "./trainPurchaseGate";
 import { shareSaleBlock, certificatesIn } from "./shareSale";
-import { presidentFor } from "./presidencyTransfer";
+/* Design note #1624 (Slice 8.3): the projection MOVED to `presidencyTransfer.ts`, where the selection lives,
+   because the share-sale gate wants it too (S9-14) and a second copy is #1184's failure mode. Imported
+   rather than re-declared; 6.6.3 case (c) below is unchanged. */
+import { presidentAfterSale } from "./presidencyTransfer";
 import { SHARE_BLOCK_PERCENT } from "./endgame";
 import { derivePhase } from "./gamePhase";
 import { isSellableToCorporation } from "./baltimorePrivate";
@@ -418,8 +421,15 @@ export function forcedSaleRefusal(
   const company = state.public_companies.find((entry) => entry.company_id === companyId);
   if (!company) return "That corporation is not on this board.";
   /* 6.6.3: the rescued corporation's presidency may not change. Projected through the same rule every other
-     change uses (`presidentFor`, #596): the crown moves only to a holder with strictly more. */
-  if (companyId === funding.companyId && presidentAfterSale(company, seller, percentage) !== company.president) {
+     change uses (`presidentFor`, #596): the crown moves only to a holder with strictly more.
+     Design note #1620 (Slice 8.3): AND THROUGH THE SAME TIE-BREAK. The projection is handed
+     `state.player_addresses`, so the successor it predicts is the successor `settlePresidencies` will
+     actually crown -- a predictor with a different tie rule would refuse a legal sale, or allow one whose
+     settlement then moved the crown the rule says a forced sale may not move. */
+  if (
+    companyId === funding.companyId &&
+    presidentAfterSale(company, seller, percentage, state.player_addresses ?? []) !== company.president
+  ) {
     return `Selling ${percentage}% of ${company.ticker} would hand its presidency to another player, which a forced sale may not do.`;
   }
   /* 6.6.3: only enough. A bundle one certificate smaller that still covers the shortfall means this one is
@@ -431,14 +441,6 @@ export function forcedSaleRefusal(
     return `Only enough may be sold: ${needed} certificate${needed === 1 ? "" : "s"} of ${company.ticker} at $${price} covers the $${funding.shortfall} still needed.`;
   }
   return null;
-}
-
-/** Who would preside after `seller` sold `percentage`, under the same rule as every other change. */
-function presidentAfterSale(company: PublicCompanyState, seller: string, percentage: number): string | null {
-  const holdings = company.player_holdings
-    .map((entry) => (entry.player === seller ? { ...entry, percentage: entry.percentage - percentage } : entry))
-    .filter((entry) => entry.percentage > 0);
-  return presidentFor({ ...company, player_holdings: holdings });
 }
 
 /** Every legal forced sale, corporation by corporation, judged bundle by bundle against the current board. */

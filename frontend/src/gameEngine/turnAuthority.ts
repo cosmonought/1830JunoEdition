@@ -58,6 +58,9 @@ import {
 } from "./emergencyFunding";
 import type { MapGridResponse } from "../components/hexContractTypes";
 import { dividendAmountRefusal, routeSetRefusal, routeSkipRefusal } from "./routeAuthority";
+// Design note #1617 (Slice 8.2, S8-14): the paid station placement's two reducer questions, asked at the lock too.
+import { operatingIdentityRefusal } from "./operatingIdentity";
+import { stationPlacementRefusal } from "./stationPlacementGate";
 import { tileEraFor } from "./gameConstants";
 /* Design note #1570 (Batch 7.2): the SAME predicates the reducer's core asks, so the two locks cannot
    disagree about a stock transaction. Ingress answers with the sentence; the reducer remains the law. */
@@ -93,6 +96,14 @@ import {
   proposePrivateTradeRefusal,
   rescindPrivateTradeRefusal,
 } from "./privateTradeAuthority";
+/* Design notes #1610-#1612 (Slice 8.2): the home station's hold and its placement's legality -- the same
+   predicates the reducer asks, so the two locks cannot disagree; ingress answers with the sentence. */
+import {
+  boardHomeHexToAxial,
+  homePlacementRefusal,
+  homeStationHold,
+  type HomePlacement,
+} from "./homeStationAuthority";
 
 export interface TurnAuthorityInput {
   state: GameStateResponse;
@@ -194,6 +205,19 @@ export function turnRefusal(input: TurnAuthorityInput): string | null {
     if (held !== null) return held;
   }
 
+  /* ---- THE FOURTH HOLD (#1612, Slice 8.2 -- S8-12): THE OPERATING CORPORATION'S HOME STATION ----
+     While the corporation under the Operating Round cursor owes its home station (the start of its first
+     operating turn), only the placement -- whose legality is judged in the room-message branch below -- and the
+     room's `RevertTo` / `CloseRoom` pass. After the offer hold, so a board under one of the first three reports
+     that reason; before the consent exemption, whose answers the hold refuses like everything else. The SAME
+     predicate and the same sentence the reducer asks before anything moves (#1613), with this table's board in
+     effect (#1300: this boundary is not already inside a `withRules` scope). Before Slice 8.2 ingress had no
+     home hold at all, so a held proposal was appended to the log and no-op'd by the core (R74-C). */
+  {
+    const held = withTableRules(state, () => homeStationHold(state, msg, boardHomeHexToAxial));
+    if (held !== null) return held;
+  }
+
   /* ---- EXEMPTION 3: consent answers on a two-party trade (#701) ----
      THE OWED ANSWER IS ALWAYS OFF-TURN, BY CONSTRUCTION. A corporation on its turn OFFERS; the private's
      owner or the selling president ANSWERS, and that player is by definition not the one operating. The
@@ -247,6 +271,15 @@ export function turnRefusal(input: TurnAuthorityInput): string | null {
       return stockChartRefusal(state, () =>
         parLadderRefusal(msg.SetBoPar.par_value, chartContextFromState(state), BO_TICKER),
       );
+    }
+    /* #1611 (Slice 8.2, S8-6): the home placement is the other legality question in this family a socket
+       boundary should answer -- owed now, on a candidate home, in a legal circle -- because the alternative is a
+       placement the player believes landed and the reducer quietly declined. The owner rule above stays first.
+       The D&H's free station is not a home placement (#1615) and keeps its owner check alone. */
+    if ("PlaceHomeStation" in msg) {
+      const placement = msg.PlaceHomeStation as HomePlacement;
+      if (placement.kind === "dh") return null;
+      return withTableRules(state, () => homePlacementRefusal(state, placement, input.mapGrid, boardHomeHexToAxial));
     }
     return null;
   }
@@ -337,6 +370,20 @@ export function turnRefusal(input: TurnAuthorityInput): string | null {
     return auctionRefusal(state, waterfall, msg);
   }
   /* ==================================================================
+      DESIGN NOTE 1617 (ingress): A PAID STATION PLACEMENT IS ANSWERED WITH ITS REASON (Slice 8.2, S8-14)
+     ==================================================================
+     The reducer asks a `PlaceStationToken` two questions, in this order: is the corporation it names the one
+     operating (#1510), and is the placement legal (`stationPlacementRefusal`, #1511 -- the step, the allowance, the
+     treasury, the circle, the home reservations including a tiled OO home hex closed to other corporations, #1617,
+     and connectivity). Ingress asked neither, so a refused placement reached the log and was no-op'd by the core
+     (S8-12's shape). The same two predicates, in the same order, with this table's board in effect (#1300). */
+  if ("PlaceStationToken" in msg) {
+    return (
+      operatingIdentityRefusal(state, msg) ??
+      withTableRules(state, () => stationPlacementRefusal(state, msg.PlaceStationToken, input.mapGrid))
+    );
+  }
+  /* ==================================================================
       DESIGN NOTE 1550 (ingress): THE ROUTE, THE DIVIDEND AND THE SKIP ARE ANSWERED WITH THEIR REASON
      ==================================================================
      Batch 6. The reducer refuses these by identity (`applySandboxActionCore`, the second lock); asked here
@@ -352,6 +399,12 @@ export function turnRefusal(input: TurnAuthorityInput): string | null {
  *  read outside the scope is read off whichever chart was last activated, which on a server with two rooms is
  *  the other table's. One line, so the two locks read one chart. */
 function stockChartRefusal(state: GameStateResponse, ask: () => string | null): string | null {
+  return withRules(resolveVariants(state.variants), ask);
+}
+
+/** #1612: the same scope for the home station's questions, which read the board's home table, heralds and
+ *  printed cities. */
+function withTableRules(state: GameStateResponse, ask: () => string | null): string | null {
   return withRules(resolveVariants(state.variants), ask);
 }
 
@@ -416,6 +469,9 @@ export function operatingLegalityRefusal(
    REFUSED BY THE OWNER, NEVER BY LEGALITY. Whether the B&O CAN be parred (`boPresidencyRefusal`), whether a
    token IS owed, whether an exchange is legal -- those are the reducer's, and a refusal here that duplicated
    them would be #1184's shape. This asks only "is this yours to send".
+   (Batch 7.2 #1570 and Slice 8.2 #1611 add two legality questions AFTER this function, in `turnRefusal`: the
+   B&O par ladder and the home placement -- asked of the SAME predicates the reducer asks, which is the opposite
+   of #1184's duplicate. Whether a D&H station is legal stays the D&H's.)
 
    `undefined` HOST OR LOG SKIPS THAT CHECK, deliberately. The replay harness and the CLI run this without a
    room document; refusing there would be a gate judging on a field nobody gave it. On the server both are

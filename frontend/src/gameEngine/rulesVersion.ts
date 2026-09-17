@@ -174,10 +174,26 @@ export interface ReplayPolicy {
    *  says. Never a production restore policy: `start.ts --legacy-logs` does not reach it (a legacy room
    *  admitted on a local server holds at its first past-trim discard until a president resolves it). */
   legacyExcessTrains?: "refuse" | "engine-chose-cheapest";
+  /** #1614 (Slice 8.2, owner ruling R3 / D-31): what a LEGACY log's Stock-Round home placements mean --
+   *  DEVELOPMENT-CORPUS ONLY, NEVER A PRODUCTION RESTORE POLICY. Every log before Slice 8.2 was played on the
+   *  engine that demanded the home token at the float; the current reducer places it at the start of the
+   *  corporation's first operating turn and refuses the old entries as untimely. `"defer-to-first-turn"` has
+   *  `replayLog` REMEMBER the last such entry's candidate home choice (hex / circle) for each corporation and
+   *  attempt it once, as a synthetic `PlaceHomeStation` through today's arm, when that corporation first
+   *  owes its home -- judged by the CURRENT authority on the board of that moment, never forced, never
+   *  substituted, appended nowhere. `"refuse"` -- the default, and the only value the server carries --
+   *  replays the old entries as the refusals they now are, so the corporation's hold stands at its first turn.
+   *  Only consulted for a `legacy` log. */
+  legacyHomeTokens?: "refuse" | "defer-to-first-turn";
 }
 
 /** The server's policy: a room the field does not pin is not interpreted. */
-export const SERVER_REPLAY_POLICY: ReplayPolicy = { legacyLogs: "refuse", legacyExcessTrains: "refuse" };
+export const SERVER_REPLAY_POLICY: ReplayPolicy = {
+  legacyLogs: "refuse",
+  legacyExcessTrains: "refuse",
+  // #1614: no legacy home-choice adapter on a server, ever.
+  legacyHomeTokens: "refuse",
+};
 
 /** The development corpus's policy: the stored and golden logs under `frontend/` predate the pin and are
  *  replayed under the current engine AS FIXTURES. Passing this is the visible statement that a test or the
@@ -186,6 +202,9 @@ export const DEVELOPMENT_CORPUS_POLICY: ReplayPolicy = {
   legacyLogs: "development-corpus",
   // #1530: best-effort corpus compatibility (the corpus was played under the automatic trim); not fidelity.
   legacyExcessTrains: "engine-chose-cheapest",
+  /* #1614 (R3): the corpus's float-time home placements are the players' recorded choices, tried at the first
+     operating turn under the current rules -- data, not grandfathered legality. */
+  legacyHomeTokens: "defer-to-first-turn",
 };
 
 /** The version the effective deal names: a number, `null` for a deal without one, `undefined` for no deal. */

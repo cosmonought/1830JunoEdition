@@ -237,18 +237,27 @@ describe("§9 R74-C (A): while an earlier mandatory hold stands, no ordinary off
     }
   });
 
-  it("the home-token hold: every proposal refused by the reducer as every room engine runs it (ingress has no home-token hold for ANY message -- pre-existing)", () => {
-    for (const held of [
-      withCorp(operatingBoard(), NYC, { home_hex_label: "E19", station_token_hexes: [], station_tokens: [] }),
-      withCorp(stockRoundBoard(), NYC, { home_hex_label: "E19", station_token_hexes: [], station_tokens: [] }),
-    ]) {
-      expect(pendingHomeTokens(held, homeHexToAxial(held)).map((owed) => owed.ticker)).toEqual(["NYC"]);
-      for (const [label, msg, actor] of PROPOSALS(held)) {
-        expect([label, homeTokenBlock({ state: held, homeHexToAxial: homeHexToAxial(held), msg })]).toEqual([label, expect.stringContaining("NYC has floated and its home station is not on the board yet.")]);
-        const after = applyAsRoom(held, msg, actor);
-        expect([label, same(after, held)]).toEqual([label, true]);
-        expect([label, standingOrdinaryOffer(after)]).toEqual([label, null]);
-      }
+  /* Slice 8.2 (#1610 / #1612, S8-5 / S8-12) re-pinned this case. The home-token hold used to stand from the float, in any
+     round, for any floated corporation without a token, and only in the reducer ("ingress has no home-token hold for
+     ANY message -- pre-existing"). It now stands only for the OPERATING corporation at the start of its first
+     operating turn, and ingress asks the same predicate as its fourth hold -- so the Operating board puts PRR (the
+     operating corporation) in that position and both locks refuse with the one sentence, while the Stock Round board
+     with a token-less floated NYC holds nothing at all. */
+  it("the home-station hold: every proposal refused at both locks with the hold's sentence; a token-less corporation in a Stock Round holds nothing", () => {
+    const held = withCorp(operatingBoard(), PRR, { home_hex_label: "H12", station_token_hexes: [], station_tokens: [] });
+    expect(pendingHomeTokens(held, homeHexToAxial(held)).map((owed) => owed.ticker)).toEqual(["PRR"]);
+    for (const [label, msg, actor] of PROPOSALS(held)) {
+      const sentence = homeTokenBlock({ state: held, homeHexToAxial: homeHexToAxial(held), msg });
+      expect([label, sentence]).toEqual([label, expect.stringContaining("PRR is starting its first operating turn and its home station is not on the board yet.")]);
+      expect([label, ingress(held, actor, msg)]).toEqual([label, sentence]);
+      const after = applyAsRoom(held, msg, actor);
+      expect([label, same(after, held)]).toEqual([label, true]);
+      expect([label, standingOrdinaryOffer(after)]).toEqual([label, null]);
+    }
+    const stockRound = withCorp(stockRoundBoard(), NYC, { home_hex_label: "E19", station_token_hexes: [], station_tokens: [] });
+    expect(pendingHomeTokens(stockRound, homeHexToAxial(stockRound))).toEqual([]);
+    for (const [label, msg] of PROPOSALS(stockRound)) {
+      expect([label, homeTokenBlock({ state: stockRound, homeHexToAxial: homeHexToAxial(stockRound), msg })]).toEqual([label, null]);
     }
   });
 
@@ -281,7 +290,9 @@ describe("§9 R74-C (A): while an earlier mandatory hold stands, no ordinary off
     }
   });
 
-  it("a legal room sequence: a float raises the home-token hold, a trade proposed under it creates no offer, and the same proposal works once the token is down", () => {
+  /* Slice 8.2 (#1610) re-pinned this sequence: a Stock Round float raises no hold, so the trade proposed right after it
+     is created at once, and the float-time placement the old sequence needed is refused at ingress as untimely. */
+  it("a legal room sequence: a Stock Round float raises no hold -- the trade proposed after it is created, and a placement there is refused at ingress", () => {
     const E19 = STATIC_BOARD_HEXES.find((hex) => hex.label === "E19")!;
     const seed = withCorp(
       board({
@@ -299,14 +310,13 @@ describe("§9 R74-C (A): while an earlier mandatory hold stands, no ordinary off
     );
     const { room, submit } = S.roomFor(seed);
     expect(submit(P2, M.buyStock(NYC)).kind).toBe("applied");
-    expect(pendingHomeTokens(room.state, homeHexToAxial(room.state)).map((owed) => owed.ticker)).toEqual(["NYC"]);
-    const before = room.state;
-    // Appended (ingress has no home-token hold), refused by the reducer: no offer exists.
-    expect(submit(P2, M.proposeTrade(DH, P2, P1, 50)).kind).toBe("applied");
-    expect(standingOrdinaryOffer(room.state)).toBeNull();
-    expect(guarded(room.state)).toEqual(guarded(before));
-    expect(submit(P2, { PlaceHomeStation: { game_id: 1, company_id: NYC, q: E19.q, r: E19.r, kind: "home" } }).kind).toBe("applied");
+    expect(room.state.public_companies.find((entry) => entry.company_id === NYC)?.is_floated).toBe(true);
     expect(pendingHomeTokens(room.state, homeHexToAxial(room.state))).toEqual([]);
+    const before = room.state;
+    const placement = submit(P2, { PlaceHomeStation: { game_id: 1, company_id: NYC, q: E19.q, r: E19.r, kind: "home" } });
+    expect(placement.kind).toBe("refused");
+    expect((placement as { reason?: string }).reason).toBe("NYC places its home station at the start of its first operating turn, and it is not operating now.");
+    expect(guarded(room.state)).toEqual(guarded(before));
     expect(submit(P2, M.proposeTrade(DH, P2, P1, 50)).kind).toBe("applied");
     expect(room.state.private_trade_offer).toMatchObject({ private_id: DH, proposer: P2 });
   });

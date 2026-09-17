@@ -3,7 +3,7 @@
 import { readFileSync } from "fs";
 import { join } from "path";
 
-import { gameHistoryFrom } from "./gameHistory";
+import { gameHistoryFrom, roundLabelOf as roundLabelOfState } from "./gameHistory";
 import { readStripped } from "./sourceScan";
 import { activateBoard, STANDARD_BOARD } from "../components/hexBoardData";
 import { replayLog, entriesFromExport, type ExportedEntry } from "../gameEngine/replayLog";
@@ -27,7 +27,11 @@ import FIXTURE from "./__fixtures__z6cLog.json";
    So the completed-game behaviour moves to the frozen golden copy of JUNO-CV4 (committed beside the golden
    master): fourteen samples, seven Operating Rounds, dividends, fleets and every core accolade, and Batch 7 changes
    nothing about it but the Bank's balance. Z6C-only coverage (the Yellow Sign's Mark, rust) is recorded as a
-   fixture task in the ledger (S10-21), not asserted against a frozen board. */
+   fixture task in the ledger (S10-21), not asserted against a frozen board.
+   SLICE 8.2 (#1614a): JUNO-CV4 is a legacy log whose home placements sit in Stock Rounds, so every CV4 case below
+   names `DEVELOPMENT_CORPUS_POLICY` at its call. The epilogue's default -- the shell's call, no adapter -- stops at
+   B&O's first operating turn (`[SR 1, OR 1.1, Final]`). Measured: under the development corpus's policy the CV4
+   history (every sample, tally, accolade and autopsy row) is identical to the pre-8.2 epilogue's. */
 const CV4_GOLDEN = join(__dirname, "__fixtures__", "replayGolden", "logs", "JUNO-CV4.log.jsonl");
 const LOG = readFileSync(CV4_GOLDEN, "utf8")
   .split("\n")
@@ -39,7 +43,7 @@ describe("the log replayed as a timeline (design note #1411)", () => {
   afterAll(() => activateBoard(STANDARD_BOARD));
 
   it("samples once per round boundary, in order, and ends on Final", () => {
-    const history = gameHistoryFrom(LOG as never);
+    const history = gameHistoryFrom(LOG as never, DEVELOPMENT_CORPUS_POLICY);
     expect(history.rounds.length).toBeGreaterThan(2);
     expect(history.rounds[history.rounds.length - 1].label).toBe("Final");
     const labels = history.rounds.map((r) => r.label);
@@ -57,7 +61,7 @@ describe("the log replayed as a timeline (design note #1411)", () => {
   });
 
   it("carries every player and every corporation on every sample", () => {
-    const history = gameHistoryFrom(LOG as never);
+    const history = gameHistoryFrom(LOG as never, DEVELOPMENT_CORPUS_POLICY);
     for (const round of history.rounds) {
       expect(round.players.map((p) => p.address)).toEqual(history.players);
       expect(round.corporations.map((c) => c.companyId)).toEqual(history.corporations.map((c) => c.companyId));
@@ -65,7 +69,7 @@ describe("the log replayed as a timeline (design note #1411)", () => {
   });
 
   it("prices come off the chart and net worth is cash plus stock", () => {
-    const history = gameHistoryFrom(LOG as never);
+    const history = gameHistoryFrom(LOG as never, DEVELOPMENT_CORPUS_POLICY);
     const final = history.rounds[history.rounds.length - 1];
     expect(final.corporations.some((c) => c.price !== null)).toBe(true);
     for (const p of final.players) {
@@ -87,7 +91,7 @@ describe("the log replayed as a timeline (design note #1411)", () => {
     DESIGN NOTE 1414 (harness): THE TALLIES ARE DIFFS
    ================================================================== */
 describe("the accolades and the autopsy, read off the board's diffs (design note #1414)", () => {
-  const history = gameHistoryFrom(LOG as never);
+  const history = gameHistoryFrom(LOG as never, DEVELOPMENT_CORPUS_POLICY);
 
   it("names a Robber Baron, a Master of the Line, a Track Boss and a Market Manipulator on a played game", () => {
     const by = Object.fromEntries(history.accolades.map((a) => [a.key, a]));
@@ -140,7 +144,7 @@ describe("the accolades and the autopsy, read off the board's diffs (design note
 
 describe("the fleet ledger behind a click (design note #1431)", () => {
   it("every corporation carries a payback and a ledger whose rows add up to its train spend", () => {
-    const history = gameHistoryFrom(LOG as never);
+    const history = gameHistoryFrom(LOG as never, DEVELOPMENT_CORPUS_POLICY);
     for (const corp of history.autopsy) {
       expect(typeof corp.payback).toBe("number");
       for (const row of corp.fleetLedger) {
@@ -166,7 +170,7 @@ describe("the fleet ledger behind a click (design note #1431)", () => {
 
 describe("dividends per player per round (design note #1434)", () => {
   it("each OR sample carries what each player was paid in it, and the rounds add up to the Robber Baron's figure", () => {
-    const history = gameHistoryFrom(LOG as never);
+    const history = gameHistoryFrom(LOG as never, DEVELOPMENT_CORPUS_POLICY);
     const ors = history.rounds.filter((r) => r.label.startsWith("OR "));
     for (const address of history.players) {
       const sum = ors.reduce((a, r) => a + (r.players.find((p) => p.address === address)?.dividends ?? 0), 0);
@@ -196,35 +200,63 @@ describe("dividends per player per round (design note #1434)", () => {
      33      p-je0gw2v0's B&O share floats it, one entry later than the table did.
      34+     the authoritative home-token hold owes B&O's home station, which no later entry in the log places, so
              every remaining stored entry is a reducer no-op and the log-derived timeline is `[SR 1, Final]`.
-   The stored log is not rewritten, and the completed-game tests above read JUNO-CV4 instead. */
-describe("JUNO-Z6C under rules engine version 5: an expected historical-log incompatibility (Batch 7.5)", () => {
+   The stored log is not rewritten, and the completed-game tests above read JUNO-CV4 instead.
+
+   SLICE 8.2 RE-PIN (S8-5; design notes #1610 / #1614; predicted by the Stage-8 design's corpus table). THE FREEZE
+   AT 34 WAS THE FLOAT-TIME HOLD, AND THAT HOLD IS RETIRED. 9 / 12 / 14 / 31 / 32 / 33 are unchanged. What changed:
+     33      the float purchase no longer holds the buyer's seat (#769 retired). The first difference from the
+             pre-8.2 replay is the board after 33 (`active_player_index`, `consecutive_passes`, `bought_this_turn`,
+             `bought_this_turn_company`, `turn_action_taken`); the first difference in what is accepted is 34, a
+             `PassTurn` the old hold refused.
+     34+     a Stock Round owes no home station, so SR 1 goes on.
+     40      B&O's first operating turn opens after 40. Under the development corpus's policy the choice recorded at
+             32 (I15) -- refused there as untimely, and remembered -- is tried at that turn through the reducer and
+             lands; NNH's (37), C&O's (56), NYC's (256) and PMQ's (343, Detroit/Windsor circle 1) follow at their own
+             first turns, and the log runs on to OR 10.1 on the Batch-7-corrected board. Without the adapter -- the
+             epilogue's default, which is the shell's call -- nothing in the stored log places B&O's home at its turn,
+             and the log-derived timeline stops there, behind the authoritative home hold: `[SR 1, OR 1.1, Final]`.
+   The continuation is still not the table's game (31 is still refused, and many later entries are refused on the
+   corrected board), so the completed-game tests keep reading JUNO-CV4. Measured for the Slice-8.2 write-up: at
+   every stored entry this replay equals the pre-8.2 engine's with each home placed at its float from the same
+   recorded choice, station tokens aside. The stored log is not rewritten. */
+describe("JUNO-Z6C under rules engine version 5: an expected historical-log incompatibility (Batch 7.5; re-pinned by Slice 8.2)", () => {
   afterAll(() => activateBoard(STANDARD_BOARD));
 
-  it("freezes at index 33 behind the home-token hold, for the reason the auction correction at 9 starts", () => {
-    expect(gameHistoryFrom(Z6C_LOG as never).rounds.map((round) => round.label)).toEqual(["SR 1", "Final"]);
-
-    const providers = sandboxReplayProviders();
+  const BO_PRIVATE = 6;
+  const BO = 4;
+  const BUYER = "p-lzjh2r6u";
+  const seedZ6C = () => ({
+    state: withEmptyRoster(sandboxScenarioState(DEFAULT_SANDBOX_SCENARIO, 0, "default")),
+    waterfall: waterfallForRoster(sandboxWaterfallState(sandboxScenario(DEFAULT_SANDBOX_SCENARIO).phase, 0, true), []),
+  });
+  const bo = (state: GameStateResponse) => state.public_companies.find((entry) => entry.company_id === BO)!;
+  /** The development-corpus replay, once: the board handed to every STORED entry by index, and to every synthetic
+   *  home entry (#1614) in order -- a synthetic entry shares its index with the stored entry it follows. */
+  let replayed: { result: ReturnType<typeof replayLog>; before: Record<number, GameStateResponse>; synthetic: Array<{ index: number; state: GameStateResponse }> } | null = null;
+  const z6c = () => {
+    if (replayed !== null) return replayed;
     const before: Record<number, GameStateResponse> = {};
+    const synthetic: Array<{ index: number; state: GameStateResponse }> = [];
     const result = replayLog(
       entriesFromExport(Z6C_LOG as unknown as ExportedEntry[]),
-      providers,
-      {
-        state: withEmptyRoster(sandboxScenarioState(DEFAULT_SANDBOX_SCENARIO, 0, "default")),
-        waterfall: waterfallForRoster(sandboxWaterfallState(sandboxScenario(DEFAULT_SANDBOX_SCENARIO).phase, 0, true), []),
-      },
+      sandboxReplayProviders(),
+      seedZ6C(),
       ({ entry, stateBefore }) => {
-        before[entry.index] = stateBefore;
+        if (entry.id.includes(":legacy-")) synthetic.push({ index: entry.index, state: stateBefore });
+        else before[entry.index] = stateBefore;
       },
       DEVELOPMENT_CORPUS_POLICY,
     );
-    const BO_PRIVATE = 6;
-    const BO = 4;
-    const BUYER = "p-lzjh2r6u";
+    replayed = { result, before, synthetic };
+    return replayed;
+  };
+
+  it("the auction correction at 9 still leaves B&O unfloated at 31, its placement at 32 still places nothing, and 33 floats it", () => {
+    const { before } = z6c();
     const offered = (state: GameStateResponse) =>
       (state as GameStateResponse & { waterfall?: { privates: Array<{ private_id: number; face_value: string; is_lowest_offered: boolean }> } })
         .waterfall?.privates.find((entry) => entry.is_lowest_offered);
     const cash = (state: GameStateResponse, player: string) => Number(state.player_cash.find((entry) => entry.player === player)?.cash_vgp);
-    const bo = (state: GameStateResponse) => state.public_companies.find((entry) => entry.company_id === BO)!;
 
     // 9 / 12: the SV is sold, the B&O is on offer, and neither all-pass marks it down.
     expect(before[9].private_companies.find((entry) => entry.private_id === 1)?.owner).not.toBeNull();
@@ -244,13 +276,53 @@ describe("JUNO-Z6C under rules engine version 5: an expected historical-log inco
     expect(stateDigest(before[33])).toBe(stateDigest(before[32]));
     // 33: B&O floats on the other player's share.
     expect(bo(before[34]).is_floated).toBe(true);
-    const hold = homeTokenBlock({ state: before[34], homeHexToAxial: providers.chartInjections(before[34]).homeHexToAxial! });
-    expect(hold).toMatch(/^B&O has floated and its home station is not on the board yet\. p-lzjh2r6u must place it on I15/);
-    // 34+: nothing the log still holds moves the board.
-    const frozen = stateDigest(before[34]);
-    for (const [index, state] of Object.entries(before)) {
-      if (Number(index) >= 34) expect(stateDigest(state)).toBe(frozen);
-    }
-    expect(stateDigest(result.state)).toBe(frozen);
+  });
+
+  it("Slice 8.2: the float holds nothing, B&O's recorded choice lands at its first operating turn, and the log no longer freezes", () => {
+    const { result, before, synthetic } = z6c();
+    const table = sandboxReplayProviders().chartInjections(before[34]).homeHexToAxial!;
+    // 34: a Stock Round owes no home station -- no hold, and the pass moves the board. (Pre-8.2: the float-time hold.)
+    expect(before[34].current_round_type).toBe("StockRound");
+    expect(homeTokenBlock({ state: before[34], homeHexToAxial: table })).toBeNull();
+    expect(stateDigest(before[35])).not.toBe(stateDigest(before[34]));
+    // Floated at 33, and no token on the board through the rest of SR 1 (#1610: nothing is placed at the float).
+    expect(bo(before[40]).station_token_hexes).toEqual([]);
+    // After 40, B&O's first operating turn: its home is owed, and the choice recorded at 32 is the one tried there.
+    expect(synthetic[0].index).toBe(40);
+    expect(roundLabelOfState(synthetic[0].state)).toBe("OR 1.1");
+    expect(homeTokenBlock({ state: synthetic[0].state, homeHexToAxial: table })).toBe(
+      "B&O is starting its first operating turn and its home station is not on the board yet. p-lzjh2r6u must place it on I15 before B&O can operate.",
+    );
+    expect(bo(before[41]).station_token_hexes).toEqual([[3, 8]]);
+    expect(result.legacyHomeStations).toEqual([
+      { recordedAt: 32, afterIndex: 40, companyId: BO, q: 3, r: 8, cityIndex: null, applied: true },
+      { recordedAt: 37, afterIndex: 47, companyId: 7, q: 6, r: 6, cityIndex: 0, applied: true }, // NNH, New York's first circle
+      { recordedAt: 56, afterIndex: 59, companyId: 5, q: 0, r: 5, cityIndex: null, applied: true }, // C&O, Cleveland
+      { recordedAt: 256, afterIndex: 285, companyId: 2, q: 7, r: 4, cityIndex: 0, applied: true }, // NYC, E19
+      { recordedAt: 343, afterIndex: 362, companyId: 9, q: 0, r: 4, cityIndex: 1, applied: true }, // PMQ, Detroit/Windsor circle 1
+    ]);
+    // The log-derived timeline under the development corpus's policy: the game runs on to OR 10.1.
+    expect(gameHistoryFrom(Z6C_LOG as never, DEVELOPMENT_CORPUS_POLICY).rounds.map((round) => round.label)).toEqual([
+      "SR 1", "OR 1.1", "SR 2", "OR 2.1", "SR 3", "OR 3.1", "SR 4", "OR 4.1", "SR 5", "OR 5.1", "OR 5.2",
+      "SR 6", "OR 6.1", "OR 6.2", "SR 7", "OR 7.1", "OR 7.2", "SR 8", "OR 8.1", "OR 8.2",
+      "SR 9", "OR 9.1", "OR 9.2", "SR 10", "OR 10.1", "Final",
+    ]);
+  });
+
+  it("Slice 8.2: without the development corpus's adapter -- the epilogue's default -- the log stops at B&O's first operating turn", () => {
+    expect(gameHistoryFrom(Z6C_LOG as never).rounds.map((round) => round.label)).toEqual(["SR 1", "OR 1.1", "Final"]);
+    const held = replayLog(
+      entriesFromExport(Z6C_LOG as unknown as ExportedEntry[]),
+      sandboxReplayProviders(),
+      seedZ6C(),
+      undefined,
+      { ...DEVELOPMENT_CORPUS_POLICY, legacyHomeTokens: "refuse" },
+    );
+    expect(held.legacyHomeStations).toEqual([]);
+    expect(roundLabelOfState(held.state)).toBe("OR 1.1");
+    expect(bo(held.state).station_token_hexes).toEqual([]);
+    expect(homeTokenBlock({ state: held.state, homeHexToAxial: sandboxReplayProviders().chartInjections(held.state).homeHexToAxial! })).toBe(
+      "B&O is starting its first operating turn and its home station is not on the board yet. p-lzjh2r6u must place it on I15 before B&O can operate.",
+    );
   });
 });

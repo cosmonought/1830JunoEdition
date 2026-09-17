@@ -34,7 +34,7 @@ import {
 /* Design note #1511: the reservation's circle is decided by the SAME function the board's ring and click use
    (#858's `homeSlotIndex`), read through the same marker point, so the circle the badge marks, the circle the
    President may click, and the circle the authority holds against everybody else are one answer. */
-import { homeSlotIndex, stationMarkerPoint } from "../components/hexCanvasPrimitives";
+import { homeSlotIndex, homeSlotsAreOpen, stationMarkerPoint } from "../components/hexCanvasPrimitives";
 import type { MapGridResponse } from "../components/hexContractTypes";
 import {
   NEW_YORK_PRINTED_ARTWORK,
@@ -304,12 +304,49 @@ export function evaluateStationPlacement(
     };
   }
 
+  /* ==================================================================
+      DESIGN NOTE 1617: A TILED OO HOME HEX IS CLOSED TO EVERY OTHER CORPORATION UNTIL ITS HOME IS PLACED (S8-14)
+     ==================================================================
+     OWNER RULING (Stage 8, Slice 8.2, S8-14, 2026-09-17), made against the updated revised rulebook and the full
+     48-page rulebook, whose base game states the Erie's rule in this conditional form (7.3.2, p. 20) and whose
+     OO-starting-hex variant applies the Erie's rules to the Pere Marquette on E5 (V-7.3, p. 32). The Erie may
+     put its home in either city of its yellow OO hex (E11), and so may the Level Playing Field's PMQ on E5 (#1611).
+     What the home is protected by depends on the hex:
+       * BEFORE A TILE IS LAID THERE, the ordinary future-home rule is enough (§6.3.2): another corporation may take
+         one of the two cities if it is otherwise legal, but never the last one -- the hex-level reservation arm
+         below keeps one slot for the home corporation.
+       * ONCE A TILE HAS BEEN LAID OR UPGRADED THERE, and until the home corporation places its home, NO OTHER
+         corporation may place a station anywhere on the hex -- in either city, however many slots are free. A
+         foreign station placed legally before the tile stays where it is (an upgrade keeps the stations on the
+         hex); nothing may be added beside it.
+       * ONCE THE HOME IS PLACED the reservation is spent (`homeReservationStands`) and ordinary rules govern.
+     The home corporation is never refused by its own reservation and needs no tile first: its home goes in either
+     free city of the hex, tiled or not (#1611). "A tile has been laid" means a tile on the grid that the board did
+     not print there (#1301's `printed`); no board prints one on E11 or E5. The OO homes are the entries on a hex
+     where the president picks the circle (`homeSlotsAreOpen`, #742) -- the Erie's E11 and the PMQ's E5 -- so New
+     York's locked circle (#858 / #1511) and the C&O's two cities (#1325) are untouched. One predicate, asked by the
+     reducer's gate, by ingress (through `stationPlacementRefusal`), by the veil and by the click. */
+  const closedHome = closedOoHomeAt(mapGrid, q, r, company, allCompanies);
+  if (closedHome !== null) {
+    const owner = allCompanies.find((entry) => entry.company_id === closedHome.companyId) as
+      | (StationPlacementCompany & { ticker?: string })
+      | undefined;
+    const who = owner?.ticker ?? `Company #${closedHome.companyId}`;
+    return {
+      allowed: false,
+      reason:
+        `${who} has not placed its home station on ${closedHome.label} yet and a tile has been laid there, ` +
+        `so no other corporation may place a station on ${closedHome.label} until it does.`,
+    };
+  }
+
   /* Reservations. Every corporation's home city holds a slot for it from the start of the game, floated or not.
      THE RESERVATION IS RELEASED BY USE, not by floating: a company that has floated AND placed its home token is
      occupying the slot rather than reserving it, and its token is already counted above. So the test is "does
      this hex reserve a slot for somebody who has not taken it yet".
      That distinction matters on the shared OO hexes: ERIE's home is a two-city hex, so before ERIE floats another
-     corporation may still take the OTHER circle -- reserving both would over-block it. */
+     corporation may still take the OTHER circle -- reserving both would over-block it. (Slice 8.2, #1617: true
+     until a tile is laid there; from then until the home is placed, the arm above closes the whole hex.) */
   const unclaimedReservations = stationHomeHexes().filter((home) => {
     if (home.q !== q || home.r !== r) return false;
     if (home.companyId === company.company_id) return false;
@@ -486,6 +523,31 @@ export function evaluateStationPlacement(
   }
 
   return ALLOWED;
+}
+
+/** Design note #1617: the OO home that closes `(q, r)` to `company`, or `null`. Closed means: another corporation's
+ *  home entry on this hex, on a hex where the president picks the circle (the Erie's E11, the Level Playing Field's
+ *  PMQ E5), with its reservation still standing (that corporation has placed no home), and a tile laid on the hex
+ *  in play (a printed tile does not count). */
+export function closedOoHomeAt(
+  mapGrid: MapGridResponse,
+  q: number,
+  r: number,
+  company: Pick<StationPlacementCompany, "company_id">,
+  allCompanies: readonly StationPlacementCompany[],
+): HomeStationEntry | null {
+  const tiled = mapGrid.tiles.some((tile) => tile.q === q && tile.r === r && tile.printed !== true);
+  if (!tiled) return null;
+  return (
+    stationHomeHexes().find((home) => {
+      if (home.q !== q || home.r !== r) return false;
+      if (home.companyId === company.company_id) return false;
+      if (home.enforced === false) return false;
+      if (!homeSlotsAreOpen(home.label)) return false;
+      const owner = allCompanies.find((entry) => entry.company_id === home.companyId);
+      return homeReservationStands(owner, home);
+    }) ?? null
+  );
 }
 
 /** How many cities this hex has -- `citySlotCount` split the other way. A laid tile knows; a preprinted hex

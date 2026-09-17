@@ -74,6 +74,8 @@ import { MOCK_TRAIN_CATALOG } from "./mockFixtures";
 import { tileEraFor } from "./gameConstants";
 import { depotInventory, derivePhase } from "./gamePhase";
 import { pendingTrainDiscards } from "./trainDiscard";
+// Design note #1612 (Slice 8.2): the home station's obligation, derived on the cursor.
+import { boardHomeHexToAxial, owedHomeStation } from "./homeStationAuthority";
 import { privateSettlementMatches, trainSettlementMatches } from "./pendingOfferHold";
 import type { PrivatePurchaseOffer, TrainPurchaseOffer } from "./gameState";
 import { tokenCityIndex } from "../components/hexContractTypes";
@@ -121,6 +123,17 @@ export function nextDerivedAction(input: DerivedActionInput): DerivedAction | nu
      anyway would be walking the turn past the decision the rules give to a player. Asked before the accepted
      offer below, because an accepted purchase is also "anything else". */
   if (pendingTrainDiscards(state) !== null) return null;
+  /* ==================================================================
+      DESIGN NOTE 1612 (derived): WHILE THE HOME STATION IS OWED THE GAME OWES NOTHING
+     ==================================================================
+     Slice 8.2 (S8-5). At the start of its first operating turn a corporation must place its home station before
+     anything else; the reducer refuses every other message meanwhile (`homeStationHold`, #1613). Track is never
+     auto-skipped, but Tokens, Routes, Dividends and Hardware are -- and a corporation with no token has nowhere
+     to place, nothing to run and nothing to declare, so a loop that kept answering would walk it through its
+     whole turn on the strength of a placement nobody has made. So: nothing, for the same reason as the discard
+     line above, asked right after it (the four holds' priority) and before the accepted offer (which cannot
+     stand at a turn opening, #1590). The board's own label table, as the reducer's providers hand it in. */
+  if (owedHomeStation(state, boardHomeHexToAxial) !== null) return null;
   const extraStationAvailable =
     input.extraStationAvailable ??
     (() => {

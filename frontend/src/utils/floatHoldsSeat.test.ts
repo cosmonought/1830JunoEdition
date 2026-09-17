@@ -25,6 +25,17 @@
 //
 // WRONG ON THREE COUNTS -- 20% not 10%, twice par not par, and it omitted the par-setting entirely, which is
 // the most consequential decision in a Stock Round and the one figure a reader cannot reconstruct later.
+//
+// ==================================================================
+//  SUPERSEDED BY DESIGN NOTE 1610 (Stage 8, Slice 8.2, S8-5) -- THE FIRST BLOCK'S RULE, NOT ITS REPORT
+// ==================================================================
+//
+// #769's report was real and so was its diagnosis (a table told nothing while a seat is refused), but the debt the
+// seat was held for is not owed in a Stock Round: 6.3.1 places the home station "at the beginning of a railroad's
+// first turn of operation". So the purchase that floats a corporation ends the buyer's turn like any other, no
+// token is placed or owed until that corporation first operates, and a Stock Round placement is refused as
+// untimely. The first block below is re-pinned to that rule, case for case (the report's own case first); the
+// wiring and the controls are unchanged. The Slice-8.2 suites (`homeStationAuthority.test.ts`) carry the rest.
 
 import { applySandboxAction, placeHomeStationToken } from "../gameEngine/sandboxSession";
 import { describeGameplayAction } from "./actionLog";
@@ -95,25 +106,24 @@ const buy = (state: GameStateResponse, companyId: number, actor = "p1") =>
     { actor, homeHexToAxial },
   );
 
-describe("the float holds the seat", () => {
-  it("leaves the cursor on the President", () => {
-    /* THE REPORT. Before #769 this advanced to p2, who then had a turn in which nothing worked. */
+describe("the float no longer holds the seat (#769 retired by #1610)", () => {
+  it("passes the turn on the purchase that floats, and owes no token in the Stock Round", () => {
+    /* THE REPORT'S BOARD. Before #769 this advanced to p2 while a token was owed; under #769 it stayed on p1 for
+       the placement. Under 6.3.1 nothing is owed until PRR's first operating turn, so p2 is simply next. */
     const after = buy(board(), PRR);
     expect(after.public_companies[0].is_floated).toBe(true);
-    expect(after.active_player_index).toBe(0);
+    expect(after.public_companies[0].station_token_hexes).toEqual([]);
+    expect(after.active_player_index).toBe(1);
   });
 
-  it("releases the seat once the token is placed", () => {
-    /* THE OTHER HALF, and the one that would matter more if it broke: a hold with no release is a frozen
-       game. The placement is the only thing that lifts it.
-       CALLED DIRECTLY, and the first draft got that wrong. `PlaceHomeStation` is not an arm of
-       `applyOneAction` -- the shell applies it through `placeHomeStationToken`, which is therefore the
-       authority for this message and the place the release belongs. Routing the test through
-       `applySandboxAction` was testing a path that does not handle it. */
+  it("refuses a Stock Round placement, so there is no seat for it to release", () => {
+    /* Was "releases the seat once the token is placed" (#769a). The placement is untimely now: the board comes back
+       as it was handed, token-less, with the seat where the purchase left it. */
     const floated = buy(board(), PRR);
     const home = homeHexToAxial("H12")!;
     const placed = placeHomeStationToken(floated, PRR, home[0], home[1], 0, homeHexToAxial);
-    expect(placed.public_companies[0].station_token_hexes.length).toBe(1);
+    expect(placed).toBe(floated);
+    expect(placed.public_companies[0].station_token_hexes).toEqual([]);
     expect(placed.active_player_index).toBe(1);
   });
 
@@ -134,19 +144,21 @@ describe("the float holds the seat", () => {
     expect(placeHomeStationToken(settled, PRR, home[0], home[1], 0, homeHexToAxial)).toBe(settled);
   });
 
-  it("does not release the seat outside a Stock Round", () => {
-    // Nothing else advances a seat this way; an Operating Round has its own cursor.
-    const inOr = buy(board(), PRR);
+  it("places the token at PRR's first operating turn and moves no seat", () => {
+    /* Was "does not release the seat outside a Stock Round". The placement belongs to the Operating Round now, as a
+       mandatory pre-turn action: it lands, and neither the seat nor the corporation cursor moves. */
+    const inOr = {
+      ...buy(board(), PRR),
+      current_round_type: "OperatingRound",
+      active_operating_order: [PRR],
+      active_corporation_index: 0,
+      operating_sub_phase: "Track",
+    } as GameStateResponse;
     const home = homeHexToAxial("H12")!;
-    const placed = placeHomeStationToken(
-      { ...inOr, current_round_type: "OperatingRound" } as GameStateResponse,
-      PRR,
-      home[0],
-      home[1],
-      0,
-      homeHexToAxial,
-    );
-    expect(placed.active_player_index).toBe(0);
+    const placed = placeHomeStationToken(inOr, PRR, home[0], home[1], 0, homeHexToAxial);
+    expect(placed.public_companies[0].station_token_hexes).toEqual([home]);
+    expect(placed.active_player_index).toBe(inOr.active_player_index);
+    expect(placed.active_corporation_index).toBe(0);
   });
 
   it("is wired that way in the shell", () => {

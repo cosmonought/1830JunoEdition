@@ -336,7 +336,14 @@ describe("each room message has an owner, #1249", () => {
   it("PlaceHomeStation: the corporation's president; the D&H's owner for a D&H token", () => {
     const presided = withPresident(board(), 1, BOB);
     const home = { PlaceHomeStation: { company_id: 1, q: 0, r: 0, kind: "home", city_index: null, hex_label: "H12" } };
-    expect(refusal(presided, BOB, home)).toBeNull();
+    /* Slice 8.2 (#1611, S8-6): past the owner, a HOME placement meets its legality at the lock -- the same predicate
+       the reducer asks -- so the president's message on this Stock Round board is answered with that sentence
+       rather than appended and no-op'd. Was `toBeNull()`, when this branch asked the owner and nothing else. The
+       D&H token below keeps its owner check alone (#1615). */
+    const { homePlacementRefusal, boardHomeHexToAxial } = require("../gameEngine/homeStationAuthority") as typeof import("../gameEngine/homeStationAuthority");
+    const legality = homePlacementRefusal(presided, home.PlaceHomeStation, undefined, boardHomeHexToAxial);
+    expect(legality).not.toBeNull();
+    expect(refusal(presided, BOB, home)).toBe(legality);
     expect(refusal(presided, ALICE, home)).toBe("Only PRR's president places its station.");
     const dh = { PlaceHomeStation: { company_id: 1, q: 0, r: 0, kind: "dh", city_index: null, hex_label: "F16" } };
     expect(refusal(withOwner(presided, 3, ALICE), BOB, dh)).toBe("Only the Delaware & Hudson's owner can use its free station.");

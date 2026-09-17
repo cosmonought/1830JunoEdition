@@ -152,7 +152,9 @@ describe("the watcher's arm can actually be reached (design note #788)", () => {
   it("has a memo to inspect", () => {
     // The slice guard: a boundary that moves silently would make every assertion below vacuous.
     expect(MEMO.length).toBeGreaterThan(50);
-    expect(MEMO).toContain("pendingHomeTokens(gameState, homeHexToAxial)");
+    /* #1616 (Slice 8.2): the grid rides along so the options are the hexes with a legal circle now; the memo still
+       asks only the board. */
+    expect(MEMO).toContain("pendingHomeTokens(gameState, homeHexToAxial, mapGrid)");
   });
 
   it("does not withhold the token from a non-president", () => {
@@ -167,7 +169,7 @@ describe("the watcher's arm can actually be reached (design note #788)", () => {
   it("keeps the viewer out of its dependencies", () => {
     /* Belt to the above: if the memo does not read the viewer, it cannot depend on one. A stray dependency
        here would be the first sign the filter had come back. */
-    expect(MEMO).toContain("}, [gameState, homeHexToAxial]);");
+    expect(MEMO).toContain("}, [gameState, homeHexToAxial, mapGrid]);");
   });
 
   it("still decides the ASK by the viewer, at the prop", () => {
@@ -192,10 +194,14 @@ describe("the gates this explains are still in place", () => {
     expect(APP_CODE).toContain("homeTokenBlock");
   });
 
-  it("keeps #769's held seat", () => {
+  it("keeps the prompt's list in the reducer (the #769 held seat it was paired with is retired by #1610)", () => {
+    /* Was "keeps #769's held seat". Slice 8.2 retired the seat hold -- a float owes nothing in a Stock Round -- and
+       the modal now explains the operating corporation's turn-local hold instead. What this still guards is that the
+       list the modal is raised from is the reducer's own derivation, not a shell copy. */
     const fs = require("fs") as typeof import("fs");
     const path = require("path") as typeof import("path");
     const reducer = fs.readFileSync(path.join(__dirname, "..", "gameEngine", "sandboxSession.ts"), "utf8");
-    expect(reducer).toContain("pendingHomeTokens");
+    expect(reducer).toContain("export function pendingHomeTokens(");
+    expect(reducer).toContain("const owed = owedHomeStation(state, homeHexToAxial);");
   });
 });

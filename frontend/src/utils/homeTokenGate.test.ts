@@ -20,6 +20,17 @@
 //
 // AND TWO OF THEM ARE ABOUT THE EXITS. A gate is easy; a gate somebody can get stuck behind is a worse bug
 // than the one it fixes, so the placement and Undo have their own cases.
+//
+// ==================================================================
+//  RE-PINNED BY DESIGN NOTES 1610 / 1612 (Stage 8, Slice 8.2, S8-5 / S8-12)
+// ==================================================================
+//
+// "IN 1830 THERE IS NO GAP TO ACT IN" was not the rule. 6.3.1 places the home station "at the beginning of a
+// railroad's first turn of operation", so the reported position -- PRR floated in a Stock Round, token not down --
+// owes NOTHING and holds NOTHING: P2's purchase is simply P2's purchase. The gate survives where the rule puts it:
+// PRR under the Operating Round cursor at the start of its first turn, with no token. Every case below keeps its
+// assertion and moves to that board; the Stock Round board now pins the absence of a freeze. The exits are the
+// placement, #763's Undo and the room's own messages (#1612).
 
 import { applySandboxAction, pendingHomeTokens } from "../gameEngine/sandboxSession";
 import { homeTokenBlock, homeTokenOwed } from "../gameEngine/homeTokenGate";
@@ -34,7 +45,7 @@ const homeHexToAxial = (label: string): readonly [number, number] | null => {
   return hex ? ([hex.q, hex.r] as const) : null;
 };
 
-/** PRR floated, its home token NOT yet on the board -- the reported position. */
+/** PRR floated, its home token NOT yet on the board -- the reported position, in the Stock Round. */
 function board(over: Record<string, unknown> = {}): GameStateResponse {
   return {
     player_addresses: ["p1", "p2"],
@@ -82,33 +93,57 @@ function board(over: Record<string, unknown> = {}): GameStateResponse {
   } as unknown as GameStateResponse;
 }
 
-const apply = (state: GameStateResponse, msg: unknown) =>
-  applySandboxAction(state, msg as never, { actor: "p2", homeHexToAxial });
+/** The same PRR at the start of its first operating turn -- where the home station IS owed (#1610). */
+function firstTurn(over: Record<string, unknown> = {}): GameStateResponse {
+  return board({
+    current_round_type: "OperatingRound",
+    macro_round_number: 1,
+    active_player_index: 0,
+    active_operating_order: [PRR],
+    active_corporation_index: 0,
+    operating_sub_phase: "Track",
+    ...over,
+  });
+}
+
+const apply = (state: GameStateResponse, msg: unknown, actor = "p2") =>
+  applySandboxAction(state, msg as never, { actor, homeHexToAxial });
 
 describe("the reported position", () => {
-  it("owes a token", () => {
-    /* The premise, read back. If PRR were not actually pending, every refusal below would be about nothing. */
-    const owed = pendingHomeTokens(board(), homeHexToAxial);
+  it("owes nothing in the Stock Round: the float is not the moment (#1610)", () => {
+    expect(pendingHomeTokens(board(), homeHexToAxial)).toEqual([]);
+    expect(homeTokenOwed(board(), homeHexToAxial)).toBe(false);
+    expect(homeTokenBlock({ state: board(), homeHexToAxial })).toBeNull();
+  });
+
+  it("lets P2's purchase through -- the report's action is an ordinary purchase", () => {
+    const before = board();
+    const after = apply(before, { BuyStock: { game_id: 1, protocol_id: BO, source: "Ipo", par_value: "100" } });
+    expect(after).not.toBe(before);
+  });
+
+  it("owes the token at PRR's first operating turn", () => {
+    /* The premise of every case below, read back. If PRR were not actually pending, every refusal would be about
+       nothing. */
+    const owed = pendingHomeTokens(firstTurn(), homeHexToAxial);
     expect(owed).toHaveLength(1);
     expect(owed[0].ticker).toBe("PRR");
-    expect(homeTokenOwed(board(), homeHexToAxial)).toBe(true);
+    expect(homeTokenOwed(firstTurn(), homeHexToAxial)).toBe(true);
   });
 
   it("names the corporation, the hex and the player holding things up", () => {
-    /* The reader is usually NOT the one holding things up -- P2 sees this, P1 has the prompt. "Wait" without
-       "for whom" is the most annoying message a game can show. */
-    const reason = homeTokenBlock({ state: board(), homeHexToAxial });
-    expect(reason).toMatch(/PRR has floated/);
+    /* The reader is usually NOT the one holding things up. "Wait" without "for whom" is the most annoying message a
+       game can show. */
+    const reason = homeTokenBlock({ state: firstTurn(), homeHexToAxial });
+    expect(reason).toMatch(/PRR is starting its first operating turn/);
     expect(reason).toMatch(/H12/);
-    expect(reason).toMatch(/must place it/);
+    expect(reason).toMatch(/p1 must place it/);
   });
 });
 
 describe("no message lands while a token is owed", () => {
-  it("refuses the share purchase from the report", () => {
-    /* THE REPORT. Before #763 this settled a purchase against a board with a floated corporation that has no
-       token -- a board 1830 cannot reach, which is the state #762's crash was living in. */
-    const before = board();
+  it("refuses a share purchase", () => {
+    const before = firstTurn();
     expect(
       apply(before, {
         BuyStock: { game_id: 1, protocol_id: BO, source: "Ipo", par_value: "100" },
@@ -117,62 +152,58 @@ describe("no message lands while a token is owed", () => {
   });
 
   it("refuses a pass", () => {
-    const before = board();
-    expect(apply(before, { PassTurn: { game_id: 1 } })).toBe(before);
+    const before = firstTurn();
+    expect(apply(before, { PassTurn: { game_id: 1 } }, "p1")).toBe(before);
   });
 
   it("refuses a sale", () => {
-    const before = board();
-    expect(apply(before, { SellStock: { game_id: 1, protocol_id: PRR, percentage: 10 } })).toBe(
-      before,
-    );
+    const before = firstTurn();
+    expect(apply(before, { SellStock: { game_id: 1, protocol_id: PRR, percentage: 10 } })).toBe(before);
   });
 
   it("refuses even a message that looks harmless", () => {
-    /* The point of gating before every arm rather than on the three obvious ones: "harmless" is a judgement
-       about today's arms, and the next arm will be written by somebody who has not read this note. */
-    const before = board();
-    expect(apply(before, { AdvanceOperatingSubPhase: { game_id: 1 } })).toBe(before);
+    /* The point of gating before every arm rather than on the three obvious ones: "harmless" is a judgement about
+       today's arms, and the next arm will be written by somebody who has not read this note. */
+    const before = firstTurn();
+    expect(apply(before, { AdvanceOperatingSubPhase: { game_id: 1, protocol_id: PRR } }, "p1")).toBe(before);
   });
 });
 
 describe("the exits stay open", () => {
   it("lets the placement itself through", () => {
-    /* Otherwise the gate locks the board for ever -- the one failure mode that would be worse than the bug
-       it fixes. */
+    /* Otherwise the gate locks the board for ever -- the one failure mode that would be worse than the bug it fixes.
+       Asserted on the token, not on `not.toBe(board())`, which a fresh fixture passes whatever happens. */
+    const home = homeHexToAxial("H12")!;
+    const before = firstTurn();
     const placed = applySandboxAction(
-      board(),
-      { PlaceHomeStation: { game_id: 1, protocol_id: PRR, q: 3, r: 5, city_index: 0 } } as never,
+      before,
+      { PlaceHomeStation: { game_id: 1, company_id: PRR, q: home[0], r: home[1], kind: "home", city_index: null } } as never,
       { actor: "p1", homeHexToAxial },
     );
-    expect(placed).not.toBe(board());
+    expect(placed.public_companies[0].station_token_hexes).toEqual([home]);
   });
 
   it("lets Undo through", () => {
-    /* A gate with no exit turns any bad state into an unrecoverable one, and Undo is the only thing that can
-       rewind past whatever produced it.
-       ASSERTED ON THE PREDICATE, NOT ON THE STATE, and the first draft got that wrong. The reducer's
-       `UndoLastAction` arm is a deliberate no-op -- "genuinely unmodellable: undo is a full replay of the
-       contract's event log" -- so it returns the same state whether the gate passes it or refuses it, and an
-       identity check could never tell the two apart. What has to be true is that the GATE does not name it. */
+    /* A gate with no exit turns any bad state into an unrecoverable one, and Undo is the only thing that can rewind
+       past whatever produced it. ASSERTED ON THE PREDICATE, NOT ON THE STATE: the reducer's `UndoLastAction` arm is a
+       deliberate no-op, so an identity check could never tell a pass from a refusal. */
     expect(
-      homeTokenBlock({ state: board(), homeHexToAxial, msg: { UndoLastAction: { game_id: 1 } } }),
+      homeTokenBlock({ state: firstTurn(), homeHexToAxial, msg: { UndoLastAction: { game_id: 1 } } }),
     ).toBeNull();
   });
 
   it("still refuses an ordinary message on the same board", () => {
     // The control for the assertion above: the gate is live, it simply exempts Undo.
     expect(
-      homeTokenBlock({ state: board(), homeHexToAxial, msg: { PassTurn: { game_id: 1 } } }),
+      homeTokenBlock({ state: firstTurn(), homeHexToAxial, msg: { PassTurn: { game_id: 1 } } }),
     ).not.toBeNull();
   });
 });
 
 describe("the gate opens once the token is down", () => {
-  it("allows the purchase again", () => {
-    /* THE CONTROL, and the one that would catch a gate that never lifts. Same board, same message, token
-       placed. */
-    const settled = board({
+  it("lets the turn go on", () => {
+    /* THE CONTROL, and the one that would catch a gate that never lifts. Same board, same message, token placed. */
+    const settled = firstTurn({
       public_companies: [
         {
           ...(board().public_companies[0] as object),
@@ -180,33 +211,29 @@ describe("the gate opens once the token is down", () => {
         },
         board().public_companies[1],
       ],
-    } as never);
+    });
     expect(homeTokenOwed(settled, homeHexToAxial)).toBe(false);
-    expect(
-      apply(settled, {
-        BuyStock: { game_id: 1, protocol_id: BO, source: "Ipo", par_value: "100" },
-      }),
-    ).not.toBe(settled);
+    expect(apply(settled, { AdvanceOperatingSubPhase: { game_id: 1, protocol_id: PRR } }, "p1")).not.toBe(settled);
   });
 
-  it("says nothing when no corporation has floated", () => {
-    const nothingFloated = board({
+  it("says nothing when the operating corporation has not floated", () => {
+    const nothingFloated = firstTurn({
       public_companies: [
         { ...(board().public_companies[0] as object), is_floated: false },
         board().public_companies[1],
       ],
-    } as never);
+    });
     expect(homeTokenBlock({ state: nothingFloated, homeHexToAxial })).toBeNull();
   });
 
   it("says nothing for a corporation with no home hex on this board", () => {
     // #416: `homeHexToAxial` returning null means the float still happens and simply owes no token.
-    const noHome = board({
+    const noHome = firstTurn({
       public_companies: [
         { ...(board().public_companies[0] as object), home_hex_label: "ZZ99" },
         board().public_companies[1],
       ],
-    } as never);
+    });
     expect(homeTokenBlock({ state: noHome, homeHexToAxial })).toBeNull();
   });
 });
@@ -220,14 +247,13 @@ describe("both surfaces ask one function", () => {
     return raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
   };
 
-  it("is enforced by the reducer", () => {
-    expect(read("gameEngine/sandboxSession.ts")).toContain("homeTokenBlock({ state, homeHexToAxial: ctx.homeHexToAxial, msg })");
+  it("is enforced by the reducer, before anything moves (#1613)", () => {
+    expect(read("gameEngine/sandboxSession.ts")).toContain("homeStationHold(state, msg, ctx.homeHexToAxial)");
+    expect(read("gameEngine/homeTokenGate.ts")).toContain("return homeStationHold(state, msg as GameplayExecuteMsg | undefined, homeHexToAxial, labelForAddress);");
   });
 
   it("is what the Pass button says", () => {
-    /* The button explains itself rather than silently doing nothing -- and it reads FIRST among the pass
-       reasons, because a player told about some later rule would fix that one and find the button still
-       dead. */
+    /* The button explains itself rather than silently doing nothing -- and it reads FIRST among the pass reasons. */
     expect(read("App.tsx")).toContain("homeTokenBlock({");
   });
 });

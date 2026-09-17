@@ -8,8 +8,16 @@ version pin, a golden, a fixture or a stored log.** The only repository writes a
 
 **Rulebook authority.** Lookout Spiele 1830-RE (2018), `en_1830re.html_Rules_1830-RE_EN.pdf`. Quotations below are
 verbatim from that file (fetched from `lookout-spiele.de` for this pass; the owner's local copy is the same file).
-Owner-defined variants (Level Playing Field, Project 18XX+, Delayed Auction) are judged against the owner's spec and
+Owner-defined variants (~~Level Playing Field,~~ Project 18XX+, Delayed Auction) are judged against the owner's spec and
 the notes cited.
+
+> **Corrected by Slice 8.2 (2026-09-16).** The Level Playing Field is **not** owner-defined and does have a printed
+> counterpart: the full 48-page Lookout/Mayfair rulebook (`1830 FULL RULES with variants.pdf`, now in the repository
+> root) prints it as **Scenario D, S-1.0 "A Level Playing Field"** (pp. 34–36; Table T-08, p. 47). **Source split:** the
+> revised 2018 28-page rulebook (`en_1830re…`) is the Classic / base-game authority wherever it covers the subject; the
+> full 48-page rulebook is the printed authority for 1830+ / Scenario-D material the revised book does not contain. An
+> owner variation from printed Scenario D is recorded as its own item, never by labelling the whole scenario
+> owner-defined. The Scenario-D facts this stage relies on are in §5.1a.
 
 **Method.** Read the ledger (`RULES_HARDENING_BACKLOG.md` Part B Stage 8, Part C, Part D, Part E), the audit
 (`AUDIT_RULES_TO_MACHINE_2026-09-13.md` M10 / M15 / m2 / m3 / m6), the Batch 7 design and the 7.5 closure, then traced
@@ -88,6 +96,19 @@ re-baseline and the eventual Z6C / 3XD replay corrections produced by the Stage-
 prefix + dynamically sorted not-yet-operated tail** (model (a) of §2.4). `active_operating_order` and
 `active_corporation_index` are kept; no operated-set architecture.
 
+**S8-14 — the Erie's and the PMQ's OO home hex (owner ruling at the Slice-8.2 review, 2026-09-17; implemented in Slice
+8.2, #1617, §5.9; ledger D-33).** Made against the updated revised rulebook and the full 48-page rulebook. It resolves the
+question §5.1 filed, for the Erie on E-11 and, under the Level Playing Field, the PMQ on E-5:
+- **Before a tile is placed or upgraded on the OO home hex:** no whole-hex reservation. Ordinary future-home protection
+  applies — another corporation may occupy one of the two home cities if otherwise legal, but may not take the last legal
+  home city.
+- **Once a tile has been placed or upgraded there, before the home is established:** no other corporation may place any
+  additional station anywhere on the hex — a whole-hex prohibition, not a one-circle reservation. A foreign station
+  legally placed before the tile remains; no further foreign station may be added until the home corporation places its
+  home.
+- **After the home is established:** the special prohibition ends; ordinary rules govern.
+- The Erie / PMQ may still choose either legal city for its free home; no tile is required before the home.
+
 **Model policy (owner, 2026-09-16).** Opus is the default model for **every** Stage-8 implementation slice. Escalation to
 Fable is appropriate only when, after tracing the real implementation, a specific unresolved architectural ambiguity
 with materially different valid solutions remains — never merely because a state machine is complicated. §11 and §12
@@ -112,6 +133,7 @@ are updated to match.
 | **S8-11** timing notes (m4 / m5 / m11) | OWNER DECISION pending only if rulebook-literal timing is wanted | Not defects. No change proposed; m4 (float capitalisation on the crossing purchase) is untouched by the home move because the treasury is still unspendable before the OR. | leave |
 | **S8-12** ingress does not mirror the home-token hold | OPEN | Confirmed by code (`turnRefusal` has three holds, no home hold). **Absorbed into Slice 8.2** — the hold's sentence, pass list and ordering are one rule at both locks (§5.7). | **Slice 8.2** |
 | **S8-13 (new, proven)** the chart step runs before the holds | — | Newly proven on the corpus: **FCJ 904 / 911 / 918 / 932** are `SellStock` entries sent while N&W (floated at 902) owed its home token; the core refuses each sale, but `applySandboxMarketAction` had already walked the seller's token down, so `market_positions` moves for a sale that never happened (§5.8). The same shape is latent for the discard and offer holds. Filed as S8-13. | **Slice 8.2** (the hold moves in front of the chart step) |
+| **S8-14 (new, Slice 8.2)** the Erie's OO home hex once it is tiled | — | Found by Slice 8.2 checking the brief against the full 48-page rulebook: its base game 7.3.2 (p. 20) closes the Erie's hex to other railroads' stations once a tile is on it, until the Erie's home is placed; the implementation held one circle, tiled or not (§5.1). **Owner ruling 2026-09-17 (§0):** that conditional form, for the Erie on E-11 and the PMQ on E-5. | **Slice 8.2** — **IMPLEMENTED 2026-09-17 (#1617, §5.9)** |
 
 Absorbed and not to be re-implemented: S8-7, S8-8 (sale half), S8-9. Residual wording only: S8-8's `?? 67` fallback in
 `priceOf` / `sharePriceFor` (helper hygiene, no gameplay path reaches it on a pinned board).
@@ -437,6 +459,49 @@ not have to place a tile in its starting hex. Similarly, the NYC does not have t
 §6.3.2: "A railroad may not place a token in a city if it would block the creation of the home station of a railroad
 that has not yet operated." §5.3: a floated corporation "begins operating in the next operating round".
 
+**Slice 8.2 source check (2026-09-16).** The full 48-page rulebook's base game states the same rule at 7.1 (Special),
+7.3.1 and 7.3.2 (pp. 17 and 20): the home token goes down at the start of the railroad's first operating turn, free; the
+Erie may take either city of its hex; neither the Erie nor the NYC must first lay a tile in its starting hex. One
+sentence there has no counterpart in the revised book's text quoted above: the full book's 7.3.2 adds that once a tile
+is on the Erie's hex, no other railroad may place a station there until the Erie has placed its home — a whole-hex
+prohibition, where the implementation (and §6.3.2 as quoted) held only the one circle the Erie needs, tiled or not. The
+variant V-7.3 (p. 32) states the prohibition without the tile condition and applies the Erie's rules to the PMQ on E-5.
+~~Under the source split the revised book controls this Classic rule, so Slice 8.2 keeps the implemented reading; the
+difference is filed for an owner ruling as S8-14.~~ *(Superseded 2026-09-17.)* **Resolved by the owner's S8-14 ruling
+(§0):** the conditional form, for the Erie on E-11 and the PMQ on E-5 — before a tile, ordinary last-city protection;
+from a tile until the home is placed, the whole hex is closed to other corporations' new stations (a station placed
+before the tile stays); after the home, ordinary rules. Implemented as #1617 (§5.9).
+
+### 5.1a Scenario D (printed) — the facts Stage 8 relies on
+
+Read in the full 48-page rulebook, S-1.2 and Table T-08, for Slice 8.2 (paraphrased; page numbers are the book's):
+- **N&W** is added; its base city is **Norfolk L-16** (5.0, p. 34; T-08). A normal fixed home — the book's separate
+  multiple-starting-hex material is not part of Scenario D.
+- **PMQ** is added; its base is **Detroit/Windsor E-5**, and it may start in **either** city (5.0, p. 34); the base game's
+  Erie track-laying rules apply to the PMQ as well (7.2, p. 35). Slice 8.2 therefore treats the PMQ's home exactly as the
+  Erie's on E-5 (owner brief): either circle, free, no tile first, the Erie-equivalent reservation — including the S8-14
+  conditional rule once E-5 is tiled (§0; V-7.3, p. 32, applies the Erie's OO rules to the PMQ).
+- **Erie and N&W certificates** (5.0, p. 34): the Erie has two 20 % certificates — the president's and an "other" one — so
+  with six 10 % certificates; the N&W's second 20 % certificate is handled like the Erie's. Printed details for Slice 8.3:
+  the other 20 % becomes buyable once the president's certificate is bought; until it is sold a buyer may take either a
+  10 % or the 20 % from the initial offering; its owner may sell only half of it (10 %) and only when 10 % certificates are
+  already in the Bank Pool to exchange (initial-offering certificates do not count). #1324 already models the certificate
+  mix and the half-sale condition; Slice 8.3 should confirm the purchase-availability details.
+- **C&O** (7.3, p. 35): at the start of its first operating turn the C&O places its home in **Cleveland F-6 or Richmond
+  K-13** (T-08). Richmond is closed to every other railroad until the C&O lays its first token; Cleveland is not, and if
+  another railroad closes Cleveland out first the C&O can only open in Richmond; a C&O start in Cleveland opens Richmond
+  to other railroads; the C&O may hold stations in both cities only with a valid connection. Hence: **Richmond
+  protected, Cleveland blockable**; the unchosen city is forfeited as a home and reachable later only as an ordinary
+  station. This supersedes the design pass's generic "LPF C&O has two homes" wording (§5.5).
+- **Station prices** (7.3, p. 35): the scenario prints a flat $100 station price. **Owner reading (Slice 8.2 brief):** the
+  home stays free (the base game's 7.3.1) and every ordinary station after it costs $100 — no $40 first additional
+  station. The D&H's free station stays free (Table T-05, p. 46; the DH description, p. 47).
+- **PRR starting hex** (7.3, p. 36): on the 1830+ board the PRR's starting hex has no city; a special PRR token placed at
+  its first operating turn may count as a 10-value city on PRR routes through the hex, and other railroads use the track
+  normally. The implementation's herald home (#1302 / #1332: a PRR-only revenue centre and network root, optional on a
+  route, occupying no city and no token) is a **representation difference with the same effect**, recorded, not a defect;
+  Slice 8.2 keeps the brief's rule that a herald owes no home placement.
+
 ### 5.2 Current machine (traced) — the lifecycle as it stands
 
 | Moment | Code | Behaviour |
@@ -497,7 +562,8 @@ to "what should actually be held": the table *is* waiting on exactly that presid
 
 **Position of the hold — in front of the chart step (S8-13).** All four holds move from `applySandboxActionCoreJudged`
 to `applySandboxActionAfterAuction`, ahead of `applySandboxMarketAction`, in their existing order (discard → funding →
-offer → home). A held message must return the board by identity *before* the chart moves. The queue settle of §2.4
+offer → home). *(Implemented one layer higher, Slice 8.2 §5.9: the top of `applySandboxActionOnBoard`, ahead of the
+auction atom too — and the lay's grid step asks the same predicate.)* A held message must return the board by identity *before* the chart moves. The queue settle of §2.4
 stays behind the chart step. (Today the discard and offer holds are protected only by coincidence: a sale under them
 is refused by `stockSaleRefusal`'s round rule — except a player↔player trade offer standing in a Stock Round, D-24,
 which is the latent case.)
@@ -521,7 +587,11 @@ ingress:**
    keep `[0]` for `kind: "home"` and append for `kind: "dh"`. Opus to grep the `[0]` readers before changing.
 
 **Reservation (§6.3.2)** needs no change: `homeReservationStands` already models "not yet operated" as "no token of
-its own", from the start of the game, and releases by use. Under the new timing the reservation simply persists
+its own", from the start of the game, and releases by use. *(Rechecked against printed Scenario D for Slice 8.2: the
+C&O asymmetry is already encoded — #1325's `LPF_HOME_STATIONS` enforces K13 and marks F6 `enforced: false` — so no
+change was needed. The Erie / PMQ OO home hex, filed as S8-14 (§5.1), was ruled on 2026-09-17 (§0): the reservation
+arithmetic stays as it is on an untiled OO hex, and #1617 closes a tiled, unhomed OO home hex to every other corporation,
+§5.9.)* Under the new timing the reservation simply persists
 through the Stock Round after the float until the first turn — which is the rulebook's own window. The token is never
 made physically present early to model it.
 
@@ -552,8 +622,8 @@ prompt therefore appears at the start of the corporation's first OR turn (U-32, 
 | `CloseRoom` | passes, as under every hold |
 | Ingress | fourth hold + `homePlacementRefusal` for the message itself (LEGALITY SYNC at the lock, S10-1's shape) |
 | Delayed Auction (#905) | no effect: B&O's par/presidency grant does not float it |
-| Herald home (#1302) | owes nothing; PRR on 18XX+ still operates from H12 without a token |
-| LPF C&O two homes (#1325) | the choice is made at the first turn; either hex; reservation on both released by the placement |
+| Herald home (#1302) | owes nothing; PRR on 18XX+ still operates from H12 without a token *(printed Scenario D gives the PRR a special token with the same effect — a representation difference, §5.1a)* |
+| LPF C&O two homes (#1325) | ~~the choice is made at the first turn; either hex; reservation on both released by the placement~~ **Superseded (Slice 8.2, printed Scenario D, §5.1a):** the choice is made at the first turn among the currently legal candidates; **Richmond is reserved, Cleveland is not** (it may be tokened or closed out before C&O operates); a Cleveland start releases Richmond at once; the unchosen city is forfeited as a home |
 | D&H free station | exempt from the home predicate; timing unchanged (the corporation's own Track step) |
 
 ### 5.6 Hex-validation note for S8-6
@@ -577,6 +647,162 @@ sale: **server/JUNO-FCJ 904, 911, 918, 932** (N&W floated at 902; each entry cha
 else). Under the current model this is reachable in live play (a sale sent while another corporation's float is being
 witnessed). Under the new model the SR-time hold no longer exists, and the four holds move in front of the chart step
 so the shape cannot recur for any hold. Replay-semantic for FCJ (the four price moves disappear) — part of the bump.
+
+### 5.9 Implementation record — Slice 8.2 (Opus, 2026-09-16; uncommitted, awaiting owner review)
+
+S8-5, S8-6, S8-12 and S8-13 are implemented on the committed Slice-8.1 baseline `05b5dfc`, and S8-14 in the same
+uncommitted tree after the owner's ruling (2026-09-17). `RULES_ENGINE_VERSION` stays
+**5** (the bump is Slice 8.5's). Nothing is staged or committed; the owner's unrelated working-tree changes are preserved.
+Design notes **#1610–#1617** carry the reasoning in source.
+
+**Files.** New `frontend/src/gameEngine/homeStationAuthority.ts` (#1610–#1612). Changed: `sandboxSession.ts`
+(`authoritativeHoldRefusal` and the #1613 gate; the #1611 legality check in the core; the `BuyStock` #769 seat hold and
+the Sell-Buy-Sell home refusal removed; `placeHomeStationToken` without #769a; `placeDhFreeStationToken`, #1615;
+`pendingHomeTokens` narrowed, #1616), `turnAuthority.ts` (fourth hold; `homePlacementRefusal` in the sandbox-only
+branch; S8-14: a `PlaceStationToken` asked the reducer's identity and legality predicates, #1617), `stationTokens.ts`
+(S8-14: `closedOoHomeAt` and its arm in `evaluateStationPlacement`, #1617), `derivedActions.ts` (null while a home is
+owed), `homeTokenGate.ts` (delegates), `rulesVersion.ts` (`legacyHomeTokens`), `replayLog.ts` (`LegacyHomeChoices`,
+`LegacyLogAdapters` #1614a, the grid step's hold check), `utils/gameHistory.ts` and `utils/roundReplay.ts` (optional
+adapter policy, production passes none), `App.tsx` (two small hunks beside the owner's work: the prompt memo passes the
+grid; the lay predicate asks the holds).
+
+**The obligation (#1610).** `owedHomeStation(state, table)` / `homeStationOwed(state, companyId, table)`: an Operating
+Round ∧ the corporation under the cursor ∧ floated ∧ its home is not a printed herald ∧ it holds no station token ∧ at
+least one candidate home resolves on the board in effect. Nothing is stored.
+
+**Legality (#1611).** `homePlacementRefusal(state, placement, mapGrid, table)` — one predicate for the reducer and
+ingress, in order: the corporation exists; not a herald; home not already established; a home on this board; floated;
+operating now (so a Stock Round placement, a second placement and a non-operating corporation are refused); the hex is a
+candidate (`homeHexChoicesFor`: the state's `home_hex_label`, plus the board's `homeHexesFor` entries when they agree —
+C&O's F6 + K13); then, given a grid: a one-city hex takes `null` / 0, a multi-city hex must name a circle that exists,
+#858's locked circle for a fixed home on a two-city hex (NNH), and `evaluateStationPlacement` (occupancy, the
+one-token-per-city rule, the allowance, other corporations' reservations). No tile is required; connectivity is not
+asked. The message's `q` / `r` / `city_index` are judged, never trusted (#1325's "wherever it recorded" is withdrawn).
+
+**The OO home hex (#1617, S8-14 — owner ruling 2026-09-17, §0).** `closedOoHomeAt(mapGrid, q, r, company, allCompanies)`
+(`stationTokens.ts`) returns the home entry that closes `(q, r)` to `company`, or `null`:
+1. If no tile is on the grid at `(q, r)` other than one the board printed (`printed !== true`, #1301), return `null` —
+   an untiled OO hex is governed by the ordinary reservation arithmetic, which keeps one city for its owner (last-city
+   protection) and lets another corporation take the other if otherwise legal. No board prints a tile on E11 or E5.
+2. Otherwise return the first home entry of the board in effect (`stationHomeHexes()`) that is on `(q, r)`, belongs to
+   another corporation, is enforced (`enforced !== false`), lies on a hex where the president picks the circle
+   (`homeSlotsAreOpen` — the Erie's E11; under the Level Playing Field the PMQ's E5), and whose reservation still stands
+   (`homeReservationStands`: its owner holds no token on that hex, which for a single-home corporation means its home is
+   not placed; no record of the owner counts as standing); `null` if none qualifies.
+
+`evaluateStationPlacement` asks it after the allowance, city, one-station-per-hex and hex-full checks and before the
+hex-level reservation arithmetic, and refuses with "<ticker> has not placed its home station on <hex> yet and a tile has
+been laid there, so no other corporation may place a station on <hex> until it does." Unchanged: that arithmetic, #1511's
+per-circle occupancy and locked reservations, connectivity, and the home predicate — the owner is never refused by its own
+entry, so the Erie / PMQ still takes either free city, tiled or not. Nothing is removed from the board: a foreign station
+placed before the tile stays (a lay may move or clamp a token's circle, #824 / #1315, and never removes one). New York's
+locked circle (#858 / #1511) and the C&O's cities (#1325) are not open-circle hexes and are untouched. Every reader of the
+predicate follows — the reducer's gate (`stationPlacementRefusal`), the veil (`placeableStationHexes`) and the click
+reason. **Ingress parity:** `turnRefusal` now asks a `PlaceStationToken`, after the seat rule, the reducer's two questions
+in the reducer's order — `operatingIdentityRefusal`, then `stationPlacementRefusal` under the table's rules (#1300) — and
+returns before `operatingLegalityRefusal`, which has no station arm. Before this, ingress judged a paid placement only by
+its seat and the holds, so a refused placement was appended and no-op'd (S10-1's shape); now every illegal paid placement,
+this one included, is answered with the authority's sentence. Replay is unaffected by the ingress half (`RoomEngine` does
+not run ingress).
+
+**The hold (#1612).** `homeStationHold(state, msg, table)` — while the operating corporation owes its home, everything
+but `PlaceHomeStation{kind: "home"}`, `RevertTo`, `CloseRoom` and `UndoLastAction` is refused with one sentence: "<ticker>
+is starting its first operating turn and its home station is not on the board yet. <president> must place it on
+<hexes> before <ticker> can operate." Asked by the reducer (through `authoritativeHoldRefusal`), by `turnRefusal` as the
+fourth hold (after discard / funding / offer, before the consent exemption), and by `nextDerivedAction` (returns
+`null`). The hold is turn-local by construction: no Stock Round, no other corporation's turn, no future corporation.
+
+**Before anything moves (#1613).** `authoritativeHoldRefusal(state, msg, ctx)` — discard → funding / finished game → offer
+→ home — is asked at the top of `applySandboxActionOnBoard`, before the auction atom, the chart step, the core and the
+8.1 queue settle; the three checks it replaces were removed from `applySandboxActionCoreJudged` (pointer notes left). A
+held message returns the board by identity (a refused accepted settlement still retires its offer, #1596). **Found by
+this slice's own S8-13 check (a held message must produce no other partial mutation):** a lay touches a third atom —
+`RoomEngine.applyOnBoard` and `App.tsx`'s dispatch lay the tile on the GRID before the reducer runs, gated only by
+identity and tile legality — so a `LayTile` sent under a hold (CV4 27 walked without the adapter: B&O's lay with its home
+owed) put its tile on the grid while the reducer refused the lay. Both grid steps now ask `authoritativeHoldRefusal` on
+the lay's snapshot. Corpus effect: none (every observed grid identical, §8.1).
+
+**Float mechanics retired.** #769 (the buyer's seat held until the placement) and #769a (the placement releasing it) are
+gone; the float purchase advances the seat as any purchase does; `PlaceHomeStation` moves no seat, pass streak or
+`turn_action_taken`.
+
+**D&H isolation (#1615).** `kind: "dh"` goes to `placeDhFreeStationToken` (floated, not already on the hex; appended;
+free) and is never asked the home predicate; the home stays at `station_token_hexes[0]` / `station_tokens[0]`. Side effect
+worth recording: the Level Playing Field's C&O could not use the D&H power before (#1325's two-home check refused its D&H
+station); it now can. The D&H's own rules (hex, once, turn) are still judged at neither lock — filed as S9-12.
+
+**Prompt (#1616, U-32).** `pendingHomeTokens(state, table, mapGrid)` lists at most the operating corporation's obligation,
+its options filtered through `legalHomeTargets`; `App.tsx`'s memo passes the grid. No prompt at the float; the prompt at
+the first turn offers only legal choices (closed-out Cleveland is not offered; N&W offers Norfolk only). The
+"Corporation Floated" flourish and the modal's visual design were not touched. Consequence filed as U-37: a non-herald
+float's Activity Log line (#1343) is written at the placement, so a Stock Round float is now narrated at the first turn.
+
+**Development-corpus adapter (#1614, R3 / D-31).** `ReplayPolicy.legacyHomeTokens` — `"refuse"` (server) /
+`"defer-to-first-turn"` (`DEVELOPMENT_CORPUS_POLICY`), legacy logs only. `LegacyHomeChoices`: a stored home placement
+refused while its corporation does not owe its home, on a candidate home (`isHomeCandidate`), is remembered (last wins);
+when the operating corporation owes its home and a choice is remembered, ONE synthetic placement by its president goes
+through `engine.apply` — the current predicate on the current board — and the memory is spent whether or not it lands;
+never substituted (not the other circle, not the other city). #1614a `LegacyLogAdapters.apply(engine, entry)` is the
+one per-entry step `replayLog`'s loop and the corpus harnesses (`replayJunoCV4`, `stationLegality`) share. `RoomSession`,
+the server and the shell's epilogue / round scrubber apply no adapter (source-scanned).
+
+**Source-tracing answers (brief §38).** (1) A home is `home_hex_label` resolved on the board in effect, plus that
+board's `homeStations` entries for the same company. (2) Yes — one fixed hex; one hex with two open circles (Erie E11,
+PMQ E5, `homeSlotsAreOpen`); two hexes (C&O). (3) `LPF_HOME_STATIONS` (`hexBoardDataLpf.ts`, #1325). (4) Richmond only:
+Cleveland's entry is `enforced: false` and holds nothing (a test title claiming "reserves Cleveland and Richmond" was
+wrong and is corrected). (5) Yes — E5 is an open-slot hex like E11. (6) Yes — N&W `home_hex_label: "L16"`, no second
+home. (7) No helper touched assumes one 20 % certificate; `doubleCertificate.ts` (#1324) models Erie's and N&W's second
+20 %. (8) LPF: home $0, every later ordinary station $100 (#1320's schedule); Classic unchanged ($0 / $40 / $100) — both
+pinned. (9) Yes — the D&H station is free and outside the schedule. (10) Readers treat the token lists as sets; the home
+remains first and the D&H station is appended. None of these is an architecture blocker; S8-14, the one rules question,
+was ruled on 2026-09-17 and is implemented (#1617).
+
+**Tests and gates.** New: `homeStationAuthority.test.ts` (21), `homeStationLpf.test.ts` (14), `holdBeforeChart.test.ts`
+(8), `legacyHomeAdapter.test.ts` (15). Focused gate: **122 suites / 2,161 tests, all passing** (full Jest not run).
+Mutation checks, each restored byte-for-byte: the hold moved behind the chart step → 3 chart cases fail; the ingress
+hold removed → the both-locks case fails; the derived `null` removed → the derived case fails; the adapter disabled → 9
+cases fail; Cleveland reserved → 2 C&O cases fail; the grid step ignoring holds → the grid case fails; an untimely
+placement accepted → 3 timing cases fail. Frontend `tsc --noEmit` clean; server `tsc -p server/tsconfig.json` clean.
+
+**S8-14 follow-up tests and gates (2026-09-17).** New cases only: `homeStationAuthority.test.ts` §29 (7 — the tile is
+real; before a tile one city allowed and the last refused, at both locks; after a tile both cities and a circle-less
+placement refused at both locks and E11 gone from the veil; a foreign station placed before the tile survives the
+reducer's own lay, nothing is added beside it, and the Erie takes the free city at both locks but not the taken one; after
+the Erie's home, ordinary rules; a printed tile closes nothing; NNH's G19 is not an OO home), `homeStationLpf.test.ts` §29
+(6 — the same cases for the PMQ on E5 with N&W as the other corporation, without the veil, printed-tile and G19 checks;
+the C&O's F6 untouched), `legacyHomeAdapter.test.ts`
+(3 — a remembered Erie / PMQ circle on a tiled hex is judged by the current authority and lands at the first turn; a
+circle taken before the tile stays taken and the hold stands). Suite totals now 28 / 20 / 18. Focused gate: **76 suites /
+1,614 tests, all passing** (home, reservation, station, ingress, offer-matrix, replay and history suites; full Jest not
+run); the three S8-14 suites re-run after the last test edit, 66 / 66. Mutations, each restored byte-for-byte: the closure
+disabled → 6 cases fail; the ingress station branch removed → 8; a printed tile counted as laid → 1; the closure applied
+without a tile → 7 (including §26's last-city cases); the closure outliving the home → 2. Frontend `tsc --noEmit` clean;
+server `tsc -p server/tsconfig.json` clean; ESLint reports nothing on the five touched files.
+
+### 5.10 Expectations changed by Slice 8.2 (each a direct consequence, with its reason; no stored log rewritten)
+
+| Suite | Change | Index / reason |
+|---|---|---|
+| `floatHoldsSeat` | the float purchase advances the seat; a Stock Round placement is refused; the OR placement moves no seat | hand-built; #769 / #769a retired (S8-5) |
+| `homeTokenGate` | the Stock Round owes nothing; the hold engages at the first turn with the new sentence; source scan follows the gate | hand-built; #1610 / #1612 / #1613 |
+| `homeStationWait` | memo strings carry the grid; the #769 held-seat scan became "the reducer still derives the list" | source scan; #1616 |
+| `heraldHome` | the list is asked under an OR cursor: PRR's turn owes nothing, NYC's owes NYC | hand-built; #1610 |
+| `levelPlayingFieldRules` | C&O's placement made at C&O's turn; the "reserves Cleveland and Richmond" title corrected | hand-built; #1610, Scenario D |
+| `trainDiscard` | the "refused" policy spreads `DEVELOPMENT_CORPUS_POLICY` and changes only `legacyExcessTrains` | harness; #1614 key |
+| `turnAuthority` | a home placement on a home-less board gets `homePlacementRefusal`'s sentence at ingress (was `null`) | hand-built; S8-6 / S8-12 |
+| `offerMatrix74Hold` | home-hold case moved to a first-turn board (both locks, one sentence); the room sequence's SR placement is refused as untimely | hand-built; #1610 / #1612 |
+| `messageSchema` | the president's `null` now uses PRR's printed home at its first turn; the old 0,0 placement is pinned as refused | hand-built; S8-6 / S8-12 |
+| `replayJunoCV4`, `stationLegality` | corpus prefixes walked through `LegacyLogAdapters` (boards at 131 / 95 / 96 identical to the pre-8.2 walks) | harness; #1614a |
+| `gameHistory` (CV4 cases), `accolades`, `gameOutro`, `roundReplay` | CV4 read under `DEVELOPMENT_CORPUS_POLICY` (history identical; round boards identical except the SR 1 / SR 3 ends lacking B&O's / C&O's tokens) | harness; #1614a |
+| `gameHistory` (Z6C characterization) | re-pinned: no freeze at 34; B&O's 32 choice lands after 40; development timeline 26 samples to OR 10.1; the epilogue default stops at OR 1.1 behind the hold | Z6C: board after 33 (seat, #769), acceptance 34 (`PassTurn`) |
+| `replayJuno3XD` | turn keys 307 → 11.1.1, 313 → 12.0.4, 318 / 319 → 12.0.7 (were read off the board frozen at 290) | 3XD: NYC's float-time freeze lifted; first newly applied entry 296 |
+| `moneyConservation` | the Yellow Sign corpus list is `["203 YellowSignEvent +90"]` (was empty: the log froze at 34) | Z6C 203: C&O's Mark, S9-1 unchanged |
+
+Goldens (`replayGolden` fixtures) unchanged — CV4 and G6J replay to identical final boards. Corpus files byte-identical
+(sha256) before and after.
+
+**S8-14 follow-up (2026-09-17): no existing expectation changed.** Every S8-14 case is new; §26's last-city cases ("Erie's
+reservation keeps one E11 city for it", "PMQ's reservation is Erie's") pass unchanged, on untiled boards.
 
 ---
 
@@ -720,6 +946,41 @@ freezing a log that the rulebook says should continue (FCJ 903, 3XD 290, Z6C 34)
 Without the adapter every completed-game fixture dies at the first OR turn of the first floated corporation, which
 would remove the only completed game the suite has (CV4, re-homed there by 7.5).
 
+### 8.1 Measured at implementation — Slice 8.2 (18 files / 3,103 stored entries, `DEVELOPMENT_CORPUS_POLICY`)
+
+Two comparisons. **(A) Against the pre-8.2 tree** (the 8.1 working tree before any 8.2 edit): per file, the first stored
+entry whose board differs (*field-first*), the first whose acceptance differs (*acceptance-first*; total in brackets),
+the supplied homes (`[company, recordedAt, afterIndex, circle]`, all applied), and the end state. **(B) Against the
+pre-8.2 engine made to place each home at its float from the log's own recorded choice** (the old rule without its
+freeze): at **every** stored entry of **every** file the board is identical apart from station tokens, acceptance is
+identical, and the grid is identical; the end states are identical except where a corporation's first turn lies beyond
+the log (server/G6J: B&O and C&O; FCJ-96: B&O), which lack those tokens. So every divergence in (A) is home timing, and
+the lifted freezes continue exactly as the old engine would have continued them.
+
+| File | Field-first | Acceptance-first | Supplied homes | End state | Matches corrected authority / reason |
+|---|---|---|---|---|---|
+| golden / server / export **JUNO-CV4** | 20 (seat after the float purchase at 19) | 20 `PlaceHomeStation` refused (2) | B&O I15 [4, 20, 26]; C&O F6 [5, 59, 62] | identical | yes — #769 retired; placement untimely, supplied at each first turn |
+| server/**JUNO-CW7** | 28 (tokens) | 27 (2) | B&O [4, 27, 57]; B&M E23 [8, 50, 64] | identical | yes — home timing |
+| server/**JUNO-FCJ** | 50 (tokens) | 49 (75) | B&M [8, 49, 69]; B&O [4, 53, 98]; N&W L16 [10, 689, 936] | 16 fields (was frozen SR 25; now OR 29.1) | yes — N&W's float at 902 no longer freezes; 904 / 911 / 918 become real sales and 932 is refused by the President's Certificate rule (no chart move) |
+| server/**JUNO-G6J** | 23 (seat) | 23 (2) | none (no OR in the log) | tokens only | yes — both first turns lie beyond the log |
+| export/**JUNO-3XD** | 25 (seat) | 25 (11) | B&O [4, 27, 35]; PRR H12 [1, 25, 42]; NYC E19 [2, 213, 302, circle 0] | 12 fields (SR 11 → SR 12) | yes — NYC's float at 289 no longer freezes; 290 / 293 stay refused (unaffordable), 296 is the first newly applied entry |
+| export/**JUNO-QVC** | 16 (seat) | 16 (3) | B&O [4, 16, 27]; PRR [1, 18, 36]; C&O [5, 24, 42] | identical | yes — home timing |
+| server/**JUNO-Z6C**, fixture **Z6C-494** | 34 (seat after 33) | 34 `PassTurn` applied (342 / 297) | B&O [4, 32, 40]; NNH G19 [7, 37, 47, circle 0]; C&O [5, 56, 59]; NYC [2, 256, 285, circle 0]; PMQ E5 [9, 343, 362, circle 1] | 25 fields (SR 1 → OR 11.2 / OR 10.1) | yes — the 7.5 freeze lifts; the Yellow Sign at 203 is reached again (+$90, S9-1) |
+| prefix/**JUNO-FCJ-96** | 50 (tokens) | 49 (2) | B&M [8, 49, 69] | B&O's token absent | yes — B&O's first turn lies beyond the prefix in the sweep (the #1555 harness reaches it after 74) |
+| 7NZ ×2, TQQ, JJD, 8E8, golden G6J | — | — | none | identical | no float |
+| export/JUNO-Y8V | — | — | — | — | replays zero entries; no evidence |
+
+No off-home, circle-less or now-illegal remembered choice occurs in the corpus: every supplied home lands. Money is
+conserved everywhere apart from Z6C 203's Mark (S9-1). No golden fixture changes.
+
+**S8-14 follow-up (2026-09-17), against the 8.2 tree immediately before it.** At every observed message of every file —
+3,131 (3,103 stored entries + the adapter's 28 home placements) — the state digest, the per-field digests, the station
+tokens and the grid are identical, and so is every end state. The edge case does not occur: no file ever has a
+non-printed tile on E11 or E5 (the closed window never opens), no `PlaceStationToken` or `PlaceHomeStation` by another
+corporation targets either hex, and no foreign token ever appears on either (the Erie places no home in the corpus; the
+PMQ's one home, Z6C, lands on an untiled E5 after 362). For all 32 `PlaceStationToken` entries the new ingress branch's
+verdict matches the reducer's outcome (all legal, all placed).
+
 ---
 
 ## 9. Replay strategy for the home transition — recommendation
@@ -764,6 +1025,11 @@ This is the 4.6 precedent in shape and in policy (D-9: best-effort, development-
 replayed under the correct rule, and the historically chosen hex / city (Erie's slot, C&O's LPF hex) is carried as
 *data* rather than invented. The alternative would cost the suite its only completed game.
 
+> **Implemented (Slice 8.2, §5.9).** As recommended, with the "remember" test stated as "refused while its corporation
+> does not owe its home, on a candidate home" (`LegacyHomeChoices.untimelyChoice`) — which admits the Z6C 32 / 3XD 213 /
+> FCJ 689 choices made while un-floated on the version-5 board — and the loop body shared as `LegacyLogAdapters.apply`
+> (#1614a) so a harness walking a corpus prefix through its own `RoomEngine` supplies the same. Measured result: §8.1.
+
 **Version strategy (question 10): A — one bump, 5 → 6, at Stage-8 closure (a Batch 8.5 in 7.5's shape).** Every
 Stage-8 slice is replay-semantic, the corpus shows the slices do not interact in stored play (order and presidency
 repairs move nothing; the home move changes fields at 8 indices and gameplay only where the old hold froze a log; the
@@ -806,12 +1072,14 @@ No competing UI document is created; Part C is the one list.
   own dividend never displaces it; operated prefix immutable; float-between-turns not inserted; derived key stable);
   `soldOutRise.test.ts` two risers one cell; corpus sweep asserting digest identity to the 7.5 baseline.
 
-### Slice 8.2 — Home station authority (S8-5, S8-6, S8-12, S8-13) — **Opus** (owner model policy, §0; was "Fable High"; R3 ruled)
-- Ledger: S8-5 → RESOLVED, S8-6 → RESOLVED, S8-12 → RESOLVED, S8-13 → RESOLVED; S10-17's `PlaceHomeStation` row
+### Slice 8.2 — Home station authority (S8-5, S8-6, S8-12, S8-13) — **Opus** (owner model policy, §0; was "Fable High"; R3 ruled) — **IMPLEMENTED 2026-09-16, uncommitted (§5.9, §5.10, §8.1)**
+- Ledger: S8-5 → RESOLVED, S8-6 → RESOLVED, S8-12 → RESOLVED, S8-13 → RESOLVED, S8-14 → RESOLVED (owner ruling
+  2026-09-17, #1617, D-33); S10-17's `PlaceHomeStation` row
   closed; S10-21 updated (Z6C characterization re-pinned).
 - Invariant: §5.4 obligation-on-cursor; hold turn-local and in front of the chart step; placement legality 1–5;
-  reservation unchanged; seat untouched by the placement; derived loop silent under the hold; ingress mirrors the hold
-  and the placement predicate.
+  reservation unchanged on an untiled OO hex and a tiled, unhomed OO home hex closed to other corporations (S8-14); seat
+  untouched by the placement; derived loop silent under the hold; ingress mirrors the hold, the placement predicate and
+  the paid placement's predicates.
 - Files: new `homeStationAuthority.ts` (`homeStationOwed`, `homeStationHold`, `homePlacementRefusal`);
   `homeTokenGate.ts` (retired or delegating); `sandboxSession.ts` (`pendingHomeTokens` narrowed; `BuyStock` arm #769
   removed; `placeHomeStationToken` #769a removed, `kind` branch, no seat advance; holds moved to
@@ -836,6 +1104,11 @@ No competing UI document is created; Part C is the one list.
 - Files: `presidencyTransfer.ts`, `emergencyFunding.ts` (441), callers' signatures, tests.
 - Replay: replay-semantic only on a tie; corpus identical.
 - Tests: §4.3 cases + one LPF double-certificate case.
+- **Scenario-D input (recorded by Slice 8.2, §5.1a):** the Erie's and the N&W's second 20 % certificate are PRINTED
+  Scenario-D behaviour (full rulebook S-1.2 5.0), not an owner-defined LPF rule: president's 20 % + other 20 % + six 10 %;
+  the other 20 % buyable once the president's certificate is bought; a buyer may take the 10 % or the 20 % from the
+  initial offering until the 20 % is sold; its half-sale needs 10 % certificates already in the Bank Pool. A tie-break
+  or projection helper must not assume one 20 % certificate per corporation.
 
 ### Slice 8.4 — M&H exchange authority (S8-10) — **Opus** (R1 / R2 ruled, §0: interjection + queued off-turn request, owner's source choice)
 - Ledger: S8-10 → RESOLVED (rewritten finding).
@@ -925,3 +1198,15 @@ S8-1 (corpus status under v5 + overlay proof), S8-2 (exchange-arm gap cross-refe
 S8-5 (owner ruling recorded; status DEFERRED → OPEN; corpus facts), S8-6 (corpus: no off-home placement; D&H shares
 the arm), S8-10 (finding rewritten to the actual defect; 3XD 288), S8-12 (absorbed into the home slice), **S8-13 new**,
 S10-21 cross-reference, Part C U-32 … U-35. No item marked RESOLVED.
+
+**Slice 8.2 ledger edits (2026-09-16).** Header rulebook paragraph (LPF is printed Scenario D; source split); S8-5, S8-6,
+S8-12, S8-13 → `RESOLVED`; **S8-14 new** (Erie / PMQ whole-hex reservation question); S9-5 retitled and corrected (printed
+Scenario D, owner variations listed separately); **S9-12 new** (D&H free-station legality at neither lock); S10-17
+(`PlaceHomeStation` row closed); S10-21 (Z6C now replays to OR 10.1); **S10-22 new** (the #1530 adapter's identity
+guard); U-32 reworded to the owner's text; **U-37 new** (float narration timing); D-10 corrected; D-31 implementation
+note; Part E row for Slice 8.2. U-35 untouched.
+
+**S8-14 follow-up ledger edits (2026-09-17).** S8-14 → `RESOLVED` (the owner's conditional ruling, #1617); **D-33 new**
+(the ruling); S9-5's list of owner readings (S8-14 ruled); S10-1 (a paid station placement's identity and legality
+refusals are now answered at ingress); the Stage-8 row of the stage table; Part E's 8.2 row (#1617 and its corpus
+measurement).

@@ -201,21 +201,28 @@ describe("the whole corpus conserves money after every replayed entry", () => {
        because the one log that exercised it stops at 34. What this case pins is therefore both halves: the
        corpus list is empty for the reason above, AND the Mark still mints on a board that reaches it. If S9-1
        is ever closed the second half fails and the exemption in `MINTS_BY_DESIGN` comes out with it. The freeze
-       itself is characterized step by step in `gameHistory.test.ts` (Batch 7.5). */
+       itself is characterized step by step in `gameHistory.test.ts` (Batch 7.5).
+
+       SLICE 8.2 RE-PIN (S8-5, #1610 / #1614; the Stage-8 design's corpus table predicted it): THE CORPUS REACHES 203
+       AGAIN. The freeze at 34 was the float-time home hold, which is retired: B&O floated at 33 owes nothing in the
+       Stock Round, and its home is owed at its first operating turn (after 40), where the development corpus's policy
+       supplies the choice recorded at 32 (I15). The log runs on, and at 203 C&O's Mark (`YellowSignEvent`, stage
+       "mark", its 3-train taken) credits C&O $90 -- half the train's depot value, with no payer: the Batch 7.1
+       observation, back on the stored corpus. S9-1 is unchanged and still Stage 9's; the corpus list below names that
+       one entry, and the synthetic board after it still pins the rule itself. Nothing else in the corpus mints. */
     const z6c = logs.find((entry) => entry.name === "server/JUNO-Z6C");
     if (z6c) {
       const steps = walk(z6c.entries);
       const minted = steps
         .map((step, i) => ({ step, next: steps[i + 1] }))
         .filter(({ step, next }) => next && next.money !== step.money && step.kind !== "SetupGame");
-      expect(minted.map(({ step, next }) => `${step.index} ${step.kind} +${next.money - step.money}`)).toEqual([]);
-      const digestAt = (index: number) => {
-        const i = steps.findIndex((step) => step.index === index);
-        return JSON.stringify(steps[i].state);
-      };
-      const frozen = digestAt(34);
-      expect(JSON.stringify(steps[steps.length - 1].state)).toBe(frozen);
-      expect(digestAt(203)).toBe(frozen);
+      expect(minted.map(({ step, next }) => `${step.index} ${step.kind} +${next.money - step.money}`)).toEqual(["203 YellowSignEvent +90"]);
+      // Slice 8.2: no longer frozen at 34 -- the board at 203 is not the board at 34, and the Mark lands on C&O.
+      const at = (index: number) => steps.find((step) => step.index === index)!.state;
+      expect(JSON.stringify(at(203))).not.toBe(JSON.stringify(at(34)));
+      const mark = steps.findIndex((step) => step.index === 203);
+      const co = (state: GameStateResponse) => state.public_companies.find((entry) => entry.ticker === "C&O")!;
+      expect(Number(co(steps[mark + 1].state).treasury) - Number(co(steps[mark].state).treasury)).toBe(90);
     }
 
     const BO = 6;

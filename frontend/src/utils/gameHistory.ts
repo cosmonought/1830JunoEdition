@@ -37,7 +37,8 @@
 //
 // COMPUTED ONCE, AT THE END. A 600-action log replays in well under a second.
 
-import { RoomEngine, entriesFromExport, type ReplayEntry } from "../gameEngine/replayLog";
+import { LegacyLogAdapters, RoomEngine, entriesFromExport, type ReplayEntry } from "../gameEngine/replayLog";
+import { SERVER_REPLAY_POLICY, replayCompatibility, type ReplayPolicy } from "../gameEngine/rulesVersion";
 import { sandboxReplayProviders } from "../gameEngine/replayProviders";
 import {
   DEFAULT_SANDBOX_SCENARIO,
@@ -276,10 +277,18 @@ function parsePayload(entry: ReplayEntry): Record<string, Record<string, unknown
 }
 
 /** Replay `log` and sample it at every round boundary, tallying the accolades as it goes. Reverts are
- *  honoured (`effectiveActions`). */
-export function gameHistoryFrom(log: readonly SandboxAction[]): GameHistory {
+ *  honoured (`effectiveActions`).
+ *
+ *  Design note #1614a (Slice 8.2): `policy` chooses which development-corpus adapters walk the log, and nothing
+ *  else. The shell passes none: under the server's policy no adapter runs and every entry goes through
+ *  `engine.apply` exactly as it always has -- a legacy log is read the way the current engine reads it. A test
+ *  that reads a legacy corpus log (the frozen JUNO-CV4) passes `DEVELOPMENT_CORPUS_POLICY` by name, as
+ *  `replayLog`'s callers do. The epilogue never refused a log and does not start to here. */
+export function gameHistoryFrom(log: readonly SandboxAction[], policy: ReplayPolicy = SERVER_REPLAY_POLICY): GameHistory {
   const entries: ReplayEntry[] = effectiveActions(entriesFromExport(log));
-  const engine = new RoomEngine(sandboxReplayProviders(), roomSeed());
+  const providers = sandboxReplayProviders();
+  const engine = new RoomEngine(providers, roomSeed());
+  const adapters = new LegacyLogAdapters(providers, replayCompatibility(entries), policy);
   const rounds: RoundSample[] = [];
   let lastKey: string | null = null;
   let lastIndex = -1;
@@ -355,7 +364,7 @@ export function gameHistoryFrom(log: readonly SandboxAction[]): GameHistory {
 
   for (const entry of entries) {
     const before = engine.snapshot.state;
-    engine.apply(entry);
+    adapters.apply(engine, entry); // #1614a: exactly `engine.apply(entry)` unless the caller named an adapter policy
     lastIndex = entry.index;
     const after = engine.snapshot.state;
     const msg = parsePayload(entry);

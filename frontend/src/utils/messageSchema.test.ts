@@ -373,9 +373,24 @@ describe("a player cannot act as somebody else (#1450)", () => {
 
 describe("the between-turn actions keep the authority they had", () => {
   it("lets a corporation's president place its home station, and nobody else", () => {
-    const msg = { PlaceHomeStation: { company_id: 1, q: 0, r: 0, kind: "home" } };
-    expect(refusal("p-a", msg)).toBeNull();
-    expect(refusal("p-b", msg)).toContain("president places its station");
+    /* Slice 8.2 (S8-12 / S8-6, #1611): ingress now judges the placement with the reducer's own
+       `homePlacementRefusal`, so the president's null needs a placement that is legal -- PRR's printed home (H12,
+       at 2,7 on the standard board) at the start of its first operating turn. This board's PRR used to carry no
+       home at all and the placement named 0,0; that is now refused, in the authority's words, and is pinned as such.
+       Who may place is unchanged: the president, and nobody else. */
+    const withHome = board({
+      public_companies: [
+        { company_id: 1, ticker: "PRR", president: "p-a", is_floated: true, par_value: "100", player_holdings: [], station_token_hexes: [], home_hex_label: "H12" },
+      ],
+    } as unknown as Partial<GameStateResponse>);
+    const ask = (state: GameStateResponse, actor: string, msg: unknown) =>
+      turnRefusal({ state, waterfall: null, actor, msg: msg as never, host: "p-a", log: [] });
+    const home = { PlaceHomeStation: { company_id: 1, q: 2, r: 7, kind: "home" } };
+    expect(ask(withHome, "p-a", home)).toBeNull();
+    expect(ask(withHome, "p-b", home)).toContain("president places its station");
+    const nowhere = { PlaceHomeStation: { company_id: 1, q: 0, r: 0, kind: "home" } };
+    expect(refusal("p-a", nowhere)).toBe("PRR has no home station on this board.");
+    expect(refusal("p-b", nowhere)).toContain("president places its station");
   });
 
   it("refuses CloseRoom before the game is over, from anybody", () => {

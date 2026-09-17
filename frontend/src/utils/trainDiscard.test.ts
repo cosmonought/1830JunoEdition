@@ -564,7 +564,10 @@ describe("a legacy log's silent discard is supplied by the corpus policy, and by
     expect(supplied.legacyDiscards).toEqual([]);
     expect(pendingTrainDiscards(supplied.state)).toBeNull();
 
-    const refused = replayLog(entries, sandboxReplayProviders(), seedFor(), undefined, { legacyLogs: "development-corpus", legacyExcessTrains: "refuse" });
+    /* Slice 8.2 (#1614): the corpus policy gained a second adapter (`legacyHomeTokens`), so this comparison spreads the
+       policy and changes the ONE key it is about. Written as a literal it silently dropped the home-choice adapter
+       too, and 3XD then froze at B&O's first operating turn on one side only. */
+    const refused = replayLog(entries, sandboxReplayProviders(), seedFor(), undefined, { ...DEVELOPMENT_CORPUS_POLICY, legacyExcessTrains: "refuse" });
     expect(refused.legacyDiscards).toEqual([]);
     expect(pendingTrainDiscards(refused.state)).toBeNull();
     expect(stateDigest(refused.state)).toBe(stateDigest(supplied.state));

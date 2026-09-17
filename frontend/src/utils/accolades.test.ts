@@ -16,6 +16,7 @@ import { activateBoard, STANDARD_BOARD } from "../components/hexBoardData";
 import { readStripped } from "./sourceScan";
 import { readFileSync } from "fs";
 import { join } from "path";
+import { DEVELOPMENT_CORPUS_POLICY } from "../gameEngine/rulesVersion";
 
 /* Batch 7.5: the played game these tallies are read off is the frozen golden copy of JUNO-CV4. They were
    written on JUNO-Z6C's log, which no longer reaches a completed game under rules engine version 5 (it freezes
@@ -182,7 +183,9 @@ describe("the selection (design note #1416)", () => {
 
 describe("the tallies on a played game (design note #1416)", () => {
   afterAll(() => activateBoard(STANDARD_BOARD));
-  const history = gameHistoryFrom(LOG as never);
+  /* Slice 8.2 (#1614a): CV4 is a legacy corpus log -- read under the development corpus's policy, named here; the
+     epilogue's default (the shell's) applies no adapter and stops at B&O's first operating turn. */
+  const history = gameHistoryFrom(LOG as never, DEVELOPMENT_CORPUS_POLICY);
   const by = Object.fromEntries(history.accolades.map((a) => [a.key, a])) as Record<AccoladeKey, Accolade>;
 
   it("computes all thirty-seven, each with a holder from the roster or none", () => {

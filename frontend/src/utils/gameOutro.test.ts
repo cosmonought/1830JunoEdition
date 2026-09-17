@@ -55,7 +55,9 @@ describe("the second pass (design note #1420)", () => {
       .split("\n")
       .filter((line) => line.trim().length > 0)
       .map((line) => JSON.parse(line) as unknown);
-    const history = gameHistoryFrom(entries as never);
+    // Slice 8.2 (#1614a): a legacy corpus log, read under the development corpus's policy by name.
+    const { DEVELOPMENT_CORPUS_POLICY } = require("../gameEngine/rulesVersion") as typeof import("../gameEngine/rulesVersion");
+    const history = gameHistoryFrom(entries as never, DEVELOPMENT_CORPUS_POLICY);
     const ors = history.rounds.filter((r) => r.label.startsWith("OR "));
     expect(ors.length).toBeGreaterThan(3);
     const withRevenue = ors.filter((r) => r.corporations.some((c) => c.revenue > 0));

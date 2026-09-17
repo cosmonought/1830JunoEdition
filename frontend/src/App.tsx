@@ -543,6 +543,7 @@ import {
      owns that now, which is the whole point of the change -- a round can only
      be opened by the path that replays. */
   pendingHomeTokens,
+  authoritativeHoldRefusal, // #1613 (Slice 8.2): the lay's grid step asks the holds the reducer asks
   describePrivatePayout,
   /* Design note #1049: the ROUND, not just the viewer's slice of it. `summarisePrivateRevenueForPlayer` is
      still the thing that itemises the viewer's own privates -- this wraps it and adds the other seats' totals,
@@ -5973,6 +5974,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         const layRefused = (q: number, r: number, tileId: number, orientation: number) =>
           (stateBeforeAction !== null &&
             operatingIdentityRefusal(stateBeforeAction, msg as GameplayExecuteMsg) !== null) ||
+          /* #1613 (Slice 8.2, S8-13): a lay held by an authoritative hold -- above all the home owed at a
+             corporation's first turn -- lands on neither atom: the reducer's own predicate, same snapshot. */
+          (stateBeforeAction !== null &&
+            withRules(
+              rulesBeforeAction,
+              () =>
+                authoritativeHoldRefusal(stateBeforeAction, msg as GameplayExecuteMsg, {
+                  mapGrid: gridBeforeAction,
+                  homeHexToAxial,
+                }) !== null,
+            )) ||
           withRules(
             rulesBeforeAction,
             () =>
@@ -8109,7 +8121,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      See docs/ai_architecture/state_machine.md - App.tsx #416 */
   const pendingHomeToken = useMemo(() => {
     if (!gameState) return null;
-    const owed = pendingHomeTokens(gameState, homeHexToAxial)[0] ?? null;
+    /* Design note #1616 (Slice 8.2): owed only by the operating corporation at the start of its first operating
+       turn, never at a float (#1610) -- and with the grid, the options are the hexes with a legal circle now. */
+    const owed = pendingHomeTokens(gameState, homeHexToAxial, mapGrid)[0] ?? null;
     if (!owed) return null;
 
     /* ==================================================================
@@ -8138,7 +8152,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      * ONE QUESTION, ONE ANSWER, in the place that can act on it -- the rule this project keeps rediscovering.
      * `viewerAddress` leaves the dependency list because nothing here reads it any more. */
     return owed;
-  }, [gameState, homeHexToAxial]);
+  }, [gameState, homeHexToAxial, mapGrid]);
 
   /* #455's hotseat seat move is gone; in a room the prompt is already on the right client and there is no cursor to fight.
      See docs/ai_architecture/state_machine.md - App.tsx #578 */

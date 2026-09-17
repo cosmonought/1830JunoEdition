@@ -74,15 +74,22 @@ describe("the herald on the expanded board", () => {
   });
 
   it("owes PRR no home token, while NYC still owes its own", () => {
+    /* Design note #1610 (Slice 8.2): a home is owed only by the corporation under the Operating Round cursor at the
+       start of its first turn, so the board names a round and a cursor -- PRR's turn owes nothing (the herald),
+       NYC's owes its token. Was a round-less board on which every floated corporation was listed at once. */
     const state = {
+      current_round_type: "OperatingRound",
       active_operating_order: [PRR, NYC],
+      active_corporation_index: 0,
       public_companies: [
         { company_id: PRR, ticker: "PRR", is_floated: true, home_hex_label: "H12", station_token_hexes: [], president: "a" },
         { company_id: NYC, ticker: "NYC", is_floated: true, home_hex_label: "E19", station_token_hexes: [], president: "b" },
       ],
     } as unknown as GameStateResponse;
-    const owed = pendingHomeTokens(state, (label) => (label === "E19" ? [7, 4] : label === "H12" ? [2, 7] : null));
-    expect(owed.map((entry) => entry.companyId)).toEqual([NYC]);
+    const lookup = (label: string): readonly [number, number] | null => (label === "E19" ? [7, 4] : label === "H12" ? [2, 7] : null);
+    expect(pendingHomeTokens(state, lookup)).toEqual([]);
+    const nycTurn = { ...state, active_corporation_index: 1 } as GameStateResponse;
+    expect(pendingHomeTokens(nycTurn, lookup).map((entry) => entry.companyId)).toEqual([NYC]);
   });
 
   it("pays $10 to PRR, nothing to anyone else, and nothing when PRR passes it by", () => {

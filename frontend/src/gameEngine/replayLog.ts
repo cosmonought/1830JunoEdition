@@ -54,6 +54,7 @@ import {
   applySandboxAction,
   applySandboxLayTile,
   applySandboxMarketAction,
+  authoritativeHoldRefusal,
   type SandboxActionContext,
   type SandboxMarketContext,
 } from "./sandboxSession";
@@ -72,10 +73,13 @@ import {
   SERVER_REPLAY_POLICY,
   replayCompatibility,
   replayRefusal,
+  type ReplayCompatibility,
   type ReplayPolicy,
 } from "./rulesVersion";
 import { depotCostFor, derivePhase, type TrainTier } from "./gamePhase";
 import { pendingTrainDiscards } from "./trainDiscard";
+// Design note #1614 (Slice 8.2): the development corpus's home-choice adapter asks the home authority, never a copy.
+import { boardHomeHexToAxial, homeEstablished, homeStationOwed, isHomeCandidate, owedHomeStation } from "./homeStationAuthority";
 import { tileEraFor } from "./gameConstants";
 import type { TileColorTier } from "../components/hexTileCatalog";
 import type { GameStateResponse, WaterfallStateResponse } from "./gameState";
@@ -242,6 +246,21 @@ export interface ReplayResult {
    *  `legacyExcessTrains: "engine-chose-cheapest"` -- the choice the pre-version-2 engine made silently, made
    *  visible. Empty for every pinned log and under the server's policy. Each names the index it followed. */
   legacyDiscards: Array<{ afterIndex: number; companyId: number; model: string }>;
+  /** Design note #1614: the home-station choices this replay remembered from a LEGACY log's untimely
+   *  `PlaceHomeStation{kind: "home"}` entries and tried at the corporation's first operating turn, under
+   *  `legacyHomeTokens: "defer-to-first-turn"` -- `recordedAt` the stored entry the choice came from,
+   *  `afterIndex` the entry after which the turn began, `applied` whether the current authority accepted it
+   *  (`false`: the choice was no longer legal there, nothing was placed, and the hold stood). Empty for every
+   *  pinned log and under the server's policy. */
+  legacyHomeStations: Array<{
+    recordedAt: number;
+    afterIndex: number;
+    companyId: number;
+    q: number;
+    r: number;
+    cityIndex: number | null;
+    applied: boolean;
+  }>;
 }
 
 /** Replay a log into final state.
@@ -369,6 +388,17 @@ export class RoomEngine {
        corporation that is not operating lands on neither atom. Judged on the same snapshot as the tile
        rule, for #766's reason. `App.tsx` folds the same check into its own predicate. */
     const stateBefore = this.state;
+    /* Design note #1613 (Slice 8.2, S8-13): AND THE GRID REFUSES A HELD LAY. The four authoritative holds refuse a
+       held message before the auction, the chart and the core see it -- but a lay touches a third atom, and this
+       one moves first. A `LayTile` sent under a hold (the home owed at a corporation's first turn makes a lay the
+       most natural held message there is) laid its tile here while the reducer refused the lay by identity: a
+       board and a grid that disagree about a tile. Asked on the same snapshot, with the one predicate the reducer
+       asks, and the same injections it is handed. */
+    const heldLay =
+      authoritativeHoldRefusal(stateBefore, msg, {
+        mapGrid: gridBefore,
+        homeHexToAxial: this.providers.chartInjections(stateBefore).homeHexToAxial,
+      }) !== null;
     this.grid = applySandboxLayTile(
       gridBefore,
       lay.q,
@@ -376,6 +406,7 @@ export class RoomEngine {
       lay.tile_id,
       lay.orientation,
       (q: number, r: number, tileId: number, orientation: number) =>
+        heldLay ||
         operatingIdentityRefusal(stateBefore, msg) !== null ||
         this.providers.layRefused(gridBefore, q, r, tileId, orientation, eraBefore),
     );
@@ -562,6 +593,196 @@ export class RoomEngine {
   }
 }
 
+/** One remembered legacy home choice (#1614). */
+export interface LegacyHomeChoice {
+  companyId: number;
+  q: number;
+  r: number;
+  cityIndex: number | null;
+  hexLabel?: string;
+}
+
+/* ==================================================================
+    DESIGN NOTE 1614 (the adapter): THE MEMORY, KEPT APART FROM THE LOOP SO IT CAN BE ASKED DIRECTLY
+   ==================================================================
+   The development corpus's home-choice adapter (see the note in `replayLog`). Three questions, each answered
+   under the table's own rules (#1300) and with the providers' label table -- the one the reducer is handed:
+     `untimelyChoice` -- is this stored entry a `PlaceHomeStation{kind: "home"}` its corporation does NOT owe on the
+       board it is handed (so today's reducer will refuse it as untimely), for a corporation with no home yet, on
+       one of its candidate homes (`isHomeCandidate`)? Then it is a choice to remember.
+     `remember` -- after the entry is applied: if the corporation still holds no token (it was refused -- read
+       off the corporation, because a charted board comes back as a fresh object even for a refusal), the choice
+       replaces any earlier one for that corporation. The last recorded choice wins.
+     `syntheticFor` -- if the operating corporation owes its home and a choice is remembered for it, the ONE
+       synthetic entry to apply (authored by its president, not derived), and the memory is spent whether or
+       not the reducer accepts it: the choice is tried once, never retried, never exchanged for another. */
+export class LegacyHomeChoices {
+  private readonly providers: ReplayProviders;
+  private readonly remembered = new Map<number, LegacyHomeChoice & { recordedAt: number }>();
+  private synthesized = 0;
+
+  constructor(providers: ReplayProviders) {
+    this.providers = providers;
+  }
+
+  private table(state: GameStateResponse) {
+    return this.providers.chartInjections(state).homeHexToAxial ?? boardHomeHexToAxial;
+  }
+
+  /** The choices currently remembered, by corporation (a copy, for reports and tests). */
+  get pending(): ReadonlyMap<number, LegacyHomeChoice & { recordedAt: number }> {
+    return new Map(this.remembered);
+  }
+
+  untimelyChoice(entry: ReplayEntry, handed: GameStateResponse, grid: MapGridResponse | undefined): LegacyHomeChoice | null {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(entry.payload);
+    } catch {
+      return null;
+    }
+    if (typeof parsed !== "object" || parsed === null || !("PlaceHomeStation" in parsed)) return null;
+    const body = (parsed as {
+      PlaceHomeStation: { company_id: number; q: number; r: number; kind?: string; city_index?: number | null; hex_label?: string };
+    }).PlaceHomeStation;
+    if (body.kind === "dh") return null;
+    return withRules(resolveVariants(handed.variants), () => {
+      const company = handed.public_companies.find((candidate) => candidate.company_id === body.company_id);
+      if (!company || homeEstablished(company)) return null;
+      const table = this.table(handed);
+      if (homeStationOwed(handed, company.company_id, table)) return null; // timely: the ordinary path judges it
+      if (!isHomeCandidate(company, body, table, grid)) return null;
+      return { companyId: company.company_id, q: body.q, r: body.r, cityIndex: body.city_index ?? null, hexLabel: body.hex_label };
+    });
+  }
+
+  remember(choice: LegacyHomeChoice, recordedAt: number, after: GameStateResponse): void {
+    const company = after.public_companies.find((candidate) => candidate.company_id === choice.companyId);
+    if (company !== undefined && homeEstablished(company)) return; // it was applied after all: nothing to remember
+    this.remembered.set(choice.companyId, { ...choice, recordedAt });
+  }
+
+  syntheticFor(
+    state: GameStateResponse,
+    after: Pick<ReplayEntry, "index" | "id">,
+  ): { entry: ReplayEntry; choice: LegacyHomeChoice & { recordedAt: number } } | null {
+    if (this.remembered.size === 0) return null;
+    const owed = withRules(resolveVariants(state.variants), () => owedHomeStation(state, this.table(state)));
+    if (owed === null || owed.president === null) return null;
+    const choice = this.remembered.get(owed.companyId);
+    if (choice === undefined) return null;
+    this.remembered.delete(owed.companyId);
+    this.synthesized += 1;
+    return {
+      choice,
+      entry: {
+        index: after.index,
+        id: `${after.id}:legacy-home-${this.synthesized}`,
+        actor: owed.president,
+        payload: JSON.stringify({
+          PlaceHomeStation: {
+            game_id: 0,
+            company_id: owed.companyId,
+            q: choice.q,
+            r: choice.r,
+            kind: "home",
+            city_index: choice.cityIndex,
+            ...(choice.hexLabel === undefined ? {} : { hex_label: choice.hexLabel }),
+          },
+        }),
+      },
+    };
+  }
+
+  /** The report line for one attempt: `applied` read off the corporation. */
+  outcome(
+    attempt: { choice: LegacyHomeChoice & { recordedAt: number } },
+    afterIndex: number,
+    after: GameStateResponse,
+  ): ReplayResult["legacyHomeStations"][number] {
+    const { choice } = attempt;
+    const company = after.public_companies.find((candidate) => candidate.company_id === choice.companyId);
+    return {
+      recordedAt: choice.recordedAt,
+      afterIndex,
+      companyId: choice.companyId,
+      q: choice.q,
+      r: choice.r,
+      cityIndex: choice.cityIndex,
+      applied: company !== undefined && homeEstablished(company),
+    };
+  }
+}
+
+/* ==================================================================
+    DESIGN NOTE 1614a (harnesses): ONE STEP FOR EVERY WALK OF A LEGACY LOG
+   ==================================================================
+   `replayLog` is not the only walk over a development-corpus log. A harness that needs the ENGINE partway
+   through -- to ask `settleOwed` what the game owes at an index (replayJunoCV4), or to supply a choice of its
+   own between two stored entries (stationLegality's #1555 repair) -- drives a `RoomEngine` itself. Until
+   Slice 8.2 such a walk differed from `replayLog` only by the discards #1530 supplies, and no prefix a harness
+   walked reached one. Since #1610 a walk that skips the home-choice adapter freezes at the first floated
+   corporation's first operating turn and asserts on a board no replay of that log reaches. So what the
+   development corpus's adapters do around ONE stored entry is this one method; `replayLog`'s loop is a call to
+   it, and a harness calls the same method -- never a copy of the sequence:
+     1. judge the entry against the board it is handed (#1614: an untimely home choice?);
+     2. apply it through `RoomEngine.apply`, the server's path;
+     3. remember the choice if the reducer refused it (#1614);
+     4. supply the owed discards, cheapest model first (#1530);
+     5. try the operating corporation's remembered home once (#1614) -- after the discards, the holds' priority.
+   Which adapters run is decided once, from the log's compatibility and the caller's policy (#1520): for a
+   pinned log, and under the server's policy, `apply` is exactly `engine.apply`. */
+export class LegacyLogAdapters {
+  /** #1530: the `DiscardTrain` entries supplied so far, in order. */
+  readonly legacyDiscards: ReplayResult["legacyDiscards"] = [];
+  /** #1614: the remembered home choices tried so far, in order. */
+  readonly legacyHomeStations: ReplayResult["legacyHomeStations"] = [];
+  private readonly supplyLegacyDiscards: boolean;
+  private readonly legacyHomes: LegacyHomeChoices | null;
+
+  constructor(providers: ReplayProviders, compatibility: ReplayCompatibility, policy: ReplayPolicy) {
+    const legacy = compatibility.kind === "legacy";
+    this.supplyLegacyDiscards = legacy && policy.legacyExcessTrains === "engine-chose-cheapest";
+    this.legacyHomes = legacy && policy.legacyHomeTokens === "defer-to-first-turn" ? new LegacyHomeChoices(providers) : null;
+  }
+
+  /** Apply one stored entry to `engine`, with whatever this log's adapters supply around it. */
+  apply(engine: RoomEngine, entry: ReplayEntry, observe?: ReplayObserver): void {
+    const { legacyHomes, legacyDiscards } = this;
+    // #1614: judged on the board the entry is handed, before it is applied; remembered only if it was refused.
+    const untimelyHome = legacyHomes?.untimelyChoice(entry, engine.snapshot.state, engine.snapshot.grid) ?? null;
+    engine.apply(entry, observe);
+    if (untimelyHome !== null) legacyHomes?.remember(untimelyHome, entry.index, engine.snapshot.state);
+    if (this.supplyLegacyDiscards) {
+      for (let pending = pendingTrainDiscards(engine.snapshot.state); pending !== null; pending = pendingTrainDiscards(engine.snapshot.state)) {
+        const { required } = pending;
+        const model = [...required.choices].sort(
+          (a, b) => depotCostFor(engine.snapshot.state, a as TrainTier) - depotCostFor(engine.snapshot.state, b as TrainTier),
+        )[0];
+        if (model === undefined || required.president === null) break; // nothing the arm could apply; leave it standing
+        const synthetic: ReplayEntry = {
+          index: entry.index,
+          id: `${entry.id}:legacy-discard-${legacyDiscards.length + 1}`,
+          actor: required.president,
+          payload: JSON.stringify({ DiscardTrain: { game_id: 0, protocol_id: required.companyId, model_type: model } }),
+          derived: true,
+        };
+        const before = engine.snapshot.state;
+        engine.apply(synthetic, observe);
+        if (engine.snapshot.state === before) break; // refused: do not spin
+        legacyDiscards.push({ afterIndex: entry.index, companyId: required.companyId, model });
+      }
+    }
+    /* #1614: AFTER the discards (the holds' priority -- a discard owed would refuse the placement first), one
+       attempt at the operating corporation's remembered choice, through the reducer. */
+    const owedChoice = legacyHomes === null ? null : legacyHomes.syntheticFor(engine.snapshot.state, entry);
+    if (legacyHomes !== null && owedChoice !== null) {
+      engine.apply(owedChoice.entry, observe);
+      this.legacyHomeStations.push(legacyHomes.outcome(owedChoice, entry.index, engine.snapshot.state));
+    }
+  }
+}
+
 export function replayLog(
   entries: readonly ReplayEntry[],
   providers: ReplayProviders,
@@ -598,32 +819,40 @@ export function replayLog(
      version-2 log carries its own discards), and the server never passes the policy.
      BEST-EFFORT, NOT FIDELITY: this supplies the one missing CHOICE and nothing else. Every other version-2
      rule still applies to the legacy log, so a fixture can diverge from its own play where a version-1 rule
-     was wrong (JUNO-FCJ 474: a purchase version 1 refused at the arriving tier's limit). Development-only. */
-  const supplyLegacyDiscards =
-    compatibility.kind === "legacy" && policy.legacyExcessTrains === "engine-chose-cheapest";
-  const legacyDiscards: ReplayResult["legacyDiscards"] = [];
-  for (const entry of live) {
-    engine.apply(entry, observe);
-    if (!supplyLegacyDiscards) continue;
-    for (let pending = pendingTrainDiscards(engine.snapshot.state); pending !== null; pending = pendingTrainDiscards(engine.snapshot.state)) {
-      const { required } = pending;
-      const model = [...required.choices].sort(
-        (a, b) => depotCostFor(engine.snapshot.state, a as TrainTier) - depotCostFor(engine.snapshot.state, b as TrainTier),
-      )[0];
-      if (model === undefined || required.president === null) break; // nothing the arm could apply; leave it standing
-      const synthetic: ReplayEntry = {
-        index: entry.index,
-        id: `${entry.id}:legacy-discard-${legacyDiscards.length + 1}`,
-        actor: required.president,
-        payload: JSON.stringify({ DiscardTrain: { game_id: 0, protocol_id: required.companyId, model_type: model } }),
-        derived: true,
-      };
-      const before = engine.snapshot.state;
-      engine.apply(synthetic, observe);
-      if (engine.snapshot.state === before) break; // refused: do not spin
-      legacyDiscards.push({ afterIndex: entry.index, companyId: required.companyId, model });
-    }
-  }
+     was wrong (JUNO-FCJ 474: a purchase version 1 refused at the arriving tier's limit). Development-only.
+     (Slice 8.2, #1614a: "this loop" is now `LegacyLogAdapters.apply`, the one step a harness walking a prefix
+     through its own `RoomEngine` calls too.) */
+  /* ==================================================================
+      DESIGN NOTE 1614: A LEGACY HOME PLACEMENT IS THE PLAYER'S CHOICE, REMEMBERED -- NEVER ITS TIMING, NEVER ITS LEGALITY
+     ==================================================================
+     Owner ruling R3 (Stage-8 design §0 / D-31), Slice 8.2. Every development-corpus log was played on the engine
+     that demanded the home token at the FLOAT (#763 / #769): its `PlaceHomeStation{kind: "home"}` entries sit in
+     Stock Rounds, and the version the corpus is replayed under (#1610) refuses every one of them as untimely --
+     without which each completed-game fixture would freeze at the first operating turn of its first floated
+     corporation (JUNO-CV4 at 27). What the entry DOES carry is a decision the players made: which home hex (the
+     Level Playing Field's C&O) or which circle (Erie, PMQ). So, under `legacyHomeTokens:
+     "defer-to-first-turn"` on a LEGACY log only:
+       * a stored home placement that is REFUSED while its corporation does not owe its home (early -- the Stock
+         Round, another corporation's turn, before its float) and that names one of the corporation's
+         CANDIDATE homes (`isHomeCandidate`: a candidate hex; a circle of that hex) is REMEMBERED -- nothing is
+         placed and nothing is appended; a later such entry for the same corporation replaces it (the last
+         recorded choice wins); an off-home placement is not a candidate and is not remembered;
+       * after every applied entry (stored or synthetic), if the operating corporation owes its home and a
+         choice is remembered for it, ONE synthetic `PlaceHomeStation`, authored by its president, goes through
+         `engine.apply` -- the same reducer path, the same `homePlacementRefusal` against the board as it stands
+         at that turn -- and the memory is spent either way;
+       * the remembered choice is DATA, not grandfathered legality: if it is no longer legal (its circle taken,
+         Cleveland closed out before C&O's turn), the authority refuses it, the map does not change, and the
+         normal home hold stays in force. It is never swapped for the other circle or the other city -- that
+         would be a decision nobody made.
+     Development-only (D-9): the server's policy is `"refuse"`, a pinned log never reaches this, and a room's
+     rebuild (`RoomSession`) applies entries without it. The entries exist only inside this call and are
+     reported in `legacyHomeStations`. `RevertTo` is resolved before the loop (whose body is
+     `LegacyLogAdapters.apply`, #1614a), so a rebuild reproduces the same memory from the same surviving entries.
+     The synthetic entry is NOT marked derived: it is a player's choice, and a derived entry would spend the
+     turn's guard key (#1208). */
+  const adapters = new LegacyLogAdapters(providers, compatibility, policy);
+  for (const entry of live) adapters.apply(engine, entry, observe);
 
   const { state, waterfall, grid, unparseable } = engine.snapshot;
   return {
@@ -633,7 +862,8 @@ export function replayLog(
     grid,
     applied: live.length,
     dropped: ordered.length - live.length,
-    legacyDiscards,
+    legacyDiscards: adapters.legacyDiscards,
+    legacyHomeStations: adapters.legacyHomeStations,
     unparseable,
   };
 }

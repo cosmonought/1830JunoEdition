@@ -14,7 +14,8 @@
    the table actually saw, not a reconstruction. A 600-entry log replays in well under a second; the shell
    caches each round it has visited. */
 
-import { RoomEngine, entriesFromExport } from "../gameEngine/replayLog";
+import { LegacyLogAdapters, RoomEngine, entriesFromExport } from "../gameEngine/replayLog";
+import { SERVER_REPLAY_POLICY, replayCompatibility, type ReplayPolicy } from "../gameEngine/rulesVersion";
 import { sandboxReplayProviders } from "../gameEngine/replayProviders";
 import {
   DEFAULT_SANDBOX_SCENARIO,
@@ -48,18 +49,25 @@ export function replaySnapshotAtRound(
   log: readonly SandboxAction[],
   rounds: readonly RoundSample[],
   at: number,
+  /* Design note #1614a (Slice 8.2): the development corpus's adapters, by policy -- the parameter `gameHistoryFrom`
+     takes, and it must be the value `rounds` was sampled under, or the scrubbed board is not the sampled one. The
+     shell passes none: under the server's policy no adapter runs and each entry goes through `engine.apply`. */
+  policy: ReplayPolicy = SERVER_REPLAY_POLICY,
 ): ReplaySnapshot | null {
   const round = rounds[at];
   if (!round) return null;
   const end = roundEndExclusive(rounds, at);
   const scenario = sandboxScenario(DEFAULT_SANDBOX_SCENARIO);
-  const engine = new RoomEngine(sandboxReplayProviders(), {
+  const providers = sandboxReplayProviders();
+  const engine = new RoomEngine(providers, {
     state: withEmptyRoster(sandboxScenarioState(DEFAULT_SANDBOX_SCENARIO, 0, "default")),
     waterfall: waterfallForRoster(sandboxWaterfallState(scenario.phase, 0, scenario.zeroState === true), []),
   });
-  for (const entry of effectiveActions(entriesFromExport(log))) {
+  const entries = effectiveActions(entriesFromExport(log));
+  const adapters = new LegacyLogAdapters(providers, replayCompatibility(entries), policy);
+  for (const entry of entries) {
     if (entry.index >= end) break;
-    engine.apply(entry);
+    adapters.apply(engine, entry);
   }
   const snapshot = engine.snapshot;
   return { state: snapshot.state, waterfall: snapshot.waterfall, grid: snapshot.grid, label: round.label };

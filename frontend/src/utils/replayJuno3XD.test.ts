@@ -257,7 +257,16 @@ describe("JUNO-3XD replays headless", () => {
        So "the replay agrees with the live game" now holds only for the runs before the divergence -- 61, 81,
        86, 102, 108 -- and every other claim is pinned exactly, with the replayed key, so that any further change
        to this log's calendar announces itself here. Not historical-fidelity replay (D-9); the divergence is
-       reported in BATCH7.5_REPLAY_VERSION_CLOSURE_2026-09-16.md and the ledger's Part E. */
+       reported in BATCH7.5_REPLAY_VERSION_CLOSURE_2026-09-16.md and the ledger's Part E.
+       SLICE 8.2 RE-PIN (S8-5, #1610 / #1614): the last four replayed keys were read off a FROZEN board. NYC floated
+       at 289, the float-time home hold (#763 / #769) froze SR 11 there, and every later entry was a no-op, so the runs
+       at 307-319 all read "11.0". That hold is retired, so from 290 each entry is judged on its own merits: 290 and
+       293 are still refused (the buyer cannot pay, Batch 7.1), 291 / 292 / 294 / 295 are out of turn, and the first
+       entry that now applies is the pass at 296. OR 11.1 opens after 301, and NYC's choice recorded at 213 (E19,
+       circle 0) lands at its first turn, after 302. So the run at 307 now replays in OR 11.1 (11.1.1) and those at
+       313 / 318 / 319 in SR 12 (12.0.x). The logged keys and the earlier twenty claims are unchanged, and the stored
+       log is not rewritten. Measured for the Slice-8.2 write-up: at every stored entry this replay equals the pre-8.2
+       engine's with each home placed at its float from the same recorded choice, station tokens aside. */
     expect(mismatches.map((check) => `${check.index} ${check.logged} -> ${check.replayed}`)).toEqual([
       "71 2.1.1 -> 3.0.1",
       "117 4.1.7 -> 5.0.7",
@@ -279,10 +288,10 @@ describe("JUNO-3XD replays headless", () => {
       "270 6.2.7 -> 10.1.7",
       "276 6.2.5 -> 11.0.5",
       "281 6.2.2 -> 11.0.2",
-      "307 7.1.1 -> 11.0.1",
-      "313 7.1.4 -> 11.0.4",
-      "318 7.1.7 -> 11.0.7",
-      "319 7.1.7 -> 11.0.7",
+      "307 7.1.1 -> 11.1.1",
+      "313 7.1.4 -> 12.0.4",
+      "318 7.1.7 -> 12.0.7",
+      "319 7.1.7 -> 12.0.7",
     ]);
     expect(turnKeyChecks.filter((check) => check.logged === check.replayed).map((check) => check.index)).toEqual([61, 81, 86, 102, 108]);
   });

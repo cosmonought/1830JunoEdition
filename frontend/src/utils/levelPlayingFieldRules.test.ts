@@ -448,7 +448,9 @@ describe("the 20% standard certificate (design note #1324)", () => {
 /* ------------------------------------------------------------------ */
 
 describe("C&O's two homes (design note #1325)", () => {
-  it("reserves Cleveland and Richmond on this board, Cleveland alone elsewhere", () => {
+  /* Slice 8.2 (#1611): the title said "reserves Cleveland and Richmond", and the assertions never did -- Cleveland's
+     entry is `enforced: false`, a marker that holds nothing. Scenario D reserves Richmond only. Title corrected. */
+  it("lists Cleveland (an unenforced marker) and Richmond (enforced) on this board, Cleveland alone elsewhere", () => {
     withRules(LPF, () => {
       const homes = homeHexesFor(CO_COMPANY_ID);
       expect(homes.map((h) => h.label).sort()).toEqual(["F6", "K13"]);
@@ -461,8 +463,12 @@ describe("C&O's two homes (design note #1325)", () => {
 
   it("prompts for either, accepts either, and forfeits the other once one is taken", () => {
     const state = lpfOperating();
+    /* Design note #1610 (Slice 8.2): the prompt and the placement belong to C&O's first operating turn, so C&O is put
+       under the cursor. Was PRR's turn, on which every floated corporation owed its token at once. */
     const floatedCo = {
       ...state,
+      active_operating_order: [CO_COMPANY_ID],
+      active_corporation_index: 0,
       public_companies: state.public_companies.map((c) =>
         c.company_id === CO_COMPANY_ID ? { ...c, is_floated: true, president: P2 } : c,
       ),

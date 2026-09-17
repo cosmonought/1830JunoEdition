@@ -16,8 +16,8 @@
 
 import { readFileSync } from "fs";
 import { join } from "path";
-import { RoomEngine, entriesFromExport, replayLog, type ExportedEntry, type ReplayEntry } from "../gameEngine/replayLog";
-import { DEVELOPMENT_CORPUS_POLICY } from "../gameEngine/rulesVersion";
+import { LegacyLogAdapters, RoomEngine, entriesFromExport, replayLog, type ExportedEntry, type ReplayEntry } from "../gameEngine/replayLog";
+import { DEVELOPMENT_CORPUS_POLICY, replayCompatibility } from "../gameEngine/rulesVersion";
 import { effectiveActions } from "../gameEngine/logRevert";
 import { readStripped as readSource } from "./sourceScan";
 import {
@@ -85,8 +85,20 @@ describe("JUNO-CV4 replays headless on the Level Playing Field", () => {
     const live = effectiveActions(
       [...entries].sort((a, b) => a.index - b.index).filter((entry) => entry.index <= 131),
     );
-    const engine = new RoomEngine(sandboxReplayProviders(), { state: seedState, waterfall: seedWaterfall });
-    for (const entry of live) engine.apply(entry);
+    const providers = sandboxReplayProviders();
+    const engine = new RoomEngine(providers, { state: seedState, waterfall: seedWaterfall });
+    /* Slice 8.2 (#1614a): walked through the development corpus's adapters -- the policy the golden replay above
+       passes by name. A bare `engine.apply` walk replays a policy nobody passed: since #1610 B&O's home placement
+       at 20 (a Stock Round) is refused as untimely, the walk stops behind B&O's home hold at its first operating
+       turn (after 26), and it never reaches C&O's lay at 131. Through the adapters each remembered choice is tried
+       at its corporation's first turn (B&O after 26, C&O after 62), exactly as `replayLog` tries it. Measured
+       against the pre-8.2 walk of this test: the board at 131 is the same state and the same grid, field for field. */
+    const adapters = new LegacyLogAdapters(providers, replayCompatibility(live), DEVELOPMENT_CORPUS_POLICY);
+    for (const entry of live) adapters.apply(engine, entry);
+    expect(adapters.legacyHomeStations.map((attempt) => [attempt.companyId, attempt.applied])).toEqual([
+      [4, true],
+      [5, true],
+    ]);
     expect(engine.snapshot.state.operating_sub_phase).toBe("Tokens");
     let n = 0;
     const mint = (msg: unknown, reason: string): ReplayEntry => ({

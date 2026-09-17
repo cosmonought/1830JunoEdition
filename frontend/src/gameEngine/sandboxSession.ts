@@ -108,8 +108,8 @@ import {
 } from "./privateTradeAuthority";
 import { CA_BONUS_TICKER, CA_PRIVATE_ID, applyPrivateExchange } from "./privateExchange";
 import type { MapGridResponse, MapTileEntry } from "../components/hexContractTypes";
-// Design note #1325: a corporation's home hexes on the board in effect (two for the LPF's C&O).
-import { homeHexesFor } from "../components/hexContractTypes";
+/* Design note #1325: a corporation's home hexes on the board in effect (two for the LPF's C&O) -- read through
+   `homeStationAuthority.homeHexChoicesFor` since Slice 8.2 (#1611), so this file no longer imports the table. */
 import { TILE_CATALOG_BY_ID, type TileColorTier } from "../components/hexTileCatalog";
 import { archetypeForHex, hexValueForEra } from "../components/hexGeometry";
 import { depotInventory, derivePhase, openDepotTiers, TIER_ORDER, trainTier, type GamePhase } from "./gamePhase";
@@ -120,8 +120,17 @@ import { hasActedThisTurn } from "./turnAction";
 import { MIN_BID_INCREMENT, minimumBidFor } from "./auctionEscrow";
 import { shareSaleBlock } from "./shareSale";
 import { metFloatThreshold, FULL_CAPITALISATION_MULTIPLE } from "./floatThreshold";
-// Design note #763: a float is not finished until its home token is on the board.
-import { homeTokenBlock } from "./homeTokenGate";
+/* Design note #763: a float is not finished until its home token is on the board -- SUPERSEDED by #1610 (Slice 8.2):
+   the home station is owed at the start of the corporation's first operating turn, on the cursor, and the
+   obligation, its legality and its hold are `homeStationAuthority`'s. `homeTokenGate` remains the shell's name
+   for the same answers. */
+import {
+  boardHomeHexToAxial,
+  homePlacementRefusal,
+  homeStationHold,
+  legalHomeTargets,
+  owedHomeStation,
+} from "./homeStationAuthority";
 import { dividendRefusal, dividendRefused } from "./dividendGate";
 import { operatingIdentityRefusal } from "./operatingIdentity";
 import { stationPlacementRefusal } from "./stationPlacementGate";
@@ -2643,6 +2652,24 @@ function settleAuctionLifecycle(state: GameStateResponse, msg: GameplayExecuteMs
   return waterfall === state.waterfall ? state : { ...state, waterfall };
 }
 
+/** Design note #1613: the four authoritative holds in their priority -- the excess-train discard (#1530), the
+ *  forced train purchase and the finished game (#1540), a standing ordinary offer (#1590), the operating
+ *  corporation's home station (#1612) -- the first sentence that applies, or `null`. The same predicates ingress
+ *  asks (`turnRefusal`), in the same order. The home hold needs the board's label table, as the placement arm
+ *  always has (#550): a caller that hands in none is judged on the other three. */
+export function authoritativeHoldRefusal(
+  state: GameStateResponse,
+  msg: GameplayExecuteMsg,
+  ctx?: Pick<SandboxActionContext, "mapGrid" | "homeHexToAxial">,
+): string | null {
+  return (
+    pendingDiscardBlock(state, msg) ??
+    emergencyFundingBlock(state, msg, ctx?.mapGrid) ??
+    pendingOfferBlock(state, msg) ??
+    (ctx?.homeHexToAxial ? homeStationHold(state, msg, ctx.homeHexToAxial) : null)
+  );
+}
+
 function applySandboxActionOnBoard(
   state: GameStateResponse,
   msg: GameplayExecuteMsg,
@@ -2666,6 +2693,29 @@ function applySandboxActionOnBoard(
 
      THE PREDICATE IS `auctionAuthority`'s, the same one ingress asks (`turnRefusal`), and the actor it judges
      is the atom's own cursor -- the player `applySandboxWaterfallAction` would have applied the action as. */
+  /* ==================================================================
+      DESIGN NOTE 1613: THE AUTHORITATIVE HOLDS ARE ASKED BEFORE ANYTHING MOVES (Slice 8.2, S8-13)
+     ==================================================================
+     PROVEN ON THE CORPUS (Stage-8 design §5.8): server/JUNO-FCJ 904, 911, 918 and 932 are `SellStock` entries
+     sent while a home token was owed. The core refused each sale -- but `applySandboxMarketAction` runs BEFORE
+     the core (#272/#273, #1197), and the chart's `saleRefused` asks `stockSaleRefusal`, which contains no hold,
+     so the seller's token walked down the chart for a sale that never happened. The discard (#1530), funding
+     (#1540) and offer (#1590) holds had the same shape, protected only by coincidence (a held sale usually
+     also fails a stock rule); a held `DeclareDividends` had it too (`dividendRefused` asks no hold either).
+     And #1580 already records that the AUCTION atom is a second mutation ahead of the core.
+     SO THE FOUR HOLDS MOVE HERE, above both atoms, in their existing priority -- discard, funding (and the
+     finished game), a standing ordinary offer, the home station (#1612) -- out of `applySandboxActionCoreJudged`,
+     where they had stood since their batches. A held message returns the board BY IDENTITY before the auction
+     step, the chart step, the core or the queue settle (#1600) can see it. The rule a player is told is
+     unchanged; only WHERE the reducer asks moved (the Stage-8 design named `applySandboxActionAfterAuction`,
+     one layer down; the auction atom is the reason it is one layer higher).
+     THE ONE DELIBERATE MUTATION OF A REFUSAL IS KEPT: #1596 retires a standing accepted offer whose settlement
+     is refused "by any gate in the core", and a hold was one of those gates -- so a hold's refusal of that
+     settlement still retires the offer, and nothing else moves. Ordinary legality (the forced sale's rules,
+     the discard's owner, the offers' predicates, the home placement's circle) stays in the core. */
+  if (authoritativeHoldRefusal(state, msg, ctx) !== null) {
+    return retireRefusedSettlement(state, msg);
+  }
   if (isAuctionMessage(msg) && auctionRefusal(state, state.waterfall ?? null, msg) !== null) {
     return state;
   }
@@ -2927,8 +2977,10 @@ function applySandboxActionCoreJudged(
      which read a cursor that is not the authority while a discard is owed. ONE gate, not one per arm: the
      Operating sub-phase, the turn's end, another corporation's move, a stock or auction action, a purchase --
      all are "anything else". `RevertTo` is resolved on the log and never reaches this function (#1026).
-     The discard's own legality -- the right corporation, its president, a train it owns -- is the next line. */
-  if (pendingDiscardBlock(state, msg) !== null) return state;
+     The discard's own legality -- the right corporation, its president, a train it owns -- is the next line.
+     Design note #1613 (Slice 8.2): the HOLD is now asked in `applySandboxActionOnBoard`, above the auction and
+     chart atoms, so a held message cannot move the chart first (S8-13); "asked first" is still true, one layer
+     higher. The discard's own legality stays here. */
   if ("DiscardTrain" in msg) {
     const { protocol_id, model_type } = msg.DiscardTrain;
     if (discardTrainRefusal(state, { protocol_id, model_type }, ctx?.actor) !== null) return state;
@@ -2940,8 +2992,9 @@ function applySandboxActionCoreJudged(
      refused by identity; the president's forced `SellStock` is judged by 6.6.3's three rules on top of the
      ordinary ones; the `EmergencyBuyHardware` is refused until treasury and cash cover the price, and
      refused outright when no forced purchase is owed (the president's money is only ever spent on one).
-     After `GameEnd` only `CloseRoom` passes. */
-  if (emergencyFundingBlock(state, msg, ctx?.mapGrid) !== null) return state;
+     After `GameEnd` only `CloseRoom` passes.
+     Design note #1613 (Slice 8.2): `emergencyFundingBlock` itself is asked in `applySandboxActionOnBoard` now,
+     before anything moves; the forced sale's and the emergency purchase's own rules stay below. */
   if ("SellStock" in msg && ctx?.actor) {
     const funding = emergencyFundingFor(state, ctx.mapGrid);
     if (funding !== null) {
@@ -2980,7 +3033,7 @@ function applySandboxActionCoreJudged(
      `offer_id` register the sandbox never had) are refused on a pinned board first (ruled Q11 / D-23); a
      legacy board keeps the no-op arm it was played on (D-9). */
   if (legacyOfferMessageRefusal(state, msg) !== null) return state;
-  if (pendingOfferBlock(state, msg) !== null) return state;
+  // Design note #1613 (Slice 8.2): `pendingOfferBlock` is asked in `applySandboxActionOnBoard`, before anything moves.
   /* ==================================================================
       DESIGN NOTE 1595: THE OFFER MESSAGES ARE JUDGED AGAINST THE BOARD, NOT THE PAYLOAD (Batch 7.4, S7-11)
      ==================================================================
@@ -3187,9 +3240,21 @@ function applySandboxActionCoreJudged(
      cannot exist.
      BEFORE EVERY OTHER ARM, because the point is that no message lands -- including the ones that would
      otherwise be harmless. `homeTokenBlock` lets the placement and Undo through; a gate with no exit turns a
-     bad state into an unrecoverable one. */
-  if (ctx?.homeHexToAxial) {
-    if (homeTokenBlock({ state, homeHexToAxial: ctx.homeHexToAxial, msg }) !== null) return state;
+     bad state into an unrecoverable one.
+     SUPERSEDED BY #1610 / #1612 (Slice 8.2). The premise "floating a corporation and placing its home token are
+     one event" is not the rule: 6.3.1 places the home station at the beginning of the corporation's FIRST
+     OPERATING TURN, and a Stock Round float owes nothing. The hold survives, narrowed to that turn and to the
+     operating corporation (`homeStationHold`), and is asked with the other three holds in
+     `applySandboxActionOnBoard` before anything moves (#1613). What stands HERE now is the placement's own
+     legality, for #1019's reason: refused by identity before any stage runs. */
+  /* ==================================================================
+      DESIGN NOTE 1611: THE HOME PLACEMENT IS JUDGED, NOT TRUSTED (Slice 8.2, S8-6)
+     ==================================================================
+     `homePlacementRefusal` -- owed now, on one of the corporation's candidate homes, in a circle that exists,
+     is its own (a locked home circle) and is available. The D&H's free station shares the message and is not a
+     home placement (#1615). A caller with no label table keeps #550's answer (the arm places nothing). */
+  if (isPlaceHomeStationMsg(msg) && msg.PlaceHomeStation.kind !== "dh" && ctx?.homeHexToAxial) {
+    if (homePlacementRefusal(state, msg.PlaceHomeStation, ctx.mapGrid, ctx.homeHexToAxial) !== null) return state;
   }
 
   /* ==================================================================
@@ -4489,8 +4554,11 @@ function applyOneAction(
       q,
       r,
       city_index: cityIndex,
+      kind,
     } = msg.PlaceHomeStation;
-    return placeHomeStationToken(state, companyId, q, r, cityIndex, ctx.homeHexToAxial);
+    // Design note #1615: the D&H's free station shares this message and is not a home placement.
+    if (kind === "dh") return placeDhFreeStationToken(state, companyId, q, r, cityIndex ?? null);
+    return placeHomeStationToken(state, companyId, q, r, cityIndex ?? null, ctx.homeHexToAxial, ctx.mapGrid);
   }
 
   /* Three cases, each saying one thing: undefined means solo (cursor is the actor), a seated author is used, anything else is null. `??` would reinstate the nondeterminism #549 removed.
@@ -4568,12 +4636,13 @@ function applyOneAction(
        as before: a turn that acted advances without counting, one that did not is a pass in the streak.
        WHILE A HOME TOKEN IS OWED THE TURN CANNOT END (#769: the seat is held for the placement), so the Pass
        is refused by returning the state -- the shell's gate says why.
+       SUPERSEDED BY #1610 (Slice 8.2): a float owes no token in a Stock Round, so there is nothing for the Pass
+       to wait on and that refusal is gone; the turn ends exactly as any other purchase turn does.
        ONLY UNDER THE REVISION: a log dealt before it (#1443 in `gameVariants.ts`) ends the turn on the buy
        as it always did, so it replays to the same board. */
     if (sellBuySellInForce(resolveVariants(state.variants))) {
       const stage = stockTurnStage(state);
       if (stage === "sell") return { ...state, stock_turn_stage: "buy" };
-      if (ctx?.homeHexToAxial && pendingHomeTokens(state, ctx.homeHexToAxial).length > 0) return state;
     }
     return hasActedThisTurn(state) ? advanceSeat(state) : recordPass(state);
   }
@@ -4782,10 +4851,12 @@ function applyOneAction(
        makes the obligation legible from every screen without anybody reading a message.
        ONLY WHEN THIS PURCHASE OWES A TOKEN. A buy that floats nothing advances the seat exactly as before --
        the condition is the debt, not the float, so a corporation with no resolvable home hex (#416) does not
-       freeze the round. */
-    if (ctx?.homeHexToAxial && pendingHomeTokens(settledBuy, ctx.homeHexToAxial).length > 0) {
-      return settledBuy;
-    }
+       freeze the round.
+       SUPERSEDED BY #1610 (Slice 8.2). The report was real, and so was the diagnosis that a refused seat is
+       worse than a held one -- but the debt it held the seat for is not owed in a Stock Round at all. 6.3.1
+       places the home station at the start of the corporation's first operating turn, so the float settles,
+       the seat advances as for any purchase, and the president is asked when the corporation first operates
+       (`homeStationHold`, #1612). The hold on the seat is retired, not moved. */
     /* #1443: under Sell-Buy-Sell the purchase is the middle of the turn, not its end -- the seat stays with
        the buyer, who may sell again and then ends the turn with a Pass. */
     if (sellBuySellInForce(resolveVariants(settledBuy.variants))) return settledBuy;
@@ -5001,9 +5072,14 @@ function applyOneAction(
 
          EVERY TOKEN ON THE HEX MOVES, not only the acting corporation's. On an unlaid preprinted OO hex the
          cities are indistinguishable for whoever is standing there, so a second occupant's index is exactly
-         as arbitrary as the first's. In practice there is one -- nobody else may token these hexes before
-         they are upgraded -- but a rule that quietly assumed that would be a rule about the board rather than
-         about the cardboard.
+         as arbitrary as the first's -- and a second occupant IS possible, which is why this arm never assumed
+         otherwise. WHEN one is possible is S8-14's rule (#1617, `stationTokens.ts`): BEFORE a tile is laid or
+         upgraded on an OO home hex, ordinary future-home protection applies -- another corporation may occupy
+         one of the two cities as long as that does not eliminate the last legal home opportunity; ONCE a tile
+         has been laid or upgraded there, no new foreign station may be placed anywhere on the hex until the
+         Erie (or the Level Playing Field's PMQ on E5) has established its home, while a foreign station
+         legally placed before the tile STAYS where it is -- the case this arm carries across the upgrade;
+         AFTER the home is established the whole-hex prohibition ends and ordinary rules govern.
          ABSENT MEANS UNCHANGED, which is every ordinary upgrade in the game.
 
          ==================================================================
@@ -5947,8 +6023,9 @@ export function applyFloatThreshold(
   return capitalisation.ok ? capitalisation.state : state;
 }
 
-/** A corporation that has floated and still owes its home station token.
- *  Design note #416: what the prompt is raised from. */
+/** The corporation that owes its home station token now.
+ *  Design note #416: what the prompt is raised from. Design note #1610 (Slice 8.2): only ever the OPERATING
+ *  corporation, at the start of its first operating turn -- never a corporation that has merely floated. */
 export interface PendingHomeToken {
   companyId: number;
   ticker: string;
@@ -5957,58 +6034,62 @@ export interface PendingHomeToken {
   r: number;
   president: string | null;
   /** Design note #1325: every hex the token may go on. One entry for the printed eight; two for the Level
-   *  Playing Field's C&O, whose prompt then asks which. The first is `hexLabel`/`q`/`r`. */
+   *  Playing Field's C&O, whose prompt then asks which. The first is `hexLabel`/`q`/`r`.
+   *  Design note #1616 (Slice 8.2): with a grid, only the hexes with a LEGAL circle now -- a Cleveland closed
+   *  out before C&O operates is not offered, and Richmond (held for C&O by its reservation) is. */
   options: ReadonlyArray<{ hexLabel: string; q: number; r: number }>;
 }
 
-/** Derived from the board, so a reload or a late poll cannot lose the prompt. Ordered by operating order; a company whose label does not resolve is absent rather than pending.
- *  See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #416 */
+/** Derived from the board, so a reload or a late poll cannot lose the prompt. A company whose label does not resolve is absent rather than pending.
+ *  See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #416
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 1610 (the prompt's list): AT MOST ONE ENTRY, AND ONLY ON ITS TURN
+ *  ==================================================================
+ *  This listed every floated corporation without a token, in operating order, in any round -- which is what
+ *  raised the Place Home Station modal on the Stock Round purchase that floated a corporation, and what
+ *  `homeTokenBlock` froze the table on. The obligation is `homeStationAuthority.owedHomeStation`'s now: the
+ *  corporation under the Operating Round cursor, at the start of its first operating turn. So the list is that
+ *  one corporation or nothing, and the shell's prompt moves to the turn with no change of its own (U-32).
+ *  "Ordered by operating order" is kept true trivially.
+ *  `mapGrid` (#1616) narrows the options to the hexes on which some circle is legal right now; absent, every
+ *  candidate hex is listed, as before. When a grid leaves none -- a hand-built board the reservations make
+ *  unreachable -- the options are empty and the printed home is still named. */
 export function pendingHomeTokens(
   state: GameStateResponse,
   homeHexToAxial: (label: string) => readonly [number, number] | null,
+  mapGrid?: MapGridResponse,
 ): PendingHomeToken[] {
-  const rank = new Map(state.active_operating_order.map((id, index) => [id, index]));
-
-  const pending = state.public_companies.flatMap((company) => {
-    if (!company.is_floated || !company.home_hex_label) return [];
-    // Design note #1302: a home that is a printed herald owes no token -- there is no city to put one in.
-    if (heraldHexFor(company.company_id) !== null) return [];
-    const axial = homeHexToAxial(company.home_hex_label);
-    if (!axial) return [];
-    const [q, r] = axial;
-    /* Design note #1325: THE HOME IS PLACED WHEN THE CORPORATION HOLDS ANY TOKEN. Its first token is always
-       its home (the gate holds play until it is placed), so this and the per-hex test agree for the printed
-       eight -- and only this one is right for a corporation with two homes, which may have sat on the other. */
-    const already =
-      company.station_token_hexes.length > 0 ||
-      company.station_token_hexes.some(([hq, hr]) => hq === q && hr === r);
-    if (already) return [];
-    const homeLabel = company.home_hex_label;
-    const options = homeHexesFor(company.company_id)
-      .map((home) => ({ hexLabel: home.label, q: home.q, r: home.r }))
-      .sort((a, b) => (a.hexLabel === homeLabel ? -1 : b.hexLabel === homeLabel ? 1 : 0));
-    return [
-      {
-        companyId: company.company_id,
-        ticker: company.ticker,
-        hexLabel: company.home_hex_label,
-        q,
-        r,
-        president: company.president,
-        options: options.length > 0 ? options : [{ hexLabel: company.home_hex_label, q, r }],
-      },
-    ];
-  });
-
-  return pending.sort(
-    (a, b) =>
-      (rank.get(a.companyId) ?? Number.MAX_SAFE_INTEGER) -
-        (rank.get(b.companyId) ?? Number.MAX_SAFE_INTEGER) || a.companyId - b.companyId,
-  );
+  const owed = owedHomeStation(state, homeHexToAxial);
+  if (!owed) return [];
+  const legal = mapGrid === undefined ? null : legalHomeTargets(state, mapGrid, homeHexToAxial);
+  const options =
+    legal === null
+      ? owed.choices
+      : owed.choices.filter((choice) => legal.some((target) => target.q === choice.q && target.r === choice.r));
+  const head = options[0] ?? owed.choices[0];
+  return [
+    {
+      companyId: owed.companyId,
+      ticker: owed.ticker,
+      hexLabel: head.hexLabel,
+      q: head.q,
+      r: head.r,
+      president: owed.president,
+      options: options.map((choice) => ({ hexLabel: choice.hexLabel, q: choice.q, r: choice.r })),
+    },
+  ];
 }
 
 /** The other half of the prompt, and IDEMPOTENT -- a double-click or replayed dispatch cannot stack two tokens on one hex.
- *  See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #416 */
+ *  See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #416
+ *
+ *  Design note #1611 (Slice 8.2): JUDGED, NOT TRUSTED. Every placement asks `homePlacementRefusal` -- the
+ *  corporation owes its home now (operating, floated, first turn, not a herald, no token yet), the hex is one of
+ *  its candidate homes, and (with a grid) the circle exists, is its own and is available. A second placement is
+ *  refused because the first established the home, which is also what keeps this idempotent. #1325's
+ *  two-home-only hex check ("a log written for a single-home corporation keeps replaying to wherever it
+ *  recorded") is withdrawn: every corporation's hex is checked. */
 export function placeHomeStationToken(
   state: GameStateResponse,
   companyId: number,
@@ -6016,20 +6097,21 @@ export function placeHomeStationToken(
   r: number,
   /** Design note #560: WHICH city on the hex. `null` leaves the renderer's
    *  heuristic in charge, which is right for a single-city hex and is the
-   *  only honest answer when the click could not be resolved. */
+   *  only honest answer when the click could not be resolved. Design note #1611: a hex with more than one
+   *  city must name it. */
   cityIndex: number | null = null,
-  /** Design note #769a: the board's label lookup, injected on #7's rule. Absent means the seat is not
-   *  released -- the honest answer for a caller that cannot tell whether anything is still owed. */
-  homeHexToAxial?: (label: string) => readonly [number, number] | null,
+  /** Design note #769a: the board's label lookup, injected on #7's rule. #1610: the candidate homes are
+   *  resolved through it; absent, the board in effect's own table (`boardHomeHexToAxial`). */
+  homeHexToAxial: (label: string) => readonly [number, number] | null = boardHomeHexToAxial,
+  /** #1611: the grid, for the circle's existence and availability. Absent, those arms are not asked (#757). */
+  mapGrid?: MapGridResponse,
 ): GameStateResponse {
-  const company = state.public_companies.find((entry) => entry.company_id === companyId);
-  if (!company || !company.is_floated) return state;
-  if (company.station_token_hexes.some(([hq, hr]) => hq === q && hr === r)) return state;
-  /* Design note #1325: a two-home corporation's token goes on one of its homes and nowhere else. Checked
-     only when the board names more than one, so a log written for a single-home corporation keeps replaying
-     to wherever it recorded. */
-  const homes = homeHexesFor(companyId);
-  if (homes.length > 1 && !homes.some((home) => home.q === q && home.r === r)) return state;
+  if (
+    homePlacementRefusal(state, { company_id: companyId, q, r, city_index: cityIndex, kind: "home" }, mapGrid, homeHexToAxial) !==
+    null
+  ) {
+    return state;
+  }
 
   const placed: GameStateResponse = {
     ...state,
@@ -6066,13 +6148,53 @@ export function placeHomeStationToken(
      GUARDED ON THE ROUND AND ON THE REMAINING DEBT. A Stock Round only: nothing else advances a seat this
      way. And only when no OTHER corporation still owes a token -- two floats in one purchase is not a board
      1830 reaches, but a release that fired on the first of two would hand the turn on with an obligation
-     still outstanding, which is exactly the state this pair of notes exists to prevent. */
-  if (state.current_round_type !== "StockRound") return placed;
-  if (homeHexToAxial && pendingHomeTokens(placed, homeHexToAxial).length > 0) return placed;
-  /* #1443: under Sell-Buy-Sell the placement completes the PURCHASE, not the turn -- the president may still
-     sell, and ends the turn with the Pass. */
-  if (sellBuySellInForce(resolveVariants(placed.variants))) return placed;
-  return advanceSeat(placed);
+     still outstanding, which is exactly the state this pair of notes exists to prevent.
+     SUPERSEDED BY #1610 (Slice 8.2), WITH #769. There is no Stock Round placement left to complete a turn: the
+     home station is placed at the start of the corporation's first operating turn, where it is a mandatory
+     pre-turn action and not one of the turn's steps. So the placement touches no seat, no pass streak and no
+     `turn_action_taken`, and the operating cursor (`settleOperatingCursor`) sees the same corporation at the
+     same step afterwards -- the president simply continues into Lay Track. */
+  return placed;
+}
+
+/* ==================================================================
+    DESIGN NOTE 1615: THE D&H'S FREE STATION IS NOT A HOME PLACEMENT, AND DOES NOT TAKE THE HOME SLOT
+   ==================================================================
+   `PlaceHomeStation{kind: "dh"}` shares the message because both stations are free (#442), and until Slice 8.2
+   it shared `placeHomeStationToken` too -- so it was PREPENDED at `station_token_hexes[0]`, the slot the home
+   token's own comment says "several readers take as the home station", and a two-home corporation's D&H station
+   was refused outright by #1325's "a two-home corporation's token goes on one of its homes" (the Level Playing
+   Field's C&O could never use the power). Neither is a D&H rule. The D&H's rules are its own (`dhPower.ts`:
+   the D&H's hex, the owning corporation, once, at its Lay Track step; the owner at ingress); this arm keeps the
+   two state checks the shared arm applied to it -- a floated corporation, not already on the hex -- APPENDS the
+   token, and charges nothing. Ordering only: `stationTokensOf`, the gates and the route search read the token
+   set, not its order, so the move changes no rule. The home slot stays the home's. */
+export function placeDhFreeStationToken(
+  state: GameStateResponse,
+  companyId: number,
+  q: number,
+  r: number,
+  cityIndex: number | null = null,
+): GameStateResponse {
+  const company = state.public_companies.find((entry) => entry.company_id === companyId);
+  if (!company || !company.is_floated) return state;
+  if (company.station_token_hexes.some(([hq, hr]) => hq === q && hr === r)) return state;
+  return {
+    ...state,
+    public_companies: state.public_companies.map((entry) =>
+      entry.company_id === companyId
+        ? {
+            ...entry,
+            station_token_hexes: [...entry.station_token_hexes, [q, r] as [number, number]],
+            // #560: together, always.
+            station_tokens:
+              cityIndex === null
+                ? entry.station_tokens ?? null
+                : [...(entry.station_tokens ?? []), [q, r, cityIndex] as [number, number, number]],
+          }
+        : entry,
+    ),
+  };
 }
 
 /* Private revenue never became money: revenue_per_or was printed as a property and nothing paid it. #328: once per ROUND, not once per corporation. #329: the bank pays; unowned, closed and corporate-owned are handled distinctly.

@@ -1,5 +1,6 @@
-import { pendingHomeTokens } from "./sandboxSession";
 import type { GameStateResponse } from "./gameState";
+import type { GameplayExecuteMsg } from "../utils/sessionKey";
+import { homeStationHold, owedHomeStation } from "./homeStationAuthority";
 
 /* ==================================================================
  *  DESIGN NOTE 763: A FLOAT IS NOT FINISHED UNTIL THE TOKEN IS DOWN
@@ -28,10 +29,24 @@ import type { GameStateResponse } from "./gameState";
  *   the PLACEMENT itself, obviously, or the gate would lock the board forever;
  *   UNDO, because a gate with no exit turns any bad state into an unrecoverable one, and undo is the only
  *   thing that can rewind past whatever produced it.
+ *
+ * ==================================================================
+ *  SUPERSEDED BY DESIGN NOTES 1610 / 1612 (Stage 8, Slice 8.2)
+ * ==================================================================
+ *
+ * "IN 1830 THERE IS NO GAP TO ACT IN" IS NOT THE RULE. Floating and placing the home token are NOT one event:
+ * 6.3.1 places the home station "at the beginning of a railroad's first turn of operation", and 5.3 has a
+ * floated corporation begin operating in the next Operating Round. The gap #763 closed by freezing the whole
+ * table was the rulebook's own interval between a Stock Round float and that corporation's first turn -- and
+ * freezing it stopped the Stock Round the rules let continue.
+ *
+ * WHAT SURVIVES. The obligation is derived on the Operating Round cursor (`owedHomeStation`): only the operating
+ * corporation, only at the start of its first operating turn, and only until it holds a token. The hold is that
+ * corporation's turn-local hold (`homeStationHold`), asked by the reducer before anything moves (#1613), by
+ * ingress as its fourth hold (S8-12) and by the derived loop. This file keeps its two names for the shell -- the
+ * Pass button's reason and the Auto-Buy guard -- and answers both from that one module, so there is no second
+ * pass list here: the placement, #763's Undo, and the room's `RevertTo` / `CloseRoom` (see #1612).
  */
-
-/** Messages that may still be dispatched while a home token is owed. */
-const ALWAYS_ALLOWED: readonly string[] = ["PlaceHomeStation", "UndoLastAction"];
 
 export interface HomeTokenGateInput {
   state: GameStateResponse;
@@ -50,23 +65,9 @@ export interface HomeTokenGateInput {
  *  message a game can show. */
 export function homeTokenBlock(input: HomeTokenGateInput): string | null {
   const { state, homeHexToAxial, msg, labelForAddress } = input;
-
-  const owed = pendingHomeTokens(state, homeHexToAxial)[0];
-  if (!owed) return null;
-
-  if (msg !== undefined) {
-    const key =
-      typeof msg === "object" && msg !== null ? (Object.keys(msg)[0] ?? "") : String(msg ?? "");
-    if (ALWAYS_ALLOWED.includes(key)) return null;
-  }
-
-  const who = owed.president
-    ? (labelForAddress?.(owed.president) ?? owed.president)
-    : "its President";
-  return (
-    `${owed.ticker} has floated and its home station is not on the board yet. ` +
-    `${who} must place it on ${owed.hexLabel} before play continues.`
-  );
+  /* #1612: the one hold, the one sentence -- "<ticker> is starting its first operating turn and its home
+     station is not on the board yet. <who> must place it on <hexes> before <ticker> can operate." */
+  return homeStationHold(state, msg as GameplayExecuteMsg | undefined, homeHexToAxial, labelForAddress);
 }
 
 /** Whether anything is owed at all, for surfaces that only need the fact. */
@@ -74,5 +75,5 @@ export function homeTokenOwed(
   state: GameStateResponse,
   homeHexToAxial: (label: string) => readonly [number, number] | null,
 ): boolean {
-  return pendingHomeTokens(state, homeHexToAxial).length > 0;
+  return owedHomeStation(state, homeHexToAxial) !== null;
 }

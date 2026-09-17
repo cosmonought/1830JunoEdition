@@ -12,7 +12,8 @@
 
 import { readFileSync } from "fs";
 import { join } from "path";
-import { RoomEngine, entriesFromExport, type ExportedEntry } from "../gameEngine/replayLog";
+import { LegacyLogAdapters, RoomEngine, entriesFromExport, type ExportedEntry } from "../gameEngine/replayLog";
+import { DEVELOPMENT_CORPUS_POLICY, replayCompatibility } from "../gameEngine/rulesVersion";
 import { effectiveActions } from "../gameEngine/logRevert";
 import {
   DEFAULT_SANDBOX_SCENARIO,
@@ -70,8 +71,19 @@ function engineBefore(upTo: number): RoomEngine {
     sandboxWaterfallState(sandboxScenario(DEFAULT_SANDBOX_SCENARIO).phase, 0, true),
     [],
   );
-  const engine = new RoomEngine(sandboxReplayProviders(), { state: seedState, waterfall: seedWaterfall });
-  for (const entry of loadPrefix()) {
+  const providers = sandboxReplayProviders();
+  const engine = new RoomEngine(providers, { state: seedState, waterfall: seedWaterfall });
+  const prefix = loadPrefix();
+  /* Slice 8.2 (#1614a): THE PREFIX IS A LEGACY LOG, WALKED THROUGH THE DEVELOPMENT CORPUS'S ADAPTERS. It was played
+     on the engine that demanded the home token at the float, so the home placements at 49 (B&M) and 53 (B&O) sit
+     in a Stock Round and today's reducer refuses them as untimely (#1610); a bare `engine.apply` walk would then
+     stop behind B&M's home hold at its first operating turn (after 69) and never reach the Tokens step at 95. The
+     adapters try each remembered choice at that corporation's first turn -- the step `replayLog` takes -- so B&M's
+     home lands on E23 after 69 and B&O's on I15 after 74 (once the #1555 purchase below lets B&M's turn end).
+     Measured against the pre-8.2 walk of this harness: the board at 95 and at 96 is the same state and the same
+     grid, field for field. */
+  const adapters = new LegacyLogAdapters(providers, replayCompatibility(prefix), DEVELOPMENT_CORPUS_POLICY);
+  for (const entry of prefix) {
     if (entry.index >= upTo) break;
     /* ==================================================================
         DESIGN NOTE 1555 (fixture repair): THE PURCHASE THE LIVE TABLE WAS NEVER ASKED FOR
@@ -94,7 +106,7 @@ function engineBefore(upTo: number): RoomEngine {
         derived: true,
       });
     }
-    engine.apply(entry);
+    adapters.apply(engine, entry);
   }
   return engine;
 }

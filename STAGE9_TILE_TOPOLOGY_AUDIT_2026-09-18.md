@@ -2374,3 +2374,46 @@ server    npm run build (node …/tsc -p) ................... clean
 | M-11's `printedTile` removed | **4 tests fail** — existence, route graph, upgrade set, and the source-order test |
 | the station refusal returns `{ ...state }` instead of `state` | **1 test fails** — the atomicity assertion is by IDENTITY, and it has teeth |
 | **[follow-up]** the `#1625` projection + total-slot floor removed | **1 test fails** — "3b. THE BYPASS: free, unindexed stations on a bare OO hex must still fit the tile's slots". This was the state of the code at review time, measured rather than asserted: the other four omitted-field cases passed before the fix |
+
+### §20k Post-commit verification — the VF-5 / D-19 cross-reference **[2026-09-18, after `17616c8`]**
+
+Stage 9.2 is committed at **`17616c8359765a029d170eca82e7b1698c91222c`**. A VF-5 animation test then failed, and
+the audit of it **confirmed this slice rather than qualifying it. No production legality changed, and none was
+needed.**
+
+**The fixture depended on the defect F-2 fixes.** `tileTransition.test.ts`'s *"resolves an unexpected pair to the
+destination with no orphaned stroke"* selects a facing by `describeTransition(candidate).removed > 0` over printed
+Baltimore, and the only I15 facings with that property were the ones that severed Baltimore's printed rail. Its own
+comment said so at the time — *"a rules question recorded in the batch report, not answered here"* — and the batch
+report is `VISUAL_FLOURISH_BACKLOG.md`'s **D-19**, which named the cause exactly: *"the sandbox filter offers #53
+(and #592 on expanded) on Baltimore (I15) at facings that do not carry the printed track, **because its
+path-preservation rule runs only over a laid tile**."* That is F-2, discovered independently from the presentation
+side and deferred to rules hardening. **D-19 is a backlog item, not a renderer piece id**, and it is now marked
+RESOLVED by this slice.
+
+**Measured at I15, all six facings** (Plus board; `priorTopologyAt` = `source: landmark`, exits `{0,4}`, segments
+`[[0,4]]`, agreeing with `liveEdgesForHex`):
+
+| facing | exits | preservation | verdict | pre-9.2 |
+|---|---|---|---|---|
+| 0 · 2 · 4 | {0,2,4} | pass | **legal** | legal — unchanged |
+| 1 · 3 · 5 | {1,3,5} | loses edges 0 and 4 **and** segment (0,4) | **refused** | legal — **changed by F-2** |
+
+`#592` shows the same parity at I15; **E23 → #53 is 1/3/5 and unchanged** by Stage 9.2 (the rim test already
+refused the wrong parity there), which is the control proving #53 is not globally over-restricted. **I15 remains
+upgradeable — only the track-cutting orientations disappeared.** The removed pieces on the illegal facings are two
+`edge → marker0` rails, the two halves of the printed `(0,4)` segment: rules-level track, not renderer
+decomposition noise.
+
+**The structural result, which is the durable part.** An exhaustive sweep of the legal transition graph on all
+three boards found **28,438 legal transitions — standard 6,859, plus 11,313, LPF 10,266 — of which 1,405 have
+`reconfigured > 0` and ZERO have `removed > 0`.** A legal lay or upgrade must preserve every source segment, so
+every source piece finds a destination match; **`removed > 0` is therefore not reachable from a legal game
+transition under the current transition model**, and a removed piece is the renderer's signature of deleted rail.
+
+**Consequences recorded, nothing acted on here.** The VF-5 fixture is stale and its repair belongs to the visual
+owner; the requirement is explicitly **not** "find another legal transition with `removed > 0`" — the sweep proves
+there is none — but either a legal `reconfigured`/`added` transition (**Plus `I15 → #53@0` is a suitable candidate
+at `reconfigured = 2`, `added = 1`, `removed = 0`**, keeping the fixture's shape) or a hand-built, clearly
+renderer-only plan. **No VF-5 source or test was modified, no gameplay defect was filed, and the Stage-9.2 corpus
+and golden conclusions in §20g are unchanged.**

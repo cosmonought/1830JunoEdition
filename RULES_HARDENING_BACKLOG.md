@@ -1560,6 +1560,20 @@ S9-16.
   **0 placements newly accepted** outside M-11 (S9-18), and every newly refused placement is on an immutable hex or
   is a Baltimore facing that cuts printed track.
 
+*POST-COMMIT VERIFICATION (2026-09-18, after `17616c8`).* A VF-5 animation fixture failed once F-2 landed, and the
+audit **confirmed the refusal**. The fixture picked a Plus-board Baltimore (I15) → #53 facing by
+`describeTransition(...).removed > 0`, and the only such facings were the ones that severed Baltimore's printed
+`(0,4)` rail; `VISUAL_FLOURISH_BACKLOG.md`'s **D-19** had already recorded the cause in F-2's own terms ("its
+path-preservation rule runs only over a laid tile") and deferred it here. **D-19 is now RESOLVED by Stage 9.2.**
+Legal I15 → #53 facings are **0/2/4** (1/3/5 refused, each losing both printed exits and the whole `(0,4)`
+segment); #592 shows the same parity; **E23 → #53 is 1/3/5 and unchanged**, the control showing #53 is not globally
+over-restricted. The hex stays upgradeable. An exhaustive sweep found **28,438 legal transitions across the three
+boards (standard 6,859 · plus 11,313 · LPF 10,266), 1,405 with `reconfigured > 0` and ZERO with `removed > 0`** —
+so `removed > 0` is not reachable from a legal transition, and the stale fixture must NOT be repaired by hunting
+for one. **No production legality change was required, no VF-5 code or test was touched, no gameplay defect is
+filed, and the corpus/golden conclusions above are unchanged.** Detail: `STAGE9_TILE_TOPOLOGY_AUDIT_2026-09-18.md`
+§20k.
+
 **S9-15. The 1830+ tray under-supplies #63 by three, and a test pins the wrong figure.**
 Status `OPEN` (found by Stage 9.1, 2026-09-18; `STAGE9_TILE_TOPOLOGY_AUDIT_2026-09-18.md` §4 / §10, finding F-4).
 T-09 gives `C15` = old **#63** a Classic count of **3** and an 1830+ delta of **+1**, i.e. **4** copies under the

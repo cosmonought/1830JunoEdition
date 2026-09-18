@@ -16,7 +16,11 @@ import { actingAddress, type GameStateResponse, type WaterfallStateResponse } fr
 import { dividendSplit } from "../gameEngine/dividendSplit";
 import type { GameplayExecuteMsg } from "./sessionKey";
 import type { MapGridResponse } from "../components/hexContractTypes";
-import type { TileColorTier } from "../components/hexTileCatalog";
+/* #1630 (Slice 9.3, S9-21): THE SENTENCE NAMES THE TILE, so it must use the tile's NAME. `tile_id` is the
+   storage key and is logged and replayed exactly as stored; `canonicalTileName` is what the rules call it.
+   Byte-identical output for the 73 tiles whose printed old number the errata leaves alone -- only oo1, oo13
+   and oo14 move, and only in what they are CALLED. */
+import { canonicalTileName, type TileColorTier } from "../components/hexTileCatalog";
 import { boardHexLabel } from "../components/hexGeometry";
 import type { OperatingSubPhase } from "../components/OperatingSubPhaseStepper";
 import { depotInventory } from "../gameEngine/gamePhase";
@@ -429,7 +433,7 @@ export function describeGameplayAction(
   if ("LayTile" in msg) {
     const { protocol_id, tile_id, q, r } = msg.LayTile;
     return (
-      `${corp(gameState, protocol_id)} laid Tile #${tile_id} on ${hexName(mapGrid, q, r)}` +
+      `${corp(gameState, protocol_id)} laid Tile ${canonicalTileName(tile_id)} on ${hexName(mapGrid, q, r)}` +
       /* Design note #1066: named only when something was actually charged. Most hexes are free, and a
          sentence that mentioned a terrain cost on every lay would be wrong far more often than right. */
       (chargedSomething(context, protocol_id) ? " and paid the terrain cost." : ".") +

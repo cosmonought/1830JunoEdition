@@ -165,8 +165,15 @@ describe("the tray (design note #1320)", () => {
       if (LPF_TRAY_REMOVALS.some(([removedId]) => removedId === tileId)) continue;
       expect(LPF_TRAY.counts.get(tileId)).toBe(count);
     }
-    // #1395: #810 and #882 (Toronto's green and brown) STAY, one each -- D10 is printed TO and takes only
-    // them, so removing them left a hex that could never be built through.
+    /* #1395: #810 and #882 (Toronto's green and brown) STAY, one each -- D10 is printed TO and takes only
+       them, so removing them left a hex that could never be built through.
+       AND THE REASON, not just the number (Slice 9.3, §10c). PUBLISHED SCENARIO D REMOVES BOTH: T-01's S-1.0
+       list prints `to1 (810) …… 1` and `to5 (882) …… 1`, and S-1.1 ❻ repeats it -- in each case the tile's
+       ENTIRE 1830+ supply. This project's Level Playing Field deviates from that on purpose, by owner ruling
+       from the playtest report, and the deviation is frozen. A future "reconcile the tray against the
+       rulebook" pass will find these two on a printed removal list and be RIGHT about the rulebook and WRONG
+       about this variant; these two lines are what stops it. The deviation covers the TO pair and nothing
+       else -- it does not extend to #63 (S9-15) or to any other tile. */
     expect(LPF_TRAY.counts.get(810)).toBe(1);
     expect(LPF_TRAY.counts.get(882)).toBe(1);
     // The 18XX+ tray is untouched.

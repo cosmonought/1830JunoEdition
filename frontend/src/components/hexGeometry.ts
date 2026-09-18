@@ -29,7 +29,7 @@ import {
   terrainBuildFeeAt,
 } from "./hexBoardData";
 import { corporationLabel } from "../utils/corporationNames";
-import { TILE_CATALOG, TILE_CATALOG_BY_ID } from "./hexTileCatalog";
+import { TILE_CATALOG, TILE_CATALOG_BY_ID, canonicalTileName } from "./hexTileCatalog";
 import type { TerrainType, TileColorTier } from "./hexTileCatalog";
 import { trayEntries } from "./tileTray";
 // Design note #724: "is there a token here" asked by name, off the required list.
@@ -357,7 +357,8 @@ export function evaluateHexForTileLaying(
         return {
           eligible: false,
           reason: "max-tier",
-          message: `${hexLabel} already holds tile #${laid.tile_id}, which is ${entry.color} — the top colour tier. There is no further upgrade for this hex.`,
+          // #1630 (S9-21): the message NAMES the tile, so it uses the canonical name; `tile_id` stays the key.
+          message: `${hexLabel} already holds tile ${canonicalTileName(laid.tile_id)}, which is ${entry.color} — the top colour tier. There is no further upgrade for this hex.`,
           hexLabel,
         };
       }

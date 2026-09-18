@@ -35,7 +35,7 @@ function boardWith(tileIds: number[]): MapGridResponse {
 }
 
 describe("the mirrored tray counts", () => {
-  it("carries a real printed count for all 46 standard tiles (and the 28 of the tile set)", () => {
+  it("carries a real printed count for all 46 standard tiles (and the 30 of the tile set)", () => {
     /* Design note #626: `UNLIMITED_TILE_SUPPLY` (u32::MAX) is deliberately
        not modelled because nothing uses it. If the backend ever does, this
        is the assertion that says so before anyone renders "4294967295

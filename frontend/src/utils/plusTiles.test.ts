@@ -69,7 +69,13 @@ describe("the standard tray is exactly what it was (design note #1311)", () => {
 
 describe("the Project 18XX+ tray, count by count (the request, section 1)", () => {
   it("recounts the eight standard tiles the request names", () => {
-    for (const [id, count] of [[9, 12], [8, 13], [7, 7], [57, 6], [14, 4], [15, 4], [59, 3], [63, 1]]) {
+    /* #1629 (Slice 9.3, S9-15): #63 IS FOUR, AND THIS LINE USED TO SAY ONE. The figure now comes from the
+       rulebook rather than from the owner spec's transcription of it: T-09 prints C15/#63 as `3 +1` -- three
+       Classic copies plus one -- and the official errata's correction tile sheet instructs "40 value added to
+       1830+ side of ALL FOUR C15 tiles". This list is TOTALS, because `tileTrayPlus` writes it with
+       `counts.set`, so the "+1" transcribed here deleted the three Classic copies instead of adding a fourth.
+       Every other row already read as a total (#59 `2 +1` -> 3, #14 `2 +2` -> 4, #9 `7 +5` -> 12). */
+    for (const [id, count] of [[9, 12], [8, 13], [7, 7], [57, 6], [14, 4], [15, 4], [59, 3], [63, 4]]) {
       expect({ id, count: PLUS_TRAY.counts.get(id) }).toEqual({ id, count });
     }
   });
@@ -254,8 +260,13 @@ describe("what upgrades to what, under each tray", () => {
       expect(tileUpgradeTargets(53)).toEqual(expect.arrayContaining([61, 884, 997]));
       expect(tileUpgradeTargets(592)).toEqual(expect.arrayContaining([61, 884, 997]));
       expect(tileUpgradeTargets(15)).not.toContain(884);
-      // The OO hexes: green #626 beside #59, brown #36/#35/#984 beside the printed set, then gray #167.
-      expect(tileUpgradeTargets(59).some((id) => [36, 35, 984].includes(id))).toBe(true);
+      /* The OO hexes: green #626 beside #59, brown #36/#35/#984 beside the printed set, then gray #167.
+         #1628 (Slice 9.3, S9-19): #59 reaches #984 and the five Classic browns, and NOT oo13 (#36) or oo14
+         (#35) -- both were reachable only through facings that connect #59's two pre-printed exits, which
+         revised 6.2.2 ❹ forbids. T-09's `oo2 -> oo10-oo17` range over-reaches by exactly those two, which are
+         also the two tiles the errata's identity correction names. Stated exactly rather than as `.some`, so
+         the set cannot drift back. */
+      expect([...tileUpgradeTargets(59)].sort((a, b) => a - b)).toEqual([64, 65, 66, 67, 68, 984]);
       expect(tileUpgradeTargets(64)).toContain(167);
       // New York's second brown option, from the green #54.
       expect(tileUpgradeTargets(54)).toContain(883);

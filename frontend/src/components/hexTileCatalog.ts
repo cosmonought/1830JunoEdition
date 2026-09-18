@@ -96,6 +96,53 @@ export interface TileCatalogEntry {
    *  is laid only over a two-town hex. The three-exit green towns (#141-#144) carry no flag and take a
    *  one-town hex only; the legality filter reads this to keep the two families apart. */
   mergesTowns?: true;
+
+  /* ==================================================================
+      DESIGN NOTE 1628 (Slice 9.3, S9-19): TWO SYSTEMS THAT MAY NEVER MEET
+     ==================================================================
+     A RULE FACT, not a topology fact, and the only reason it is a per-tile flag is that the PRINTED RULE is
+     per-tile. Revised 6.2.2 ❹, verbatim: "When a tile is replaced, all stations on the replaced tile must be
+     placed on the new tile with the same connections as before. This also means that the pre-printed exits on
+     a (59) tile can never be connected in the tile upgrade."
+
+     WHAT IT MEANS HERE: this tile's `cityGroups` are not merely "which edge draws with which circle" -- they
+     are SYSTEMS, and an upgrade laid over this tile may not put any two of them in one connected component of
+     the new tile. The legality filter reads the flag and nothing else about the tile's number; a tile id never
+     appears in the predicate (design note #1 forbids it), and the reducer consumes the metadata rather than a
+     coordinate/facing blacklist.
+
+     WHAT IT IS NOT, and this is the half that matters. It is NOT "merges are illegal". Stage 9.1 measured the
+     legal merge family: the printed New York landmark is two revenue centres with no track between them and the
+     green #54 that replaces it CONNECTS them legally (design note #676 and `priorTopologyAt`'s landmark arm say
+     so), #53's and #592's Baltimore chain changes topology legally, and the town-merge family (#1403) exists
+     precisely to join two centres into one. A global "source components may never merge" rule, or "city count
+     must stay constant", would refuse every one of those. Only a tile carrying this flag is constrained, and
+     today exactly one does: old #59. */
+  separateSystems?: true;
+  /* ==================================================================
+      DESIGN NOTE 1630 (Slice 9.3, S9-21): THE NUMBER IS A KEY, NOT A NAME
+     ==================================================================
+     THE INVARIANT: an errata-invalid old number may remain a stable MACHINE KEY for compatibility, and is no
+     longer treated as a canonical RULES IDENTITY. Two jobs, and 9.3 separates them rather than replacing one
+     with the other.
+
+     `tileId` above stays the STORAGE / ABI KEY for every tile, including the three below. It is what
+     `ExecuteMsg::LayTile` carries as an int, what every stored log holds, what `MapTileEntry.tile_id` is, and
+     what a golden's digest is built out of -- and it is written by NEW state too, so it is emphatically not an
+     "input-only" spelling. Renumbering it would change the recorded shape of persisted state for no rules
+     gain, and for two of the three there is no number to renumber TO.
+
+     `canonicalId` is what the RULES call this tile after the official errata, and equally what a player should
+     be shown. It is present ONLY where the printed old number is erroneous -- three entries -- and `undefined`
+     everywhere else, where the printed old number is both the key and the name and the errata touches neither.
+     Read it through `canonicalTileName(tileId)` at the bottom of this file rather than reaching for the field,
+     so the fallback lives in one place.
+
+     THE ERRATA VOIDS NUMBERS, NOT TILES. oo1, oo13 and oo14 are all valid, correct, playable tiles whose
+     geometry and revenue are owner-confirmed. What the errata voids is their PRINTED OLD-SYSTEM NUMBERS:
+     #626 is corrected to #8861, and #36 / #35 are withdrawn with no replacement, so for oo13 and oo14 the
+     Lookout identifier is the only valid name there is. */
+  canonicalId?: string;
 }
 
 /** Hand-kept mirror of `hexmap::TILE_CATALOG` -- keep this in exact sync with that Rust array any time it
@@ -357,6 +404,10 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     cityGroups: [[0], [2]],
     paths: [[0, 0], [2, 2]],
     revenue: 40,
+    /* #1628 (S9-19): the two `cityGroups` above are the two pre-printed systems revised 6.2.2 ❹ names, and an
+       upgrade may never connect them. The `paths` self-loops say the same thing from the other side -- each
+       exit runs in and stops, with no track between the two cities. */
+    separateSystems: true,
   },
 
   /* ---- Brown tier (18 tiles) ---- */
@@ -696,8 +747,18 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     revenue: 30,
     plusOnly: true,
   },
+  /* #1630 (S9-21): CANONICAL IDENTITY IS `#8861`, NOT `#626`. The official errata voids the printed 626 and
+     names the correction; `canonicalId` below is the record, and `626` survives here as the STORAGE KEY -- the
+     int the wire, the logs and the goldens already hold -- not as the tile's name.
+     AND IT HAS NO SUCCESSOR, ON PURPOSE. Errata: "The oo1 (8861) tile is not upgradable"; owner ruling #1390
+     says the same from the playtest side ("there's no upgrade for 626, it stops at Green"). Its two cities'
+     exits ({0,1} and {3,4}) match no brown OO, so the derived graph reports the dead end by MEASURING it --
+     there is no successor list here to delete and none to add. Filed, withdrawn and re-checked twice; this
+     comment exists so it is not filed a third time. */
   {
     tileId: 626,
+    /* #1630: STORAGE KEY 626, canonical rules/display identity `#8861`. See the field's note above. */
+    canonicalId: "#8861",
     connections: 0b011_011,
     terrain: "DoubleCityHub",
     color: "Green",
@@ -770,8 +831,15 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     revenue: 20,
     plusOnly: true,
   },
+  /* #1630 (S9-21): CANONICAL IDENTITY IS `oo13`. The errata voids the printed 36 and supplies no replacement
+     ("should have a number that is NOT 36 -- neither support site has a number for this tile"), so the Lookout
+     ID is the name and `36` is the storage key only. Geometry and revenue are owner-confirmed correct (two
+     gap-2 cities at separation 3; $50). `oo13 -> oo20` having no legal facing is S9-16, a recorded
+     contradiction between official sources, NOT a defect here -- do not "fix" this tile to close it. */
   {
     tileId: 36,
+    /* #1630: STORAGE KEY 36, canonical rules/display identity `oo13`. See the field's note above. */
+    canonicalId: "oo13",
     connections: 0b110_110,
     terrain: "DoubleCityHub",
     color: "Brown",
@@ -781,8 +849,14 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     revenue: 50,
     plusOnly: true,
   },
+  /* #1630 (S9-21): CANONICAL IDENTITY IS `oo14`. Same errata clause as oo13 -- the printed 35 is void with no
+     replacement, so `35` is the storage key and `oo14` is the name. Geometry and revenue owner-confirmed (two
+     gap-2 cities at separation 1; $50), and `oo14 -> oo20` has six legal facings, which is why S9-16 names
+     only its sibling. */
   {
     tileId: 35,
+    /* #1630: STORAGE KEY 35, canonical rules/display identity `oo14`. See the field's note above. */
+    canonicalId: "oo14",
     connections: 0b110_011,
     terrain: "DoubleCityHub",
     color: "Brown",
@@ -860,6 +934,20 @@ export const TILE_CATALOG_SIZE = 76;
 export const TILE_CATALOG_BY_ID: ReadonlyMap<number, TileCatalogEntry> = new Map(
   TILE_CATALOG.map((entry) => [entry.tileId, entry]),
 );
+
+/** What the rules call this tile, and what a player should be shown for it -- design note #1630.
+ *
+ *  THE ONE NAMING AUTHORITY, on the live catalog rather than beside it. Every production path already resolves
+ *  a serialized `tile_id` through `TILE_CATALOG_BY_ID`, so the canonical identity is in hand wherever the tile
+ *  is; a second module holding the same fact would be a second authority to drift from.
+ *
+ *  Falls through to `#<id>` for the other 73 tiles, which is correct rather than a default: their printed old
+ *  number IS their name, the errata touches neither, and the string they produce is byte-identical to the one
+ *  every call site built by hand before this existed. Only oo1, oo13 and oo14 change, and only in what they
+ *  are CALLED -- never in what is stored, sent or replayed. */
+export function canonicalTileName(tileId: number): string {
+  return TILE_CATALOG_BY_ID.get(tileId)?.canonicalId ?? `#${tileId}`;
+}
 
 // Drift tripwire (design note #118). A duplicated `tileId` would silently collapse inside the `Map` above and
 // quietly shadow one of the two entries, which is exactly the class of bug the old/new id-space overlap makes

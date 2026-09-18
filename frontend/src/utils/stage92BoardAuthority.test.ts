@@ -326,10 +326,14 @@ describe("F-2: the board's own printed track is preserved on a first lay", () =>
     });
   });
 
-  it("characterizes #59 today, so Slice 9.3's S9-19 shows up as a change", () => {
-    /* NOT AN ENDORSEMENT. Revised 6.2.2 ❹'s last sentence forbids an upgrade that connects #59's two
-       pre-printed exits, and this slice does not implement it. Pinned at today's value so 9.3 cannot land
-       silently. */
+  it("#59 still upgrades, and now only to facings that keep its two systems apart (S9-19 landed in 9.3)", () => {
+    /* WAS A CHARACTERIZATION, IS NOW A RESULT. At 9.2 this pinned "the filter offers something for a laid
+       #59" with an explicit note that revised 6.2.2 ❹'s separation clause was NOT implemented. Slice 9.3
+       implemented it (`hexTileCatalog` #1628, `sandboxTileLegality` #1628), so the interesting half is no
+       longer "something is offered" but "what is offered still covers every listed successor".
+       The full matrix, the seven audited illegal facings and the control proving generic merges stayed legal
+       all live in `stage93TileAuthority.test.ts`; this is the Stage-9.2 suite's own cross-check that 9.3 did
+       not close the OO chain on the STANDARD board, which 9.3's own suite measures on the expansion. */
     withRules(STANDARD, () => {
       const e11 = hexAt("E11");
       const laid: MapGridResponse = {
@@ -337,7 +341,8 @@ describe("F-2: the board's own printed track is preserved on a first lay", () =>
         tiles: [{ q: e11.q, r: e11.r, tile_id: 59, orientation: 0, landmark: null }],
       };
       const offered = acceptedAtAnyEra(laid, e11.q, e11.r);
-      expect(offered.length).toBeGreaterThan(0);
+      // The five Classic browns, two facings each -- #64@2/@4, #65@0/@4, #66@0/@5, #67@0/@2, #68@2/@5.
+      expect(offered).toEqual(["64@2", "64@4", "65@0", "65@4", "66@0", "66@5", "67@0", "67@2", "68@2", "68@5"]);
     });
   });
 });

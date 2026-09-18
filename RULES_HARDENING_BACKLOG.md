@@ -1574,8 +1574,8 @@ for one. **No production legality change was required, no VF-5 code or test was 
 filed, and the corpus/golden conclusions above are unchanged.** Detail: `STAGE9_TILE_TOPOLOGY_AUDIT_2026-09-18.md`
 §20k.
 
-**S9-15. The 1830+ tray under-supplies #63 by three, and a test pins the wrong figure.**
-Status `OPEN` (found by Stage 9.1, 2026-09-18; `STAGE9_TILE_TOPOLOGY_AUDIT_2026-09-18.md` §4 / §10, finding F-4).
+**S9-15. ~~The 1830+ tray under-supplies #63 by three, and a test pins the wrong figure.~~ RESOLVED.**
+Status **`RESOLVED`** (Slice 9.3, 2026-09-18, uncommitted — resolution appended at the end of this entry). Was `OPEN` (found by Stage 9.1, 2026-09-18; `STAGE9_TILE_TOPOLOGY_AUDIT_2026-09-18.md` §4 / §10, finding F-4).
 T-09 gives `C15` = old **#63** a Classic count of **3** and an 1830+ delta of **+1**, i.e. **4** copies under the
 expansion — and the brown column's own footer total (+11) only reconciles with that +1. `tileTrayPlus.RECOUNTED`
 sets `[63, 1]`, so `PLUS_TRAY` and `LPF_TRAY` hold **one** #63 where the rulebook has four, and `PLUS_TRAY` totals
@@ -1596,6 +1596,35 @@ four physical #63 tiles on the 1830+ side, exactly T-09's `3 +1`. The earlier su
 confirmation is withdrawn. Corpus-neutral: 4 lays of #63 across the corpus, peak 2 simultaneously on a board.
 Related doc drift: `tileSupply.test.ts:38`'s comment says "the 28 of the tile set" where it
 asserts 30.
+
+> **RESOLVED — Slice 9.3, 2026-09-18 (uncommitted).** `tileTrayPlus.RECOUNTED` now reads `[63, 4]`, with design
+> note **#1629** on the list stating what every row of it means: these are **TOTALS**, because the map below is
+> `counts.set` (replacement), and #63's row carried T-09's "+1" column into a slot that means the whole supply —
+> which under replacement semantics DELETED the three Classic copies instead of adding a fourth. Every other row
+> already read as a total (#59 `2 +1` → 3, #14 `2 +2` → 4, #9 `7 +5` → 12), which is why only this one was wrong.
+>
+> **Fixed in the PHYSICAL SUPPLY, ahead of every scenario removal**, so both derived trays inherit it untouched:
+> Classic **3** (unchanged) · full 1830+ **4** · published Scenario D **4** · Project 18XX LPF **4**. #63 is on no
+> removal list — not T-01's S-1.0 Ⓓ list, not S-1.1 ❻, not `LPF_TRAY_REMOVALS` — and the errata correction sheet
+> prints Ⓑ Ⓓ Ⓖ Ⓡ on C15, so Scenario D is a scenario that KEEPS it. The TO override (#1395, §10c) is untouched and
+> does not extend here.
+>
+> **Measured tray delta against Stage 9.2, complete rather than sampled:** `PLUS_TRAY` **76 types / 135 → 138
+> copies**, `LPF_TRAY` **72 types / 127 → 130 copies**, `STANDARD_TRAY` **46 / 85 unchanged**, and the only
+> per-tile difference in the whole inventory is `#63: 1 → 4`. Pinned by an explicit whole-inventory literal in
+> `stage93TileAuthority.test.ts` ("NO OTHER TILE QUANTITY MOVED"), so a future count that drifts for any reason
+> fails with the tile named. `plusTiles.test.ts` now asserts `[63, 4]` **against T-09 and the errata sheet**, with
+> the reasoning in the test rather than "the request"; `tileSupply.test.ts`'s "28 of the tile set" comment drift
+> (F-7) is corrected to 30.
+>
+> **Corpus: neutral, as predicted** — 18/18 files byte-identical in state, per-entry `map_grid`, every lay verdict
+> and final board. The tray is never exhausted in any log.
+>
+> **One arithmetic correction to this audit's own §10, recorded and not a code defect:** the audit states the
+> engine's LPF tray holds **74** distinct types. Measured, it holds **72**. `LPF_TRAY_REMOVALS` takes 2 each of
+> #5 and #6, and the 1830+ tray holds exactly 2 of each, so those two types reach zero and leave the tray for the
+> same documented reason #592 and #61 do. Four types drop out, not two. Copy counts are unaffected and were
+> always right.
 
 **S9-16. `oo13 -> oo20` has no legal facing — a contradiction in official material, NOT an engine defect.**
 Status `OPEN — BLOCKED` (found by Stage 9.1, 2026-09-18; **split and narrowed at revision 9.1b the same day**;
@@ -1796,8 +1825,8 @@ intermediate version bump** — it records the expected behaviour of the uncommi
 Stage-9 `RULES_ENGINE_VERSION` bump remains owed at closure, and S9-19's future re-pins stay separate and will be
 justified on their own. Raw logs byte-unchanged.
 
-**S9-19. #59's two pre-printed exits may never be connected by an upgrade, and seven accepted facings break that.**
-Status `OPEN` (filed at Stage 9.1 revision 9.1b, 2026-09-18; `STAGE9_TILE_TOPOLOGY_AUDIT_2026-09-18.md` §8a/§8b).
+**S9-19. ~~#59's two pre-printed exits may never be connected by an upgrade, and seven accepted facings break that.~~ RESOLVED.**
+Status **`RESOLVED`** (Slice 9.3, 2026-09-18, uncommitted — resolution appended at the end of this entry). Was `OPEN` (filed at Stage 9.1 revision 9.1b, 2026-09-18; `STAGE9_TILE_TOPOLOGY_AUDIT_2026-09-18.md` §8a/§8b).
 **PRINTED RULE, not an owner decision.** 2018 revised rulebook §6.2.2 ❹, verbatim: "When a tile is replaced, all
 stations on the replaced tile must be placed on the new tile with the same connections as before. **This also means
 that the pre-printed exits on a (59) tile can never be connected in the tile upgrade.**" The first pass filed this
@@ -1826,6 +1855,93 @@ token on the hex (so the *station* half of ❹ was satisfied every time; the vio
 **JUNO-FCJ 640** (E11, `#59@5 → oo14@0` — no legal facing of oo14 exists), **JUNO-FCJ 1047** (E5,
 `#59@4 → #65@0` — a bad facing; `#65 @2` and `@4` were both legal), **JUNO-Z6C 399** (E5, `#59@4 → oo13@2` — no
 legal facing of oo13 exists). Two logs to re-pin and a version bump owed with Slice 9.2/9.3.
+
+> **RESOLVED — Slice 9.3, 2026-09-18 (uncommitted).**
+>
+> **Architecture: tile metadata consumed by generic machinery, not a tile-id branch.** `TileCatalogEntry` gains
+> `separateSystems?: true` (design note **#1628**), carried by exactly one entry — old **#59** — and meaning *"this
+> tile's `cityGroups` are SYSTEMS, and an upgrade may not put two of them in one connected component of the new
+> tile."* A tile-specific fact is the honest shape here because **the printed rule is itself tile-specific**: ❹
+> names "(59)". `priorTopologyAt` reads the flag off the LAID tile and rotates the groups to board edges, so
+> `HexTopology` now carries `separateSystems`; `separationPreserved` is rule **5b** of `filterSandboxPlacements`,
+> beside rule 5 rather than inside it, because the two ask different questions — rule 5 asks whether the track
+> that is here SURVIVES, 5b asks whether two systems that were apart are still apart. **No tile id appears in the
+> predicate** (`sandboxTileLegality` design note #1 forbids it), and it is semantic metadata rather than a
+> coordinate/facing blacklist.
+>
+> **Systems are defined topologically, never from renderer strokes.** The source systems are #59's own
+> `cityGroups`, rotated; the destination's connectivity is the union-find closure of `tileSegments`' rotated
+> `paths` — the mirrored backend routing `pathfinding.rs` itself walks, present on all 76 entries, in which a hub
+> is its full pairwise expansion, so a one-city hub answers "connected" without being special-cased. A `[e, e]`
+> terminus unions with nothing (#676's reading) and the artwork's `CITY_ENDPOINT` sentinel is dropped rather than
+> unioned through, because the artwork collapses every centre of a multi-city tile onto one symbol. No destination
+> `city_index` is required and no SVG is read.
+>
+> **Deviation from this entry's own implementation note, deliberately.** The note proposed landing it with S9-17's
+> `fitStationsToUpgrade` edge-set anchor. That mechanism runs **per token, in the reducer**: a hex carrying no
+> token has nothing for it to anchor, and #59's separation clause binds whether or not a station is present. The
+> same *question shape* is used — which destination component carries this source edge set — asked in the
+> placement predicate so it holds for every lay. The station half of ❹ stays exactly where Slice 9.2 put it.
+>
+> **Measured, complete matrix** — 8 successors × 6 destination facings × 6 source facings = **288 candidates**;
+> **114 offered before → 72 after**; **42 refused**, which is §8b's seven pairs reproduced at all six source
+> rotations (source-rotation invariance is itself pinned). §8b's table reproduces exactly at source `#59@0`:
+> #68 {2,5} · #67 {0,2} · #66 {0,5} · #65 {0,4} · #64 {2,4} · #984 {1,2} · oo13 {} · oo14 {}. **All five Classic
+> successors keep exactly two legal facings from every source facing**, so nothing became unreachable.
+>
+> **It did NOT generalize, and that is pinned by a control.** New York's two severed printed cities still become
+> one connected green #54, the town-merge family (#1403) is untouched, Baltimore's chain is untouched, and a sweep
+> over 60 hexes × the whole tray measures **> 500 legal component-merging upgrades still accepted**. A mutation
+> that applies the rule globally takes that count to zero and fails the control.
+>
+> **Corpus: no divergence, and the cause is proven rather than assumed.** All 18 files are byte-identical in
+> state, per-entry `map_grid`, every lay verdict and final board. The three stored transitions §14b adjudicates are
+> refused at the 9.3 predicate — pinned directly, by reconstructing each source configuration — but in LIVE replay
+> they never reach it: `operatingIdentityRefusal` already refuses each one **upstream and identically at baseline**
+> (JUNO-FCJ 555/640/988/1047 — "A corporation only acts during an Operating Round", the replay being in a
+> StockRound at those indices; JUNO-Z6C 378/399 — "Only the operating corporation lays track"). The #59 therefore
+> never lands on E5 or E11 in replay, the destination hexes are bare, and the upgrade's precondition is absent.
+> **§14b's adjudication is a read of the STORED ACTIONS against the rule and remains correct as such; the replay
+> consequence it predicted does not materialise.** So: **no log re-pinned, no golden re-pinned, `replayGolden`
+> green, and no version bump is forced by S9-19.**
+>
+> **NO CORRECTIVE AUTO-ROTATION.** JUNO-FCJ 1047 names `#65@0`; `#65@2` and `#65@4` are legal from that source and
+> the engine refuses the action anyway. Pinned as its own assertion so the alternatives are on the record and
+> visibly not taken.
+>
+> **Upgrade-graph consequence — and the three layers must be kept apart (design note #1632).** "The upgrade
+> graph" names three different objects: **(A) declared relationships** (T-09 ∪ the revised Classic tables ∪ the
+> correction sheet — *no such table exists in this repo, deliberately*, `tileUpgrades.ts` #675; it lives in the
+> audit, which also RECONCILES it per §6b); **(B) legal relationships** — does any (source facing, destination
+> facing) pass the real authority; **(C) the reachability closure** — `tileUpgradeGraph()`, a walk that lays a
+> tile the board accepts and asks what replaces it, per (board, tray).
+>
+> **The 62 / 120 / 110 → 62 / 117 / 107 counts are LAYER C: reachable edges.** Standard **62 → 62**
+> (oo13/oo14 are `plusOnly`), 1830+ **120 → 117**, LPF **110 → 107**. Three edges leave the closure and only
+> two of them stopped being legal:
+>
+> | Relationship | Layer B (legal?) | Layer C (reachable?) | Why |
+> |---|---|---|---|
+> | `#59 → oo13 (36)` | **refused** — 0 facings at any combination | gone | S9-19: every facing connects #59's two pre-printed exits |
+> | `#59 → oo14 (35)` | **refused** — 0 facings | gone | same |
+> | `oo14 → oo20 (167)` | **STILL LEGAL — six facings**, the identity offset +1, exactly §8c-i | gone | oo14's only source was #59, so no reachable board holds an oo14 to ask from |
+>
+> **Nothing in this record may be read as "Slice 9.3 made `oo14 → oo20` illegal". It did not**, and a dedicated
+> assertion measures its six facings so the claim cannot drift. **oo13 and oo14 are now unreachable from any
+> board position in the expanded game** — the corrected-authority answer — while remaining in the tray, because
+> they are physical components and inventory is not a legality question.
+>
+> **S9-16's "sole zero-facing edge" claim, made precise.** After 9.3 the raw, unreconciled T-09 range has
+> **eleven** zero-facing OO rows: `oo1 → oo10-oo17` (eight, retracted by the errata's *"The oo1 (8861) tile is
+> not upgradable"*, §6b class C, and already zero before 9.3), `#59 → oo13` and `#59 → oo14` (§6b class C,
+> *"T-09 range over-reach on precisely the two tiles the errata voids"*, now also refused by the printed clause),
+> and `oo13 → oo20` (§6b class F/C, **unresolved**). **So S9-16 is sole only of the RECONCILED set** — the one
+> §8c's "119 publisher-valid edges · exactly 1 with no legal facing" counts, after the class-C rows a higher
+> authority corrects out are removed. The difference is not arithmetic: every other zero-facing row has a
+> **named higher authority that removes it**, and `oo13 → oo20` has none. That is what "a contradiction in
+> official material" means, and why it alone is a residue. The unqualified sentence *"S9-16 is the only
+> publisher-valid zero-facing edge"* is **no longer true after 9.3** and must carry the qualifier; the 9.3 suite
+> asserts the qualified form and enumerates all eleven corrected-out rows by class.
 
 **S9-20. ~~oo13 and oo14 carry revenue 50; the official errata records 40 for each.~~ WITHDRAWN — NOT A DEFECT.**
 Status `OPEN` (filed at revision 9.1b, 2026-09-18; audit §5b). The errata's *Tile Numbering — Older* section, in the
@@ -1862,8 +1978,8 @@ Replay, if it does become 50 → 40: **arithmetic, not legality** — both tiles
 (oo14 on JUNO-FCJ E11, oo13 on JUNO-Z6C E5), so the change would alter recorded route revenue there; land it with
 S9-19, which re-pins the same two logs.
 
-**S9-21. Three tiles are keyed on old numbers the official errata voids.**
-Status `OPEN` (filed at revision 9.1b, 2026-09-18; audit §2b). Corrected project convention: **do not canonize an
+**S9-21. ~~Three tiles are keyed on printed old numbers the official errata voids.~~ RESOLVED (rules authority); display remainder → U-38.**
+Status **`RESOLVED — rules/catalog authority`** (Slice 9.3, 2026-09-18, uncommitted — resolution appended at the end of this entry; three player-visible display sites remain, filed as **U-38**). Was `OPEN` (filed at revision 9.1b, 2026-09-18; audit §2b). Corrected project convention: **do not canonize an
 old number the errata voids.** Where a corrected old number exists it becomes canonical and the printed one a
 deprecated alias; where the errata voids the number and offers no replacement, the **Lookout ID** is canonical.
 
@@ -1879,6 +1995,72 @@ reads them as old 18xx numbers. It is a naming-authority debt, and the cheap fix
 **input aliases** (`"626"` resolving to the oo1/#8861 record), not a rename of a dozen tables. Audit §2b classifies
 every one of the repo's 34 `626` occurrences (topology source · display · test · unrelated colour string
 `#262626` · unrelated design-note number). Replay: none. **Do not implement before Slice 9.3.**
+
+> **RESOLVED for rules/catalog authority — Slice 9.3, 2026-09-18 (uncommitted). Rewritten twice: once for
+> terminology at the closure pass, once at the production-use check, which found the first implementation was
+> dormant.**
+>
+> **TERMINOLOGY FIRST, because this finding's own title was loose. THE ERRATA VOIDS NUMBERS, NOT TILES.** oo1,
+> oo13 and oo14 are valid, correct, playable tiles with owner-confirmed geometry and revenue. What is void is
+> **#626** (corrected to **#8861**) and **#36 / #35** (withdrawn with no replacement, so the Lookout identifier
+> is the only valid name those two have). Nothing here reopens their geometry or their upgrade analysis.
+>
+> **THE INVARIANT:** *an errata-invalid old NUMBER may remain a stable MACHINE KEY for compatibility, and is no
+> longer treated as a canonical RULES IDENTITY.* Two jobs, separated.
+>
+> | | stable storage / ABI key | serialized `tile_id` | canonical rules identity | canonical display LABEL (where the shared helper is consumed) | deprecated identifier | valid old number? |
+> |---|---|---|---|---|---|---|
+> | **oo1** | `626` | **`626`** | **#8861** | `#8861` | ~~#626~~ | yes — 8861 |
+> | **oo13** | `36` | **`36`** | **oo13** | `oo13` | ~~#36~~ | **none exists** |
+> | **oo14** | `35` | **`35`** | **oo14** | `oo14` | ~~#35~~ | **none exists** |
+>
+> **The display column is the label `canonicalTileName` yields, at the three surfaces that consume it — NOT a
+> claim that every player-visible surface has been converted.** Three have not; they are listed under REMAINDER
+> below and tracked as **U-38**.
+>
+> **WHERE THE AUTHORITY LIVES: on the live catalog, not beside it.** `TileCatalogEntry.canonicalId` (design note
+> **#1630**), present on exactly three of the 76 entries, read through `canonicalTileName(tileId)` exported from
+> `hexTileCatalog.ts`. Every production path already resolves a serialized `tile_id` through
+> `TILE_CATALOG_BY_ID`, so the canonical identity is in hand wherever the tile is, with no second table to drift
+> from. For the other 73 tiles the helper returns exactly the `` `#${tileId}` `` string every call site built by
+> hand, which is asserted — a fix for three must not quietly relabel seventy.
+>
+> **THREE REAL PRODUCTION CONSUMERS**, all in files carrying no owner hunk:
+>
+> | Consumer | File | Was | Is |
+> |---|---|---|---|
+> | Activity Log sentence, every tile lay | `utils/actionLog.ts` `describeGameplayAction` | `laid Tile #626 on H18` | `laid Tile #8861 on H18` |
+> | "this hex is finished" click/glow message | `components/hexGeometry.ts` `evaluateHexForTileLaying` | `already holds tile #36` | `already holds tile oo13` |
+> | tile-picker tooltip | `components/TileSelectionPopup.tsx` | `Tile #35 — …` | `Tile oo14 — …` |
+>
+> **WITHDRAWN AT THE PRODUCTION-USE CHECK: the separate `components/tileIdentity.ts` module, with
+> `resolveTileKey` and `acceptedTileSpellings`.** The first implementation described that module as the semantic
+> layer while it had **no production consumer at all** — only the Stage-9.3 test imported it. A second dormant
+> identity table beside the live catalog is duplicate authority, exactly the hazard audit §2's "three tables
+> describe one tile" note names, so it is removed rather than committed. Its string parser went with it: a sweep
+> finds **no textual tile-id input boundary in production** (`messageSchema` types `tile_id` as `"int"`; the only
+> near-miss, `utils/gameHistory.ts:639` `Number(body.tile_id)`, is JSON-number coercion). Historical replay
+> compatibility concerns the numeric `tile_id`, which never moved.
+>
+> **"Input-only alias" was wrong and is withdrawn.** `applySandboxLayTile` writes `tile_id: tileId` straight into
+> the grid, so a #626 laid *today* still serializes as **626**. The integer is the **stable historical storage /
+> ABI key**, written by new authoritative state as well as read from old; what is deprecated is the number **as a
+> rules identifier**, and what normalizes is interpretation and display. Pinned by an assertion that lays a #626
+> through the reducer and reads `"tile_id":626` back out.
+>
+> **Corpus: 18/18 identical to baseline `fdc4b9a`** after the wiring — per-entry state, per-entry `map_grid`,
+> every lay verdict, final state, every final field, final board. The rendered sentence is UI state
+> (`describeGameplayAction` feeds `App.tsx`'s label and toast); no stored log carries it.
+>
+> **REMAINDER → U-38.** Three player-visible surfaces still print the raw integer and were deliberately NOT
+> touched, because each sits in an owner-dirty file: `App.tsx:3340` (the #1390 "no upgrade in this game"
+> receipt — which is about #626 itself), `components/hexCanvasPrimitives.ts:1063` (the number drawn on the hex
+> face) and `components/TileReference.tsx` (the Tiles tab). Display-only, no replay effect.
+>
+> **Read against the original finding** — a *naming-authority* debt whose own prescription was explicitly "not a
+> rename of every reference" — this is **RESOLVED**. Read as "no player sees the voided number anywhere", it is
+> **PARTIAL by exactly the three call sites above**. Both readings are stated so the owner can pick without
+> re-deriving the scope.
 
 **S9-11. The Blood Price landing is not stamped as an arrival.**
 Status `OPEN` (found by Slice 8.1, 2026-09-16; Yellow Sign / Unpredictable Revenue only). `applySandboxMarketAction`'s
@@ -2495,6 +2677,26 @@ whether the Activity Log should also say "floated" at the float and "placed its 
 
 ---
 
+**U-38.** (S9-21; filed by Slice 9.3's production-use check, 2026-09-18) **Three player-visible surfaces still
+print an errata-voided tile NUMBER — DISPLAY ONLY, no replay effect.** Slice 9.3 put the canonical rules/display
+identity on the live catalog (`TileCatalogEntry.canonicalId`, design note #1630) and wired three production
+consumers to `canonicalTileName`: the Activity Log sentence (`utils/actionLog.ts`), the "this hex is finished"
+click/glow message (`components/hexGeometry.ts`) and the tile-picker tooltip
+(`components/TileSelectionPopup.tsx`). **Three surfaces were deliberately left alone because each sits in an
+owner-dirty file and Slice 9.3's brief forbids touching them:**
+
+| Site | What a player sees | Should be |
+|---|---|---|
+| `App.tsx:3340` — the #1390 receipt, *"Tile #N has no upgrade in this game"* | `Tile #626` | `Tile #8861` |
+| `components/hexCanvasPrimitives.ts:1063` — the number drawn on the hex face | `#626` · `#36` · `#35` | `#8861` · `oo13` · `oo14` |
+| `components/TileReference.tsx:221/306/364` — the Tiles reference tab | `#626` · `#36` · `#35` | canonical |
+
+**The fix is one import and a call per site** — `canonicalTileName(tileId)` from `hexTileCatalog.ts`, which
+returns the identical `` `#${tileId}` `` string for the other 73 tiles, so no other label moves. The `App.tsx`
+receipt is the sharpest case: it exists *because of* #626 and currently names it by the number the errata voids.
+**No reducer change, no replay effect, no golden.** Blocked only on the owner's files being free; the engine and
+catalog half is done and test-pinned (`utils/stage93TileAuthority.test.ts`).
+
 ## Part D — Deliberate rules deviations and owner decisions (never to be "fixed" as bugs)
 
 **D-1. Bankruptcy ends the game immediately, as the conclusion of the bankrupt president's turn; total-table bankruptcy is impossible.** Owner, 2026-09-06 (DECISIONS A7), rulebook §6.7 / §7.1 — implemented by Stage 5 (`settleBankruptcy`, `DeclareBankruptcy`). `OWNER DECISION` — consistent with the rulebook; recorded because an earlier design had an all-bankrupt fallback, now withdrawn. (The settlement snapshot is taken *after* that turn concludes — MIGRATION_PLAN #1254.)
@@ -2678,6 +2880,7 @@ PMQ — the ruling applies the conditional form to both. Implementation: Slice 8
 | **6** | **8.5** (`0b23b1e`) | **The bump.** `RULES_ENGINE_VERSION` 5 → 6, `SUPPORTED_RULES_ENGINE_VERSIONS` derived `[6]`, changelog row 6 naming every Stage-8 semantic change: operating order settled on the committed post-rise chart, sold-out rise order, the home station owed at the FIRST OPERATING TURN, the Erie / PMQ whole-hex protection, C&O Cleveland-or-Richmond, the CLOCKWISE presidency tie-break, the Scenario-D certificate-safe exchange, the M&H authority with `pending_mh_exchange` and its boundary settlement, and 8.5's own removal of the unparred share price (S8-8, #1640). A version-5 room is refused before replay **under every policy**; unpinned logs keep the #1520 boundary (server refuses, development corpus admits). | **Measured from HEAD under v6**, 18 files / **4,105 stored entries / 3,103 applied / 1,002 dropped by `RevertTo` / 1,131 reducer no-ops / deterministic 18 of 18 / 0 boards ending with a queued M&H request**. The three frozen goldens (last written at `47d1b7a`, Batch 7.5) replay byte for byte — the one TRUE before/after comparison, and **Stage 8 costs them nothing**. The S8-8 change is corpus-neutral: **zero** boards carry a standing emergency-funding obligation. **Filed, not fixed:** S10-23 (`export/JUNO-Y8V` applies 0 of 668 rows — no entry ids, and `effectiveActions` kills by identity, #1026; pre-existing, `logRevert.ts` untouched by Stage 8) and S10-24 (the discard hold omits `RevertTo`; unreachable, reverts never reach the reducer). **Re-pinned:** `batch75Closure`'s four version assertions to the relative form Batch 4.6 / 5 / 6 already use. Nothing else re-pinned; no expected output re-derived from the new engine |
 
 | 6 (owed until Stage-9 closure) | **9.2** (uncommitted) | **Board / printed-topology authority.** `immutableHexRefusal` (#1620) is rule 0 of `filterSandboxPlacements`, ported from `hexmap.rs:2317` / `:2331` in their order and shared with `evaluateHexForTileLaying` (S9-10 / F-1); `priorTopologyAt` (#1621) feeds rule 5 the hex's LIVE topology in `liveEdgesForHex`'s fallback order, so board-printed track is preserved on a first lay (S9-10 / F-2); `stationAnchorAuthority.stationAnchorRefusal` (#1623) puts revised 6.2.2 ❹ in the reducer, ahead of every mutation (S9-17); and the Level Playing Field gains T-02's seventh board tile, the printed straight `#9@0` at **M-11** (#1622, S9-18). `RULES_ENGINE_VERSION` deliberately NOT bumped — Stage 8's precedent: implementation slices stay on the pin and Stage 9 takes ONE deliberate bump at closure, once S9-19's re-pins are known and can be reconciled with these. **Stage-9 bump is now OWED.** | **Measured against the baseline audit commit `d837419` across ALL 18 current corpus files — 18/18** (3 goldens + 8 `server/data` + 5 `sandbox-log-*` exports + the FCJ-96 prefix + the Z6C-494 fixture; the same set Stage 8.5 used) under `DEVELOPMENT_CORPUS_POLICY`. **Identical stored / applied / dropped / unparseable counts in all 18, and EVERY DYNAMIC STATE FIELD IDENTICAL at every entry and at the end — zero state divergences observed anywhere.** `map_grid` is a separate object and is **never byte-identical on a Level Playing Field log**: the printed M-11 straight is in the INITIAL grid, so the board differs from index 0 — a static/setup difference, not a gameplay one. **Exactly one stored action changes acceptance in the whole corpus**, in one room appearing in two files: **JUNO-Z6C idx 227** (`#8@0` at M-11, no `token_cities`) — ACCEPTED at baseline, **REFUSED** under 9.2, because T-02 prints yellow track on that hex so the lay repeats the colour tier and drops printed edge 3. Its state before and after is identical on both sides (M-11 is Plain, so a $0 refusal leaves no trace); the boards never converge. `server/JUNO-FCJ` idx 159 (`#9@0` at M-11) was already refused by `operatingIdentityRefusal` and still is — **no change**. F-1, F-2 and S9-17 are **measured corpus-neutral**. **RE-PINNED (2, both explained):** `replayGolden` fixtures `JUNO-CV4.json` and `JUNO-G6J.json`, each +1 grid entry (the printed M-11 tile) and nothing else — pure insertion, 14 lines, zero deletions — reason *"S9-18 — restore printed LPF M-11 straight from T-02"*. `JUNO-7NZ.json` untouched. **All raw logs byte-unchanged.** The focused Stage-9.2 gate is green |
+| 6 (owed until Stage-9 closure) | **9.3** (uncommitted) | **Tile separation, physical supply and canonical identity.** `TileCatalogEntry.separateSystems` (#1628) carries revised 6.2.2 ❹'s separation clause as **tile metadata**, on old **#59** alone; `priorTopologyAt` rotates its `cityGroups` onto `HexTopology.separateSystems`, and `separationPreserved` is **rule 5b** of `filterSandboxPlacements` — the first rule in that file to compare CONNECTIVITY (union-find over the destination's rotated `paths`) rather than segments, and a no-op for every prior that names no systems (S9-19). `tileTrayPlus.RECOUNTED` corrects #63's PHYSICAL supply `1 → 4` ahead of every scenario removal (#1629, S9-15). `TileCatalogEntry.canonicalId` on the live catalog (#1630) gives the three tiles whose printed old NUMBERS the errata voids their canonical rules/display identity — `#8861` / `oo13` / `oo14` — read through `canonicalTileName` by three real production consumers (the Activity Log sentence `actionLog.describeGameplayAction`, the hex-finished message `hexGeometry.evaluateHexForTileLaying`, and the tile-picker tooltip), while the integers stay the **stable storage / ABI key** and are deprecated only as **rules identifiers** (S9-21). **Newly written state still serializes `tile_id: 626 / 36 / 35`** — that is the compatibility, not a leak. Display remainder in three owner-dirty files filed as **U-38**. `RULES_ENGINE_VERSION` deliberately NOT bumped, and **this slice does not force one** — see the corpus column. **Stage-9 bump remains OWED at Stage-9 closure.** | **Measured against `fdc4b9a` (HEAD) across ALL 18 corpus files — 18/18**, same assembly as 9.2, under `DEVELOPMENT_CORPUS_POLICY`. **Identical applied / dropped / unparseable counts, identical state digest at EVERY entry, identical `map_grid` at every entry, identical verdict on every one of the 334 replayed `LayTile` actions (3,131 observed entries in all), identical final state, identical final state field digests, identical final board — in all 18 files. ZERO divergence of any kind.** The three transitions S9-19 was predicted to make refusal-added (**JUNO-FCJ 640**, **JUNO-FCJ 1047**, **JUNO-Z6C 399**) are refused by the 9.3 predicate — pinned directly by reconstructing each source configuration — but in live replay they never reach it: `operatingIdentityRefusal` refuses each **upstream and identically at baseline** (FCJ 555/640/988/1047, wrong round; Z6C 378/399, wrong corporation), so the #59 never lands on E5 or E11 and the destination hexes are bare. §14b's adjudication of the STORED ACTIONS stands; its predicted replay consequence does not materialise. **NO log re-pinned, NO golden re-pinned, `replayGolden` green, no version bump forced.** S9-15 is corpus-neutral as predicted (tray never exhausted); S9-21 changes no persisted representation at all — the storage keys are untouched and new state serializes them exactly as before. **All raw logs byte-unchanged.** |
 
 Items above that carry "bump" must add a row here when they land. No golden or replay expectation is ever
 re-pinned silently: the re-pin, its index and its reason go in the batch write-up and in this table.

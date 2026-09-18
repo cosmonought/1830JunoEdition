@@ -273,6 +273,11 @@ export interface HexTopology {
   segments: TileSegment[] | null;
   /** Which arm answered. Exported so a test can pin the fallback order rather than infer it. */
   source: "laid" | "gray" | "offboard" | "landmark";
+  /** #1628 (S9-19): edge groups this hex's CURRENT tile insists stay mutually disconnected through an
+   *  upgrade, already rotated to board edges. Present only when the tile carries `separateSystems`, which
+   *  today is old #59 alone. `undefined` means the ordinary rules and nothing more -- a landmark's two
+   *  severed city stubs (New York) are deliberately NOT this, because ❹ does not name them. */
+  separateSystems?: readonly (readonly number[])[];
 }
 
 const sortedUnique = (edges: readonly number[]): number[] =>
@@ -314,10 +319,18 @@ export function priorTopologyAt(
        print. The hex is covered; claiming the printed rail is still under there would be inventing topology,
        and "no opinion" is the direction this file fails in (design note #0). */
     if (!entry) return null;
+    const rot = ((laid.orientation % 6) + 6) % 6;
     return {
       mask: rotateConnections(entry.connections, laid.orientation) & 0b111111,
       segments: tileSegments(laid.tile_id, laid.orientation),
       source: "laid",
+      /* #1628 (S9-19): read off the tile's own metadata, rotated to the facing it was laid at. Only the LAID
+         arm carries it -- the board's printed arms describe track the board prints, and revised 6.2.2 ❹'s
+         separation clause is about a (59) TILE. */
+      separateSystems:
+        entry.separateSystems === true && entry.cityGroups
+          ? entry.cityGroups.map((group) => group.map((edge) => (edge + rot) % 6))
+          : undefined,
     };
   }
 
@@ -407,6 +420,92 @@ function preservesRouting(
      catalog would mean editing the mirror away from the Rust source it mirrors, which is the one thing this
      file's whole design forbids. The comparison is ours; the mirror is not. */
   return oldSegments.every(([a, b]) => a === b || available.has(segmentKey(a, b)));
+}
+
+/* ==================================================================
+    DESIGN NOTE 1628 (Slice 9.3, S9-19): THE SEPARATION CLAUSE
+   ==================================================================
+
+   `preservesRouting` above asks whether every segment the hex runs today SURVIVES. It cannot ask whether two
+   of them became ONE, because a self-loop is satisfied by its edge surviving (#676) and a real path is
+   compared as a pair -- neither comparison has any notion of which city an exit lands in. So an upgrade that
+   keeps both of #59's stubs AND joins them through the destination's own track reads as a pure addition, and
+   is accepted. That is exactly the over-acceptance Stage 9.1 measured: seven (tile, facing) pairs.
+
+   THIS IS THE ONLY RULE IN THE FILE THAT COMPARES CONNECTIVITY RATHER THAN SEGMENTS, and it runs only for a
+   prior that ASKED for it (`HexTopology.separateSystems`, from `TileCatalogEntry.separateSystems`). A prior
+   without the flag reaches `true` on the first line and pays one property read.
+
+   THE DESTINATION'S CONNECTIVITY, not its city list. `cityGroups` is frontend-only artwork bookkeeping and
+   #883 does not carry it at all; `paths` is the mirrored backend routing that `hexmap::pathfinding` itself
+   walks, every one of the 76 entries has it, and a city hub appears there as the full pairwise expansion of
+   its live edges (`TileCatalogEntry.paths` #119). So "are these two edges joined by this tile" is exactly
+   "are they in one component of `tileSegments`", and a hub answers yes without being special-cased.
+
+   WHY A TERMINUS DOES NOT UNION. `[e, e]` is #676's "enters at e and stops"; unioning it with itself is a
+   no-op, which is the honest reading -- a stub joins an edge to nothing. `CITY_ENDPOINT` (-1) can only arrive
+   from the ARTWORK fallback, which collapses every centre of a multi-city tile onto one sentinel; unioning
+   through it would invent a connection the artwork never claimed, so it is dropped. No catalog tile reaches
+   that fallback (`stage93TileAuthority.test.ts` pins that every entry has `paths`), and if one ever does the
+   honest answer is "these edges are not known to be joined" rather than a fabricated merge. */
+
+/** The connected components of `tileId`'s own track at `orientation`, as board-edge groups. */
+export function tileEdgeComponents(tileId: number, orientation: number): number[][] {
+  const entry = TILE_CATALOG_BY_ID.get(tileId);
+  if (!entry) return [];
+  const segments = tileSegments(tileId, orientation);
+  const parent = new Map<number, number>();
+  const find = (edge: number): number => {
+    const seen = parent.get(edge);
+    if (seen === undefined || seen === edge) return edge;
+    const root = find(seen);
+    parent.set(edge, root);
+    return root;
+  };
+  const union = (a: number, b: number): void => {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent.set(ra, rb);
+  };
+  for (const edge of liveEdges(rotateConnections(entry.connections, orientation))) parent.set(edge, edge);
+  for (const [a, b] of segments ?? []) {
+    if (a === CITY_ENDPOINT || b === CITY_ENDPOINT || a === b) continue;
+    if (!parent.has(a)) parent.set(a, a);
+    if (!parent.has(b)) parent.set(b, b);
+    union(a, b);
+  }
+  const groups = new Map<number, number[]>();
+  for (const edge of Array.from(parent.keys()).sort((a, b) => a - b)) {
+    const root = find(edge);
+    groups.set(root, [...(groups.get(root) ?? []), edge]);
+  }
+  return Array.from(groups.values());
+}
+
+/** Does `candidate` at this facing keep the prior's separated systems apart?
+ *
+ *  `true` whenever the prior names none, which is every hex on the board but one holding a #59. */
+export function separationPreserved(
+  prior: HexTopology,
+  candidate: TileCatalogEntry,
+  candidateOrientation: number,
+): boolean {
+  const systems = prior.separateSystems;
+  if (!systems || systems.length < 2) return true;
+  const components = tileEdgeComponents(candidate.tileId, candidateOrientation);
+  const componentOf = (edge: number): number => components.findIndex((group) => group.includes(edge));
+  for (let i = 0; i < systems.length; i += 1) {
+    for (let j = i + 1; j < systems.length; j += 1) {
+      for (const a of systems[i]) {
+        for (const b of systems[j]) {
+          const ca = componentOf(a);
+          const cb = componentOf(b);
+          if (ca !== -1 && ca === cb) return false;
+        }
+      }
+    }
+  }
+  return true;
 }
 
 /* ------------------------------------------------------------------ */
@@ -697,6 +796,14 @@ export function filterSandboxPlacements(
     /* 5. Path preservation, per orientation -- #1621: over the hex's LIVE topology, which is the laid tile
        where one stands and the board's own printed track where none does. */
     if (prior && !preservesRouting(prior, entry, orientation)) {
+      return false;
+    }
+
+    /* 5b. Separation, per orientation -- #1628 (S9-19). Beside rule 5 rather than inside it, because the two
+       answer different questions: rule 5 asks whether the track that is here SURVIVES, and this asks whether
+       two systems that were apart are still apart. A prior that names no separated systems -- every hex but
+       one holding a #59 -- returns `true` immediately. */
+    if (prior && !separationPreserved(prior, entry, orientation)) {
       return false;
     }
 

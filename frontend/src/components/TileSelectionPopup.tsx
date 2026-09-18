@@ -33,6 +33,10 @@ import type { DeliverTxResponse } from "@cosmjs/stargate";
 
 import { useGameSession } from "../context/GameSessionContext";
 import { TilePreviewThumbnail, TILE_CATALOG_BY_ID } from "./HexGridRenderer";
+/* #1630 (Slice 9.3, S9-21): the tooltip NAMES the tile, so it uses the tile's NAME. Imported straight from
+   the catalog rather than through `HexGridRenderer`'s re-export, which is one of the naming authorities
+   this must not add a second hop to. Unchanged for every tile but oo1, oo13 and oo14. */
+import { canonicalTileName } from "./hexTileCatalog";
 import { FONT_FAMILY, FONT_SIZE } from "../styles/typography";
 import type { LegalTilePlacement, TileColorTier } from "./HexGridRenderer";
 
@@ -793,8 +797,8 @@ export function TileSelectionPopup({
                   }}
                   title={
                     canRotate
-                      ? `Tile #${group.tileId} — double-click (or press R) to rotate`
-                      : `Tile #${group.tileId} — only one legal rotation here`
+                      ? `Tile ${canonicalTileName(group.tileId)} — double-click (or press R) to rotate`
+                      : `Tile ${canonicalTileName(group.tileId)} — only one legal rotation here`
                   }
                   style={{
                     flex: "0 0 auto",

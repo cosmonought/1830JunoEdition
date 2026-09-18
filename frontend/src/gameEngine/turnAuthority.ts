@@ -79,6 +79,9 @@ import { auctionRefusal, isAuctionMessage } from "./auctionAuthority";
 /* Design notes #1590-#1595 (Batch 7.4): the ordinary offers' hold and their three authorities -- the same
    predicates the reducer's core asks, so the two locks cannot disagree; ingress answers with the sentence. */
 import { legacyOfferMessageRefusal, pendingOfferBlock } from "./pendingOfferHold";
+/* Design note #1630 (Slice 8.4): the M&H exchange's request predicate -- the same function the reducer's arm
+   asks, so the socket and the board cannot disagree about whether an exchange is legal. */
+import { mhExchangeRequestRefusal, type MhExchangeRequest } from "./mohawkExchange";
 import {
   answerPrivatePurchaseRefusal,
   privatePurchaseRefusal,
@@ -280,6 +283,19 @@ export function turnRefusal(input: TurnAuthorityInput): string | null {
       const placement = msg.PlaceHomeStation as HomePlacement;
       if (placement.kind === "dh") return null;
       return withTableRules(state, () => homePlacementRefusal(state, placement, input.mapGrid, boardHomeHexToAxial));
+    }
+    /* #1630 (Slice 8.4, S8-10): the M&H exchange is the third legality question in this family a socket
+       boundary should answer, for the reason #1570 and #1611 give for the other two -- the alternative is an
+       exchange the player believes landed and the reducer quietly declined, which for THIS message would cost
+       them a private company in their own mind while the board still held it. The owner rule above stays
+       first and is deliberately not repeated; what is asked here is the SAME predicate the reducer's arm
+       asks, including the duplicate-request rule, so ingress and the arm cannot disagree about a refusal.
+       THE DISPOSITION IS NOT ASKED HERE. Whether a legal request executes now or waits for the next
+       between-turns boundary is the reducer's settlement, not an authorization question -- a queued request
+       is an ACCEPTED message, and refusing it at the socket would delete the off-turn half of the power. */
+    if ("ExchangePrivate" in msg) {
+      const exchange = msg.ExchangePrivate as MhExchangeRequest;
+      return withTableRules(state, () => mhExchangeRequestRefusal(state, exchange, actor));
     }
     return null;
   }

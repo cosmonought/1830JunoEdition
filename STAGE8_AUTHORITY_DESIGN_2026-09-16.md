@@ -129,7 +129,7 @@ are updated to match.
 | **S8-7** first-SR sale ban | RESOLVED (7.2) | Nothing residual in the reducer. | absorbed — do not touch |
 | **S8-8** unparred share sale | RESOLVED sale half (7.2); `priceOf` / `sharePriceFor` `?? 67` fallback still standing | The fallback is unreachable for a sale on a pinned board (7.2 rule 5) and for a forced sale of an unparred share (rule 4). It is dead-code hygiene, not a gameplay defect. | **Slice 8.5 cleanup** (Opus, mechanical) — or leave; no rule depends on it |
 | **S8-9** par ladder / silent president conversion | RESOLVED (7.2) | Nothing residual. | absorbed — do not touch |
-| **S8-10** M&H exchange takes IPO before pool | OPEN | The ledger's sentence understates it. The `ExchangePrivate` arm applies whatever the message says and re-derives nothing (§6): source, corporation, `keep_open`, ownership, the 60 % cap, the certificate limit, share availability, timing, the float threshold and the presidency are all unjudged in the reducer; ingress asks only "is the M&H yours". Corpus: 3XD 288 takes NYC's IPO from 50 % to 40 % (60 % out) **without floating it**; it floats one entry later on a purchase. | **Slice 8.4** (Opus after §6 is frozen; one Fable question in §6.7) |
+| **S8-10** M&H exchange takes IPO before pool | RESOLVED (8.4) | The ledger's sentence understates it. The `ExchangePrivate` arm applies whatever the message says and re-derives nothing (§6): source, corporation, `keep_open`, ownership, the 60 % cap, the certificate limit, share availability, timing, the float threshold and the presidency are all unjudged in the reducer; ingress asks only "is the M&H yours". Corpus: 3XD 288 takes NYC's IPO from 50 % to 40 % (60 % out) **without floating it**; it floats one entry later on a purchase. | **Slice 8.4** — **IMPLEMENTED 2026-09-17 (#1630, §6.8)** |
 | **S8-11** timing notes (m4 / m5 / m11) | OWNER DECISION pending only if rulebook-literal timing is wanted | Not defects. No change proposed; m4 (float capitalisation on the crossing purchase) is untouched by the home move because the treasury is still unspendable before the OR. | leave |
 | **S8-12** ingress does not mirror the home-token hold | OPEN | Confirmed by code (`turnRefusal` has three holds, no home hold). **Absorbed into Slice 8.2** — the hold's sentence, pass list and ordering are one rule at both locks (§5.7). | **Slice 8.2** |
 | **S8-13 (new, proven)** the chart step runs before the holds | — | Newly proven on the corpus: **FCJ 904 / 911 / 918 / 932** are `SellStock` entries sent while N&W (floated at 902) owed its home token; the core refuses each sale, but `applySandboxMarketAction` had already walked the seller's token down, so `market_positions` moves for a sale that never happened (§5.8). The same shape is latent for the discard and offer holds. Filed as S8-13. | **Slice 8.2** (the hold moves in front of the chart step) |
@@ -1126,7 +1126,10 @@ pending indication that persists until execution or cancellation (exact presenta
 settlement, so e.g. a first 5-train bought before the next between-turns opening closes the M&H and the request expires
 with no NYC share (§0 R1); **STATE VISIBILITY** for the queued → executed / canceled status.
 
-### 6.7 Owner rulings required
+### 6.7 Owner rulings — **BOTH RULED 2026-09-16 (§0); nothing here is outstanding**
+
+> The two questions below are kept for the reasoning trail only. Their answers are R1 and R2 in §0 and are
+> implemented in Slice 8.4 (§6.8); no part of this section is a live question.
 
 > **Both ruled 2026-09-16 (§0).** R1: the interjection default, plus the queued off-turn timing model. R2: yes — the
 > owner chooses the source when both piles hold a legal share.
@@ -1140,6 +1143,119 @@ with no NYC share (§0 R1); **STATE VISIBILITY** for the queued → executed / c
   touches the seat machine.
 - **R2.** Must the client offer the pool when both piles hold a share (rulebook: "from the bank or the bank pool" —
   the owner's choice)? Proposed: yes, one extra option in the flow modal (NEW ACTION, cheap).
+
+### 6.8 Implementation record — Slice 8.4 (Opus, 2026-09-17; uncommitted, awaiting owner review)
+
+**S8-10 RESOLVED.** `RULES_ENGINE_VERSION` remains **5** (the one Stage-8 bump is still 8.5's). The design of §6.3 is
+implemented as ruled, with three departures from its wording, each recorded below.
+
+**Files changed (9).**
+
+| File | What |
+|---|---|
+| `gameEngine/mohawkExchange.ts` | **new.** The whole authority: request legality, the execute-or-queue disposition, the atomic execution, the settlement of a queued request (#1630). |
+| `gameEngine/gameState.ts` | `PendingMhExchange` + the optional `pending_mh_exchange` field (#1630). |
+| `gameEngine/floatThreshold.ts` | receives `applyFloatThreshold`, moved verbatim from the reducer (#1631). |
+| `gameEngine/sandboxSession.ts` | the `ExchangePrivate` arm rewritten and moved below the actor resolution; `settleMhExchange` called at the two turn boundaries (#1630, #1632, #1633); `applyFloatThreshold` imported and re-exported. |
+| `gameEngine/turnAuthority.ts` | ingress asks `mhExchangeRequestRefusal` — the same predicate the arm asks (#1630). |
+| `utils/mohawkExchangeAuthority.test.ts` | **new.** 57 cases. |
+| `utils/mohawkExchangeCorpus.test.ts` | **new.** 8 cases, read-only corpus fork comparison. |
+| `utils/floatThreshold.test.ts` | one source-scan assertion follows the moved function. |
+| `utils/offerAuthority.test.ts` | one Batch-7.4 assertion re-aimed at the ownership rule it is about (ingress now answers legality too). |
+
+**Departure 1 — a new module, not `privateExchange.ts`.** §6.3 proposed `privateExchangeRefusal` in
+`privateExchange.ts`. That file is imported BY `sharePurchase.ts` (for `PLAYER_HOLDING_CAP_PERCENT`), and the
+authority needs `sharePurchase`'s zone rule, `gameState`'s certificate breakdown, `stockTransactionAuthority`'s
+chart context, `floatThreshold` and `presidencyTransfer` — so the predicate had to live one level out or the
+import edge would reverse. `mohawkExchange.ts` is that level; `privateExchange.ts` is untouched and keeps
+`applyPrivateExchange`, which the new module and the C&A/B&O grant paths both still use.
+
+**Departure 2 — the float helper moved rather than a new `settleFloat` being introduced (#1631).** §6.3 proposed
+"`applyFloatThreshold` (moved out of the `BuyStock` arm into a shared `settleFloat` used by both)". A second name
+for the same function would have been a second thing to keep in step; the function itself moved to
+`floatThreshold.ts`, beside the measure it settles, and `sandboxSession.ts` re-exports it so `boFloatRule.test.ts`,
+`floatThreshold.test.ts` and the `BuyStock` arm are unchanged. Ordinary `BuyStock` float behaviour is unchanged by
+construction — same function, same argument, same call site.
+
+**Departure 3 — the holds are asked by the two askers, not by the predicate.** `authoritativeHoldRefusal` lives in
+`sandboxSession.ts`, which imports the new module, so the predicate cannot ask it. It does not need to: both locks
+already run the four holds ahead of every message (`turnRefusal` #1530/#1540/#1590/#1612; the reducer #1613), and
+`ExchangePrivate` is on no hold's pass list. A request arriving under a hold is refused by the hold with the hold's
+own sentence and records nothing; a request queued earlier cannot settle under one because the **boundary itself is
+not crossed** — the `PassTurn` that would cross it is refused by the same gate. That is the ruling ("holds first;
+settle at the next legal boundary after the obligation clears") obtained without a priority list of its own.
+
+**The authoritative pending state.**
+
+```ts
+pending_mh_exchange?: { player: string; private_id: number; company_id: number; source: "Ipo" | "Bank" } | null;
+```
+
+Four fields, optional per #232 (absent on every stored log), `null` written by a settlement that has just cleared
+one. No timestamp, no reserved certificate, no cached legality, no promise of execution.
+
+**The two settlement hooks, and why they are where they are.**
+
+- **`advanceCorporation` (#1632)** — its FIRST line. It is the only place a corporation's Operating turn ends (one
+  caller: the `PassTurn` Operating branch), and three of its four exits BUILD an operating order. `buildOperatingOrder`
+  decides membership and `settleOperatingQueue` only permutes it (#1600), so a float settled after a build is a
+  corporation locked out of a round it has just qualified for.
+- **`seatBoundaryExchange` (#1633)** — wrapped around `applyOneAction`, INSIDE `settleRoundTransitions`'s argument.
+  A Stock Round turn ends when the seat moves (`advanceSeat` / `recordPass`) or the round ends
+  (`stock_round_just_ended`); `settleRoundTransitions` is what opens the Operating Round, so settling on this side of
+  it is what puts a float from the last Stock Round turn into the Operating Round that is about to open.
+
+The resulting order is exactly the one §11 of the implementation brief requires: *previous turn ends → M&H settles →
+float/presidency authoritative → build/freeze any new OR membership → sync the seat*.
+
+**No genuine between-turn state exists in this engine, so the disposition has two answers and not three.**
+`advanceSeat`, `recordPass` and `advanceCorporation` move from one turn into the next within a single entry, and the
+two round-boundary flags are raised and cleared by `settleRoundTransitions` inside that same entry. There is no board
+a client can address on which nobody's turn is underway. `turn_action_taken === false` is the first moment of the
+NEXT player's turn, not a gap, and is deliberately not read.
+
+**Corpus (read-only, 18 logs / 4,105 entries, `DEVELOPMENT_CORPUS_POLICY`).** Two stored `ExchangePrivate` rows, both
+private 4 → NYC, both `source: "Ipo"`, neither carrying `keep_open`:
+
+| Row | Replayed? | Repaired authority | Difference | Convergence |
+|---|---|---|---|---|
+| `export/JUNO-3XD` @288 | yes | **ACCEPTED**, disposition `execute` (own Stock Round turn) | `public_companies`, `virtual_bank_vgp`: NYC `is_floated false → true`, treasury `0 → 900`, bank `10085 → 9185` | forked through 34 further entries; **converged at 289**; final boards identical |
+| `export/JUNO-Y8V` @10 | **no** — `RevertTo` @11 removes it | — | none | — |
+
+The design pass predicted exactly this ("3XD 288 … NYC floats on the exchange; transient … then 290"), and the
+measurement confirms it with one correction: convergence is at **289**, the next entry, not 290. No stored log
+carries a `pending_mh_exchange` field anywhere, and no replay ends with a request standing. No golden was repinned,
+no log rewritten, no expectation re-derived.
+
+**Follow-up (#1634, 2026-09-17, owner review): the pre-presidency exchange, proved, and one narrowing.**
+p. 15 / p. 27 allow the exchange **before NYC's President's Certificate has been purchased**, with the resulting
+share subject to the unparred-sale restriction. Audited and pinned as §13 of the authority suite (7 cases):
+
+- **Already legal, and already correct — no rule was added.** Six of the seven cases pass on the pre-#1634 code.
+  The exchange on an unstarted NYC delivers one ordinary 10%, closes the M&H, and leaves `par_value` null, the
+  presidency vacant, the corporation unfloated, the President's Certificate in the IPO, no cash moved and no Stock
+  Round marker touched. The resulting share cannot be sold: `stockSaleRefusal` rule 4 refuses it on the BOARD fact
+  (S8-8: "an unparred corporation has no price … and that is true of every share of it however it was come by"), at
+  ingress and in the reducer alike, and once NYC is started the ordinary sale authority permits it — the restriction
+  is the board's, never a mark on the share. **No M&H-specific sale rule exists or was added.**
+- **`ordinaryPurchaseRefusal` carries none of the purchase rules.** Traced in full: it asks `hasDoubleCertificate`
+  and, only if there is one, whether the named pile's ordinary percentage covers the request. No
+  President's-Certificate-first rule, no par requirement, no affordability, no one-purchase-per-turn, no
+  sold-this-round lockout. For NYC (no `double_certificate`) it returns `null` immediately.
+- **The narrowing it surfaced.** `ordinaryPercentIn` — the arithmetic beside it — subtracts the LPF 20% card and
+  nothing else, because both were written for a POOL, where the President's Certificate never is (#448). The IPO is
+  where it always is until the corporation is started, so a hand-built board whose NYC IPO held only the President's
+  20% would have passed `ordinaryPercentIn ≥ 10` and handed out half that card as a 10% share. `mhSourceRefusal` now
+  asks **`ordinaryPercentAvailable`** (`stockTransactionAuthority.ts`) — the same reading `stockPurchaseRefusal`
+  asks, subtracting the President's 20% and the LPF double — and the two purchase-side helpers are no longer
+  imported. Not reachable in ordinary play (an unstarted corporation's IPO is 100% and no share of an unparred
+  corporation can be sold into the pool), reachable by a hand-built or replayed message, which is what the predicate
+  is for. Corpus unchanged: `JUNO-3XD` @288 is still ACCEPTED and the sweep is byte-identical.
+- **Bank Pool before par: traced, not constructed.** Every route into the Bank Pool is a sale, and
+  `stockSaleRefusal` rule 4 refuses every sale of a corporation with no par — in a Stock Round and in the Operating
+  Round's forced-sale exception alike. So "an ordinary NYC 10% in the Bank Pool before NYC is parred" has no
+  reachable history and needs no special pre-par Pool rule; the ordinary source check answers it. No malformed
+  board was built to test it.
 
 ---
 
@@ -1347,13 +1463,13 @@ No competing UI document is created; Part C is the one list.
   initial offering until the 20 % is sold; its half-sale needs 10 % certificates already in the Bank Pool. A tie-break
   or projection helper must not assume one 20 % certificate per corporation.
 
-### Slice 8.4 — M&H exchange authority (S8-10) — **Opus** (R1 / R2 ruled, §0: interjection + queued off-turn request, owner's source choice)
+### Slice 8.4 — M&H exchange authority (S8-10) — **Opus** (R1 / R2 ruled, §0: interjection + queued off-turn request, owner's source choice) — **IMPLEMENTED 2026-09-17, uncommitted (§6.8)**
 - Ledger: S8-10 → RESOLVED (rewritten finding).
 - Invariant: §6.3 predicate at both locks; float settles; presidency settles; no seat/streak change (under the R1
   default); `keep_open` refused; empty pile refused (no mint).
 - Files: `privateExchange.ts`, `sandboxSession.ts` (arm + shared `settleFloat`), `turnAuthority.ts`, `App.tsx`
   dispatch (predicate only), tests.
-- Replay: 3XD 288 transient (float one entry earlier); bump owed at 8.5.
+- Replay: 3XD 288 transient (float one entry earlier); bump owed at 8.5. **Measured 2026-09-17: converges at 289, final boards identical (§6.8).**
 - Tests: window cases (own SR turn, between SR turns, mid-OR between actions, during a hold → refused, during the
   auction → refused), both piles, empty piles, 60 % cap, certificate limit with zone exemption, float on exchange,
   presidency on exchange, `keep_open` refused, ingress parity.

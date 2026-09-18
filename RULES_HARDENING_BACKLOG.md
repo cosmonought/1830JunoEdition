@@ -971,8 +971,10 @@ fallback). Audit m8. Rulebook §4.2 / §5.2 (67/71/76/82/90/100). Notes: `BuySto
 `ctx.parValue ?? 67`, `PAR_VALUE_LADDER` (`marketGeometry.ts`). Replay: refusal-added; bump. Detail: refuse
 `par_value ∉ PAR_VALUE_LADDER`; require it on a president's purchase.
 
-**S8-10. M&H exchange always takes the IPO share before the pool.**
-Status `OPEN` — audit m6. Rulebook p.11 ("from the bank or the pool"). Notes: `resolvePrivateExchange`,
+**S8-10. M&H exchange always takes the IPO share before the pool.** *(The heading is the original finding's;
+the defect is far wider — see the Stage-8 design note below.)*
+Status `RESOLVED` — **Slice 8.4** (2026-09-17, #1630/#1631/#1632/#1633; uncommitted, awaiting owner review). Was
+`OPEN` — audit m6. Rulebook p.11 ("from the bank or the pool"). Notes: `resolvePrivateExchange`,
 `ExchangePrivate` arm. Replay: replay-semantic if a `source` is added (default must reproduce today's choice) —
 bump. Detail: add `source: "ipo" | "pool"` to `ExchangePrivate`; default IPO for legacy entries.
 **Stage-8 design pass (2026-09-16, `STAGE8_AUTHORITY_DESIGN_2026-09-16.md` §6) — the finding is wider than the source.** The message
@@ -1008,6 +1010,45 @@ that one is offered; no silent IPO-first. STATE VISIBILITY and the source choice
 (owner, 2026-09-16; D-29, U-35's gotcha):* Slice 8.4 must pin that a request queued during another corporation's turn
 expires without effect when that turn's first 5-train purchase closes the M&H before the next boundary — no NYC share
 is delivered — and likewise when the NYC share or another legality condition is gone by settlement.
+**Implementation (Slice 8.4, 2026-09-17, #1630; design §6.8).** A new `gameEngine/mohawkExchange.ts` holds the whole
+authority and the reducer states no M&H rule of its own: `mhExchangeRefusal` (the private is the M&H, open,
+PLAYER-owned, the message's `player` is that owner and the ingress actor is that player; the target is NYC;
+`keep_open` absent or false; the source is a valid enum whose pile physically holds an ordinary 10 %; the resulting
+NYC holding is inside the 60 % cap with its Orange/Brown waiver; the resulting certificate position is inside the
+limit; the round is a Stock or Operating Round), `mhExchangeRequestRefusal` (that, plus "one pending request at a
+time" — a second request is refused rather than silently overwriting the first's chosen source),
+`mhExchangeDisposition` (own Stock Round turn → execute; anything else → queue), `applyMhExchange` (share from the
+NAMED pile, M&H closed, float settled, presidency settled — one write, no partial state) and `settleMhExchange`
+(revalidate with the same predicate; execute or retire; clear). **Ingress and the reducer's arm ask the same
+predicate** (`turnRefusal`'s sandbox-only branch, beside `SetBoPar` and `PlaceHomeStation`), so a forged or replayed
+message cannot mint. **The state is one optional field**, `pending_mh_exchange: { player, private_id, company_id,
+source } | null` — intent only: no timestamp, no reserved certificate, no cached legality. **Settlement runs at two
+boundaries**: the first line of `advanceCorporation` (#1632 — the only place a corporation's turn ends, and ahead of
+every operating-order build inside it) and `seatBoundaryExchange` wrapped around `applyOneAction` inside
+`settleRoundTransitions`'s argument (#1633 — so a float settled at the end of a Stock Round is in the Operating Round
+that opens). **The float helper moved** from the `BuyStock` arm to `floatThreshold.ts` and is re-exported
+(#1631); ordinary `BuyStock` behaviour is unchanged by construction. **The holds keep their authority unchanged**:
+`ExchangePrivate` is on no hold's pass list, so a request under a hold is refused by the hold and records nothing,
+and a queued request cannot settle under one because the `PassTurn` that would cross the boundary is itself refused.
+**Corpus (read-only, 18 logs / 4,105 entries):** two stored `ExchangePrivate` rows, both M&H → NYC from the IPO;
+`export/JUNO-Y8V` @10 is removed by a `RevertTo` and never replays; `export/JUNO-3XD` @288 is ACCEPTED and executes
+immediately (its owner's own Stock Round turn), NYC floats there instead of at 289 (treasury 0 → 900, bank
+10085 → 9185), and a fork replayed through the remaining 34 entries **converges at 289 with identical final boards**.
+`RULES_ENGINE_VERSION` remains 5; the Stage-8 bump is Slice 8.5's.
+**Follow-up at owner review (2026-09-17, #1634): the pre-presidency exchange.** p. 15 / p. 27 allow the exchange
+before NYC's President's Certificate has been bought; audited and pinned (authority suite §13, 7 cases). It was
+**already legal and already correct** — the exchange leaves NYC unstarted (no par invented, no presidency crowned,
+the President's Certificate still in the IPO, no cash moved, no Stock Round marker touched), and the delivered 10%
+is unsellable until NYC is started by the EXISTING 7.2 authority (`stockSaleRefusal` rule 4, written as the board
+fact under S8-8), which permits the same sale once NYC is parred. **No M&H-specific sale rule exists or was added.**
+`ordinaryPurchaseRefusal` was traced and carries none of the ordinary-purchase restrictions (no
+President's-Certificate-first, no par, no affordability, no per-turn count, no sold-this-round). The one narrowing
+the audit surfaced: `mhSourceRefusal` asked `ordinaryPercentIn`, which subtracts only the LPF 20% card, so a
+hand-built board whose NYC IPO held just the President's 20% would have been handed a 10%. It now asks
+`ordinaryPercentAvailable` (`stockTransactionAuthority.ts`) — the same physical-availability reading
+`stockPurchaseRefusal` asks — and imports no purchase-side helper. Unreachable in ordinary play; the corpus sweep is
+unchanged. **Bank Pool before par is unreachable** (every route into the pool is a sale and rule 4 refuses every sale
+of an unparred corporation), so no special pre-par Pool rule is needed and none was invented.
 
 **S8-15. The presidency exchange cannot represent a Scenario-D successor who holds the other 20 %.**
 Status `RESOLVED` — **Slice 8.3** (2026-09-17, #1622; uncommitted, awaiting owner review). *(Was `FILED` for a later
@@ -1875,6 +1916,26 @@ request the M&H power during another turn, it waits for the next legal between-t
 If the first 5-train is bought before that opening, M&H closes and the exchange is lost." Classified here as
 **RULES REFERENCE / GOTCHA** and **STATE VISIBILITY** for the queued → executed / canceled status. The visual
 presentation is not designed yet. `OPEN` (UI, after Slice 8.4).
+**After Slice 8.4 (2026-09-17, #1630) — what the authority has done and what U-35 still owes.** *Done, at the socket
+and in the reducer:* the exchange's legality is now answered by one predicate at both locks, so a refused exchange is
+refused wherever it is sent; a queued request is authoritative state a client can read (`pending_mh_exchange`); the
+exchange never switches source and never reserves anything. *Still OPEN, all of it presentation:*
+(i) **LEGALITY SYNC in the panel** — `resolvePrivateExchange` is untouched and still answers with its own client-side
+rule, so the powers panel / flow modal can present as live an exchange the lock will refuse (over the certificate
+limit, under a hold, outside the window, with the named pile empty). It must ask `mhExchangeRequestRefusal` instead.
+(ii) **NEW ACTION — the source choice (R2).** `resolvePrivateExchange` still picks the IPO first and silently; the
+authority accepts whichever source arrives and substitutes nothing, so the choice exists in the rules and not yet on
+the screen. Until the modal offers it, a legal Bank Pool exchange is unreachable while the IPO holds a share.
+(iii) **NEW ACTION — requesting off-turn.** The authority queues a request from any Stock or Operating Round moment;
+the current control is reachable only where the panel draws it.
+(iv) **STATE VISIBILITY** — the queued acknowledgment ("M&H exchange queued for the next legal opening."), the
+confirmation when it executes, and the cancellation notice (including the first-5 closure: "M&H exchange canceled —
+the first 5-train closed the private before the next legal opening.") plus a shared, persistent table indication of a
+standing request. **A limitation to record rather than fix here:** an EXECUTED settlement is inferable from the state
+transition (the private closes, the share arrives, `pending_mh_exchange` clears), but a CANCELLED one is not — the
+request clears and nothing else moves, so the REASON cannot be represented without new event/notification machinery.
+The authority is deterministic and the pending state clears correctly either way; representing the reason is U-35's,
+and 8.4 deliberately did not build it. (v) the Rules Reference gotcha card above.
 
 **U-36.** (S8-4 / #1211; found by Slice 8.1, 2026-09-16, by reading the code — not reproduced in a browser) **The
 sold-out-rise Activity Log line is built from the chart AFTER the rise was committed — STATE VISIBILITY.** In

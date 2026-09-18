@@ -640,7 +640,12 @@ describe("H. the player <-> player private-company trade (#1593, ruled Q12)", ()
     // The M&H exchange follows the M&H: only its new owner may exchange it afterwards.
     const mh = apply(apply(state, PROPOSE_TRADE(MH, P2, P1, 100), P1), ANSWER_TRADE(MH, true), P2);
     const exchange = (player: string) => ({ ExchangePrivate: { game_id: 1, private_id: MH, company_id: NYC, player, source: "Ipo" } });
-    expect(ingress(mh, P1, exchange(P1))).toBeNull();
+    /* Design note #1630 (Slice 8.4, S8-10): INGRESS ANSWERS THE EXCHANGE'S LEGALITY NOW, not only its
+       ownership -- the same predicate the reducer's arm asks. This fixture's NYC has an empty IPO, so the new
+       owner's request is refused for THAT and the old owner's for ownership, which is the distinction this
+       case is about. Asserted as "not the ownership sentence" rather than "accepted", so the case keeps
+       measuring the card's travel and stops depending on an unrelated pile being stocked. */
+    expect(ingress(mh, P1, exchange(P1))).not.toMatch(/owner can exchange it/);
     expect(ingress(mh, P2, exchange(P2))).toContain("owner can exchange it");
     // The D&H's used station stays used after the D&H changes hands.
     const dh = apply(apply(state, PROPOSE_TRADE(DH, P2, P1, 50), P1), ANSWER_TRADE(DH, true), P2);

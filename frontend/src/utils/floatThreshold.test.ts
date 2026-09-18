@@ -198,8 +198,14 @@ describe("one definition, and both surfaces read it", () => {
     );
   });
 
-  it("is asked by the reducer", () => {
-    expect(read("gameEngine/sandboxSession.ts")).toContain("if (!metFloatThreshold(company)) return company;");
+  it("is asked by the float settlement the reducer runs", () => {
+    /* Design note #1631 (Slice 8.4): `applyFloatThreshold` MOVED from `sandboxSession.ts` to this module,
+       unchanged, so the M&H exchange can cross the same threshold the `BuyStock` arm does without importing
+       the reducer -- `sandboxSession.ts` imports it and re-exports it, and every other caller is untouched.
+       The assertion follows the function rather than the file: what it pins is that the ONE measure is what
+       the settlement asks, which was its point when it was written. */
+    expect(read("gameEngine/floatThreshold.ts")).toContain("if (!metFloatThreshold(company)) return company;");
+    expect(read("gameEngine/sandboxSession.ts")).toContain('applyFloatThreshold(crowned, ctx.homeHexToAxial)');
   });
 
   it("is asked by the card", () => {

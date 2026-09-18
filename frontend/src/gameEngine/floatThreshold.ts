@@ -1,4 +1,8 @@
-import type { PublicCompanyState } from "./gameState";
+import type { GameStateResponse, PublicCompanyState } from "./gameState";
+/* Design note #1631 (Slice 8.4, S8-10): the capitalisation debit, for `applyFloatThreshold` below. The
+   edge is one-way -- `cashLedger.ts` reads only `gameState.ts` and `endgame.ts` -- so the float settlement
+   can live beside the measure it settles without the reducer having to own it. */
+import { debitBank } from "./cashLedger";
 
 /* ==================================================================
  *  DESIGN NOTE 749: FLOATING IS ABOUT THE IPO, NOT ABOUT PLAYERS' HANDS
@@ -103,4 +107,65 @@ export function metFloatThreshold(
   company: Pick<PublicCompanyState, "ipo_pool_percentage">,
 ): boolean {
   return soldFromIpoPercent(company) >= FLOAT_THRESHOLD_PERCENT;
+}
+
+/* ==================================================================
+    DESIGN NOTE 1631 (Slice 8.4, S8-10): THE FLOAT SETTLEMENT LEAVES THE `BuyStock` ARM
+   ==================================================================
+   MOVED HERE VERBATIM FROM `sandboxSession.ts` (#363/#376/#416/#749/#1560), not rewritten: every line below
+   is the function the reducer has been running, and `sandboxSession.ts` re-exports it so no importer changes.
+
+   WHY IT MOVED. #363's comment said "buying is the only action that can cross the float threshold, so the
+   check rides on it", and Slice 8.4 makes that false: the M&H exchange takes a 10% certificate out of the
+   NYC's IPO, which is exactly the quantity `soldFromIpoPercent` measures (#749). An exchange that floated
+   nothing would leave a corporation 60% out of the IPO and unfloated -- the defect S8-10 records on JUNO-3XD
+   288, where the stored exchange takes the IPO from 50% to 40% and NYC floats one entry later on a purchase.
+
+   FACTORED RATHER THAN COPIED, on this project's oldest rule: a second float rule in `mohawkExchange.ts` is
+   #1184's drift with a new name, and this one carries the capitalisation debit, the latch and the
+   `debitBank` refusal with it. `buildOperatingOrder` (#1530) and `syncSeatToActingCorporation` (#1600) left
+   the reducer the same way and for the same reason -- a module the reducer imports cannot import the reducer.
+   ORDINARY `BuyStock` IS UNCHANGED BY CONSTRUCTION: the arm still calls the same function with the same
+   argument, and `floatThreshold.test.ts` / `boFloatRule.test.ts` still import it from `sandboxSession`. */
+/** Floats every corporation over the threshold. Returns the SAME state when nothing changed so callers can skip on identity. homeHexToAxial is injected (utils/ must not import components/).
+ *  See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #416 */
+export function applyFloatThreshold(
+  state: GameStateResponse,
+  homeHexToAxial: (label: string) => readonly [number, number] | null,
+): GameStateResponse {
+  let changed = false;
+  // Design note #376: what the bank pays out this pass, in one debit.
+  let capitalised = 0;
+
+  const companies = state.public_companies.map((company) => {
+    if (company.is_floated) return company;
+    /* Design note #749: OUT OF THE IPO, not in players' hands. This read the sum of `player_holdings`, which
+       is the same number until somebody sells and permanently smaller afterwards -- so a corporation whose
+       shares had reached 60% out of the IPO by way of the Bank Pool never floated, and had no way to. */
+    if (!metFloatThreshold(company)) return company;
+
+    changed = true;
+
+    /* Design note #376: ten times par, into a treasury that was empty. Added
+       to whatever is there rather than assigned, so a company that somehow
+       already holds money is not silently reset by floating. */
+    const par = Number(company.par_value);
+    const capital =
+      Number.isFinite(par) && par > 0 ? par * FULL_CAPITALISATION_MULTIPLE : 0;
+    capitalised += capital;
+    const treasury = String((Number(company.treasury) || 0) + capital);
+
+    /* The token is PROMPTED, not placed: the prompt is not asking which hex, it is making the player witness the placement. homeHexToAxial still decides whether a home hex RESOLVES.
+       See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #416 */
+    return { ...company, is_floated: true, treasury };
+  });
+
+  if (!changed) return state;
+  /* Design note #376: one debit for the whole pass, for the same reason design note #329's payout banks once.
+     #1560: the reason has changed from "several calls would floor differently" to "several calls would latch
+     at different moments"; the shape is the same and so is the arithmetic. The treasuries above were credited
+     in the map, so this debit is the matching half and the pass conserves. A refused debit floats nobody --
+     a corporation capitalised out of a bank that never paid would be the mint this batch exists to end. */
+  const capitalisation = debitBank({ ...state, public_companies: companies }, capitalised);
+  return capitalisation.ok ? capitalisation.state : state;
 }

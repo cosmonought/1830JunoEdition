@@ -690,6 +690,38 @@ export interface GameStateResponse {
   kanawha_licenses_sold?: number;
   /** Whether the JK's one-time free licence has been handed to the first corporation to buy it. */
   jk_license_granted?: boolean;
+  /* ==================================================================
+      DESIGN NOTE 1630 (Slice 8.4, S8-10): THE M&H REQUEST IS INTENT, AND INTENT IS AUTHORITATIVE STATE
+     ==================================================================
+     Owner ruling R1 (Stage-8 review, 2026-09-16): a request made while ANOTHER player's or corporation's turn
+     is already underway is not executed in the middle of that turn. It is recorded, and the reducer settles it
+     automatically at the next legal between-turns boundary -- so it changes FUTURE automatic rules processing
+     and is therefore game state, not a UI flag one browser holds.
+     IT RESERVES NOTHING, which is why the shape is this small. There is no timestamp, no reserved certificate,
+     no cached legality and no promise of execution: the share, the certificate limit, the M&H's survival and
+     every other condition are re-derived from the authoritative board at settlement (`mohawkExchange.ts`
+     #1630). Four fields are what it takes to reconstruct the request, and a fifth would be a claim.
+     OPTIONAL PER #232. Absent is "this log carries no request" and is what every stored log deserialises to;
+     `null` is the same answer written deliberately by a settlement that has just cleared one. */
+  pending_mh_exchange?: PendingMhExchange | null;
+}
+
+/** The M&H owner's standing request to exchange, queued off-turn (design note #1630, Slice 8.4).
+ *
+ *  INTENT ONLY. Every field is what the owner ASKED FOR, never what they have been promised -- see the field
+ *  note above, and `mohawkExchange.ts` for the revalidation that decides whether it ever happens. */
+export interface PendingMhExchange {
+  /** The requesting player. Re-checked against the private's CURRENT owner at settlement: a request does not
+   *  travel with the company (owner ruling R1, §13 of the Slice-8.4 brief). */
+  player: string;
+  /** The private the request names -- the M&H. Stored rather than implied so the record reads as a request
+   *  rather than as a flag whose subject a later reader has to know. */
+  private_id: number;
+  /** NYC's `company_id`, as the request named it. Re-checked at settlement. */
+  company_id: number;
+  /** The source the OWNER chose (ruling R2). NEVER substituted at settlement: a chosen pile that has since
+   *  emptied cancels the request, it does not silently become the other pile. */
+  source: "Ipo" | "Bank";
 }
 
 /** One corporation's token on the stock market chart.

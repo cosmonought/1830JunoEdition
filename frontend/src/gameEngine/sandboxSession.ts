@@ -107,6 +107,16 @@ import {
   stockRoundSeat,
 } from "./privateTradeAuthority";
 import { CA_BONUS_TICKER, CA_PRIVATE_ID, applyPrivateExchange } from "./privateExchange";
+/* Design note #1630 (Slice 8.4, S8-10): the M&H exchange's authority -- request legality, the
+   execute-or-queue disposition, the atomic execution and the between-turns settlement of a queued request.
+   The reducer states no M&H rule of its own; it asks these, and so does ingress (`turnAuthority.ts`). */
+import {
+  applyMhExchange,
+  mhExchangeDisposition,
+  mhExchangeRequestRefusal,
+  settleMhExchange,
+  withPendingMhExchange,
+} from "./mohawkExchange";
 import type { MapGridResponse, MapTileEntry } from "../components/hexContractTypes";
 /* Design note #1325: a corporation's home hexes on the board in effect (two for the LPF's C&O) -- read through
    `homeStationAuthority.homeHexChoicesFor` since Slice 8.2 (#1611), so this file no longer imports the table. */
@@ -119,7 +129,9 @@ import { hasActedThisTurn } from "./turnAction";
 // Design note #1184: the bid minimum, in one place the button and the board both read.
 import { MIN_BID_INCREMENT, minimumBidFor } from "./auctionEscrow";
 import { shareSaleBlock } from "./shareSale";
-import { metFloatThreshold, FULL_CAPITALISATION_MULTIPLE } from "./floatThreshold";
+/* Design note #1631 (Slice 8.4): `applyFloatThreshold` lives in `floatThreshold.ts` now and is imported
+   here for the `BuyStock` arm, as well as re-exported below for its existing importers. */
+import { applyFloatThreshold } from "./floatThreshold";
 /* Design note #763: a float is not finished until its home token is on the board -- SUPERSEDED by #1610 (Slice 8.2):
    the home station is owed at the start of the corporation's first operating turn, on the cursor, and the
    obligation, its legality and its hold are `homeStationAuthority`'s. `homeTokenGate` remains the shell's name
@@ -400,11 +412,46 @@ export function operatingRoundSequenceLength(state: GameStateResponse): number {
 /** Wrap is an EVENT, not a loop: run the queue again if the locked sequence has another round in it, otherwise raise the flag. A cycling queue is a round with no exit.
  *  See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #431 */
 function advanceCorporation(
-  state: GameStateResponse,
+  board: GameStateResponse,
   priceFor?: (companyId: number) => number | null,
   // Design note #646: carried through so a rebuilt queue keeps the tie-break.
   markFor?: (companyId: number) => { x: number; y: number; enteredAt?: number } | null | undefined,
+  /* Design note #1632 (Slice 8.4): the home-hex table a float settled at this boundary needs. */
+  homeHexToAxial?: (label: string) => readonly [number, number] | null,
 ): GameStateResponse {
+  /* ==================================================================
+      DESIGN NOTE 1632 (Slice 8.4, S8-10): THE RAILROAD TURN BOUNDARY, AND WHY THE SETTLEMENT IS ITS FIRST LINE
+     ==================================================================
+     THIS FUNCTION IS THE ONLY PLACE A CORPORATION'S OPERATING TURN ENDS -- one caller, the `PassTurn` arm's
+     Operating Round branch -- so it is the whole of "between the turns of railroads" (p. 27). A queued M&H
+     request settles HERE, against the board the outgoing corporation left behind, before anything else.
+
+     FIRST, BECAUSE OF WHAT COMES AFTER IT IN THIS FUNCTION. Three of the four exits BUILD AN OPERATING
+     ORDER: the empty-queue repair, the next round of a locked sequence (`openOperatingRound(..., true)`),
+     and -- one layer out -- `settleRoundTransitions`. `buildOperatingOrder` decides MEMBERSHIP and
+     `settleOperatingQueue` only ever permutes it (#1600: "the settle never inserts"), so a float settled
+     AFTER a build is a corporation locked out of a round it has just qualified for. Settling first puts the
+     authoritative float/presidency state in front of every build, which is the ordering §11 of the
+     Slice-8.4 brief requires:
+         previous turn ends -> M&H settles -> float/presidency authoritative -> build/freeze any new OR
+         membership -> sync the seat for the next turn.
+
+     AND IT DOES NOT PUT A FLOAT INTO THE ROUND ALREADY OPEN. The ordinary exit below only moves
+     `active_corporation_index` along the EXISTING `active_operating_order`; a corporation floated by the
+     settlement is not in it and is not added to it. 5.3 -- "begins operating in the next operating round" --
+     therefore holds without this function knowing the rule, which is invariant 1 of Slice 8.1 doing its job.
+
+     A HOLD CANNOT BE STANDING HERE. `authoritativeHoldRefusal` refuses the `PassTurn` that reaches this
+     function while a discard, a funding obligation, an offer or a home station is owed (#1613), so the
+     boundary is not crossed at all until the obligation clears -- which is exactly the ruling ("a queued
+     request does not execute while a hold stands; settle at the next legal boundary after it is cleared")
+     obtained without a second hold check or a priority list of its own. `settleMhExchange` re-derives the
+     whole exchange regardless, so a board that reached here another way still gets the current answer.
+
+     `board` RATHER THAN `state`: the parameter is renamed so the settled board is what every line below
+     reads, and a line added later cannot accidentally reach past the settlement to the pre-boundary board. */
+  const state = settleMhExchange(board, homeHexToAxial);
+
   /* An empty queue is RECOVERED by rebuilding it, not tolerated by returning unchanged -- that was the infinite round in one line.
      See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #411 */
   if (state.active_operating_order.length === 0) {
@@ -3392,11 +3439,56 @@ function applySandboxActionCoreJudged(
          corporation owns a train. Settled here beside the era for the same
          reason (#657) -- it is a function of the board, so no message can
          change the fleet and forget it. */
-      settleBaoPrivate(settleEra(settleRoundTransitions(applyOneAction(state, msg, ctx), ctx))),
+      /* Design note #1633 (Slice 8.4, S8-10): AND THE SEAT-DRIVEN BOUNDARY IS SETTLED BEFORE THE ROUND
+         TRANSITION, which is the other half of #1632's ordering. `settleRoundTransitions` is what OPENS the
+         Operating Round when a Stock Round ends, and opening it freezes its membership -- so a queued M&H
+         exchange that floats NYC at the SR -> OR boundary must settle on THIS side of that call, or NYC sits
+         out a round it qualified for before the round existed. Wrapped around `applyOneAction` rather than
+         placed inside it so the boundary is judged from the pair of boards, which is the only way to tell a
+         turn that ENDED from one that merely acted. */
+      settleBaoPrivate(
+        settleEra(
+          settleRoundTransitions(seatBoundaryExchange(state, applyOneAction(state, msg, ctx), ctx), ctx),
+        ),
+      ),
       msg,
     ),
     ctx,
   );
+}
+
+/* ==================================================================
+    DESIGN NOTE 1633 (Slice 8.4, S8-10): WHAT COUNTS AS A SEAT-DRIVEN TURN HAVING ENDED
+   ==================================================================
+   Two facts, and between them they are the whole of "between the turns of other players" in a Stock Round:
+
+     THE SEAT MOVED. `advanceSeat` and `recordPass` are the only writers of `active_player_index` in a Stock
+     Round, and both of them mean one player's turn is over and the next has not acted. A `SellStock` (which
+     deliberately does not advance the seat) and a `BuyStock` under Sell-Buy-Sell (which leaves the seat with
+     the buyer, #1443) are therefore NOT boundaries -- the turn is still underway, which is exactly right.
+
+     THE ROUND ENDED. `recordPass` closes a Stock Round by raising `stock_round_just_ended` and seating the
+     Priority Deal; on a one-seat board that flag is the only witness, so it is asked as well as the seat.
+
+   JUDGED ON `before`, NOT ON `after`: the question is whose turn has just ENDED, and after a round transition
+   `after` no longer describes the round it ended in. An Operating Round is excluded here because its boundary
+   is `advanceCorporation`'s (#1632), one layer in, where it has to be to precede the membership build -- and
+   because settling twice would be a second place for the rule to live even though the second call would be an
+   identity (the first clears the request).
+
+   A REFUSED MESSAGE IS NOT A BOUNDARY, for free: a refusal returns the board by identity, so the seat has not
+   moved and neither flag has risen. */
+function seatBoundaryExchange(
+  before: GameStateResponse,
+  after: GameStateResponse,
+  ctx?: SandboxActionContext,
+): GameStateResponse {
+  if (after.pending_mh_exchange === undefined || after.pending_mh_exchange === null) return after;
+  if (before.current_round_type !== "StockRound") return after;
+  const seatMoved = before.active_player_index !== after.active_player_index;
+  const roundEnded = after.stock_round_just_ended === true && before.stock_round_just_ended !== true;
+  if (!seatMoved && !roundEnded) return after;
+  return settleMhExchange(after, ctx?.homeHexToAxial);
 }
 
 /* The era is SETTLED from the trains after every action, never assigned per-arm. It was stamped at seed time and never written, so a Phase 6 game still reported Yellow. The OR count is deliberately untouched (#511).
@@ -4504,25 +4596,6 @@ function applyOneAction(
     return { ...state, room_closed: true };
   }
 
-  if (isExchangePrivateMsg(msg)) {
-    /* #573: THE RESOLVED GRANT, APPLIED EVERYWHERE. The legality question was answered once, by the acting
-       client, before this was ever appended -- so this arm applies a decision rather than re-deriving one,
-       and `ExchangePrivateMsg` carries every field that decision produced.
-       `applyPrivateExchange` REFUSES A CLOSED OR MISSING PRIVATE by returning the state it was handed, which
-       is what makes a replayed duplicate safe. */
-    const { private_id, company_id, player, source, keep_open } = msg.ExchangePrivate;
-    return applyPrivateExchange(state, {
-      ok: true,
-      privateId: private_id,
-      companyId: company_id,
-      ticker: state.public_companies.find((c) => c.company_id === company_id)?.ticker ?? "",
-      player,
-      source,
-      // Design note #576: the B&O's grant leaves its private OPEN; every other exchange closes it.
-      keepOpen: keep_open === true,
-    });
-  }
-
   /* ==================================================================
       DESIGN NOTE 1204: THE PRIVATE POWERS ARE RECORDED ON THE BOARD
      ==================================================================
@@ -4572,6 +4645,47 @@ function applyOneAction(
         : null;
 
   /* ==================================================================
+      DESIGN NOTE 1630 (Slice 8.4, S8-10): THE M&H EXCHANGE IS JUDGED, THEN EXECUTED OR QUEUED
+     ==================================================================
+     WHAT THIS ARM USED TO SAY, in its own words: "the legality question was answered once, by the acting
+     client, before this was ever appended -- so this arm applies a decision rather than re-deriving one".
+     That is the whole of S8-10. The client's answer is advice on one screen; this runs on every client that
+     replays the log, so a hand-built message, a stale tab or a second control written later could take a
+     certificate out of an empty pile, keep the M&H open, name a corporation that is not the NYC, or push its
+     owner past 60 % -- and none of it left a trace. #712's sentence for the buy side, arriving here.
+
+     MOVED BELOW THE ACTOR RESOLUTION, which is the only reason this arm changed position. Ingress binds the
+     sender to the private's named owner (#1249); the reducer must bind the same pair or it is trusting a
+     check it does not perform, and `actor` is resolved above by #549's three-case rule and nowhere else.
+     `abilitySpentBy` is unaffected -- it answers `null` for this message, so nothing is skipped by the move.
+
+     THE DISPOSITION IS THE SLICE'S SUBSTANCE (owner ruling R1). On the owner's own Stock Round turn the
+     exchange happens at once. Anywhere else the REQUEST is recorded and settled by the reducer at the next
+     between-turns boundary (`settleMhExchange`, called from `advanceCorporation` and from the seat boundary
+     in `applySandboxActionCore`). Recording it is the ONLY effect: no share moves, no pile is reserved, no
+     certificate-limit headroom is held, and the M&H is not protected from the first 5-train.
+
+     R1's OTHER HALF, VISIBLE AS AN ABSENCE. This arm returns the board directly. There is no `markTrader`, no
+     `turn_action_taken`, no `bought_this_turn`, no `stock_turn_stage`, no `advanceSeat` and no pass-streak
+     touch, because a free interjection is invisible to Stock Round turn accounting -- the owner may still buy
+     before or after it, and a player who has already bought may still use it. */
+  if (isExchangePrivateMsg(msg)) {
+    const { private_id, company_id, player, source, keep_open } = msg.ExchangePrivate;
+    const request = { private_id, company_id, player, source, keep_open };
+    /* A REFUSAL RETURNS THE BOARD UNCHANGED rather than throwing -- #712's rule: a replay must not halt on an
+       entry the log already contains, and an illegal exchange that somehow got written is best treated as a
+       move that did nothing. The duplicate-request rule is part of the same predicate (#1630b). */
+    if (mhExchangeRequestRefusal(state, request, actor) !== null) return state;
+    if (mhExchangeDisposition(state, request) === "queue") {
+      return withPendingMhExchange(state, request);
+    }
+    /* Legal, and the owner's own Stock Round turn: the share arrives, the M&H closes, the float and the
+       presidency settle, in that order and as one write (#1630d). `null` is unreachable behind the refusal
+       above and returns the board rather than a partial one. */
+    return applyMhExchange(state, request, ctx?.homeHexToAxial) ?? state;
+  }
+
+  /* ==================================================================
       DESIGN NOTE 1174: THE TURN CHECK THAT CANNOT LIVE HERE, AND WHY
      ==================================================================
      REPORTED: "other players are clicking buttons and triggering actions on my turn."
@@ -4617,7 +4731,7 @@ function applyOneAction(
   // See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #0
   if ("PassTurn" in msg) {
     if (state.current_round_type === "OperatingRound") {
-      return advanceCorporation(state, ctx?.marketPriceFor, ctx?.marketMarkFor);
+      return advanceCorporation(state, ctx?.marketPriceFor, ctx?.marketMarkFor, ctx?.homeHexToAxial);
     }
     /* Design note #745: ENDING A TURN IS NOT PASSING IT. A player who has already sold this turn is pressing
        this button to finish, not to decline -- selling is an action, and 1830 guarantees anyone who acts
@@ -5980,48 +6094,10 @@ export function isSeatDrivenRound(phase: RoundType): boolean {
    different ways, and each read as obviously correct on its own. */
 export { FLOAT_THRESHOLD_PERCENT, FULL_CAPITALISATION_MULTIPLE } from "./floatThreshold";
 
-/** Floats every corporation over the threshold. Returns the SAME state when nothing changed so callers can skip on identity. homeHexToAxial is injected (utils/ must not import components/).
- *  See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #416 */
-export function applyFloatThreshold(
-  state: GameStateResponse,
-  homeHexToAxial: (label: string) => readonly [number, number] | null,
-): GameStateResponse {
-  let changed = false;
-  // Design note #376: what the bank pays out this pass, in one debit.
-  let capitalised = 0;
-
-  const companies = state.public_companies.map((company) => {
-    if (company.is_floated) return company;
-    /* Design note #749: OUT OF THE IPO, not in players' hands. This read the sum of `player_holdings`, which
-       is the same number until somebody sells and permanently smaller afterwards -- so a corporation whose
-       shares had reached 60% out of the IPO by way of the Bank Pool never floated, and had no way to. */
-    if (!metFloatThreshold(company)) return company;
-
-    changed = true;
-
-    /* Design note #376: ten times par, into a treasury that was empty. Added
-       to whatever is there rather than assigned, so a company that somehow
-       already holds money is not silently reset by floating. */
-    const par = Number(company.par_value);
-    const capital =
-      Number.isFinite(par) && par > 0 ? par * FULL_CAPITALISATION_MULTIPLE : 0;
-    capitalised += capital;
-    const treasury = String((Number(company.treasury) || 0) + capital);
-
-    /* The token is PROMPTED, not placed: the prompt is not asking which hex, it is making the player witness the placement. homeHexToAxial still decides whether a home hex RESOLVES.
-       See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #416 */
-    return { ...company, is_floated: true, treasury };
-  });
-
-  if (!changed) return state;
-  /* Design note #376: one debit for the whole pass, for the same reason design note #329's payout banks once.
-     #1560: the reason has changed from "several calls would floor differently" to "several calls would latch
-     at different moments"; the shape is the same and so is the arithmetic. The treasuries above were credited
-     in the map, so this debit is the matching half and the pass conserves. A refused debit floats nobody --
-     a corporation capitalised out of a bank that never paid would be the mint this batch exists to end. */
-  const capitalisation = debitBank({ ...state, public_companies: companies }, capitalised);
-  return capitalisation.ok ? capitalisation.state : state;
-}
+/* Design note #1631 (Slice 8.4, S8-10): `applyFloatThreshold` MOVED TO `floatThreshold.ts`, unchanged, beside
+   the measure it settles -- the M&H exchange crosses the same threshold and cannot import this file. Re-exported
+   so every existing importer (`floatThreshold.test.ts`, `boFloatRule.test.ts`, the arm below) is untouched. */
+export { applyFloatThreshold };
 
 /** The corporation that owes its home station token now.
  *  Design note #416: what the prompt is raised from. Design note #1610 (Slice 8.2): only ever the OPERATING

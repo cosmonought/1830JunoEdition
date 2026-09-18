@@ -120,7 +120,7 @@ are updated to match.
 
 | Item | Ledger status today | Finding of this pass | Disposition in Stage 8 |
 |---|---|---|---|
-| **S8-1** OR order snapshotted before the sold-out rise | OPEN (confirmed bug) | Confirmed by code (§2). The three corpus indices the ledger cites (3XD 303, FCJ 699, FCJ 398) **no longer exist on the version-5 corpus** — 3XD is refused from 140 / frozen from 290 and FCJ diverges from 83; the one surviving rise at an OR opening (FCJ 885, PRR 90 → 100) leaves the queue unchanged because PRR already led. The mechanism is proved on every OR-bearing board by the resolver-overlay probe (§2.3). | **Slice 8.1** (with S8-3, S8-4) — **IMPLEMENTED 2026-09-16 (Opus, uncommitted; §2.8)** |
+| **S8-1** OR order snapshotted before the sold-out rise | OPEN (confirmed bug) | Confirmed by code (§2). The three corpus indices the ledger cites (3XD 303, FCJ 699, FCJ 398) **no longer exist on the version-5 corpus** — 3XD is refused from 140 / frozen from 290 and FCJ diverges from 83; the one surviving rise at an OR opening (FCJ 885, PRR 90 → 100) leaves the queue unchanged because PRR already led. The mechanism is proved on every OR-bearing board by the resolver-overlay probe (§2.3). | **Slice 8.1** (with S8-3, S8-4) — **IMPLEMENTED 2026-09-16 (Opus, committed `05b5dfc`; §2.8)** |
 | **S8-2** presidency tie by `player_holdings` order | RESOLVED | Confirmed by code (§4). No stored log contains a tie between two challengers (every presidency change in the corpus has exactly one challenger). Additional gap found: the `ExchangePrivate` arm never calls `settlePresidencies` (§6). | **Slice 8.3** — **IMPLEMENTED 2026-09-17 (#1620, §4.4)**; measured corpus-neutral (18 logs / 3,131 entries / 7 presidency changes / 0 ties / 0 disagreements) |
 | **S8-3** order fixed at OR open; §6.1 note not applied | DEFERRED | Confirmed by code; no mid-OR price movement of a not-yet-operated corporation occurs anywhere in the corpus (the only engine path that can produce one is Stage 5's forced sale of another corporation's shares during an OR). Design in §2. | **Slice 8.1** — **IMPLEMENTED 2026-09-16 (§2.8)** |
 | **S8-4** sold-out rise iterates in company order | OPEN (test gap) | Confirmed by code (`roundEndSoldOutRises` walks `public_companies`; `withArrival` stamps arrival in walk order, so two risers landing in one cell stack in company order, not §4.5's). No two risers share a cell anywhere in the corpus (one rise at an opening in 18 files). | **Slice 8.1** — **IMPLEMENTED 2026-09-16 (§2.8)** |
@@ -276,7 +276,7 @@ Sort the risers before committing: price desc, then the §6.0 key (column, row, 
 exporting it from `operatingOrder.ts` — and commit in that order so `withArrival` stacks the highest-priced first
 (on top). Pin with a two-riser-one-cell case in `soldOutRise.test.ts`.
 
-### 2.8 Implementation record — Slice 8.1 (Opus, 2026-09-16; uncommitted, awaiting owner review)
+### 2.8 Implementation record — Slice 8.1 (Opus, 2026-09-16; **committed `05b5dfc`**)
 
 S8-1, S8-3 and S8-4 are implemented to R4's representation, with the refinements listed below. Design notes **#1600**
 (the queue settle) and **#1601** (riser order) carry the reasoning in source.
@@ -447,7 +447,7 @@ UI parity: **STATE VISIBILITY** — the presidency-change narration already name
 from the former president") belongs in the Activity Log line (U-30's WHY family) and in the Rules Reference §5.4
 paragraph. Filed as U-33 (§13).
 
-### 4.4 Implementation record — Slice 8.3 (Opus, 2026-09-17; uncommitted, awaiting owner review)
+### 4.4 Implementation record — Slice 8.3 (Opus, 2026-09-17; **committed `02a9838`**)
 
 S8-2 is implemented to §4.3's frozen design, unchanged in substance. Design note **#1620** carries the reasoning in
 source; `RULES_ENGINE_VERSION` stays **5** (the single Stage-8 bump remains owed at Slice 8.5).
@@ -885,7 +885,7 @@ else). Under the current model this is reachable in live play (a sale sent while
 witnessed). Under the new model the SR-time hold no longer exists, and the four holds move in front of the chart step
 so the shape cannot recur for any hold. Replay-semantic for FCJ (the four price moves disappear) — part of the bump.
 
-### 5.9 Implementation record — Slice 8.2 (Opus, 2026-09-16; uncommitted, awaiting owner review)
+### 5.9 Implementation record — Slice 8.2 (Opus, 2026-09-16; **committed `efe4098`**)
 
 S8-5, S8-6, S8-12 and S8-13 are implemented on the committed Slice-8.1 baseline `05b5dfc`, and S8-14 in the same
 uncommitted tree after the owner's ruling (2026-09-17). `RULES_ENGINE_VERSION` stays
@@ -1144,7 +1144,7 @@ with no NYC share (§0 R1); **STATE VISIBILITY** for the queued → executed / c
 - **R2.** Must the client offer the pool when both piles hold a share (rulebook: "from the bank or the bank pool" —
   the owner's choice)? Proposed: yes, one extra option in the flow modal (NEW ACTION, cheap).
 
-### 6.8 Implementation record — Slice 8.4 (Opus, 2026-09-17; uncommitted, awaiting owner review)
+### 6.8 Implementation record — Slice 8.4 (Opus, 2026-09-17; **committed `fc5a575`**)
 
 **S8-10 RESOLVED.** `RULES_ENGINE_VERSION` remains **5** (the one Stage-8 bump is still 8.5's). The design of §6.3 is
 implemented as ruled, with three departures from its wording, each recorded below.
@@ -1413,7 +1413,7 @@ No competing UI document is created; Part C is the one list.
 
 ## 11. Implementation slices (in order)
 
-### Slice 8.1 — Operating queue authority (S8-1, S8-3, S8-4) — **Opus** (owner model policy, §0; was "Fable High") — **IMPLEMENTED 2026-09-16, uncommitted (§2.8)**
+### Slice 8.1 — Operating queue authority (S8-1, S8-3, S8-4) — **Opus** (owner model policy, §0; was "Fable High") — **IMPLEMENTED 2026-09-16, COMMITTED `05b5dfc` (§2.8)**
 - Ledger: S8-1 → RESOLVED, S8-3 → RESOLVED, S8-4 → RESOLVED; S10-18's rise-order gap closed.
 - Invariant: §2.5 (1)–(6). One settle point, frozen prefix, dynamic tail, membership fixed at open.
 - Files: `operatingOrder.ts` (export the comparator; `settleOperatingQueue`), `sandboxSession.ts`
@@ -1425,7 +1425,7 @@ No competing UI document is created; Part C is the one list.
   own dividend never displaces it; operated prefix immutable; float-between-turns not inserted; derived key stable);
   `soldOutRise.test.ts` two risers one cell; corpus sweep asserting digest identity to the 7.5 baseline.
 
-### Slice 8.2 — Home station authority (S8-5, S8-6, S8-12, S8-13) — **Opus** (owner model policy, §0; was "Fable High"; R3 ruled) — **IMPLEMENTED 2026-09-16, uncommitted (§5.9, §5.10, §8.1)**
+### Slice 8.2 — Home station authority (S8-5, S8-6, S8-12, S8-13) — **Opus** (owner model policy, §0; was "Fable High"; R3 ruled) — **IMPLEMENTED 2026-09-16, COMMITTED `efe4098` (§5.9, §5.10, §8.1)**
 - Ledger: S8-5 → RESOLVED, S8-6 → RESOLVED, S8-12 → RESOLVED, S8-13 → RESOLVED, S8-14 → RESOLVED (owner ruling
   2026-09-17, #1617, D-33); S10-17's `PlaceHomeStation` row
   closed; S10-21 updated (Z6C characterization re-pinned).
@@ -1450,7 +1450,7 @@ No competing UI document is created; Part C is the one list.
   (a legacy log with an SR placement replays to a board whose first-turn token equals the stored choice; an
   unfloated-at-the-time placement is not remembered); corpus sweep asserting the §8 table.
 
-### Slice 8.3 — Presidency tie-break (S8-2) + the Scenario-D presidency exchange (S8-15) + its half-sale prerequisite (S9-14) — **Opus** (design frozen in §4.3; S8-15 and then S9-14 ruled into this slice 2026-09-17) — **IMPLEMENTED 2026-09-17, uncommitted (§4.4, §4.5, §4.6)**
+### Slice 8.3 — Presidency tie-break (S8-2) + the Scenario-D presidency exchange (S8-15) + its half-sale prerequisite (S9-14) — **Opus** (design frozen in §4.3; S8-15 and then S9-14 ruled into this slice 2026-09-17) — **IMPLEMENTED 2026-09-17, COMMITTED `02a9838` (§4.4, §4.5, §4.6)**
 - Ledger: S8-2 → RESOLVED; **S8-15 → RESOLVED** (#1622); **S9-14 → RESOLVED, absorbed** (#1624); S10-18's tie gap closed; **S9-13 filed and left OPEN by the same ruling** (the chart walks one row per 10 %, not per certificate — Stage 9).
 - Invariant: strictly-more to challenge; among tied top challengers, closest clockwise from the incumbent; forced-sale
   projection agrees with settlement.
@@ -1463,7 +1463,7 @@ No competing UI document is created; Part C is the one list.
   initial offering until the 20 % is sold; its half-sale needs 10 % certificates already in the Bank Pool. A tie-break
   or projection helper must not assume one 20 % certificate per corporation.
 
-### Slice 8.4 — M&H exchange authority (S8-10) — **Opus** (R1 / R2 ruled, §0: interjection + queued off-turn request, owner's source choice) — **IMPLEMENTED 2026-09-17, uncommitted (§6.8)**
+### Slice 8.4 — M&H exchange authority (S8-10) — **Opus** (R1 / R2 ruled, §0: interjection + queued off-turn request, owner's source choice) — **IMPLEMENTED 2026-09-17, COMMITTED `fc5a575` (§6.8)**
 - Ledger: S8-10 → RESOLVED (rewritten finding).
 - Invariant: §6.3 predicate at both locks; float settles; presidency settles; no seat/streak change (under the R1
   default); `keep_open` refused; empty pile refused (no mint).
@@ -1474,7 +1474,7 @@ No competing UI document is created; Part C is the one list.
   auction → refused), both piles, empty piles, 60 % cap, certificate limit with zone exemption, float on exchange,
   presidency on exchange, `keep_open` refused, ingress parity.
 
-### Slice 8.5 — Stage-8 closure — **Opus**
+### Slice 8.5 — Stage-8 closure — **Opus** — **IMPLEMENTED 2026-09-17, UNCOMMITTED (§17)**
 - Ledger: Part E row 6; S8-8 residual fallback removed; Part C U-32 … U-35 statuses confirmed as filed.
 - `RULES_ENGINE_VERSION` 5 → 6, `RULES_ENGINE_CHANGELOG` row, `SUPPORTED_RULES_ENGINE_VERSIONS` follows;
   corpus reconciliation in 7.5's format (every re-pin with index and reason); the matrix / static audits (exhaustive
@@ -1563,3 +1563,175 @@ note; Part E row for Slice 8.2. U-35 untouched.
 (the ruling); S9-5's list of owner readings (S8-14 ruled); S10-1 (a paid station placement's identity and legality
 refusals are now answered at ingress); the Stage-8 row of the stage table; Part E's 8.2 row (#1617 and its corpus
 measurement).
+
+---
+
+## 17. Stage-8 completion record (Slice 8.5, Opus, 2026-09-17; **UNCOMMITTED — this pass**)
+
+### 17.1 The five slices
+
+| Slice | Items | Design notes | Commit |
+| --- | --- | --- | --- |
+| **8.1** Operating queue authority | S8-1, S8-3, S8-4 | #1600, #1601 | **`05b5dfc`** |
+| **8.2** Home station authority | S8-5, S8-6, S8-12, S8-13, S8-14 | #1610–#1617 | **`efe4098`** |
+| **8.3** Presidency transfer | S8-2, S8-15, S9-14 | #1620, #1622, #1624 | **`02a9838`** |
+| **8.4** M&H exchange authority | S8-10 | #1630–#1634 | **`fc5a575`** |
+| **8.5** Stage-8 closure | the 5 → 6 bump, S8-8's residual, the closure matrices | #1640 | **uncommitted — awaiting the owner's review and full-suite gate** |
+
+Baseline for every measurement in this document: **`7c5f29c`** (Batch 7, the commit before Slice 8.1).
+
+### 17.2 What Slice 8.5 owns
+
+1. **`RULES_ENGINE_VERSION` 5 → 6** with changelog row 6 naming every Stage-8 semantic change, and
+   `SUPPORTED_RULES_ENGINE_VERSIONS` left derived (`[RULES_ENGINE_VERSION]`) exactly as every bump since
+   version 1 has left it. A version-5 log is refused before the reducer sees an entry, **under every policy
+   including `DEVELOPMENT_CORPUS_POLICY`** — #1520's rule that "the opt-in admits the UNPINNED, never the
+   differently pinned". The legacy boundary is untouched: an unpinned log is still refused by the server
+   policy and still admitted by the development-corpus policy.
+2. **S8-8's residual** (#1640): `sharePriceFor`'s `?? 67` nominal leaves the 6.6.3 forced-sale projection.
+   An unparred corporation is now priceless on every board; a parred corporation with no chart mark keeps
+   Batch 7.2's pinned/legacy split (`null` on a board this engine dealt, the legacy nominal otherwise).
+   `forcedSaleRefusal` gained a price-null refusal ahead of the "only enough" arithmetic, and
+   `legalForcedSales` skips a corporation it cannot price rather than valuing it at a figure nobody chose.
+   **Corpus-neutral**: the corpus contains zero boards on which an emergency-funding obligation stands.
+3. **The corpus reconciliation**, measured from HEAD under engine v6 (§17.3).
+4. **The five closure matrices and the eight static audits** (`stage85Matrices.test.ts`, §17.4).
+5. **Re-pins narrowly required by the bump**: `batch75Closure.test.ts`'s four version assertions moved to the
+   relative form Batch 4.6 / 5 / 6 already use (`>= 5`, `[RULES_ENGINE_VERSION]`, a `slice(0, 5)` changelog
+   prefix). Nothing else was re-pinned, and no expected output was re-derived from the new engine.
+
+### 17.3 Corpus reconciliation, HEAD under engine v6
+
+18 files / **4,105 stored entries** / **3,103 applied** / 1,002 dropped by `RevertTo` / **1,131 reducer
+no-ops** / **deterministic 18 of 18** / **0 boards end holding a queued M&H request**.
+
+| Evidence | What it covers |
+| --- | --- |
+| `replayGolden.test.ts` (green) | The only TRUE before/after comparison: the three frozen goldens were last written at `47d1b7a` (Batch 7.5) and HEAD replays them byte for byte. **Stage 8 costs the golden boards nothing.** |
+| `presidencyCorpus.test.ts` | 8.3's selector, forked and compared against the pre-slice rule |
+| `mohawkExchangeCorpus.test.ts` | 8.4's arm, forked and replayed to convergence |
+| `legacyHomeAdapter.test.ts` | 8.2's adapter on the frozen CV4 and Z6C logs |
+| `stage85Closure.test.ts` (new) | The whole-corpus facts none of the above measure: reducer no-ops by message kind, determinism across repeated replays, final digests, and no standing pending request |
+
+Reducer no-ops are **not a Stage-8 delta**: they include every refusal Batches 3 through 7 added. They are
+reported per message kind so that a future slice can see which authority declined what.
+
+**Findings discovered by the reconciliation — filed, not fixed (§1's rule).**
+
+- **S10-23. A hand-exported log whose rows carry no `id` applies nothing.** `export/JUNO-Y8V` stores 668 rows and
+  applies 0. `entriesFromExport` passes `id: entry.id` through unchanged, so a missing id stays missing and
+  every row of such a file shares the identity `undefined`; `effectiveActions` resolves a `RevertTo` **by
+  identity** (design note #1026, which is deliberate and correct — it is what stops an entry being destroyed
+  merely for sharing a number with a reverted one), so the first of the file's 17 reverts kills all 668.
+  **Pre-existing, not Stage 8's**: `git log 7c5f29c..HEAD -- frontend/src/gameEngine/logRevert.ts` is empty,
+  and Slice 8.1's own record already observed "JUNO-Y8V replays zero entries". Every log whose rows ARE
+  distinctly identified applies entries normally. A fix would stamp an id at export time or fall back to the
+  index as the identity; both are export/harness changes and neither is a rule.
+- **S10-24. The excess-train discard hold is the only one that does not admit `RevertTo`.** The funding hold
+  admits it through `resolvesEmergencyFunding`, the offer hold through `ALWAYS_PASSES`, the home hold through
+  `passesHomeStationHold`; `pendingDiscardBlock` (#1530, which predates the other three) admits only
+  `DiscardTrain` and `CloseRoom`. **Unreachable on the replay path**: `effectiveActions` removes every
+  `RevertTo` before any entry is applied, so the reducer is never asked to judge one. Recorded because the
+  asymmetry is real in the source.
+
+### 17.3a The direct Batch-7 → v6 comparison, measured entry by entry
+
+Asked for at review and measured with **two whole rule engines loaded side by side** — `7c5f29c`'s
+`frontend/src` extracted read-only outside the repository, and the current uncommitted tree — driven over the
+same corpus with the same providers, the same seed and each tree's own `DEVELOPMENT_CORPUS_POLICY`. One digest
+function (the current `stateDigest`, byte-identical in both trees) hashes both sides, so the comparison is
+about state and never about the hash. The unit of comparison is the board **after** each stored effective
+entry, adapters included. `logRevert.ts` is byte-identical between the two trees, so both engines see the same
+effective entry list.
+
+| Log | Stored | Effective | Diverges | First differing entry | Cause | Effect/acceptance diffs | Converges | Final |
+| --- | ---: | ---: | --- | --- | --- | ---: | --- | --- |
+| golden/JUNO-7NZ | 1 | 1 | **NO DIFFERENCE** | — | — | 0 | — | same |
+| golden/JUNO-CV4 | 177 | 141 | yes | k=19 / idx 19 `BuyStock` | **8.2** | 2 (20, 59) | k=58 (idx 62) | **same** |
+| golden/JUNO-G6J | 10 | 10 | **NO DIFFERENCE** | — | — | 0 | — | same |
+| server/JUNO-7NZ | 1 | 1 | **NO DIFFERENCE** | — | — | 0 | — | same |
+| server/JUNO-8E8 | 33 | 31 | **NO DIFFERENCE** | — | — | 0 | — | same |
+| server/JUNO-CV4 | 177 | 141 | yes | k=19 / idx 19 `BuyStock` | **8.2** | 2 (20, 59) | k=58 (idx 62) | **same** |
+| server/JUNO-CW7 | 124 | 118 | yes | k=27 / idx 27 `PlaceHomeStation` | **8.2** | 2 (27, 50) | k=64 (idx 64) | **same** |
+| server/JUNO-FCJ | 1106 | 932 | yes | k=45 / idx 49 `PlaceHomeStation` | **8.2** | 76 | never | **different** |
+| server/JUNO-G6J | 30 | 28 | yes | k=22 / idx 22 `BuyStock` | **8.2** | 2 (23, 25) | never | **different** |
+| server/JUNO-TQQ | 1 | 1 | **NO DIFFERENCE** | — | — | 0 | — | same |
+| server/JUNO-Z6C | 615 | 604 | yes | k=33 / idx 33 `BuyStock` | **8.2** | 347 | never | **different** |
+| export/JUNO-3XD | 322 | 320 | yes | k=22 / idx 24 `BuyStock` | **8.2** | 12 | never | **different** |
+| export/JUNO-CV4 | 150 | 120 | yes | k=19 / idx 19 `BuyStock` | **8.2** | 2 (20, 59) | k=58 (idx 62) | **same** |
+| export/JUNO-JJD | 6 | 6 | **NO DIFFERENCE** | — | — | 0 | — | same |
+| export/JUNO-QVC | 93 | 70 | yes | k=15 / idx 15 `BuyStock` | **8.2** | 3 (16, 18, 24) | k=40 (idx 42) | **same** |
+| export/JUNO-Y8V | 668 | **0** | **NO DIFFERENCE** | — | — (S10-23) | 0 | — | same |
+| prefix/JUNO-FCJ-96 | 96 | 92 | yes | k=45 / idx 49 `PlaceHomeStation` | **8.2** | 2 (49, 53) | never | **different** |
+| fixture/JUNO-Z6C-494 | 495 | 487 | yes | k=33 / idx 33 `BuyStock` | **8.2** | 302 | never | **different** |
+
+**Totals.** 18 files; 4,105 stored rows; 3,103 effective; adapter messages Batch-7 **0** / v6 **28** (all of
+them the `legacyHomeTokens` home-choice adapter, #1614); **11 logs diverge, 7 show NO DIFFERENCE**; 5 of the 11
+converge to an identical final board; **6 final boards differ**; 11 logs carry effect/acceptance
+disagreements. **Every first difference is 8.2's.** None is 8.1, 8.3, 8.4 or S8-8.
+
+**The two shapes of first difference, and why they are the same cause.** Either a `BuyStock` that floats a
+corporation — Batch 7 raised the float-time home obligation and froze the seat there (`active_player_index`,
+`bought_this_turn`, `turn_action_taken`, `consecutive_passes` all differ), v6 does not — or a stored
+`PlaceHomeStation` that Batch 7 applied at float time and v6 defers to the corporation's first operating turn
+(`station_token_hexes` differ, and the adapter re-offers the player's recorded choice later).
+
+**The six different final boards, all downstream of that.** `server/JUNO-FCJ` Batch-7 frozen at SR 25 →
+v6 reaches OR 29.1 and N&W's token lands; `server/JUNO-Z6C` SR 1 → OR 11.2; `fixture/JUNO-Z6C-494` SR 1 →
+OR 10.1; `export/JUNO-3XD` SR 11 → SR 12. The other two are the mirror image — the log **ends before the
+corporation's first operating turn**, so a token Batch 7 placed at the float is legitimately absent under v6:
+`server/JUNO-G6J` (no Operating Round in the log at all; `public_companies` is the only differing field) and
+`prefix/JUNO-FCJ-96` (B&M's token placed, B&O's not yet due).
+
+**The M&H effect, isolated from the Stage-8 whole.** Exactly one corpus entry carries an `ExchangePrivate`
+that is ever applied: `export/JUNO-3XD` **idx 288** (`private_id` 4 → NYC, source IPO). Measured on both
+engines at that entry: Batch 7 takes NYC's IPO 50 → 40 and leaves it **unfloated** (treasury 0, bank 10085);
+v6 takes the same certificate and **settles the float threshold in the same entry** (#1631 — floated, treasury
+900, bank 9185); at **idx 289 both boards agree again** (IPO 30, floated, treasury 900, bank 9275, same
+president). So the isolated M&H effect is transient over one entry and converges at 289, exactly as the design
+pass predicted and as `mohawkExchangeCorpus.test.ts` measures by forking the arm. **That is not a statement
+about 3XD's whole-Stage-8 comparison**: 3XD has already diverged at idx 24 for 8.2's reason and never
+reconverges, so its digests differ at 288 and 289 whatever the M&H arm does. `export/JUNO-Y8V`'s stored
+`ExchangePrivate` at idx 10 is reverted away and never applied (S10-23), so it is no evidence for any rule.
+
+**Why nothing else contributes, stated as evidence rather than inference.** 8.1 — its own record measures
+digest-identical boards at every entry of every file; `operatingQueueSettle.test.ts` green. 8.3 —
+`presidencyCorpus.test.ts` forks the pre-slice selector and finds 7 presidency changes and **0** disagreements.
+8.4 — `mohawkExchangeCorpus.test.ts` forks the pre-slice arm; the one applied exchange is the 3XD case above.
+S8-8 — **0** boards in the corpus carry a standing emergency-funding obligation, so the changed projection is
+never reached. **No unexpected difference was found.**
+
+### 17.4 The closure matrices and the static audits
+
+`frontend/src/utils/stage85Matrices.test.ts` (29 cases) states each Stage-8 authority as a table, prints the
+grid it measured, and compares it against the grid written beside it.
+
+- **§11 operating order** — the comparator's five levels each decided with every higher level tied; the key's
+  fallbacks (par for a missing price, `-Infinity` for a missing mark, `Infinity` for a missing arrival, and
+  never `NaN`); membership is floated-with-a-president and nothing else; the settle permutes the waiting tail
+  only, never inserts a mid-round float and never moves a corporation that has operated; identity when no
+  round opened and no token moved.
+- **§12 hold × message × round** — six board states × sixteen message kinds as one printed grid, plus each
+  hold's full escape list and the four-step priority ladder (discard → funding / finished game → offer →
+  home station). This is where S10-24 was found.
+- **§13 home placement** — the seven-row obligation table (cursor, floated, resolvable home, no token, an
+  Operating Round), the herald exemption measured on the board that actually prints a herald, and the hold's
+  escape list including the D&H's free token, which is a different placement wearing the same message.
+- **§14 presidency** — the ten-row selector table (majority, strictly-more, the 20 % floor, percentage before
+  seat, the clockwise tie-break from the incumbent's seat, the LPF non-president 20 %), the projection asked
+  as the same function, the settlement's identity-when-nothing-moves, and the deterministic answers a
+  malformed roster gets.
+- **§15 M&H** — the disposition table (execute only in the requester's own Stock Round seat, else queue), the
+  refusal table, the source table proving R2 (the pile asked for is the pile judged; no silent fallback), and
+  that queuing vests nothing.
+- **§16 the eight static audits** — A1 one presidency selector and no ordering by `player_holdings`;
+  A2 no obligation derived at the float; A3 one M&H arm and no direct `applyPrivateExchange` in the shell;
+  A4 no defaulted exchange source; A5 one `applyFloatThreshold`; A6 no `?? 67` anywhere in the engine;
+  A7 `active_operating_order` written in exactly three authoritative places and never by the shell;
+  A8 nothing inserts into the queue. **All eight are clean**; the only survivors are two named nominal
+  constants, both documented as the legacy/chartless last resort, and a compatibility re-export.
+
+### 17.5 What Stage 8.5 deliberately did not do
+
+Start Stage 9. Fix S9-12 or S9-13. Fix S10-23 or S10-24. Bump beyond 6. Rewrite a corpus log, a golden fixture or an
+expected output merely because v6 differs. Run the full Jest suite — that is the owner's gate.

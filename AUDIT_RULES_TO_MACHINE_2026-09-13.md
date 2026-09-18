@@ -105,9 +105,15 @@ reservation, blocking (6.3.2/6.3.3) are all in `stationTokens.evaluateStationPla
 
 **M7.** No "no sales in the first Stock Round" rule (5.1) in `shareSaleBlock` or the `SellStock` arm. UI-ONLY.
 
-**M8.** Selling shares of an **unparred** corporation (C&A's PRR share, M&H's NYC share before a president) is accepted
+**M8.** ~~Selling shares of an **unparred** corporation (C&A's PRR share, M&H's NYC share before a president) is accepted
 and priced at `SANDBOX_NOMINAL_SHARE_PRICE` ($67) by `applySandboxMarketAction` `priceOf` fallback. Rulebook p.15: cannot
-be sold until the president's certificate is bought. FAIL.
+be sold until the president's certificate is bought. FAIL.~~ **RESOLVED — the sale half by Batch 7.2 (#1570), the
+projection half by Stage 8, Slice 8.5 (#1640).** `stockSaleRefusal` rule 4 refuses every sale of a corporation with no
+par, in a Stock Round and in the Operating Round's forced-sale exception alike — which is also why a share of an
+unstarted corporation has no reachable history in the Bank Pool. Slice 8.5 then took the nominal out of the 6.6.3
+forced-sale projection: `sharePriceFor` returns `null` for an unparred corporation on every board, `forcedSaleRefusal`
+says so before any "only enough" arithmetic, and `legalForcedSales` skips what it cannot price. Backlog **S8-8**
+`RESOLVED`. PASS.
 
 **M9.** Emergency purchase buys the cheapest **depot** tier only (`EmergencyBuyHardware` → `depotInventory` first row;
 `buyReturnedTrain` refuses when `requireFunds=false`). Rulebook 6.6.2 "cheapest train available" includes the Bank Pool
@@ -146,8 +152,11 @@ rulebook / UNCLEAR vs intent.
 
 ## Minor Findings
 
-- **m1.** Operating-order tie-break for equal price **and** equal column falls to arrival ordinal; rulebook 6.0 says
-  "furthest up" first. Reachable: $67 sits at x=6 on rows y=3, 4 and 5. PARTIAL.
+- **m1.** ~~Operating-order tie-break for equal price **and** equal column falls to arrival ordinal; rulebook 6.0 says
+  "furthest up" first. Reachable: $67 sits at x=6 on rows y=3, 4 and 5. PARTIAL.~~ **RESOLVED — #1531, and relocated to
+  `operatingOrder.compareOperatingOrder` by Stage 8, Slice 8.1 (#1600).** The comparator now has five disjoint levels:
+  price desc, column desc, **row desc**, arrival asc, company id. Pinned as a table in `stage85Matrices.test.ts` §11.1.
+  PASS.
 - **m2.** Order is fixed at OR open; the 6.1 note ("if a railroad's share value changes for a railroad that has not yet
   operated, the new share value is used") is not applied mid-round. PARTIAL.
 - **m3.** Sold-out rise iterates `state.public_companies` in company order; 4.5 says highest-priced token first (matters
@@ -281,7 +290,7 @@ Columns: Rule · Rulebook § · Implementation · Enforcement point · Tests (by
 | Seller chooses order across corps | 5.1 | one `SellStock` per bundle | n/a | — | PASS | |
 | Cannot rebuy a corp sold this SR | 5.1/5.2 | `sold_this_round`, `soldThisRound` | `sharePurchaseBlock` | `sellThenBuyLock.test.ts` | PASS | |
 | President's cert never sold; transfer on exceeding | 5.1/5.4 | `shareSaleBlock` successor rule; `settlePresidencies` | arm | `presidentCertificateSale.test.ts` | PASS | |
-| Cannot sell unparred shares | p.15 | none; priced at $67 fallback | — | — | FAIL | M8 |
+| Cannot sell unparred shares | p.15 | `stockSaleRefusal` rule 4 (no par → no sale); `sharePriceFor` returns `null` | arm + 6.6.3 projection | `stockTransactionAuthority.test.ts`, `mohawkExchangeAuthority.test.ts` §13, `stage85Closure.test.ts` §4 | PASS | M8 closed by Batch 7.2 + Slice 8.5 |
 | Buy from IPO at par / pool at market | 4.1/5.2 | `BuyStock` price from `par_value` message / chart | arm | `parFromMessage.test.ts` | PASS / TEST GAP | relies on shell sending `par_value` for IPO buys |
 | First cert is president's at 2×par; par ∈ ladder | 5.2/4.2 | `isPresidentBuy`, `charged = price*2` | arm | `presidentPurchase.test.ts`, `parPrice.test.ts` | PARTIAL | m8: ladder not validated in reducer |
 | Cash required | 5.2 (implicit) | none | — | — | FAIL | C3 |
@@ -417,8 +426,8 @@ Columns: Rule · Rulebook § · Implementation · Enforcement point · Tests (by
 | SV | revenue $5, no power, markdown behaviour | PARTIAL | markdown misapplied to others (C5) |
 | CS | extra lay on B20 unconnected; two tiles that turn | PASS | `bonusLay.ts`, `cslPowerState`; m10 on lapse |
 | DH | yellow 57 on F16 for $120, free token same turn, counts as the lay, lapses when others tile F16 | PASS | `dhPower.ts`, `PlaceHomeStation{dh}` |
-| MH | NYC 10% from bank or pool if <60% and available; SR turn or between turns; closes | PARTIAL | m6; sale-before-par unenforced (M8) |
-| CA | PRR 10% to auction buyer; stays open; share unsellable until PRR parred | PARTIAL | M8 |
+| MH | NYC 10% from bank or pool if <60% and available; SR turn or between turns; closes | PASS | `mohawkExchange.ts` (Slice 8.4, #1630–#1634): m6's `source` is on the message and is the owner's choice, never switched for them; the between-turns window is a queued request revalidated at the next legal boundary; sale-before-par enforced (M8 closed) |
+| CA | PRR 10% to auction buyer; stays open; share unsellable until PRR parred | PASS | unsellable-until-parred enforced by `stockSaleRefusal` rule 4 (M8 closed by Batch 7.2 + Slice 8.5) |
 | BO | president's cert + par; never to a corporation; stays with owner on presidency loss; closes on B&O's first train | PASS | `grantBOPresidency`, `isSellableToCorporation`, `settleBaoPrivate` |
 | All | corporations may buy privates phase 3–4 at 50–200% face, any time in their turn; never sell them; closed at first 5; cannot close voluntarily or sell to pool | PARTIAL | M13; closure ✓ |
 
@@ -485,7 +494,9 @@ reaches `bidders.length − 1` after the last raise. Tests: A raise, B pass, C r
 tables: refuse only the first SR, not SR after the auction).
 **M8** — `shareSaleBlock`: refuse when `par_value` is null; `priceOf` must not fall back to a nominal price on a sale.
 **M9** — emergency: choose min over open depot tiers ∪ `returned_trains`, and allow `buyReturnedTrain` with `requireFunds=false`.
-**M10** — `presidentFor`: order challengers by seat distance clockwise from `company.president`.
+**M10** — `presidentFor`: order challengers by seat distance clockwise from `company.president`. **DONE — Stage 8,
+Slice 8.3 (#1620):** one selector, `presidentFor(company, seating)`, with the clockwise tie-break measured from the
+incumbent's seat and percentage always ahead of it; the forced-sale projection asks the same function.
 **M11** — `rankPlayers`: drop the champion rule; keep `isBankrupt` as a label.
 **M12** — `sellableHoldings`: for the rescued corp, allow sales down to the point where no other holder would exceed the
 president; cap total proceeds at the shortfall.
@@ -494,6 +505,9 @@ player, treasury ≥ price.
 **M14** — `settleTrainSale`: refuse unless buyer is operating at Hardware, price ≥ 1, buyer under limit, treasury ≥ price.
 **M15** — decide: either keep float-time placement as an explicit house rule (document it in the Rules Reference) or move
 the obligation to the corporation's first OR turn (`openingSubPhase` gate). Validate the hex against `home_hex_label`.
+**DECIDED AND DONE — owner ruling R3, Stage 8, Slice 8.2 (#1610 / #1611 / #1612):** the obligation moved to the start of
+the corporation's first operating turn and is derived on the Operating Round cursor; one placement predicate answers at
+both locks; the development corpus's float-time placements are carried by the `legacyHomeTokens` adapter (#1614).
 **M16** — owner decision: label the board "Project 18XX+" everywhere, or implement the p.25 board as a separate variant.
 **m1** — add row (`mark.y`) as the third key. **m6** — add `source` to `ExchangePrivate`. **m8** — validate `par_value ∈
 PAR_VALUE_LADDER` in the arm.

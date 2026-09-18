@@ -67,18 +67,23 @@ const repinned = (entries: readonly ServerLogEntry[], version: number): ServerLo
   });
 
 describe("RULES_ENGINE_VERSION 5 (Batch 7.5)", () => {
-  it("is 5, the changelog's fifth row says why, and a new deal is stamped 5 on the log and on the board", () => {
-    expect(RULES_ENGINE_VERSION).toBe(5);
-    expect(SUPPORTED_RULES_ENGINE_VERSIONS).toEqual([5]);
-    expect(RULES_ENGINE_CHANGELOG.map((row) => row.version)).toEqual([1, 2, 3, 4, 5]);
+  it("is at least 5, the changelog's fifth row says why, and a new deal is stamped with the pin on the log and on the board", () => {
+    /* RE-PINNED BY STAGE 8.5, which bumped to 6. This case asserts what BATCH 7.5 introduced -- the
+       version-5 row and the refusal of a version-4 room -- against whatever the current pin is, exactly as
+       Batch 6 relaxed Batch 5's `3` to `>= 3` and Batch 5 relaxed Batch 4.6's `2`. A version-only edit:
+       nothing about 7.5's replay meaning changed, and the three green suites named in this file's header
+       are still what proves it. */
+    expect(RULES_ENGINE_VERSION).toBeGreaterThanOrEqual(5);
+    expect(SUPPORTED_RULES_ENGINE_VERSIONS).toEqual([RULES_ENGINE_VERSION]);
+    expect(RULES_ENGINE_CHANGELOG.map((row) => row.version).slice(0, 5)).toEqual([1, 2, 3, 4, 5]);
     expect(RULES_ENGINE_CHANGELOG[4].note).toMatch(/Batch 7/);
     expect(RULES_ENGINE_CHANGELOG[4].note).toMatch(/ledger/);
     expect(RULES_ENGINE_CHANGELOG[4].note).toMatch(/Stock Round/);
     expect(RULES_ENGINE_CHANGELOG[4].note).toMatch(/Schuylkill Valley/);
     expect(RULES_ENGINE_CHANGELOG[4].note).toMatch(/instance/);
     const room = dealtRoom();
-    expect(room.rulesEngineVersion()).toBe(5);
-    expect(room.state.rules_engine_version).toBe(5);
+    expect(room.rulesEngineVersion()).toBe(RULES_ENGINE_VERSION);
+    expect(room.state.rules_engine_version).toBe(RULES_ENGINE_VERSION);
   });
 
   it("refuses a version-4 room before the reducer sees a single entry, on restore and headless, under EVERY policy", () => {
@@ -87,7 +92,7 @@ describe("RULES_ENGINE_VERSION 5 (Batch 7.5)", () => {
     try {
       const held = new RoomSession({ providers: sandboxReplayProviders(), seed: seed(), build: "b", mintId: () => "x" });
       held.restore(versionFour);
-      expect(held.incompatible?.compatibility).toEqual({ kind: "incompatible", version: 4, supported: [5] });
+      expect(held.incompatible?.compatibility).toEqual({ kind: "incompatible", version: 4, supported: [RULES_ENGINE_VERSION] });
       /* The development-corpus opt-in admits the UNPINNED, never the differently pinned (#1520): a version-4
          deal is not a legacy log, so the bridge does not reach it. */
       const underCorpusPolicy = new RoomSession({
@@ -98,7 +103,7 @@ describe("RULES_ENGINE_VERSION 5 (Batch 7.5)", () => {
         replayPolicy: DEVELOPMENT_CORPUS_POLICY,
       });
       underCorpusPolicy.restore(versionFour);
-      expect(underCorpusPolicy.incompatible?.compatibility).toEqual({ kind: "incompatible", version: 4, supported: [5] });
+      expect(underCorpusPolicy.incompatible?.compatibility).toEqual({ kind: "incompatible", version: 4, supported: [RULES_ENGINE_VERSION] });
       expect(() => replayLog(versionFour as ReplayEntry[], sandboxReplayProviders(), seed())).toThrow(ReplayIncompatibleError);
       expect(() => replayLog(versionFour as ReplayEntry[], sandboxReplayProviders(), seed(), undefined, DEVELOPMENT_CORPUS_POLICY)).toThrow(
         ReplayIncompatibleError,
@@ -162,7 +167,7 @@ const historical = [
   },
 ];
 
-describe("historical corporation offers replay deterministically under version 5 (7.4's #1597, closed in 7.5)", () => {
+describe("historical corporation offers replay deterministically under the current engine pin (7.4's #1597, closed in 7.5)", () => {
   for (const log of historical) {
     it(`${log.name}: the stored proposal at ${log.proposal} is instance 1 on every replay, and RevertTo rebuilds it`, () => {
       if (!existsSync(log.file)) return; // local development corpus, not committed

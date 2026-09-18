@@ -62,7 +62,7 @@ import { effectiveActions } from "./logRevert";
 
 /** The rules engine this build carries. Bump it, and add a line below, when a deployment changes what a
  *  stored log replays to. Do NOT bump it for UI, protocol or narration changes. */
-export const RULES_ENGINE_VERSION = 5;
+export const RULES_ENGINE_VERSION = 6;
 
 /** Every version this engine can replay faithfully. One entry until somebody builds a versioned reducer;
  *  the point of the list is that "supported" is an explicit statement rather than "whatever is running". */
@@ -140,6 +140,40 @@ export const RULES_ENGINE_CHANGELOG: ReadonlyArray<{ version: number; note: stri
       "`BidOnPrivate` and the `AcceptTrainOffer` family are refused on pinned boards. A version-4 log carries " +
       "purchases, auction steps and settlements the reducer let through without these rules, so it is " +
       "refused, never reinterpreted.",
+  },
+  {
+    version: 6,
+    note:
+      "Stage 8 (8.1-8.5, 2026-09-16/17, #1600-#1640): the Operating Round's order, the home station, the " +
+      "presidency and the Mohawk & Hudson are authoritative. 8.1: the operating order is settled once per " +
+      "entry on the COMMITTED post-rise chart (rulebook 6.0/6.1) -- round membership and the operated / " +
+      "operating prefix are frozen, the not-yet-operated tail is re-sorted whenever a token moves, and the " +
+      "6.0 tie-break is price, then rightmost column, then uppermost row, then earliest arrival; the " +
+      "end-of-Stock-Round sold-out rise is committed before the opening queue is read, so a riser that " +
+      "overtakes a rival operates ahead of it. 8.2: a corporation's home station is placed at the start of " +
+      "its FIRST OPERATING TURN (6.3.1), not at its float -- the obligation, its legality (a candidate home " +
+      "hex, a legal circle) and its hold are one authority asked by the reducer and by ingress alike, the " +
+      "Stock-Round seat hold is retired, and the four mandatory holds are asked ABOVE the auction and chart " +
+      "atoms so a held message cannot move the market before it is refused; the Erie's (and, under the Level " +
+      "Playing Field, the PMQ's) two-city home hex is closed to every other corporation's station once a tile " +
+      "is on it and until the home is placed, and the C&O's first home is its owner's choice of Cleveland or " +
+      "Richmond with Richmond reserved until then. 8.3: the presidency is settled immediately from the " +
+      "holdings (5.4) -- a challenger must hold strictly more, and tied challengers are resolved CLOCKWISE " +
+      "from the displaced president's seat rather than by the order the holdings array happens to carry; the " +
+      "transfer is certificate-safe on a Scenario-D corporation, where the successor may return the printed " +
+      "other-20 card instead of two ordinary tens, and a half-sale of that card requires a 10% certificate " +
+      "already in the Bank Pool. 8.4: the M&H exchange is judged rather than applied -- ownership, the NYC " +
+      "target, `keep_open`, the physical availability of an ORDINARY 10% certificate, the 60% cap and the " +
+      "projected certificate limit, at the reducer and at ingress; it is a free interjection that consumes no " +
+      "purchase and moves no seat, streak or Priority Deal; the owner's chosen source is used and never " +
+      "substituted; a request made while another player's or corporation's turn is underway is recorded as " +
+      "`pending_mh_exchange` and settled -- after full revalidation -- at the next between-turns boundary, " +
+      "before any new Operating Round membership is built; and the exchange settles the float threshold " +
+      "(shared with `BuyStock`) and the presidency. 8.5: the share-price nominal is gone from the forced-sale " +
+      "projection -- an unparred corporation has no price, so it is skipped rather than valued (S8-8). " +
+      "A version-5 log carries an operating order frozen on a stale chart, home tokens placed at the float, " +
+      "presidencies settled by holdings order and M&H exchanges applied unjudged, so it is refused, never " +
+      "reinterpreted.",
   },
 ];
 

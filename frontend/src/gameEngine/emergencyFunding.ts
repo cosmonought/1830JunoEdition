@@ -140,8 +140,10 @@ import { derivePhase } from "./gamePhase";
 import { isSellableToCorporation } from "./baltimorePrivate";
 import { privatePriceBounds, privatePurchasePhaseOpen } from "./privatePriceBand";
 
-/** The reducer's own nominal price where a board carries no chart -- the same figure the sale arm pays. */
+/** The last-resort price on a LEGACY or chartless board -- the same figure, and the same D-9 reason, as the
+ *  reducer's `SANDBOX_NOMINAL_SHARE_PRICE`. Never consulted on a board this engine dealt (#1640). */
 const NOMINAL_SHARE_PRICE = 67;
+
 
 export interface EmergencyFunding {
   companyId: number;
@@ -190,9 +192,49 @@ export interface LegalForcedSale {
   restriction: string | null;
 }
 
-/** The price a share of this corporation fetches, as the sale arm prices it. */
-export function sharePriceFor(state: GameStateResponse, companyId: number): number {
-  return state.market_positions?.[companyId]?.price ?? NOMINAL_SHARE_PRICE;
+/** The price a share of this corporation fetches, as the sale arm prices it -- or `null` when it has none.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 1640 (Slice 8.5, S8-8): AN UNPARRED CORPORATION HAS NO PRICE, SO IT IS NOT PROJECTED
+ *  ==================================================================
+ *  THIS WAS THE LAST `?? 67` ON THE BOARD, and it was a SECOND ladder. `gameState.sharePriceFor` -- the one
+ *  every display reads -- has answered "market, then par, then nothing to sell" since #711, which retired
+ *  exactly this kind of divergent second reading. This one had no par step and no bottom: a corporation with
+ *  no token on the chart was worth $67, whatever the board said about it.
+ *
+ *  AND IT WAS REACHABLE, which is why it is Stage 8's and not hygiene. `stockSaleRefusal` refuses every sale
+ *  of an unparred corporation (rule 4, Batch 7.2) and every sale on a pinned board of a corporation with no
+ *  mark (rule 5) -- but `legalForcedSales` asks `forcedSaleRefusal` DIRECTLY, one layer below those rules, so
+ *  the 6.6.3 projection could offer the president a share nothing would ever buy, priced at a number nobody
+ *  chose, and count it toward whether a bankruptcy was avoidable. The C&A's PRR share and the M&H's NYC share
+ *  before its president's certificate is bought are precisely the shares that reach that state (rulebook
+ *  p. 15: they cannot be sold until the President's Certificate has been purchased).
+ *
+ *  `null` RATHER THAN ZERO, because zero is a price and this is the absence of one: the two callers below
+ *  refuse and skip respectively, and neither divides by it.
+ *
+ *  THE PINNED / LEGACY SPLIT IS BATCH 7.2's, NOT A NEW ONE, and it is why the nominal is still in this file.
+ *  §7.2 rule 4 already decided what a MISSING MARK means: on a board this engine dealt (`pinnedBoard`) a
+ *  corporation with no token has no price and the trade is refused; on a legacy or chartless board it keeps
+ *  the reducer's nominal, for D-9's reason -- "the development corpus and the hand-built fixtures predate the
+ *  invariant that every parred corporation has a mark, and refusing there would strand a replay on a rule its
+ *  game never had". This function now answers the same way, so the projection and the sale gate agree about
+ *  every board instead of about only the charted ones.
+ *
+ *  WHAT CHANGED IS THE UNPARRED CASE, and it changes on EVERY board: a corporation that has not been started
+ *  has no price anywhere, pinned or legacy, because there is nothing a sale of it could be settled at
+ *  (`stockSaleRefusal` rule 4, S8-8). That is the whole of the Stage-8 residual.
+ *
+ *  `SANDBOX_NOMINAL_SHARE_PRICE` in the reducer is the same last resort at the other atom and stays for the
+ *  same D-9 reason; Batch 7.2 already made it unreachable on any pinned board. */
+export function sharePriceFor(state: GameStateResponse, companyId: number): number | null {
+  const mark = state.market_positions?.[companyId]?.price;
+  if (typeof mark === "number" && Number.isFinite(mark) && mark > 0) return mark;
+  const company = state.public_companies.find((entry) => entry.company_id === companyId);
+  // S8-8: unstarted, so unpriced -- on every board, and whatever the chart does or does not say.
+  if (!company || company.par_value === null || company.par_value === undefined) return null;
+  // §7.2 rule 4's split, restated: no nominal on a board this engine dealt.
+  return typeof state.rules_engine_version === "number" ? null : NOMINAL_SHARE_PRICE;
 }
 
 function cashOf(state: GameStateResponse, player: string): number {
@@ -432,9 +474,18 @@ export function forcedSaleRefusal(
   ) {
     return `Selling ${percentage}% of ${company.ticker} would hand its presidency to another player, which a forced sale may not do.`;
   }
+  /* Design note #1640 (S8-8): NO PRICE, NO SALE -- the same fact `stockSaleRefusal` states as rules 4 and 5,
+     asked here because `legalForcedSales` reaches this function directly and would otherwise project a sale
+     of a share that cannot be sold. An unparred corporation has no price for a sale to be settled at, and a
+     corporation whose token is not on the chart has none either. */
+  const price = sharePriceFor(state, companyId);
+  if (price === null) {
+    return company.par_value === null || company.par_value === undefined
+      ? `${company.ticker} has not been started yet — a share of it cannot be sold until its President's Certificate has been bought and its par set.`
+      : `${company.ticker} has no price on the market chart, so a sale of it cannot be settled.`;
+  }
   /* 6.6.3: only enough. A bundle one certificate smaller that still covers the shortfall means this one is
      more than enough. The last certificate may overshoot -- that is the rule's own arithmetic. */
-  const price = sharePriceFor(state, companyId);
   const certificates = certificatesIn(percentage);
   if (certificates > 1 && price * (certificates - 1) >= funding.shortfall) {
     const needed = Math.max(1, Math.ceil(funding.shortfall / Math.max(1, price)));
@@ -452,6 +503,11 @@ export function legalForcedSales(
   for (const company of state.public_companies) {
     const held = company.player_holdings.find((entry) => entry.player === funding.president)?.percentage ?? 0;
     if (held <= 0) continue;
+    /* Design note #1640 (S8-8): SKIPPED, not valued. `forcedSaleRefusal` refuses every bundle of a priceless
+       corporation anyway, so this only states the rule where a reader looks for it -- and it keeps
+       `pricePerShare` a price rather than a fallback. */
+    const price = sharePriceFor(state, company.company_id);
+    if (price === null) continue;
     const bundles: number[] = [];
     let restriction: string | null = null;
     for (let percentage = SHARE_BLOCK_PERCENT; percentage <= held; percentage += SHARE_BLOCK_PERCENT) {
@@ -464,7 +520,7 @@ export function legalForcedSales(
       companyId: company.company_id,
       ticker: company.ticker,
       heldPercent: held,
-      pricePerShare: sharePriceFor(state, company.company_id),
+      pricePerShare: price,
       bundles,
       maxPercent: bundles[bundles.length - 1],
       restriction,

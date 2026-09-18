@@ -244,38 +244,68 @@ function catalogHasTierAbove(tier: TileColorTier): boolean {
   return trayEntries().some((entry) => entry.color === next);
 }
 
-/** Pure and synchronous -- every input is static board data plus the already-fetched grid. A stale or empty grid can only make this MORE permissive, which is the correct direction to fail.
- *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #141 */
-export function evaluateHexForTileLaying(
-  q: number,
-  r: number,
-  mapGrid: MapGridResponse,
-): HexClickEligibility {
+/* ==================================================================
+    DESIGN NOTE 1620 (Slice 9.2, S9-10 / F-1): THE HEX ITSELF REFUSES, AND THE AUTHORITY NEVER ASKED IT
+   ==================================================================
+
+   GATES 1, 2a AND 2b USED TO LIVE ONLY IN `evaluateHexForTileLaying`, which is a CLICK predicate: the
+   renderer asks it (`HexGridRenderer.tsx` #141), the glow asks it, `layableHexes` asks it -- and
+   `filterSandboxPlacements`, the one predicate the Node server and every replay judge a `LayTile` with,
+   did not. Stage 9.1 measured the hole exhaustively: 79 (tile, facing) lays accepted on the standard
+   board's immutable hexes, 54 of them deleting printed track, and the same class on the expansion and the
+   Level Playing Field.
+
+   IT IS A MIGRATION REGRESSION, NOT A MISSING RULE. The CosmWasm contract refuses both cases BY NAME --
+   `hexmap.rs:2317` `OffboardHexNotBuildable` (module doc #14) and `:2331` `GrayHexNotUpgradeable` (module
+   doc #19), with `src/tests.rs:5205` asserting the gray one -- and its legal-placement query mirrors both at
+   `:1976`/`:1985`. The rule was enforced while the chain had the last word; the authority moved out from
+   under it when the Node server took over. Revised rulebook 6.2.1 ❷ / 6.2.2 ❷ are the rules citation,
+   and the official errata adds "The Richmond hex (K15) should be grey, as it cannot be upgraded".
+
+   SO THE THREE GATES BECOME ONE PURE PREDICATE AND BOTH SIDES ASK IT. Not a copy in the filter -- a copy is
+   how the message a player is shown and the refusal a replay applies start disagreeing. The ORDER is the
+   contract's: off-board first, then gray, both ahead of every geometric rule, because the two sets are
+   disjoint and each is more absolute than anything below.
+
+   WHAT IT IS NOT. This is "this hex can never be built on", which revised 6.2.1 ❷'s "terminates against
+   the blank side of a grey hex, or against a solid red hex side" is NOT -- that one is about where a rail
+   ENDS, is a property of a candidate edge rather than of the hex being laid on, and is untouched here. */
+export type ImmutableHexReason = Extract<HexClickRejection, "not-a-hex" | "offboard" | "gray-immutable">;
+
+export interface ImmutableHexRefusal {
+  reason: ImmutableHexReason;
+  /** Player-facing, or `null` for `"not-a-hex"` -- clicking blank space is not an error anyone made. */
+  message: string | null;
+  hexLabel: string;
+}
+
+/** Whether the BOARD forbids every tile on this hex, at every facing, forever. Pure board data: no grid, no
+ *  tile, no orientation, no era -- which is what lets the authority and the renderer share one answer. */
+export function immutableHexRefusal(q: number, r: number): ImmutableHexRefusal | null {
   /* ---- Gate 1: is this a hex at all? ---- */
   const boardHex = STATIC_BOARD_HEXES.find((entry) => entry.q === q && entry.r === r);
   if (!boardHex) {
     // No message on purpose: clicking blank space is not an error a player made, and reporting it would flash a tooltip every time someone clicked the background to dismiss something.
     // See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #141
-    return { eligible: false, reason: "not-a-hex", message: null, hexLabel: describeHex(q, r) };
+    return { reason: "not-a-hex", message: null, hexLabel: describeHex(q, r) };
   }
 
   const hexLabel = boardHex.label;
 
-  /* ---- Gate 2a: red off-board terminals ---- */
+  /* ---- Gate 2a: red off-board terminals ---- `hexmap.rs:2317`, checked first. */
   if (boardHex.type === "RedOffboard") {
     return {
-      eligible: false,
       reason: "offboard",
       message: `${hexLabel} is a red off-board area. It is a revenue destination, not a buildable hex — no tile can ever be laid here.`,
       hexLabel,
     };
   }
 
-  // Both tables are consulted because they were populated in separate passes, and requiring only one to be right would make the gate depend on which pass a hex was added in.
-  // See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #141
+  /* ---- Gate 2b: preprinted gray (and Coal) ---- `hexmap.rs:2331`, checked right after. ----
+     Both tables are consulted because they were populated in separate passes, and requiring only one to be right would make the gate depend on which pass a hex was added in.
+     See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #141 */
   if (boardHex.printedColor === "Gray" || boardHex.printedColor === "Coal" || GRAY_HEXES[hexLabel] !== undefined) {
     return {
-      eligible: false,
       reason: "gray-immutable",
       // #1320: Coal River is printed in its own colour but is fixed for the same reason a gray hex is.
       message:
@@ -285,6 +315,33 @@ export function evaluateHexForTileLaying(
       hexLabel,
     };
   }
+
+  return null;
+}
+
+/** Pure and synchronous -- every input is static board data plus the already-fetched grid. A stale or empty grid can only make this MORE permissive, which is the correct direction to fail.
+ *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #141 */
+export function evaluateHexForTileLaying(
+  q: number,
+  r: number,
+  mapGrid: MapGridResponse,
+): HexClickEligibility {
+  /* ---- Gates 1, 2a and 2b: #1620, the board's own refusal, shared with the authority. ---- */
+  const immutable = immutableHexRefusal(q, r);
+  if (immutable) {
+    return {
+      eligible: false,
+      reason: immutable.reason,
+      message: immutable.message,
+      hexLabel: immutable.hexLabel,
+    };
+  }
+
+  const boardHex = STATIC_BOARD_HEXES.find((entry) => entry.q === q && entry.r === r);
+  /* Unreachable -- Gate 1 above returns for a coordinate with no hex. Narrowing rather than asserting,
+     because a non-null assertion here would be a second, silent claim about that gate. */
+  if (!boardHex) return { eligible: false, reason: "not-a-hex", message: null, hexLabel: describeHex(q, r) };
+  const hexLabel = boardHex.label;
 
   /* ---- Gate 3: terminal tier ---- */
   const laid = mapGrid.tiles.find((tile) => tile.q === q && tile.r === r);

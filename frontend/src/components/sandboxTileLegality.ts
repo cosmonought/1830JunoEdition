@@ -20,11 +20,22 @@
 // Design notes #3/#4/#6/#7/#483: see `docs/ai_architecture/hex_tile_math.md`.
 
 import { TILE_CATALOG_BY_ID, type TileColorTier, type TileCatalogEntry } from "./hexTileCatalog";
-import { IMPASSABLE_BORDER_EDGES, LANDMARK_HEXES, STATIC_BOARD_HEXES, TO_HEXES, YELLOW_OO_HEXES, boardMemo } from "./hexBoardData";
+import {
+  GRAY_HEXES,
+  IMPASSABLE_BORDER_EDGES,
+  LANDMARK_HEXES,
+  LANDMARK_TRACKS,
+  OFFBOARD_TRACKS,
+  STATIC_BOARD_HEXES,
+  TO_HEXES,
+  YELLOW_OO_HEXES,
+  boardMemo,
+} from "./hexBoardData";
 import { inTray, trayCountOf } from "./tileTray";
 import {
   HEX_NEIGHBOR_OFFSETS,
   archetypeForHex,
+  immutableHexRefusal,
   isBoardHex,
   liveEdges,
   liveEdgesForHex,
@@ -230,24 +241,149 @@ export function tileSegments(tileId: number, orientation: number): TileSegment[]
   return null;
 }
 
-/** Does `candidate` preserve every segment `existing` runs?
+/* ==================================================================
+    DESIGN NOTE 1621 (Slice 9.2, S9-10 / F-2): THE BOARD IS TOPOLOGY TOO
+   ==================================================================
+
+   `preservesRouting` was fed `TILE_CATALOG_BY_ID.get(laid.tile_id)` and nothing else, so rule 5 was SKIPPED
+   ENTIRELY on every first lay over a hex whose track is printed on the BOARD rather than carried by a tile.
+   Revised 6.2.2 ❸ does not care which of the two is holding the rail: "All track segments on the replaced
+   tile must be maintained in the same orientations on the new tile."
+
+   IT WAS NOT LATENT. Stage 9.1 found the three landmark hexes masked by `staysOnBoard` ON THE STANDARD
+   BOARD and warned the masking "breaks if any board edit gives I15, E23 or G19 a neighbour it currently
+   lacks". The edit had already happened: on the expansion Baltimore I15 has all six neighbours, so the
+   wrong-parity facings survive the rim test and SIX track-deleting lays are accepted there (three on the
+   Level Playing Field, where #592 is out of the tray). Measured, not assumed -- see the Stage-9.2 suite.
+
+   SO THE QUESTION BECOMES "WHAT TOPOLOGY IS ON THIS HEX RIGHT NOW", and it is asked in ONE place.
+   `priorTopologyAt` resolves it in `liveEdgesForHex`'s own order -- laid tile (a `printedTile` IS a laid
+   tile, #1301) ▸ gray ▸ off-board ▸ landmark ▸ nothing -- so the route graph and the lay predicate cannot
+   disagree about what track exists. REPLACEMENT, NOT UNION: this board's semantics are that a laid tile IS
+   the hex's topology (`liveEdgesForHex`, `archetypeForHex` and `traversalSegments` all say so by asking the
+   tile first and stopping), and unioning a printed print with the tile that replaced it would demand a
+   brown OO keep the yellow hex's two severed stubs forever. */
+
+/** The topology a hex carries at this instant, whatever is holding it. */
+export interface HexTopology {
+  /** Every live edge, as a six-bit mask -- the `hexmap.rs` #10 invariant's left-hand side. */
+  mask: number;
+  /** Internal routing in `tileSegments`' convention: `[a, b]` is a run between two edges, `[e, e]` a
+   *  terminus that enters at `e` and stops (design note #676). `null` when it cannot be derived. */
+  segments: TileSegment[] | null;
+  /** Which arm answered. Exported so a test can pin the fallback order rather than infer it. */
+  source: "laid" | "gray" | "offboard" | "landmark";
+}
+
+const sortedUnique = (edges: readonly number[]): number[] =>
+  Array.from(new Set(edges)).sort((a, b) => a - b);
+
+/** Spokes meeting at the hex's own centre marker: the full PAIRWISE set, which is how this codebase states
+ *  a hub everywhere else (`TileCatalogEntry.paths` for #53, `printedPathsForTraversal` for the warehouses).
+ *  A single spoke is a terminus, and two spokes are one path -- both fall out of the same expansion. */
+const pairwiseThroughCentre = (edges: readonly number[]): TileSegment[] => {
+  const unique = sortedUnique(edges);
+  if (unique.length === 0) return [];
+  if (unique.length === 1) return [[unique[0], unique[0]] as const];
+  const out: TileSegment[] = [];
+  for (let i = 0; i < unique.length; i += 1) {
+    for (let j = i + 1; j < unique.length; j += 1) out.push([unique[i], unique[j]] as const);
+  }
+  return out;
+};
+
+/** Each stub enters and stops. What a red off-board area IS -- `trackSegments.ts` #484 answers `null` for
+ *  one before it even looks at the tile, because terminality is a property of the board. */
+const stubsThatEnd = (edges: readonly number[]): TileSegment[] =>
+  sortedUnique(edges).map((edge) => [edge, edge] as const);
+
+/** What track stands on `(q, r)` before this action -- design note #1621.
+ *
+ *  `null` means "nothing, or nothing derivable", and rule 5 then has no opinion, exactly as it had none for
+ *  a bare hex before. The order is `liveEdgesForHex`'s, deliberately: a THIRD classifier of what a hex
+ *  carries is how the route graph and the legality predicate start answering differently. */
+export function priorTopologyAt(
+  mapGrid: MapGridResponse,
+  q: number,
+  r: number,
+): HexTopology | null {
+  const laid = mapGrid.tiles.find((tile) => tile.q === q && tile.r === r);
+  if (laid) {
+    const entry = TILE_CATALOG_BY_ID.get(laid.tile_id);
+    /* A tile id the mirror has not caught up to says NOTHING rather than falling through to the board's own
+       print. The hex is covered; claiming the printed rail is still under there would be inventing topology,
+       and "no opinion" is the direction this file fails in (design note #0). */
+    if (!entry) return null;
+    return {
+      mask: rotateConnections(entry.connections, laid.orientation) & 0b111111,
+      segments: tileSegments(laid.tile_id, laid.orientation),
+      source: "laid",
+    };
+  }
+
+  const boardHex = STATIC_BOARD_HEXES.find((hex) => hex.q === q && hex.r === r);
+  if (boardHex) {
+    const grayTrack = GRAY_HEXES[boardHex.label];
+    if (grayTrack) {
+      return {
+        mask: maskOf(grayTrack.edges),
+        segments: pairwiseThroughCentre(grayTrack.edges),
+        source: "gray",
+      };
+    }
+    const offboardEdges = OFFBOARD_TRACKS[boardHex.label];
+    if (offboardEdges) {
+      return {
+        mask: maskOf(offboardEdges),
+        /* #1320: a Level Playing Field warehouse is a red area a route runs THROUGH -- its stubs meet at a
+           dit -- while every other red area is where a route ENDS. */
+        segments:
+          boardHex.warehouse === true
+            ? pairwiseThroughCentre(offboardEdges)
+            : stubsThatEnd(offboardEdges),
+        source: "offboard",
+      };
+    }
+  }
+
+  const landmark = LANDMARK_HEXES.find((entry) => entry.q === q && entry.r === r);
+  if (landmark) {
+    const cities = LANDMARK_TRACKS[landmark.name] ?? [];
+    if (cities.length === 0) return null;
+    /* ONE ENTRY PER CITY, and the split is the point. New York is `[{edges:[1]}, {edges:[4]}]` -- two
+       revenue centres with NO track joining them -- which expands to two TERMINI, precisely #59's own
+       `paths: [[0,0],[2,2]]` encoding, so #676's relaxation applies and the upgrade that CONNECTS them stays
+       legal. Baltimore's single city `{0,4}` expands to the one path `(0,4)`, which is the rail that must
+       survive. Nothing here is keyed on a landmark's name. */
+    const segments = cities.flatMap((city) => pairwiseThroughCentre(city.edges));
+    const mask = maskOf(cities.flatMap((city) => [...city.edges]));
+    if (mask === 0) return null;
+    return { mask, segments, source: "landmark" };
+  }
+
+  return null;
+}
+
+const maskOf = (edges: readonly number[]): number =>
+  edges.reduce((mask, edge) => mask | (1 << (((edge % 6) + 6) % 6)), 0) & 0b111111;
+
+/** Does `candidate` preserve every segment the hex runs today?
  *
  *  Falls back to the edge-superset test when either side's routing cannot
  *  be derived -- design note #4's stated gap. */
 function preservesRouting(
-  existing: TileCatalogEntry,
-  existingOrientation: number,
+  prior: HexTopology,
   candidate: TileCatalogEntry,
   candidateOrientation: number,
 ): boolean {
   // The edge test is a NECESSARY condition either way, and it is the whole
   // test when routing is underivable. `hexmap.rs` module doc comment #10,
   // verbatim: "old_actual & !new_actual == 0".
-  const oldMask = rotateConnections(existing.connections, existingOrientation);
+  const oldMask = prior.mask;
   const newMask = rotateConnections(candidate.connections, candidateOrientation);
   if ((oldMask & ~newMask & 0b111111) !== 0) return false;
 
-  const oldSegments = tileSegments(existing.tileId, existingOrientation);
+  const oldSegments = prior.segments;
   const newSegments = tileSegments(candidate.tileId, candidateOrientation);
   if (!oldSegments || !newSegments) return true;
 
@@ -456,6 +592,17 @@ export function filterSandboxPlacements(
   placements: readonly LegalTilePlacement[],
   { mapGrid, q, r, era, networkHexes, networkPorts }: SandboxLegalityContext,
 ): LegalTilePlacement[] {
+  /* ==================================================================
+      RULE 0. THE HEX ITSELF -- design note #1620 (Slice 9.2, S9-10 / F-1)
+     ==================================================================
+     Ported from `hexmap.rs` IN ITS ORDER: off-board (`:2317`) then gray (`:2331`), both ahead of every
+     geometric rule below, because each is disjoint from and more absolute than all of them. Hoisted out of
+     the per-placement loop because it is a fact about the HEX -- no tile, no facing and no era can change
+     it, and refusing 456 placements one at a time would only say the same thing 456 times.
+     THE MESSAGE AND THE REFUSAL ARE ONE ANSWER: `evaluateHexForTileLaying` (the click/glow predicate) asks
+     the same function, so what a player is told and what a replay applies cannot drift apart. */
+  if (immutableHexRefusal(q, r) !== null) return [];
+
   const restriction = hexLabelRestriction(mapGrid, q, r);
   const wanted = hexCentres(mapGrid, q, r);
   const eraRank = TIER_RANK[era];
@@ -463,6 +610,9 @@ export function filterSandboxPlacements(
   const boardHex = STATIC_BOARD_HEXES.find((hex) => hex.q === q && hex.r === r);
   const laid = mapGrid.tiles.find((tile) => tile.q === q && tile.r === r);
   const existing = laid ? TILE_CATALOG_BY_ID.get(laid.tile_id) : undefined;
+  /* #1621: the topology rule 5 must preserve -- the laid tile when there is one, the BOARD's own print when
+     there is not. Resolved once per hex rather than per candidate; it does not depend on the tile offered. */
+  const prior = priorTopologyAt(mapGrid, q, r);
 
   // Design note #3: a laid tile wins, then the hex's printed tier, then
   // bare ground at -1.
@@ -544,8 +694,9 @@ export function filterSandboxPlacements(
        track cross into it" -- and a hex on the far side of a barrier is perfectly real. */
     if (crossesImpassableBorder(q, r, entry, orientation)) return false;
 
-    // 5. Path preservation, per orientation.
-    if (existing && !preservesRouting(existing, laid?.orientation ?? 0, entry, orientation)) {
+    /* 5. Path preservation, per orientation -- #1621: over the hex's LIVE topology, which is the laid tile
+       where one stands and the board's own printed track where none does. */
+    if (prior && !preservesRouting(prior, entry, orientation)) {
       return false;
     }
 

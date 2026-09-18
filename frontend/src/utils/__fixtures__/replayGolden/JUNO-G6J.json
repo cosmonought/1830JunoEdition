@@ -345,6 +345,20 @@
         ],
         "landmark": null,
         "printed": true
+      },
+      {
+        "q": -1,
+        "r": 12,
+        "tile_id": 9,
+        "orientation": 0,
+        "paths": [
+          [
+            0,
+            3
+          ]
+        ],
+        "landmark": null,
+        "printed": true
       }
     ]
   }

@@ -77,6 +77,22 @@ const CHANGED: readonly BoardHex[] = [
   hex("A9", { type: "Plain", printedColor: "Gray" }),
   // Coal River.
   hex(COAL_RIVER_LABEL, { type: "Plain", printedColor: "Coal", revenueTiers: COAL_RIVER_REVENUE }),
+  /* ==================================================================
+      DESIGN NOTE 1622 (Slice 9.2, S9-18 / F-6): THE SEVENTH BOARD TILE
+     ==================================================================
+     T-02 lists SEVEN board tiles for Scenario D and this file shipped six. The missing one is
+     "Straight Track (30g) -- use an A-1 tile -- M-11", which S-1.1 ❷ states again in prose. Without it the
+     Deep South warehouse's third stub (`LPF_WAREHOUSES.M13`, the `edge(4)` = W one, #1313) points at a blank
+     hex, and M-9 -- the Coal River's own SE neighbour -- has nothing joining it eastward.
+     A-1 IS OLD #9, the plain straight, and at orientation 0 its `connections: 0b001_001` are edges 0 (E) and
+     3 (W): M-11 is (-1, 12), so edge 0 is (0, 12) = M-13 and edge 3 is (-2, 12) = M-9. The orientation is
+     derived from the neighbour arithmetic, not from the coordinate's name.
+     PRINTED, NOT PRE-LAID. `printedTile` (#1301) is the mechanism the expansion already uses for H12's green
+     #24: `initialGridFor` seeds it into the INITIAL grid flagged `printed`, so the route graph, the lay
+     predicate, the renderer and the slot counts all see an ordinary tile while `tileSupply` and rule 0b know
+     it never came out of the tray. It is a delta on the EXPANSION's M-11, so the standard and 1830+ boards
+     keep their blank hex. */
+  hex("M11", { type: "Plain", printedTile: { tileId: 9, orientation: 0 } }),
 ];
 
 const LPF_HEXES: readonly BoardHex[] = (() => {

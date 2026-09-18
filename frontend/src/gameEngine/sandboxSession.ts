@@ -227,6 +227,7 @@ import {
   routeCrossesCoalRiver,
 } from "./kanawhaLicense";
 import { tileCitySlotCounts } from "../components/TileGraphics";
+import { stationAnchorRefusal } from "./stationAnchorAuthority";
 import { DIESEL_TIER, dieselExchangeCostFor, dieselExchangeRefusal } from "./dieselExchange";
 import { numberedPrivate } from "./privateOrdinal";
 
@@ -3135,6 +3136,17 @@ function applySandboxActionCoreJudged(
   if ("LayTile" in msg && ctx?.layRefused) {
     const { q, r, tile_id, orientation } = msg.LayTile;
     if (ctx.layRefused(q, r, tile_id, orientation)) return state;
+  }
+
+  /* Design note #1623 (Slice 9.2, S9-17): AND THE STATIONS ON THAT HEX, which `layRefused` cannot judge --
+     `filterSandboxPlacements`' whole input is `{ mapGrid, q, r, era }` and a token is state. Revised 6.2.2 ❹
+     ("all stations on the replaced tile must be placed on the new tile with the same connections as
+     before") was enforced only by `App.tsx`'s `legalRotations` memo until this line; the shell keeps calling
+     it for the rotation list, and this is the copy a crafted message, a socket and a replay all meet.
+     HERE, BESIDE `layRefused`, FOR #757's REASON: both atoms -- the state and the tile grid -- refuse
+     together or apply together, and this arm sits ahead of every mutation the `LayTile` arm performs. */
+  if ("LayTile" in msg) {
+    if (stationAnchorRefusal(state, msg.LayTile, ctx?.mapGrid) !== null) return state;
   }
 
   /* Design note #774: ONE CORPORATION, ONE DIVIDEND DECLARATION, AT THE STEP THAT OWNS THE CHOICE.

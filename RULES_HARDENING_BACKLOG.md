@@ -1524,6 +1524,42 @@ so ❹ was satisfiable and none is provably illegal. If F-9 is ruled "distinct",
 **two of them have no legal facing at all** until S9-16 is fixed, so F-8/F-9 and S9-16 must land in one slice. Bump
 expected at the end of Slice 9.2. No visual-flourish code is touched by the eventual fix; VF-5 only surfaced it.
 
+*RESOLVED IN PART BY SLICE 9.2 (2026-09-18, uncommitted).* The two **board/printed-topology** halves of this entry
+are implemented and pinned; the catalog and #59 halves are untouched and stay `OPEN` under S9-19 / S9-15 / S9-21 /
+S9-16.
+
+- **F-1, the immutable hex — RESOLVED.** `evaluateHexForTileLaying`'s Gates 1 / 2a / 2b are extracted into one pure
+  predicate, `hexGeometry.immutableHexRefusal(q, r)` (design note **#1620**), which the click gate and
+  `filterSandboxPlacements` now BOTH ask — not a copy, so the message a player is shown and the refusal a replay
+  applies cannot drift. It is rule **0** of the filter, hoisted out of the per-placement loop, in `hexmap.rs`'s own
+  order: off-board (`:2317`) first, then gray/Coal (`:2331`), both ahead of every geometric rule.
+  `src/tests.rs:5205`'s assertion (`#57 @0` at Cleveland F6 refused; the legal-placement query empty) is ported.
+  Measured before → after, over every hex of all three boards at all four eras: **standard 79 → 0, 1830+ 106 → 0,
+  LPF 87 → 0 (272 → 0)**. The standard-board 79 reproduces Stage 9.1's figure exactly, hex for hex and facing for
+  facing; the other two boards were never enumerated before and are reported here for the first time.
+- **F-2, printed board topology — RESOLVED.** New `sandboxTileLegality.priorTopologyAt(mapGrid, q, r)` (design note
+  **#1621**) answers "what track stands on this hex right now" in `liveEdgesForHex`'s own fallback order — laid tile
+  (a `printedTile` IS a laid tile, #1301) ▸ gray ▸ off-board ▸ landmark ▸ nothing — and rule 5 is fed from it
+  instead of from a `TileCatalogEntry`. **Replacement, not union**: this board's semantics are that a laid tile IS
+  the hex's topology, and a test pins `priorTopologyAt(...).mask` equal to `liveEdgesForHex`'s answer on **every hex
+  of every board**, so the route graph and the lay predicate cannot disagree about what exists.
+- **THE "FOUND CASE WITHDRAWN" PARAGRAPH ABOVE IS ITSELF CORRECTED.** Stage 9.1 measured the three landmark hexes on
+  the **standard** board only and warned the `staysOnBoard` masking "breaks if any board edit gives I15, E23 or G19 a
+  neighbour it currently lacks". **The edit had already happened.** On the expansion Baltimore I15 has all six
+  neighbours, and the wrong-parity facings survive the rim test: **six** track-deleting lays were accepted there
+  (`53@1 53@3 53@5 592@1 592@3 592@5`), and **three** on the Level Playing Field (`53@1 53@3 53@5`, #592 being out of
+  that tray). So S9-10's original recorded case — "an expanded/LPF Baltimore facing that cuts printed track is
+  offered and accepted" — was **right about the hex and the boards** and wrong only about the tile pairing. Slice 9.2
+  refuses all nine, for preservation rather than for the rim. Boston and New York are unchanged on every board.
+- **G19's facing 4 is still refused**, by `staysOnBoard`, and deliberately: revised 6.2.1 ❷'s edge-termination rule
+  is a separate rule from immutability and is **not** in this slice's scope. Recorded so it is not read as fixed.
+- **Corpus: neutral for F-1 and F-2, as predicted.** Baseline `d837419` → Slice 9.2 across 11 log files (8 distinct):
+  identical stored / applied / dropped / unparseable counts, identical final game state, and no acceptance change
+  attributable to either finding.
+- Whole-board before → after sweep, all three boards × all four eras × all 76 types × 6 facings:
+  **0 placements newly accepted** outside M-11 (S9-18), and every newly refused placement is on an immutable hex or
+  is a Baltimore facing that cuts printed track.
+
 **S9-15. The 1830+ tray under-supplies #63 by three, and a test pins the wrong figure.**
 Status `OPEN` (found by Stage 9.1, 2026-09-18; `STAGE9_TILE_TOPOLOGY_AUDIT_2026-09-18.md` §4 / §10, finding F-4).
 T-09 gives `C15` = old **#63** a Classic count of **3** and an 1830+ delta of **+1**, i.e. **4** copies under the
@@ -1664,6 +1700,38 @@ same discipline. Fix: call the existing pure function from the authority; the sh
 gesture. Replay: **refusal-added, corpus-neutral** (§14: every stored token landing is edge-consistent and
 single-token).
 
+*RESOLVED BY SLICE 9.2 (2026-09-18, uncommitted).* `gameEngine/stationAnchorAuthority.ts` (design note **#1623**)
+calls the **existing** `planTokenUpgrade` — re-sited, not rewritten, because a second implementation of ❹ is the
+divergence class `replayProviders.ts` #1199 lists three prior payments for — and `applySandboxActionCore` asks it
+for every `LayTile`, beside the `layRefused` gate and ahead of every mutation the arm performs. It is not in
+`filterSandboxPlacements`: that predicate's whole input is `{ mapGrid, q, r, era }` and a token is state, so
+widening it would put state into the one pure board-geometry module in the codebase. Two refusals, and they are
+different questions: **(1)** no legal landing exists (`planTokenUpgrade` returns `null` — a token is stranded, or
+the landings do not fit the slots); **(2)** the message asks for a landing the board does not allow — the case a
+crafted or replayed `token_cities` builds and the shell could never produce. The old single-index `token_city`
+spelling (#824) is judged by the same rule. A token the message does not name is left to #1315's `clampCity`, so an
+older log carrying no `token_cities` is not re-adjudicated. **Replay: refusal-added, measured corpus-neutral** — no
+stored entry's acceptance changes and no final state moves.
+
+*[REVIEW FOLLOW-UP, same slice] One real hole found and closed; the other four omission cases were already safe.*
+All three placement arms accept `city_index === null` and write `station_token_hexes` **without** a
+`station_tokens` entry (design note #560's third state), so "a station whose city nobody recorded" is reachable by
+a direct client. Measured case by case: omitting `token_cities`/`token_city` for a station **with** a stored index
+was already refused when the stored index is not the anchor (`effectiveLandingCity` mirrors the arm's own
+named ▸ stored ▸ `clampCity` resolution); omitting one company from a non-empty map was already refused; and an
+unindexed station whose plan anchor exists was already over-constrained by `cityExitEdges(…, null)`. **The hole was
+capacity for a `free` unindexed station**: `fitStationsToUpgrade` counts a free token against no city on a
+multi-city candidate (#1315), and the authority skipped it too — so three stations could be seated on #59's two
+slots by a message that said nothing. Closed by design note **#1625**: every station is projected
+(named ▸ `token_city` ▸ stored-and-clamped ▸ `planTokenUpgrade`'s own derived anchor), all projections count
+per city, and a **total-slot floor** (`stations on the hex ≤ Σ slots`) covers the case where no destination is
+decidable. No second remapping algorithm; the mirror is pinned against what the `LayTile` arm writes.
+**Legacy replay preserved, measured:** across all 18 corpus files there are 30 lays onto a tokened hex, **every one
+carrying exactly ONE station**, so the floor cannot fire; the 2 that name no mapping (`export/JUNO-3XD` 121 and
+316) were already refused at baseline for unrelated reasons and remain refused. No adapter was invented. `App.tsx` was **not touched**: `legalRotations` keeps
+its own call, and collapsing the two call sites into the shared helper is recorded as a narrow UI/legal-sync cleanup
+(see S10 below), not done here, because owner modal/UI work is live in that file.
+
 **S9-18. Level Playing Field is missing T-02's printed straight track at M-11.**
 Status `OPEN` (found by Stage 9.1, 2026-09-18; audit §5 / §10, finding F-6). Printed Scenario D places seven board
 tiles (T-02, p. 45; S-1.1 ❷, p. 34): Coal River L-8, the five warehouses M-13 / L-2 / F-2 / A-11 / B-24, and
@@ -1677,6 +1745,42 @@ expansion's green #24 at H12 is the precedent). Verify the facing against the re
 Replay: **acceptance-changing for LPF** (a rail exists that did not), so this is the change in Slice 9.2 that forces
 the version bump. Note also that the rulebook cites "Table T-01 on p. 44" for board tiles when they are in T-02 on
 p. 45 — a rulebook typo, recorded so it is not chased.
+
+*RESOLVED BY SLICE 9.2 (2026-09-18, uncommitted).* `hexBoardDataLpf.ts` gains
+`hex("M11", { type: "Plain", printedTile: { tileId: 9, orientation: 0 } })` (design note **#1622**), a delta on the
+EXPANSION's M-11, so the standard and 1830+ boards keep their blank hex. The orientation is derived from the
+neighbour arithmetic rather than from the coordinate's name: M-11 is (-1, 12), #9's `connections: 0b001_001` are
+edges 0 and 3, edge 0 is (0, 12) = **M-13** and edge 3 is (-2, 12) = **M-9** — the straight T-02 prints, and the
+rail M-13's own printed W stub (#1313) has been pointing at. Verified by test: the route graph traverses 0↔3 and
+refuses 0↔1; the tray is untouched (`tileStock(9).placed === 0`, because `initialGridFor` flags it `printed`);
+M-11 now offers only the five green tiles that keep the straight (`18@0 23@3 24@0 26@3 27@0`) and no yellow tile at
+all; the other two boards still show a bare hex that takes `9@0`.
+
+*REPLAY: ACCEPTANCE-CHANGING, AND — CONTRARY TO STAGE 9.1's §14c — NOT CORPUS-NEUTRAL.* The audit reported "no lay
+on M11 in any log". **Two logs lay there**, and the baseline → 9.2 comparison resolves them exactly:
+
+| Log | Entry | Lay | Baseline | Slice 9.2 | Cause |
+|---|---|---|---|---|---|
+| **JUNO-FCJ** | **159** | `#9@0` at M-11 by corp 4 | **refused** — `operatingIdentityRefusal`: *"Only the operating corporation lays track — B&M is operating, not B&O."* | **refused** (identity first; now tile-illegal too) | **no change** |
+| **JUNO-Z6C** | **227** | `#8@0` at M-11 by corp 4 | **accepted** (bare hex, legal yellow lay) | **REFUSED** — the hex already holds printed yellow track, so the lay fails both the colour step and preservation | **S9-18** |
+
+So **exactly one stored action changes acceptance in the whole corpus**, it is the one S9-18 predicts, and refusing
+it is the correct rules outcome: under T-02 that hex was never blank, and #8 both repeats the colour tier and cuts
+the printed straight. Consequences, measured: **the final game state of every log is byte-identical** (M-11 is Plain,
+so `withTerrainPaid` records nothing for a $0 hex and the refusal leaves no trace in state), and no recorded route
+ran through M-11. The only board difference in the whole corpus is at (-1, 12): every LPF log gains the printed
+`#9@0`, and JUNO-Z6C loses the `#8@0` it should never have had.
+
+*GOLDENS RE-PINNED IN THIS SLICE [review follow-up].* `replayGolden.test.ts` failed on **JUNO-CV4** and
+**JUNO-G6J** for this and only this reason. On review both fixtures are re-pinned now, with the reason
+**"S9-18 — restore printed LPF M-11 straight from T-02"**: each gains the single grid entry
+`{"q":-1,"r":12,"tile_id":9,"orientation":0,"paths":[[0,3]],"landmark":null,"printed":true}` and nothing else —
+`applied` 141/10 unchanged, `dropped` 36/0 unchanged, `unparseable` unchanged, every other grid entry and the whole
+state byte-identical, verified by a harness before the write and visible as a **pure insertion of 14 lines with zero
+deletions** in `git diff`. `JUNO-7NZ.json` is untouched (not an LPF game). **The re-pin does not need an
+intermediate version bump** — it records the expected behaviour of the uncommitted Stage-9 implementation. The
+Stage-9 `RULES_ENGINE_VERSION` bump remains owed at closure, and S9-19's future re-pins stay separate and will be
+justified on their own. Raw logs byte-unchanged.
 
 **S9-19. #59's two pre-printed exits may never be connected by an upgrade, and seven accepted facings break that.**
 Status `OPEN` (filed at Stage 9.1 revision 9.1b, 2026-09-18; `STAGE9_TILE_TOPOLOGY_AUDIT_2026-09-18.md` §8a/§8b).
@@ -1951,6 +2055,16 @@ table's game (31 stays refused; many later entries are refused on the corrected 
 Sign at 203 is reached again (C&O's Mark, +$90 — `moneyConservation`'s corpus list re-pinned to that entry, S9-1). The
 epilogue's default path (no adapter) stops at B&O's first OR turn (`[SR 1, OR 1.1, Final]`), pinned beside it. A
 completed Yellow Sign game is still owed.
+
+**S10-25. `legalRotations` and the authority now ask the station rule separately, and should ask it once.**
+Status `OPEN` (opened by Slice 9.2, 2026-09-18). S9-17 put revised 6.2.2 ❹ in the reducer
+(`gameEngine/stationAnchorAuthority.ts`, #1623) by calling the same pure `planTokenUpgrade` the shell's
+`legalRotations` memo calls (`App.tsx:10797`, design note #879) — one implementation, two call sites, which is
+correct and is not a duplication of the RULE. What is owed is the small cleanup: the shell should ask the
+authority's helper rather than assembling the anchors itself, so the rotation list a president is offered and the
+refusal a replay applies are computed by one function end to end. **Deliberately not done in Slice 9.2**: `App.tsx`
+was carrying live owner modal / UI / wallet work throughout the slice, and editing it to deduplicate a memo would
+have collided with that for no rules gain. No behaviour depends on this; it is a seam, not a defect.
 
 **S10-22. The Batch-4.6 discard adapter's "do not spin" guard cannot see a refusal on a charted board.**
 Status `OPEN` (development-corpus only; found by Slice 8.2, 2026-09-16). `LegacyLogAdapters.apply` (formerly `replayLog`'s
@@ -2548,6 +2662,8 @@ PMQ — the ruling applies the conditional form to both. Implementation: Slice 8
 | 5 (owed until 8.5) | 8.3 (`02a9838`) | one presidency selector, `presidentFor(company, seating)`: §5.4's clockwise tie-break measured from the FORMER president's seat, strictly-more to take the crown, the 20 % floor as a percentage (so the LPF non-president 20 % qualifies exactly as two 10 %s do), and the forced-sale projection asked of that same function so an answer cannot drift from its settlement (S8-2, #1620); the Scenario-D presidency exchange — two ordinary 10 %s where the successor has them, otherwise the other-20 card one-for-one, percentages unmoved either way (S8-15, #1622); and V-7.2's prerequisite, that a sale cannot supply its own exchange certificate (S9-14, #1624) | **Measured against the committed 8.2 tree `efe4098`**, 18 logs / 3,131 observed messages: **7 presidency changes, 0 ties, 0 disagreements between the old selector and the new one** — corpus-neutral, every board and every final digest identical. `presidencyCorpus.test.ts` forks the pre-slice rule and replays both to convergence. Nothing re-pinned; `RULES_ENGINE_VERSION` still 5 |
 | 5 (owed until 8.5) | 8.4 (`fc5a575`) | the M&H exchange becomes an authority of its own (`mohawkExchange.ts`, S8-10, #1630–#1634): a FREE player-initiated interjection that consumes no Stock Round purchase, no `bought_this_turn`, no Sell→Buy→Sell stage, no `turn_action_taken`, no pass streak, no Priority Deal and not the seat (R1); a request made while another player's or corporation's turn is underway is QUEUED as `pending_mh_exchange` and settled, FULLY REVALIDATED, at the next legal between-turn boundary (queuing vests nothing, and the first 5-train can still close the M&H and destroy the opportunity); settlement runs inside `settleRoundTransitions` and as `advanceCorporation`'s first line, both ahead of every `buildOperatingOrder`, so an SR→OR float is never locked out of the round it has just qualified for; the source is the owner's choice and is never switched for them (R2) | **Measured against the committed 8.3 tree `02a9838`**, forked engine vs HEAD (`mohawkExchangeCorpus.test.ts`): no corpus log contains an `ExchangePrivate` entry, so the arm is corpus-neutral by construction; every board and final digest identical. `pending_mh_exchange` is covered by the digest automatically (`stateDigest` canonicalises the WHOLE state, #232) — absent, `null` and standing are three distinct digests, pinned in `stage85Closure.test.ts`. Nothing re-pinned; `RULES_ENGINE_VERSION` still 5 |
 | **6** | **8.5** (`0b23b1e`) | **The bump.** `RULES_ENGINE_VERSION` 5 → 6, `SUPPORTED_RULES_ENGINE_VERSIONS` derived `[6]`, changelog row 6 naming every Stage-8 semantic change: operating order settled on the committed post-rise chart, sold-out rise order, the home station owed at the FIRST OPERATING TURN, the Erie / PMQ whole-hex protection, C&O Cleveland-or-Richmond, the CLOCKWISE presidency tie-break, the Scenario-D certificate-safe exchange, the M&H authority with `pending_mh_exchange` and its boundary settlement, and 8.5's own removal of the unparred share price (S8-8, #1640). A version-5 room is refused before replay **under every policy**; unpinned logs keep the #1520 boundary (server refuses, development corpus admits). | **Measured from HEAD under v6**, 18 files / **4,105 stored entries / 3,103 applied / 1,002 dropped by `RevertTo` / 1,131 reducer no-ops / deterministic 18 of 18 / 0 boards ending with a queued M&H request**. The three frozen goldens (last written at `47d1b7a`, Batch 7.5) replay byte for byte — the one TRUE before/after comparison, and **Stage 8 costs them nothing**. The S8-8 change is corpus-neutral: **zero** boards carry a standing emergency-funding obligation. **Filed, not fixed:** S10-23 (`export/JUNO-Y8V` applies 0 of 668 rows — no entry ids, and `effectiveActions` kills by identity, #1026; pre-existing, `logRevert.ts` untouched by Stage 8) and S10-24 (the discard hold omits `RevertTo`; unreachable, reverts never reach the reducer). **Re-pinned:** `batch75Closure`'s four version assertions to the relative form Batch 4.6 / 5 / 6 already use. Nothing else re-pinned; no expected output re-derived from the new engine |
+
+| 6 (owed until Stage-9 closure) | **9.2** (uncommitted) | **Board / printed-topology authority.** `immutableHexRefusal` (#1620) is rule 0 of `filterSandboxPlacements`, ported from `hexmap.rs:2317` / `:2331` in their order and shared with `evaluateHexForTileLaying` (S9-10 / F-1); `priorTopologyAt` (#1621) feeds rule 5 the hex's LIVE topology in `liveEdgesForHex`'s fallback order, so board-printed track is preserved on a first lay (S9-10 / F-2); `stationAnchorAuthority.stationAnchorRefusal` (#1623) puts revised 6.2.2 ❹ in the reducer, ahead of every mutation (S9-17); and the Level Playing Field gains T-02's seventh board tile, the printed straight `#9@0` at **M-11** (#1622, S9-18). `RULES_ENGINE_VERSION` deliberately NOT bumped — Stage 8's precedent: implementation slices stay on the pin and Stage 9 takes ONE deliberate bump at closure, once S9-19's re-pins are known and can be reconciled with these. **Stage-9 bump is now OWED.** | **Measured against the baseline audit commit `d837419` across ALL 18 current corpus files — 18/18** (3 goldens + 8 `server/data` + 5 `sandbox-log-*` exports + the FCJ-96 prefix + the Z6C-494 fixture; the same set Stage 8.5 used) under `DEVELOPMENT_CORPUS_POLICY`. **Identical stored / applied / dropped / unparseable counts in all 18, and EVERY DYNAMIC STATE FIELD IDENTICAL at every entry and at the end — zero state divergences observed anywhere.** `map_grid` is a separate object and is **never byte-identical on a Level Playing Field log**: the printed M-11 straight is in the INITIAL grid, so the board differs from index 0 — a static/setup difference, not a gameplay one. **Exactly one stored action changes acceptance in the whole corpus**, in one room appearing in two files: **JUNO-Z6C idx 227** (`#8@0` at M-11, no `token_cities`) — ACCEPTED at baseline, **REFUSED** under 9.2, because T-02 prints yellow track on that hex so the lay repeats the colour tier and drops printed edge 3. Its state before and after is identical on both sides (M-11 is Plain, so a $0 refusal leaves no trace); the boards never converge. `server/JUNO-FCJ` idx 159 (`#9@0` at M-11) was already refused by `operatingIdentityRefusal` and still is — **no change**. F-1, F-2 and S9-17 are **measured corpus-neutral**. **RE-PINNED (2, both explained):** `replayGolden` fixtures `JUNO-CV4.json` and `JUNO-G6J.json`, each +1 grid entry (the printed M-11 tile) and nothing else — pure insertion, 14 lines, zero deletions — reason *"S9-18 — restore printed LPF M-11 straight from T-02"*. `JUNO-7NZ.json` untouched. **All raw logs byte-unchanged.** The focused Stage-9.2 gate is green |
 
 Items above that carry "bump" must add a row here when they land. No golden or replay expectation is ever
 re-pinned silently: the re-pin, its index and its reason go in the batch write-up and in this table.

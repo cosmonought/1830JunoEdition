@@ -1246,7 +1246,7 @@ Detail: either label the board "Project 18XX+" everywhere (Game Type drop-down #
 record it here as the intended authority, or implement the p.25 board as a separate variant. No replay effect
 from the labelling choice.
 
-**S9-5. ~~Level Playing Field is owner-defined~~ The Level Playing Field is printed Scenario D (S-1.0), with owner variations recorded separately (the free home under the flat $100 station price, the herald-home representation of the PRR's starting-hex token, the Erie / PMQ OO home hex reading).** *(Narrow correction, Slice 8.3, 2026-09-17: the title used to list "7 seats, N&W / PMQ, JK + Coalfields licence, 20 % double certificate, 7-trains, $750 Diesel exchange, herald home" as owner variations. All but the herald home are **printed** Scenario D, as this entry's own "Printed there" list already said — the Erie's and the N&W's second 20 % certificate among them (full rulebook 5.0, p. 34: president's 20 % + other 20 % + six 10 %s, and the other 20 % is not a President's Certificate). Only genuine owner readings are listed in the title now.)*
+**S9-5. ~~Level Playing Field is owner-defined~~ The Level Playing Field is printed Scenario D (S-1.0), with owner variations recorded separately (the free home under the flat $100 station price, the herald-home representation of the PRR's starting-hex token, the Erie / PMQ OO home hex reading, **and the retention of the TO tiles that printed Scenario D removes**).** *(Narrow correction, Slice 8.3, 2026-09-17: the title used to list "7 seats, N&W / PMQ, JK + Coalfields licence, 20 % double certificate, 7-trains, $750 Diesel exchange, herald home" as owner variations. All but the herald home are **printed** Scenario D, as this entry's own "Printed there" list already said — the Erie's and the N&W's second 20 % certificate among them (full rulebook 5.0, p. 34: president's 20 % + other 20 % + six 10 %s, and the other 20 % is not a President's Certificate). Only genuine owner readings are listed in the title now.)*
 **Corrected by Slice 8.2 (2026-09-16).** The title's "owner-defined" was wrong: the full 48-page rulebook prints the
 scenario (S-1.0 "A Level Playing Field", pp. 34–36; Table T-08, p. 47). Printed there: N&W (base Norfolk L-16) and PMQ
 (Detroit/Windsor E-5, either city, the Erie's track rules) added; up to 7 players (certificate limits and starting money
@@ -1260,7 +1260,20 @@ the Erie, where V-7.3's wording omits the tile condition; implemented, #1617); a
 later is listed here rather than labelling the scenario owner-defined. Status `OWNER DECISION` (recorded; audit N "PASS vs owner spec" — now to be read
 as "PASS vs the printed scenario and the owner's recorded readings"). Notes: `gameVariants.ts`,
 `levelPlayingField.ts`, `doubleCertificate.ts`, `kanawhaLicense.ts`, `hexBoardDataLpf.ts` (`COAL_RIVER_EDGES`),
-#1323 Coal River bar, #1276 / #1298 / #1299 licence, #1286 warehouses. Open sub-items: S9-8 (pool cap in
+#1323 Coal River bar, #1276 / #1298 / #1299 licence, #1286 warehouses.
+**FROZEN OWNER OVERRIDE, added at revision 9.1b (2026-09-18) — the TO tiles.** Printed Scenario D removes
+`to1 (810) x1` and `to5 (882) x1` (T-01 S-1.0; S-1.1 clause 6) while leaving the TO hex **D10** on the board.
+**Project 18XX LPF retains both, one each**, because D10 is printed `TO` and accepts only the `TorontoHub` family —
+so without them the labelled hex has no upgrade path and can never be built through, which playtesters reasonably
+did not expect. Recorded at `tileTrayLpf.ts` design note **#1395** (from the report "When clicking the preprinted
+Toronto (TO) hex, the tileselector does not pop up at all... Let's restore the TO tiles for our LPF variant's tile
+set"), after #1385's list had removed them. **Implemented and test-pinned**: `LPF_TRAY_REMOVALS` omits both, and
+`utils/levelPlayingField.test.ts:170-171` asserts `LPF_TRAY.counts.get(810) === 1` and `...get(882) === 1` by name.
+Classification: **INTENTIONAL PROJECT DEVIATION — PASS.** Not a catalog defect, not variant leakage, not a
+reconciliation error, not an ambiguity. **A future "rulebook reconciliation" pass must not revert it**, and that
+test is what stops one. Chain: printed `TO` hex -> #810 (green, slots [1,2], $50) -> #882 (brown, slots [2,2], $70),
+terminal at brown; exercised in the corpus on both LPF logs (JUNO-FCJ 660->700, JUNO-Z6C 549->564). Full record:
+`STAGE9_TILE_TOPOLOGY_AUDIT_2026-09-18.md` section 10c. Open sub-items: S9-8 (pool cap in
 certificates); the seventh seat colour (#1344 done; `seatColor.test.ts` contrast/livery question flagged, U-8);
 S6-4; LPF-specific route rules (warehouses as termini, `routeConnection` / `assignRouteSet`, decision 21a of
 2026-09-08) to be carried into S6-1.
@@ -1341,56 +1354,413 @@ today means *no rule*), so do it with tests that assert the reducer answers the 
 Destination `frontend/src/gameEngine/board/`.
 
 **S9-10. Authoritative tile-upgrade topology preservation.**
-Status `OPEN` — NOT implemented in Batch 7.4. First recorded 2026-09-15 from the visual-flourish VF-5 work as
-"preprinted-track preservation"; **wording corrected 2026-09-16 (Batch 7.4 final review, owner ruling)** after the
-full 48-page 1830 rulebook with the expanded / LPF tile sets showed the first generalisation was too broad. This
-entry must NOT be read as "every old city needs a one-to-one successor" or "any change in city topology is illegal".
+Status `OPEN` — NOT implemented in Batch 7.4, NOT implemented by Stage 9.1. First recorded 2026-09-15 from the
+visual-flourish VF-5 work as "preprinted-track preservation"; **wording corrected 2026-09-16 (Batch 7.4 final
+review, owner ruling)** after the full 48-page 1830 rulebook with the expanded / LPF tile sets showed the first
+generalisation was too broad; **manifest audit completed and this entry re-stated 2026-09-18
+(`STAGE9_TILE_TOPOLOGY_AUDIT_2026-09-18.md`, Stage 9.1)**. This entry must NOT be read as "every old city needs a
+one-to-one successor" or "any change in city topology is illegal".
 
-*Found case.* Today's preservation check (`preservesRouting` behind `sandboxTileLegality` / `layRefused`) compares a
-candidate tile against the LAID tile it replaces, so on a board hex whose track is printed on the map — expanded /
-LPF Baltimore — a #53 / #592 facing that cuts printed track is offered and accepted (tile numbers as the
-implementation's catalog carries them; the manifest audit below verifies the old / new mapping).
+*Rule authority, established 2026-09-18.* §7.2.2 of the 48-page book, p. 19: ❸ "All track segments on the replaced
+tile must be maintained in the same orientations on the new tile"; ❹ "all stations on the replaced tile must be
+placed on the new tile with the same connections as before". **Printed board hexes ARE the replaced tile** — p. 19's
+own tables are keyed "Tan Hex → Yellow Tile #s" and "**Yellow Hex** → Green Tile #s", with Baltimore, Boston, New
+York and the 2-small-city OO hex listed as yellow hexes — so printed track counts as pre-existing track with no
+special case needed. §7.2.1 ❺'s "same number and size of cities" is town-vs-city, **not** slot parity (p. 19's hex
+table is keyed "0 cities / 1 small city / 2 small cities / 1 large city"); a Stage-9 fix must not tighten rule 2
+into slot parity, or 1830+'s #592 becomes unplayable everywhere. The **28-page revised rulebook is absent from the
+repo** — every Classic-side quotation above is from the 48-page book's own Base Game section, and adding
+`en_1830re.html_Rules_1830-RE_EN.pdf` is owed before Slice 9.2.
+
+*FOUND CASE WITHDRAWN.* The recorded case — "expanded / LPF Baltimore — a #53 / #592 facing that cuts printed track
+is offered and accepted" — is **NOT reproducible on any of the three boards**, and its tile pairing was a
+misreading. Measured over all six facings at each printed landmark hex: at **I15** (printed 1 city, exits {0,4}) and
+**E23** (printed 1 city, exits {1,5}) the engine offers exactly the rules-legal facings ({0,2,4} and {1,3,5}
+respectively) and nothing else; at **G19** (two spurs, {1} and {4}) it offers facing 1 alone and *wrongly refuses*
+the also-legal facing 4. The right answer arrives from `staysOnBoard` (design note #7) — a rule about the map's rim
+— rather than from preservation, so the protection is **incidental and fragile**: it breaks on any board edit that
+gives those hexes a neighbour they lack, on any new B/NY tile with a different edge set, and on any printed-track
+hex that is not on the rim.
+
+*#53 and #592 are SIBLINGS, not a chain.* T-09 (p. 48): `bb1` = old **#53**, green B, **1 slot**, 2 in Classic,
+2 in 1830+ → `bb5/bb6/bb7`; `bb2` = old **#592**, green B, **2 slots**, 0 in Classic, **2 in 1830+** →
+the same `bb5/bb6/bb7` = old **#61** (1 slot), **#884** (3 slots), **#997** (2 slots). There is no `#53 → #592`
+edge in any ruleset; the two tiles have identical exits ({0,2,4}) and identical successors and differ **only** in
+station-slot count, which the engine models correctly (`TILE_GRAPHICS_CATALOG` markers, read by
+`tileCitySlotCounts`). Also established: label **"B" serves Baltimore AND Boston** (p. 19: "Baltimore … bb1 ·
+Boston … bb1"), so the `BostonHub` terrain tag is a poor name for a correct model, and `hexLabelRestriction`
+derives the family structurally rather than by coordinate list. LPF removes **#592 ×2 and #61 ×2**, so the LPF B
+chain is #53 (1 slot) → #884 (3) / #997 (2), with no capacity shrink available — which is almost certainly why
+printed Scenario D removes that exact pair.
+
+*CONFIRMED INSTANCES OF THE SAME MECHANISM, and they are worse.* `preservesRouting` is gated on
+`existing = TILE_CATALOG_BY_ID.get(laid.tile_id)`, so rule 5 is **skipped entirely** on any first lay over a printed
+hex; and `sandboxTileLegality.ts` imports from `hexBoardData` only `IMPASSABLE_BORDER_EDGES, LANDMARK_HEXES,
+STATIC_BOARD_HEXES, TO_HEXES, YELLOW_OO_HEXES, boardMemo`, mentioning `printedColor` on two lines inside
+`preprintedTierByLabel`'s `"Yellow"` filter and **never** reading `GRAY_HEXES`, `RedOffboard`, `"Coal"`,
+`LANDMARK_TRACKS` or station `slots`. The victims are the hexes 1830 forbids outright: on the standard board the
+authoritative `layRefused` accepts **79 distinct (hex, tile, facing) lays on hexes that can never be built on**,
+**54 of which delete printed track** — E9 18/17, C15 18/17, F6 6/6, D14 6/6, H12 6/4, A17 3/2, D24 3/2, I19 1/0,
+F24 1/0, plus **17 lays on the seven red off-board areas**. Under LPF the same gap reaches the **Coalfields hex
+(L8)** and the five **warehouses**. `evaluateHexForTileLaying` refuses all of them correctly — and is **UI-only**
+(`HexGridRenderer` clicks, the glow, `layableHexes`); it is not in `layRefused`, so a replay cannot enforce it.
+**AND THIS ONE IS A MIGRATION REGRESSION, NOT AN OMISSION, WHICH MEANS THE FIX HAS A REFERENCE IMPLEMENTATION.**
+The CosmWasm contract refuses both cases by name, ahead of every geometric rule, with a Rust test behind them:
+`src/hexmap.rs:2317` `OffboardHexNotBuildable` ("Off-Board Reservation", module doc #14) and `:2331`
+`GrayHexNotUpgradeable` ("Gray Hex Immutability … a preprinted GRAY hex's real starting track is permanent --
+nothing may ever be laid here", module doc #19); variants at `:1405` / `:1354`, mirrored in the legal-placement
+query at `:1976` / `:1985`, asserted at `src/tests.rs:5205`. The rule was enforced while the contract had the
+last word and did not survive the move to the Node authority — `server/src/gameServer.ts:356` and
+`server/src/replayCli.ts:101` both build sessions with `sandboxReplayProviders()`, whose `layRefused` is
+`filterSandboxPlacements` alone. `sandboxTileLegality.ts`'s design note #0 is candid about the original scope
+("a filter that exists only where no authority is reachable cannot drift from an authority"); that premise
+expired when the Node server became the authority. **Slice 9.2 should port `hexmap.rs`'s two checks in their Rust
+order**, which is also the order `evaluateHexForTileLaying` already uses, and port the Rust assertion with them.
+*One related gate is inert for the same reason and is deliberately NOT filed here:* the authoritative call site
+passes only `{ mapGrid, q, r, era }`, no `networkHexes`/`networkPorts`, so rule 6 (`orientationJoinsNetwork`)
+never runs authoritatively either — which that function's own doc states on purpose ("What this deliberately does
+NOT check … network connectivity, city reservation for unfloated home hexes, and tray depletion"). That is a
+route/connectivity concern, not a topology one; it belongs in **S10** beside S10-1, and Slice 9.2 must not
+silently change it while passing the merged topology in.
+*(This resolves `AUDIT_RULES_TO_MACHINE_2026-09-13.md` §F's `UNCLEAR` row "No tiles on gray/red" to MISSING.)*
 
 **Requirement.** Stage 9 audits tile-upgrade legality against the ACTIVE RULESET's explicit upgrade families and
 topology rules.
 
 *Universal:*
 - pre-existing track required by the source position is preserved as the rules require;
-- track printed on the underlying board hex does not disappear merely because preservation looks only at a laid tile;
-- existing station / token connectivity remains valid through the upgrade;
+- track printed on the underlying board hex does not disappear merely because preservation looks only at a laid
+  tile — the fix is to give rule 5 a merged `priorTopologyAt(mapGrid, q, r)` resolving laid tile ▸ printed tile ▸
+  `LANDMARK_TRACKS` ▸ `GRAY_HEXES` ▸ `OFFBOARD_TRACKS` ▸ nothing, mirroring `liveEdgesForHex`'s and
+  `archetypeForHex`'s existing fallback order so no third classifier is born;
+- a hex the board forbids outright refuses every tile **in the authoritative predicate**, not only in the UI;
+- existing station / token connectivity remains valid through the upgrade — and is judged authoritatively;
 - the destination tile and facing belong to a rules-legal upgrade transition.
 
 *Not universal — topology-changing rules belong to specific upgrade families; apply the constraint the active
-ruleset actually defines:*
-- fixed OO, old tile #59: the two original city / track systems are preserved, and the upgrade may not connect them;
-- Variable OO Cities is NOT enabled in this implementation and must not be used to legalise #59 mergers;
-- the expanded 1830+ / LPF tile manifests contain explicitly legal unusual topology changes, including two small
-  cities upgrading to one small city — explicitly defined variant topology changes / merges remain legal;
+ruleset actually defines. THE MANIFEST OF EXCEPTIONS IS NOW CLOSED, and it is four items long:*
+- **`#54 → #883` is the ONLY city merge in the entire tile set** (2 cities × 1 slot → 1 city × 4 slots; 1830+ only).
+  Already modelled — #1315's `clampCity`, `planTokenUpgrade`'s single-city fit, `nyMerge.test.ts`;
+- **`#592 → #61` is the ONLY capacity-shrinking upgrade** (2 slots → 1; 1830+ only, absent from Classic and LPF).
+  Refused correctly by `fitStationsToUpgrade`, **not** refused authoritatively;
+- **eight double-town → single-town greens** (#1/#55→#88, #2/#56/#632→#87, #69/#630/#631→#204; 1830+ only) —
+  already modelled by `mergesTowns` (#1403);
+- **NO city anywhere in the tile set ever splits**, so class C needs no machinery at all;
+- Variable OO Cities is **not present in the repo at all** — no flag, no code, no string — and cannot be used to
+  legalise #59 mergers;
 - do not infer a blanket "cities may never merge" rule;
-- do not infer legality merely from geometric compatibility, or from the current placement filter accepting a facing.
+- do not infer legality merely from geometric compatibility, or from the current placement filter accepting a
+  facing.
+
+*#59 — RESOLVED BY PRINTED RULE, not by an owner decision (revision 9.1b, 2026-09-18).* The 2018 revised rulebook
+was located this pass and **§6.2.2 ❹ carries the clause verbatim**: "When a tile is replaced, all stations on the
+replaced tile must be placed on the new tile with the same connections as before. **This also means that the
+pre-printed exits on a (59) tile can never be connected in the tile upgrade.**" The first pass filed this as an
+ambiguity needing an owner ruling only because it had no copy of the revised book. **There is no owner decision
+here.** The ruling is frozen as printed rule and refiled as its own defect, **S9-19**: old #59 carries two distinct
+city / track systems, an upgrade facing may not connect them, each system's station must land on a city carrying the
+same connections, a merging orientation is illegal, and Variable OO stays OFF (a sweep for `variableoo` /
+`variable oo` / `variable-oo` across `frontend/src` returns zero matches and `GameVariants` has no such flag, so
+nothing can be invoked to legalise a merge). The **complete successor set is five tiles** — revised p. 19:
+`59 (2) → 64, 65, 66, 67, 68` — and the first pass's abbreviated "#64, #65, #67" is corrected; #66 and #68 were
+always in it. **The rule costs Classic nothing**: all five keep at least two legal facings, so it is a pure
+over-acceptance defect with no reachability cost. **Seven (tile, facing) pairs accepted today are illegal** —
+#67@4, #65@2, #64@0, oo13@1, oo13@4, oo14@1, oo14@2 — and oo13/oo14 are reachable from #59 *only* through illegal
+facings, i.e. not at all, which is consistent with the errata voiding both tiles' identities and means T-09's
+`oo2 → oo10-oo17` range over-reaches by exactly those two.
 
 *Tile numbers.* Project-facing code comments, tests and reports use the old / original 18xx numbers. The fuller
 Lookout rulebook's new numbers may appear only as a cross-reference; where both are shown, the implementation uses
-the old number.
+the old number. **Verified 2026-09-18: zero modern identifiers in code, and they must stay out** — `A1`, `A9`,
+`A11`, `A17`, `A19`, `B10`, `B12`, `B16`, `B20`, `B24`, `C15`, `C21`, `C23`, `D2`, `D10`, `D14`, `D24` are all real
+hex labels in `hexBoardData`, and `C15` is simultaneously the Lookout name of tile **#63** and the board label of
+**Kingston**. The old-number convention is the only collision-free choice here, not merely a preference. Full
+crosswalk: audit §3. **CORRECTED CONVENTION (revision 9.1b): do not canonize an old number the official Mayfair
+errata voids.** *"1830 Clarifications & Errata (01/03/12)"* (© Mayfair Games 20120106) records that **oo1 (626)
+should be oo1 (8861)**, and that **oo13's printed 36** and **oo14's printed 35** are both wrong with **no valid
+replacement**. So: where a corrected old number exists it is canonical and the printed one is a deprecated alias
+(**oo1 = #8861**, alias ~~#626~~); where the errata voids the number and supplies none, the **Lookout ID** is
+canonical (**oo13**, alias ~~#36~~; **oo14**, alias ~~#35~~). The engine keys all three on the deprecated aliases —
+behaviourally inert, filed as **S9-21**. One inconsequential rulebook conflict: T-09 prints A8 = #6 / A9 = #5 while T-01 and S-1.1 ❻
+print A8 (5) / A9 (6); identical colour, terrain, slots, quantities and successors, and LPF removes 2 of each, so no
+engine behaviour can depend on it.
 
-*Order of work (manifest audit BEFORE any change to `preservesRouting`):*
-1. cross-check the implementation's expanded / LPF tile catalog against the full rulebook manifest;
-2. verify each tile's cities, station slots, track, edge connections and permitted upgrade families;
-3. verify the old-number / new-number mapping;
-4. only then tighten orientation / topology preservation.
+*Order of work (manifest audit BEFORE any change to `preservesRouting`) — ALL FOUR STEPS DONE 2026-09-18:*
+1. ✔ the implementation's Classic / 1830+ / LPF tile catalog is cross-checked against T-09 (p. 48): **76 types, an
+   exact two-way match; Classic reconciles tile-for-tile, 46 types / 85 copies**; the only quantity defect is
+   **#63** (see S9-15);
+2. ✔ cities, station slots, track, edge connections and permitted upgrade families verified per tile (audit §4);
+3. ✔ the old / new mapping verified (audit §3);
+4. ☐ **only now** tighten orientation / topology preservation — Slice 9.2, after the F-8 / F-9 rulings.
 
-*Planned tests must distinguish:* (a) Baltimore / preprinted-track loss (every legal and illegal facing, at both
-locks, refusals digest-equal); (b) fixed-OO #59 illegal reconnection; (c) ordinary multi-city preservation; (d)
-explicitly legal expanded / LPF topology-changing upgrades (accepted). Plus at least one non-Baltimore
-preprinted-track hex on each board that has one.
+*What the audit measured about the generic filter, and it changes the design answer.* Over all 76 types × 6 × 6
+facings, the engine's generic predicate reproduces **the rulebook's entire 127-edge upgrade graph** — no
+rulebook-legal edge fails its tier / centre / terrain rules, and the only two edges it accepts that T-09 omits are
+`#28 → #43` and `#29 → #43`, **which p. 19 explicitly lists** (`B13 … C4, C8, C9, C10` / `B14 … C4, C7, C9, C10`)
+and whose geometry is sound. **T-09 has an erratum there; the engine is right and no change is owed.** So the
+correct Stage-9 design is **a richer GENERIC preservation predicate plus the four-item exception manifest above** —
+not a catalog-declared adjacency table (which would restate a graph the filter already computes, and would have
+*hidden* S9-16 rather than exposed it) and not a `if (source === 59)` special case.
+
+*Planned tests must distinguish:* (a) printed-track loss at every printed hex on every board — landmark, gray, Coal
+and red-off-board — every legal and illegal facing, at both locks, refusals digest-equal, **and asserting the
+refusal comes from preservation rather than from `staysOnBoard`** (G19's facing 4 is the canary: it is rules-legal
+and refused today); (b) the #59 facings, once F-9 is ruled; (c) ordinary multi-city preservation; (d) the four
+explicitly legal topology-changing upgrades (accepted); (e) **a standing catalog invariant — every rulebook-legal
+upgrade has at least one legal facing** (this is what would have caught S9-16 the day #626 was added).
 
 *Supersedes a prior PASS.* `AUDIT_RULES_TO_MACHINE_2026-09-13.md` §F "Upgrade preserves all segments and stations"
 was marked PASS; that audit proved only part of the invariant (laid-tile segment superset and token migration) and
-is re-annotated `PARTIAL — see S9-10`. Stage 9 re-audits every topology-sensitive upgrade.
+is re-annotated `PARTIAL — see S9-10`. Stage 9 re-audits every topology-sensitive upgrade. The same audit's
+"No tiles on gray/red" row is updated `UNCLEAR → MISSING` by this pass.
 
-Replay: refusal-added (a stored lay that cut printed track, or reconnected #59's systems, would be refused), and
-possibly acceptance-added for a legal variant merge the filter refuses today — sweep both directions before
-claiming none exists — bump. No visual-flourish code is touched by the eventual fix; VF-5 only surfaced it.
+Replay: **refusal-added, and measured corpus-neutral.** 12 logs / 198 effective lays / **73 effective upgrade
+transitions** (`RevertTo { index }` is exclusive — "everything from `index` onward did not happen"; getting that off
+by one inflates the count to 101 and manufactures 21 phantom same-tier "upgrades"). All 73 pass the v6 predicate,
+and **zero stored lays land on a hex immutable on that log's own board**, so closing the printed-track and
+immutable-hex halves re-pins nothing. The only corpus exposure is F-9's: **JUNO-FCJ 640 (E11, #59@5 → #35@0),
+JUNO-FCJ 1047 (E5, #59@4 → #65@0), JUNO-Z6C 399 (E5, #59@4 → #36@2)** — each with exactly **one** token on the hex,
+so ❹ was satisfiable and none is provably illegal. If F-9 is ruled "distinct", those three become refusal-added and
+**two of them have no legal facing at all** until S9-16 is fixed, so F-8/F-9 and S9-16 must land in one slice. Bump
+expected at the end of Slice 9.2. No visual-flourish code is touched by the eventual fix; VF-5 only surfaced it.
+
+**S9-15. The 1830+ tray under-supplies #63 by three, and a test pins the wrong figure.**
+Status `OPEN` (found by Stage 9.1, 2026-09-18; `STAGE9_TILE_TOPOLOGY_AUDIT_2026-09-18.md` §4 / §10, finding F-4).
+T-09 gives `C15` = old **#63** a Classic count of **3** and an 1830+ delta of **+1**, i.e. **4** copies under the
+expansion — and the brown column's own footer total (+11) only reconciles with that +1. `tileTrayPlus.RECOUNTED`
+sets `[63, 1]`, so `PLUS_TRAY` and `LPF_TRAY` hold **one** #63 where the rulebook has four, and `PLUS_TRAY` totals
+**135** copies against the rulebook's **138**. Every other one of the 76 types matches exactly in all three trays,
+and Classic reconciles tile-for-tile. The wrong figure is *pinned*: `plusTiles.test.ts:72` asserts `[63, 1]` against
+"the request", not against T-09 — which is why this survived. Fix is one number plus re-pointing that assertion at
+the rulebook. Replay: **acceptance-widening** (a fourth #63 becomes layable), corpus-neutral — the corpus never
+exhausts the tray. **Revision 9.1b:** the inventory is **replacement, not additive** — `PLUS_TRAY` copies `STANDARD_TRAY.counts` and
+then `counts.set(63, 1)`, and #63 is not `plusOnly`, so the later "add each plusOnly entry" loop does not restore
+it; the effective 1830+ supply really is **1** against T-09's **4**. No scenario removes a #63, so LPF inherits the
+same shortfall. **The official Mayfair errata does NOT alter the count** — its #63 item is about the *value*
+("The C15 (63) tiles have the wrong value. The value should be 40, instead of 50"), and the engine already carries
+`revenue: 40`, so that half is a **PASS**. Since the other seven recounts match T-09's totals exactly, a
+transcription of "+1" as "1" in the owner spec is the likely story. **Revision 9.1c — CONFIRMED BY COMPONENT
+EVIDENCE, no owner confirmation needed:** the errata's own correction tile sheet (pages 2-3 of the errata PDF,
+headed "1830 - Errata Sheet MFG1830-88") instructs **"40 value added to 1830+ side of all four C15 tiles"** —
+four physical #63 tiles on the 1830+ side, exactly T-09's `3 +1`. The earlier suggestion to seek owner
+confirmation is withdrawn. Corpus-neutral: 4 lays of #63 across the corpus, peak 2 simultaneously on a board.
+Related doc drift: `tileSupply.test.ts:38`'s comment says "the 28 of the tile set" where it
+asserts 30.
+
+**S9-16. `oo13 -> oo20` has no legal facing — a contradiction in official material, NOT an engine defect.**
+Status `OPEN — BLOCKED` (found by Stage 9.1, 2026-09-18; **split and narrowed at revision 9.1b the same day**;
+`STAGE9_TILE_TOPOLOGY_AUDIT_2026-09-18.md` §8c). This entry used to cover two dead ends. **The oo1 half is
+WITHDRAWN**: the official Mayfair errata states plainly under *Rules* — "**Tile oo1 (8861) is not upgradable**" —
+and the repo already carried the owner's own playtest ruling to the same effect (`App.tsx:3331`, from the LPF report
+"the green OO tiles when clicked do not have any tileselector popups to upgrade them", RULED: "there's no upgrade
+for 626, it stops at Green", with design note #1390 giving the player an explicit "no upgrade in this game" receipt
+pinned by `actionReceipt.test.ts:218`). So T-09's `oo1 → oo10-oo17` row is erroneous material, the engine's zero
+facings are **correct**, and no stale metadata exists anywhere in the repo — the only artefact that ever claimed oo1
+successors was the first pass of the Stage-9.1 audit, which its own revision withdraws.
+
+**What remains is oo13.** The errata voids oo13's printed old number (**"should have a number that is NOT 36 —
+neither support site has a number for this tile"**) and supplies no replacement, but it does **not** retract
+`oo13 → oo20`, so that edge stands. The engine offers **zero of 36 facings**, and the cause is now isolated exactly.
+
+*The engine's oo13 geometry is independently authored, not contaminated by historical tile #36.*
+`plusTiles.test.ts:133-137` pins every expanded two-city tile against the owner spec's own edge numbers (0 NE,
+clockwise, via `edge()`), and those assertions **are** the spec: oo13 = cities `{0,2}`/`{3,5}`, oo14 =
+`{0,2}`/`{1,3}`, oo1 = `{0,1}`/`{3,4}`, oo17 = `{0,1}`/`{2,3}`, oo20 = `{0,1,3}`/`{2,4,5}`. So the engine neither
+aliases oo13 to tile #36 nor copies #36's geometry — it defines its own and merely *labels* it with the voided
+number (S9-21).
+
+*Why every facing fails.* Both of oo13's cities are gap-2 pairs (two exits with one edge between). Reduce such a
+tile to one rotation- and reflection-invariant number — the separation between its two cities' gap-centres. oo13's
+is **3 (opposite)**; oo14's is **1 (adjacent)**. Sweeping every synthetic gap-2 two-city source against the engine's
+`#167`: separation **1 → 6 legal facings**, separation **3 → 0**, and `#167` admits separation 1 only. The failure
+is therefore neither a predicate defect nor a facing defect but a **shape disagreement between the oo13 record and
+the oo20 record**, and it is total.
+
+*And it cannot be repaired through `#167`.* Enumerating every two-city partition of a six-exit gray OO and asking
+how many of T-09's eight `ooNN → oo20` edges each can host with the cities kept distinct: **the maximum is 7 of 8,
+six different partitions achieve it, every one of them omits exactly oo13, and the engine's `[[0,1,4],[2,3,5]]` is
+one of the six.** The only partitions that admit oo13 lose between two and five other T-09 edges. **So `#167` must
+NOT be changed** — it already maximises conformance.
+
+*Two mutually exclusive hypotheses remain, and one artefact decides.* **H1:** oo13's shape is wrong in the engine —
+if its true cities are separation-1, the edge gains 6 facings, T-09 reaches 8/8, `#167` stays as it is, and the fix
+is one `cityGroups`/`paths` correction. (T-09's thumbnail weakly favours H1: oo13's circles read as clustered on one
+side of a through-rail while oo14's are separated across a diagonal, and "clustered" is what separation 1 looks
+like — but at ≈70 × 80 px native that is an impression, not evidence.) **H2:** oo13's shape is right and T-09's
+`oo13 → oo20` is further erroneous material like its oo1 row, in which case the engine is already correct and
+nothing is owed.
+
+**REVISION 9.1c — RECLASSIFIED: NOT AN ENGINE DEFECT. Status `RECORDED` (informational), not `OPEN`.**
+Two authorities arrived. (1) The replacement tile sheet is **pages 2-3 of the official errata PDF itself** (headed
+"1830 - Errata Sheet MFG1830-88"), and **oo13's legend prints `oo13 -> oo20`** with roundels **B D G R**; oo14's
+prints `oo14 -> oo20`. (2) The **owner supplied the authoritative physical-tile transcription**: oo13 and oo14 are
+**BROWN** OO tiles, each with **two separate large cities whose systems are not connected**, **oo13 joining edges
+{0,2} and {3,5}**, **oo14 joining {0,2} and {1,3}**, **$50 revenue each**. **The engine matches that transcription
+on every field** — colour Brown, two `DoubleCityHub` cities at one slot each, those exact city groups (in both edge
+conventions), revenue 50. So neither 9.1b hypothesis survives: the edge is official (H2 dead) **and** the engine's
+oo13 geometry is correct (H1 dead).
+
+**The residue is a contradiction between official sources.** oo13's two cities are gap-2 pairs whose gap-centres sit
+**3 apart**; `oo20`/#167's two 3-edge cities offer exactly one gap-2 pair each, at gap-centres **1 apart**; a
+rotation moves both centres together and can never turn 3 into 1. And it cannot be repaired by re-splitting `oo20`:
+enumerating **every** candidate gray-OO geometry — all live-edge sets of size 4-6 crossed with all 2- and 3-city
+partitions, **556 candidates** — **none** hosts all eight of T-09's `ooNN -> oo20` rows with the source cities kept
+distinct. The maximum is **7/8**, every 7/8 candidate omits oo13, and **the engine's current #167 is one of them**.
+The best candidate that does host oo13 reaches only 5/8, losing oo10 (#68), oo12 (#66) and oo17 (#984). The
+degenerate 8/8 escape (a one-edge city plus a five-edge city, i.e. a single effective city) is closed by T-09's own
+`oo20` art, which shows two separate circles.
+
+**Therefore: nothing to implement. Do NOT touch `#167` and do NOT touch oo13.** The engine already implements the
+maximum-conformance reading and preserves every Classic OO upgrade. Recorded for the publisher. If the owner ever
+prefers to honour the correction sheet over T-09's oo10/oo12/oo17 rows, the alternative is costed: re-split `oo20`
+to `{0,2}/{1,3,4,5}` (or an equivalent), gaining `oo13 -> oo20` and losing those three. That is a preference between
+conflicting official rows, not a defect.
+
+*Measured with the confirmed geometry:* **oo14 -> oo20 is legal at 6 of 36 facing pairs** (oo14@0 -> oo20@1, @1->@2,
+@2->@3, @3->@4, @4->@5, @5->@0), all keeping the two cities distinct; **oo13 -> oo20 is legal at 0 of 36**. Across
+the whole reconciled graph — T-09 plus the revised Classic tables plus the correction sheet, minus the errata-voided
+oo1 row — **119 publisher-valid edges, exactly one with no legal facing: `oo13 -> oo20`.**
+
+~~**REVISION 9.1c — THE ART WAS FOUND, AND IT KILLS H2.**~~ The replacement tile sheet is **pages 2 and 3 of the
+official errata PDF itself**, headed "1830 - Errata Sheet MFG1830-88"; 9.1b searched for it as a separate artefact
+and never opened the PDF's own image content. Rendered and read this pass, each corrected tile carries a legend hex
+with its identifier, old number, scenario roundels, upgrade line and set. **oo13's legend prints `oo13 -> oo20`**
+(and oo14's prints `oo14 -> oo20`), with roundels **B D G R** on both. So the upgrade is **affirmed by the
+publisher**, not merely un-retracted: **H2 is dead**, and the remaining explanation for the engine's zero facings is
+that **oo13's `cityGroups`/`paths` do not match the corrected tile (H1)** — an engine catalog defect.
+
+**What is still unread:** the tile's **rails** — which of the six edges runs into which city. The browser pane used
+for the visual pass entered a stuck CSS-scaled zoom state partway through (screenshot timeouts, clicks refused as
+"frame owner is CSS-transformed", scroll acting as zoom), so colour, label, city count and every legend hex were
+read but the track geometry was not. **This is now a rendering-resolution gap, not a source-retrieval gap, and it
+must NOT be converted into an owner ruling.** It closes in one step: save the errata PDF into a connected folder and
+render pages 2-3 with `pdftoppm` at 300-600 dpi, as the 48-page rulebook was rendered in the first pass. The sheets
+are vector art with a real text layer, so the rails will resolve cleanly. It blocks one item inside Slice 9.3 and nothing else; Slice 9.2 is unaffected. The deciding test, once the
+page is rendered: read oo13's two cities' exits off the tile and compute the separation between their gap-centres —
+**1 means the expected H1 fix** (correct `cityGroups`/`paths`, expect 6 legal facings, leave `#167` alone);
+**3 would mean official material contradicts itself**, since the same sheet prints the upgrade, and that is then a
+genuine STOP rather than a catalog edit.
+
+Replay: **corpus-neutral either way.** JUNO-Z6C 399 lays oo13 on E5 and never upgrades it, but that lay is already
+illegal for the #59 reason (S9-19), so S9-16's outcome does not change that log's fate. Related durable fix, owed in
+the same slice: a standing catalog invariant test — *every upgrade edge that survives reconciliation has at least
+one legal facing* — which would have caught this the day the tile was added.
+
+**S9-17. Rule 7.2.2 ❹ — station anchoring and slot capacity — is enforced only in the shell.**
+Status `OPEN` (found by Stage 9.1, 2026-09-18; audit §12 / §13, finding F-5). `utils/stationConnectivity.ts`
+(design note #878) implements the rule correctly and in the rulebook's own terms — a token is anchored to its **edge
+set**, not its city index, and `fitStationsToUpgrade(anchors, candidateCities, slots)` returns `null` for a facing
+that strands any token **or overfills any city** (#1315). ERIE falls out of it rather than being special-cased: a
+tokenless token has no edges, so ❹ is vacuous and every facing stays legal, and by the brown upgrade it is
+constrained like everyone else. But `planTokenUpgrade` gates **`legalRotations`, a `useMemo` in `App.tsx:10797`** —
+whose own design note #879 says in so many words *"SO THE FILTER IS PART OF LEGALITY, not a courtesy"* — and it is
+**not** in `layRefused` (`operatingIdentityRefusal ‖ authoritativeHoldRefusal ‖ filterSandboxPlacements`), nor in
+`replayProviders.layRefused`, which is `filterSandboxPlacements` alone. So the reducer accepts whatever
+`token_cities` a message carries, clamps out-of-range indices (#1315) and never checks that a token's new city
+carries its old connections or has room; a replay re-validates the tile and the facing but not the token landing.
+The only shipped edge where capacity can shrink is `#592 → #61` (S9-10's exception manifest), so the live exposure
+is narrow — but this is **the same pattern as S9-1** (`YellowSignEvent` client-authoritative), and the two want the
+same discipline. Fix: call the existing pure function from the authority; the shell keeps calling it for the rotate
+gesture. Replay: **refusal-added, corpus-neutral** (§14: every stored token landing is edge-consistent and
+single-token).
+
+**S9-18. Level Playing Field is missing T-02's printed straight track at M-11.**
+Status `OPEN` (found by Stage 9.1, 2026-09-18; audit §5 / §10, finding F-6). Printed Scenario D places seven board
+tiles (T-02, p. 45; S-1.1 ❷, p. 34): Coal River L-8, the five warehouses M-13 / L-2 / F-2 / A-11 / B-24, and
+**"Straight Track (30g) … use an A-1 tile" at M-11** — A-1 being old **#9**. The engine models the first six
+(`COAL_RIVER_*`, `LPF_WAREHOUSES`) and **not the seventh**: `LPF_BOARD` carries no `printedTile` on any hex, and
+M11 is the expansion's bare `hex("M11", { type: "Plain" })`. The tile would join **M9 ↔ M13** (M11 is (-1,12); M13's
+printed W stub faces M11's E edge, and M11's W edge faces M9), i.e. a printed rail into the Deep South that the
+variant assumes. The mechanism already exists — design note #1301's `printedTile`, realised by `initialGridFor` as a
+`MapTileEntry` flagged `printed`, which every reader including rule 5 and `tileSupply` handles correctly (the
+expansion's green #24 at H12 is the precedent). Verify the facing against the rendered board before committing.
+Replay: **acceptance-changing for LPF** (a rail exists that did not), so this is the change in Slice 9.2 that forces
+the version bump. Note also that the rulebook cites "Table T-01 on p. 44" for board tiles when they are in T-02 on
+p. 45 — a rulebook typo, recorded so it is not chased.
+
+**S9-19. #59's two pre-printed exits may never be connected by an upgrade, and seven accepted facings break that.**
+Status `OPEN` (filed at Stage 9.1 revision 9.1b, 2026-09-18; `STAGE9_TILE_TOPOLOGY_AUDIT_2026-09-18.md` §8a/§8b).
+**PRINTED RULE, not an owner decision.** 2018 revised rulebook §6.2.2 ❹, verbatim: "When a tile is replaced, all
+stations on the replaced tile must be placed on the new tile with the same connections as before. **This also means
+that the pre-printed exits on a (59) tile can never be connected in the tile upgrade.**" The first pass filed this
+as S9-10's open ambiguity purely because it had no copy of the revised book; the clause names #59 explicitly.
+
+*What is wrong today.* `preservesRouting` has no notion of which city an exit lands in — by design, since a hub is
+mirrored as its full pairwise expansion — and #59's two exits are encoded as self-loops (`paths: [[0,0],[2,2]]`)
+whose terminus relaxation (design note #676, correct and load-bearing) is satisfied by the edge merely surviving.
+So a facing that puts both exits in ONE city of the brown tile reads as an *addition* and passes. Measured from
+`#59 @0` over all six facings of each successor, the illegal-but-accepted pairs are **#67@4, #65@2, #64@0,
+oo13@1, oo13@4, oo14@1, oo14@2** — seven in all.
+
+*What it does not cost.* All five of the revised book's successors (`59 (2) → 64, 65, 66, 67, 68`) keep **at least
+two legal facings** each: #68 @{2,5}, #67 @{0,2}, #66 @{0,5}, #65 @{0,4}, #64 @{2,4}, and #984 @{1,2} on the
+expanded side. Nothing becomes unreachable, so this is a pure over-acceptance defect. oo13 and oo14 are reachable
+from #59 *only* through illegal facings — i.e. not at all — which is exactly consistent with the errata voiding both
+of those tiles' identities, and means T-09's `oo2 → oo10-oo17` range over-reaches by precisely those two.
+
+*Implementation note.* This wants the general form, not a `if (source === 59)` branch: the predicate needs to know,
+for each pre-existing city, which candidate city carries its exits — which is the same question
+`stationConnectivity.fitStationsToUpgrade` already answers for tokens (design note #878's edge-set anchor). Land it
+with S9-17 so one mechanism serves both halves of ❹, the track half and the station half.
+
+Replay: **refusal-added, and NOT corpus-neutral** — three stored transitions become illegal, all with exactly one
+token on the hex (so the *station* half of ❹ was satisfied every time; the violation is the track half):
+**JUNO-FCJ 640** (E11, `#59@5 → oo14@0` — no legal facing of oo14 exists), **JUNO-FCJ 1047** (E5,
+`#59@4 → #65@0` — a bad facing; `#65 @2` and `@4` were both legal), **JUNO-Z6C 399** (E5, `#59@4 → oo13@2` — no
+legal facing of oo13 exists). Two logs to re-pin and a version bump owed with Slice 9.2/9.3.
+
+**S9-20. ~~oo13 and oo14 carry revenue 50; the official errata records 40 for each.~~ WITHDRAWN — NOT A DEFECT.**
+Status `OPEN` (filed at revision 9.1b, 2026-09-18; audit §5b). The errata's *Tile Numbering — Older* section, in the
+same breath as voiding each tile's old number, adds "**(it has a vaue of 40 rather than 50)**" for oo13 and
+"**(it has a value of 40 rather than 50)**" for oo14. The engine has `revenue: 50` for both, pinned at
+`plusTiles.test.ts:160`. This is the same 50 → 40 family as the errata's C15 (#63) item — "The C15 (63) tiles have
+the wrong value. The value should be 40, instead of 50" — which the engine **already** honours with `revenue: 40`,
+so the pattern is established and two of three are wrong. The errata does **not** name oo17 (#984), whose 50 stands.
+
+*Honest caveat on the grammar.* The oo13/oo14 notes are phrased as observations rather than the imperative the C15
+entry uses. Two readings: (i) value errata in the C15 family — the reading recommended here, three tiles in one
+document about one tile sheet and one wrong number; or (ii) *distinguishing remarks* identifying which physical tile
+is meant, given that no old number does. **Both readings put the printed value at 40**; they differ only in
+certainty. One line of owner confirmation would close it, and the same replacement tile sheet S9-16 needs would
+settle it outright.
+
+**REVISION 9.1c — WITHDRAWN. Status `NOT A DEFECT`.** The owner's authoritative physical-tile transcription gives
+**$50 revenue for both oo13 and oo14**; the errata's corrected tile art shows 50; the engine has `revenue: 50` for
+both, pinned at `plusTiles.test.ts:160`. **The engine is correct and nothing is owed** — no value change, no test
+move, no log re-pinned. The errata's parenthetical "(it has a value of 40 rather than 50)" is a *distinguishing
+remark* attached to a tile that has no old number, and it is inaccurate; it is **not** a value correction in the
+sense the C15 (63) entry is ("The value should be 40, instead of 50", an instruction the engine already honours).
+The original reasoning is retained below only to show how the earlier reading arose.
+
+~~**REVISION 9.1c — CONTESTED, DO NOT ACT.**~~ The errata's correction tile sheet was rendered this pass and the
+corrected **oo13** and **oo14** faces each show a **"50"** value roundel in frame, while the corrected **oo11 (67)**
+and **oo16 (64)** beside them each show **two** roundels, one per city, both 50 — which is how an OO tile is badged.
+So either the errata's parenthetical is a *distinguishing remark* rather than a correction, or the roundel seen was
+the second city's. The sheet's only explicit value instruction names a different tile ("40 value added to 1830+ side
+of all four C15 tiles") and is phrased as an instruction, which the oo13/oo14 parentheticals are not. **Resolve by
+reading both roundels on both tiles from the same render S9-16 needs, before changing any number.**
+
+Replay, if it does become 50 → 40: **arithmetic, not legality** — both tiles sit on boards that ran to the end
+(oo14 on JUNO-FCJ E11, oo13 on JUNO-Z6C E5), so the change would alter recorded route revenue there; land it with
+S9-19, which re-pins the same two logs.
+
+**S9-21. Three tiles are keyed on old numbers the official errata voids.**
+Status `OPEN` (filed at revision 9.1b, 2026-09-18; audit §2b). Corrected project convention: **do not canonize an
+old number the errata voids.** Where a corrected old number exists it becomes canonical and the printed one a
+deprecated alias; where the errata voids the number and offers no replacement, the **Lookout ID** is canonical.
+
+| Lookout ID | Canonical | Deprecated alias | Errata basis |
+|---|---|---|---|
+| oo1 | **#8861** | ~~#626~~ | "oo1 (626) should be oo1 (8861) according to one website supporting the older numbering system" |
+| oo13 | **oo13** | ~~#36~~ | "should have a number that is NOT 36 — neither support site has a number for this tile" |
+| oo14 | **oo14** | ~~#35~~ | "should have a number that is NOT 35 — neither support site has a number for this tile" |
+
+The engine keys all three on the deprecated aliases — `TILE_CATALOG` `tileId: 626 / 36 / 35`, and every tray, test,
+artwork and marker table off those. **Behaviourally inert today**: the ids are opaque unique handles and no rule
+reads them as old 18xx numbers. It is a naming-authority debt, and the cheap fix is a canonical record plus
+**input aliases** (`"626"` resolving to the oo1/#8861 record), not a rename of a dozen tables. Audit §2b classifies
+every one of the repo's 34 `626` occurrences (topology source · display · test · unrelated colour string
+`#262626` · unrelated design-note number). Replay: none. **Do not implement before Slice 9.3.**
 
 **S9-11. The Blood Price landing is not stamped as an arrival.**
 Status `OPEN` (found by Slice 8.1, 2026-09-16; Yellow Sign / Unpredictable Revenue only). `applySandboxMarketAction`'s

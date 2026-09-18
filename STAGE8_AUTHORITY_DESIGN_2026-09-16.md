@@ -1576,7 +1576,7 @@ measurement).
 | **8.2** Home station authority | S8-5, S8-6, S8-12, S8-13, S8-14 | #1610–#1617 | **`efe4098`** |
 | **8.3** Presidency transfer | S8-2, S8-15, S9-14 | #1620, #1622, #1624 | **`02a9838`** |
 | **8.4** M&H exchange authority | S8-10 | #1630–#1634 | **`fc5a575`** |
-| **8.5** Stage-8 closure | the 5 → 6 bump, S8-8's residual, the closure matrices | #1640 | **uncommitted — awaiting the owner's review and full-suite gate** |
+| **8.5** Stage-8 closure | the 5 → 6 bump, S8-8's residual, the closure matrices | #1640 | **`0b23b1e`** |
 
 Baseline for every measurement in this document: **`7c5f29c`** (Batch 7, the commit before Slice 8.1).
 

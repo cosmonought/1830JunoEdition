@@ -143,6 +143,10 @@ import {
   legalHomeTargets,
   owedHomeStation,
 } from "./homeStationAuthority";
+/* Design note #1660 (Stage 9, Slice 9.4b, S9-12): the D&H's own legality, asked here exactly as
+   `homePlacementRefusal` is asked above -- the same predicate ingress asks, so a message that reaches this
+   reducer by any path meets the same law. */
+import { dhStationRefusal } from "./dhStationAuthority";
 import { dividendRefusal, dividendRefused } from "./dividendGate";
 import { operatingIdentityRefusal } from "./operatingIdentity";
 import { stationPlacementRefusal } from "./stationPlacementGate";
@@ -3320,6 +3324,13 @@ function applySandboxActionCoreJudged(
   if (isPlaceHomeStationMsg(msg) && msg.PlaceHomeStation.kind !== "dh" && ctx?.homeHexToAxial) {
     if (homePlacementRefusal(state, msg.PlaceHomeStation, ctx.mapGrid, ctx.homeHexToAxial) !== null) return state;
   }
+  /* Design note #1660 (S9-12): the D&H's free station is judged here too, for #1611's own reason -- refusing
+     only inside the arm would have let a refused placement's message still reach whatever runs after it in
+     this function, on a board the placement never actually touched. `dhStationRefusal` is the SAME predicate
+     `placeDhFreeStationToken` asks below and ingress asks at the socket. */
+  if (isPlaceHomeStationMsg(msg) && msg.PlaceHomeStation.kind === "dh") {
+    if (dhStationRefusal(state, msg.PlaceHomeStation, ctx?.mapGrid) !== null) return state;
+  }
 
   /* ==================================================================
       DESIGN NOTE 1570: THE STOCK TRANSACTION IS JUDGED HERE, FOR #1019's REASON (Batch 7.2)
@@ -3663,8 +3674,11 @@ function settleOperatingCursor(
        the fog is now the third step of the revenue sequence and takes it on a RUN, where it can be narrated
        and can ring. What survives at this boundary is `expireGhostTrains` -- the limit exemption, which is a
        per-Operating-Round grace and has nothing to do with the doom clock. */
-    if (settled.operating_sub_phase === undefined) return settled;
-    return { ...settled, operating_sub_phase: undefined };
+    /* Design note #1660 (S9-12): the D&H's window is exactly as turn-scoped as the sub-phase it rides
+       beside, and closes at the same boundary -- leaving the Operating Round entirely ends any turn that was
+       in progress. */
+    if (settled.operating_sub_phase === undefined && settled.dh_station_pending === undefined) return settled;
+    return { ...settled, operating_sub_phase: undefined, dh_station_pending: undefined };
   }
 
   const turnChanged =
@@ -3786,6 +3800,11 @@ function settleOperatingCursor(
       ...after,
       public_companies: cleared,
       operating_sub_phase: openingSubPhase(after),
+      /* Design note #1660 (S9-12): the turn that opened the D&H's free-station window is over -- cleared
+         beside `operating_sub_phase` for the same reason every other turn-scoped fact in this function is
+         cleared here rather than left to expire on its own. A corporation that laid F16 and let its turn end
+         without placing the token needs an ordinary, connected station there from now on. */
+      dh_station_pending: undefined,
     };
   }
 
@@ -4647,7 +4666,9 @@ function applyOneAction(
       kind,
     } = msg.PlaceHomeStation;
     // Design note #1615: the D&H's free station shares this message and is not a home placement.
-    if (kind === "dh") return placeDhFreeStationToken(state, companyId, q, r, cityIndex ?? null);
+    if (kind === "dh") {
+      return placeDhFreeStationToken(state, companyId, q, r, cityIndex ?? null, ctx?.mapGrid);
+    }
     return placeHomeStationToken(state, companyId, q, r, cityIndex ?? null, ctx.homeHexToAxial, ctx.mapGrid);
   }
 
@@ -5148,6 +5169,11 @@ function applyOneAction(
        power and a silent substitution is the kind of divergence #891 records. */
     const abilityKey = (msg.LayTile as { ability_key?: unknown }).ability_key;
     const jkLay = abilityKey === JK_TILE_ABILITY_KEY;
+    /* Design note #1660 (S9-12): THE D&H'S OWN LAY OPENS THE FREE STATION'S WINDOW. `used_private_abilities`
+       already marks `dh-tile` spent for good; this is the separate, turn-scoped fact `dhStationAuthority.ts`
+       reads to tell "laid, and this is still that turn" from "laid, sometime" -- see design note #1660 on
+       `dh_station_pending` in `gameState.ts`. */
+    const dhLay = abilityKey === "dh-tile";
     if (jkLay && jkTileRefusal(state, protocol_id, q, r) !== null) return state;
     const fullFee = terrainFeeDue(state.terrain_fees_paid, q, r, terrainBuildFeeAt);
     const fee = jkLay ? jkHalfFee(fullFee) : fullFee;
@@ -5281,9 +5307,13 @@ function applyOneAction(
        The legality and affordability gates above are untouched: the fee is still the authoritative
        `terrainFeeDue`, still charged once per hex (#723), and a corporation that cannot pay still may not
        build. A refused transfer refuses the WHOLE lay -- `state`, not `merged` -- which is #891's own rule. */
-    if (fee <= 0) return merged;
+    /* Design note #1660 (S9-12): the window opens on this same return, win or lose the fee -- a mountain
+       lay with a $0 terrain cost is still a lay. */
+    const withDhWindow = (s: GameStateResponse): GameStateResponse =>
+      dhLay ? { ...s, dh_station_pending: protocol_id } : s;
+    if (fee <= 0) return withDhWindow(merged);
     const paid = transfer(merged, { corporation: protocol_id }, BANK, fee);
-    return paid.ok ? paid.state : state;
+    return paid.ok ? withDhWindow(paid.state) : state;
   }
 
   if ("BuyHardwareFromPool" in msg) {
@@ -6258,20 +6288,33 @@ export function placeHomeStationToken(
    token's own comment says "several readers take as the home station", and a two-home corporation's D&H station
    was refused outright by #1325's "a two-home corporation's token goes on one of its homes" (the Level Playing
    Field's C&O could never use the power). Neither is a D&H rule. The D&H's rules are its own (`dhPower.ts`:
-   the D&H's hex, the owning corporation, once, at its Lay Track step; the owner at ingress); this arm keeps the
-   two state checks the shared arm applied to it -- a floated corporation, not already on the hex -- APPENDS the
-   token, and charges nothing. Ordering only: `stationTokensOf`, the gates and the route search read the token
-   set, not its order, so the move changes no rule. The home slot stays the home's. */
+   the D&H's hex, the owning corporation, once, at its Lay Track step; the owner at ingress); this arm APPENDS
+   the token and charges nothing. Ordering only: `stationTokensOf`, the gates and the route search read the
+   token set, not its order, so the move changes no rule. The home slot stays the home's.
+
+   DESIGN NOTE 1660 (Stage 9, Slice 9.4b, S9-12): AND NOW THE D&H'S OWN CONDITIONS ARE ASKED, NOT ASSUMED.
+   This arm used to check only what the shared home arm happened to check -- a floated corporation, not
+   already on the hex -- which is silent about the D&H's OWN rules entirely (its hex, the owning corporation,
+   once, and the same-turn timing the base game's rule states). `dhStationRefusal` is that predicate, asked
+   here exactly as `placeHomeStationToken` asks `homePlacementRefusal`, so a message that reaches this arm by
+   any path -- ingress, a replay, a direct call -- meets the same law. On success the turn's window closes
+   (`dh_station_pending: undefined`) rather than waiting for the next turn change to clear it: the power is
+   spent, and a stale pointer naming a company that can never use it again is a fact worth not leaving lying
+   about, even though nothing unsafe would read it before then. */
 export function placeDhFreeStationToken(
   state: GameStateResponse,
   companyId: number,
   q: number,
   r: number,
   cityIndex: number | null = null,
+  /** #757: the board-dependent legality arms are not asked without a grid; a caller with none gets the
+   *  pre-Slice-9.4b answer (floated, not already there) rather than a token invented on a board this arm
+   *  cannot see. */
+  mapGrid?: MapGridResponse,
 ): GameStateResponse {
-  const company = state.public_companies.find((entry) => entry.company_id === companyId);
-  if (!company || !company.is_floated) return state;
-  if (company.station_token_hexes.some(([hq, hr]) => hq === q && hr === r)) return state;
+  if (dhStationRefusal(state, { company_id: companyId, q, r, city_index: cityIndex }, mapGrid) !== null) {
+    return state;
+  }
   return {
     ...state,
     public_companies: state.public_companies.map((entry) =>
@@ -6287,6 +6330,7 @@ export function placeDhFreeStationToken(
           }
         : entry,
     ),
+    dh_station_pending: undefined,
   };
 }
 

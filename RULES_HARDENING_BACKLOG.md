@@ -925,7 +925,7 @@ E11, PMQ E5); connectivity is not asked; the message's coordinates are judged, n
 pinned as authority (`homeStationLpf.test.ts`, the brief's 16 C&O points); N&W is a fixed home at Norfolk L16; LPF prices
 the home $0 and every later ordinary station $100, Classic unchanged. The D&H's `kind: "dh"` station is judged by neither
 this predicate nor the home slot (#1615: appended, free) — which incidentally lets the LPF C&O use the D&H power #1325's
-two-home check used to refuse. The D&H's own rules are not re-judged at either lock (S9-12).
+two-home check used to refuse. The D&H's own rules are not re-judged at either lock (S9-12; **RESOLVED** by Slice 9.4b, 2026-09-19).
 
 **S8-7. No "no sales in the first Stock Round" rule in the reducer.**
 Status `RESOLVED` — Batch 7.2 (#1570): `stockSaleRefusal` rule 3, `isFirstStockRound(state)` =
@@ -2116,17 +2116,90 @@ to bump collectively with the rest of Stage 9's closure as already planned.
 *UI/readiness.* None owed — the chart already reads `enteredAt` off `market_positions` for every other mover;
 nothing downstream needed changing.
 
-**S9-12. The D&H's free station is not judged by the D&H's rules at either lock.**
-Status `OPEN` (found by Slice 8.2, 2026-09-16, by reading the code; pre-existing). `PlaceHomeStation{kind: "dh"}` is
-refused at ingress only for the wrong actor (the corporation's president and the D&H's owner, `turnAuthority.ts`), and
-the reducer's arm (`placeDhFreeStationToken`, #1615) checks only that the corporation is floated and not already on the
-hex. The D&H's own conditions — the D&H's hex (F-16), the owning corporation, once, and the base game's rule that a
-station not placed on the turn the D&H tile is laid needs an ordinary legal route (Table T-05 / the DH description, p.
-47) — live in `dhPower.ts` for the prompt but are asked at neither lock, so a hand-crafted entry could place a free
-station for the D&H's owner's corporation anywhere. Unreached in play (the shell only offers the legal placement) and in
-the corpus (one `kind: "dh"` entry, 3XD 115, already refused by identity). Repair: a `dhStationRefusal` asked by the arm
-and by ingress. Replay: refusal-added on crafted entries — bump with Stage 9.
+**S9-12. The D&H's free station is not judged by the D&H's rules at either lock.** `RESOLVED` (Stage 9, Slice
+9.4b, 2026-09-19). Was `OPEN` (found by Slice 8.2, 2026-09-16, by reading the code; pre-existing). `PlaceHomeStation{kind:
+"dh"}` was refused at ingress only for the wrong actor and by the reducer's arm (`placeDhFreeStationToken`, #1615) only
+for an unfloated corporation or a repeat placement on the hex; the D&H's own conditions -- its hex (F16), the owning
+corporation, once, and the base game's rule that a station not placed on the turn the D&H tile is laid needs an
+ordinary legal route (Table T-05 / the D&H description, p. 47) -- lived in `dhPower.ts` for the prompt only and were
+asked at neither lock.
 
+*Correction to the original finding.* The ingress owner check this entry described ("refused... for the wrong actor...
+and the D&H's owner") was not merely incomplete, as filed -- it was structurally unable to pass. It compared the acting
+PLAYER against `private_companies[DH].owner`, the private's player-owner field; `owner` and `owner_protocol_id` are
+mutually exclusive (`gameState.ts` #379), and the D&H's power belongs to "the owning CORPORATION" (`dhPower.ts`'s own
+description), which is only a real state once `owner_protocol_id` is set and `owner` is `null`. So the one check
+ingress asked could never pass for the only board the power is meant to work on -- a legitimately corporation-owned
+D&H reads `owner: null`, and `null !== actor` refused every actor there was. This is confirmed, not merely inferred:
+the corpus's one `kind: "dh"` entry (3XD 115) already replayed as refused under the pre-9.4b code, and it was refused
+by this broken check rather than because the free station was actually illegal there.
+
+*Repair.* One predicate, `dhStationRefusal` (`gameEngine/dhStationAuthority.ts`, design note #1660), asked identically
+by the reducer's arm and by ingress (`turnAuthority.ts`'s `turnRefusal` room-message branch), covering: the target hex
+(F16 only); the D&H in play; ownership (the owning CORPORATION via `owner_protocol_id`, never the retired
+player-`owner` check); floated; the acting corporation's own operating turn (`operatingCorporationId`); not already on
+the hex (an idempotent signal, kept ahead of the lay/lapse check below for the reason noted next); the lay taken and
+not lapsed (`dhPower.ts`'s own `dhPowerState`, asked for `forfeited` and the lay only -- deliberately never for
+`tokenAvailable`, whose `used_private_abilities` "dh-token" input is marked by the reducer's own pre-arm bookkeeping
+(#1204) before this predicate's own caller runs, which would otherwise make a first, legal call see its own
+in-progress placement as an illegal repeat; `station_token_hexes` is the non-self-referential substitute); the same
+operating turn as the lay, via a new turn-scoped state field, `dh_station_pending` (`gameState.ts` #1660, written by
+the `LayTile` arm the instant the D&H's own lay succeeds and cleared everywhere `operating_sub_phase` itself is, for
+the same reason #1183's `last_run_turn_key` and #1204's `used_private_abilities` needed to travel in state rather
+than client memory); and, once a grid is available, the city's allowance, existence, occupancy and every reservation
+via Stage 9.2's own `evaluateStationPlacement`, with connectivity the one printed exemption -- a caller's opt-in
+(`skipConnectivity`, `stationTokens.ts` #1660) rather than a duplicate city-remapping algorithm, asked last and only
+after every other question above already holds, so the exemption cannot travel anywhere the printed rule did not put
+it. `$0` station cost is untouched by the terrain lay's own `$120` mountain fee, which `LayTile`'s arm still charges
+exactly as before; the two were already separate and stay separate.
+
+*Tests.* `frontend/src/utils/dhStationAuthority.test.ts` (new; 19 tests): the full LEGAL/REFUSE matrix -- wrong hex, D&H
+not in play, non-owning corporation, player-owned D&H, not floated, not the operating turn, repeat use, forfeited,
+lay not yet taken, timing (lay taken, not this turn), a malformed city index, no city capacity, no token available
+(allowance exhausted), and a hand-crafted unknown-corporation message -- every refusal asserted by its sentence AND by
+`stateDigest` equality (no mutation on refusal) at BOTH locks, plus controls proving the connectivity exemption fires
+for the D&H and does not leak into an ordinary `PlaceStationToken` on the same hex, and that the pre-9.4b no-grid
+answer still stands (#757). `homeStationAuthority.test.ts`'s existing #1615 describe block updated for the new
+predicate (added a tile-57 F16 grid, `used_private_abilities`/`dh_station_pending` fixtures) plus a second test for
+the no-grid caller; `turnAuthority.test.ts`'s D&H case rewritten to pin its assertion through the real
+`dhStationRefusal` predicate rather than the retired `withOwner`-based check. All three suites pass (79 combined).
+Mutation-tested: each of the hex, ownership, forfeit/lapse, repeat-use, timing and capacity/allowance checks was
+disabled one at a time in `dhStationAuthority.ts` and the matching test(s) failed as expected, then the file was
+restored byte-for-byte (`md5sum` verified) before continuing.
+
+*Regression.* Directly implicated suites re-run clean, unrelated to the four owner-excluded test files: `dhPower.test.ts`,
+`dhStationPrompt.test.ts`, `dhTokenStep.test.ts`, `freeStationAutoStage.test.ts`, `stationLegality.test.ts`,
+`stationConnectivity.test.ts`, `stationCityReach.test.ts`, `stationTokenWall.test.ts`, `stationVeil.test.ts`,
+`stationSlotPreview.test.ts`, `homeStationLpf.test.ts`, `homeStationWait.test.ts`, `operatingIdentity.test.ts`,
+`operatingCursorReplay.test.ts`, `terrainFeeOnce.test.ts`, `terrainAffordability.test.ts`, `privateErrand.test.ts`,
+`privatePowerFlow.test.ts` (294 combined) plus `replayGolden.test.ts` and `replayJuno3XD.test.ts` (9 combined) -- 382
+tests total across the touched/implicated suites, all green. `npx tsc --noEmit` clean throughout.
+
+*Corpus.* The same 18-file canonical assembly S9-11 measures against (`golden/*` (3) + `server/data/*.log.jsonl` (8) +
+`frontend/sandbox-log-JUNO-*.json` (5) + `JUNO-FCJ-prefix96.log.jsonl` (1) + the Z6C 494-entry fixture (1), 4,105
+entries). Exactly one `kind: "dh"` entry in the whole corpus: `export/JUNO-3XD` idx 115. That entry's preceding
+`LayTile` (idx 114, `protocol_id: 7`, tile #57 on F16) predates the `ability_key` instrumentation (#1204/#1237)
+entirely and carries no such field, so replaying it under the current reducer never marks `used_private_abilities`
+with `"dh-tile"` -- but this is not itself the reason idx 115 no-ops under the new predicate: replayed forward, corp 7
+(NNH) is `is_floated: false` and outside `active_operating_order` at that point in this log (a pre-existing,
+already-diverged replay under earlier stages' stock/float authority -- NNH never floats anywhere in this replay, confirmed
+by `replayJuno3XD.test.ts`'s own printed cursor), so the PRE-9.4b arm's own `is_floated` check already refused this
+exact placement for an unrelated reason, before Slice 9.4b existed. S9-12 adds no new refusal here: idx 115 was
+already a no-op, and remains one. `replayGolden.test.ts` (none of its 3 golden logs contain a `kind: "dh"` entry) and
+`replayJuno3XD.test.ts` both pass unchanged.
+
+*Bump.* Replay-semantic in principle (a corpus game that legally exercised the D&H's free station under the old,
+under-checked locks could in principle replay differently) but the corpus contains no such game -- the one `kind: "dh"`
+entry was already a no-op before this slice, for reasons this slice did not touch. `RULES_ENGINE_VERSION` stays 6, to
+bump collectively with the rest of Stage 9's closure as already planned.
+
+*UI/readiness.* `LEGALITY SYNC`. The shell's own D&H prompt (`dhStationPrompt.ts` / `dhFreeStationAvailableFor`,
+#1237) already derives its "is the free station available" answer from the same `dhPowerState` machine this predicate
+reads, and already only ever offers the placement on F16, on the owning corporation's own turn, right after its own
+lay -- so ordinary play was never able to reach any of the newly-enforced refusals in the first place, and nothing in
+the derived-action loop or the prompt's own copy needs to change. Filed here rather than skipped only because a
+LEGALITY SYNC entry is owed whenever a lock gains a check that was not there before, per the Part C standing rule --
+there is no follow-up task attached.
 ### Stage 10 — Replay / settlement / release hardening
 
 **S10-1. Refusal transport.** A reducer refusal is an identity no-op that `RoomSession.submit` still answers

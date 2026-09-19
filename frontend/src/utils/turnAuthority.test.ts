@@ -333,21 +333,42 @@ describe("each room message has an owner, #1249", () => {
     expect(refusal(board(), BOB, { SetBoPar: { player: BOB, par_value: "100" } })).toBeNull();
   });
 
-  it("PlaceHomeStation: the corporation's president; the D&H's owner for a D&H token", () => {
+  it("PlaceHomeStation: the corporation's president; the D&H's own legality for a D&H token (#1660, S9-12)", () => {
     const presided = withPresident(board(), 1, BOB);
     const home = { PlaceHomeStation: { company_id: 1, q: 0, r: 0, kind: "home", city_index: null, hex_label: "H12" } };
     /* Slice 8.2 (#1611, S8-6): past the owner, a HOME placement meets its legality at the lock -- the same predicate
        the reducer asks -- so the president's message on this Stock Round board is answered with that sentence
-       rather than appended and no-op'd. Was `toBeNull()`, when this branch asked the owner and nothing else. The
-       D&H token below keeps its owner check alone (#1615). */
+       rather than appended and no-op'd. Was `toBeNull()`, when this branch asked the owner and nothing else. */
     const { homePlacementRefusal, boardHomeHexToAxial } = require("../gameEngine/homeStationAuthority") as typeof import("../gameEngine/homeStationAuthority");
     const legality = homePlacementRefusal(presided, home.PlaceHomeStation, undefined, boardHomeHexToAxial);
     expect(legality).not.toBeNull();
     expect(refusal(presided, BOB, home)).toBe(legality);
     expect(refusal(presided, ALICE, home)).toBe("Only PRR's president places its station.");
-    const dh = { PlaceHomeStation: { company_id: 1, q: 0, r: 0, kind: "dh", city_index: null, hex_label: "F16" } };
-    expect(refusal(withOwner(presided, 3, ALICE), BOB, dh)).toBe("Only the Delaware & Hudson's owner can use its free station.");
-    expect(refusal(withOwner(presided, 3, BOB), BOB, dh)).toBeNull();
+
+    /* ==================================================================
+        DESIGN NOTE 1660 (S9-12): THE D&H TOKEN NO LONGER KEEPS ITS OWNER CHECK ALONE
+       ==================================================================
+       Past the president, a D&H token now meets the D&H's OWN legality at this lock too -- the same predicate
+       the reducer's arm asks (`dhStationRefusal`) -- rather than the bare `return null` #1615 left here.
+       THE CHECK THIS REPLACES WAS ALREADY WRONG, not merely incomplete: `roomMessageRefusal` used to compare
+       the ACTING PLAYER against `private_companies[DH].owner`, the private's PLAYER-owner field. `owner` and
+       `owner_protocol_id` are mutually exclusive (`gameState.ts` #379), so a legitimately corporation-owned
+       D&H reads `owner: null` and the old check refused every actor there was -- it could never once pass on
+       the only board the power is meant to work on. `withOwner`, which only ever set that player field, is
+       retired from this case for exactly that reason; a real D&H legality now needs `owner_protocol_id`, an
+       operating turn and the turn-scoped window `dh_station_pending` records, none of which this lightweight
+       board builds -- so, as with the HOME case just above, the assertion is pinned THROUGH the real
+       predicate rather than restating a sentence of its own (#1184's shape, avoided). */
+    const { dhStationRefusal } = require("../gameEngine/dhStationAuthority") as typeof import("../gameEngine/dhStationAuthority");
+    const { STATIC_BOARD_HEXES } = require("../components/hexBoardData") as typeof import("../components/hexBoardData");
+    const f16 = STATIC_BOARD_HEXES.find((hex: { label: string }) => hex.label === "F16")!;
+    const dh = { PlaceHomeStation: { company_id: 1, q: f16.q, r: f16.r, kind: "dh", city_index: null, hex_label: "F16" } };
+    const dhLegality = dhStationRefusal(presided, dh.PlaceHomeStation, undefined);
+    // PRR does not own the D&H on this board and is not the operating corporation either -- not legal yet.
+    expect(dhLegality).not.toBeNull();
+    expect(refusal(presided, BOB, dh)).toBe(dhLegality);
+    // The president gate still stands ahead of the D&H's own legality, exactly as for a home placement.
+    expect(refusal(presided, ALICE, dh)).toBe("Only PRR's president places its station.");
   });
 
   it("ExchangePrivate: the private's owner, named in the message", () => {

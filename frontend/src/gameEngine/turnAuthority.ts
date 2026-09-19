@@ -45,7 +45,10 @@ import { actingAddress } from "./gameState";
 import { isSandboxOnlyMsg } from "./gameSetup";
 import type { GameplayExecuteMsg } from "../utils/sessionKey";
 import { BO_PRIVATE_ID, BO_TICKER } from "./gameConstants";
-import { DH_PRIVATE_ID } from "./dhPower";
+/* Design note #1660 (Stage 9, Slice 9.4b, S9-12): the D&H's OWN legality -- its hex, the owning corporation,
+   once, and the same-turn timing the base game's rule states -- the same predicate the reducer's arm asks, so
+   ingress and the arm cannot disagree about a D&H free-station refusal. */
+import { dhStationRefusal } from "./dhStationAuthority";
 import { effectiveActions, type RevertableAction } from "./logRevert";
 import { pendingDiscardBlock, pendingTrainDiscards } from "./trainDiscard";
 import {
@@ -278,10 +281,12 @@ export function turnRefusal(input: TurnAuthorityInput): string | null {
     /* #1611 (Slice 8.2, S8-6): the home placement is the other legality question in this family a socket
        boundary should answer -- owed now, on a candidate home, in a legal circle -- because the alternative is a
        placement the player believes landed and the reducer quietly declined. The owner rule above stays first.
-       The D&H's free station is not a home placement (#1615) and keeps its owner check alone. */
+       #1660 (S9-12): the D&H's free station is not a home placement (#1615) and is no longer exempted here
+       either -- it gets the SAME treatment, its own legality asked by its own predicate rather than a bare
+       `return null` that left everything but the president's identity unchecked at this lock. */
     if ("PlaceHomeStation" in msg) {
       const placement = msg.PlaceHomeStation as HomePlacement;
-      if (placement.kind === "dh") return null;
+      if (placement.kind === "dh") return dhStationRefusal(state, placement, input.mapGrid);
       return withTableRules(state, () => homePlacementRefusal(state, placement, input.mapGrid, boardHomeHexToAxial));
     }
     /* #1630 (Slice 8.4, S8-10): the M&H exchange is the third legality question in this family a socket
@@ -522,14 +527,18 @@ function roomMessageRefusal(input: TurnAuthorityInput, actor: string): string | 
   }
 
   if ("PlaceHomeStation" in msg) {
-    const { company_id, kind } = msg.PlaceHomeStation as { company_id: number; kind?: string };
+    /* #1660 (S9-12): the `kind === "dh"` branch that used to live here compared the ACTING PLAYER against
+       `private_companies[DH].owner` -- the private's PLAYER-owner field, which is `null` the moment the D&H
+       is legitimately bought by a corporation (`owner` and `owner_protocol_id` are mutually exclusive, #379),
+       so it could never pass on the only board the power is meant to work on. Corporate ownership is a
+       legality question, not an identity one -- exactly what #1611 and #1630 already say about the home
+       placement and the M&H exchange below -- so it is asked once, correctly, by `dhStationRefusal` in
+       `turnRefusal`'s room-message branch. What is left here is the SAME question every kind of
+       `PlaceHomeStation` answers: whose president is sending it. */
+    const { company_id } = msg.PlaceHomeStation as { company_id: number; kind?: string };
     const company = state.public_companies.find((entry) => entry.company_id === company_id);
     if (!company) return "That corporation is not in this game.";
     if (company.president !== actor) return `Only ${company.ticker}'s president places its station.`;
-    if (kind === "dh") {
-      const dh = state.private_companies.find((entry) => entry.private_id === DH_PRIVATE_ID);
-      if (dh && dh.owner !== actor) return "Only the Delaware & Hudson's owner can use its free station.";
-    }
     return null;
   }
 

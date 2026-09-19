@@ -240,6 +240,19 @@ export interface StationPlacementInput {
   /** Design note #1323: hexes the placing corporation's network may not cross (`"q,r"` keys). Optional so
    *  every pre-#1323 caller keeps its answer; `barredHexesFor` supplies it. */
   barredHexes?: ReadonlySet<string>;
+  /** ==================================================================
+   *   DESIGN NOTE 1660 (Stage 9, Slice 9.4b, S9-12): ONE PRINTED EXEMPTION, NAMED RATHER THAN GUESSED
+   *  ==================================================================
+   *  Every other refusal this function asks -- the corporation's own allowance, whether a city exists, one
+   *  token per corporation per city, slot occupancy, the OO-home closure, home reservations, and the circle
+   *  question -- is a property of the CITY or of the corporation's own supply, true for the D&H's free
+   *  station exactly as it is true for an ordinary paid one. Connectivity is the one printed exception (the
+   *  D&H description: "ignoring track connection rules"), and only for the hex the power names -- so it is a
+   *  caller's OPT-IN, not a second code path. Absent or `false` is every existing caller's answer, unchanged;
+   *  `dhStationAuthority.ts` is the only caller that ever passes `true`, and only after confirming the hex is
+   *  F16 and the D&H's own conditions hold, so the exemption cannot travel to a placement this function was
+   *  never asked to exempt. */
+  skipConnectivity?: boolean;
 }
 
 export interface StationPlacementResult {
@@ -262,7 +275,7 @@ const NOT_REACHED: StationPlacementResult = {
 export function evaluateStationPlacement(
   input: StationPlacementInput,
 ): StationPlacementResult {
-  const { mapGrid, q, r, company, allCompanies, cityIndex, barredHexes } = input;
+  const { mapGrid, q, r, company, allCompanies, cityIndex, barredHexes, skipConnectivity } = input;
   const here = (hexes: ReadonlyArray<readonly [number, number]>) =>
     hexes.some(([hq, hr]) => hq === q && hr === r);
 
@@ -437,6 +450,12 @@ export function evaluateStationPlacement(
       };
     }
   }
+
+  /* Design note #1660 (S9-12): THE ONE OPT-IN EXEMPTION, ASKED LAST FOR THE SAME REASON CONNECTIVITY ITSELF
+     IS ASKED LAST. Every refusal above this line is a property of the city or of the corporation's own
+     supply and applies to the D&H's free station exactly as to an ordinary paid one; this line is the only
+     place `skipConnectivity` has anything to skip, so it changes nothing else about the function. */
+  if (skipConnectivity) return ALLOWED;
 
   /* Connectivity, LAST and deliberately. The three refusals above are properties of the CITY and are true for
      everybody; this one is about the acting corporation, and a player who has been told "that city is full" does

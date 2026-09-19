@@ -681,6 +681,25 @@ export interface GameStateResponse {
    * #817's exact case. */
   used_private_abilities?: readonly string[];
   /* ==================================================================
+      DESIGN NOTE 1660 (Stage 9, Slice 9.4b, S9-12): THE FREE STATION'S WINDOW, ON THE BOARD
+     ==================================================================
+     `used_private_abilities` says WHETHER the D&H's lay has ever happened; it cannot say WHEN, because it is
+     an additive set with no notion of a turn. The printed rule (the D&H description, p. 47 of the full
+     rulebook; Table T-05) is narrower than "ever": the free, unconnected station comes with the SAME
+     operating turn as the lay -- a station placed later needs an ordinary, connected, paid placement instead,
+     through `PlaceStationToken`, not this one.
+
+     SO THE WINDOW IS ITS OWN FACT, TURN-SCOPED LIKE `bought_this_turn_company` AND `turn_action_taken` ABOVE
+     IT, and for their reason: Undo replays the log, so anything the reducer must decide travels in the state
+     the reducer replays. The company id that just spent `dh-tile`, or absent when no window is open.
+
+     WRITTEN BY THE `LayTile` ARM the instant the D&H's own lay succeeds, and CLEARED wherever this file
+     already clears a turn-scoped fact -- `settleOperatingCursor`'s `turnChanged` branch and its
+     leaving-the-Operating-Round branch, the same two places `operating_sub_phase` itself is reset -- and by
+     `placeDhFreeStationToken` the moment the station lands, so a spent power leaves no window standing for a
+     later reader to puzzle over. A game with no D&H power ever exercised never writes this field. */
+  dh_station_pending?: number | null;
+  /* ==================================================================
       DESIGN NOTE 1323: THE LEVEL PLAYING FIELD'S GAME-WIDE COUNTERS
      ==================================================================
      Three facts that belong to the game rather than to any corporation, all optional per #232 -- absent is

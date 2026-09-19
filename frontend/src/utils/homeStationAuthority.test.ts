@@ -456,10 +456,19 @@ describe("§29 S8-14: the Erie's E11 -- one city protected before a tile, the wh
 /* ================================================================== */
 
 describe("the D&H's free station is judged by its own rules and never takes the home slot (#1615)", () => {
+  /* Design note #1660 (S9-12): F16 with tile #57 down -- the one city the D&H's own lay creates, and the
+     grid every legality check below needs to see a destination at all. `applySandboxLayTile` is the same
+     mutator `tiledE11()` above uses for E11's green upgrade. */
+  const dhGrid = (): MapGridResponse => applySandboxLayTile(GRID, ...at("F16"), 57, 0, () => false);
+
   const dhBoard = () =>
     withCorp(
       withState(orBoard(BO, "Tokens"), {
-        private_companies: [{ private_id: DH_PRIVATE, name: "Delaware & Hudson", cost: "70", revenue_per_or: "15", owner: P2, owner_protocol_id: BO, closed: false }],
+        private_companies: [{ private_id: DH_PRIVATE, name: "Delaware & Hudson", cost: "70", revenue_per_or: "15", owner: null, owner_protocol_id: BO, closed: false }],
+        /* #1660: the D&H's own lay has happened, and this is still that same operating turn -- the two
+           facts `dhStationRefusal` asks for beyond the shared arm's old floated/not-already-there pair. */
+        used_private_abilities: ["dh-tile"],
+        dh_station_pending: BO,
       }),
       BO,
       { station_token_hexes: [at("I15")], station_tokens: [] },
@@ -467,12 +476,22 @@ describe("the D&H's free station is judged by its own rules and never takes the 
 
   it("is appended after the home, free, and not asked the home predicate", () => {
     const state = dhBoard();
-    const after = applyAsRoom(state, home(BO, "F16", null, "dh"), P2, GRID);
+    const grid = dhGrid();
+    const after = applyAsRoom(state, home(BO, "F16", 0, "dh"), P2, grid);
     expect(tokens(after, BO)).toEqual([key("I15"), key("F16")]);
     expect(corp(after, BO).treasury).toBe(corp(state, BO).treasury);
-    expect(homePlacementRefusal(state, home(BO, "F16").PlaceHomeStation, GRID, table)).toBe("B&O's home station is already on the board.");
-    const direct = placeDhFreeStationToken(state, BO, ...at("F16"), 0);
+    expect(homePlacementRefusal(state, home(BO, "F16").PlaceHomeStation, grid, table)).toBe("B&O's home station is already on the board.");
+    const direct = placeDhFreeStationToken(state, BO, ...at("F16"), 0, grid);
     expect(corp(direct, BO).station_token_hexes.map(([q, r]) => `${q},${r}`)).toEqual([key("I15"), key("F16")]);
     expect(corp(direct, BO).station_tokens).toEqual([[hexAt("F16").q, hexAt("F16").r, 0]]);
+  });
+
+  it("without a grid, the shared arm's old pair still stands: floated, not already on the hex", () => {
+    /* #757: no board-dependent arm is asked without a grid, so a caller that cannot supply one (the same
+       caller `placeHomeStationToken` has always tolerated) still gets a placement rather than a silent
+       no-op invented by a check it could never satisfy. */
+    const state = dhBoard();
+    const direct = placeDhFreeStationToken(state, BO, ...at("F16"), 0);
+    expect(tokens(direct, BO)).toEqual([key("I15"), key("F16")]);
   });
 });

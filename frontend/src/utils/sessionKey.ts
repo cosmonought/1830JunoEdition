@@ -364,11 +364,22 @@ export type GameplayExecuteMsg =
         protocol_id: number;
         /* Design note #1092: THREE STAGES ON THE WIRE. "fog" takes the gifted train back, an OR set after its
          clock started -- the third and last thing the Yellow Sign does to a corporation. */
-      stage: "mark" | "carcosa" | "fog";
+      /* ==================================================================
+          DESIGN NOTE 1661 (S9-1): OPTIONAL, AND LEGACY REPLAY DATA WHERE PRESENT
+         ==================================================================
+         THE FOUR OUTCOME FIELDS BELOW WERE THE DEFECT. A client chose the stage, the train and the award of
+         an event that is supposed to be random, and the authoritative reducer applied them. The reducer
+         derives all four now (`yellowSign.ts` #1661) and a live dispatch omits them; they remain on the wire
+         type because the development corpus's stored entries carry them and an unpinned board still replays
+         from them. Optional, so the request shape type-checks and the historical shape still parses. */
+      stage?: "mark" | "carcosa" | "fog";
         /** Stage 1: the model taken. Stage 2: the model gifted. */
-        model: string;
+        model?: string;
         /** Stage 1 only: the treasury award, already halved and floored. */
         cash?: string;
+        /** #1661: waive the CHANCE and the WINDOW (#1128's playtest trigger). Not a stage -- the board says
+         *  which stage a waiver lands on, and at most one is ever available. */
+        debug_force?: boolean;
         /** ==================================================================
          *   DESIGN NOTE 1375: THE MARK TAKES ONE TRAIN'S ROUTE, NOT THE WHOLE RUN
          *  ==================================================================

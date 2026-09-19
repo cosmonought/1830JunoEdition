@@ -1213,14 +1213,129 @@ with no corpus effect; part of the Stage-8 bump at 8.5 — `RULES_ENGINE_VERSION
 
 ### Stage 9 — Variants + map data + variant authority
 
-**S9-1. `YellowSignEvent` is client-authoritative.**
-Status `OPEN` — **HIGH PRIORITY** (Stage 2 commit message; `messageSchema.ts` #1451 records it as deferred).
-Notes: #1046, `App.tsx` computes the outcome and submits it; `gameEngine/yellowSign.ts` (`fogIsDue`), the
-`YellowSignEvent` arm (~4928), stage "fog" removes a train, applies the Mark, arms Carcosa and the blood price.
-Replay: making the server derive it is a redesign of the Unpredictable Revenue pipeline — replay-semantic for
-Yellow-Sign rooms only; bump. Detail: any player, on their turn, can hand-submit an event naming any corporation;
-it is schema-validated and nothing more. The server must derive the event from the log (seeded randomness or a
-committed roll) and refuse a client-supplied one, or the variant must be excluded from authoritative rooms.
+**S9-1. ~~`YellowSignEvent` is client-authoritative.~~ The Yellow Sign outcome AND its input are authoritative.**
+Status **`RESOLVED`** — Slice 9.4d, 2026-09-19 (#1661 the outcome, #1662 the input). *(Was `OPEN` / **HIGH
+PRIORITY**: Stage 2 commit message; `messageSchema.ts` #1451 recorded it as deferred.)* **Direct client outcome
+selection is removed, the turn's draw is the server's at hosted ingress and committed for replay, and `debug_force`
+cannot be used by an ordinary hosted client.**
+
+**Confirmed root cause.** `YellowSignEvent` carried the OUTCOME of a random event: `stage`, `model`, `cash` and
+`revenue_seed`. The live path — normal `App.tsx` → the Yellow Sign block in the `RunMultipleRoutes` narration →
+`messageSchema` shape validation → `RoomSession.submit` → `applySandboxAction` → the same reducer the server runs —
+shape-checked those four fields and applied them. So an ordinary hosted client chose which stage fired, which
+corporation's train left, how much the treasury gained, whether a corporation became Carcosan, which trains were
+exempt from the limit, and when the doom clock started. The defect was not that the figures were implausible; it was
+that a client got to choose among the plausible ones, and the variant's whole premise is that exactly one of them is
+the right one. Classification **A — real game-rule authority defect, HIGH.**
+
+**Final authoritative design (#1661, `yellowSign.ts` / `sandboxSession.ts`).** `resolveYellowSign(board, protocolId,
+phaseTier, {force})` derives the whole outcome from the committed board, and the message becomes a REQUEST
+(`{game_id, protocol_id, debug_force?}`). No new randomness primitive: the turn's draw is already #1051's committed
+roll — drawn once in the shell, written into `RunMultipleRoutes.revenue_seed`, replayed rather than re-rolled — and
+the only new state is `last_run_revenue_seed`, that same number copied onto the corporation by the run arm so the
+reducer can reach it at the `YellowSignEvent` that follows. It is the fifth turn-scoped figure and is cleared by
+#777's turn-change rule beside `last_route_revenue`, because a seed outliving its turn would price the next turn's
+sign against the last turn's roll — the one staleness that changes *which stage* fires. Every other input
+(`printed_route_revenue`, the fleet, `has_yellow_sign` / `is_carcosan` / `carcosan_trains`, the doom clock,
+`derivePhase`) is reducer-written board state. The three mutations are unchanged and now live in one shared
+`applyYellowSignOutcome`, so the authority split cannot become two sets of Yellow Sign rules; #1421's Mark gate
+(a sign already out, or outside phases 2–4) is still the reducer's last word and is asked of both paths.
+**The debug force survives and stops being a choice.** #1128's flag named its stage; #1404 already derived the
+sequence from the board with `forcedSignStagesAvailable`, and at most one stage is ever available (the three
+predicates are mutually exclusive). So the wire carries a BOOLEAN: it waives the chance and the window, and the
+board says which stage the waiver lands on. A stale arm now resolves to nothing by construction rather than by the
+cycle happening to be right.
+
+**Replay compatibility — treatment A, no log rewritten, no ABI migration.** The split is #1551's, already the house
+pattern two hundred lines up (a pinned board refuses `RunManualRoute`; an unpinned one still applies it): a board
+carrying `rules_engine_version` is authoritative and derives, ignoring the four outcome fields; an unpinned board
+applies the outcome it stored, byte for byte. The four fields stay in `messageSchema` and on the `sessionKey` wire
+type, optional — dropping them would turn every historical entry into a rejected one. **No stored log replays to a
+different board**, so this slice is not replay-semantic and requires no bump: every log in the corpus is unpinned.
+That is not a formality — JUNO-Z6C index 203 carries *no* `revenue_seed` and was played under #1046's zeroing, which
+a derivation would silently replace with #1375's kept run. An unpinned board cannot be continued in production at all
+(`SERVER_REPLAY_POLICY.legacyLogs: "refuse"`), so the legacy branch grants no live client any authority it did not
+already have as a fixture.
+
+**Security property.** Forged `stage`, forged corporation, forged `model`, forged `cash` and a forged gift/Carcosa
+payload are all inert on a pinned board — pinned by cases 2–5 below, each sending the same request against the same
+board and varying only the client's claim.
+
+**Files (both revisions).** Production: `gameEngine/yellowSign.ts`, `gameEngine/sandboxSession.ts`,
+`gameEngine/gameState.ts`, `gameEngine/messageSchema.ts`, `App.tsx`, `utils/sessionKey.ts`, `utils/gameHistory.ts`,
+and for #1662 the new `utils/serverIngress.ts` plus `utils/roomSession.ts`.
+
+**Focused tests.** New `utils/yellowSignAuthority.test.ts` (10 cases): determinism from one pre-state; forged stage;
+forged corporation/train; forged cash; forged gift/fog; the legitimate Mark's full mutation; the derived escalation
+and fog on the boards that permit them; the unpinned board replaying its stored outcome; the debug force as a waiver;
+and the seed's recording and turn-scoped clear. Three existing suites had their source-scan pins inverted to the new
+contract rather than duplicated: `batch48` (the reducer derives on a pinned board, replays on an unpinned one),
+`batch60` (the gift branch's new home; the fog dispatch no longer names its stage) and `forcedSignAndRadioBar`
+(`debug_force` is a boolean behind the same `sandbox` gate). `gameHistory`'s Carcosan-Railways accolade (#1421) now
+reads the stage off the diff (`yellowSignStageApplied`) with the stored fields as the fallback, and #1264's
+train-limit suppression treats a `YellowSignEvent` loss as the sign's when the message names no model.
+New `utils/yellowSignIngress.test.ts` (6 cases) for #1662: a client-supplied `revenue_seed` (and a client-supplied
+turn key) cannot select the committed seed; the normalizer is the commit point and the committed payload is what it
+returned; replay consumes the stored seed and an undo does not re-roll it; hosted ingress drops `debug_force`; the
+reducer refuses it on a pinned board even if one reached it; and the local sandbox affordance still works on the
+unpinned board it was asked for.
+
+**Implicated log.** JUNO-Z6C: two stored entries, one effective. Index 203 (C&O, Mark) replays on an unpinned board
+through the legacy branch, unchanged; index 567 (the stale-client second Mark) is reverted at 569 and was already a
+no-op under #1421. The 18-file corpus sweep (`moneyConservation`) and `replayJuno3XD` are green.
+
+**Version consequence.** `RULES_ENGINE_VERSION` stays **6** in this slice, and that is a statement about this slice
+only. No stored log replays to a different board here, because every log carrying a `YellowSignEvent` is unpinned and
+takes the branch it always took — but **absence of corpus divergence is not the closure argument**. The deliberate
+**6 → 7 bump remains owed at Stage-9 closure**, where it is taken for the stage as a whole; nothing here discharges
+it, and this entry must not be read as evidence that it is unnecessary.
+
+**Both authority holes the first pass left are closed (#1662, second revision of the slice).** They were blockers,
+not follow-ups, and neither is deferred.
+
+*(a) The turn's draw is the server's.* #1051 made the die a COMMITTED draw — rolled once, written into the log,
+replayed rather than re-rolled — which is a statement about reproducibility and says nothing about authority.
+Committing a chosen number does not make it a draw: a crafted client could roll locally until the seed produced the
+stage it wanted, submit that one, and every derivation downstream would faithfully reproduce the outcome the player
+had picked. The fix reuses #1520's existing server-ingress seam and nothing else — the one line in
+`RoomSession.submit` that already replaced the client's `SetupGame` version pin. `normalizeForCommit`
+(`utils/serverIngress.ts`) now owns three things there, between the authority gate and the append: the version pin
+(#1520, moved inside, unchanged); `RunMultipleRoutes`'s `revenue_turn` and `revenue_seed`; and `YellowSignEvent`'s
+`debug_force`. The **turn key is rebuilt from the server's board**, never read off the message, because the key is
+what the earlier-draw lookup searches on — a client that could name it could point the search at a turn whose roll
+it liked, which is the same defect one field over. The **seed** is then #1051's own rule asked of the server's RAW
+log: `seedAlreadyRolled(this.log, key) ?? mintSeed()`, so the undo rule the feature was specified with ("undoing it
+should not change their roll, otherwise players would just slot machine their way to +20 %") holds, and holds
+better than on the client, whose copy of a room's log can be behind. `mintSeed` is injected like `mintId`,
+defaulting to `randomTurnSeed`. **No new RNG architecture** and no derivation of randomness from another
+client-selectable field. **Replay never reaches the normalizer**: it runs once, before the append, and a rebuild
+reads the committed payload — `RoomSession.restore` replays entries that were normalized when they were first
+accepted.
+
+*(b) `debug_force` is gated twice.* Hosted ingress **drops** the field, so it never becomes part of the accepted
+entry (dropped rather than refused: the event itself is legitimate and the shell has already narrated it — refusing
+would leave a log line with no mechanics). Independently, the reducer honours the waiver **only on an unpinned
+board** (`force: !pinned && debug_force === true`), because an ingress filter is a claim about a transport and the
+rule has to hold on every client that replays the entry. The split is the same one the outcome already used and it
+is exact: a hosted room deals through `link.submit` and the server stamps `rules_engine_version`, so it is pinned;
+a Firestore sandbox room deals through `appendSandboxAction` with no server, so it is not. #1128's playtest tool
+therefore keeps working in the local sandbox — where it was asked for and the only place it was meant to work — and
+is inert in an authoritative room. `App.tsx` arms the chip only on an unpinned board, so the narration cannot print
+a forced stage the board will refuse (#1375's narration/board invariant).
+
+*Correction to #1661's branch key, found by closing (b).* Splitting on the pin alone was half an answer: it is right
+about the corpus and wrong about a LIVE unpinned board, since a Firestore sandbox room sends the same request shape
+as everyone else and those requests would have been read as stored outcomes that are not there. The key is now two
+questions — the MESSAGE says which kind of entry it is (a stored outcome NAMES a stage; a request does not) and the
+BOARD says whether a client may be believed. Only a stored outcome on an unpinned board is applied as written: the
+development corpus, and nothing else. **The legacy replay treatment is unchanged by this** — JUNO-Z6C 203 still
+takes the branch it always took.
+
+*Superseded record (for the history):* «#1046, `App.tsx` computes the outcome and submits it; `gameEngine/yellowSign.ts`
+(`fogIsDue`), the `YellowSignEvent` arm (~4928), stage "fog" removes a train, applies the Mark, arms Carcosa and the
+blood price. Replay: making the server derive it is a redesign of the Unpredictable Revenue pipeline — replay-semantic
+for Yellow-Sign rooms only; bump.» The bump the old note predicted did not fall due, because the derivation is gated
+on the pin rather than applied to every board.
 
 **S9-2. The Yellow-Sign ghost-train expiry keeps its own automatic round-boundary trim.**
 Status `DEFERRED` (variant ruling). Notes: Batch 4.6 §2 ("out of scope, Part 7"); `expireGhostTrains` (#1046)

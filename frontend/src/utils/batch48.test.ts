@@ -153,11 +153,27 @@ describe("the mark takes the cheapest train and pays half", () => {
 });
 
 describe("the reducer applies what the shell decided", () => {
-  it("carries the figures on the message rather than re-deriving them", () => {
-    /* THE REPLAY TRAP. By the time a rebuild reaches this action the fleet has moved on, so a reducer that
-       re-derived "the cheapest train" would take a DIFFERENT train than the game did -- #902's "an old log
-       replays to the game it was played as", broken. */
-    expect(REDUCER).toContain("const { protocol_id, stage, model, cash, revenue_seed } = msg.YellowSignEvent;");
+  it("derives the figures on a pinned board and replays the stored ones on an unpinned fixture", () => {
+    /* THE REPLAY TRAP #1046 NAMED, AND WHERE S9-1 FOUND ITS ANSWER. "By the time a rebuild reaches this
+       action the fleet has moved on, so a reducer that re-derived the cheapest train would take a DIFFERENT
+       train than the game did" -- true, and it is why this batch carried the figures on the message. It is
+       also how a client came to choose the outcome of a random event (S9-1, HIGH).
+       #1661 SEPARATES THE TWO CLAIMS. A pinned board derives, because its run recorded the committed draw on
+       the board (`last_run_revenue_seed`) and the derivation therefore reads the fleet AS IT RAN rather than
+       as it later became. An unpinned board -- every stored log in the development corpus -- still replays
+       the outcome it stored, so #902's rule holds exactly where it was aimed. */
+    expect(REDUCER).toContain(
+      "const { protocol_id, stage, model, cash, revenue_seed, debug_force } = msg.YellowSignEvent;",
+    );
+    /* #1662 corrected #1661's key: the MESSAGE says which kind of entry it is (a stored outcome NAMES a
+       stage; a request does not) and the BOARD says whether a client may be believed. Only a stored outcome
+       on an unpinned board is applied as written -- the development corpus, and nothing else. */
+    expect(REDUCER).toContain('const pinned = typeof state.rules_engine_version === "number";');
+    expect(REDUCER).toContain("const stored = stage !== undefined;");
+    expect(REDUCER).toContain("if (!stored || pinned) {");
+    expect(REDUCER).toContain("return applyYellowSignOutcome(state, protocol_id, derived);");
+    // #1662: and the playtest waiver is the pin's alone.
+    expect(REDUCER).toContain("force: !pinned && debug_force === true,");
   });
 
   it("takes the taken train's route out of BOTH revenue fields, and zeroes both on a seedless message", () => {
@@ -165,7 +181,9 @@ describe("the reducer applies what the shell decided", () => {
        train's route goes; the rest of the fleet's run stands. `printed_route_revenue` is what a later
        dispatch accumulates onto (#941), so both fields are rewritten together, as before. A message without
        the seed is one written under #1046 and keeps the zeroing it was played with. */
-    expect(REDUCER).toContain("const kept = revenue_seed === undefined ? null : runWithoutTrain(company, model, {");
+    // #1661: the absence is `parts === null` now -- an unpinned entry with no recorded seed -- not the field.
+    expect(REDUCER).toContain("const kept = parts === null ? null : runWithoutTrain(company, model, parts);");
+    expect(REDUCER).toContain("revenue_seed === undefined");
     expect(REDUCER).toContain("last_route_revenue: String(kept ? kept.adjusted : 0),");
     expect(REDUCER).toContain("printed_route_revenue: String(kept ? kept.printed : 0),");
   });

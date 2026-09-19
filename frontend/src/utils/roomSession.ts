@@ -65,7 +65,6 @@ import {
   replayCompatibility,
   replayRefusal,
   rulesEngineVersionOf,
-  stampRulesEngineVersion,
   type ReplayCompatibility,
   type ReplayPolicy,
 } from "../gameEngine/rulesVersion";
@@ -77,7 +76,9 @@ import {
 } from "./serverProtocol";
 import type { GameplayExecuteMsg } from "./sessionKey";
 import type { GameStateResponse } from "../gameEngine/gameState";
-import { isSetupGameMsg } from "../gameEngine/gameSetup";
+/* #1662 (S9-1): the ingress seam #1520 opened, generalised -- the version pin, the turn's draw, and the
+   playtest waiver a hosted room does not admit. `isSetupGameMsg` / `stampRulesEngineVersion` moved inside it. */
+import { normalizeForCommit } from "./serverIngress";
 
 /** An entry as this server stores it: the shared shape plus the nonce that makes a retry safe. */
 export interface ServerLogEntry extends ReplayEntry {
@@ -94,6 +95,10 @@ export interface RoomSessionOptions {
   mintId: () => string;
   /** Wall clock, injected for the same reason. `#643`: an entry keeps its own stamp. */
   now?: () => number;
+  /** #1662 (S9-1): the server's revenue draw, injected for `mintId`'s reason -- a test needs the seed to be
+   *  known, and the normalizer must not be the thing that decides to be deterministic. `randomTurnSeed` when
+   *  absent, which is what a deployment gets. */
+  mintSeed?: () => number;
   /** #1225: put per-field digests on every answer, so a client that detects a divergence can NAME the field
    *  instead of reporting two opaque hashes. Off by default: it is a diagnostic for local play, and a
    *  deployment should not pay for it on every frame. */
@@ -437,10 +442,23 @@ export class RoomSession {
        #1520: THE DEAL IS STAMPED BY THIS SERVER. Whatever version the client wrote into `SetupGame` -- the
        right one, a wrong one, none -- is replaced by the engine this process carries, so the pin is a fact
        about the server that dealt and never a claim the client made. It is written into the payload, which
-       is the one part of the entry every rebuild reads first. */
-    const recorded = isSetupGameMsg(input.msg)
-      ? (stampRulesEngineVersion(input.msg as unknown as { SetupGame: Record<string, unknown> }) as unknown as GameplayExecuteMsg)
-      : input.msg;
+       is the one part of the entry every rebuild reads first.
+       #1662 (S9-1): AND SO IS THE TURN'S DRAW. The same seam now also owns `RunMultipleRoutes`'s turn key and
+       `revenue_seed`, and drops `YellowSignEvent`'s playtest waiver. #1051 made the die a COMMITTED draw,
+       which is a statement about reproducibility and not about authority: a crafted client could roll locally
+       until the seed produced the Yellow Sign stage it wanted, and every derivation downstream would then
+       faithfully reproduce the outcome the player had picked. The server draws instead, here, before the
+       append -- so the number the log commits is the one this process rolled. `serverIngress.ts` #1662 has
+       the rest, including why the raw log rather than the effective one answers the undo question.
+       BEFORE THE APPEND AND ONLY HERE. Replay reads what was committed; nothing re-normalizes a stored
+       entry, because `restore` replays entries that were normalized when they were first accepted. */
+    const recorded = normalizeForCommit(input.msg, {
+      board: this.state,
+      /* THE RAW LOG, INCLUDING WHAT A REVERT STRUCK OUT -- #1051's rule, which is the whole reason a player
+         cannot undo their way to a better face. `this.log` is that log. */
+      rawLog: this.log,
+      mintSeed: this.options.mintSeed,
+    });
     const entry: ServerLogEntry = {
       ...mintLogEntry({
         index: this.nextIndex,

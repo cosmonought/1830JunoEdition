@@ -174,7 +174,13 @@ describe("the flag crosses the machine it was armed on", () => {
   it("is gated on host AND on sandbox, both", () => {
     expect(APP).toContain("sandboxRoom.hostId === localId");
     expect(APP).toContain("const forcedSign = sandbox ?");
-    expect(APP).toContain("forced: sandbox ?");
+    /* #1661 (S9-1): the armed stage is read behind the same `sandbox` gate, and what crosses the wire is a
+       BOOLEAN -- the board says which stage a waiver lands on, so no message can name one. */
+    /* #1662 (S9-1): and on a LOCAL board, third. An authoritative room deals pinned and refuses the waiver,
+       so arming it there would narrate a stage the board never wrote. */
+    expect(APP).toContain("const signArmed = sandbox && signLocal ?");
+    expect(APP).toContain("const signLocal = before?.rules_engine_version == null;");
+    expect(APP).toContain("const signForce = signArmed === null ? {} : { debug_force: true as const };");
   });
 
   it("has a readout, not just a shortcut", () => {

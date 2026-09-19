@@ -271,14 +271,28 @@ export const GAMEPLAY_MESSAGE_SCHEMA: Readonly<Record<string, Readonly<Record<st
   /* #1451: SYSTEM/DERIVED IN INTENT, CLIENT-SENT IN FACT. Validated like any other message; the question of
      who may send it is `turnAuthority`'s and is recorded as deferred. `cash` is a STRING in every stored
      occurrence, matching the contract's `Uint128` convention rather than the integer this file would have
-     guessed. */
+     guessed.
+     ==================================================================
+      DESIGN NOTE 1661 (S9-1): FOUR OUTCOME FIELDS, NOW LEGACY REPLAY DATA
+     ==================================================================
+     `stage`, `model`, `cash` and `revenue_seed` WERE THE DEFECT: a client chose the outcome of a random event
+     and the reducer applied it. They are OPTIONAL now and a live dispatch omits them; the authoritative arm
+     derives all four from the committed board (`yellowSign.ts` #1661). They stay in the table because every
+     stored `YellowSignEvent` in the corpus carries them and an unpinned board still replays from them -- a
+     validator that dropped them would turn historical entries into rejected ones, which is precisely the
+     behaviour change #1450's note refuses to make for a vestigial field.
+     `debug_force` IS A BOOLEAN, NOT A STAGE, and that is the whole of why it is safe to admit: it waives the
+     chance and the window (#1128), and the board still says which stage the waiver lands on. Shape validation
+     cannot tell an ordinary client from a playtest host, and it does not have to -- there is no stage here to
+     forge. */
   YellowSignEvent: {
     game_id: "int?",
     protocol_id: "int",
-    stage: "enum:mark|carcosa|fog",
+    stage: "enum:mark|carcosa|fog?",
     model: "string|null?",
     cash: "string?",
     revenue_seed: "finite?",
+    debug_force: "bool?",
   },
 
   /* ---- the between-turn / exception family (`isSandboxOnlyMsg`) ---- */

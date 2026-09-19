@@ -144,7 +144,10 @@ describe("the clock starts on the trigger and not before", () => {
     /* RULED: "A Carcosan D-train begins this countdown the moment it is gifted ... completes the OR set in
        which it is gifted, and then the next OR set before disappearing into the fog." Same `+ 1`, different
        trigger -- there is no later Diesel purchase to wait for when the gift IS the Diesel. */
-    const gift = sliceBetween(SESSION, 'if (stage === "mark") {', "if (\"RunMultipleRoutes\" in msg)");
+    /* #1661 (S9-1): the three branches moved into `applyYellowSignOutcome`, which the derived and the legacy
+       path share, so the gift is now the tail of that function rather than the tail of the arm. The claim is
+       unchanged; only where the slice ends is. */
+    const gift = sliceBetween(SESSION, 'if (stage === "mark") {', "export function isSeatDrivenRound");
     expect(gift).toContain('trainTier(model) === "D"');
     expect(gift).toContain("carcosan_doom_after_macro_round: (state.macro_round_number ?? 0) + 1");
   });
@@ -474,8 +477,11 @@ describe("the third stage moves the board like the other two", () => {
   it("is dispatched rather than mutated locally", () => {
     /* #1046's RULE VERBATIM: "board state in this app is what the reducer writes while replaying", so a
        train removed in the shell would come back on the next rebuild. */
-    expect(APP).toContain('stage: "fog"');
+    /* #1661 (S9-1): the dispatch no longer NAMES the stage -- the authoritative reducer derives it -- so what
+       is pinned here is that the shell still dispatches on the fog rather than taking the train itself. */
     expect(APP).toContain('resolved.stage === "fog"');
+    expect(APP).toContain('"YellowSignEvent",');
+    expect(APP).not.toContain('stage: "fog"');
   });
 
   it("no longer takes the train at the round boundary", () => {

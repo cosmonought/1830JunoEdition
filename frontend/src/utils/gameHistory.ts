@@ -52,6 +52,7 @@ import { depotCostFor, derivePhase, trainTier } from "../gameEngine/gamePhase";
 import { citySlotCount } from "../gameEngine/stationTokens";
 import { boardFor, withRules } from "../gameEngine/boardSelection";
 import { flavorBucketFor, resolveVariants, revenueFlavourClause, rollTurnRevenue } from "../gameEngine/gameVariants";
+import { yellowSignStageApplied } from "../gameEngine/yellowSign";
 import { variantCueFor } from "./variantSfx";
 import { tileStock } from "./tileSupply";
 import { describeFleetLosses } from "../gameEngine/sandboxSession";
@@ -645,13 +646,19 @@ export function gameHistoryFrom(log: readonly SandboxAction[], policy: ReplayPol
     /* CARCOSAN RAILWAYS and THE REDEEMER (#1421): a stage of the sign lands on the president of the corporation
        it happened to; the Blood Price is a corporation buying a train the seller's `carcosan_trains` names. */
     if (kind === "YellowSignEvent") {
-      if (typeof body.model === "string" && body.model && (body.stage === "mark" || body.stage === "fog")) {
-        fate(Number(body.protocol_id), body.model, "taken"); // #1431
-      }
       const company = companyById(before, Number(body.protocol_id));
-      const stage = String(body.stage);
-      const bearer = company?.president ?? null;
       const companyAfter = companyById(after, Number(body.protocol_id));
+      /* Design note #1661 (S9-1): THE MESSAGE NO LONGER CARRIES THE OUTCOME on a pinned board -- the reducer
+         derives it -- so this reads the board it moved and falls back to the stored fields for the corpus's
+         unpinned entries, which still carry them. One reader, both eras. */
+      const applied = yellowSignStageApplied(company, companyAfter);
+      const stage = applied?.stage ?? String(body.stage);
+      const takenModel =
+        applied?.model ?? (typeof body.model === "string" && body.model ? body.model : null);
+      if (takenModel && (stage === "mark" || stage === "fog")) {
+        fate(Number(body.protocol_id), takenModel, "taken"); // #1431
+      }
+      const bearer = company?.president ?? null;
       const tookEffect = companyAfter !== undefined && company !== undefined && companyAfter !== company;
       if (bearer && tookEffect && ["mark", "carcosa", "fog"].includes(stage)) {
         bump(signStages, bearer, 1);

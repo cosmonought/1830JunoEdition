@@ -447,6 +447,7 @@ import {
   // Design note #1092: the doom clock, asked at the run rather than at the boundary.
   fogIsDue,
   yellowSignStateOf,
+  forcedSignStagesAvailable,
   nextForcedSign,
 } from "./gameEngine/yellowSign";
 import YellowSignOverlay from "./components/YellowSignOverlay";
@@ -6694,6 +6695,32 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
                 before?.public_companies ?? [],
                 actionLogRef.current.map((entry) => entry.label),
               );
+              /* ==================================================================
+                  DESIGN NOTE 1661 (S9-1): THE FORCE IS A WAIVER, NOT A CHOICE OF STAGE
+                 ==================================================================
+                 #1128's flag NAMED its stage and #1404 built the cycle from
+                 `forcedSignStagesAvailable`, which already answers "the next legal step in the sequence" from
+                 the board -- and at most one stage is ever available, because the three predicates are
+                 mutually exclusive. So the armed name was never information the board did not already hold.
+                 THE WIRE CARRIES A BOOLEAN NOW. `debug_force` says only "waive the chance and the window";
+                 the authoritative reducer asks the same helper for the stage, so a hand-crafted message
+                 cannot name one. Read here through the same helper for the same reason the outcome is: the
+                 sentence and the board must be derived from one function (#1375).
+                 AND A STALE ARM RESOLVES TO NOTHING rather than to a stage the game has spent -- #1404's
+                 report, answered by construction instead of by the cycle happening to be correct. */
+              /* #1662 (S9-1): AND IT IS A LOCAL TOOL, SO IT IS ASKED OF A LOCAL BOARD. An authoritative room
+                 deals pinned (`rules_engine_version`, stamped by the server that dealt it) and both drops the
+                 waiver at ingress and refuses it in the reducer, so a forced stage there would be a sentence
+                 the board never wrote -- the narration/board divergence #1375 exists to prevent. The chip
+                 keeps working in a Firestore sandbox room, which is where #1128 asked for it. */
+              const signLocal = before?.rules_engine_version == null;
+              const signArmed = sandbox && signLocal ? (sandboxRoomDocRef.current?.forcedSign ?? null) : null;
+              const signForcePhase = derivePhase(before)?.tier ?? "2";
+              const signForced =
+                signArmed === null
+                  ? null
+                  : (forcedSignStagesAvailable(signState, signForcePhase)[0] ?? null);
+              const signForce = signArmed === null ? {} : { debug_force: true as const };
               /* THE NATURAL DRAW FIRST, then the Easter egg's rules applied to it -- so this cannot disagree
                  with `revenueFlavourClause` about what would otherwise have been printed. */
               /* One call site for the turn's sentence (#940/#941 pin it to exactly one); the Mark's re-rolled
@@ -6719,7 +6746,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
                    subscribed to -- so the flag is armed on one machine and consumed on whichever machine is
                    actually taking the run. `sandbox` gates it because the tool is a playtest affordance and
                    has no business on a chain game; a room doc does not exist there in any case. */
-                forced: sandbox ? (sandboxRoomDocRef.current?.forcedSign ?? null) : null,
+                forced: signForced,
               });
               /* ==================================================================
                   DESIGN NOTE 1128: CLEARED ON THE STAGE THAT FIRED, NOT ON THE ATTEMPT
@@ -6838,16 +6865,23 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
                     yellowSignStamp,
                     "sign",
                   );
+                  /* ==================================================================
+                      DESIGN NOTE 1661 (S9-1): THE DISPATCH ASKS; IT NO LONGER ANSWERS
+                     ==================================================================
+                     `stage`, `model`, `cash` and `revenue_seed` USED TO TRAVEL HERE, and that was the defect:
+                     the client chose the outcome of a random event and the authoritative reducer applied it.
+                     The reducer derives all four now, from the committed board and the run's committed draw
+                     (`yellowSign.ts` #1661), so this says only WHICH corporation is resolving.
+                     THE NARRATION ABOVE IS UNAFFECTED AND STILL AGREES WITH THE BOARD. It is composed from
+                     `banked` -- the reducer's own post-run state -- under the same seed the reducer records,
+                     which is the pair of inputs the derivation reads. Two readers, one answer (#1375). */
                   void runGameplayAction(
                     "YellowSignEvent",
                     {
                       YellowSignEvent: {
                         game_id: gameId,
                         protocol_id: companyId,
-                        stage: "mark",
-                        model: taken,
-                        cash: String(award),
-                        revenue_seed: seed.turnSeed,
+                        ...signForce,
                       },
                     },
                     { silentInLog: true },
@@ -6866,14 +6900,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
                    roster could take a different one than the game took. */
                 const taken = (ran?.carcosan_trains ?? [])[0] ?? null;
                 if (taken) {
+                  // #1661: the request only -- the reducer derives the marked train it takes.
                   void runGameplayAction(
                     "YellowSignEvent",
                     {
                       YellowSignEvent: {
                         game_id: gameId,
                         protocol_id: companyId,
-                        stage: "fog",
-                        model: taken,
+                        ...signForce,
                       },
                     },
                     { silentInLog: true }, // #1375: the clause above is the line
@@ -6883,14 +6917,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
                 const gifted = escalationTier(derivePhase(before)?.tier ?? "2");
                 if (gifted) {
                   logInfo(`${ticker} received a ${gifted}-train.`, "", yellowSignStamp);
+                  // #1661: the request only -- the reducer derives the gifted tier from the phase in force.
                   void runGameplayAction(
                     "YellowSignEvent",
                     {
                       YellowSignEvent: {
                         game_id: gameId,
                         protocol_id: companyId,
-                        stage: "carcosa",
-                        model: gifted,
+                        ...signForce,
                       },
                     },
                     { silentInLog: true }, // #1375: the line above is the line

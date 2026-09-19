@@ -40,7 +40,15 @@
 import { UNPREDICTABLE_REVENUE_FLAVOR } from "../constants/flavorText";
 // Design note #1051: `revenueSeedHash` is no longer imported here -- every draw this file makes comes out of
 // the turn's own recorded roll now, so there is nothing left for it to hash.
-import { rollTurnRevenue, type FlavorBucket, type RevenueRoll, type RevenueSeedParts } from "./gameVariants";
+import {
+  flavorBucketFor,
+  legacyTurnSeed,
+  revenueFlavourClause,
+  rollTurnRevenue,
+  type FlavorBucket,
+  type RevenueRoll,
+  type RevenueSeedParts,
+} from "./gameVariants";
 import { DEPOT_COST, TIER_ORDER, trainTier, type TrainTier } from "./gamePhase";
 import type { PublicCompanyState } from "./gameState";
 
@@ -556,4 +564,210 @@ function skipFrom(bucket: FlavorBucket, parts: RevenueSeedParts, fallback: strin
     if (candidate !== YELLOW_SIGN_MALUS_LINE && candidate !== YELLOW_SIGN_BONUS_LINE) return candidate;
   }
   return fallback;
+}
+
+/* ==================================================================
+    DESIGN NOTE 1661 (S9-1): THE OUTCOME IS DERIVED, NOT SENT
+   ==================================================================
+
+   THE DEFECT. `YellowSignEvent` carried the answer: the client picked the stage, named the corporation's
+   train, and quoted the Mark's cash award, and the authoritative reducer applied all three after a shape
+   check. Trains, treasury cash, Carcosan status, the train-limit exemption and the doom clock were therefore
+   whatever an ordinary hosted client said they were, and the one thing the variant is built on -- that the
+   sign is a LOTTERY -- was the one thing the client got to choose.
+
+   THE FIX IS NOT A PLAUSIBILITY CHECK. Asking whether a client-supplied stage/model/cash are individually
+   believable still lets a client pick among the believable answers, and the whole point of a random event is
+   that exactly one of them is the right one. So the outcome is DERIVED here, from the committed board, and
+   the message becomes a request to resolve.
+
+   WHY IT IS ALREADY REPLAY-DETERMINISTIC, WITH NO NEW RANDOM SOURCE. Every input this function reads is
+   committed:
+     - the turn's draw is `last_run_revenue_seed`, which is #1051's committed roll copied onto the board by
+       the run that made it -- one draw, recorded in the log, replayed rather than re-rolled;
+     - the printed total, the fleet, the treasury, `has_yellow_sign` / `is_carcosan` / `carcosan_trains` and
+       the doom clock are all reducer-written board state;
+     - the phase is `derivePhase`, a function of that same board.
+   So the same pre-state replays to the same outcome on every client and on every rebuild, which is the
+   property #1044 spent its whole note defending -- reached now for the MECHANICS as well as for the sentence.
+
+   THE DEBUG FORCE SURVIVES AND STOPS BEING A CHOICE. #1128 asked for a playtest trigger and #1404 refined it
+   to "the next legal step in the sequence"; `forcedSignStagesAvailable` already computes that sequence FROM
+   THE BOARD, and at most one stage is ever available (a Mark needs nobody marked; the Carcosa needs somebody
+   marked and unescalated; the Fog needs a Carcosan corporation -- the three predicates are mutually
+   exclusive). So the request carries a BOOLEAN, not a stage: the caller may waive the chance and the window,
+   and the board still says which stage that waiver lands on. A hand-crafted message cannot name one.
+
+   ONE FUNCTION, BOTH READERS -- `runWithoutTrain`'s rule (#1375) applied to the whole event. The reducer
+   derives the outcome it applies and the shell derives the sentence it prints, from this function, against
+   the same post-run board. The Activity Log and the treasury cannot come apart. */
+
+/** What the sign does to the board this turn, derived. `null` for "no stage fires". */
+export interface YellowSignOutcome {
+  stage: "mark" | "carcosa" | "fog";
+  /** The train taken (mark / fog) or gifted (carcosa). Never empty -- a stage with no train does not fire. */
+  model: string;
+  /** The Mark's award, `0` for the other two stages. */
+  cash: number;
+  /** The committed draw this outcome was derived under, for the Mark's `runWithoutTrain`. */
+  parts: RevenueSeedParts;
+}
+
+/** The board this resolution reads. Declared structurally rather than imported as `GameStateResponse` so this
+ *  module keeps reading boards without depending on the whole state surface -- #1040's rule, one module one
+ *  subject. */
+export interface YellowSignBoard {
+  macro_round_number?: number;
+  sub_round_index?: number;
+  public_companies: ReadonlyArray<
+    Pick<
+      PublicCompanyState,
+      | "company_id"
+      | "ticker"
+      | "owned_trains"
+      | "printed_route_revenue"
+      | "last_route_revenue"
+      | "last_run_breakdown"
+      | "routes_run_this_turn"
+      | "has_yellow_sign"
+      | "is_carcosan"
+      | "carcosan_trains"
+      | "carcosan_doom_after_macro_round"
+      | "last_run_revenue_seed"
+    >
+  >;
+}
+
+export interface YellowSignResolution {
+  /** The flavour clause the turn ends on, and which stage (if any) fired. */
+  resolution: FlavourResolution;
+  /** The mechanical consequence, or `null` when no stage fires or the stage has no train to act on. */
+  outcome: YellowSignOutcome | null;
+}
+
+const NO_RESOLUTION: YellowSignResolution = {
+  resolution: { line: "", stage: null },
+  outcome: null,
+};
+
+/** The authoritative Yellow Sign resolution for `protocolId`'s just-finished run.
+ *
+ *  `board` is the state the run has ALREADY been applied to -- the reducer's own output. Nothing the sign
+ *  reads is changed by a run (the fleet, the flags, the doom clock, the phase), and the two figures that ARE
+ *  changed by it (`printed_route_revenue`, `last_run_breakdown`) are exactly the ones this needs in their
+ *  post-run form, which is why the post-run board is the one honest input for both readers.
+ *
+ *  `force` waives the CHANCE and the WINDOW, never the state (#1128). Which stage a waiver lands on is the
+ *  board's answer, not the caller's. */
+export function resolveYellowSign(
+  board: YellowSignBoard,
+  protocolId: number,
+  phaseTier: string,
+  options?: { force?: boolean },
+): YellowSignResolution {
+  const company = board.public_companies.find((entry) => entry.company_id === protocolId);
+  if (!company) return NO_RESOLUTION;
+
+  const macroRound = board.macro_round_number ?? 0;
+  const subRound = board.sub_round_index ?? 0;
+  /* #1051's committed draw, off the board. The fallback is the pre-#1051 hash, which is what the run arm and
+     the shell both fall back to for a log written before the roll was recorded -- so all three agree about an
+     old entry exactly as they agree about a new one. */
+  const parts: RevenueSeedParts = {
+    macroRound,
+    subRound,
+    companyId: protocolId,
+    turnSeed:
+      typeof company.last_run_revenue_seed === "number"
+        ? company.last_run_revenue_seed
+        : legacyTurnSeed(macroRound, subRound, protocolId),
+  };
+
+  const signState = yellowSignStateFromCompanies(board.public_companies);
+  /* #1404's sequence, computed from the board. At most one stage is available at a time, so this IS the armed
+     stage rather than a menu the caller chooses from. */
+  const forced = options?.force === true ? (forcedSignStagesAvailable(signState, phaseTier)[0] ?? null) : null;
+
+  const printedTotal = Math.max(0, Number(company.printed_route_revenue ?? 0) || 0);
+  const roll = rollTurnRevenue(printedTotal, parts);
+  const resolution = resolveFlavourLine({
+    naturalLine: revenueFlavourClause(roll, parts),
+    bucket: flavorBucketFor(roll),
+    ticker: company.ticker,
+    parts,
+    state: signState,
+    phaseTier,
+    owned: company.owned_trains,
+    fogDue: fogIsDue(company, macroRound),
+    forced,
+  });
+
+  const model = ((): string | null => {
+    switch (resolution.stage) {
+      case "mark":
+        return lowestValueTrain(company.owned_trains);
+      case "carcosa":
+        return escalationTier(phaseTier);
+      case "fog":
+        return (company.carcosan_trains ?? [])[0] ?? null;
+      default:
+        return null;
+    }
+  })();
+
+  if (resolution.stage === null || model === null || model === "") {
+    return { resolution, outcome: null };
+  }
+  return {
+    resolution,
+    outcome: {
+      stage: resolution.stage,
+      model,
+      cash: resolution.stage === "mark" ? markPayout(model) : 0,
+      parts,
+    },
+  };
+}
+
+/** Which stage a `YellowSignEvent` actually applied, read off the board it moved.
+ *
+ *  Design note #1661: THE MESSAGE NO LONGER SAYS, so the readers that used to ask it (the timeline's Carcosan
+ *  Railways accolade, #1421) ask the diff instead. One train gone and the sign newly out is a Mark; a train
+ *  gained and the corporation newly Carcosan is the escalation; a `carcosan_trains` entry gone is the Fog.
+ *  `null` when the arm refused and nothing moved, which is the answer those readers already wanted. */
+export function yellowSignStageApplied(
+  before: Pick<PublicCompanyState, "owned_trains" | "has_yellow_sign" | "is_carcosan" | "carcosan_trains"> | undefined,
+  after: Pick<PublicCompanyState, "owned_trains" | "has_yellow_sign" | "is_carcosan" | "carcosan_trains"> | undefined,
+): { stage: "mark" | "carcosa" | "fog"; model: string | null } | null {
+  if (!before || !after) return null;
+  const hadMarks = before.carcosan_trains ?? [];
+  const hasMarks = after.carcosan_trains ?? [];
+  const lostMark = hadMarks.find((model) => {
+    const remaining = [...hasMarks];
+    const at = remaining.indexOf(model);
+    return at < 0;
+  });
+  if (hasMarks.length < hadMarks.length && lostMark !== undefined && after.is_carcosan === true) {
+    return { stage: "fog", model: lostMark };
+  }
+  const had = before.owned_trains ?? [];
+  const has = after.owned_trains ?? [];
+  if (after.has_yellow_sign === true && before.has_yellow_sign !== true) {
+    return { stage: "mark", model: missingFrom(had, has) };
+  }
+  if (after.is_carcosan === true && before.is_carcosan !== true) {
+    return { stage: "carcosa", model: missingFrom(has, had) };
+  }
+  return null;
+}
+
+/** The one entry `from` holds that `to` does not, by multiset -- `null` when they agree. */
+function missingFrom(from: readonly string[], to: readonly string[]): string | null {
+  const remaining = [...to];
+  for (const model of from) {
+    const at = remaining.indexOf(model);
+    if (at >= 0) remaining.splice(at, 1);
+    else return model;
+  }
+  return null;
 }

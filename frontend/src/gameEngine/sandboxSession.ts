@@ -38,6 +38,7 @@ import {
   resolveVariants,
   sellBuySellInForce,
   rollTurnRevenue,
+  type RevenueSeedParts,
 } from "./gameVariants";
 // Design note #723: the terrain fee is charged on the FIRST build of a hex and never again.
 import { terrainFeeDue, withTerrainPaid } from "./terrainFee";
@@ -218,7 +219,7 @@ import {
 } from "./doubleCertificate";
 // Design note #1320: the Level Playing Field's entities, applied by the `SetupGame` arm.
 import { JK_PRIVATE_ID, withLevelPlayingFieldEntities } from "./levelPlayingField";
-import { runWithoutTrain } from "./yellowSign";
+import { resolveYellowSign, runWithoutTrain, type YellowSignOutcome } from "./yellowSign";
 // Design note #1323: the Kanawha Licence -- its purchase, its grant and the hex it unlocks.
 import {
   JK_TILE_ABILITY_KEY,
@@ -235,6 +236,10 @@ import { tileCitySlotCounts } from "../components/TileGraphics";
 import { stationAnchorRefusal } from "./stationAnchorAuthority";
 import { DIESEL_TIER, dieselExchangeCostFor, dieselExchangeRefusal } from "./dieselExchange";
 import { numberedPrivate } from "./privateOrdinal";
+
+/* Design note #1600: `syncSeatToActingCorporation` (#411) moved to `operatingOrder.ts`, unchanged, beside the queue
+   settle that also needs it; `settleOperatingQueue` is the one writer of the order after it is built. */
+import { buildOperatingOrder, settleOperatingQueue, syncSeatToActingCorporation } from "./operatingOrder";
 
 /** A nominal share price, applied so a `BuyStock`/`SellStock` visibly moves
  *  the cash column. NOT a computed price -- see design note 0. The real
@@ -330,9 +335,6 @@ function advanceSeat(state: GameStateResponse): GameStateResponse {
 /* Design note #1530: `buildOperatingOrder` lives in `operatingOrder.ts` now (the discard module needs it and
    cannot import this file); re-exported so every caller keeps its import. */
 export { buildOperatingOrder } from "./operatingOrder";
-/* Design note #1600: `syncSeatToActingCorporation` (#411) moved to `operatingOrder.ts`, unchanged, beside the queue
-   settle that also needs it; `settleOperatingQueue` is the one writer of the order after it is built. */
-import { buildOperatingOrder, settleOperatingQueue, syncSeatToActingCorporation } from "./operatingOrder";
 
 /* 1830's OR counts by phase: Yellow 1, Green 2, Brown 3. Derived from the TRAINS in play, not from current_global_era. null yields 1 -- the safe direction.
    See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #431 */
@@ -1587,10 +1589,18 @@ export function describeFleetLosses(
       const at = lost.indexOf(sold.model_type);
       if (at >= 0) lost.splice(at, 1);
     }
-    // #1264: so does the one the Yellow Sign took.
-    if (taken !== null && taken.protocol_id === company.company_id && taken.model) {
-      const at = lost.indexOf(taken.model);
-      if (at >= 0) lost.splice(at, 1);
+    /* #1264: so does the one the Yellow Sign took.
+       #1661 (S9-1): THE MESSAGE NO LONGER NAMES IT on a pinned board -- the arm derives the train -- so with
+       no model to splice, EVERY departure is the sign's. That is not a widening: the arm can remove at most
+       the one train the stage takes, and it is the only thing a `YellowSignEvent` does to a fleet, so a loss
+       under this message was never the limit's to report. */
+    if (taken !== null && taken.protocol_id === company.company_id) {
+      if (taken.model) {
+        const at = lost.indexOf(taken.model);
+        if (at >= 0) lost.splice(at, 1);
+      } else {
+        lost.length = 0;
+      }
     }
     if (discardedByChoice !== null && discardedByChoice.protocol_id === company.company_id) {
       const at = lost.indexOf(discardedByChoice.model_type);
@@ -3761,10 +3771,15 @@ function settleOperatingCursor(
        cleared below because the other three can all be zero while it is not -- a turn whose routes earned
        nothing still ran trains. Left out of this predicate, such a turn would leave a breakdown standing that
        no later clear would ever reach. */
+    /* Design note #1661 (S9-1): AND THE SEED IS THE FIFTH. A turn-scoped draw left standing would price the
+       NEXT turn's Yellow Sign against the LAST turn's roll -- #941's bug in the one field whose staleness
+       would change which stage fires rather than how much it paid. Listed in the predicate as well as cleared
+       below for #1031's reason: a turn can end with every other figure at zero and this one set. */
     const staleRun = (company: (typeof after.public_companies)[number]) =>
       (company.last_route_revenue ?? "0") !== "0" ||
       (company.printed_route_revenue ?? "0") !== "0" ||
       (company.last_run_breakdown?.length ?? 0) !== 0 ||
+      company.last_run_revenue_seed !== undefined ||
       (company.routes_run_this_turn ?? 0) !== 0;
     /* ==================================================================
        DESIGN NOTE 1028: REMEMBER IT ON THE WAY OUT
@@ -3813,6 +3828,8 @@ function settleOperatingCursor(
                    has not run this turn" is a positive fact and says so. */
                 last_run_breakdown: [],
                 routes_run_this_turn: 0,
+                // #1661: absent again, so the next turn's sign falls back to the hash rather than to a stale draw.
+                last_run_revenue_seed: undefined,
               }
             : company,
         )
@@ -5734,153 +5751,75 @@ function applyOneAction(
      exists to prevent.
      REFUSES BY RETURNING THE STATE IT WAS HANDED (#778), like every other gate here. */
   if ("YellowSignEvent" in msg) {
-    const { protocol_id, stage, model, cash, revenue_seed } = msg.YellowSignEvent;
+    const { protocol_id, stage, model, cash, revenue_seed, debug_force } = msg.YellowSignEvent;
     const company = state.public_companies.find((entry) => entry.company_id === protocol_id);
     if (!company) return state;
 
     /* ==================================================================
-        DESIGN NOTE 1092: THE FOG COLLECTS, AND THE CURSE STAYS
+        DESIGN NOTE 1661 (S9-1): THE PINNED BOARD DERIVES; THE UNPINNED ONE REPLAYS WHAT IT STORED
        ==================================================================
-       THE THIRD STAGE, dispatched from the run that narrated it. It takes the named train and clears the
-       clock, and deliberately does NOT clear `is_carcosan`: ruled that "if the Carcosa train rusts while
-       owned, the corporation remains permanently cursed", which is the edge case the corporation-level flag
-       was added for -- a scoreboard keyed on holding the train would find nobody here.
-       THE MODEL COMES OFF THE MESSAGE, like the Mark's does (#902): by the time an old log replays here the
-       fleet has moved on, and re-deriving "the marked train" against a later roster could take a different
-       one than the game took.
-       REFUSES BY RETURNING THE STATE IT WAS HANDED if the train is already gone -- a replayed duplicate must
-       not take a second train. */
-    if (stage === "fog") {
-      const owned = company.owned_trains;
-      const marks = company.carcosan_trains ?? [];
-      const markedAt = marks.indexOf(model ?? "");
-      if (markedAt < 0) return state;
-      const survivingMarks = [...marks];
-      survivingMarks.splice(markedAt, 1);
-      const survivors = owned == null ? null : [...owned];
-      if (survivors) {
-        const at = survivors.indexOf(model ?? "");
-        if (at >= 0) survivors.splice(at, 1);
-      }
-      return {
-        ...state,
-        public_companies: state.public_companies.map((entry) =>
-          entry.company_id === protocol_id
-            ? {
-                ...entry,
-                ...(survivors === null ? {} : { owned_trains: survivors }),
-                carcosan_trains: survivingMarks,
-                ...(survivingMarks.length === 0
-                  ? { carcosan_doom_after_macro_round: undefined }
-                  : {}),
-              }
-            : entry,
-        ),
-      };
+       THE SPLIT IS #1551's, AND IT IS ALREADY THE HOUSE PATTERN -- two hundred lines up, a pinned board
+       refuses `RunManualRoute` outright while an unpinned one still applies it. Same shape here, for the same
+       reason: `rules_engine_version` is on the state only when the deal was stamped by a server running this
+       engine, so it is the one honest answer to "may this board be reinterpreted".
+
+       A PINNED BOARD IS AUTHORITATIVE. The stage, the corporation's train, the Mark's award and the gift are
+       derived from the committed board and the run's committed draw; `stage`, `model`, `cash` and
+       `revenue_seed` on the message are IGNORED, so a hand-crafted one cannot choose a different legal
+       result. `debug_force` waives the chance and the window only -- the board still says which stage.
+
+       AN UNPINNED BOARD IS A FIXTURE, NOT A GAME. Every stored `YellowSignEvent` in the development corpus
+       predates the pin (JUNO-Z6C 203 and 567), and re-deriving them would replay old logs to boards they were
+       never played on -- #902's rule, and exactly what index 203 would suffer: it carries no `revenue_seed`
+       and was played under #1046's zeroing, which a derivation would silently replace with #1375's kept run.
+       So their stored outcome is treated as LEGACY REPLAY DATA and applied as before, byte for byte. Such a
+       board cannot be continued in production at all (`SERVER_REPLAY_POLICY.legacyLogs: "refuse"`), so this
+       branch grants no live client any authority it did not already have as a fixture.
+       NO VERSION BUMP FOLLOWS, because no stored log replays to a different board: every log that carries one
+       of these entries is unpinned and takes the branch it always took. */
+    /* ==================================================================
+        DESIGN NOTE 1662 (S9-1): TWO QUESTIONS, NOT ONE -- WHAT THE MESSAGE IS, AND WHAT THE BOARD IS
+       ==================================================================
+       #1661 SPLIT ON THE PIN ALONE AND THAT WAS HALF AN ANSWER. It is right about the corpus and wrong about
+       a LIVE unpinned board: a Firestore sandbox room deals without a server and therefore without a pin, and
+       its clients send the same request shape as everyone else. Keyed on the pin alone, those requests would
+       have fallen into the legacy branch and been read as stored outcomes that are not there.
+       SO THE MESSAGE SAYS WHICH KIND OF ENTRY IT IS and the board says whether a client may be believed. An
+       entry that NAMES a stage is a stored historical outcome; one that does not is a request. Only a stored
+       outcome on an UNPINNED board is applied as written -- the development corpus, and nothing else. A
+       pinned board derives whatever it is sent, so a hand-crafted `stage` is inert there exactly as before.
+       AND THE WAIVER IS THE PIN'S ALONE. `debug_force` is #1128's playtest affordance and an authoritative
+       room has no playtests: it is dropped at hosted ingress (`serverIngress.ts` #1662) and, if one ever
+       reached this reducer anyway, refused here. Two gates rather than one, because an ingress filter is a
+       claim about a transport and this is a claim about the rules -- and the rule is the one that has to hold
+       on every client that replays the entry. A local sandbox room keeps the tool, which is where it was
+       asked for and the only place it was ever meant to work. */
+    const pinned = typeof state.rules_engine_version === "number";
+    const stored = stage !== undefined;
+    if (!stored || pinned) {
+      const derived = resolveYellowSign(state, protocol_id, derivePhase(state)?.tier ?? "2", {
+        force: !pinned && debug_force === true,
+      }).outcome;
+      if (derived === null) return state;
+      return applyYellowSignOutcome(state, protocol_id, derived);
     }
 
-    if (stage === "mark") {
-      /* ==================================================================
-          DESIGN NOTE 1421: THE REDUCER IS THE LAST GATE ON A MARK
-         ==================================================================
-         JUNO-Z6C's log carries a second Mark (index 567, ERIE, phase D) while C&O had held the sign since
-         OR 6.1 -- a line no current client can compose: the Mark's window is phases 2-4 and the game holds
-         one sign. It was dispatched by a tab still running a build from before #1404, whose forced Mark
-         skipped the window and whose sign state came off the log's sentence after #1375 had moved the clause
-         off it. The table reverted it by hand. THE RULES ARE CHECKED HERE TOO, because a stale client is a
-         thing that happens at a playtest and every client replays this same reducer: a Mark while a sign is
-         out, or outside its window, is a no-op on every screen rather than a second curse on one. Entry 203
-         (C&O, phase 4, first sign) replays exactly as before. */
-      const signOut = state.public_companies.some((entry) => entry.has_yellow_sign === true || entry.is_carcosan === true);
-      const tier = derivePhase(state)?.tier ?? "2";
-      if (signOut || !["2", "3", "4"].includes(tier)) return state;
-      /* THE TRAIN GOES AND THE TURN EARNS NOTHING. Ruled: "loses its lowest value train. It receives no
-         standard route revenue for this submission. Instead, award the corporation cash equal to 0.5x the
-         deleted train's depot value."
-         BOTH REVENUE FIELDS ARE ZEROED, not just the modified one. `printed_route_revenue` is what the next
-         train's roll accumulates onto (#941), so leaving it would pay for these routes on the corporation's
-         NEXT dispatch -- the silent double-payment #934 was reported for. */
-      const owned = company.owned_trains;
-      if (owned == null) return state;
-      const at = owned.indexOf(model);
-      if (at < 0) return state;
-      const survivors = [...owned];
-      survivors.splice(at, 1);
-      const award = Math.max(0, Number(cash ?? 0) || 0);
-      /* ==================================================================
-          DESIGN NOTE 1375: THE OTHER TRAINS' ROUTES STAND
-         ==================================================================
-         RULED SINCE #1046: the Mark takes the train and THAT TRAIN'S ROUTE; what the rest of the fleet ran
-         is still earned. `runWithoutTrain` (yellowSign.ts) takes the taken train's printed route out of the
-         run and rolls the remainder under the seed the run itself used -- carried on the message, because
-         the reducer must not draw (#1051). A message without the seed is one written under the old ruling
-         and keeps the zeroing it was played with, so no stored log replays to a different board. */
-      const kept = revenue_seed === undefined ? null : runWithoutTrain(company, model, {
-        macroRound: state.macro_round_number ?? 0,
-        subRound: state.sub_round_index ?? 0,
-        companyId: protocol_id,
-        turnSeed: revenue_seed,
-      });
-      return {
-        ...state,
-        public_companies: state.public_companies.map((entry) =>
-          entry.company_id === protocol_id
-            ? {
-                ...entry,
-                owned_trains: survivors,
-                has_yellow_sign: true,
-                treasury: String((Number(entry.treasury ?? 0) || 0) + award),
-                last_route_revenue: String(kept ? kept.adjusted : 0),
-                printed_route_revenue: String(kept ? kept.printed : 0),
-                ...(kept && kept.breakdown ? { last_run_breakdown: kept.breakdown } : {}),
-                ...(kept ? { routes_run_this_turn: kept.routes } : {}),
-              }
-            : entry,
-        ),
-      };
-    }
-
-    /* THE GIFT. Ruled: "instantly gains a train matching the current phase's tier ... it does not deplete the
-       bank's supply ... and it bypasses train limit checks until the end of the Operating Round."
-       IT JOINS `owned_trains` LIKE ANY OTHER TRAIN and is ALSO listed in `ghost_trains`, which is #979's
-       shape: the roster stays the one place a fleet lives, and the exception is a mark beside it. A separate
-       array of ghost trains would be a second roster to fall out of step with the first.
-       THE FLAG IS CLEARED HERE. "Remove the corporation's flag ... so it cannot re-occur." */
-    return {
-      ...state,
-      public_companies: state.public_companies.map((entry) =>
-        entry.company_id === protocol_id
-          ? {
-              ...entry,
-              owned_trains: [...(entry.owned_trains ?? []), model],
-              ghost_trains: [...(entry.ghost_trains ?? []), model],
-              /* ==================================================================
-                  DESIGN NOTE 1089: THREE MARKS, THREE CLOCKS, ONE GIFT
-                 ==================================================================
-                 `ghost_trains` IS THE LIMIT EXEMPTION and empties at the end of this Operating Round (#1046).
-                 `carcosan_trains` IS THE IDENTITY -- the gold trim, the chip icon, the thing the doom clock
-                 comes for -- and outlives it by a full OR set. Written together here and separated
-                 everywhere after, because this is the one moment they are the same train for the same
-                 reason. */
-              carcosan_trains: [...(entry.carcosan_trains ?? []), model],
-              /* THE CURSE IS ON THE COMPANY. Ruled: "the only way a corporation loses the flag is by
-                 successfully transferring the Carcosa train". It survives the train's own destruction, which
-                 is the edge case the end-game egg needed -- a scoreboard keyed on holding the train would
-                 find nobody once it had rusted. */
-              is_carcosan: true,
-              /* THE DOOM CLOCK, STARTED HERE ONLY FOR A GIFTED DIESEL. Ruled: "A Carcosan D-train begins
-                 this countdown the moment it is gifted ... completes the OR set in which it is gifted, and
-                 then the next OR set before disappearing into the fog." A gifted 5 or 6 waits for the first
-                 D-train instead, which `startCarcosanDoomClock` handles at the phase change.
-                 `+ 1` IS THE WHOLE RULE: triggered during set N, gone at the conclusion of set N + 1. */
-              ...(trainTier(model) === "D"
-                ? { carcosan_doom_after_macro_round: (state.macro_round_number ?? 0) + 1 }
-                : {}),
-              has_yellow_sign: false,
-            }
-          : entry,
-      ),
-    };
+    return applyYellowSignOutcome(state, protocol_id, {
+      stage,
+      model: model ?? "",
+      cash: Math.max(0, Number(cash ?? 0) || 0),
+      /* #1375's legacy branch, preserved exactly: a stored Mark with no recorded seed keeps #1046's zeroing,
+         so no stored log replays to a different board. `null` is what that absence means here. */
+      parts:
+        revenue_seed === undefined
+          ? null
+          : {
+              macroRound: state.macro_round_number ?? 0,
+              subRound: state.sub_round_index ?? 0,
+              companyId: protocol_id,
+              turnSeed: revenue_seed,
+            },
+    });
   }
 
   if ("RunMultipleRoutes" in msg) {
@@ -6017,6 +5956,15 @@ function applyOneAction(
               // held, because "this message could not say" is not "the previous answer was wrong".
               ...(breakdown ? { last_run_breakdown: breakdown } : {}),
               routes_run_this_turn: (entry.routes_run_this_turn ?? 0) + routes.length,
+              /* Design note #1661 (S9-1): THE COMMITTED DRAW, ONTO THE BOARD. The number is #1051's -- rolled
+                 once in the shell, carried in this message, read here rather than re-rolled -- and this
+                 writes it where the `YellowSignEvent` that follows can reach it. Written ONLY when the
+                 message carries one: absence is #232's "the log does not say", which `resolveYellowSign`
+                 answers with the same `legacyTurnSeed` fallback this arm's own roll uses, so an old entry is
+                 priced and narrated identically whichever reader asks. */
+              ...(typeof msg.RunMultipleRoutes.revenue_seed === "number"
+                ? { last_run_revenue_seed: msg.RunMultipleRoutes.revenue_seed }
+                : {}),
             }
           : entry,
       ),
@@ -6145,6 +6093,165 @@ function applyOneAction(
   // Any unconsidered ExecuteMsg variant. Advancing the turn keeps the loop alive, and a turn that moves wrongly is far easier to notice than a control that silently does nothing.
   // See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #2
   return advanceSeat(state);
+}
+
+/* ==================================================================
+    DESIGN NOTE 1661 (S9-1): ONE APPLIER, TWO SOURCES OF THE OUTCOME
+   ==================================================================
+   THE THREE BRANCHES BELOW ARE #1046's, #1092's AND #1375's, UNCHANGED. What moved is where the outcome comes
+   from: the derived answer on a pinned board, the stored one on an unpinned fixture. Factoring them into one
+   function is what stops the two paths drifting into two sets of Yellow Sign rules -- the split is about
+   AUTHORITY, not about what the sign does, and a second copy of the mutation would quietly make it about
+   both.
+   THE GATES STAY HERE. #1421's "a Mark while a sign is out, or outside its window, is a no-op" is the
+   reducer's last word on a stale client and is asked of both paths; on the derived path it agrees with the
+   resolution by construction, which is the right relationship between a derivation and the gate behind it. */
+type AppliedYellowSign = Omit<YellowSignOutcome, "parts"> & { parts: RevenueSeedParts | null };
+
+function applyYellowSignOutcome(
+  state: GameStateResponse,
+  protocolId: number,
+  outcome: AppliedYellowSign,
+): GameStateResponse {
+  const { stage, model, cash, parts } = outcome;
+  const company = state.public_companies.find((entry) => entry.company_id === protocolId);
+  if (!company) return state;
+
+  /* ==================================================================
+      DESIGN NOTE 1092: THE FOG COLLECTS, AND THE CURSE STAYS
+     ==================================================================
+     THE THIRD STAGE, dispatched from the run that narrated it. It takes the named train and clears the
+     clock, and deliberately does NOT clear `is_carcosan`: ruled that "if the Carcosa train rusts while
+     owned, the corporation remains permanently cursed", which is the edge case the corporation-level flag
+     was added for -- a scoreboard keyed on holding the train would find nobody here.
+     REFUSES BY RETURNING THE STATE IT WAS HANDED if the train is already gone -- a replayed duplicate must
+     not take a second train. */
+  if (stage === "fog") {
+    const owned = company.owned_trains;
+    const marks = company.carcosan_trains ?? [];
+    const markedAt = marks.indexOf(model);
+    if (markedAt < 0) return state;
+    const survivingMarks = [...marks];
+    survivingMarks.splice(markedAt, 1);
+    const survivors = owned == null ? null : [...owned];
+    if (survivors) {
+      const at = survivors.indexOf(model);
+      if (at >= 0) survivors.splice(at, 1);
+    }
+    return {
+      ...state,
+      public_companies: state.public_companies.map((entry) =>
+        entry.company_id === protocolId
+          ? {
+              ...entry,
+              ...(survivors === null ? {} : { owned_trains: survivors }),
+              carcosan_trains: survivingMarks,
+              ...(survivingMarks.length === 0
+                ? { carcosan_doom_after_macro_round: undefined }
+                : {}),
+            }
+          : entry,
+      ),
+    };
+  }
+
+  if (stage === "mark") {
+    /* ==================================================================
+        DESIGN NOTE 1421: THE REDUCER IS THE LAST GATE ON A MARK
+       ==================================================================
+       JUNO-Z6C's log carries a second Mark (index 567, ERIE, phase D) while C&O had held the sign since
+       OR 6.1 -- a line no current client can compose: the Mark's window is phases 2-4 and the game holds
+       one sign. It was dispatched by a tab still running a build from before #1404, whose forced Mark
+       skipped the window and whose sign state came off the log's sentence after #1375 had moved the clause
+       off it. The table reverted it by hand. THE RULES ARE CHECKED HERE TOO, because a stale client is a
+       thing that happens at a playtest and every client replays this same reducer: a Mark while a sign is
+       out, or outside its window, is a no-op on every screen rather than a second curse on one. Entry 203
+       (C&O, phase 4, first sign) replays exactly as before. */
+    const signOut = state.public_companies.some((entry) => entry.has_yellow_sign === true || entry.is_carcosan === true);
+    const tier = derivePhase(state)?.tier ?? "2";
+    if (signOut || !["2", "3", "4"].includes(tier)) return state;
+    /* THE TRAIN GOES AND THE TURN EARNS NOTHING. Ruled: "loses its lowest value train. It receives no
+       standard route revenue for this submission. Instead, award the corporation cash equal to 0.5x the
+       deleted train's depot value."
+       BOTH REVENUE FIELDS ARE ZEROED, not just the modified one. `printed_route_revenue` is what the next
+       train's roll accumulates onto (#941), so leaving it would pay for these routes on the corporation's
+       NEXT dispatch -- the silent double-payment #934 was reported for. */
+    const owned = company.owned_trains;
+    if (owned == null) return state;
+    const at = owned.indexOf(model);
+    if (at < 0) return state;
+    const survivors = [...owned];
+    survivors.splice(at, 1);
+    const award = Math.max(0, cash);
+    /* ==================================================================
+        DESIGN NOTE 1375: THE OTHER TRAINS' ROUTES STAND
+       ==================================================================
+       RULED SINCE #1046: the Mark takes the train and THAT TRAIN'S ROUTE; what the rest of the fleet ran
+       is still earned. `runWithoutTrain` (yellowSign.ts) takes the taken train's printed route out of the
+       run and rolls the remainder under the seed the run itself used. `null` parts is a stored entry
+       written under the old ruling (#1661: an unpinned board, no `revenue_seed`) and keeps the zeroing it
+       was played with, so no stored log replays to a different board. */
+    const kept = parts === null ? null : runWithoutTrain(company, model, parts);
+    return {
+      ...state,
+      public_companies: state.public_companies.map((entry) =>
+        entry.company_id === protocolId
+          ? {
+              ...entry,
+              owned_trains: survivors,
+              has_yellow_sign: true,
+              treasury: String((Number(entry.treasury ?? 0) || 0) + award),
+              last_route_revenue: String(kept ? kept.adjusted : 0),
+              printed_route_revenue: String(kept ? kept.printed : 0),
+              ...(kept && kept.breakdown ? { last_run_breakdown: kept.breakdown } : {}),
+              ...(kept ? { routes_run_this_turn: kept.routes } : {}),
+            }
+          : entry,
+      ),
+    };
+  }
+
+  /* THE GIFT. Ruled: "instantly gains a train matching the current phase's tier ... it does not deplete the
+     bank's supply ... and it bypasses train limit checks until the end of the Operating Round."
+     IT JOINS `owned_trains` LIKE ANY OTHER TRAIN and is ALSO listed in `ghost_trains`, which is #979's
+     shape: the roster stays the one place a fleet lives, and the exception is a mark beside it. A separate
+     array of ghost trains would be a second roster to fall out of step with the first.
+     THE FLAG IS CLEARED HERE. "Remove the corporation's flag ... so it cannot re-occur." */
+  return {
+    ...state,
+    public_companies: state.public_companies.map((entry) =>
+      entry.company_id === protocolId
+        ? {
+            ...entry,
+            owned_trains: [...(entry.owned_trains ?? []), model],
+            ghost_trains: [...(entry.ghost_trains ?? []), model],
+            /* ==================================================================
+                DESIGN NOTE 1089: THREE MARKS, THREE CLOCKS, ONE GIFT
+               ==================================================================
+               `ghost_trains` IS THE LIMIT EXEMPTION and empties at the end of this Operating Round (#1046).
+               `carcosan_trains` IS THE IDENTITY -- the gold trim, the chip icon, the thing the doom clock
+               comes for -- and outlives it by a full OR set. Written together here and separated
+               everywhere after, because this is the one moment they are the same train for the same
+               reason. */
+            carcosan_trains: [...(entry.carcosan_trains ?? []), model],
+            /* THE CURSE IS ON THE COMPANY. Ruled: "the only way a corporation loses the flag is by
+               successfully transferring the Carcosa train". It survives the train's own destruction, which
+               is the edge case the end-game egg needed -- a scoreboard keyed on holding the train would
+               find nobody once it had rusted. */
+            is_carcosan: true,
+            /* THE DOOM CLOCK, STARTED HERE ONLY FOR A GIFTED DIESEL. Ruled: "A Carcosan D-train begins
+               this countdown the moment it is gifted ... completes the OR set in which it is gifted, and
+               then the next OR set before disappearing into the fog." A gifted 5 or 6 waits for the first
+               D-train instead, which `startCarcosanDoomClock` handles at the phase change.
+               `+ 1` IS THE WHOLE RULE: triggered during set N, gone at the conclusion of set N + 1. */
+            ...(trainTier(model) === "D"
+              ? { carcosan_doom_after_macro_round: (state.macro_round_number ?? 0) + 1 }
+              : {}),
+            has_yellow_sign: false,
+          }
+        : entry,
+    ),
+  };
 }
 
 /** Whether `phase` is one where seats act in order, as opposed to

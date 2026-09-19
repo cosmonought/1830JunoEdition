@@ -188,6 +188,25 @@ export interface PublicCompanyState {
    *  keying the roll by train MODEL would hand both the same face.
    *  Turn-scoped, and cleared beside `last_route_revenue` by the same turn-change rule (#777). */
   routes_run_this_turn?: number;
+  /** ==================================================================
+   *   DESIGN NOTE 1661 (S9-1): THE TURN'S COMMITTED DRAW, ON THE BOARD
+   *  ==================================================================
+   *
+   * THE SEED THE RUN WAS PRICED UNDER, copied off `RunMultipleRoutes.revenue_seed` by the arm that applied
+   * it. #1051 already makes that number a COMMITTED draw -- rolled once in the shell, written into the log,
+   * read back by every client -- so this field stores nothing new; it makes the committed draw reachable from
+   * the BOARD rather than only from the message that carried it.
+   *
+   * WHICH IS WHAT S9-1 NEEDED. The Yellow Sign's outcome is a pure function of the run's draw and the
+   * committed board, but the reducer sees one message at a time: at the `YellowSignEvent` that follows a run
+   * it no longer holds the run's payload. Recording the seed here is what lets `resolveYellowSign` derive the
+   * stage, the train and the award authoritatively instead of trusting the figures a client sent.
+   *
+   * TURN-SCOPED, cleared beside `last_route_revenue` and its three siblings by #777's turn-change rule -- for
+   * #777's own reason, since a seed outliving its turn would price the next turn's sign against the last
+   * turn's draw. Absent on every board dealt before this field, which #232 reads as "the log does not say"
+   * and `resolveYellowSign` answers with `legacyTurnSeed`, the same fallback the run arm and the shell use. */
+  last_run_revenue_seed?: number;
   /** Design note #906: trains under Gentle Rust that are living on borrowed time.
    *
    *  NOT IN `owned_trains`, and that is the whole mechanism: every surface that counts a corporation's trains

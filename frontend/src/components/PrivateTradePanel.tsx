@@ -30,6 +30,10 @@ import { corporateSaleBlockReason } from "../gameEngine/baltimorePrivate";
 import { PRIVATE_COMPANY_CATALOG, abilitySummary } from "../utils/privateCatalog";
 import { numberedPrivate } from "../gameEngine/privateOrdinal";
 
+/** The band the contract enforces, mirrored -- design note #1. #1541: the band lives in the engine now
+ *  (`gameEngine/privatePriceBand.ts`), shared with the emergency private sale; re-exported here for its callers. */
+import { privatePriceBounds } from "../gameEngine/privatePriceBand";
+
 /** A live proposal. Client-side only -- design note #0. */
 export interface PrivateTradeProposal {
   privateId: number;
@@ -44,10 +48,7 @@ export interface PrivateTradeProposal {
   price: number;
 }
 
-/** The band the contract enforces, mirrored -- design note #1. #1541: the band lives in the engine now
- *  (`gameEngine/privatePriceBand.ts`), shared with the emergency private sale; re-exported here for its callers. */
 export { PRIVATE_PRICE_MIN_FACTOR, PRIVATE_PRICE_MAX_FACTOR, privatePriceBounds } from "../gameEngine/privatePriceBand";
-import { privatePriceBounds } from "../gameEngine/privatePriceBand";
 
 /* Design note #660a: `eligiblePrivatesForPurchase` DELETED. Found while adding the B&O sale ban to it: nothing
    called it. The modal renders from the LOOSE list and decides what may be proposed by resolving the selection

@@ -1304,6 +1304,47 @@ stored log contains an LPF sale of the other-20 (Slice 8.3's sweep: 15 stored sa
 presidency change at all). **STAYS OPEN:** the owner's 2026-09-17 ruling absorbed S9-14 into Slice 8.3 and left
 this one explicitly out — "Do NOT touch S9-13. The chart-movement treatment of a sold other-20 remains Stage 9."
 **Later LPF / double-certificate slice.**
+**RESOLVED — Stage 9.4c.** **Root cause:** `applySandboxMarketAction`'s `SellStock` arm derived a single
+`blocks` figure from `percentage / 10` and used it for BOTH the chart step (`ctx.projectSale(mark, blocks)`)
+and the proceeds (`priceOf(protocol_id) * blocks`) — correct for proceeds (a 20 % block is worth twice a 10 %
+one whichever card carries it), wrong for the chart, which is per physical CERTIFICATE, not per tenth of a
+percent. **Fix, reusing the Stage 8.3 physical-certificate model (no second representation added):**
+`doubleCertificate.ts` gains `certificatesSoldInMarketMove(company, holder, percentage)` — the same
+`ordinaryPercentHeld` / `doubleSaleEffect` split #1324 already reads, answering "how many physical cards does
+this sale move": the ordinary portion is still one card per ten percent, and the double — touched at all,
+block or half — is exactly one more card, never two. `sandboxSession.ts` splits the old single `blocks` into
+`shareUnits` (unchanged, feeds `proceeds` only) and `certificateSteps` (feeds `ctx.projectSale` only), wired
+through a new optional `SandboxMarketContext.certificatesSold` callback the reducer supplies from real state
+(`applySandboxActionAfterAuction`); callers that don't supply it (chartless fixtures, existing direct
+`applySandboxMarketAction` tests) fall back to the old percentage/10 count unchanged. **Files changed:**
+`frontend/src/gameEngine/doubleCertificate.ts` (new export), `frontend/src/gameEngine/sandboxSession.ts`
+(import, `SandboxMarketContext.certificatesSold`, the `SellStock` arm's `shareUnits`/`certificateSteps` split,
+the call site wiring), `frontend/src/utils/soldOutRise.test.ts` (one literal-source assertion updated for the
+`blocks` → `certificateSteps` rename it was pinning). **Focused tests, new:**
+`frontend/src/utils/marketStepCertificates.test.ts`, 4/4 passing — one ordinary 10 % certificate (one market
+step), one non-president 20 % certificate sold as a whole block (one market step, not two), two separate
+ordinary 10 % certificates (two market steps), and proceeds staying percentage-correct (the 20 % block pays
+exactly twice the 10 % sale) with the Bank Pool's physical-certificate count (`certificateCardsInPool`)
+asserted on each. **Directly implicated existing suites, re-run, 215/215 passing (incl. the 4 new above):**
+`presidencyLpf.test.ts`, `presidentCertificateSale.test.ts`, `doubleWithhold.test.ts`, `shareSale.test.ts`,
+`soldOutRise.test.ts`, `stockTransactionAuthority.test.ts`, `stockRefusalAtomicity.test.ts`,
+`presidencyAuthority.test.ts`, `bloodPriceArrival.test.ts` — the S8-15/S9-14 presidency exchange (which this
+fix does not touch: `presidentAfterSale` / `needsDoubleForPresidencyExchange` are untouched) settles exactly as
+before. **Corpus — targeted scan only, NOT an 18/18 canonical-corpus reconciliation:** this slice located 8
+`server/data/*.log.jsonl` logs in the working tree (six under the LPF variant: 8E8, CV4, CW7, FCJ, G6J, Z6C)
+and scanned those 8 — not the established Stage-9 canonical 18-file corpus, which this slice did not assemble
+or search. A text scan of the six LPF logs for a `SellStock` against either Scenario-D company (ERIE id 6,
+N&W id 10) found two hits, both in `JUNO-FCJ` (indices 849 and 851, `protocol_id: 6`, `percentage: 30`);
+replaying the prefix up to each shows ERIE still unfloated at that point (`is_floated: false`,
+`player_holdings: []`) and the state, market position and actor's cash byte-identical before and after both
+entries — both refused, not applied sales. No other located log references either company in a `SellStock`.
+**So: no applied sale of the non-president 20% certificate was found in the 8 logs this slice located** —
+consistent with, but not a repeat or extension of, Slice 8.3's own earlier sweep ("no stored log contains an
+LPF sale of the other-20"). **Complete canonical 18-file reconciliation remains owed and is explicitly
+deferred to Stage-9 closure** — this entry's corpus note is not that reconciliation and must not be read as
+one. **Typecheck:** `tsc --noEmit` clean. **Part-C/UI consequence:** none
+— the fix is inside the chart-step atom only; no panel, log line or Rules Reference text names a certificate
+count. `RULES_ENGINE_VERSION` unchanged at 6.
 
 **S9-14. `shareSaleBlock` judged the half-sale on the seller's current cards, so it did not see the exchange the sale itself forces.**
 Status `RESOLVED` — **ABSORBED INTO Slice 8.3** by owner ruling 2026-09-17 and fixed there (#1624; committed `02a9838`). *(Was `FILED` for a later Stage-9 slice, filed by Slice 8.3 the same day.)* Rulebook §5.4 +

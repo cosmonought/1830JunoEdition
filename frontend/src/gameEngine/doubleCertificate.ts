@@ -169,6 +169,38 @@ export function doubleSaleRefusal(company: CompanyLike, holder: string, percenta
   return effect.kind === "refused" ? effect.reason : null;
 }
 
+/** ==================================================================
+ *   DESIGN NOTE 1650 (S9-13): THE CHART WALKS PER CARD, NOT PER TEN PERCENT
+ *  ==================================================================
+ *
+ * FILED (Slice 8.3, left open by the owner's 2026-09-17 ruling on S9-14): "the chart walks one row per 10%,
+ * not per certificate, so the LPF other-20 sold as a block drops the token twice." `RULES_HARDENING_BACKLOG.md`
+ * S9-13.
+ *
+ * PERCENTAGE, PROCEEDS AND MARKET MOVEMENT ARE THREE DIFFERENT NUMBERS, and #1324 already keeps the first two
+ * of them straight -- `certificatesIn`/`saleProceeds` (`shareSale.ts`) price a sale in tens because a 20%
+ * block IS worth twice a 10% one, whatever card carries it. The chart is not a price: 1830's stock market
+ * steps once per physical certificate that changes hands, and the other-20 is ONE certificate for exactly the
+ * reason it is one line in `certificateCardsHeld` above -- "A CERTIFICATE COUNT is president (1) + double (1)
+ * + the rest in tens."
+ *
+ * SO THIS ASKS THE SAME SPLIT `doubleSaleEffect` AND `ordinaryPercentHeld` ALREADY READ, rather than a new
+ * one: the ordinary portion of the sale is still one card per ten percent (unchanged from before this note),
+ * and the double -- touched at all, block or half -- is exactly one more card, never two. A holder with no
+ * double degrades to the plain percentage/10 count this replaces, so an ordinary seller sees no change.
+ *
+ * NOT THE PRESIDENT'S CERTIFICATE. It is never sold (`presidentCertificateSale.test.ts`); `ordinaryPercentHeld`
+ * already excludes it the same way `doubleSaleEffect`'s callers do, so this function does not re-litigate that
+ * gate -- a sale that reaches it was refused upstream and never walks the chart at all. */
+export function certificatesSoldInMarketMove(company: CompanyLike, holder: string, percentage: number): number {
+  const ordinary = ordinaryPercentHeld(company, holder);
+  const ordinarySold = Math.min(percentage, ordinary);
+  const ordinaryCerts = ordinarySold / SANDBOX_SHARE_PERCENTAGE;
+  const fromDouble = percentage - ordinarySold;
+  const doubleCerts = fromDouble > 0 ? 1 : 0;
+  return Math.max(1, ordinaryCerts + doubleCerts);
+}
+
 /* ---- the presidency exchange ------------------------------------------------------ */
 
 /** ==================================================================

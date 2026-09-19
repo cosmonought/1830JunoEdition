@@ -506,7 +506,10 @@ describe("every arm of the compass names a movement the code performs", () => {
   });
 
   it("has a down the market atom performs", () => {
-    expect(marketSource).toContain("ctx.projectSale(mark, blocks)");
+    // S9-13: the sale's chart step walks `certificateSteps` (physical certificates), not the `shareUnits`
+    // proceeds are priced in -- renamed from `blocks` when the two were split apart (design note 1650,
+    // `doubleCertificate.ts`), so the token stops walking two rows for a single 20% certificate.
+    expect(marketSource).toContain("ctx.projectSale(mark, certificateSteps)");
   });
 
   it("colours the two gains green and the two losses red", () => {

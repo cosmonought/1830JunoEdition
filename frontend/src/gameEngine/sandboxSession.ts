@@ -211,6 +211,7 @@ import {
    the arithmetic -- the BuyStock arm no longer computes a percentage, it is handed one by
    `priceStockPurchase`, which is where the constant is read now. */
 import {
+  certificatesSoldInMarketMove,
   doublePurchaseRefusal,
   doubleSaleEffect,
   withDoubleAt,
@@ -2422,6 +2423,10 @@ export interface SandboxMarketContext {
    *  visible symptom is a price drop with no matching change in anybody's holdings -- which reads as a market
    *  bug rather than as a refused action. */
   saleRefused?: (companyId: number, percentage: number) => boolean;
+  /** S9-13: physical certificates the sale moves off the seller's hand, for the chart step -- one row per
+   *  CARD, not per 10%. Absent (a chartless/no-actor caller) falls back to the pre-fix percentage/10 count,
+   *  unchanged for every caller that does not supply it. See design note 1650, `doubleCertificate.ts`. */
+  certificatesSold?: (companyId: number, percentage: number) => number;
   /** Design note #774: the same split again, for the dividend. This atom advances BEFORE the game state, so
    *  a declaration the reducer refuses would still walk the token left -- which IS the reported symptom, a
    *  price that moved further than anything on the board accounts for. One refusal, asked by both. */
@@ -2529,9 +2534,17 @@ export function applySandboxMarketAction(
     const { protocol_id, percentage } = msg.SellStock;
     // Design note #748a: a sale the reducer will decline moves no token either.
     if (ctx?.saleRefused?.(protocol_id, percentage) === true) return unchanged;
-    const blocks = Math.max(1, Math.round(percentage / SANDBOX_SHARE_PERCENTAGE));
+    // PROCEEDS are priced in tenths of a percent -- #1324's `saleProceeds` unit, unchanged by S9-13: a 20%
+    // block is worth twice a 10% one whichever card carries it.
+    const shareUnits = Math.max(1, Math.round(percentage / SANDBOX_SHARE_PERCENTAGE));
+    // S9-13: MARKET MOVEMENT is certificates sold, not tenths of a percent -- the other-20 is one card
+    // whether sold as a block or half-sold, so it drops the token one row like any other single certificate.
+    // Kept separate from `shareUnits` above on purpose (design note 1650, `doubleCertificate.ts`): folding
+    // them back into one number is the exact bug this note exists to prevent.
+    const certificateSteps =
+      ctx?.certificatesSold?.(protocol_id, percentage) ?? shareUnits;
     const mark = prices[protocol_id] ?? null;
-    const proceeds = priceOf(protocol_id) * blocks;
+    const proceeds = priceOf(protocol_id) * shareUnits;
 
     if (mark === null || !ctx?.projectSale) {
       return { prices, tradePrice: proceeds, moved: null };
@@ -2539,7 +2552,7 @@ export function applySandboxMarketAction(
     // Walked from the CELL, not from the price -- design note #272. Two
     // cells share a price on this chart and stepping down from the wrong
     // one lands somewhere the marker never was.
-    const landed = ctx.projectSale(mark, blocks);
+    const landed = ctx.projectSale(mark, certificateSteps);
     if (!landed || (landed.x === mark.x && landed.y === mark.y)) {
       return { prices, tradePrice: proceeds, moved: null };
     }
@@ -2810,6 +2823,14 @@ function applySandboxActionAfterAuction(
     const priced = applySandboxMarketAction(state.market_positions, msg, {
       ...ctx?.marketContext,
       dividendRefused: (companyId: number) => dividendRefused(state, companyId),
+      certificatesSold: (companyId: number, percentage: number) => {
+        const seller = ctx?.actor ?? null;
+        const company = state.public_companies.find((entry) => entry.company_id === companyId);
+        if (!seller || !company) {
+          return Math.max(1, Math.round(percentage / SANDBOX_SHARE_PERCENTAGE));
+        }
+        return certificatesSoldInMarketMove(company, seller, percentage);
+      },
       /* ==================================================================
           DESIGN NOTE 1570: THE CHART ASKS THE SAME PREDICATE THE CORE WILL (Batch 7.2)
          ==================================================================

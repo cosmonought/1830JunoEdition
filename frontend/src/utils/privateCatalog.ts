@@ -220,11 +220,14 @@ export const PRIVATE_COMPANY_CATALOG: Readonly<Record<number, PrivateCatalogEntr
        THE LONG FORM WAS ALREADY RIGHT, which is what makes this a drift rather than a policy -- "whoever buys
        it out of the auction IS HANDED a 10% PRR share" sits a few lines below the bullet that said "was
        handed". One private, two tenses, three lines apart. */
-      "Its auction buyer is handed a 10% PRR share on purchase.",
+      /* "INITIAL PURCHASER" IS THE RULEBOOK'S WORD (3.0: "The initial purchaser of the CA immediately
+         receives a 10% share of the PRR without further payment."), and it is the one that stays true under
+         the delayed-auction variant, where the sale is not the opening auction of the game. */
+      "Its initial purchaser is handed a 10% PRR share on purchase.",
       "Nothing further to trigger \u2014 the company stays open.",
     ],
     ability:
-      "Whoever buys it out of the auction is handed a 10% PRR share at once and at no further cost. Nothing is triggered and the company stays open. The PRR will not be operating yet, but the share is held or sold like any other.",
+      "Its initial purchaser is handed a 10% PRR share at once and at no further cost. Nothing is triggered and the company stays open. The PRR will not be operating yet, but the share is held or sold like any other.",
   },
   6: {
     acronym: "BO",

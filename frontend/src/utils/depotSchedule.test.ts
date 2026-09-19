@@ -35,6 +35,10 @@ describe("nothing was lost in the split", () => {
   });
 
   it("keeps every phase name", () => {
+    /* #1327: the Diesel row used to read "Diesel Era" while the phase badge and the Rules Reference both
+       said `Phase D`. The names are now derived from `gamePhase.ts`'s own naming, so this list is what the
+       badge prints -- which is what this field's comment always promised. The Diesel keeps a gloss because
+       `Phase D` alone does not say which train opens it, and the gloss is the app's own existing spelling, the one the phase-shift warning has printed since #5. */
     const phases = TIERS.map((tier) => DEPOT_SCHEDULE[tier].phase);
     expect(phases).toEqual([
       "Phase 2",
@@ -42,7 +46,7 @@ describe("nothing was lost in the split", () => {
       "Phase 4",
       "Phase 5",
       "Phase 6",
-      "Diesel Era",
+      "Phase D (Diesel)",
     ]);
   });
 

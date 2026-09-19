@@ -697,8 +697,10 @@ function PrivateCard({
                   ref={isTurn ? turnRowRef : undefined}
                   style={{
                     ...styles.bidRowEntry,
+                    /* #1449: `borderLeft`, the property the base declares. `seatColorFor` returns null until
+                       the seat resolves, so a bare `borderLeftColor` here is genuinely removable. */
                     ...(stripe
-                      ? { borderLeftColor: stripe, backgroundColor: washedPlayerSurface(CARD_SURFACE, stripe) }
+                      ? { borderLeft: `4px solid ${stripe}`, backgroundColor: washedPlayerSurface(CARD_SURFACE, stripe) }
                       : null),
                     ...(bid.bidder === connectedWalletAddress ? styles.bidRowEntryOwn : null),
                   }}

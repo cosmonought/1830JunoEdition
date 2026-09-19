@@ -29,7 +29,7 @@
 // everything the helper decides. The gap is the JSX itself, and it is the same gap every other UI assertion
 // in this repo has.
 
-import { TIER_ORDER, trainTierName, trainTierNamePlural } from "../gameEngine/gamePhase";
+import { TIER_ORDER, phaseName, trainTierName, trainTierNamePlural } from "../gameEngine/gamePhase";
 import { readSource, readStripped, sliceBetween } from "./sourceScan";
 
 describe("a tier is named the way a player says it", () => {
@@ -147,8 +147,19 @@ describe("the note and the code agree", () => {
     // `readSource` resolves from `src/`, not from this file -- #886's one reader, one root.
     const RAW = readSource("gameEngine/gamePhase.ts");
     expect(RAW).toContain("THE PHASE IS NOT THE TRAIN");
-    // And the phase labels themselves still say it, which is the fact the note is defending.
-    expect(readStripped("gameEngine/gamePhase.ts")).toContain('"Phase D (Diesel)"');
-    expect(readStripped("gameEngine/depotSchedule.ts")).toContain('phase: "Diesel Era"');
+    /* And the phase labels themselves still say it, which is the fact the note is defending.
+       #1327 REDREW WHERE THE WORD LIVES WITHOUT MOVING THE BOUNDARY. This case used to pin two literals --
+       `"Phase D (Diesel)"` in this file and `phase: "Diesel Era"` in `depotSchedule` -- which were two
+       spellings of ONE phase, and the second agreed with neither the phase badge nor the Rules Reference.
+       Both now come from `phaseName`, which still carries "Diesel" for exactly the reason this note gives.
+       So the claim is unchanged and the assertion is stronger: the gloss survives, and it survives in one
+       place rather than in two that could part again. */
+    expect(readStripped("gameEngine/gamePhase.ts")).toContain('`${phaseLabel(tier)} (Diesel)`');
+    expect(phaseName("D")).toBe("Phase D (Diesel)");
+    expect(phaseName("6")).toBe("Phase 6");
+    /* The ledger's depot table reads that namer instead of keeping its own list. */
+    const depot = readStripped("gameEngine/depotSchedule.ts");
+    expect(depot).toContain("phaseName");
+    expect(depot).not.toContain('phase: "Diesel Era"');
   });
 });

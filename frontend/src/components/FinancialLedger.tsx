@@ -59,6 +59,8 @@ import { CapacityPill, LastRoutePayout, lastRunFigure, TrainChips } from "./Trai
 import { playerLiquidity } from "../gameEngine/endgame";
 import { marketZoneForPrice, type MarketGridResponse } from "./StockMarketRenderer";
 import { DEPOT_SCHEDULE, firstPurchaseEffects, rustLabel } from "../gameEngine/depotSchedule";
+/* #1433: every one of these tables is wider than a phone pane, and none of them said so. */
+import { SidewaysScroller } from "./SidewaysScroller";
 import { showsCurseBesideName } from "../utils/carcosaCurse";
 import CarcosaMark from "./CarcosaMark";
 import {
@@ -166,7 +168,7 @@ function BankTreasurySection({ gameState }: { gameState: GameStateResponse }) {
       <summary style={{ ...styles.sectionTitle, ...styles.sectionTitleBank, ...styles.sectionSummary }}>
         Bank Treasury
       </summary>
-      <div style={styles.tableScroll}>
+      <SidewaysScroller label="Bank Treasury">
         <table style={styles.table}>
           <thead>
             <tr>
@@ -199,7 +201,7 @@ function BankTreasurySection({ gameState }: { gameState: GameStateResponse }) {
             </tr>
           </tbody>
         </table>
-      </div>
+      </SidewaysScroller>
 
       <DepotInventoryTable gameState={gameState} />
     </details>
@@ -226,7 +228,7 @@ function DepotInventoryTable({ gameState }: { gameState: GameStateResponse }) {
   return (
     <>
       <h4 style={styles.subTableTitle}>Bank Depot Train Inventory</h4>
-      <div style={styles.tableScroll}>
+      <SidewaysScroller label="Bank Depot Train Inventory">
         <table style={styles.table}>
           <thead>
             <tr>
@@ -362,7 +364,7 @@ function DepotInventoryTable({ gameState }: { gameState: GameStateResponse }) {
             })}
           </tbody>
         </table>
-      </div>
+      </SidewaysScroller>
       {phase != null && !phase.known && (
         <p style={styles.footnote}>
           Depot counts assume no trains have been bought — this room is not reporting train
@@ -469,7 +471,7 @@ export function PlayerAssetsSection({
       {gameState.player_addresses.length === 0 ? (
         <p style={styles.placeholderText}>No registered players yet.</p>
       ) : (
-        <div style={styles.tableScroll}>
+        <SidewaysScroller label="Player Assets">
           <table style={styles.table}>
             <thead>
               <tr>
@@ -706,7 +708,7 @@ export function PlayerAssetsSection({
               })}
             </tbody>
           </table>
-        </div>
+        </SidewaysScroller>
       )}
       {netWorthsEnabled && netWorthsError && (
         <p style={styles.footnote}>Net worth query failed: {netWorthsError}</p>
@@ -773,7 +775,7 @@ function CorporationAssetsSection({
       {gameState.public_companies.length === 0 ? (
         <p style={styles.placeholderText}>No corporations yet.</p>
       ) : (
-        <div style={styles.tableScroll}>
+        <SidewaysScroller label="Corporation Assets">
           <table style={styles.table}>
             <thead>
               <tr>
@@ -949,7 +951,7 @@ function CorporationAssetsSection({
               })}
             </tbody>
           </table>
-        </div>
+        </SidewaysScroller>
       )}
     </details>
   );
@@ -1302,8 +1304,10 @@ const styles: Record<string, React.CSSProperties> = {
     fontVariantNumeric: "tabular-nums",
   },
   /* Design note #1035: BORDER AND INK, matching the pills and the train chips. No fill -- #702's rule. */
-  corpPrivateChipWarn: { borderColor: ALERT_WARN_BORDER, color: ALERT_WARN_INK },
-  corpPrivateChipCritical: { borderColor: ALERT_CRITICAL_BORDER, color: ALERT_CRITICAL_INK },
+  // #1449: the shorthand, not `borderColor` -- the base is `1px solid #3a3a3a`.
+  corpPrivateChipWarn: { border: `1px solid ${ALERT_WARN_BORDER}`, color: ALERT_WARN_INK },
+  // #1449: the shorthand, not `borderColor` -- the base is `1px solid #3a3a3a`.
+  corpPrivateChipCritical: { border: `1px solid ${ALERT_CRITICAL_BORDER}`, color: ALERT_CRITICAL_INK },
   corpPrivateChip: {
     fontSize: FONT_SIZE.micro,
     fontWeight: 700,

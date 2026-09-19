@@ -170,7 +170,12 @@ describe("the identity edge", () => {
        each other, not to carry dark text: #702 measured one livery pair at 1.00:1 against its intended ink,
        and #1030 exists because this very toast once blended into what it sat on. The colour goes on a 5px
        left rule -- the same edge the auction card carries -- and the measured ground/ink pair survives. */
-    expect(TOAST).toContain('borderLeftWidth: "5px"');
+    /* Design note #1449: the claim is unchanged -- a 5px left rule carries the accent and the ground does
+       not. The SPELLING changed, and had to: three conditional left-side longhands over a base that sets the
+       `border` shorthand are cleared together when the accent goes, taking the left edge with them. The rule
+       is now one always-present `borderLeft` whose two branches are both real, so nothing is ever removed. */
+    expect(TOAST).toContain("accentColor ? `5px solid ${accentColor}`");
+    expect(TOAST).toContain("borderLeft: accentColor ?");
     expect(TOAST).not.toContain("backgroundColor: accentColor");
   });
 });

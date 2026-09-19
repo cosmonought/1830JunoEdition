@@ -198,7 +198,9 @@ export function strokeTrackLayers(
   drawing: TrackDrawing,
   penWidth: number,
   outlineExtra: number,
-  ink: string,
+  /* Design note #1471: one ink, or each path's own -- a tile proposal washes its planned rails while the rails being
+     built over them keep the board's ink, and both must share one outline pass per layer. */
+  ink: string | ((path: Path2D) => string),
 ): void {
   ctx.lineJoin = "round";
   const outlinePass = (paths: readonly Path2D[]) => {
@@ -217,9 +219,12 @@ export function strokeTrackLayers(
        into the neighbour. One cap for both passes, and the two ends coincide. Joins stay round -- that is
        what keeps a curve's inner edge smooth -- and an end that meets a city or town is under its marker. */
     ctx.lineCap = "butt";
-    ctx.strokeStyle = ink;
+    if (typeof ink === "string") ctx.strokeStyle = ink;
     ctx.lineWidth = penWidth;
-    for (const path of paths) ctx.stroke(path);
+    for (const path of paths) {
+      if (typeof ink !== "string") ctx.strokeStyle = ink(path);
+      ctx.stroke(path);
+    }
   };
   for (const layer of drawing.layers) {
     outlinePass(layer);

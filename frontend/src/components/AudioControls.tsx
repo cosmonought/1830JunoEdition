@@ -29,6 +29,7 @@
 import React from "react";
 
 import { styles } from "../styles/appStyles";
+import { mirrorSfxEnabled } from "../utils/audio";
 import AudioControlPopover, { type AudioCategoryToggle } from "./AudioControlPopover";
 
 export interface AudioControlsProps {
@@ -62,6 +63,12 @@ export function AudioControls({ audio }: AudioControlsProps) {
      serve. Held per instance, so the waiting room's control and the bar's never share a disclosure. */
   const [openPanel, setOpenPanel] = React.useState<"radio" | "sfx" | null>(null);
   const audioGroup = React.useRef<HTMLSpanElement | null>(null);
+
+  /* Design note #1474: the master switch this control shows and flips, mirrored for a cue that is timed below the
+     shell -- the board's tile transitions (`audio.ts` #1474). An effect, so what it mirrors is what was committed. */
+  React.useEffect(() => {
+    mirrorSfxEnabled(audio.sfxEnabled);
+  }, [audio.sfxEnabled]);
 
   /* Design note #1120: resolved from the list rather than held as its own string, so the name beside the
      button and the row ticked inside the popover cannot disagree -- they are the same lookup on the same id.

@@ -172,17 +172,46 @@ describe("the trigger is a click on the readout, not a hover on the button", () 
 });
 
 describe("the dialog behaves like the other dialogs in this app", () => {
-  it("closes on Escape and on the backdrop, and not on itself", () => {
-    expect(MODAL).toContain('event.key === "Escape"');
-    expect(MODAL).toContain("onClick={onClose}");
+  /* ==================================================================
+      SUPERSEDED BY #1644 (batch 3), AND REWRITTEN RATHER THAN LOOSENED
+     ==================================================================
+     The two cases below used to pin the SPELLING of this file's own Escape listener and its own focus
+     restoration -- `event.key === "Escape"`, `document.activeElement`, `opener.focus()`. Both implementations
+     are gone: the modal audit counted eight near-identical copies of that listener and measured that this
+     file's restoration was `HostSetupCard`'s minus all three of its guards, so it attempted to focus `<body>`
+     and attempted to focus a detached node. Escape, the first-refusal check, the opener capture and the
+     GUARDED restoration are now `useDialogDismissal` (#1641).
+     WHAT THEY WERE PROTECTING IS UNCHANGED AND IS ASSERTED HARDER. The behaviour -- Escape closes, the
+     backdrop closes, the panel swallows its own clicks, and focus goes back to the control that opened the
+     dialog -- is measured on the real component in `components/gameModalDismissal.test.tsx`, including the
+     two focus attempts the old code made and the new guards decline. These two cases now defend the
+     DELEGATION, which is the thing a future edit could quietly undo. */
+
+  it("delegates Escape to the shared dismissal boundary, and keeps both click rules", () => {
+    /* #1651 SUPERSEDES the hook spelling this looked for. The dialog is a native `<dialog>` now and its
+       Escape policy is the `closedby` attribute the engine enforces -- `dismissible` with `onDismiss` pointing
+       at the SAME `onClose` the x and the scrim call, which is the property this case has always been about.
+       Both click rules are unchanged: the scrim dismisses, and the panel swallows its own clicks so a drag on
+       the chart cannot close it. */
+    expect(MODAL).toContain("<NativeModal");
+    expect(MODAL).toContain("dismissible");
+    expect(MODAL).toContain("onDismiss={onClose}");
+    expect(MODAL).not.toContain("useDialogDismissal");
+    expect(MODAL).not.toContain('addEventListener("keydown"');
+    expect(MODAL).toContain("onScrimClick={onClose}");
     expect(MODAL).toContain("onClick={(event) => event.stopPropagation()}");
   });
 
-  it("returns focus to whatever opened it", () => {
+  it("returns focus to whatever opened it, through the guarded shared restoration", () => {
     /* Without this a keyboard player who closes the dialog lands at the top of the document -- which on the
-       Operating Round panel means finding the dividend columns again. */
-    expect(MODAL).toContain("document.activeElement");
-    expect(MODAL).toContain("opener.focus()");
+       Operating Round panel means finding the dividend columns again. The capture and the restore belong to
+       the hook now, so what this file must NOT do is keep a private copy beside it. */
+    /* #1651: the capture and the restore belong to the boundary now, which is where they HAVE to be --
+       `showModal()` moves focus, so the capture must precede it, and layout effects run child-first. What
+       this file must still not do is keep a private copy beside it. */
+    expect(MODAL).toContain("restoreOpener");
+    expect(MODAL).not.toContain("openerRef");
+    expect(MODAL).not.toContain("document.activeElement");
   });
 
   it("is separable from the chart it frames", () => {

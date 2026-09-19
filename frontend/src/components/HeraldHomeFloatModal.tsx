@@ -22,6 +22,8 @@
 
 import React from "react";
 
+import { NativeModal } from "./NativeModal";
+
 import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { CorporateLogo } from "./CorporateLogo";
 import { corporationFullName } from "../utils/corporationNames";
@@ -43,28 +45,42 @@ export interface HeraldHomeFloatModalProps {
   onDismiss: () => void;
 }
 
-export function HeraldHomeFloatModal({ notice, liveryColor, liveryInk, onDismiss }: HeraldHomeFloatModalProps) {
-  React.useEffect(() => {
-    if (!notice) return undefined;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onDismiss();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [notice, onDismiss]);
+/* ==================================================================
+    DESIGN NOTE 1644: BATCH 3 -- THE PRIVATE ESCAPE LISTENER IS GONE
+   ==================================================================
+   This component hand-rolled `window.addEventListener("keydown")` + `if (event.key === "Escape")`. The modal
+   audit (`claude/modal-audit-2026-09-18.md`) counted eight near-identical copies of that listener and
+   measured what all of them share: they ignore `event.defaultPrevented`, so a nested transient surface that
+   consumes Escape cannot stop them, and two layers would close on one keypress. Measured here before the
+   change: `IGNORED (closed anyway)`. Also measured: closing by any route -- Escape, "Understood" and the backdrop -- left
+   `document.activeElement` on `<body>`, because this file carried the listener but never the opener capture
+   that goes with it (audit H4).
 
+   THE LISTENER, THE FIRST-REFUSAL CHECK, THE OPENER CAPTURE AND THE GUARDED RESTORATION WERE
+   `useDialogDismissal` (#1641) and are now the native dialog's own (#1651): `dismissible` becomes the
+   `closedby` attribute the engine enforces, and `restoreOpener` is the same guarded return. `dismissible` is
+   unconditional here: measured, every close route on this surface dismisses without a pending or disabled
+   state on any of them.
+
+   THE CHILD IS GONE WITH IT (#1651). `DismissalLifecycle` existed because a hook in this body would have
+   captured an opener when the game shell mounted and never run its restore on a close -- the render switch
+   above keeps this component mounted all session. `NativeModal` is only RENDERED when the switch is on, so it
+   mounts and unmounts with the dialog and is the lifecycle the contract was written against. */
+
+export function HeraldHomeFloatModal({ notice, liveryColor, liveryInk, onDismiss }: HeraldHomeFloatModalProps) {
   if (!notice) return null;
   const fullName = corporationFullName(notice.ticker);
 
   return (
-    <div style={styles.backdrop} role="presentation" onClick={onDismiss}>
-      <div
-        style={styles.card}
-        role="dialog"
-        aria-modal="true"
-        aria-label={`${notice.ticker} has floated`}
-        onClick={(event) => event.stopPropagation()}
-      >
+    <NativeModal
+      name={`${notice.ticker} has floated`}
+      dismissible
+      onDismiss={onDismiss}
+      onScrimClick={onDismiss}
+      restoreOpener
+      scrimStyle={styles.backdrop}
+    >
+      <div style={styles.card} onClick={(event) => event.stopPropagation()}>
         <div style={{ ...styles.livery, backgroundColor: liveryColor, color: liveryInk }}>
           <CorporateLogo
             ticker={notice.ticker}
@@ -99,7 +115,7 @@ export function HeraldHomeFloatModal({ notice, liveryColor, liveryInk, onDismiss
           Understood &#8250;
         </button>
       </div>
-    </div>
+    </NativeModal>
   );
 }
 
@@ -109,7 +125,8 @@ const styles: Record<string, React.CSSProperties> = {
   backdrop: {
     position: "fixed",
     inset: 0,
-    zIndex: 4000,
+    /* #1651: the `zIndex: 4000` that stood here is gone -- this scrim is a `<dialog>` in the top layer, which
+       is above the whole document by definition, so the number decided nothing. */
     display: "flex",
     alignItems: "center",
     justifyContent: "center",

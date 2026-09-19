@@ -7,12 +7,13 @@
 // the room and reloads into the game as that seat. The room-code path (#1352) stays underneath for a player
 // who never set a PIN -- their seat can still be claimed by code and adopts the PIN they type.
 
-import React, { useState } from "react";
+import React, { useLayoutEffect, useRef, useState } from "react";
 
 import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { claimSeat, findSeatsByPin, type FoundSeat } from "../utils/roomDocLink";
 import { writeSandboxResume } from "../utils/activeGame";
 import { adoptSeat, isValidSeatPin, localPlayerId } from "../utils/seatPin";
+import { NativeModal } from "./NativeModal";
 
 export interface RejoinByPinCardProps {
   onClose: () => void;
@@ -20,11 +21,47 @@ export interface RejoinByPinCardProps {
   onRejoinByCode: () => void;
 }
 
+/** ==================================================================
+ *   DESIGN NOTE 1642: BATCH 1 -- AND WHY `busy` IS NOT THE DISMISSAL RULE HERE
+ *  ==================================================================
+ *
+ * The modal audit found this card, like its neighbour, carrying `aria-modal="true"` with no Escape (H3) and
+ * dropping focus on `<body>` from every close route (H4). Measured on the real card beforehand, with focus on
+ * the control being pressed: Escape did nothing; the x, Cancel and the backdrop all closed and all left
+ * `document.activeElement` on BODY. Both are now the native dialog's own policy (#1651; `useDialogDismissal` from #1641 until then).
+ *
+ * `dismissible` IS DELIBERATELY NOT PASSED, and that is a measurement rather than an oversight. This card has
+ * a `busy` flag, but it is a SUBMISSION gate, not a dismissal gate: measured with a lookup held in flight,
+ * "Find my games" and every "Rejoin" button were disabled while the x, Cancel and the backdrop were all still
+ * live and still closed the card. Mapping `busy` to `dismissible` because of its name would have made Escape
+ * STRICTER than all three visible routes -- a rule no control on this card enforces. So the hook's default
+ * stands: this dialog is always dismissible, exactly as it always was, and Escape now agrees with the three
+ * routes instead of being absent from them.
+ *
+ * (The contrast with `JoinGameCard` is the point: there, two of three routes already refused while busy and
+ * the third was the outlier. Here, three of three allow it. The rule is taken from the controls each time.)
+ *
+ * `onRejoinByCode` IS NOT A CLOSE, it is a navigation to the room-code door -- but it unmounts this card, so
+ * the restore covers it too, because the restore lives in the unmount rather than in any one route.
+ *
+ * INITIAL FOCUS IS THE SAME CONTROL AS BEFORE, the PIN field, moved off native `autoFocus` and onto a local
+ * layout effect: native autofocus fires during React's mutation phase, before any effect, so it would beat
+ * the hook's opener capture and this card would record its own input as the thing to restore focus to. */
 export function RejoinByPinCard({ onClose, onRejoinByCode }: RejoinByPinCardProps) {
   const [pin, setPin] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [seats, setSeats] = useState<FoundSeat[] | null>(null);
+  const pinRef = useRef<HTMLInputElement | null>(null);
+
+  /* #1651/#1652: THE ESCAPE PATH AND THE OPENER RESTORE MOVED INTO THE ELEMENT ITSELF. `useDialogDismissal`
+     is gone from this file: the scrim below is a native `<dialog>`, its `dismissible` prop becomes the
+     `closedby` attribute the engine enforces, and `restoreOpener` is the same guarded return the hook did.
+     Nothing this file decided changed -- only who carries it out. */
+
+  useLayoutEffect(() => {
+    pinRef.current?.focus();
+  }, []);
 
   const lookUp = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -66,8 +103,15 @@ export function RejoinByPinCard({ onClose, onRejoinByCode }: RejoinByPinCardProp
   };
 
   return (
-    <div style={styles.backdrop} role="presentation" onClick={onClose}>
-      <div style={styles.card} role="dialog" aria-modal="true" aria-label="Rejoin a game" onClick={(event) => event.stopPropagation()}>
+    <NativeModal
+      name="Rejoin a game"
+      dismissible
+      onDismiss={onClose}
+      onScrimClick={onClose}
+      restoreOpener
+      scrimStyle={styles.backdrop}
+    >
+      <div style={styles.card} onClick={(event) => event.stopPropagation()}>
         <div style={styles.header}>
           <span style={styles.heading}>Rejoin a game</span>
           <button type="button" style={styles.closeButton} onClick={onClose} aria-label="Close">
@@ -81,6 +125,7 @@ export function RejoinByPinCard({ onClose, onRejoinByCode }: RejoinByPinCardProp
 
         <form style={styles.row} onSubmit={lookUp}>
           <input
+            ref={pinRef}
             style={styles.input}
             inputMode="numeric"
             autoComplete="off"
@@ -88,7 +133,6 @@ export function RejoinByPinCard({ onClose, onRejoinByCode }: RejoinByPinCardProp
             placeholder="PIN"
             aria-label="Seat PIN"
             value={pin}
-            autoFocus
             onChange={(event) => {
               setPin(event.target.value.replace(/\D/g, "").slice(0, 4));
               setSeats(null);
@@ -129,7 +173,7 @@ export function RejoinByPinCard({ onClose, onRejoinByCode }: RejoinByPinCardProp
           </button>
         </div>
       </div>
-    </div>
+    </NativeModal>
   );
 }
 
@@ -139,7 +183,8 @@ const styles: Record<string, React.CSSProperties> = {
   backdrop: {
     position: "fixed",
     inset: 0,
-    zIndex: 4200,
+    /* #1651: the `zIndex: 4200` that stood here is gone -- this scrim is a `<dialog>` in the top layer, which
+       is above the whole document by definition, so the number decided nothing. */
     pointerEvents: "auto", // #1360: never inherit a `none` from whatever this is mounted under
     display: "flex",
     alignItems: "center",
@@ -213,5 +258,6 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: "pointer",
     whiteSpace: "nowrap",
   },
-  disabled: { borderColor: "#3a3a3a", backgroundColor: "#1c1c1c", color: "#6e6c68", cursor: "not-allowed" },
+  // #1449: the shorthand, not `borderColor` -- the base is `1px solid #3f7a55`.
+  disabled: { border: "1px solid #3a3a3a", backgroundColor: "#1c1c1c", color: "#6e6c68", cursor: "not-allowed" },
 };

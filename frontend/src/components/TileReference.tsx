@@ -265,7 +265,9 @@ function TileTray({
             aria-label={`${tier} tiles`}
           >
             <header style={styles.trayHead}>
-              <h3 style={{ ...styles.trayTitle, color: TIER_INK[tier] }}>{tier}</h3>
+              <h3 id={`tiles-section-${tier.toLowerCase()}`} style={{ ...styles.trayTitle, color: TIER_INK[tier] }}>
+                {tier}
+              </h3>
               {/* Design note #692: "Top tier -- nothing replaces it" was on all EIGHTEEN brown tiles, and it
                   is a fact about the TIER. Said once, on the thing it is true of. `PlayerCards` #567 removed
                   three marks on the same reasoning: a caption repeated on every member of a group is telling
@@ -305,7 +307,8 @@ function TileTray({
                     onClick={() => setSelectedTileId(isSelected ? null : tileId)}
                     style={{
                       ...styles.trayTile,
-                      ...(isSelected ? { ...styles.trayTileSelected, borderColor: TIER_INK[tier] } : {}),
+                      // #1449: the shorthand the base declares (`1px solid transparent`).
+                      ...(isSelected ? { ...styles.trayTileSelected, border: `1px solid ${TIER_INK[tier]}` } : {}),
                     }}
                   >
                     {/* Design note #692a: sized up from 44px. The artwork is the thing this tab is FOR, and at
@@ -426,11 +429,50 @@ function TileReference({ mapGrid }: TileReferenceProps) {
           paths are read from the same rules the board enforces when it offers you a
           tile — colour step, letter code, and keeping every path the old tile carried.
         </p>
+        {/* ==================================================================
+             DESIGN NOTE 1435: A CATALOG THIS TALL NEEDS A WAY IN
+            ==================================================================
+            MEASURED at 430: 8,902px before #1434's second column, 4,700 after -- eleven screens of scrolling
+            to reach Brown, with nothing between the top of the page and the tile you came for.
+            TEXT, NOT A PANEL. The brief for this pass was explicitly "without turning the page into another
+            stack of panels", and the reference already has the shape for this: a row of names, hairline above,
+            no box. Four entries, generated from the sections that exist, so a link cannot point at a tray this
+            game does not deal (`Gray` appears only under the 18XX+ tile set, and appears here only then).
+            BUTTONS RATHER THAN `#id` LINKS, because the shell scrolls its own pane rather than the document,
+            and a hash jump would move the wrong box. `scrollIntoView` moves whichever ancestor scrolls. */}
+        <nav style={styles.directory} aria-label="Tile sections" data-testid="tiles-directory">
+          {[{ id: "tiles-section-printed", label: "Printed on the board" }].concat(
+            TIERS.filter((tier) => byTier.has(tier)).map((tier) => ({
+              id: `tiles-section-${tier.toLowerCase()}`,
+              label: tier,
+            })),
+          ).map((entry, index) => (
+            <React.Fragment key={entry.id}>
+              {index > 0 && (
+                <span style={styles.directoryDot} aria-hidden="true">
+                  ·
+                </span>
+              )}
+              <button
+                type="button"
+                style={styles.directoryLink}
+                onClick={() => {
+                  const target = document.getElementById(entry.id);
+                  if (target) target.scrollIntoView({ block: "start", behavior: "smooth" });
+                }}
+              >
+                {entry.label}
+              </button>
+            </React.Fragment>
+          ))}
+        </nav>
       </header>
 
       {/* ---- The three chains that start on the board rather than in the tray ---- */}
       <div style={styles.printedBlock}>
-        <h3 style={styles.sectionTitle}>Printed on the board</h3>
+        <h3 id="tiles-section-printed" style={styles.sectionTitle}>
+          Printed on the board
+        </h3>
         <p style={styles.sectionNote}>
           These hexes arrive with their yellow tile already on them, so there is no
           yellow tile to find in the tray. Their chains start at green.
@@ -580,11 +622,58 @@ const styles: Record<string, React.CSSProperties> = {
      it needs no knowledge of the column count, which is why the count is only ever used to decide WHERE the
      item goes and never how wide it is. */
   detailRow: { gridColumn: "1 / -1" },
+  /* #1435: a row of names, not a row of chips. Hairline above so it reads as belonging to the header it
+     closes, and nothing that could be mistaken for a control that changes the catalog. */
+  directory: {
+    display: "flex",
+    flexWrap: "wrap",
+    alignItems: "baseline",
+    gap: "2px 4px",
+    marginTop: "10px",
+    paddingTop: "10px",
+    borderTop: "1px solid #2a2a2a",
+  },
+  directoryDot: { color: "#6e6c68", fontSize: FONT_SIZE.small },
+  directoryLink: {
+    /* A button that reads as a link: the affordance is the underline and the focus ring, and the hit area is
+       the padding -- 11px of it, so a thumb has something to land on at phone width. */
+    appearance: "none",
+    background: "none",
+    border: "none",
+    /* #1435: the hit area is the padding. 8px vertical makes each name a ~33px target -- short of the 44px
+       guideline, which a row of four names cannot reach without becoming the stack of panels this was asked
+       not to be, but comfortably past the 25px it started at. */
+    padding: "8px 9px",
+    margin: 0,
+    font: "inherit",
+    fontSize: FONT_SIZE.small,
+    fontWeight: 700,
+    letterSpacing: "0.03em",
+    textTransform: "uppercase",
+    color: "#c8c6c0",
+    textDecoration: "underline",
+    textUnderlineOffset: "3px",
+    cursor: "pointer",
+  },
   trayContents: {
     display: "grid",
     /* Design note #1265: the column is the tile plus the room #692a's 64px had -- 132 was 64 + 68, so this
        is 84 + 68, written as arithmetic so the two move together. */
-    gridTemplateColumns: `repeat(auto-fill, minmax(${TRAY_TILE_PX + 68}px, 1fr))`,
+    /* ==================================================================
+        DESIGN NOTE 1434: ONE TILE PER ROW WAS A TEN-PIXEL MISS, NOT A DECISION
+       ==================================================================
+       MEASURED at 430: the tray pane is 306px and this minimum was 152 (84 + 68), so two tracks wanted
+       152 + 12 + 152 = 316. Ten pixels short, and `auto-fill` fell to ONE column -- a 306px track holding
+       84px of tile and 222px of nothing, 46 times, for a page 8,902px tall.
+       THE ARTWORK IS NOT THE CONSTRAINT AND IS NOT TOUCHED. `TRAY_TILE_PX` is 84 at every width -- 430, 1024
+       and 1440 all draw the same 84px hexagon -- so the column minimum is label room, not tile size. Two
+       columns at 430 give a 147px track: the same 84px tile, five pixels less label room than the 152 above,
+       and still WIDER than the 138px the tiles get at 1440.
+       THE CAP IS ARITHMETIC, NOT A BREAKPOINT. `(100% - 12px) / 2` is "half a row, less the gap" -- it binds
+       only while half a row is narrower than the desktop minimum, which is any pane under 316px. At 900 it
+       resolves to 444 and at 1476 to 732, so `min()` returns the 152 both already used and every wider
+       layout is byte-identical. No media query decides this, and none can go stale. */
+    gridTemplateColumns: `repeat(auto-fill, minmax(min(${TRAY_TILE_PX + 68}px, calc((100% - 12px) / 2)), 1fr))`,
     gap: "16px 12px",
   },
   /* Design note #692: contents, not cards. No border, no fill -- the hexagon is already a bounded shape. */

@@ -601,6 +601,7 @@ import MainTabBar, {
   type MainTab,
 } from "./components/MainTabBar";
 import { chromeZoomFor, styles } from "./styles/appStyles";
+import { ModalLayerHost } from "./components/ModalPortal";
 import { PHASE_SHIFT_PULSE_CSS, TURN_PULSE_KEYFRAMES_CSS } from "./styles/animations";
 import {
   BO_PRIVATE_ID,
@@ -625,7 +626,9 @@ import {
   ACTIVE_GAME_STORAGE_KEY,
   readActiveGame,
   readActiveSandboxRoom,
+  readSandboxWatchRoom,
   writeActiveSandboxRoom,
+  writeSandboxWatchRoom,
   SANDBOX_GAME_ID,
   SANDBOX_ROOM_ID,
   type ActiveGame,
@@ -687,6 +690,19 @@ import {
   setRoomNicknames,
 } from "./utils/playerLabels";
 import { RevenueModifierFlash, type RevenueFlashSignal } from "./components/RevenueModifierFlash";
+/* ==================================================================
+    DESIGN NOTE 1451: THE SHELL DESCRIBES THE TRADE; THE CARD DRAWS IT
+   ==================================================================
+   `describeStockTransaction` reads the completed message (which names the kind AND the corporation) and the
+   two states the drain already holds (which carry the ownership that moved and the crown that did). What
+   comes back is a description of something that has already happened; `StockRoundPanel` turns it into a
+   border, a subdued table and a percentage travelling between two rows. Nothing in this shell waits on it,
+   reads it back, or behaves differently for its presence.
+   #1450's `FlightGhostLayer` is GONE, with its body portal and its anchor machinery. Slide-out movement
+   across the shell is the treasury's vocabulary (#1272) and a certificate is not a dollar. */
+import { describeStockTransaction } from "./utils/stockTransaction";
+import { buildFocusSequence, PRESIDENCY_SFX } from "./components/stockTransferFocus";
+import type { StockTransactionEvent } from "./components/StockRoundPanel";
 import { RADIUS } from "./styles/typography";
 import { numberedPrivate, setPrivateOrder } from "./gameEngine/privateOrdinal";
 import { isUpgradeDeadEnd } from "./utils/tileUpgrades"; // #1390
@@ -835,6 +851,22 @@ interface AppShellProps {
   /* The room is chosen in the Lobby and handed down as the starting value; the shell owns the listener.
      See docs/ai_architecture/firebase_middleware.md - App.tsx #524 */
   sandboxRoomSeed?: string | null;
+  /** ==================================================================
+   *   DESIGN NOTE 1441: THE SPECTATOR SAYS SO, RATHER THAN BEING INFERRED
+   *  ==================================================================
+   *
+   * #1415's seat claim below decided who was a watcher from the room's STATUS -- "a dealt game takes no new
+   * seats, so a client here is a spectator". That inference was right about every door that existed then and
+   * is wrong about the one #1441 opens: Watch on a public table that is still WAITING, which the server has
+   * always permitted and which the seat claim would have turned into a Join the moment the room resolved.
+   * SO THE INTENT TRAVELS WITH THE CODE. Not a second spectator path -- the same `onEnterSandbox` with no
+   * join write in front of it -- just told which of the two things it is being used for.
+   *
+   * DESIGN NOTE 1442: AND IT IS THE CODE, NOT A FLAG. A boolean cannot say WHICH room it was granted for, and
+   * this shell is not remounted between rooms (its key is the game and the mode, both constant for the
+   * sandbox) -- so a `true` survived "leave the room, join another from the gate" and held back the seat
+   * claim for a room nobody had asked to watch. A code can only ever match its own room. */
+  sandboxWatchSeed?: string | null;
   /** Returns to the Lobby. */
   onLeaveGame: () => void;
   /** Which of the three ways of looking at a board this is -- design note
@@ -895,7 +927,7 @@ function withSeededChart(
   };
 }
 
-function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }: AppShellProps) {
+function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, sandboxWatchSeed = null }: AppShellProps) {
   const wallet = useWallet();
   const session = useGameSession();
 
@@ -971,6 +1003,21 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   useEffect(() => {
     writeActiveSandboxRoom(sandboxRoomCode);
   }, [sandboxRoomCode]);
+  /* ==================================================================
+      DESIGN NOTE 1442: THE WATCH INTENT IS CONSUMED BY ITS OWN ROOM, AND RETIRED BY ANY OTHER
+     ==================================================================
+     A COPY RATHER THAN THE PROP, for the same reason the room code above is one: the gate below can change
+     the room without this shell remounting, and an intent that only the ROOT could retire would still be in
+     force when it did. Held here, it expires the moment this shell looks at anything else -- including at
+     nothing, which is what "Back to the lobby" from the gate leaves behind.
+     THE STORE IS CLEARED WITH IT, so the refresh that #1442 exists to survive cannot resurrect an intent the
+     player has already navigated away from. */
+  const [sandboxWatchRoom, setSandboxWatchRoom] = useState<string | null>(sandboxWatchSeed);
+  useEffect(() => {
+    if (sandboxWatchRoom === null || sandboxWatchRoom === sandboxRoomCode) return;
+    setSandboxWatchRoom(null);
+    writeSandboxWatchRoom(null);
+  }, [sandboxWatchRoom, sandboxRoomCode]);
   const localId = localPlayerId();
 
   /* In a room this browser is one person with one id, which makes every existing turn/president gate correct at once.
@@ -4780,10 +4827,72 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     if (heldTreasuryRef.current) window.clearTimeout(heldTreasuryRef.current.timer);
   }, []);
   const handleTreasuryMachineDone = useCallback(() => setTreasuryQueue((queue) => queue.slice(1)), []);
+
+  /* ==================================================================
+      DESIGN NOTE 1451: ONE TRANSACTION IN FLIGHT, AND IT IS ONLY A PICTURE
+     ==================================================================
+     NOT A QUEUE, unlike the two money machines above (#1291). Those play one at a time because each is a
+     panel occupying a corner for three and a half seconds; this is a card lighting up for a third of a
+     second, and holding the second trade back until the first finished would narrate a stock round slower
+     than the players produce it. A new event SUPERSEDES: the card clears its timers, resets to the first
+     stage and draws the new one.
+     THE CLEAR TIMER LIVES HERE so the signal has a way home -- #1095's lesson, from the one ephemeral signal
+     in this shell that had none and sat waiting for a remount for the rest of the session. It reads the
+     sequence's own total rather than a second copy of the timing.
+     REPLAY-SILENT through the same guard as every other ephemeral cue (#825): a join replays the whole log,
+     and a card flashing for every trade the table has ever made is exactly what that guard prevents. */
+  const stockTransactionTokenRef = useRef(0);
+  const stockTransactionTimerRef = useRef<number | null>(null);
+  const [stockTransaction, setStockTransaction] = useState<StockTransactionEvent | null>(null);
+  const showStockTransaction = useCallback((event: Omit<StockTransactionEvent, "token">) => {
+    if (replayingHistory) return;
+    /* Asked BEFORE a token is spent: a description the sequence cannot stage (nothing moved, nothing this
+       card can show) should leave the previous transaction's presentation alone rather than replacing it
+       with an empty one. */
+    const sequence = buildFocusSequence(event);
+    if (!sequence) return;
+    stockTransactionTokenRef.current += 1;
+    const token = stockTransactionTokenRef.current;
+    setStockTransaction({ ...event, token });
+    if (stockTransactionTimerRef.current !== null) {
+      window.clearTimeout(stockTransactionTimerRef.current);
+    }
+    stockTransactionTimerRef.current = window.setTimeout(() => {
+      stockTransactionTimerRef.current = null;
+      /* Only if nothing newer has arrived -- a superseding trade owns the card now, and clearing on the
+         previous one's clock would cut its successor off mid-sequence. */
+      setStockTransaction((live) => (live !== null && live.token === token ? null : live));
+    }, sequence.totalMs);
+  }, []);
+  useEffect(
+    () => () => {
+      if (stockTransactionTimerRef.current !== null) {
+        window.clearTimeout(stockTransactionTimerRef.current);
+      }
+    },
+    [],
+  );
+
   /* Design note #1291 (9): the spend's whoosh, through the same helper as every cue (#1041), under the
      payout category's mute -- it is the same kind of sound about the same kind of event. */
   const handleTreasuryMachineCue = useCallback(() => {
     playVariantCue(SPEND_SFX, sfxEnabledRef.current && sfxPayoutRef.current);
+  }, []);
+
+  /* ==================================================================
+      DESIGN NOTE 1457: A NEW PRESIDENT, SAID OUT LOUD
+     ==================================================================
+     THROUGH THE SAME HELPER AS EVERY OTHER CUE (#1041), so the master mute, the shared SFX volume, the
+     concurrency cap and the radio ducking all apply exactly as they do to the dividend register and the
+     treasury whoosh. The card decides WHEN -- it owns the beat the crown is drawn on (#1062's split) -- and
+     this decides only whether the reader is listening.
+     THE MASTER TOGGLE AND NO CATEGORY OF ITS OWN. The three categories are "turn", "revenue" and "payouts";
+     a presidency is none of them, and the ruling was explicit that this must not add another control. So it
+     rides `sfxEnabled` alone, like the variant flavour cue at the bottom of this file.
+     NOT AWAITED, AND NOTHING WAITS FOR IT. `playVariantCue` returns void, the animation's length is set by
+     `stockTransferFocus.ts` and knows nothing about the clip's tail, and no gameplay path reads this. */
+  const handlePresidencyCue = useCallback(() => {
+    playVariantCue(PRESIDENCY_SFX, sfxEnabledRef.current);
   }, []);
 
   const showActionToast = useCallback((text: string, durationMs?: number) => {
@@ -7431,6 +7540,23 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             }
           }
 
+          /* ==================================================================
+              DESIGN NOTE 1451: THE STOCK TRADE, DESCRIBED FROM THE ACTION AND THE TWO STATES
+             ==================================================================
+             `gameplay` IS THE AUTHORITATIVE MESSAGE -- the one the reducer applied, above -- so the KIND and
+             the CORPORATION are read rather than inferred. `before`/`after` supply the ownership that moved
+             and, separately, the crown: `settlePresidencies` has already applied `presidencyTransfer.ts`'s
+             rule to `after`, and comparing one field across two states is reading that verdict, not
+             re-deriving it. The shell computes no price, no legality and no successor.
+             AFTER `setSandboxState(after)`, AND THAT ORDER IS LOAD-BEARING. The card measures its own
+             geometry in a layout effect, by which time the destination row exists -- including the row of a
+             player buying their first share of this corporation, which did not exist a moment ago.
+             NOTHING AWAITS THIS. It is a `setState` on a value the dispatch never reads again. */
+          {
+            const traded = describeStockTransaction(gameplay, before, after);
+            if (traded) showStockTransaction(traded);
+          }
+
           /* settleRoundTransitions performs the transition; the shell only logs it. Detected by comparing state, silent on a replay, and no tab navigation here (#213 owns that).
              See docs/ai_architecture/state_machine.md - App.tsx #642 */
         label =
@@ -7791,6 +7917,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       /* Design note #1049: stable for the same reason and named for the same reason -- an omitted stable
          dependency is indistinguishable from a forgotten one to the next reader. */
       showPrivatePayoutPhase,
+      /* Design note #1451: stable (`useCallback` with an empty list), listed for the reason the three above
+         it are -- an omitted stable dependency is indistinguishable from a forgotten one to the next
+         reader. */
+      showStockTransaction,
       session,
       refreshGameState,
       spectator,
@@ -11151,13 +11281,21 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
        spectator (the Ongoing tab's door), and asking would only earn the refusal. A seat the host removed is
        the same: the document says so, and the write would be turned away with the same sentence the waiting
        room already shows. */
-    if (sandboxRoom.status !== "waiting" || (sandboxRoom.kicked ?? []).includes(localId)) return;
+    /* #1441: a viewer who pressed Watch is not asking for a seat, whatever the room's status says.
+       #1442: and only in the room they asked to watch -- the comparison is what makes the intent one-shot. */
+    if (
+      sandboxWatchRoom === sandboxRoomCode ||
+      sandboxRoom.status !== "waiting" ||
+      (sandboxRoom.kicked ?? []).includes(localId)
+    ) {
+      return;
+    }
     void upsertSandboxPlayer(sandboxRoomCode, {
       id: localId,
       nickname: sandboxSeatRef.current || "Player",
       isReady: false,
     });
-  }, [sandbox, sandboxRoomCode, sandboxRoomResolved, sandboxRoom, localId]);
+  }, [sandbox, sandboxRoomCode, sandboxRoomResolved, sandboxRoom, localId, sandboxWatchRoom]);
 
   const replayingRef = useRef(false);
   /* Design note #668: the ids of the entries this client has already applied,
@@ -13389,6 +13527,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                     onSelectParValue={handleSelectParValue}
                     onBuyShare={handleBuyShare}
                     onBuyDoubleCertificate={handleBuyDoubleCertificate}
+                    /* Design note #1451: presentation only. The card draws the trade that just landed and
+                       reports nothing back; every figure on it is the committed one either way. */
+                    transaction={stockTransaction}
+                    onPresidencyCue={handlePresidencyCue}
                     purchaseBlockFor={purchaseBlockFor}
                     saleBlockFor={saleBlockFor}
                     salePriceAfter={salePriceAfter}
@@ -14325,24 +14467,45 @@ function GameRouter() {
     writeActiveSandboxRoom(sandboxRoomCode);
   }, [sandboxRoomCode]);
 
-  const handleEnterSandbox = useCallback((roomCode?: string | null) => {
-    setSandboxRoomCode(roomCode ?? null);
+  /* Design note #1441: `watchOnly` is the Lobby's Watch button -- the same door, with the seat claim held.
+     #1442: recorded as the ROOM it was granted for, and seeded from the session so a refresh while watching
+     does not reset it to "seat me". EVERY entry writes this, which is what keeps it from going stale: Host,
+     Join, the code box and Watch all arrive here, and only Watch arrives with a room. */
+  const [sandboxWatchRoom, setSandboxWatchRoom] = useState<string | null>(readSandboxWatchRoom);
+  const handleEnterSandbox = useCallback((roomCode?: string | null, watchOnly?: boolean) => {
+    const code = roomCode ?? null;
+    const watching = watchOnly === true ? code : null;
+    setSandboxRoomCode(code);
+    setSandboxWatchRoom(watching);
+    writeSandboxWatchRoom(watching);
     setActiveGame({ gameId: SANDBOX_GAME_ID, roomId: SANDBOX_ROOM_ID, mode: "sandbox" });
   }, []);
 
   const handleLeaveGame = useCallback(() => setActiveGame(null), []);
 
+  /* ==================================================================
+      DESIGN NOTE 1648: THE MODAL LAYER IS A SIBLING OF THE SCREEN, NOT A CHILD OF IT
+     ==================================================================
+     Each screen below returns its own root `<div>` carrying `chromeZoomFor(uiScale)`, and there is no wrapper
+     above them -- so the subtree a later batch will make `inert` IS that root div. The layer therefore has to
+     be its sibling, which is what this fragment is for. It is rendered AFTER the screen so it paints above it
+     by document order, and it carries the same `useUiScale()` the screen root does, exactly once. See
+     `components/ModalPortal.tsx` for the whole argument. */
   if (!activeGame) {
     return (
-      <Lobby
-        onEnterGame={handleEnterGame}
-        onSpectateGame={handleSpectateGame}
-        onEnterSandbox={handleEnterSandbox}
-      />
+      <>
+        <Lobby
+          onEnterGame={handleEnterGame}
+          onSpectateGame={handleSpectateGame}
+          onEnterSandbox={handleEnterSandbox}
+        />
+        <ModalLayerHost />
+      </>
     );
   }
 
   return (
+    <>
     <AppShell
       // Keyed on room and mode so a room change - or a spectator joining properly - gets a genuinely fresh shell.
       // See docs/ai_architecture/firebase_middleware.md - App.tsx #551
@@ -14352,8 +14515,11 @@ function GameRouter() {
       mode={activeGame.mode}
       // Design note #524: `null` for every mode but a joined sandbox room.
       sandboxRoomSeed={activeGame.mode === "sandbox" ? sandboxRoomCode : null}
+      sandboxWatchSeed={activeGame.mode === "sandbox" ? sandboxWatchRoom : null}
       onLeaveGame={handleLeaveGame}
     />
+      <ModalLayerHost />
+    </>
   );
 }
 

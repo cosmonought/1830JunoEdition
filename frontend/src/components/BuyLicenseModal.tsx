@@ -20,6 +20,8 @@
 // down to one exit because a mis-click there loses ceremony; a mis-click here loses nothing).
 
 import React from "react";
+
+import { NativeModal } from "./NativeModal";
 import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { PickaxeIcon } from "./KanawhaBadge";
 import { KANAWHA_LICENSE_COST, KANAWHA_LICENSES_FOR_SALE } from "../gameEngine/kanawhaLicense";
@@ -40,6 +42,28 @@ export interface BuyLicenseModalProps {
   onBuy: () => void;
 }
 
+/* ==================================================================
+    DESIGN NOTE 1644: BATCH 3 -- THE PRIVATE ESCAPE LISTENER IS GONE
+   ==================================================================
+   This component hand-rolled `window.addEventListener("keydown")` + `if (event.key === "Escape")`. The modal
+   audit (`claude/modal-audit-2026-09-18.md`) counted eight near-identical copies of that listener and
+   measured what all of them share: they ignore `event.defaultPrevented`, so a nested transient surface that
+   consumes Escape cannot stop them, and two layers would close on one keypress. Measured here before the
+   change: `IGNORED (closed anyway)`. Also measured: closing by ANY route -- Escape, the x, "Not now"/"Close" and the backdrop -- left
+   `document.activeElement` on `<body>`, because this file carried the listener but never the opener capture
+   that goes with it (audit H4).
+
+   THE LISTENER, THE FIRST-REFUSAL CHECK, THE OPENER CAPTURE AND THE GUARDED RESTORATION WERE
+   `useDialogDismissal` (#1641) and are now the native dialog's own (#1651): `dismissible` becomes the
+   `closedby` attribute the engine enforces, and `restoreOpener` is the same guarded return. `dismissible` is
+   unconditional here: measured, every close route on this surface dismisses without a pending or disabled
+   state on any of them.
+
+   THE CHILD IS GONE WITH IT (#1651). `DismissalLifecycle` existed because a hook in this body would have
+   captured an opener when the game shell mounted and never run its restore on a close -- the render switch
+   above keeps this component mounted all session. `NativeModal` is only RENDERED when the switch is on, so it
+   mounts and unmounts with the dialog and is the lifecycle the contract was written against. */
+
 export function BuyLicenseModal({
   open,
   onClose,
@@ -50,26 +74,18 @@ export function BuyLicenseModal({
   treasuryBefore = null,
   onBuy,
 }: BuyLicenseModalProps) {
-  React.useEffect(() => {
-    if (!open) return undefined;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
-
   if (!open) return null;
   const canBuy = refusal === null;
   return (
-    <div style={styles.backdrop} role="presentation" onClick={onClose}>
-      <div
-        style={styles.card}
-        role="dialog"
-        aria-modal="true"
-        aria-label="The Coalfields and the Kanawha Licence"
-        onClick={(event) => event.stopPropagation()}
-      >
+    <NativeModal
+      name="The Coalfields and the Kanawha Licence"
+      dismissible
+      onDismiss={onClose}
+      onScrimClick={onClose}
+      restoreOpener
+      scrimStyle={styles.backdrop}
+    >
+      <div style={styles.card} onClick={(event) => event.stopPropagation()}>
         <div style={styles.header}>
           <span style={styles.heading}>
             <PickaxeIcon height={22} title="Coalfields" />
@@ -120,7 +136,7 @@ export function BuyLicenseModal({
           )}
         </div>
       </div>
-    </div>
+    </NativeModal>
   );
 }
 
@@ -130,7 +146,8 @@ const styles: Record<string, React.CSSProperties> = {
   backdrop: {
     position: "fixed",
     inset: 0,
-    zIndex: 3600,
+    /* #1651: the `zIndex: 3600` that stood here is gone -- this scrim is a `<dialog>` in the top layer, which
+       is above the whole document by definition, so the number decided nothing. */
     display: "flex",
     alignItems: "center",
     justifyContent: "center",

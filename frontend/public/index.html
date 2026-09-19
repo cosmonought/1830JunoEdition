@@ -3,15 +3,32 @@
   <head>
     <meta charset="utf-8" />
     <link rel="icon" href="%PUBLIC_URL%/favicon.ico" />
-    <!-- Design note #1014: the viewport is LOCKED. "Ensure the viewport is locked and strictly prevents user
-         scaling" -- so the page may not be pinched or double-tap-zoomed either, not just the board. The canvas
-         carries the matching `touch-action: pan-x pan-y`; this is the page-level half of the same instruction.
+    <!-- Design note #1014 (WITHDRAWN BY #1618 BELOW; kept verbatim because the reasoning is the record):
+         the viewport was LOCKED. "Ensure the viewport is locked and strictly prevents user scaling" -- so the
+         page could not be pinched or double-tap-zoomed either, not just the board. The canvas carried the
+         matching `touch-action: pan-x pan-y`; this was the page-level half of the same instruction.
          `maximum-scale` AND `user-scalable` TOGETHER, deliberately: iOS Safari has ignored `user-scalable=no`
-         since iOS 10, and honours `maximum-scale`. Neither alone covers both engines. -->
-    <meta
-      name="viewport"
-      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
-    />
+         since iOS 10, and honours `maximum-scale`. Neither alone covers both engines.
+
+         DESIGN NOTE 1618: THE LOCK IS WITHDRAWN -- A PINCH IS AN ACCESSIBILITY CAPABILITY, NOT A UI SETTING
+         #1014 locked the page to protect a board that no longer works the way it did. The Rail Map owns NO
+         gesture a pinch can conflict with: the canvas has no pan, no pointer capture and no internal zoom
+         (`HexGridRenderer` moves the view only on the fit pass), and its `handlePointerCancel` was already
+         written for "the browser took the gesture over". Nothing else in the app reads page scale, listens for
+         touch or gesture events, or declares `touch-action` outside two named interactive regions. There is no
+         functional dependency left to protect, and the lock's only remaining effect was to deny a mobile reader
+         the one magnification every platform guarantees them.
+
+         This is NOT the UI scale picker, and it does not touch it. The picker chooses the app's interface
+         DENSITY (`UI_SCALE_STEPS`, 63%..125%, first run 100% -- `utils/uiScale.ts` #1450). Browser page zoom is
+         the user agent's own accessibility capability and belongs to the reader. The two are independent; both
+         remain available.
+
+         `initial-scale=1` stays -- it is the STARTING scale, not a ceiling, and it is what stops mobile Safari
+         from laying the page out at 980px and shrinking it. What is gone is the CEILING (`maximum-scale=1.0`)
+         and the REFUSAL (`user-scalable=no`). Do not restore either: `utils/viewportZoom.test.ts` fails by name
+         if they come back, and so does any app-wide `touch-action` that refuses a pinch. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#000000" />
     <meta
       name="description"

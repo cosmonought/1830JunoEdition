@@ -1853,7 +1853,8 @@ const styles: Record<string, React.CSSProperties> = {
   },
   /* Design note #618: only the purchasable row keeps a raised treatment --
      it is the one that is a control rather than a reference line. */
-  depotCardActive: { borderColor: "#3f7a55", backgroundColor: "#152317" },
+  // #1449: the shorthand, not `borderColor` -- the base is `1px solid transparent`.
+  depotCardActive: { border: "1px solid #3f7a55", backgroundColor: "#152317" },
   depotCardRusted: { opacity: 0.45 },
   depotTier: {
     fontSize: FONT_SIZE.body,
@@ -2083,7 +2084,8 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
     cursor: "pointer",
   },
-  badgeSelected: { borderColor: "#4d8ee0", backgroundColor: "#1d3a55" },
+  // #1449: the shorthand, not `borderColor` -- the base is `1px solid #4a4a4a`.
+  badgeSelected: { border: "1px solid #4d8ee0", backgroundColor: "#1d3a55" },
   // Inline styles cannot express `:disabled` (Lobby.tsx design note #3), so
   // the disabled look is computed.
   badgeDisabled: { opacity: 0.5, cursor: "not-allowed" },
@@ -2120,7 +2122,13 @@ const styles: Record<string, React.CSSProperties> = {
   primaryButton: {
     padding: "8px 16px",
     borderRadius: RADIUS.card,
-    border: `1px solid ${ACTION_GREEN_BORDER}`,
+    /* #1449: LONGHANDS here, not the `border` shorthand. `buttonDisabled` recolours this button AND
+       `promptButton`, which already uses longhands; giving the variant a shorthand would wipe that one's
+       width and style on the way out. Declaring the colour in the base is what makes the variant's
+       `borderColor` a CHANGE rather than a removal. Computed appearance is identical. */
+    borderWidth: "1px",
+    borderStyle: "solid",
+    borderColor: ACTION_GREEN_BORDER,
     backgroundColor: ACTION_GREEN,
     color: ACTION_GREEN_INK,
     fontSize: FONT_SIZE.control,

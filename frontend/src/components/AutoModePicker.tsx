@@ -53,6 +53,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 800,
     cursor: "pointer",
   },
-  optionOn: { borderColor: "#c9a227", color: "#f0dfa8", backgroundColor: "#2a2410" },
+  // #1449: the shorthand, not `borderColor` -- the base is `1px solid #3a3a3a`.
+  optionOn: { border: "1px solid #c9a227", color: "#f0dfa8", backgroundColor: "#2a2410" },
   note: { marginLeft: "auto", fontSize: FONT_SIZE.micro, color: "#8a8a86", fontStyle: "italic" },
 };

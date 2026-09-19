@@ -10,12 +10,13 @@
 // room strip in-game (one `useState` and one mount in `App.tsx`, nothing more). The copy says, every time, that
 // the PIN is for THIS room and nothing else.
 
-import React, { useState } from "react";
+import React, { useLayoutEffect, useRef, useState } from "react";
 
 import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { claimSeat, roomDocOnServer, setSeatPin } from "../utils/roomDocLink";
 import type { SandboxRoomPlayer } from "../utils/sandboxRoom";
 import { adoptSeat, isValidSeatPin, readSeatPin, storeSeatPin, storeSeatToken } from "../utils/seatPin";
+import { useDialogDismissal } from "../utils/useDialogDismissal";
 
 export interface SeatPinModalProps {
   mode: "set" | "rejoin";
@@ -42,6 +43,44 @@ export function SeatPinModal({ mode, roomCode, localPlayerId, players, initialSe
   const [currentPin, setCurrentPin] = useState(readSeatPin(roomCode) ?? "");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  const pinRef = useRef<HTMLInputElement | null>(null);
+
+  /* ==================================================================
+      DESIGN NOTE 1643: BATCH 2 -- ESCAPE, AND FOCUS GOING HOME
+     ==================================================================
+     The modal audit (`claude/modal-audit-2026-09-18.md`) found this card carrying `aria-modal="true"` with no
+     Escape at all (H3) and dropping focus on `<body>` from every close route (H4). Measured on the real card
+     beforehand, with focus on the control being pressed: Escape did nothing; the x, Cancel and the backdrop
+     all closed and all left `document.activeElement` on BODY.
+
+     `dismissible` IS NOT PASSED, and that is a measurement. This card has a `busy` flag, and it is a
+     SUBMISSION gate: measured with a save held in flight, "Save PIN" was disabled while the x, Cancel and the
+     backdrop were all still live -- Cancel closed the card mid-save. Mapping `busy` to `dismissible` would
+     have made Escape stricter than all three visible routes, a rule no control here enforces. So the hook's
+     default stands and Escape joins the three instead of being absent from them.
+
+     `onDismiss` IS `onClose`, the same prop the x, Cancel and the backdrop call -- and the same one the
+     successful save calls, which is why the restore covers that route too without knowing about it: it lives
+     in the unmount, not in any one path. Every temporary value here (`seatId`, `pin`, `currentPin`, `busy`,
+     `note`) is reset by that unmount, so there is no second reset path for Escape to keep in step with.
+
+     THE ACCESSIBLE NAME IS NOT TOUCHED. It is `mode`-specific, `mode` is a prop, and all three call sites fix
+     it for the life of one mount -- the Lobby passes a literal, and the other two gate the mount on the same
+     state that chooses the mode. It is legitimate and it stays. What measurement did find, and what is
+     recorded rather than fixed here, is that in `set` mode the VISIBLE heading flips between "Set a PIN for
+     your seat" and "Change your seat PIN" with the roster's `hasPin` while the accessible name stays "Set a
+     seat PIN" -- the audit's M4, for a later semantic pass, not for a dismissal batch. */
+  useDialogDismissal({ onDismiss: onClose });
+
+  /* #1643: the SAME initial-focus target as before, which was native `autoFocus` on this input. React applies
+     `autoFocus` during the commit's mutation phase, before every effect, so it would move focus inside the
+     card before the hook captures the opener -- and this card would then try to restore focus to its own PIN
+     field, a node that leaves with it. Declared AFTER the hook call, which is what orders the two. No tab stop
+     was added or removed: the same element is focused, and it is focused the same way the browser was doing
+     it. */
+  useLayoutEffect(() => {
+    pinRef.current?.focus();
+  }, []);
 
   const onServer = roomDocOnServer();
   const changing = mode === "set" && me?.hasPin === true;
@@ -140,13 +179,13 @@ export function SeatPinModal({ mode, roomCode, localPlayerId, players, initialSe
         <label style={styles.field}>
           <span style={styles.label}>{changing ? "New PIN" : "PIN"}</span>
           <input
+            ref={pinRef}
             style={styles.input}
             inputMode="numeric"
             autoComplete="off"
             maxLength={4}
             placeholder="4 digits"
             value={pin}
-            autoFocus
             onChange={(event) => setPin(event.target.value.replace(/\D/g, "").slice(0, 4))}
           />
         </label>
@@ -234,5 +273,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     cursor: "pointer",
   },
-  primaryButtonDisabled: { borderColor: "#3a3a3a", backgroundColor: "#1c1c1c", color: "#6e6c68", cursor: "not-allowed" },
+  // #1449: the shorthand, not `borderColor` -- the base is `1px solid #3f7a55`.
+  primaryButtonDisabled: { border: "1px solid #3a3a3a", backgroundColor: "#1c1c1c", color: "#6e6c68", cursor: "not-allowed" },
 };

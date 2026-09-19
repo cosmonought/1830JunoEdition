@@ -45,6 +45,7 @@ directory is anchored as **`<source file> #<N>`**, so:
 | [session_keys_wallet.md](session_keys_wallet.md) | Wallet and `x/authz` session keys, spectator/read-only mode, viewer identity, sandbox identity |
 | [utils_layer.md](utils_layer.md) | The `utils/` layer: hand-kept `msg.rs` mirrors, polling hooks, certificate and net-worth derivation, who-acts-next resolution |
 | [rules_and_sourcing.md](rules_and_sourcing.md) | Where the 1830 numbers come from, how they were verified, and the rule corrections that verification forced |
+| [title_art_normalisation.md](title_art_normalisation.md) | Design note #1447: how the three raster game titles were measured and rebuilt on one canvas so `object-fit: contain` is the whole presentation rule |
 
 ## Recurring principles
 

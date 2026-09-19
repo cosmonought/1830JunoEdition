@@ -118,7 +118,7 @@ export function SandboxRoomBar({
   if (roomCode) return null;
 
   return (
-    <div style={bare ? styles.barBare : styles.bar}>
+    <div className={bare ? "sandbox-bare-bar" : undefined} style={bare ? styles.barBare : styles.bar}>
       {!bare && <span style={styles.label}>Sandbox multiplayer</span>}
       {/* ==================================================================
            DESIGN NOTE 1136: ONE SIZE, ONE COLOUR, AND GREEN ONLY WHILE PRESSED
@@ -276,6 +276,20 @@ const BARE_BUTTON_CSS = `
   color: #7fe0d0;
 }
 .sandbox-bare-btn:focus-visible { outline: 2px solid #8a8a86; outline-offset: 2px; }
+/* ==================================================================
+    DESIGN NOTE 1441: #1136's "nowrap" WAS ABOUT A BOX THAT NO LONGER EXISTS AT THIS WIDTH
+   ==================================================================
+   THAT RULE IS KEPT AND IS STILL RIGHT ON THE DESKTOP: opening the inline join form must not reflow the row
+   under the button that opened it. At 430 there is no inline form on this screen -- the Lobby opens a dialog
+   (#1440) -- and three doors at 30px of side padding are 480px of controls in a 398px window.
+   THE PADDING GOES FIRST AND THE WRAP IS THE BACKSTOP. #1165 put the presence in the padding rather than in
+   the type ("the type stays on the scale"), so the padding is what can be spent; the type does not move, and
+   neither does the 45px control height. If a longer label or a larger text-size setting still will not fit,
+   the row wraps rather than leaving a button off the screen. */
+@media (max-width: 899px) {
+  .sandbox-bare-bar { flex-wrap: wrap !important; gap: 10px !important; }
+  .sandbox-bare-btn { padding-left: 16px !important; padding-right: 16px !important; }
+}
 `;
 
 const styles: Record<string, React.CSSProperties> = {

@@ -32,6 +32,7 @@ import React from "react";
 import { FONT_SIZE, RADIUS } from "../styles/typography";
 // Design note #991: the same herald the board and the corporation card draw, not a second rendering of it.
 import { CorporateLogo } from "./CorporateLogo";
+import { NativeModal } from "./NativeModal";
 import {
   noticeBody,
   noticeHeadline,
@@ -71,7 +72,19 @@ export function FleetLossModal({
     /* NO `onClick` ON THE BACKDROP. Every other modal in this app closes on a backdrop click; this one must
        not, and the absence is deliberate enough to be worth a comment so a later tidy-up does not "restore"
        it for consistency. */
-    <div style={styles.backdrop} role="alertdialog" aria-modal="true" aria-label={noticeHeadline(notice)}>
+    <NativeModal
+      alert
+      name={noticeHeadline(notice)}
+      /* #1651: A FORCED SURFACE, SAID AS A POLICY RATHER THAN AS AN ABSENCE. `dismissible={false}` becomes
+         `closedby="none"`, which was measured to refuse Escape outright -- no `cancel`, no `close`, and it
+         survived six rapid Escapes. Before this, "no Escape" was simply the absence of a listener, which is a
+         promise nothing enforced; now the engine enforces it. There is no scrim click for the same reason
+         there never was one, and `restoreOpener={false}` because batch 4B stopped short of deciding this
+         surface's focus target and this batch must not decide it by accident. */
+      dismissible={false}
+      restoreOpener={false}
+      scrimStyle={styles.backdrop}
+    >
       <div style={styles.card}>
         <div style={styles.header}>
           {/* The cause, as a chip, so a player who has seen this before can classify it without reading. */}
@@ -157,7 +170,7 @@ export function FleetLossModal({
           </button>
         </div>
       </div>
-    </div>
+    </NativeModal>
   );
 }
 
@@ -169,7 +182,8 @@ const styles: Record<string, React.CSSProperties> = {
     inset: 0,
     /* Above `AutoPassModal`'s 3600: a fleet loss is a blocking precondition of the turn and nothing may sit
        over it. */
-    zIndex: 3800,
+    /* #1651: the `zIndex: 3800` that stood here is gone -- this scrim is a `<dialog>` in the top layer, which
+       is above the whole document by definition, so the number decided nothing. */
     display: "flex",
     alignItems: "center",
     justifyContent: "center",

@@ -105,6 +105,15 @@ export function adoptSeat(room: string, playerId: string, pin: string, token: st
   adoptLocalPlayerId(playerId);
   storeSeatPin(room, pin);
   storeSeatToken(room, token);
+  /* #1442: TAKING A SEAT RETIRES A WATCH. The intent survives a refresh now, and this function's whole job is
+     to cause one -- so a player who watched a table and then rejoined their seat in it would otherwise reload
+     holding a reason not to be seated. Written as a literal for the header's reason: this module is a leaf,
+     and `forgetSeat` below already clears `activeGame.ts`'s keys the same way. */
+  try {
+    window.sessionStorage.removeItem("juno.sandboxWatchRoom");
+  } catch {
+    /* nothing to retire */
+  }
   window.location.reload();
 }
 

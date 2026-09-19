@@ -21,6 +21,7 @@ import { ACTION_GREEN, ACTION_GREEN_BORDER, ACTION_GREEN_INK } from "../styles/p
 import { SHARE_BLOCK_PERCENT, type SellableHolding } from "../gameEngine/endgame";
 import type { EmergencyFunding, LegalPrivateSale } from "../gameEngine/emergencyFunding";
 import type { PrivatePurchaseOffer } from "../gameEngine/gameState";
+import { NativeModal } from "./NativeModal";
 
 export interface EmergencyPurchasePlan {
   /** The train the corporation is obliged to buy. */
@@ -157,7 +158,18 @@ export function EmergencyTrainPurchaseModal({
         : null;
 
   return (
-    <div style={styles.backdrop} role="dialog" aria-modal="true" aria-label="Emergency Train Purchase">
+    <NativeModal
+      name="Emergency Train Purchase"
+      /* #1651: A FORCED SURFACE, SAID AS A POLICY RATHER THAN AS AN ABSENCE. `dismissible={false}` becomes
+         `closedby="none"`, which was measured to refuse Escape outright -- no `cancel`, no `close`, and it
+         survived six rapid Escapes. Before this, "no Escape" was simply the absence of a listener, which is a
+         promise nothing enforced; now the engine enforces it. There is no scrim click for the same reason
+         there never was one, and `restoreOpener={false}` because batch 4B stopped short of deciding this
+         surface's focus target and this batch must not decide it by accident. */
+      dismissible={false}
+      restoreOpener={false}
+      scrimStyle={styles.backdrop}
+    >
       <div style={styles.panel}>
         {/* Design note #3: no close control. The header is a title, not a
             title bar -- there is nothing here to dismiss to. */}
@@ -500,7 +512,7 @@ export function EmergencyTrainPurchaseModal({
           )}
         </div>
       </div>
-    </div>
+    </NativeModal>
   );
 }
 
@@ -542,7 +554,8 @@ const styles: Record<string, React.CSSProperties> = {
   backdrop: {
     position: "fixed",
     inset: 0,
-    zIndex: 1400,
+    /* #1651: the `zIndex: 1400` that stood here is gone -- this scrim is a `<dialog>` in the top layer, which
+       is above the whole document by definition, so the number decided nothing. */
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
@@ -693,7 +706,8 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#eafff2",
   },
   sellButtonDisabled: {
-    borderColor: "#3a3a3a",
+    // #1449: the shorthand, not `borderColor` -- the base is `1px solid #4ade80`.
+    border: "1px solid #3a3a3a",
     backgroundColor: "#1c1c1c",
     color: "#6e6c68",
     cursor: "not-allowed",
@@ -768,7 +782,8 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: "pointer",
   },
   confirmButtonDisabled: {
-    borderColor: "#3a3a3a",
+    // #1449: the shorthand, not `borderColor` -- the base is `1px solid ${ACTION_GREEN_BORDER}`.
+    border: "1px solid #3a3a3a",
     backgroundColor: "#1c1c1c",
     color: "#6e6c68",
     cursor: "not-allowed",

@@ -26,6 +26,7 @@ import { ACTION_GREEN, ACTION_GREEN_BORDER, ACTION_GREEN_INK } from "../styles/p
 
 import { FONT_SIZE, RADIUS } from "../styles/typography";
 import type { PowerFlow, PowerFlowStep } from "../utils/privatePowerFlow";
+import { NativeModal } from "./NativeModal";
 
 export interface PrivatePowerFlowModalProps {
   flow: PowerFlow;
@@ -70,7 +71,19 @@ export function PrivatePowerFlowModal({
   onCancel,
 }: PrivatePowerFlowModalProps): React.ReactElement {
   return (
-    <div style={styles.backdrop} role="alertdialog" aria-modal="true" aria-label={flow.title}>
+    <NativeModal
+      alert
+      name={flow.title}
+      /* #1651: A FORCED SURFACE, SAID AS A POLICY RATHER THAN AS AN ABSENCE. `dismissible={false}` becomes
+         `closedby="none"`, which was measured to refuse Escape outright -- no `cancel`, no `close`, and it
+         survived six rapid Escapes. Before this, "no Escape" was simply the absence of a listener, which is a
+         promise nothing enforced; now the engine enforces it. There is no scrim click for the same reason
+         there never was one, and `restoreOpener={false}` because batch 4B stopped short of deciding this
+         surface's focus target and this batch must not decide it by accident. */
+      dismissible={false}
+      restoreOpener={false}
+      scrimStyle={styles.backdrop}
+    >
       <div style={styles.card}>
         <div style={styles.header}>
           <h2 style={styles.title}>{flow.title}</h2>
@@ -170,7 +183,7 @@ export function PrivatePowerFlowModal({
           </div>
         ))}
       </div>
-    </div>
+    </NativeModal>
   );
 }
 
@@ -182,7 +195,8 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    zIndex: 60,
+    /* #1651: the `zIndex: 60` that stood here is gone -- this scrim is a `<dialog>` in the top layer, which
+       is above the whole document by definition, so the number decided nothing. */
     padding: "20px",
   },
   card: {

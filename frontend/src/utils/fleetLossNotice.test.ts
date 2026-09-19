@@ -339,9 +339,20 @@ describe("the modal is genuinely unavoidable (design note #896)", () => {
 
   it("does not close on a backdrop click", () => {
     /* THE EXIT MOST LIKELY TO BE RESTORED BY ACCIDENT, because every sibling modal has it and a tidy-up pass
-       makes files look like their neighbours. The backdrop div must carry no click handler whatever. */
-    const backdrop = sliceBetween(SOURCE, "style={styles.backdrop}", ">");
-    expect(backdrop).not.toContain("onClick");
+       makes files look like their neighbours.
+       THE ANCHOR MOVED WITH #1651 AND THE ASSERTION GOT STRONGER, NOT WEAKER. There is no backdrop `<div>`
+       left to slice: the scrim IS the `<dialog>`, and the style reaches it as a prop, `scrimStyle=`. So "no
+       `onClick` after `style={styles.backdrop}`" no longer has a subject -- and because the anchor is gone
+       rather than merely unmatched, `sliceBetween` throws instead of handing back an empty string that would
+       satisfy the `not.toContain` beside it (#886). That is the vacuous pass this rewrite exists to avoid.
+       THE DISMISSAL IS A POLICY NOW, so the policy is what is asserted, on the opening tag, which carries the
+       whole of it: `onScrimClick` is the boundary's only backdrop route and this surface must not name it,
+       and `dismissible={false}` compiles to `closedby="none"`, which is also what refuses Escape -- the
+       second exit this file has never had and, before the migration, had nothing enforcing. */
+    const tag = sliceBetween(SOURCE, "<NativeModal", ">");
+    expect(tag).toContain("scrimStyle={styles.backdrop}");
+    expect(tag).not.toContain("onScrimClick");
+    expect(tag).toContain("dismissible={false}");
   });
 
   it("offers exactly one control that leaves it", () => {

@@ -471,9 +471,13 @@ const styles: Record<string, React.CSSProperties> = {
     overflow: "hidden",
   },
   // Where the token came from -- a quiet outline, since the eye should end on the destination.
-  cellOrigin: { borderColor: RULE_STRONG, borderStyle: "dashed" },
+  // #1449: the shorthand, not the colour+style longhands.
+  cellOrigin: { border: `1px dashed ${RULE_STRONG}` },
   // Where it lands. The one cell this whole popover exists to point at.
-  cellLanding: { borderColor: "#e3c951", borderWidth: "2px", padding: "2px" },
+  /* #1449: the shorthand. This one orphaned the WIDTH as well as the colour, so a cell the mark had left
+     kept `border-style: solid` alone -- 3px (the initial `medium`) in `currentColor`, measured as a white
+     ring where its neighbours are a 1px #2a2a2a rule. */
+  cellLanding: { border: "2px solid #e3c951", padding: "2px" },
   price: {
     fontSize: FONT_SIZE.micro,
     fontWeight: 700,

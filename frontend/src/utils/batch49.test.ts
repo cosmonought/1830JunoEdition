@@ -270,10 +270,23 @@ describe("the payout is read before the fleet loss", () => {
   });
 
   it("sits above the fleet-loss modal if the suppression is ever lost", () => {
-    /* THE RECOVERABLE DIRECTION. The sequence is enforced by the memo, not by this number -- but if that
-       guard is edited away, a modal in the wrong ORDER is a nuisance and a modal invisible UNDERNEATH another
-       one is a soft-lock. `FleetLossModal` sits at 3800. */
-    expect(MODAL).toContain("zIndex: 3900");
+    /* THE RECOVERABLE DIRECTION, RESTATED FOR THE TOP LAYER. SUPERSEDED BY #1651, NOT LOOSENED.
+       THIS READ `expect(MODAL).toContain("zIndex: 3900")` against `FleetLossModal`'s 3800. The number is now
+       GONE from both files rather than changed: each scrim is a `<dialog>` opened with `showModal()`, so each
+       is in the TOP LAYER, which paints above the whole document whatever any z-index says. A number there
+       decides nothing AND READS AS IF IT DID, which is the worse of the two failures -- a later author would
+       adjust 3900 and 3800 against each other believing the adjustment took. So the replacement FORBIDS one
+       coming back, on each scrim's own style block, where a slice that loses its anchor throws (#886).
+       WHAT THE PAIR ACTUALLY BOUGHT IS UNCHANGED AND STILL CHECKED. The memo above is what keeps the two from
+       ever being raised together; if that suppression is lost, the order between two top-layer dialogs is the
+       order they were opened, which is mount order, which is the memo's order. The failure is still a modal in
+       the wrong ORDER rather than a modal invisible UNDERNEATH another one -- the recoverable direction, now
+       guaranteed by the engine instead of by two numbers kept in step by hand. */
+    const FLEET = readStripped("components/FleetLossModal.tsx");
+    expect(MODAL).toContain("<NativeModal");
+    expect(FLEET).toContain("<NativeModal");
+    expect(sliceBetween(MODAL, "backdrop: {", "},")).not.toContain("zIndex");
+    expect(sliceBetween(FLEET, "backdrop: {", "},")).not.toContain("zIndex");
   });
 });
 

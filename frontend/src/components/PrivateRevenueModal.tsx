@@ -100,6 +100,7 @@ import { bestContrastTextColor } from "../styles/corporationLivery";
 /* Design note #1290: the chrome scale, so a viewport unit inside it can be divided back out. */
 import { useUiScale } from "../utils/useUiScale";
 import { privateOrdinal } from "../gameEngine/privateOrdinal";
+import { NativeModal } from "./NativeModal";
 
 /** One of the viewer's privates, already formatted. The display shape #984 established, plus #1052's number. */
 export interface PrivateRevenueLine {
@@ -202,7 +203,18 @@ export function PrivateRevenueModal({ round, roundLabel, onAcknowledge }: Privat
     /* Design note #1052: NO `onClick` ON THE BACKDROP, and the absence is deliberate enough to be worth the
        same comment `FleetLossModal` carries -- every other modal in this app closes on a backdrop click, so a
        later tidy-up would otherwise "restore" it for consistency and reintroduce the mis-click. */
-    <div style={styles.backdrop} role="dialog" aria-modal="true" aria-label="Private company payouts">
+    <NativeModal
+      name="Private company payouts"
+      /* #1651: A FORCED SURFACE, SAID AS A POLICY RATHER THAN AS AN ABSENCE. `dismissible={false}` becomes
+         `closedby="none"`, which was measured to refuse Escape outright -- no `cancel`, no `close`, and it
+         survived six rapid Escapes. Before this, "no Escape" was simply the absence of a listener, which is a
+         promise nothing enforced; now the engine enforces it. There is no scrim click for the same reason
+         there never was one, and `restoreOpener={false}` because batch 4B stopped short of deciding this
+         surface's focus target and this batch must not decide it by accident. */
+      dismissible={false}
+      restoreOpener={false}
+      scrimStyle={styles.backdrop}
+    >
       <div style={{ ...styles.card, maxHeight: `${84 / uiScale}vh` }}>
         {/* ---- The phase, named ---- */}
         <div style={styles.phaseRow}>
@@ -319,7 +331,7 @@ export function PrivateRevenueModal({ round, roundLabel, onAcknowledge }: Privat
           </button>
         </div>
       </div>
-    </div>
+    </NativeModal>
   );
 }
 
@@ -391,7 +403,8 @@ const styles: Record<string, React.CSSProperties> = {
        open, so the two are never mounted together and nothing is stacked behind anything. This value is here
        so that if that suppression is ever lost, the failure is a modal in the wrong order rather than a modal
        invisible underneath another one -- the recoverable direction. */
-    zIndex: 3900,
+    /* #1651: the `zIndex: 3900` that stood here is gone -- this scrim is a `<dialog>` in the top layer, which
+       is above the whole document by definition, so the number decided nothing. */
     display: "flex",
     alignItems: "center",
     justifyContent: "center",

@@ -42,8 +42,14 @@
 //
 // See docs/ai_architecture/contract_economy.md, depotSchedule.ts #735.
 
+import { phaseName, type TrainTier } from "./gamePhase";
+
+/** The phase cell the Game Ledger's depot table prints. `gamePhase.ts` names it (#1327); this file no longer
+ *  keeps a second list. The Diesel keeps its gloss there, for the reason recorded there. */
+const depotPhase = (tier: TrainTier): string => phaseName(tier);
+
 export interface DepotTierSchedule {
-  /** The phase this tier opens, in the words the phase badge uses. */
+  /** The phase this tier opens, in the words the phase badge uses -- derived, see `depotPhase`. */
   phase: string;
   /** Everything the FIRST purchase of this tier sets off. Empty when it sets off nothing. */
   onFirstPurchase: readonly string[];
@@ -63,37 +69,37 @@ export interface DepotTierSchedule {
 export const DEPOT_SCHEDULE: Readonly<Record<string, DepotTierSchedule>> = {
   "2": {
     closesPrivates: false,
-    phase: "Phase 2",
+    phase: depotPhase("2"),
     onFirstPurchase: [],
     rustsWhen: "A 4-Train is bought",
   },
   "3": {
     closesPrivates: false,
-    phase: "Phase 3",
+    phase: depotPhase("3"),
     onFirstPurchase: ["Unlocks Green tiles"],
     rustsWhen: "A 6-Train is bought",
   },
   "4": {
     closesPrivates: false,
-    phase: "Phase 4",
+    phase: depotPhase("4"),
     onFirstPurchase: ["Rusts all 2-Trains"],
     rustsWhen: "A D-Train is bought",
   },
   "5": {
     closesPrivates: true,
-    phase: "Phase 5",
+    phase: depotPhase("5"),
     onFirstPurchase: ["Unlocks Brown tiles", "Closes all Private Companies"],
     rustsWhen: null,
   },
   "6": {
     closesPrivates: false,
-    phase: "Phase 6",
+    phase: depotPhase("6"),
     onFirstPurchase: ["Rusts all 3-Trains"],
     rustsWhen: null,
   },
   D: {
     closesPrivates: false,
-    phase: "Diesel Era",
+    phase: depotPhase("D"),
     onFirstPurchase: ["Rusts all 4-Trains"],
     rustsWhen: null,
   },

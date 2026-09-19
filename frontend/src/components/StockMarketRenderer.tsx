@@ -468,7 +468,8 @@ function ParIpoTray({ markersByPrice }: { markersByPrice: ReadonlyMap<number, Pa
   return (
     <aside style={styles.parTray}>
       <div style={styles.parTrayHeader}>
-        <span style={styles.parTrayTitle}>Par / IPO Tray</span>
+        {/* #1432: a section under the page heading above -- the level Tiles uses for its colour sections. */}
+        <h3 style={styles.parTrayTitle}>Par / IPO Tray</h3>
         <span style={styles.parTrayHint} title="Par prices set here; a company moves onto the grid once it floats.">
           Reference only — markers are session-observed, not a live chain query
         </span>
@@ -834,7 +835,8 @@ export function StockMarketRenderer({
   return (
     <div style={styles.root} className={className}>
       <div style={styles.header}>
-        <span style={styles.headerTitle}>Stock Market</span>
+        {/* #1432: the page heading of this tab, as a heading. Same font, weight, tracking and colour. */}
+        <h2 style={styles.headerTitle}>Stock Market</h2>
         {/* Design note #387: counts the tokens actually drawn. Reading
             `marketGrid.positions` here would announce "4 companies trading"
             over an empty chart the moment any of them is unparred. */}
@@ -1149,6 +1151,8 @@ const styles: Record<string, React.CSSProperties> = {
     flexWrap: "wrap",
   },
   headerTitle: {
+    /* Rendered as an `h2` (#1432). */
+    margin: 0,
     fontSize: FONT_SIZE.strong,
     fontWeight: 700,
     letterSpacing: "0.02em",
@@ -1358,6 +1362,8 @@ const styles: Record<string, React.CSSProperties> = {
     marginBottom: "8px",
   },
   parTrayTitle: {
+    /* Rendered as an `h3` (#1432). */
+    margin: 0,
     fontSize: FONT_SIZE.heading,
     fontWeight: 700,
     textTransform: "uppercase",

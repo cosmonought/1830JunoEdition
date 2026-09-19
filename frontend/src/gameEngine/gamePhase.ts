@@ -182,6 +182,34 @@ export function tierTint(tier: TrainTier): PhaseTint {
   return TIER_PRESENTATION[tier].tint;
 }
 
+/** The phase a tier opens, named the way the badge names it -- `"Phase 4"`, `"Phase D"`.
+ *
+ *  Design note #1327: ONE PLACE DECIDES WHAT A PHASE IS CALLED. `derivePhase` has always built the badge as
+ *  `presentation.phaseNumber ?? tier` (#612, #1326), but that expression lived inside the summary builder, so
+ *  any other surface wanting the same words had to write them out again -- and `depotSchedule.ts` did,
+ *  under a field whose own comment promised "the phase this tier opens, IN THE WORDS THE PHASE BADGE USES".
+ *  Five of its six entries kept that promise and the sixth said `"Diesel Era"` while the badge said `Phase D`.
+ *  A promise a second copy has to keep by hand is the drift this module exists to prevent (#5, #632, #1094).
+ *  NOT A NUMBER, AND THAT IS THE POINT. The Diesel tier has no override, so its own key is its name and the
+ *  caller gets `Phase D` without knowing why. */
+export function phaseLabel(tier: TrainTier): string {
+  return `Phase ${TIER_PRESENTATION[tier].phaseNumber ?? tier}`;
+}
+
+/** The same phase, named the way the app already names it to a player who is about to arrive in it --
+ *  `"Phase 4"`, and `"Phase D (Diesel)"` for the last one.
+ *
+ *  THE GLOSS IS THE EXISTING SPELLING, NOT A NEW ONE. `PHASE_SHIFT_TARGET` below has printed
+ *  `"Phase D (Diesel)"` in the phase-shift warning since #5; `depotSchedule` printed `"Diesel Era"` for the
+ *  same phase in the Game Ledger. Two spellings of one phase, and the ledger's was the one that agreed with
+ *  neither the badge nor the Rules Reference. Both now come from here.
+ *  AND THE GLOSS STAYS, deliberately -- see THE PHASE IS NOT THE TRAIN above. `Phase D` alone does not say
+ *  which train opens it, and the surfaces that carry this string are a train roster and a purchase warning.
+ *  Removing "Diesel" here would be reading that note as a spelling ban, which it says it is not. */
+export function phaseName(tier: TrainTier): string {
+  return tier === "D" ? `${phaseLabel(tier)} (Diesel)` : phaseLabel(tier);
+}
+
 /** The tile era a tier belongs to -- `"Yellow"`, `"Green"` or `"Brown"`.
  *
  *  Design note #868: EXPOSED SO THE WARNING CAN COMPARE TWO TIERS. `purchaseWarnings` needs to know whether
@@ -250,11 +278,12 @@ export function tileErasAt(tier: TrainTier, plusTiles = false): readonly string[
    `purchases = depotRemaining + 1` -- empty the tier, then buy the next.
    The phase change and the rust are the SAME purchase, which is why one number serves both messages. */
 const PHASE_SHIFT_TARGET: Readonly<Partial<Record<TrainTier, { phase: string; effect: string }>>> = {
-  "2": { phase: "Phase 3", effect: "Unlocks Green Tiles" },
-  "3": { phase: "Phase 4", effect: "Rusts all 2-Trains" },
-  "4": { phase: "Phase 5", effect: "Closes all Private Companies" },
-  "5": { phase: "Phase 6", effect: "Rusts all 3-Trains" },
-  "6": { phase: "Phase D (Diesel)", effect: "Rusts all 4-Trains" },
+  "2": { phase: phaseName("3"), effect: "Unlocks Green Tiles" },
+  "3": { phase: phaseName("4"), effect: "Rusts all 2-Trains" },
+  "4": { phase: phaseName("5"), effect: "Closes all Private Companies" },
+  "5": { phase: phaseName("6"), effect: "Rusts all 3-Trains" },
+  // #1327: the same namer the Game Ledger's depot table reads, so the warning and the table cannot part.
+  "6": { phase: phaseName("D"), effect: "Rusts all 4-Trains" },
 };
 
 /** `"2 purchases until Phase 4 (Rusts all 2-Trains)"`. */

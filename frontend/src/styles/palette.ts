@@ -432,12 +432,131 @@ export const CARD_HIGHLIGHT_BORDER = "#c9a94c";
    This was a literal typed twice in `WaterfallAuctionDashboard` -- once on the live card's "Special power"
    caption and once on the sold card's -- and #1171 was about to add a third for "Standing bids". Two copies
    is a colour; three is a rule nobody wrote down.
-   DEEP ENOUGH TO BE INK, not the highlight above it: 5.9:1 on `CARD_SURFACE`, where `CARD_HIGHLIGHT_BORDER`
-   is 2.1:1 and is a border for that reason. The two golds are not interchangeable and this note is the only
-   place that says so.
+   DEEP ENOUGH TO BE INK, not the highlight above it: `CARD_HIGHLIGHT_BORDER` is 2.1:1 on `CARD_SURFACE` and
+   is a border for that reason. The two golds are not interchangeable and this note is the only place that
+   says so.
+
+   DESIGN NOTE 1172: THE NUMBER IN THE LINE ABOVE WAS WRONG, AND THAT IS HOW THIS SHIPPED.
+   #1171 recorded "5.9:1 on `CARD_SURFACE`" for `#8a7332`. It is **4.03:1** -- #8a7332 has a relative
+   luminance of 0.179 against `CARD_SURFACE`'s 0.872, which is (0.872+0.05)/(0.179+0.05). The note asserted a
+   measurement instead of taking one, and every reader since has trusted it. The ink carries the 11px/800
+   "Special power" and "Standing bids" captions AND the interactive "Full Rules" disclosure
+   (`SpecialPowerBlock` uses `captionInk` for both), so it was small text and a control under the 4.5:1 floor.
+   MEASURED ON THE GROUND IT IS ACTUALLY ON. All eighteen occurrences in the auction dashboard compute against
+   `rgb(242, 240, 235)` -- `CARD_SURFACE` -- including the sold cards; none land on `CARD_SURFACE_MUTED`.
+   DARKENED ALONG ITS OWN HUE, not replaced. `#7a6529` is the same gold at 44.4 degrees, slightly richer
+   (s 0.66 against 0.64) so it stays gold rather than drifting olive as it darkens, and it reaches **4.96:1**
+   -- a real margin over the floor rather than a value that merely rounds to it. It is still lighter than
+   `CARD_INK_FAINT` (6.56:1), which is the neutral caption ink elsewhere, so the caption is still the quieter
+   thing on the card. The pale offer cards are untouched.
+   `CARD_HIGHLIGHT_INK` (#5c4204, 8.25:1) WAS CONSIDERED AND REJECTED: it is the dark ink of the gold
+   highlight band, and borrowing it here would assert a relationship these two do not have -- the same
+   argument this note already makes about `TileSelectionPopup`.
    `TileSelectionPopup` USES THE SAME HEX AND IS LEFT ALONE, deliberately: it is a border on a tile chip, a
    different job that happens to have landed on the same value. Renaming it here would assert a relationship
    that does not exist and would make a future change to one silently change the other. */
-export const CARD_CAPTION_GOLD = "#8a7332";
+export const CARD_CAPTION_GOLD = "#7a6529";
 /** The panel behind a revealed "Full Rules" paragraph -- the caption gold at 9%. */
-export const CARD_CAPTION_GOLD_WASH = "rgba(138, 115, 50, 0.09)";
+export const CARD_CAPTION_GOLD_WASH = "rgba(122, 101, 41, 0.09)";
+
+/* ------------------------------------------------------------------ */
+/* The rounds of play, as presentation.                                 */
+/* ------------------------------------------------------------------ */
+
+/** ==================================================================
+ *   DESIGN NOTE 1626: ONE COLOUR VOCABULARY FOR "WHICH PART OF PLAY"
+ *  ==================================================================
+ *
+ * These three hues were chosen in `RulesReference.tsx` and they are not that component's property. They
+ * answer a question about the GAME -- which round does this thing belong to -- so a second surface that
+ * wants to answer it has to reach the same values or the app says "Stock Round" in two different blues.
+ * `MainTabBar` is the second surface (#1627) and this is the move that stops the third from inventing a
+ * fourth purple.
+ *
+ * NAMED FOR THE GAME, NOT FOR THE PAGE. `ROUND_ACCENT.operating`, never `rulesReferencePink`: the token has
+ * to survive the Rules Reference being restyled, renamed or replaced, and a name that points at a component
+ * is a name that goes stale the moment anything moves.
+ *
+ * THE TWO COLLISIONS THE HUES WERE PICKED AROUND, carried over verbatim because they are still true and a
+ * future pass will otherwise rediscover them the hard way:
+ * (1) 1830's TRACK PHASES ARE YELLOW / GREEN / BROWN. A round accent in any of those reads as a tile
+ *     generation. The three round hues are therefore violet, blue and magenta, and Game End is a cool slate
+ *     -- nothing in the warm-to-green band at all.
+ * (2) LIVE IS STILL GREEN, AND LIVE IS NOT A ROUND. A round accent says WHICH ROUND a thing belongs to; the
+ *     green says THIS IS HAPPENING NOW. The two are never the same channel on the same element, and neither
+ *     is ever the only carrier -- there is a word or a glyph first.
+ *
+ * WHAT IS NOT IN HERE, deliberately: corporation colours (`playerLabels.ts` seats, the corporation liveries),
+ * tile-generation colours, status colours and the current-turn green. Those answer different questions and
+ * sweeping them together is how a palette stops meaning anything.
+ *
+ * Contrast of the `ink` values on `INK_VIEWPORT`: violet 7.5:1, blue 7.3:1, magenta 6.8:1, slate 8.4:1.
+ * See docs/ai_architecture/ui_shell_layout.md, palette.ts #1626. */
+export interface RoundAccent {
+  /** The hue as TEXT: small-caps labels, terms, links. */
+  ink: string;
+  /** The hue as a LINE: a 2px rule, an underline, a dot, an inset edge. */
+  rule: string;
+  /** The hue as a FAINT WASH, for the rare tinted row. Never a card fill, never a tab fill. */
+  tint: string;
+}
+
+/** The three rounds plus the game's end. `end` is a DESTINATION rather than a fourth round, which is why it
+ *  gets the quietest, coolest accent in the set. */
+export type RoundAccentKey = "auction" | "stock" | "operating" | "end";
+
+export const ROUND_ACCENT: Readonly<Record<RoundAccentKey, RoundAccent>> = {
+  auction: { ink: "#c08ae8", rule: "rgba(192, 138, 232, 0.55)", tint: "rgba(192, 138, 232, 0.10)" },
+  stock: { ink: "#6fa3f7", rule: "rgba(111, 163, 247, 0.55)", tint: "rgba(111, 163, 247, 0.10)" },
+  operating: { ink: "#e879b0", rule: "rgba(232, 121, 176, 0.55)", tint: "rgba(232, 121, 176, 0.10)" },
+  end: { ink: "#9fb0c8", rule: "rgba(159, 176, 200, 0.55)", tint: "rgba(159, 176, 200, 0.10)" },
+};
+
+/* ------------------------------------------------------------------ */
+/* The navigation families, as presentation.                            */
+/* ------------------------------------------------------------------ */
+
+/** ==================================================================
+ *   DESIGN NOTE 1628: THE OTHER FAMILY IN THE TAB STRIP HAS A COLOUR TOO
+ *  ==================================================================
+ *
+ * #1627 gave three tabs a round hue and left four bare, and the strip read as three decorated tabs beside
+ * four unfinished ones -- the absence looked like work not done rather than a category. This is the fourth
+ * family's accent: ONE muted warm neutral shared by Stock Market, Game Ledger, Tiles and Rules Reference.
+ *
+ * NAMED FOR THE NAVIGATION FAMILY, NOT AS A FOURTH ROUND, which is the whole point of keeping it out of
+ * `ROUND_ACCENT`. It answers "what kind of surface is this tab" and not "which part of play does this belong
+ * to", and a future reader reaching into `ROUND_ACCENT` for a fifth member would be answering the wrong
+ * question. It is deliberately a bare string rather than a `RoundAccent`: only the 2px rule consumes it, and
+ * an `ink`/`rule`/`tint` triple with two unused members is an invitation to invent uses for them.
+ *
+ * IT DOES NOT MEAN INERT, UNAVAILABLE OR READ-ONLY. The Stock Market owns a board and is moved by both
+ * rounds; the Tiles tab is consulted mid-turn. The tan says "supporting surface", and unavailability in this
+ * strip has never been a colour at all -- an inapplicable tab is ABSENT (`MainTabBar` #1628).
+ *
+ * #a89577 -- CHOSEN AGAINST THE SAME TWO COLLISIONS #1626 RECORDED, which is harder in the warm band than it
+ * was in the cool one, because 1830's track phases ARE yellow/green/brown and #1626 avoided the whole band by
+ * leaving it. A navigation family is not a round, so it may enter that band -- but only at a measured
+ * distance. Measured (CIE76 dE, the method #1349 used for the tile tiers):
+ *     train-tier brown #c08a5a 19.9 | era-chip brown #8a6242 21.1 | laid-tile Brown #bf8156 22.5
+ *     auction-dashboard gold #7a6529 26.0 | era yellows 38.8 and 41.4 | tile-availability yellow #ffe600 77.6
+ *     warning #fb923c 52.5 | critical #fb7185 52.2 | current-turn ink #f2f0eb 35.9
+ *     the three round hues 54.6 / 65.9 / 68.3
+ * The nearest things to it in the whole palette are the neutral text inks (#a8a6a0 at 16.3, #8a8a86 at
+ * 17.4) -- which is the correct neighbourhood: it is a warm cousin of the tab's own label ink, not a
+ * chromatic signal.
+ *
+ * QUIETER THAN THE THREE ROUNDS ON BOTH AXES, and that is asserted rather than asserted-about:
+ *     contrast on the active tab ground (#1c1c1c): tan 5.87 : 1, against violet 6.53, blue 6.70, magenta 6.32
+ *     chroma: tan C* 19, against violet 55, blue 48, magenta 50
+ * So it is the LOWEST-contrast and by far the lowest-chroma accent in the strip, while still sitting nearly
+ * twice over the 3:1 floor for a non-text graphic. It keeps company with `ROUND_ACCENT.end` (C* 14), which is
+ * the right company: both are the quiet answer to "this is not one of the three rounds".
+ * On the resting tab ground it reads 6.60 : 1; it was checked there too because a resting tab is the state
+ * most of the strip is in most of the time.
+ *
+ * NOT A DARK BROWN. A bronze dark enough to feel recessive vanishes into a #0f0f0f--#1c1c1c shell, which was
+ * the failure this note was written to avoid; the muting is carried by CHROMA, not by darkness.
+ *
+ * See docs/ai_architecture/ui_shell_layout.md, palette.ts #1628. */
+export const UTILITY_ACCENT = "#a89577";

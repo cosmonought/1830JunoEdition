@@ -153,10 +153,19 @@ describe("the face value's new home (design note #843)", () => {
     ).toEqual([20, 40, 70, 110, 120, 160, 220]);
   });
 
-  it("renders the table from the catalog rather than a second list", () => {
+  it("renders the catalog from the catalog rather than a second list", () => {
     expect(RULES).toContain("PRIVATE_COMPANY_CATALOG");
-    expect(RULES).toContain("PRIVATE_CATALOG_ROWS.map");
-    expect(RULES).toContain("<h3 style={styles.sectionTitle}>Private Companies</h3>");
+    /* WAS `PRIVATE_CATALOG_ROWS.map` and a `<h3>Private Companies</h3>` heading -- the shape of the old
+       six-column table. The Auction & Privates redesign replaced that table with a row-per-company catalog
+       whose membership is filtered by the active variants first, so the derivation is now
+       `PRIVATE_CATALOG_ROWS.filter(applies).map(...)`. The CLAIM IS UNCHANGED and slightly stronger: the
+       page still builds its list from the catalog, and the variant seventh private appears without the
+       reference knowing its name. */
+    expect(RULES).toContain("PRIVATE_CATALOG_ROWS.filter(applies).map");
+    expect(RULES).toContain("privateRows(applies)");
+    /* And no second hand-written list of the printed six anywhere in the reference. */
+    expect(RULES).not.toContain("There are six private companies");
+    expect(RULES).not.toContain('["Schuylkill Valley (SV)"');
   });
 
   it("describes the power with the same words the card uses", () => {

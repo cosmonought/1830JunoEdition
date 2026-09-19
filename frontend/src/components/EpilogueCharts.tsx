@@ -918,7 +918,8 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     cursor: "pointer",
   },
-  chartTabOn: { borderColor: "#c9a227", color: "#f0dfa8", backgroundColor: "#2a2410" },
+  // #1449: the shorthand, not `borderColor` -- the base is `1px solid #3a3a3a`.
+  chartTabOn: { border: "1px solid #c9a227", color: "#f0dfa8", backgroundColor: "#2a2410" },
   pageTitle: { margin: 0, fontSize: "20px", fontWeight: 800, color: "#f0e2b8" },
   subTitle: { margin: "6px 0 0", fontSize: FONT_SIZE.strong, fontWeight: 800, color: "#e8e6e0" },
   pageHint: { margin: 0, fontSize: FONT_SIZE.small, color: "#8a8a86" },

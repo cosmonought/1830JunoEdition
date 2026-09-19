@@ -82,9 +82,21 @@ export const PHASE_TINT_STYLES: Readonly<Record<GamePhase["tint"], React.CSSProp
    ==================================================================
    "Everything is way too small"; one player at 250% browser zoom. The constant was right for the screen it
    was read from and wrong for that one, which is #1149's own forecast arriving. `resolveUiScale` answers
-   with this browser's stored choice, else a guess from the window's width that lands on 0.63 exactly where
-   #1149 measured it -- see `utils/uiScale.ts`. Still ONE NUMBER at module load, so every consumer of this
-   binding is exactly as it was; the picker in `TopBar` changes it by storing and reloading. */
+   with this browser's stored choice, else -- AT THE TIME -- a guess from the window's width that landed on
+   0.63 exactly where #1149 measured it. Still ONE NUMBER at module load, so every consumer of this binding
+   is exactly as it was; the picker in `TopBar` changes it by storing and reloading.
+
+   ==================================================================
+    DESIGN NOTE 1450: THE GUESS IS GONE; A FIRST RUN IS 1.0
+   ==================================================================
+   The width guess above was withdrawn. An audit measured it on a clean first run and it drew a 13px label at
+   8.19px on a 1920 or 2560 viewport -- and 20 / 8.19 is the 250% that #1273 was written to answer. The signal
+   was the problem: `window.innerWidth` counts CSS pixels, which OS scaling and browser zoom have already
+   normalised, so it cannot tell a large monitor from a zoomed-out small one and shrank both.
+   SO THIS BINDING IS 1.0 UNLESS THE READER HAS CHOSEN OTHERWISE, and 0.63 is the bottom step of the picker's
+   ladder rather than a starting point. Nothing else here changes: the same one number at module load, the
+   same three roots, the same counter-zooms, and `1 / UI_SCALE` still round-trips to exactly 1.
+   See `utils/uiScale.ts` #1450. */
 export const UI_SCALE = resolveUiScale();
 
 /* ==================================================================
@@ -328,6 +340,10 @@ export const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     // Design note #1137: 5px, the lobby's tightened gap (#1135), now the only gap.
     gap: "5px",
+    /* Design note #1443: the pair may not be wider than the line it sits on. `inline-flex` keeps the anchor
+       the width of its content (#1099), and without a ceiling that content sets the page's width on a narrow
+       screen -- see the note on `NetaMark`'s video for the 300px that does it. */
+    maxWidth: "100%",
     fontSize: FONT_SIZE.micro,
     fontWeight: 600,
     letterSpacing: "0.02em",

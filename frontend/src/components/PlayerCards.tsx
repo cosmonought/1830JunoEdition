@@ -163,7 +163,9 @@ export function PlayerCards({
               ...(isActive
                 ? {
                     ...styles.cardActive,
-                    borderColor: stripe,
+                    // #1449: the shorthand the base declares (`1px solid #2a2a2a`); a bare `borderColor`
+                    // here is removed the moment the turn moves on, leaving the card a black edge.
+                    border: `1px solid ${stripe}`,
                     boxShadow: `0 0 0 3px ${stripe}, 0 14px 26px rgba(0,0,0,0.45)`,
                   }
                 : {}),

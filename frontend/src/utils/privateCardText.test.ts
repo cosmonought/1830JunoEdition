@@ -31,7 +31,7 @@ const allBullets = Object.values(PRIVATE_COMPANY_CATALOG).flatMap((entry) => ent
 
 describe("the cards describe a power, not a history", () => {
   it("fixes the two bullets that had slipped into the past", () => {
-    expect(allBullets).toContain("Its auction buyer is handed a 10% PRR share on purchase.");
+    expect(allBullets).toContain("Its initial purchaser is handed a 10% PRR share on purchase.");
     expect(allBullets).toContain("Comes with the B&O president’s certificate and sets its par.");
   });
 

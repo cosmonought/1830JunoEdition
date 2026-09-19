@@ -1215,7 +1215,8 @@ const PRINTED_PATH_CACHE = new Map<string, readonly Path2D[]>();
 
 /* The DATA split was right and every LOOKUP over it was silently wrong: G19 was missed, so a train stopping at New York resolved no path at all and the busiest hex on the board highlighted NOTHING. printedTracksFor is the single place that knows about the exception.
    See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #229 */
-function printedTracksFor(label: string): readonly string[] | undefined {
+/* VF-5 (#1460) reads it too: a tile transition describes an unlaid landmark by the very track this draws. */
+export function printedTracksFor(label: string): readonly string[] | undefined {
   if (label === "G19") return NEW_YORK_PRINTED_ARTWORK.tracks;
   return printedCatalog()[label]?.tracks;
 }

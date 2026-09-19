@@ -673,7 +673,8 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: RADIUS.pill,
     border: "1px solid #2a2a2a",
   },
-  pathHexPaying: { color: "#f4ecd8", borderColor: "#3a3a3a", backgroundColor: "#1c1c1c" },
+  // #1449: the shorthand, not `borderColor` -- the base is `1px solid #2a2a2a`.
+  pathHexPaying: { color: "#f4ecd8", border: "1px solid #3a3a3a", backgroundColor: "#1c1c1c" },
   clearRow: {
     display: "flex",
     flexDirection: "row",
@@ -718,7 +719,8 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: "pointer",
   },
   trainChipActive: {
-    borderColor: "#38bdf8",
+    // #1449: the shorthand, not `borderColor` -- the base is `1px solid #4a4a4a`.
+    border: "1px solid #38bdf8",
     backgroundColor: "#1d3a55",
     color: "#eaf2ff",
   },
@@ -775,7 +777,8 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: "pointer",
   },
   runButtonDisabled: {
-    borderColor: "#3a3a3a",
+    // #1449: the shorthand, not `borderColor` -- the base is `1px solid #2f7d55`.
+    border: "1px solid #3a3a3a",
     backgroundColor: "#1c1c1c",
     color: "#6e6c68",
     cursor: "not-allowed",

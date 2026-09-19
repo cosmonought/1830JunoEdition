@@ -96,8 +96,27 @@ export function NetaMark({ height = 22, labelled, animated = false }: NetaMarkPr
         style={{
           height: Math.round(height * ANIMATED_HEIGHT_RATIO),
           width: "auto",
+          /* ==================================================================
+              DESIGN NOTE 1443: `width: auto` HAS A DEFAULT, AND IT IS 300px
+             ==================================================================
+             FOUND WHILE MEASURING THE WAITING ROOM, which is the one screen whose root does not clip its
+             own overflow -- so it is where this shows up as a page-wide scrollbar rather than as nothing.
+             A `<video>` whose metadata never arrives keeps the UA's intrinsic 300x150, and `width: auto`
+             then resolves to 300px however small the window is. It happens whenever the clip cannot be
+             DECODED: a build without the h264 codec (this project's own capture harness is one), media
+             blocked by policy or an extension, a transcode that lands wrong. `onError` is no help -- the
+             element is still the element.
+             THE HEIGHT WAS ALREADY DEFENDED and the width was not, which is the whole of the bug: #1137
+             pins the mark's height so the three footers agree, and nothing said what it may never exceed.
+             ONE PROPERTY, ON THE SHARED COMPONENT. A per-surface override is what #1137 spent its length
+             removing, and a footer that fits is not a surface's opinion. */
+          maxWidth: "100%",
+          minWidth: 0,
           display: "block",
-          flex: "none",
+          /* `flex: none` was the other half of the same fault: a cap the item is not allowed to shrink to is
+             not a cap. `0 1 auto` lets it give way when the line cannot hold it, and a mark whose metadata
+             DID arrive is ~39px wide and never reaches either limit -- so the loaded case is untouched. */
+          flex: "0 1 auto",
           /* ==================================================================
               DESIGN NOTE 1113: THE CLIP IS BRIGHT-ON-BLACK, SO IT KEYS
              ==================================================================

@@ -308,18 +308,45 @@ describe("the room is the page, and the text carries its own ground", () => {
     expect(FOOTER).toContain('animated={surface === "meta"}');
   });
 
-  it("lets the picture reach the foot of the page", () => {
+  it("bounds the picture to a hero and puts the list under it", () => {
     /* ==================================================================
-        DESIGN NOTE 1133: THE BAND THAT LOOKED LIKE A FOOTER
+        DESIGN NOTE 1440 SUPERSEDES #1133's `bottom: 0`
        ==================================================================
-       REPORTED as "the footer now scrims the entire lower fourth of the screen", and it was not the footer:
-       `sceneClip` was pinned to `height: 100vh` while the root is `min-height: 100vh` PLUS padding plus its
-       flow children, so the last stretch of the page had no photograph on it and the footer's strip ran into
-       that bare ink as one slab.
-       TWO EDGES, BOTH ASSERTED: the layer reaches the root's bottom, and the root no longer holds the credit
-       40px clear of it. */
-    expect(LOBBY).toContain("bottom: 0,");
+       #1133 REPORTED "the footer now scrims the entire lower fourth of the screen" and it was not the footer:
+       `sceneClip` was pinned to `height: 100vh` while the root is `min-height: 100vh` plus its flow children,
+       so the last stretch of the page had no photograph on it and the footer's strip ran into that bare ink
+       as one slab. Running the clip to the root's bottom was the right fix FOR A PAGE WITH NOTHING ON IT.
+       THE PUBLIC LIST IS WHAT FILLS THAT SPACE NOW, and it changes the sign of the argument: a clip that
+       grows with the page would stretch the window the photograph is seen through over several thousand
+       pixels of room rows, and -- the scene being centred in it -- would carry the title and the two anchored
+       buttons down to the middle of the scroll with it. There is no bare band left to defend against,
+       because emptiness is what the list replaced.
+       SO THE TWO EDGES BECOME TWO OTHER EDGES: the hero is a bounded window (`--lobby-hero`), and the scene
+       is anchored to its TOP rather than centred, which is what keeps the title and the buttons exactly where
+       #1131 put them while the picture stops above the fold instead of below it.
+       AND THE HERO TAKES ITS PLACE IN THE FLOW, which is the half a reader is most likely to delete as a
+       stray empty div: `sceneClip` is absolute and reserves no height, so without the spacer the first room
+       row would be laid out under the utility row and read through the photograph. */
+    expect(LOBBY).toContain('height: "var(--lobby-hero)"');
+    expect(LOBBY).toContain('"--lobby-hero": hero');
+    expect(LOBBY).toContain('<div style={styles.heroFlow} aria-hidden="true" />');
+    expect(LOBBY).toMatch(/top: `calc\(max\(\$\{[^}]+\}vh, calc\(\$\{[^}]+\}vw \* 1072 \/ 1920\)\) \/ 2\)`/);
+    // The scene is no longer centred on the window, which is the value that would undo all of the above.
+    expect(LOBBY).not.toContain('top: "50%"');
     expect(LOBBY).not.toContain('padding: "0 0 40px"');
+  });
+
+  it("puts the public list on the page, below the two doors", () => {
+    /* Design note #1440: the list is FLOW CONTENT in the width-capped column, after the hero spacer -- not a
+       second absolutely-placed layer over the photograph, and not inside the join dialog it came from. The
+       order is the assertion: hero, then list. */
+    const spacer = LOBBY.indexOf("<div style={styles.heroFlow}");
+    const list = LOBBY.indexOf("<LobbyRoomList");
+    expect(spacer).toBeGreaterThan(-1);
+    expect(list).toBeGreaterThan(spacer);
+    expect(LOBBY.indexOf("<div style={styles.content}>")).toBeLessThan(list);
+    // The same subscription #1415 opened, read here rather than handed to a modal.
+    expect(LOBBY).toContain("rooms={sandboxRooms.rooms}");
   });
 
   it("keeps the layer over the page from eating the page", () => {
@@ -407,7 +434,11 @@ describe("the anteroom and the table share their chrome", () => {
   it("lets the bar reach the window edges", () => {
     /* The root's inset moved to `panelWrap`. Left where it was, it would have drawn a stripe of photograph
        above a bar that is meant to sit on the edge -- which is the same class of fault as the footer band. */
-    expect(WAITING).toContain("styles.panelWrap");
+    /* Design note #1443 RENAMED THE BOX, not the rule: the panel became a full-width surface with two
+       columns on it, so the wrapper that carries the inset is `surfaceWrap`. The claim -- the root carries no
+       inset, and the box below it does -- and the value are both unchanged. */
+    expect(WAITING).toContain("styles.surfaceWrap");
+    expect(WAITING).not.toContain("styles.panelWrap");
     expect(WAITING).toContain('padding: "24px 20px 0"');
   });
 });

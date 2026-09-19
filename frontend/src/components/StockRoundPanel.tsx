@@ -11,7 +11,7 @@
 // Design notes: see `docs/ai_architecture/stock_market.md`.
 
 import PresidentCrown from "./PresidentCrown";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
   PrivateCompanyState,
   PublicCompanyState,
@@ -89,8 +89,40 @@ import { showsCurseBesideName } from "../utils/carcosaCurse";
 import CarcosaMark from "./CarcosaMark";
 import { BO_LOCKED_CARD_NOTE } from "../gameEngine/gameVariants";
 import { certificateCardsHeld, certificateCardsInPool } from "../gameEngine/doubleCertificate";
+/* ==================================================================
+    DESIGN NOTE 1451: THE CARD IS THE STAGE
+   ==================================================================
+   #1450's screen-space flight is gone. Slide-out movement across the shell is the TREASURY's vocabulary
+   (#1272) and a certificate is not a dollar, so a stock transaction is now shown where it happens: inside the
+   corporation card, as a border, a subdued table, and a percentage travelling between two rows of it.
+   THE SEQUENCE IS PURE AND LIVES NEXT DOOR (`stockTransferFocus.ts`) -- which stage follows which, and how
+   long each takes, is the part with real logic and the part a test can state. Everything below is the DRAWING
+   of it: geometry measured off this panel's own DOM, and nothing leaves the card. */
+import {
+  buildFocusSequence,
+  CROWN_OUT_MS,
+  HANDOVER_MS,
+  isStageParticipant,
+  STOCK_TRANSFER_CSS,
+  type FocusSequence,
+  type FocusStage,
+} from "./stockTransferFocus";
+import {
+  BANK_HOLDER,
+  IPO_HOLDER,
+  stagedOwnership,
+  type AppliedSteps,
+  type ShareHolder,
+  type StockTransaction,
+} from "../utils/stockTransaction";
 
 export interface StockRoundPanelProps {
+  /** Design note #1451: the stock transaction that just landed, for the affected card's own presentation.
+   *  Forwarded straight to `CorporationRoster` -- #799's lesson, in one line: a prop declared on three
+   *  interfaces and passed on two of them is invisible to `tsc` and silent at runtime. */
+  transaction?: StockTransactionEvent | null;
+  /** Design note #1457: the presidency cue, played by the shell on the beat this panel draws the crown. */
+  onPresidencyCue?: () => void;
   publicCompanies: readonly PublicCompanyState[];
   /** Design note #712: why this purchase is illegal, or `null` if it is allowed. Resolved by `App`, which
    *  holds the whole board -- the certificate limit needs the private companies and the room's size, neither
@@ -220,6 +252,10 @@ interface RosterHolding {
   percentage: number;
   isPresident: boolean;
   isSelf: boolean;
+  /** Design note #1454: a landing row for a transfer in progress. The player is a named participant of the
+   *  current step who holds nothing in the STAGED board -- so the row exists to be an anchor, and says so by
+   *  printing the card's absence dash rather than a holding. */
+  pending: boolean;
 }
 
 /* ==================================================================
@@ -319,6 +355,421 @@ function FloatProgressBadge({
   );
 }
 
+/* ==================================================================
+ *  DESIGN NOTE 1451: THE CARD'S OWN ANIMATION MACHINERY, AND NO MORE THAN THAT
+ * ==================================================================
+ *
+ * RULED: "Prefer the corporation-card rendering hierarchy to own the actual animation ... Do not create
+ * another application-wide animation system."
+ *
+ * SO IT IS THREE HOOKS AND A CHIP, all in this file, none exported. The shell hands down a description of a
+ * completed transaction and gets nothing back; everything between that prop and the pixels is here. There is
+ * no registry, no layer, no portal and no shared vocabulary for some future effect to reuse -- if the route
+ * animation wants a proxy, it can have its own, in its own file, measured against its own geometry.
+ *
+ * MEASURED IN LAYOUT PIXELS, WHICH IS WHY THERE IS NO SCALE ARITHMETIC ANYWHERE HERE. The shell's root
+ * carries `zoom: uiScale` (#1144), so a `getBoundingClientRect` inside it reports VISUAL pixels and a length
+ * written inside it is a LAYOUT pixel -- mixing the two is the trap that note exists for. `offsetTop` and
+ * `offsetLeft` are layout pixels, the proxy is written in layout pixels, and both live inside the same zoomed
+ * subtree. Nothing converts, so nothing can convert wrongly. #1450 had to reason about this constantly
+ * because it drew outside the zoom; drawing inside the card makes the question disappear. */
+
+/** What the shell hands down: the description, plus a token so two identical transactions in a row still
+ *  replay rather than sitting finished (#1060's argument for the money machines' token). */
+export interface StockTransactionEvent extends StockTransaction {
+  token: number;
+}
+
+/** The house idiom, optional-chained twice because a test environment has a `window` and no `matchMedia`
+ *  (`TreasuryMoneyMachine` #1272, `HexGridRenderer` #496). */
+function prefersReducedMotion(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
+}
+
+/** `node`'s position inside `ancestor`, in LAYOUT pixels. Walks the offset chain rather than trusting
+ *  `offsetParent` to be the table: the viewer's own row carries a tint and a border (#1110), and a future
+ *  positioned wrapper anywhere between would silently re-base every measurement below. */
+function offsetWithin(node: HTMLElement, ancestor: HTMLElement): { left: number; top: number } {
+  let left = 0;
+  let top = 0;
+  let current: HTMLElement | null = node;
+  while (current && current !== ancestor) {
+    left += current.offsetLeft;
+    top += current.offsetTop;
+    current = current.offsetParent as HTMLElement | null;
+  }
+  return { left, top };
+}
+
+/** The Shares cell belonging to `holder`, or `null`.
+ *
+ *  READ BY ATTRIBUTE RATHER THAN BY AN ATTRIBUTE SELECTOR: a key can be a player address, and addresses are
+ *  not required to be safe inside a CSS selector's quotes. This is a loop over the ten-odd cells of ONE
+ *  table, run at a stage change -- exact by construction, and cheaper than being right about a grammar. */
+function stockCell(table: HTMLElement, holder: ShareHolder): HTMLElement | null {
+  const cells = table.querySelectorAll<HTMLElement>("[data-stock-cell]");
+  for (let index = 0; index < cells.length; index += 1) {
+    if (cells[index].getAttribute("data-stock-cell") === holder) return cells[index];
+  }
+  return null;
+}
+
+/** The staged board before any beat has landed: `before`, whole. */
+const NOTHING_APPLIED: AppliedSteps = { transfer: false, presidency: false };
+
+/** Everything local to ONE sequence, held in a single value so that replacing the sequence replaces all of
+ *  it at once and no part of one transaction can be read alongside another's. */
+interface FocusProgress {
+  sequence: FocusSequence | null;
+  stageIndex: number;
+  applied: AppliedSteps;
+}
+
+function startOfSequence(sequence: FocusSequence | null): FocusProgress {
+  return { sequence, stageIndex: 0, applied: NOTHING_APPLIED };
+}
+
+/** The sequence, where it has got to, and how much of it the card has yet applied.
+ *
+ *  TWO CLOCKS OFF ONE LIST OF TIMERS. `stageIndex` drives what is MOVING and who is emphasised; `applied`
+ *  drives what the figures SAY. They are deliberately not the same value -- the transfer's figures land
+ *  three-quarters of the way through the transfer's own stage (#1452) -- and a single index could not
+ *  express that without inventing half-stages nobody animates.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 1456: THE RESET IS A RENDER, NOT AN EFFECT
+ *  ==================================================================
+ *
+ *  REPORTED, of #1452's supersession: "That one-frame combination can reveal the new transaction's final
+ *  ownership state before its animation begins."
+ *
+ *  IT COULD, AND THE CAUSE WAS WHERE THE RESET LIVED. `stageIndex` and `applied` were reset by a PASSIVE
+ *  effect keyed on the sequence, and a passive effect runs after the commit. So a superseding transaction
+ *  produced one full render -- paintable -- carrying the NEW sequence's snapshots with the OLD sequence's
+ *  flags. If the superseded transaction had already resolved its transfer, `applied.transfer` was still true
+ *  and `stagedOwnership` selected the new transaction's `after`: the finished board, a frame before its own
+ *  animation started. The exact failure #1452 exists to prevent, arriving through the back door.
+ *
+ *  SO THE THREE VALUES BECAME ONE, AND IT IS ADJUSTED DURING RENDER. `FocusProgress` carries the sequence it
+ *  belongs to, so "whose flags are these" is answerable rather than assumed; when it does not match, this
+ *  render already uses a fresh one and `setProgress` tells React to re-run before committing anything. React
+ *  discards the first pass, so the mismatched combination is never committed and cannot be painted.
+ *  `live` IS RETURNED RATHER THAN `progress`, deliberately: the discarded pass is then correct too, so this
+ *  does not depend on that discard for its result -- only for its efficiency.
+ *
+ *  THE TIMERS CARRY THEIR OWN GUARD BESIDES. Each updater checks the sequence before writing, so even a
+ *  callback that somehow outlived its cleanup cannot advance a transaction that is no longer on screen. The
+ *  superseded sequence is not queued and cannot resume: its timers are cleared and its progress is gone. */
+function useStockTransferFocus(
+  transaction: StockTransactionEvent | null,
+  /** Design note #1457: fired ONCE per sequence, on the beat the arriving crown is drawn. */
+  onCrownArrival?: () => void,
+): {
+  sequence: FocusSequence | null;
+  stage: FocusStage | null;
+  stageIndex: number;
+  applied: AppliedSteps;
+} {
+  /* Keyed on the EVENT OBJECT, which the shell rebuilds per transaction -- so a new token is a new sequence
+     and a re-render with the same event is not. */
+  const sequence = useMemo(() => buildFocusSequence(transaction), [transaction]);
+  const [progress, setProgress] = useState<FocusProgress>(() => startOfSequence(null));
+
+  const live = progress.sequence === sequence ? progress : startOfSequence(sequence);
+  if (live !== progress) setProgress(live);
+
+  useEffect(() => {
+    if (!sequence) return undefined;
+    const timers: number[] = [];
+    const advance = (at: number, step: (was: FocusProgress) => FocusProgress) => {
+      timers.push(
+        window.setTimeout(() => {
+          /* Design note #1456: never write into a sequence this timer does not belong to. */
+          setProgress((was) => (was.sequence !== sequence ? was : step(was)));
+        }, at),
+      );
+    };
+    sequence.stages.forEach((stage, index) => {
+      if (index === 0) return;
+      advance(stage.at, (was) => ({ ...was, stageIndex: index }));
+    });
+    sequence.applications.forEach((application) => {
+      /* Design note #1453: EVERY key on this beat in ONE update. A first president arrives with the shares
+         that bought the certificate, and two updates would be two renders with a paintable frame between
+         them showing a board that never existed. */
+      advance(application.at, (was) => {
+        const applied = { ...was.applied };
+        application.applies.forEach((field) => {
+          applied[field] = true;
+        });
+        return { ...was, applied };
+      });
+    });
+    return () => timers.forEach((timer) => window.clearTimeout(timer));
+  }, [sequence]);
+
+  /* ==================================================================
+      DESIGN NOTE 1457: THE PRESIDENCY CUE RIDES THE BEAT IT DESCRIBES
+     ==================================================================
+     RULED: "trigger this from the presentation event/beat that already controls `crownArrivesOn` / crown-in
+     rather than separately trying to infer presidency changes from rendered DOM or authoritative state.
+     There should be one semantic source for both."
+     SO IT IS THE SAME TWO VALUES THE CROWN'S OWN CLASS READS: `crownArrivesOn` names the arrival and
+     `applied.presidency` is the instant it lands. The sound cannot drift from the animation because there is
+     nothing to keep in step -- one condition drives both.
+     ONCE PER SEQUENCE, NOT PER RENDER. `cuedForRef` holds the sequence already announced, so a re-render at
+     the same beat -- a poll, a resize, a parent update -- finds it spent. Sequence identity is the right key
+     because a sequence IS one transaction's presentation: two identical takeovers in a row are two
+     sequences and earn two cues.
+     AND A SUPERSEDED SEQUENCE CANNOT FIRE LATE. Its timers are cleared and its progress discarded, so
+     `applied.presidency` never becomes true for it; the ref moves on with the sequence rather than needing to
+     be cleared. */
+  const cuedForRef = useRef<FocusSequence | null>(null);
+  const crownArrived = live.applied.presidency && sequence !== null && sequence.crownArrivesOn !== null;
+  useEffect(() => {
+    if (!crownArrived || sequence === null) return;
+    if (cuedForRef.current === sequence) return;
+    cuedForRef.current = sequence;
+    onCrownArrival?.();
+  }, [crownArrived, sequence, onCrownArrival]);
+
+  return {
+    sequence,
+    stage: sequence ? (sequence.stages[live.stageIndex] ?? null) : null,
+    stageIndex: live.stageIndex,
+    applied: live.applied,
+  };
+}
+
+interface ProxyPath {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  dx: number;
+  dy: number;
+}
+
+interface StageProxies {
+  stageIndex: number;
+  forward: ProxyPath;
+  /** The return leg, for the president's exchange only. */
+  back: ProxyPath | null;
+}
+
+/** Where the current stage's proxy starts and how far it travels, measured after the commit.
+ *
+ *  A LAYOUT EFFECT, WHICH IS THE WHOLE TIMING ARGUMENT. The shell raises the event before React has painted
+ *  the new board, so the destination row may not exist yet -- a player buying their first share of a
+ *  corporation has no row in its table until this commit. A layout effect runs after the commit and before
+ *  paint, so both cells are in the document and neither has been drawn in the wrong place first.
+ *  `null` IS THE ORDINARY ANSWER, not an error: the wrong tab is open, the card is not rendered, or the
+ *  reader has asked for reduced motion. The holdings underneath are already correct, which is the fallback.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 1453/1454: WHY THIS MEASURES ONCE, AND WHY IT ALWAYS FINDS SOMETHING
+ *  ==================================================================
+ *  #1453's AUDIT FOUND A HOLE AND #1454 CLOSED IT, and both halves are worth keeping. The card stages from
+ *  `before`, and `player_holdings` OMITS a holder at 0% (`gameState.ts`) -- so a player buying their FIRST
+ *  share of a corporation, a par purchase included, had no destination row to measure and got no chip at
+ *  all. That was the wrong fallback for one of the game's most common actions, and the roster draws a
+ *  landing row for the step's participants now (#1454, on the roster build below). There is always
+ *  something to aim at.
+ *
+ *  MEASURED ONCE PER STAGE, AND STILL NO RETRY. Two reasons, and the first outlived the hole: a purchase
+ *  that overtakes a rival re-sorts the rows at the resolve beat, so a proxy re-measured mid-flight would
+ *  jump. And a stage that genuinely cannot be measured -- the card is on another tab, or scrolled away --
+ *  must not be launched late: a certificate arriving after the figures it was supposed to deliver is the
+ *  exact ordering fault #1452 exists to remove. A late gesture is worse than none.
+ *
+ *  `null` REMAINS THE ORDINARY ANSWER for the cases above, and the holdings underneath are already correct,
+ *  which is the whole fallback. */
+function useTransferProxyGeometry(
+  tableRef: React.MutableRefObject<HTMLDivElement | null>,
+  sequence: FocusSequence | null,
+  stage: FocusStage | null,
+  stageIndex: number,
+): StageProxies | null {
+  const [proxies, setProxies] = useState<StageProxies | null>(null);
+
+  useLayoutEffect(() => {
+    const table = tableRef.current;
+    const carriesAPercentage = stage !== null && (stage.kind === "transfer" || stage.kind === "exchange");
+    if (!sequence || !table || !carriesAPercentage || prefersReducedMotion()) {
+      setProxies(null);
+      return;
+    }
+    const source = stockCell(table, stage.from);
+    const target = stockCell(table, stage.to);
+    if (!source || !target) {
+      setProxies(null);
+      return;
+    }
+    const from = offsetWithin(source, table);
+    const to = offsetWithin(target, table);
+    setProxies({
+      stageIndex,
+      forward: {
+        left: from.left,
+        top: from.top,
+        width: source.offsetWidth,
+        height: source.offsetHeight,
+        dx: to.left - from.left,
+        dy: to.top - from.top,
+      },
+      back:
+        stage.kind !== "exchange"
+          ? null
+          : {
+              left: to.left,
+              top: to.top,
+              width: target.offsetWidth,
+              height: target.offsetHeight,
+              dx: from.left - to.left,
+              dy: from.top - to.top,
+            },
+    });
+  }, [tableRef, sequence, stage, stageIndex]);
+
+  /* Stamped with the stage it was measured for, so a render between a stage change and its measurement
+     cannot draw the previous stage's proxy against the current stage's label. */
+  return proxies !== null && proxies.stageIndex === stageIndex ? proxies : null;
+}
+
+/** The player rows bridging their old order and their new one.
+ *
+ *  A FLIP, AND IT IS GENERIC ON PURPOSE: this records where every row was at the last beat and animates
+ *  whatever moved, rather than being told what moved it. Two things can: the crown landing (`applied
+ *  .presidency` re-sorts the roster in exactly one commit) and a purchase overtaking a rival (`applied
+ *  .transfer` does the same). Both get the same short glide, and nothing here has to agree with the sequence
+ *  about which one it was looking at.
+ *  INLINE STYLES, CLEARED ON A TIMER. An inline `transition` left behind would quietly apply to the next
+ *  thing that moved this row, weeks later, in a file nobody is reading. */
+function useRosterReorderFlip(
+  tableRef: React.MutableRefObject<HTMLDivElement | null>,
+  sequence: FocusSequence | null,
+  stageIndex: number,
+  /* Design note #1452: a dependency, because APPLYING a beat is what moves the rows now -- the crown lands
+     with `applied.presidency` and a purchase can overtake a rival the moment `applied.transfer` lands. The
+     stage index alone would have this measuring before the reorder and never after it. */
+  applied: AppliedSteps,
+  publicCompanies: readonly PublicCompanyState[],
+): void {
+  const rowTopsRef = useRef<Record<string, number> | null>(null);
+  const cleanupRef = useRef<number | null>(null);
+
+  useLayoutEffect(() => {
+    const table = tableRef.current;
+    if (!sequence || !table || prefersReducedMotion()) {
+      rowTopsRef.current = null;
+      return undefined;
+    }
+    const tops: Record<string, number> = {};
+    const rows: Record<string, HTMLElement> = {};
+    const cells = table.querySelectorAll<HTMLElement>("[data-stock-cell]");
+    for (let index = 0; index < cells.length; index += 1) {
+      const holder = cells[index].getAttribute("data-stock-cell");
+      const row = cells[index].parentElement as HTMLElement | null;
+      if (!holder || !row) continue;
+      tops[holder] = offsetWithin(row, table).top;
+      rows[holder] = row;
+    }
+    const previous = rowTopsRef.current;
+    rowTopsRef.current = tops;
+    if (!previous) return undefined;
+
+    const moved: HTMLElement[] = [];
+    for (const holder of Object.keys(tops)) {
+      const was = previous[holder];
+      if (was === undefined || was === tops[holder]) continue;
+      const row = rows[holder];
+      row.style.transition = "none";
+      row.style.transform = `translateY(${was - tops[holder]}px)`;
+      moved.push(row);
+    }
+    if (moved.length === 0) return undefined;
+
+    const frame = window.requestAnimationFrame(() => {
+      moved.forEach((row) => {
+        row.style.transition = `transform ${HANDOVER_MS}ms cubic-bezier(0.22, 0.61, 0.36, 1)`;
+        row.style.transform = "";
+      });
+    });
+    if (cleanupRef.current !== null) window.clearTimeout(cleanupRef.current);
+    cleanupRef.current = window.setTimeout(() => {
+      moved.forEach((row) => {
+        row.style.transition = "";
+        row.style.transform = "";
+      });
+    }, HANDOVER_MS + 60);
+    return () => window.cancelAnimationFrame(frame);
+    /* `publicCompanies` is a dependency so a poll landing mid-sequence re-records the rows rather than
+       leaving this comparing against a layout that has since changed underneath it. */
+  }, [tableRef, sequence, stageIndex, applied, publicCompanies]);
+
+  useEffect(
+    () => () => {
+      if (cleanupRef.current !== null) window.clearTimeout(cleanupRef.current);
+    },
+    [],
+  );
+}
+
+/** `React.CSSProperties` plus the two custom properties the travel keyframe reads. Declared rather than cast,
+ *  so the rest of the object is still checked. */
+type ProxyStyle = React.CSSProperties & {
+  "--stock-dx": string;
+  "--stock-dy": string;
+};
+
+/** One percentage, in transit between two rows of one table. */
+function TransferProxy({
+  path,
+  label,
+  crowned,
+  durationMs,
+  color,
+  ink,
+}: {
+  path: ProxyPath;
+  label: string;
+  /** The president's certificate, which is the one chip that is a particular card rather than an amount. */
+  crowned: boolean;
+  durationMs: number;
+  color: string;
+  ink: string;
+}) {
+  const travel: ProxyStyle = {
+    left: `${path.left}px`,
+    top: `${path.top}px`,
+    width: `${path.width}px`,
+    height: `${path.height}px`,
+    animationDuration: `${durationMs}ms`,
+    "--stock-dx": `${path.dx}px`,
+    "--stock-dy": `${path.dy}px`,
+  };
+  return (
+    /* TWO ELEMENTS: the outer travels, the inner fades and contracts. One element cannot do both, because
+       both are `transform` -- and splitting them is also what lets the travel take an ease-out curve while
+       the fade holds through the middle. */
+    <span className="app-stock-proxy-travel" style={travel} aria-hidden="true">
+      <span
+        className="app-stock-proxy-chip"
+        style={{
+          ...styles.transferChip,
+          backgroundColor: color,
+          color: ink,
+          animationDuration: `${durationMs}ms`,
+        }}
+      >
+        {crowned && <PresidentCrown scale={0.85} label={null} />}
+        {label}
+      </span>
+    </span>
+  );
+}
+
 function CorporationRoster({
   publicCompanies,
   phase,
@@ -349,6 +800,8 @@ function CorporationRoster({
   actingSeatColor,
   tradingOpen,
   lockedCompanyIds = [],
+  transaction,
+  onPresidencyCue,
 }: {
   publicCompanies: readonly PublicCompanyState[];
   /** Design note #713: why this SALE is illegal, or `null`. Resolved by `App` for the same reason
@@ -411,6 +864,15 @@ function CorporationRoster({
    *  `boIsLocked` already answers this in `sharePurchase`, and a panel re-asking it would be the second
    *  implementation of a rule, which is the fault this codebase keeps finding. Empty in a standard game. */
   lockedCompanyIds?: readonly number[];
+  /** Design note #1451: the stock transaction that just landed, described by the shell from the message the
+   *  reducer applied and the two states around it (`stockTransaction.ts`). PRESENTATION ONLY -- the card
+   *  draws it and reports nothing back, and every figure on screen is the committed one whether or not this
+   *  is set. A fresh `token` per event, so two identical transactions in a row still replay (#1060). */
+  transaction?: StockTransactionEvent | null;
+  /** Design note #1457: fired on the beat the arriving crown is drawn, once per transaction. The card owns
+   *  the TIMING and the shell owns the PLAYING -- #1062's split for every cue in this app, which is what
+   *  keeps the mute and the radio ducking in the one helper. */
+  onPresidencyCue?: () => void;
 }) {
   /* Design note #464: recomputed at the Operating Round BOUNDARY. `null` until the first one
      establishes an order, leaving the contract's own table order as a neutral start. `prevRoundRef`
@@ -428,10 +890,32 @@ function CorporationRoster({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roundType]);
 
+  /* ==================================================================
+      DESIGN NOTE 1451: ONE FOCUS AT A TIME, HELD BY THE PANEL
+     ==================================================================
+     PANEL-LEVEL RATHER THAN PER CARD, for a structural reason as much as a design one: the cards are inline
+     JSX inside a `.map`, so a card cannot hold hooks of its own without extracting a component from a file
+     this large. It costs nothing -- exactly one transaction is ever being shown, so a second piece of state
+     would only be a way for two cards to disagree about whose turn it is to glow.
+     A NEW `token` SUPERSEDES WHATEVER WAS PLAYING. Rapid consecutive trades cannot corrupt anything: the
+     timers are cleared, the stage index resets, and the holdings underneath were never waiting on any of it. */
+  const { sequence, stage, stageIndex, applied } = useStockTransferFocus(
+    transaction ?? null,
+    onPresidencyCue,
+  );
+  /* The focused card's ownership table, for measuring inside it. Attached only to the card the sequence names
+     (below), so a query from here cannot reach another card's rows. */
+  const focusTableRef = useRef<HTMLDivElement | null>(null);
+  const proxy = useTransferProxyGeometry(focusTableRef, sequence, stage, stageIndex);
+  useRosterReorderFlip(focusTableRef, sequence, stageIndex, applied, publicCompanies);
+
   if (publicCompanies.length === 0) {
     return (
       <div style={styles.section}>
-        <span style={styles.sectionLabel}>Corporations</span>
+        {/* #1432: a real heading, at the level the Ledger and Tiles tabs use for their own page heading.
+            The style is unchanged -- `margin: 0` is added to the style object so the element's own default
+            margin cannot move anything. */}
+        <h2 style={styles.sectionLabel}>Corporations</h2>
         <span style={styles.rosterEmpty}>
           No corporation data yet — waiting on the first GetGameState response.
         </span>
@@ -444,14 +928,39 @@ function CorporationRoster({
       {/* Design note #1148: injected once for the whole roster rather than once per card, and
          unconditionally -- #18's convention for this codebase's inline-style escape hatch (#46). */}
       <style>{FLOAT_BADGE_CSS}</style>
-      <span style={styles.sectionLabel}>Corporations</span>
+      {/* Design note #1451: injected beside the badge's rules and for the same reason -- once for the whole
+         roster, unconditionally, since `<style>` is this codebase's escape hatch for what inline styles
+         cannot express (#46). */}
+      <style>{STOCK_TRANSFER_CSS}</style>
+      <h2 style={styles.sectionLabel}>Corporations</h2>
       <div style={styles.rosterGrid}>
         {/* Design note #464 (supersedes #446): the order is HELD. #446 sorted floated companies to the front
            on every render -- right about the order, wrong about the moment, since buying is what causes floats
            and the act of using the screen rearranged it. `cardOrder` is recomputed only when an Operating Round
            begins (`utils/corporationCardOrder.ts`) and held until the next one. */}
         {/* #1350: before the first Operating Round, the spectrum order rather than the state's numbering. */}
-        {applyCardOrder(publicCompanies, cardOrder ?? openingCardOrder(publicCompanies)).map((company) => {
+        {applyCardOrder(publicCompanies, cardOrder ?? openingCardOrder(publicCompanies)).map((committed) => {
+          /* ==================================================================
+              DESIGN NOTE 1452: THE CARD RENDERS THE STAGED BOARD, NOT THE COMMITTED ONE
+             ==================================================================
+             RULED: "the affected corporation card should temporarily render a presentation snapshot derived
+             from `before` and advance that visual state through the transaction steps until it reaches
+             `after` ... The animation should cause the visible final state, not fire on top of it."
+             ONE REBINDING DOES THE WHOLE JOB. `company` below is the card's view of this corporation, and
+             while a transaction is being shown it is the committed company with four ownership fields
+             replaced by the staged selection. Every reader further down -- the ownership rows, the
+             certificate counts, the roster sort, the crown, the float badge -- picks that up without knowing
+             anything has happened, which is the only version of this that could not leave one figure
+             behind. `committed` stays in scope and is deliberately unused: nothing on this card should be
+             reading past the staged view while it is up.
+             AND IT IS A SELECTION, NOT A MUTATION (`stagedOwnership`): the fields come whole from one
+             authoritative snapshot or the other, so the card cannot draw a number the reducer never made.
+             THE FALLBACK IS THE ABSENCE OF THE OVERLAY. No transaction, a transaction this card is not the
+             subject of, or a descriptor the shell could not build -- in all three `staged` is `null` and
+             this is the committed company, unchanged, exactly as it renders today. */
+          const focusedHere = sequence !== null && sequence.companyId === committed.company_id;
+          const staged = focusedHere ? stagedOwnership(transaction ?? null, applied) : null;
+          const company = staged ? { ...committed, ...staged } : committed;
           const color = tickerColor(company.company_id);
           /* Design note #447: the field is optional and `gameState.ts` is explicit that `undefined` means
              "this build cannot tell you" while "0" means "it earned nothing" -- and a company that never
@@ -519,9 +1028,64 @@ function CorporationRoster({
            * so equal stakes keep `player_holdings`' own order -- which the reducer builds deterministically
            * and identically on every client. That matters more here than tidiness: two browsers rendering one
            * roster in two orders is a bug report nobody would know how to describe. */
-          const holdings: RosterHolding[] = company.player_holdings
-            .slice()
+          /* Design note #1451: the routing story in one line -- the shell names ONE corporation and the card
+             whose id matches lights up. Every other card renders exactly as it always has, and a transaction
+             for a corporation that is not on screen simply has no card to answer it. */
+          const focusSequence = focusedHere ? (sequence as FocusSequence) : null;
+          /* Design note #1455: where the OUTGOING crown starts fading. The stage, not the application --
+             a buy takeover pays before it is crowned, and the incumbent's crown must stay solid through the
+             purchase rather than dimming from the first frame of the transaction. */
+          const crownOutIndex = focusSequence
+            ? focusSequence.stages.findIndex((entry) => entry.kind === "crown-out")
+            : -1;
+          /* Subdued unless this row is one of the two the CURRENT stage is about. Called with no holder for
+             the parts of the table that are never a participant -- the header, the rules, the private rows. */
+          const rowClass = (holder?: ShareHolder) =>
+            focusedHere && !(holder !== undefined && isStageParticipant(stage, holder))
+              ? "app-stock-row app-stock-row-dim"
+              : "app-stock-row";
+
+          /* ==================================================================
+              DESIGN NOTE 1454: A TRANSFER NEEDS SOMEWHERE REAL TO LAND
+             ==================================================================
+             REPORTED, of #1453's fallback: "Skipping the travelling stock proxy whenever the buyer has no row
+             in the `before` snapshot is not an acceptable normal-case fallback ... it would make the
+             stock-transfer animation disappear at some of the most important ownership-establishing moments."
+             Right, and the fallback was the wrong shape: `player_holdings` omits a 0% holder, so a player's
+             FIRST purchase of a corporation -- a par purchase included -- had no destination cell to measure.
+             THE TRANSACTION NAMES THE BUYER, so the row is drawn for them. It is a PRESENTATION AFFORDANCE,
+             not a claim: it prints the card's own absence dash (`--`, the same glyph an unparred price and an
+             unrun corporation use), carries no crown, and holds no percentage. Nothing about it says the
+             player owns anything, and at the resolve beat the staged snapshot switches to `after` and the row
+             simply becomes the ordinary one it was always going to be.
+             SCOPED TO THE STEP THAT NEEDS IT, not to the union of `before` and `after`. Only the two entities
+             the CURRENT stage is about, only while that stage's figures have not yet landed, and only when
+             the staged board really has no row for them. So a seller who sells out keeps their row for the
+             whole outbound transfer -- the staged holdings are still `before` -- and loses it at the resolve
+             beat, which is the order the brief asks for and is already what the staged snapshot does.
+             ONLY A TRANSFER STAGE CAN NEED ONE, and that is worth writing down rather than leaving to be
+             rediscovered: the participants of a presidency step are the outgoing and incoming presidents, and
+             both hold at least the President's block by definition of the crown (#596b), so neither can be
+             missing from any board on which the step is playing. */
+          const anchorHolders: string[] = [];
+          if (focusedHere && stage !== null && stage.kind === "transfer" && !applied.transfer) {
+            [stage.from, stage.to].forEach((holder) => {
+              if (holder === IPO_HOLDER || holder === BANK_HOLDER) return;
+              if (anchorHolders.indexOf(holder) !== -1) return;
+              if (company.player_holdings.some((entry) => entry.player === holder)) return;
+              anchorHolders.push(holder);
+            });
+          }
+
+          const rosterEntries = company.player_holdings.map((entry) => entry);
+          /* `percentage: 0` so the one sort below handles them without a second code path -- every real
+             holding is above zero, so a landing row sorts last, which is where a holder of nothing belongs. */
+          anchorHolders.forEach((player) => rosterEntries.push({ player, percentage: 0 }));
+
+          const holdings: RosterHolding[] = rosterEntries
             .sort((a, b) => {
+              /* Design note #1452: `company.president` IS the staged president while a transaction is up --
+                 the overlay replaced it. One field, one reader, no exception to remember. */
               const presidency =
                 Number(company.president === b.player) - Number(company.president === a.player);
               return presidency !== 0 ? presidency : b.percentage - a.percentage;
@@ -529,8 +1093,11 @@ function CorporationRoster({
             .map((h) => ({
               address: h.player,
               percentage: h.percentage,
+              /* A landing row can never be crowned, and not by a special case: a president holds at least the
+                 20% block, so they always have a real holding to be found under. */
               isPresident: company.president === h.player,
               isSelf: connectedAddress !== null && h.player === connectedAddress,
+              pending: anchorHolders.indexOf(h.player) !== -1,
             }));
 
           const cardFace = (
@@ -790,7 +1357,45 @@ function CorporationRoster({
                    unit a player moves, and because the president's 20% being ONE certificate is what a percentage hides.
                    SORTED DESCENDING, and the president is NOT hoisted -- seeing them second on an equal stake is exactly
                    what a player needs to notice. */}
-                <div style={styles.ownershipTable} role="table" aria-label={`${company.ticker} ownership`}>
+                <div
+                  style={styles.ownershipTable}
+                  role="table"
+                  aria-label={`${company.ticker} ownership`}
+                  /* Design note #1451: only the focused card's table is reachable from the panel's
+                     measurement, so a query for a row cannot cross into another corporation's. */
+                  ref={focusedHere ? focusTableRef : undefined}
+                >
+                  {/* Design note #1451: the travelling percentage. Absolutely positioned INSIDE this table --
+                      it cannot leave the card, which is the constraint the whole treatment exists to honour.
+                      `aria-hidden` throughout: the figures either side of it are the accessible record, and a
+                      screen reader announcing a proxy of a number it is about to read anyway is noise. */}
+                  {focusedHere && proxy !== null && stage !== null && (
+                    <>
+                      <TransferProxy
+                        path={proxy.forward}
+                        label={`${stage.percentage}%`}
+                        crowned={stage.kind === "exchange"}
+                        durationMs={stage.durationMs}
+                        color={color}
+                        ink={bestContrastTextColor(color)}
+                      />
+                      {/* The other half of the president's exchange: 20% of ordinary shares going back the
+                          other way. Two chips crossing is the only honest picture of a swap in which NOBODY'S
+                          PERCENTAGE MOVES (`presidencyTransfer.ts` #596a) -- one chip would say a stake
+                          changed hands, which is exactly what did not happen. The crown on the outgoing one
+                          is what distinguishes the president's certificate from the shares it buys. */}
+                      {proxy.back !== null && (
+                        <TransferProxy
+                          path={proxy.back}
+                          label={`${stage.percentage}%`}
+                          crowned={false}
+                          durationMs={stage.durationMs}
+                          color={CARD_SURFACE_MUTED}
+                          ink={CARD_INK}
+                        />
+                      )}
+                    </>
+                  )}
                   {/* Design note #394: ENTITY / SHARES / PRICE. The old third column was `%`, so the header described the
                      banks and the players identically while the two rows answered different questions: a player's
                      percentage is their STAKE, the IPO's is INVENTORY, and what a buyer wants beside inventory is cost.
@@ -799,7 +1404,7 @@ function CorporationRoster({
                      Bank Pool share the CURRENT MARKET price. One price for both rows would be wrong for most of the game.
                      A PLAYER ROW'S PRICE IS BLANK, deliberately, not a dash -- there is no price at which a player's shares
                      are for sale, and printing the market figure there would read as an offer. */}
-                  <div style={styles.ownershipHeadRow} role="row">
+                  <div style={styles.ownershipHeadRow} role="row" className={rowClass()}>
                     <span style={styles.ownershipName} role="columnheader">Entity</span>
                     <span style={styles.ownershipNum} role="columnheader">Shares</span>
                     <span style={styles.ownershipNum} role="columnheader">Price</span>
@@ -808,7 +1413,7 @@ function CorporationRoster({
                   {/* The two banks, always shown -- an IPO at 0% means the
                       company is fully distributed, which is worth as much
                       as any other figure here. */}
-                  <div style={styles.ownershipRow} role="row">
+                  <div style={styles.ownershipRow} role="row" className={rowClass(IPO_HOLDER)}>
                     <span style={styles.ownershipName} role="cell">IPO</span>
                     {/* Design note #448: NINE CERTIFICATES, NOT TEN -- one 20% President's Certificate plus eight 10% shares.
                        `percentage / 10` counts PERCENT BLOCKS, so a full IPO read "10" for a stack of nine pieces of card,
@@ -816,7 +1421,7 @@ function CorporationRoster({
                        rows already used it; the two bank rows were doing raw division beside them, so one table counted in
                        two units. WHILE THE PRESIDENCY IS UNSOLD the 20% certificate sits in the IPO, which is why this cannot
                        be a constant 9. */}
-                    <span style={styles.ownershipNum} role="cell">
+                    <span style={styles.ownershipNum} role="cell" data-stock-cell={IPO_HOLDER}>
                       {certificateCardsInPool(company, "Ipo")} ({company.ipo_pool_percentage}%)
                     </span>
                     <span
@@ -827,11 +1432,11 @@ function CorporationRoster({
                       {company.par_value === null ? "--" : `$${company.par_value}`}
                     </span>
                   </div>
-                  <div style={styles.ownershipRow} role="row">
+                  <div style={styles.ownershipRow} role="row" className={rowClass(BANK_HOLDER)}>
                     <span style={styles.ownershipName} role="cell">Bank Pool</span>
                     {/* Design note #448: the same unit as every other row. A President's Certificate cannot reach the Bank
                        Pool -- a president must dump the presidency before selling out -- so `false` is not a simplification. */}
-                    <span style={styles.ownershipNum} role="cell">
+                    <span style={styles.ownershipNum} role="cell" data-stock-cell={BANK_HOLDER}>
                       {certificateCardsInPool(company, "Bank")} ({company.bank_pool_percentage}%)
                     </span>
                     <span
@@ -845,10 +1450,10 @@ function CorporationRoster({
                   </div>
 
                   {/* Design note #378: the line between unowned and owned. */}
-                  <hr style={styles.ownershipRule} />
+                  <hr style={styles.ownershipRule} className={rowClass()} />
 
                   {holdings.length === 0 ? (
-                    <span style={styles.rosterNoHoldings}>No shares held by players</span>
+                    <span style={styles.rosterNoHoldings} className={rowClass()}>No shares held by players</span>
                   ) : (
                     /* Design note #421: the highlight follows the READER, not the president. The crown already marks the
                        presidency unmistakably, so an amber row behind it emphasised a fact needing none -- while the one
@@ -864,6 +1469,41 @@ function CorporationRoster({
                     /* Design note #791: "tied" joins "max", and they cannot both apply -- two players at the
                        60% cap would be 120% of a 100% corporation. `holdingMarker` returns ONE word, so the
                        cell cannot print both even if that arithmetic were ever wrong. */
+                    /* Design note #1451: which half of the handoff this row is. Only the two players in
+                       the exchange animate; every other crown on the board is a standing fact. */
+                    /* ==================================================================
+                        DESIGN NOTE 1455: THE ARRIVAL IS KEYED ON THE FIGURES, THE DEPARTURE ON THE STAGE
+                       ==================================================================
+                       THE CROWN DRAWS IN WHEREVER IT LANDS, and that is now one branch covering two
+                       procedures: a two-player handoff and a corporation's first president. `crownArrivesOn`
+                       names the destination in both, and `applied.presidency` is the moment the staged board
+                       starts calling that player president -- which is the very render in which their crown
+                       first exists, so the animation plays from mount rather than being switched on a frame
+                       later. A first president used to POP, because the old test asked for a `handover`
+                       stage and that sequence has none.
+                       THE DEPARTURE STILL NEEDS THE STAGE, and the asymmetry is the procedure rather than an
+                       oversight: a buy is paid for before it is crowned, so the incumbent holds a solid crown
+                       through the purchase and only begins to lose it when the `crown-out` beat opens. Keying
+                       that on `!applied.presidency` alone would fade it from the first frame of the
+                       transaction, which would announce the takeover before the shares that caused it. */
+                    const crownClass =
+                      focusSequence === null
+                        ? ""
+                        : applied.presidency && holding.address === focusSequence.crownArrivesOn
+                          ? "app-stock-crown-in"
+                          : !applied.presidency &&
+                              crownOutIndex !== -1 &&
+                              stageIndex >= crownOutIndex &&
+                              holding.address === focusSequence.presidency?.from
+                            ? "app-stock-crown-out"
+                            : "";
+                    const crownAnimationStyle: React.CSSProperties = {
+                      display: "inline-flex",
+                      /* #970's rule: the duration is the constant, not a copy of it in the stylesheet. */
+                      animationDuration: `${
+                        crownClass === "app-stock-crown-out" ? CROWN_OUT_MS : HANDOVER_MS
+                      }ms`,
+                    };
                     const marker = holdingMarker(
                       holding.percentage,
                       marketZoneForPrice(market),
@@ -873,6 +1513,7 @@ function CorporationRoster({
                       <div
                         key={holding.address}
                         role="row"
+                        className={rowClass(holding.address)}
                         title={
                           marker === "max"
                             ? `${playerLabel?.(holding.address) ?? truncateHolder(holding.address)} holds the maximum ${holding.percentage}% of this corporation. The Orange and Brown zones lift this cap.`
@@ -920,16 +1561,46 @@ function CorporationRoster({
                              because a platform pictogram in a platform colour font could not be relied on to mean anything, and the
                              word that replaced it is nine characters wide in a column that must also fit a name. An inline SVG is
                              the same shape everywhere, takes the row's ink, and announces "President" to a screen reader. */}
+                          {/* ==================================================================
+                               DESIGN NOTE 1451: THE CROWN IS TAKEN AWAY BEFORE IT IS GIVEN
+                              ==================================================================
+                              Wrapped rather than given a prop: `PresidentCrown` takes `style` and not
+                              `className` (#552), and a component whose whole job is to be the same drawing
+                              everywhere should not grow an animation vocabulary because one caller wants
+                              one. The span is the animated thing; the crown inside it is untouched.
+                              THE OUTGOING CROWN IS STILL RENDERED while it fades, because the STAGED
+                              `company.president` (#1452) still names its player until the handover beat.
+                              `animation-fill-mode: forwards` holds it invisible through the exchange, so the
+                              row is visibly vacated for the whole of the swap rather than for ninety
+                              milliseconds of it. */}
                           {holding.isPresident && (
-                            <PresidentCrown style={styles.presidentTag} scale={0.95} />
+                            <span
+                              className={crownClass}
+                              style={crownClass === "" ? undefined : crownAnimationStyle}
+                            >
+                              <PresidentCrown style={styles.presidentTag} scale={0.95} />
+                            </span>
                           )}
                           {playerLabel?.(holding.address) ?? truncateHolder(holding.address)}
                         </span>
-                        <span style={styles.ownershipNum} role="cell">
+                        <span
+                          style={styles.ownershipNum}
+                          role="cell"
+                          data-stock-cell={holding.address}
+                        >
                           {/* "5 (60% max)" rather than "5 (60%, max)": the comma buys nothing and this
                              column is fixed-width (#466), so every character is a real constraint. */}
-                          {certificateCardsHeld(company, holding.address)} (
-                          {holding.percentage}%{marker === null ? "" : ` ${marker}`})
+                          {/* Design note #1454: a landing row prints the card's absence dash -- the same
+                              glyph an unparred price and a corporation that has never run already use --
+                              rather than "0 (0%)", which would be a holding of nothing stated as a figure. */}
+                          {holding.pending ? (
+                            "--"
+                          ) : (
+                            <>
+                              {certificateCardsHeld(company, holding.address)} (
+                              {holding.percentage}%{marker === null ? "" : ` ${marker}`})
+                            </>
+                          )}
                         </span>
                         {/* Design note #394: blank, not a dash. */}
                         <span style={styles.ownershipNum} role="cell" />
@@ -948,12 +1619,12 @@ function CorporationRoster({
                      reference lookup, not an action, so it must not compete with the selection that governs Buy and Sell. */}
                   {ownedPrivates.length > 0 && (
                     <>
-                      <hr style={styles.ownershipRule} />
+                      <hr style={styles.ownershipRule} className={rowClass()} />
                       {ownedPrivates.map((priv) => {
                         const open = expandedPrivateId === priv.private_id;
                         const entry = PRIVATE_COMPANY_CATALOG[priv.private_id];
                         return (
-                          <div key={priv.private_id} style={styles.privateRowGroup}>
+                          <div key={priv.private_id} style={styles.privateRowGroup} className={rowClass()}>
                             <button
                               type="button"
                               style={styles.privateRow}
@@ -1071,6 +1742,7 @@ function CorporationRoster({
           return (
             <div
               key={company.company_id}
+              className="app-stock-card"
               style={{
                 ...styles.rosterCard,
                 ...(company.is_floated ? {} : styles.rosterCardUnfloated),
@@ -1080,6 +1752,21 @@ function CorporationRoster({
                    too odd to read as anything but a mistake; the selected card already expands, and keeps
                    #1109's lift (`rosterCardActive`) -- a shadow, not a colour. */
                 borderColor: CARD_BORDER,
+                /* ==================================================================
+                    DESIGN NOTE 1451: THE BORDER IS THE WHOLE CARD-LEVEL CUE
+                   ==================================================================
+                   RULED: "a restrained temporary border/outline/accent ... Do not use a large glow, repeated
+                   pulsing, dramatic scaling, flashing", and "The border should be subordinate to the
+                   ownership-transfer animation."
+                   THE CARD'S OWN LIVERY, not a generic accent. The colour already means this corporation on
+                   this card -- it is the stripe two inches above -- so the border says WHICH without
+                   introducing a hue that has to be learnt. And it is a colour change on an edge that is
+                   already there: no new geometry, nothing that moves, nothing that competes with the two rows
+                   the reader is supposed to be looking at.
+                   HELD FOR THE WHOLE SEQUENCE, which is the half that carries the procedure. A takeover is
+                   two steps with different participants, and the unbroken border is what says they are one
+                   transaction rather than two things that happened. */
+                ...(focusedHere ? { borderColor: color } : {}),
                 ...(locked ? styles.rosterCardLocked : {}),
               }}
               aria-disabled={locked ? true : undefined}
@@ -2074,6 +2761,8 @@ export function StockRoundPanel({
   actionInFlight = false,
   roundType,
   lockedCompanyIds,
+  transaction,
+  onPresidencyCue,
 }: StockRoundPanelProps) {
   /* Design note #32: out of phase counts as "controls disabled" exactly the
      same way an unready session does -- one flag, so no control can be
@@ -2168,6 +2857,9 @@ export function StockRoundPanel({
 
       <CorporationRoster
         lockedCompanyIds={lockedCompanyIds}
+        /* Design note #1451: the one hop #799 was written about. */
+        transaction={transaction}
+        onPresidencyCue={onPresidencyCue}
         publicCompanies={publicCompanies}
         phase={phase}
         outlook={outlook}
@@ -2786,6 +3478,9 @@ const styles: Record<string, React.CSSProperties> = {
      vary with the name's length, so a column of percentages did not line up -- the one thing a table of
      numbers exists to do. `rosterHoldings` went with the list it styled. */
   ownershipTable: {
+    /* Design note #1451: the box the transfer proxy is positioned inside. It is also what makes
+       `offsetWithin` terminate on the table rather than walking out of the card. */
+    position: "relative",
     display: "flex", flexDirection: "column", gap: "1px",
     borderTopWidth: "1px", borderTopStyle: "solid", borderTopColor: CARD_DIVIDER,
     paddingTop: "7px",
@@ -2850,6 +3545,18 @@ const styles: Record<string, React.CSSProperties> = {
     borderTop: `1px solid ${CARD_DIVIDER}`,
   },
   rosterNoHoldings: { fontSize: FONT_SIZE.small, color: CARD_INK_FAINT, fontStyle: "italic" },
+  /* Design note #1451: the travelling percentage. A small piece of coloured card -- which is what a
+     certificate is -- at the size of the type it leaves and lands on. No glow, no outline beyond a hairline
+     of shadow to lift it off the row it passes over. */
+  transferChip: {
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 800,
+    lineHeight: 1.1,
+    padding: "1px 5px",
+    borderRadius: RADIUS.control,
+    fontVariantNumeric: "tabular-nums",
+    boxShadow: "0 1px 2px rgba(0, 0, 0, 0.3)",
+  },
   // Design note #8: gold + bold, the second of the president's markers.
   // Design note #421: the amber row is the VIEWER's. Renamed rather than repointed -- the old name
   // described the thing it was wrong about, and a later reader would put it back on the crown.
@@ -2946,6 +3653,8 @@ const styles: Record<string, React.CSSProperties> = {
     opacity: 0.55,
   },
   sectionLabel: {
+    /* Rendered as an `h2` (#1432): zeroed so the heading occupies exactly the space the span did. */
+    margin: 0,
     display: "flex",
     alignItems: "center",
     gap: "8px",

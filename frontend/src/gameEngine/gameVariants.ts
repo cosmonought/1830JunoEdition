@@ -42,18 +42,52 @@ export const BANK_SIZE_BY_LENGTH: Readonly<Record<GameLength, number>> = {
   long: 20000,
 };
 
-/** What each option costs a table, in the words a player choosing one needs. */
-export const GAME_LENGTH_BLURB: Readonly<Record<GameLength, string>> = {
-  short:
-    "$4,500 bank. The bank breaks early, often before the 5-trains arrive — a sharp game about the opening.",
-  /* Design note #977: "as printed" WITHOUT the number. `appNaming` #706's rule is that no player-facing
+/* ==================================================================
+    DESIGN NOTE 1440: THE AMOUNT IS READ, NOT RETYPED
+   ==================================================================
+   REPORTED of the host's second step: "Bank Size displays $4,500 while its helper text describes '$12,000
+   bank. The standard game, as printed.'" THE SCREEN WAS RIGHT AND THE CAPTURE WAS NOT -- React sets a
+   `<select>`'s value as a DOM PROPERTY, and `outerHTML` does not serialise it, so a static export of that
+   card shows the first option whatever was chosen. The live control and the sentence agreed.
+   THE SENTENCE COULD STILL HAVE BEEN WRONG, AND THAT IS WHAT IS FIXED HERE. Three copies of every bank
+   figure were in circulation -- this table, the option labels, and the blurbs' own opening words -- and only
+   the third was a hand-typed string with nothing reading it back. A wrong digit there would have been
+   invisible to every test in the tree, because no test can know that "$12,000" was meant to be the same
+   number as `BANK_SIZE_BY_LENGTH.standard`.
+   SO THE FIGURE IS DERIVED AND THE PROSE IS WHAT REMAINS WRITTEN. `bankSizeLabel` is the one formatting of
+   an amount in this app, and it is `en-US` explicitly: a bare `toLocaleString()` renders "12.000" on a
+   German browser, which is a different number in the reader's own notation. */
+/** The bank as every screen writes it. One formatting, so no two surfaces can disagree about the digits. */
+export function bankSizeLabel(length: GameLength): string {
+  return `$${BANK_SIZE_BY_LENGTH[length].toLocaleString("en-US")}`;
+}
+
+/* ==================================================================
+    DESIGN NOTE 1444: WHAT THE OPTION DOES, SEPARATELY FROM WHAT IT IS
+   ==================================================================
+   REPORTED of the waiting room: a row reading "Bank $20,000" followed by "$20,000 bank. Runs well past the
+   Diesels..." -- "the description should add meaning, not repeat the displayed value."
+   TWO CALLERS, TWO NEEDS, ONE SOURCE. The host's setup card shows this under a `<select>` whose option says
+   only "$20,000", so its sentence has to name the bank; a definition list that has just printed the amount
+   in its value column must not. Splitting the sentence at that seam serves both from one piece of prose --
+   `GAME_LENGTH_NOTE` is the meaning, and `GAME_LENGTH_BLURB` is that meaning with the amount in front of it
+   (#1440's derivation, unchanged, and still the only formatting of the figure). */
+export const GAME_LENGTH_NOTE: Readonly<Record<GameLength, string>> = {
+  short: "The bank breaks early, often before the 5-trains arrive — a sharp game about the opening.",
+  /* Design note #977: "as printed" WITHOUT the name. `appNaming` #706's rule is that no player-facing
      string names 1830 -- this app is Project 18XX -- and the lobby copy batch put it back in two places
      while the case that forbids it was already red for an unrelated reason and so said nothing. The phrase
      still points at the same thing: "as printed" is what a player choosing a bank size needs, and the
      rulebook it refers to is named in the Rules Reference where the citation belongs. */
-  standard: "$12,000 bank. The standard game, as printed.",
-  long:
-    "$20,000 bank. Runs well past the Diesels, with time for late corporations to matter.",
+  standard: "The standard game, as printed.",
+  long: "Runs well past the Diesels, with time for late corporations to matter.",
+};
+
+/** The note with the amount in front of it, for a control that does not print the figure itself. */
+export const GAME_LENGTH_BLURB: Readonly<Record<GameLength, string>> = {
+  short: `${bankSizeLabel("short")} bank. ${GAME_LENGTH_NOTE.short}`,
+  standard: `${bankSizeLabel("standard")} bank. ${GAME_LENGTH_NOTE.standard}`,
+  long: `${bankSizeLabel("long")} bank. ${GAME_LENGTH_NOTE.long}`,
 };
 
 /* ==================================================================
@@ -338,7 +372,10 @@ export const GAME_TYPE_COPY: Readonly<Record<GameType, { label: string; blurb: s
   /* The sentences are #961's, read from the one record rather than written a second time. */
   plus: { label: "18XX+", blurb: VARIANT_COPY.expandedMap.blurb },
   levelPlayingField: {
-    label: "18XX+: Level Playing Field",
+    /* Design note #1445: the article is part of the name. "A Level Playing Field" is what the variant is
+       CALLED; "Level Playing Field" read as a description of the map. The internal id, the `lpf` abbreviation
+       and `VARIANT_COPY.levelPlayingField.label` are untouched -- this is the player-facing TITLE only. */
+    label: "18XX+: A Level Playing Field",
     blurb: VARIANT_COPY.levelPlayingField.blurb,
   },
 };

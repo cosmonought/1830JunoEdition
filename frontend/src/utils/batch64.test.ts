@@ -383,25 +383,38 @@ describe("a replayed tile lay is judged against the reducer's phase", () => {
   });
 
   it("is a real difference, not a theoretical one", () => {
-    /* THE MECHANISM, EXERCISED. Green tile #29 upgrading yellow tile #7 on hex 5,0 is ALLOWED at era Green
-       and REFUSED at era Yellow -- so the era handed to this predicate is exactly what decides whether a
-       replayed upgrade survives the rebuild. Found by search rather than chosen: any pair with this property
-       proves it, and asserting a real one keeps the case honest if the catalog changes. */
+    /* THE MECHANISM, EXERCISED. Green tile #29 upgrading yellow tile #7 on B10 is ALLOWED at era Green and
+       REFUSED at era Yellow -- so the era handed to this predicate is exactly what decides whether a replayed
+       upgrade survives the rebuild. Found by search rather than chosen: any pair with this property proves
+       it, and asserting a real one keeps the case honest if the catalog changes. */
     const { filterSandboxPlacements } = require("../components/sandboxTileLegality") as typeof import("../components/sandboxTileLegality");
     const { MOCK_MAP_GRID } = require("../gameEngine/mockFixtures") as typeof import("../gameEngine/mockFixtures");
-    /* ORIENTATION MATTERS AND MY FIRST DRAFT GUESSED IT. I found this pair by search -- yellow #7 at rot 3
-       upgrading to green #29 at rot 3 -- and then wrote the case with orientation 0 for both, which is legal
-       for neither era, so it asserted `true` about a placement that is simply invalid. The suite caught it.
-       THE ROTATIONS ARE PART OF THE FIXTURE, not decoration. */
+    /* THE HEX MOVED, AND SO DID THE ROTATION WITH IT -- Slice 9.2, not a rules change here.
+       THIS CASE USED TO SIT ON (5, 0), WHICH IS **A11, A RED OFF-BOARD AREA**. That was only ever an accident
+       of how the pair was found: before Slice 9.2 the filter had no opinion about the hex itself, so an
+       off-board coordinate behaved like any other and the era distinction showed through it. `17616c8` added
+       `immutableHexRefusal` as rule **0** of `filterSandboxPlacements` -- off-board, preprinted gray and Coal
+       River refuse EVERY tile before any era or upgrade rule is consulted -- so A11 now answers "no" in both
+       eras and the fixture stopped measuring what it names. That is Stage 9.2 being right, not a regression:
+       nothing in this test ever intended to exercise A11 or off-board refusal.
+       RE-MEASURED ON A MUTABLE HEX: **B10 = (4, 1)**, `type: "Plain"`, `immutableHexRefusal(4, 1) === null`.
+       THE ROTATIONS ARE PART OF THE FIXTURE, not decoration -- and they are HEX-RELATIVE, so moving the hex
+       forces re-deriving them. #7's live edges at rot 3 are {3, 4}, whose neighbours are off the map at B10,
+       so `staysOnBoard` (rule 4b) refuses that facing there in every era. At **rot 0** the pair carries the
+       intended property exactly, and so do rot 4 and rot 5; rot 0 is used.
+       WHY THE YELLOW REFUSAL IS THE ERA RULE AND NOTHING ELSE: the two calls below differ in `era` alone --
+       same board, same hex, same laid tile, same candidate, same orientations -- and the same placement is
+       ACCEPTED at era Brown as well as at Green. Only rule 1 (`TIER_RANK[#29 = Green] > eraRank`) tracks that
+       ceiling; every other gate is era-independent and demonstrably passes. */
     const laid = {
       ...MOCK_MAP_GRID,
-      tiles: [{ q: 5, r: 0, tile_id: 7, orientation: 3 }],
+      tiles: [{ q: 4, r: 1, tile_id: 7, orientation: 0 }],
     };
     const ask = (era: "Yellow" | "Green") =>
-      filterSandboxPlacements([{ tile_id: 29, orientation: 3 }], {
+      filterSandboxPlacements([{ tile_id: 29, orientation: 0 }], {
         mapGrid: laid as never,
-        q: 5,
-        r: 0,
+        q: 4,
+        r: 1,
         era,
       }).length > 0;
     expect(ask("Green")).toBe(true);

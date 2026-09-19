@@ -14,6 +14,8 @@
 import { AutoModePicker, type AutoMode } from "./AutoModePicker";
 import React, { useState } from "react";
 
+import { NativeModal } from "./NativeModal";
+
 import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { bestContrastTextColor, corporationLiveryColor } from "../styles/corporationLivery";
 import { CorporateLogo } from "./CorporateLogo";
@@ -54,6 +56,32 @@ const SOURCE_LABELS: ReadonlyArray<{ value: AutoBuySourcePreference; label: stri
   { value: "Cheapest", label: "Cheapest", title: "Whichever of the two is cheaper this turn; IPO on a tie." },
 ];
 
+/* ==================================================================
+    DESIGN NOTE 1643: `open` HERE IS A RENDER SWITCH, NOT A MOUNT SWITCH
+   ==================================================================
+   The modal audit found this surface with no Escape (H3) and focus left on `<body>` after every close route
+   (H4). Both are `useDialogDismissal` (#1641) now -- but NOT called from the component body, and the reason is
+   measured rather than stylistic.
+
+   This component takes an `open` prop and returns `null` when it is false, and `App.tsx` keeps
+   `AutoPassModal` mounted the whole time. A hook in the body would therefore capture an opener when the GAME
+   SHELL mounted, hold a `keydown` listener for the whole session, and never run its restore on a close -- the
+   component does not unmount on one.
+
+   THE FIX IS NOT TO CONVERT THE CALL SITE. Measured: because `AutoPassModal` stays mounted, its `conditions`
+   survive a close -- toggle a condition off, close with Cancel, reopen, and it is still off. Making `open` a
+   mount switch would re-seed that state from `initial` on every opening, which is a change to what the player
+   sees in a settings dialog, and this batch changes dismissal and focus only.
+
+   SO THE LIFECYCLE LIVES IN A CHILD THAT IS ONLY RENDERED WHILE THE DIALOG IS UP. It mounts and unmounts
+   exactly with the dialog, which is the lifecycle the hook's contract is written against; it renders nothing
+   and touches no state. Converting these two to mount switches is a separate change with its own visible
+   consequence, and it is named in the note rather than smuggled in here. */
+/* #1651: `DismissalLifecycle` stood here. It existed because a hook in the component body would have captured
+   an opener when the game shell mounted and never run its restore on a close -- the render switch keeps the
+   component mounted all session. `NativeModal` is only RENDERED past that switch, so it mounts and unmounts
+   with the dialog, which is the lifecycle the contract was written against. */
+
 export function AutoBuyModal({ open, corporations, initial, onArm, onClose, onSwitchMode }: AutoBuyModalProps) {
   /* Order of ticking is order of preference (#1240), so an array rather than a set. */
   const [targets, setTargets] = useState<AutoBuyTarget[]>([...(initial?.targets ?? [])]);
@@ -86,14 +114,17 @@ export function AutoBuyModal({ open, corporations, initial, onArm, onClose, onSw
     setTargets((current) => current.map((t) => (t.companyId === companyId ? { ...t, maxPercent } : t)));
 
   return (
-    <div
-      style={styles.backdrop}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Auto-Buy settings"
-      onClick={(event) => {
+    <NativeModal
+      name="Auto-Buy settings"
+      /* #1643, carried forward by #1651: unconditional -- measured, the x, Cancel and the backdrop all dismiss
+         here whatever the state, so Escape must too. The only disabled control is Arm. */
+      dismissible
+      onDismiss={onClose}
+      onScrimClick={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
+      restoreOpener
+      scrimStyle={styles.backdrop}
     >
       <div style={styles.card}>
         <div style={styles.header}>
@@ -247,7 +278,7 @@ export function AutoBuyModal({ open, corporations, initial, onArm, onClose, onSw
           </button>
         </div>
       </div>
-    </div>
+    </NativeModal>
   );
 }
 
@@ -257,7 +288,8 @@ const styles: Record<string, React.CSSProperties> = {
   backdrop: {
     position: "fixed",
     inset: 0,
-    zIndex: 3600,
+    /* #1651: the `zIndex: 3600` that stood here is gone -- this scrim is a `<dialog>` in the top layer, which
+       is above the whole document by definition, so the number decided nothing. */
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
@@ -352,7 +384,8 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: "pointer",
   },
   primaryButtonDisabled: {
-    borderColor: "#3a3a3a",
+    // #1449: the shorthand, not `borderColor` -- the base is `1px solid #3f7a55`.
+    border: "1px solid #3a3a3a",
     backgroundColor: "#1c1c1c",
     color: "#6e6c68",
     cursor: "not-allowed",

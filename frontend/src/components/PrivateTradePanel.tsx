@@ -1013,7 +1013,11 @@ const styles: Record<string, React.CSSProperties> = {
   primaryButton: {
     padding: "9px 18px",
     borderRadius: RADIUS.card,
-    border: `1px solid ${ACTION_GREEN_BORDER}`,
+    /* #1449: LONGHANDS here -- `buttonDisabled` is shared with `promptButton`, which already uses them.
+       See `TrainPurchasePanel` for the argument. Computed appearance is identical. */
+    borderWidth: "1px",
+    borderStyle: "solid",
+    borderColor: ACTION_GREEN_BORDER,
     backgroundColor: ACTION_GREEN,
     color: ACTION_GREEN_INK,
     fontSize: FONT_SIZE.control,

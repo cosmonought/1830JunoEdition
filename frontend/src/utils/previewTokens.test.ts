@@ -52,10 +52,16 @@ const CODE = RENDERER.replace(/\/\*[\s\S]*?\*\//g, "")
   .replace(/\{\/\*[\s\S]*?\*\/\}/g, "");
 
 describe("the tokens are drawn after the ghost, not under it", () => {
+  /* Design note #1471 moved the preview into the tile pass, drawn by the flourish's painter as the proposal it is, so
+     the anchor is that branch's opening line; the ordering it pins is unchanged -- the tile pass runs long before the
+     token pass. Both cases check that it exists: with the anchor gone, `slice` starts at the end of the file and the
+     opacity case passes on "". */
+  const GHOST_PASS = "if (proposingAt(tile.q, tile.r)) {";
+
   it("paints the preview before the token pass", () => {
     /* THE WHOLE BUG, as an ordering. Asserted by index rather than by adjacency, because the two blocks are
        separated by nothing today and could reasonably grow apart. */
-    const preview = CODE.indexOf("if (previewTile) {");
+    const preview = CODE.indexOf(GHOST_PASS);
     const tokens = CODE.indexOf("drawStationTokenPass();");
     expect(preview).toBeGreaterThan(-1);
     expect(tokens).toBeGreaterThan(-1);
@@ -67,7 +73,10 @@ describe("the tokens are drawn after the ghost, not under it", () => {
        would have shown the token through it and nobody would have reported anything. Pinned so a future pass
        cannot "fix" the ordering by making the tile see-through instead. */
     expect(RENDERER).toContain("The preview is FULLY OPAQUE");
-    const previewBlock = CODE.slice(CODE.indexOf("if (previewTile) {"), CODE.indexOf("drawStationTokenPass();"));
+    expect(CODE.indexOf(GHOST_PASS)).toBeGreaterThan(-1);
+    // The branch, up to the tile pass's own drawing -- its washed look is colour, never a canvas alpha (#1471).
+    const previewBlock = CODE.slice(CODE.indexOf(GHOST_PASS), CODE.indexOf("drawHexPath(ctx, center, hexSize);", CODE.indexOf(GHOST_PASS)));
+    expect(previewBlock).toContain("proposedTileFrame(");
     expect(previewBlock).not.toContain("globalAlpha");
   });
 

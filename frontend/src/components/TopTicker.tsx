@@ -726,7 +726,8 @@ const styles: Record<string, React.CSSProperties> = {
     textAlign: "center",
     zIndex: 1,
   },
-  chatToggleOpen: { borderColor: "#4d8ee0", color: "#cfe2ff", backgroundColor: "#1d3a55" },
+  // #1449: the shorthand, not `borderColor` -- the base is `1px solid #2a2a2a`.
+  chatToggleOpen: { border: "1px solid #4d8ee0", color: "#cfe2ff", backgroundColor: "#1d3a55" },
   unreadBadge: {
     fontSize: FONT_SIZE.body,
     fontWeight: 700,

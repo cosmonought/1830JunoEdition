@@ -129,7 +129,11 @@ describe("the host's setup card offers every variant the schema defines (design 
   it("offers the bank length as its own control", () => {
     /* Not a boolean, so it is not in the loop above and would be exactly the field a schema-derived check
        quietly skips. */
-    expect(source).toContain("BANK_SIZE_BY_LENGTH");
+    /* Design note #1440: `bankSizeLabel` IS the read of `BANK_SIZE_BY_LENGTH` -- one formatting of an amount,
+       shared by the option, the blurb and the waiting room's terms, so no two of them can name different
+       digits. The claim this case makes ("the control is wired to the table") is unchanged; the name of the
+       read is not. */
+    expect(source).toContain("bankSizeLabel(length)");
     expect(source).toContain("GAME_LENGTH_BLURB");
     expect(source).toContain('data-testid="host-bank-size"');
   });
@@ -144,7 +148,13 @@ describe("the host's setup card offers every variant the schema defines (design 
     expect(room).toContain("VARIANT_TOGGLES.filter((toggle) => variants[toggle.key])");
     expect(room).not.toContain("canEditVariants");
     expect(room).not.toContain("onSetVariants");
-    expect(room).toContain("Set by the host before this room opened");
+    /* Design note #1446 REPLACED THE SENTENCE, and the claim it was standing in for survives: the terms are
+       READ here, never edited (the two assertions above), and the line under the heading says they are
+       settled. "You are agreeing to them when you press Ready" was false for a watcher, who has no Ready
+       control by design, and odd for the host, who chose them -- so it says the one thing true of every
+       reader, once, with no role-specific variant to keep in step. */
+    expect(room).toContain("Fixed when the room opened.");
+    expect(room).not.toContain("when you press Ready");
     expect(room).toContain("House rules");
   });
 
@@ -153,8 +163,24 @@ describe("the host's setup card offers every variant the schema defines (design 
        #977 RE-WORDED THE SENTENCE, not the rule: `appNaming` #706 forbids a player-facing string naming
        1830 -- this app is Project 18XX -- and the lobby copy batch had put the number back here. The anchor
        follows the copy, and the claim this case makes is unchanged. */
-    expect(room).toContain("playing the standard game, as printed");
+    /* ==================================================================
+        DESIGN NOTE 1444 MOVED THE SENTENCE, NOT THE CLAIM
+       ==================================================================
+       #924's point is that a heading with nothing under it reads as a loading state, so the empty case has to
+       SAY so -- and #977's point is that no player-facing string may name 1830. Both still hold.
+       WHAT CHANGED IS WHOSE SENTENCE IT WAS. "playing the standard game, as printed" is #977's wording about
+       the BANK, and #1444 split the settings from the house rules -- so with the bank's own note now printed
+       three lines above, that phrase would have appeared twice on one screen saying two different things.
+       The empty state says the one thing its heading is about, for every game type rather than only the
+       printed one; the phrase itself is asserted where it belongs, on `GAME_LENGTH_NOTE.standard`. */
+    /* Design note #1445 moved the line, not the claim: with no optional rules there is no right region at
+       all, so the fact is stated quietly at the foot of the left column's settings rather than as a heading
+       over an empty rail. */
+    expect(room).toContain("House rules \u00b7 <span style={styles.noneTag}>None</span>");
+    expect(room).toContain('data-testid="waiting-room-no-house-rules"');
     expect(room).not.toContain("1830");
+    const { GAME_LENGTH_NOTE } = require("../gameEngine/gameVariants") as typeof import("../gameEngine/gameVariants");
+    expect(GAME_LENGTH_NOTE.standard).toBe("The standard game, as printed.");
   });
 
   it("gives the rules text a legible treatment (design note #924)", () => {

@@ -11,7 +11,7 @@
 // moved code and its notes together, so #209 means the same note wherever it
 // is cited. New notes go in docs/ai_architecture/, not back in this header.
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { FONT_SIZE, RADIUS } from "../styles/typography";
 import {
   STATION_RADIUS_RATIO,
@@ -73,6 +73,7 @@ import {
   type MapTileEntry,
   type QueryCapableClient,
   type StationTokenCompany,
+  type HomeStationEntry,
 } from "./hexContractTypes";
 // Design note #496: the station cursor composites the real herald, so it
 // resolves the path the same way every other logo surface does.
@@ -100,6 +101,7 @@ import {
   tokenCityBucket,
 } from "../gameEngine/stationTokens";
 import {
+  HEX_NEIGHBOR_OFFSETS,
   archetypeForHex,
   axialToPixel,
   boardHexLabel,
@@ -167,7 +169,40 @@ import {
   stationMarkerRadius,
   withHexClip,
   type RouteOverlay,
+  type ValueBadgeTerrain,
 } from "./hexCanvasPrimitives";
+/* VF-5, design notes #1460-#1473: the tile-lay and tile-upgrade flourish. `tileTransition` describes a transition
+   and knows no rules; `tileTransitionCanvas` paints a frame and knows no time; this file decides when one starts,
+   what supersedes it, and when the authoritative tile takes over (#1465) -- and draws the tile being chosen as the
+   proposal a confirmed lay starts from (#1471). */
+import {
+  PROPOSED_BADGE,
+  PROVISIONAL,
+  REVEAL_SPAN,
+  TILE_TRANSITION_SFX,
+  badgePresentationAt,
+  cityAnchor,
+  cuesReached,
+  isAnimatableChange,
+  pieceMoves,
+  pieceTargetPresence,
+  planTileTransition,
+  proposedTileFrame,
+  reservationPositionAt,
+  sampleTileTransition,
+  tileTransitionCues,
+  tokenPositionAt,
+  type BadgePresentation,
+  type PresentedTile,
+  type TileTransitionCueAt,
+  type TileTransitionPlan,
+  type TokenMotion,
+  type Vec,
+} from "./tileTransition";
+import { drawTileTransitionArt, drawTileTransitionFill, withRevealSide } from "./tileTransitionCanvas";
+/* Design note #1474: the transition's cues go through the helper every cue goes through (#1041), which owns the master
+   switch's effect, the shared level, the concurrency cap, the radio's duck and the browser's refusals. */
+import { currentSfxEnabled, playVariantCue, preloadCues } from "../utils/audio";
 
 /* Design note #1357: the herald artwork, cached per ticker for the canvas. `null` until loaded (or when the
    asset is missing -- the ticker disc stands in for good). Loading is kicked off on first ask; every mounted
@@ -601,6 +636,502 @@ function releaseCapture(event: React.PointerEvent<HTMLCanvasElement>): void {
   }
 }
 
+/* ==================================================================
+    DESIGN NOTE 1465: THE BOARD STAGES A LAY; THE AUTHORITY NEVER WAITS FOR IT
+   ==================================================================
+   VF-5. A confirmed lay or upgrade transforms the hex from what it was into what it is, rather than the new tile
+   simply appearing. `tileTransition.ts` describes that transformation and knows no rules; `tileTransitionCanvas.ts`
+   paints one frame of it and knows no time. This file decides the three things only the board can: WHEN a
+   transition starts, WHAT supersedes one, and WHEN the authoritative tile takes over.
+
+   THE STATE IS NEVER STAGED. `mapGrid`, `publicCompanies` and every rule that reads them are the authority from
+   the first frame. For the one hex that changed, a transition holds the old tile's plan and where that hex's tokens,
+   reservation markers and printed value stood -- a handful of numbers, not a copy of the board -- and the draw
+   paints that hex from them until the timeline ends. Nothing waits on it, nothing dispatches from it, and it
+   cannot change what was laid, which way it faces, or where a token lands.
+
+   WHAT A HEX PRESENTS. The tile a hex shows is the grid's, except while a sent lay's ghost is held (#1145): that
+   ghost IS the picture of the lay until the grid comes back with it. So a transition starts the moment the
+   PRESENTED tile changes -- at the confirm in a room, while the round trip is still out, and in the same commit as
+   the reducer in a solo sandbox -- and the grid's arrival, which changes nothing presented, does not restart it
+   (nor does an arrival after the ghost was dropped, #1468).
+   While a transition runs, the held ghost is not painted over it, and the hex counts as laid for every printed pass.
+
+   WHICH CHANGES PLAY. Exactly one hex changing, from nothing or from a tile, to a tile no lower in tier
+   (`isAnimatableChange`). A removal (an undo; a refused lay's ghost released by #1145's clock), a downgrade, a
+   re-facing, or several hexes changing at once (a replay jump, a reconnection, a room's first grid) resolve to the
+   authority immediately.
+
+   SUPERSESSION IS A SNAP. A hex whose presented tile changes while its transition runs drops the transition and
+   draws the authority -- no queue, no second flourish chained onto a stale one, no old rail, city or token left
+   behind. The map is a tab: an unmount drops every transition with the component, and a remount animates nothing.
+
+   REDUCED MOTION is the board's existing convention (#463's pulse reads the same media query): a short local
+   crossfade of the two tiles, stations and tokens swapping at its midpoint -- no tension, division or morph.
+
+   THE HAND-OVER IS BY TIME. At the end of the timeline the ordinary tile pass draws the hex again, and the last
+   frame is that drawing (#1464). A pair that cannot be described (`null` plan, an exception while sampling) is the
+   same hand-over, taken early.
+
+   A PROPOSAL IS NOT PRESENTED (#1471). A preview the player is still choosing and turning is drawn in the tile pass as
+   the washed destination tile, but it changes no presented tile: turning it, swapping candidates or cancelling
+   starts nothing. At the confirm it becomes the held ghost, and the transition that starts then begins FROM that
+   proposal -- the same tile at the same facing, drawn a render ago -- rather than from the old tile, so the confirm
+   builds into what was already on the hex and the old tile is never shown again. Its value was already where the
+   lay puts it, washed, and holds still.
+
+   A TOKEN IS A PIECE SEATED IN ITS STATION (#1466 as revised by #1472). A token is drawn by the token pass, once, in
+   that pass's own order. On a hex mid-transition it is drawn where `tokenPositionAt` seats it: in the slot that holds
+   it, through its city's own choreography, from where it stood on the tile the hex showed to where authoritative
+   state puts it now -- a confirmed proposal's tokens too, because the city they sit in plays from its old drawing.
+   A home reservation marker rides its city the same way (`reservationPositionAt`, #1473).
+
+   A TOKEN THE LAY MOVES HAS A PLANNED PLACE (#1473) -- WHERE THIS BOARD PROPOSED THE LAY (#1474). While a tile is being
+   chosen, a token the confirm will move is drawn only where the lay puts it, faint, as part of the proposal; from the
+   confirm that planned place stays under every piece while the real token rides into it, and goes as the commit
+   settles the token there. A lay nobody proposed here -- another seat's, a replay's -- has none: its tokens ride in
+   from their seats with nothing waiting for them. A token the lay does not move is drawn as it always was. A
+   reservation marker has no planned place -- it is already drawn as a faded token: while the tile is being chosen a
+   marker the confirm will move is left out of the proposal, and from the confirm the real marker rides in from where
+   it stood; a marker the lay does not move stays as it was.
+
+   A TRANSITION SOUNDS ITS OWN BEATS (#1474). The description names the cues and the beat each rides
+   (`tileTransitionCues`); this file sounds them from the frame clock that runs while a transition does, and from
+   nowhere else -- not the draw, which repaints for a hover as readily as for a frame, and not the proposal, which
+   starts nothing, so turning or cancelling a tile is silent. Each running transition counts the cues it has dealt
+   with, so no frame, repaint, replayed effect or late grid sounds one twice: the count lives on the transition, and a
+   lay makes one transition (#1468). A cue sounds only while the draw shows its transition -- before its end, and not
+   under a proposal on its hex; a cue reached otherwise is passed over, never played late. Supersession, a board change
+   and an unmount drop the transition and its count together, so nothing obsolete sounds again; a clip already ringing
+   finishes, as every cue does. The clips are warmed with the board (#1420), and the master switch is read where the
+   control that flips it mirrors it (`audio.ts` #1474). */
+
+interface CommittedPreview {
+  q: number;
+  r: number;
+  tileId: number;
+  orientation: number;
+  tokenCities?: ReadonlyArray<readonly [number, number]>;
+}
+
+export function committedPreviewOf(preview: HexGridRendererProps["previewTile"]): CommittedPreview | null {
+  return preview && preview.committed === true ? preview : null;
+}
+
+/** The tile a hex presents: a sent lay's held ghost (#1145) where there is one, otherwise the grid's. */
+function presentedTileAt(
+  mapGrid: MapGridResponse,
+  committed: CommittedPreview | null,
+  q: number,
+  r: number,
+): PresentedTile | null {
+  if (committed && committed.q === q && committed.r === r) {
+    return { tileId: committed.tileId, orientation: committed.orientation };
+  }
+  const laid = mapGrid.tiles.find((tile) => tile.q === q && tile.r === r);
+  return laid ? { tileId: laid.tile_id, orientation: laid.orientation } : null;
+}
+
+function samePresented(a: PresentedTile | null, b: PresentedTile | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a.tileId === b.tileId && a.orientation === b.orientation;
+}
+
+function sameCommitted(a: CommittedPreview | null, b: CommittedPreview | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a.q === b.q && a.r === b.r && a.tileId === b.tileId && a.orientation === b.orientation;
+}
+
+/** Every hex whose presented tile differs between two renders. */
+export function changedPresentedHexes(
+  previousGrid: MapGridResponse,
+  previousCommitted: CommittedPreview | null,
+  nextGrid: MapGridResponse,
+  nextCommitted: CommittedPreview | null,
+): Array<{ q: number; r: number; from: PresentedTile | null; to: PresentedTile | null }> {
+  const hexes = new Map<string, { q: number; r: number }>();
+  const note = (q: number, r: number) => hexes.set(`${q},${r}`, { q, r });
+  previousGrid.tiles.forEach((tile) => note(tile.q, tile.r));
+  nextGrid.tiles.forEach((tile) => note(tile.q, tile.r));
+  if (previousCommitted) note(previousCommitted.q, previousCommitted.r);
+  if (nextCommitted) note(nextCommitted.q, nextCommitted.r);
+  const changes: Array<{ q: number; r: number; from: PresentedTile | null; to: PresentedTile | null }> = [];
+  hexes.forEach(({ q, r }) => {
+    const from = presentedTileAt(previousGrid, previousCommitted, q, r);
+    const to = presentedTileAt(nextGrid, nextCommitted, q, r);
+    if (!samePresented(from, to)) changes.push({ q, r, from, to });
+  });
+  return changes;
+}
+
+/* ==================================================================
+    DESIGN NOTE 1468: A LAY IS STAGED ONCE, HOWEVER LONG ITS PICTURE TAKES TO COME TRUE
+   ==================================================================
+   THE ORDINARY TRIP PLAYS ONCE: the ghost is presented at the confirm, the grid lands the same tile under it, and
+   the ghost is released onto a hex that already shows it (#1465). BUT THE SHELL CAN DROP THE GHOST FIRST. Its
+   clock releases it after four seconds, so a slower round trip outlives it, and the preview is one slot, so any
+   board click or new preview during the round trip clears it (#1145). The hex then shows its old tile, and when
+   the lay does land the grid presents the same tile again -- a fresh change, which played the whole flourish a
+   second time.
+   SO A GHOST THAT LEAVES ITS HEX WITHOUT THE GRID SHOWING ITS TILE LEAVES THE HEX AWAITING THAT TILE. When the grid
+   alone next presents exactly that tile there, the tile simply appears: its flourish has already played. A new
+   ghost at that hex is a new send and plays as usual.
+   NOTHING STALE IS KEPT. The wait is forgotten when anything else happens at that hex, when the grid changes
+   anywhere else (the board has moved on, as it does after a refused lay, which never arrives), and when the board
+   changes. Presentation only: it decides whether a change plays, never what the board holds. */
+export function awaitedLayLands(
+  awaited: Map<string, PresentedTile>,
+  changes: ReadonlyArray<{ q: number; r: number; from: PresentedTile | null; to: PresentedTile | null }>,
+  previousCommitted: CommittedPreview | null,
+  nextCommitted: CommittedPreview | null,
+): boolean {
+  const ghostAt = (preview: CommittedPreview | null, q: number, r: number) =>
+    preview !== null && preview.q === q && preview.r === r;
+  // The grid alone changed these: no ghost arrived on them or left them.
+  const gridOnly = changes.filter(
+    (change) => !ghostAt(previousCommitted, change.q, change.r) && !ghostAt(nextCommitted, change.q, change.r),
+  );
+  const landing = changes.length === 1 && gridOnly.length === 1 ? gridOnly[0] : null;
+  const waitedFor = landing ? awaited.get(`${landing.q},${landing.r}`) : undefined;
+  const lands = landing !== null && waitedFor !== undefined && samePresented(landing.to, waitedFor);
+  if (gridOnly.length > 0) awaited.clear();
+  changes.forEach((change) => {
+    const key = `${change.q},${change.r}`;
+    awaited.delete(key);
+    if (previousCommitted && ghostAt(previousCommitted, change.q, change.r) && !ghostAt(nextCommitted, change.q, change.r)) {
+      awaited.set(key, { tileId: previousCommitted.tileId, orientation: previousCommitted.orientation });
+    }
+  });
+  return lands;
+}
+
+function prefersReducedMotion(): boolean {
+  return typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
+}
+
+/** One hex's running transition: its plan, and where the hex's pieces stood when it began -- unit hex space about
+ *  the hex centre, so a resize mid-flight moves nothing. */
+interface ActiveTileTransition {
+  to: PresentedTile;
+  plan: TileTransitionPlan;
+  startedAt: number;
+  /** Per company: where its token stood, its city's anchor, and the city index authoritative state gave it there. */
+  tokensFrom: Map<number, { at: Vec; radius: number; anchor?: Vec; city?: number }>;
+  reservationsFrom: Map<number, Vec[]>;
+  badgeFrom: {
+    terrain: ValueBadgeTerrain;
+    value: number | undefined;
+    edges: readonly number[];
+    blocked?: Set<number>;
+  } | null;
+  /** Design note #1473: whether the flourish moves each of its pieces, asked once per piece. */
+  moving: Map<string, boolean>;
+  /** Design note #1474: the cues this transition sounds, in beat order, and how many of them it has dealt with. */
+  cues: TileTransitionCueAt[];
+  cuesDealt: number;
+}
+
+/** Design note #1473: whether `plan` moves a piece whose ride `positionAt` answers, asked once per piece and place. */
+function movesPiece(
+  memo: Map<string, boolean>,
+  piece: string,
+  plan: TileTransitionPlan,
+  from: Vec,
+  to: Vec,
+  positionAt: (t: number) => Vec,
+): boolean {
+  const key = `${piece}:${from.x.toFixed(4)},${from.y.toFixed(4)}>${to.x.toFixed(4)},${to.y.toFixed(4)}`;
+  const known = memo.get(key);
+  if (known !== undefined) return known;
+  const moves = pieceMoves(plan, to, positionAt);
+  memo.set(key, moves);
+  return moves;
+}
+
+const VALUE_BADGE_TERRAINS: ReadonlySet<string> = new Set([
+  "SmallTown",
+  "DoubleTown",
+  "MajorCityHub",
+  "DoubleCityHub",
+  "NewYorkHub",
+  "BostonHub",
+  "TorontoHub",
+]);
+
+/* ==================================================================
+    DESIGN NOTE 1466 (renderer half): WHERE A TOKEN STOOD IS THE PASS'S OWN ANSWER, ASKED OF THE OLD TILE
+   ==================================================================
+   The token pass's two placement questions -- which slot order a city's occupants take, and where one company's
+   token is drawn on a hex -- are lifted out of the pass UNCHANGED, so a starting transition can ask the very same
+   functions about the tile that USED to be on the hex. One answer to "where does this token stand", called twice;
+   never a second copy that could disagree with the pass about a slot. */
+
+// PER-SLOT placement: two tokens at a pill's centre stack and hide whether the city still has room. The chain records WHICH CITY but not which SLOT, because a slot has no meaning in the rules -- so order is chosen here, deterministically, and nothing downstream should read it as authoritative.
+// See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #134
+function occupantsByCityFor(companies: readonly StationTokenCompany[]): Map<string, StationTokenCompany[]> {
+  const occupantsByCity = new Map<string, StationTokenCompany[]>();
+  for (const company of companies) {
+    if (!company.is_floated) continue;
+    for (const [q, r] of company.station_token_hexes) {
+      /* Design note #251: the bucket key must match the index the draw pass below resolves, or a company
+         would be counted into one city's occupants and drawn from another's slot list.
+         Design note #698 moved the rule itself into `tokenCityBucket`, because the PREVIEW has to count
+         these same buckets to know which slot it is about to fill. The old expression here read
+         `?? (cities === 1 ? 0 : 0)`, both arms zero -- an unfinished thought that had already collapsed to
+         the fallback the helper now states plainly. */
+      const key = `${q},${r},${tokenCityBucket(company, q, r)}`;
+      const bucket = occupantsByCity.get(key);
+      if (bucket) bucket.push(company);
+      else occupantsByCity.set(key, [company]);
+    }
+  }
+  // `forEach`, not `for...of` over `.values()` -- tsconfig targets ES5
+  // without `downlevelIteration`, so iterating a Map iterator is a
+  // compile error here.
+  occupantsByCity.forEach((bucket) => {
+    bucket.sort((a, b) => a.company_id - b.company_id);
+  });
+  return occupantsByCity;
+}
+
+interface StationTokenMark {
+  point: { x: number; y: number };
+  radius: number | undefined;
+  /** The city the token is drawn in, where the geometry could say. */
+  city: number | undefined;
+}
+
+function stationTokenMark(input: {
+  company: StationTokenCompany;
+  q: number;
+  r: number;
+  hexSize: number;
+  laidTile: MapTileEntry | undefined;
+  previewCity: number | undefined;
+  occupantsByCity: ReadonlyMap<string, StationTokenCompany[]>;
+}): StationTokenMark {
+  const { company, q, r, hexSize, laidTile, previewCity, occupantsByCity } = input;
+  const chainCity = previewCity ?? tokenCityIndex(company, q, r);
+  const tokenCenter = axialToPixel(q, r, hexSize);
+
+  let point: { x: number; y: number } | undefined;
+  /* Design note #151: the docking RADIUS, resolved from the same artwork the slot position comes
+     from. #699 rewrote the tail of that sentence: it used to be left `undefined` on the fallback path
+     "where there is no pill to dock into and the legacy `size * 0.22` is the correct answer". It was
+     not the correct answer -- a preprinted hex still draws a circle with a size, and 0.22 happened to
+     equal it on a single city and overflow it on an OO pair. `stationMarkerRadius` asks properly. */
+  let dockRadius: number | undefined;
+
+  /* The slot machinery was always right; what gated it was chainCity !== undefined. The original caution holds for a genuinely TWO-city tile, but a one-city tile's index is 0 and there is nothing to guess.
+     See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #251 */
+  const cityCount = laidTile ? tileCitySlotCounts(laidTile.tile_id).length : 0;
+  const resolvedCity = chainCity ?? (cityCount === 1 ? 0 : undefined);
+
+  if (laidTile && resolvedCity !== undefined) {
+    const slotPoints = tileCitySlotPoints(
+      laidTile.tile_id,
+      resolvedCity,
+      laidTile.orientation,
+      tokenCenter,
+      hexSize,
+    );
+    const bucket = occupantsByCity.get(`${q},${r},${resolvedCity}`) ?? [];
+    const slot = bucket.findIndex((entry) => entry.company_id === company.company_id);
+    // A bucket longer than the city has slots means chain and mirror disagree about capacity; clamping keeps the token visible rather than vanishing -- the more debuggable failure.
+    // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #251
+    point = slotPoints[Math.min(Math.max(slot, 0), slotPoints.length - 1)];
+    // Only when a real slot point was found. If `slotPoints` came
+    // back empty the token falls through to the per-hex anchor
+    // below, and a docking radius there would shrink a token that
+    // is not docked in anything.
+    // Design note #699: the CITY's radius, not the tile's -- a tile can carry a shared city beside an
+    // unshared one, and only the shared one owes the pill's inset.
+    if (point) dockRadius = tileCityTokenRadius(laidTile.tile_id, hexSize, resolvedCity);
+  } else if (!laidTile) {
+    /* #1302: a printed two-slot pill (1830+'s Montreal, Norfolk) docks tokens along its axis, exactly
+       as a laid pill does above; a printed circle answers one point and falls through unchanged. */
+    const label = STATIC_BOARD_HEXES.find((hex) => hex.q === q && hex.r === r)?.label;
+    const slotPoints = label ? printedCitySlotPoints(label, tokenCenter, hexSize) : [];
+    if (slotPoints.length > 1) {
+      const bucket = occupantsByCity.get(`${q},${r},${chainCity ?? 0}`) ?? [];
+      const slot = bucket.findIndex((entry) => entry.company_id === company.company_id);
+      point = slotPoints[Math.min(Math.max(slot, 0), slotPoints.length - 1)];
+    }
+  }
+
+  // The city travels to the fallback too: on an UNLAID preprinted OO hex there is no artwork to anchor to, so without it a token in the north-east city was drawn in the south-west one.
+  // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #459
+  const resolved = point ?? stationMarkerPoint(q, r, hexSize, laidTile, chainCity);
+  /* Design note #699: and the radius from the SAME branch that chose the point. Left undefined, the
+     fallback fell to a flat `size * 0.22` -- which on preprinted Baltimore is its circle's exact
+     radius, so a home token painted the circle out, and on a preprinted OO hex overflowed it. That
+     difference is the "border around the second station" report: not a style, just two radii. */
+  dockRadius = dockRadius ?? stationMarkerRadius(q, r, hexSize, laidTile, chainCity);
+  return { point: resolved, radius: dockRadius, city: resolvedCity ?? chainCity };
+}
+
+/** Where `home`'s reservation marker(s) stand with `homeLaidTile` on the hex (#43, #724a, #826, #1283), for the pass
+ *  and for a transition asking about the tile that was there before. */
+function homeReservationPoints(
+  home: HomeStationEntry,
+  homeLaidTile: MapTileEntry | undefined,
+  hexSize: number,
+): ReadonlyArray<{ x: number; y: number }> {
+  const homeCenter = axialToPixel(home.q, home.r, hexSize);
+  const inMargin = YELLOW_OO_HEXES.has(home.label);
+  const optional = home.enforced === false;
+  return inMargin && !homeLaidTile
+    ? twoNodePositions(homeCenter, hexSize)
+    : optional
+      ? [homeCenter]
+      : [stationMarkerPoint(home.q, home.r, hexSize, homeLaidTile)];
+}
+
+/** The value a hex printed before a transition, so it can fade under the wash rather than vanish (A-2). */
+function outgoingValueBadge(
+  previousEntry: MapTileEntry | undefined,
+  label: string | null,
+): ActiveTileTransition["badgeFrom"] {
+  if (previousEntry) {
+    const entry = TILE_CATALOG_BY_ID.get(previousEntry.tile_id);
+    if (!entry || !VALUE_BADGE_TERRAINS.has(entry.terrain)) return null;
+    const value = chainTileRevenue(previousEntry);
+    if (value === 0) return null;
+    return {
+      terrain: entry.terrain as ValueBadgeTerrain,
+      value,
+      edges: liveEdges(rotateConnections(entry.connections, previousEntry.orientation)),
+      blocked: slotsBlockedByTileMarkers(previousEntry.tile_id, previousEntry.orientation),
+    };
+  }
+  if (label === null) return null;
+  const override = HEX_START_VALUE_OVERRIDE[label];
+  if (override === 0) return null;
+  const landmark = LANDMARK_HEXES.find((entry) => entry.label === label);
+  if (landmark) {
+    return {
+      terrain: "MajorCityHub",
+      value: override,
+      edges: (LANDMARK_TRACKS[landmark.name] ?? []).flatMap((segment) => segment.edges),
+    };
+  }
+  const hex = STATIC_BOARD_HEXES.find((entry) => entry.label === label);
+  if (hex && (YELLOW_OO_HEXES.has(label) || hex.cityDesignation)) {
+    return { terrain: "MajorCityHub", value: override, edges: [] };
+  }
+  return null;
+}
+
+/** Builds the transition for one changed hex, or `null` when the pair cannot be described. */
+function beginTileTransition(input: {
+  change: { q: number; r: number; from: PresentedTile | null; to: PresentedTile };
+  previousGrid: MapGridResponse;
+  previousCommitted: CommittedPreview | null;
+  previousCompanies: readonly StationTokenCompany[];
+  nextGrid: MapGridResponse;
+  hexSize: number;
+  /** Confirmed from the proposal drawn on this hex (#1471). */
+  provisional: boolean;
+}): ActiveTileTransition | null {
+  const { change, previousGrid, previousCommitted, previousCompanies, nextGrid, hexSize, provisional } = input;
+  const { q, r } = change;
+  const label = boardHexLabel(q, r);
+
+  /* Construction starts where the network already arrives (#1467): edges whose neighbour carries rail to the
+     shared border. A picture of where track comes from, never a connectivity verdict. */
+  const externalEdges: number[] = [];
+  for (let edge = 0; edge < 6; edge += 1) {
+    const offset = HEX_NEIGHBOR_OFFSETS[edge];
+    if (!offset) continue;
+    if (liveEdgesForHex(nextGrid, q + offset[0], r + offset[1]).includes((edge + 3) % 6)) externalEdges.push(edge);
+  }
+
+  const plan = planTileTransition({
+    from: change.from
+      ? { kind: "tile", tileId: change.from.tileId, orientation: change.from.orientation }
+      : { kind: "printed", label },
+    to: change.to,
+    externalEdges,
+    reducedMotion: prefersReducedMotion(),
+    provisional,
+  });
+  if (!plan) return null;
+  const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
+
+  const center = axialToPixel(q, r, hexSize);
+  const unit = (point: { x: number; y: number }): Vec => ({
+    x: (point.x - center.x) / hexSize,
+    y: (point.y - center.y) / hexSize,
+  });
+  const previousEntry = previousGrid.tiles.find((tile) => tile.q === q && tile.r === r);
+  const heldHere = previousCommitted !== null && previousCommitted.q === q && previousCommitted.r === r;
+  // The tile the hex showed, spelled exactly as the token pass spells a held ghost.
+  const previousLaid: MapTileEntry | undefined =
+    heldHere && previousCommitted
+      ? {
+          q,
+          r,
+          tile_id: previousCommitted.tileId,
+          orientation: previousCommitted.orientation,
+          paths: previousEntry?.paths ?? null,
+          revenue: previousEntry?.revenue ?? null,
+          landmark: previousEntry?.landmark ?? null,
+        }
+      : previousEntry;
+
+  /* Design note #1472: every token's seat on the tile the hex showed -- a confirmed proposal's too. While the tile was
+     being chosen its tokens were drawn where the lay puts them (#822, #886); from the confirm the city they sit in
+     plays from its old drawing (#1471), so they start from their seats in it. The city index is authoritative
+     state's, per company, never the geometry's: it is what lets a seat be read without asking who is who. */
+  const tokensFrom = new Map<number, { at: Vec; radius: number; anchor?: Vec; city?: number }>();
+  const occupants = occupantsByCityFor(previousCompanies);
+  for (const company of previousCompanies) {
+    if (!company.is_floated) continue;
+    if (!company.station_token_hexes.some(([tq, tr]) => tq === q && tr === r)) continue;
+    const previewCity =
+      heldHere && previousCommitted
+        ? previousCommitted.tokenCities?.find(([id]) => id === company.company_id)?.[1]
+        : undefined;
+    const mark = stationTokenMark({
+      company,
+      q,
+      r,
+      hexSize,
+      laidTile: previousLaid,
+      previewCity,
+      occupantsByCity: occupants,
+    });
+    tokensFrom.set(company.company_id, {
+      at: unit(mark.point),
+      radius: (mark.radius ?? hexSize * STATION_RADIUS_RATIO) / hexSize,
+      anchor: cityAnchor(plan, "from", mark.city),
+      city: mark.city,
+    });
+  }
+
+  /* Design note #1473: every reservation marker's place on the tile the hex showed -- a confirmed proposal's too: it
+     rides its city as a token does. */
+  const reservationsFrom = new Map<number, Vec[]>();
+  for (const home of stationHomeHexes()) {
+    if (home.q !== q || home.r !== r) continue;
+    reservationsFrom.set(home.companyId, homeReservationPoints(home, previousLaid, hexSize).map(unit));
+  }
+
+  return {
+    to: change.to,
+    plan,
+    startedAt,
+    tokensFrom,
+    reservationsFrom,
+    /* Design note #1471: a confirmed proposal already printed its value where the lay puts it, washed, and it commits
+       with its tile; only a lay nobody proposed here has an old value to fade. */
+    badgeFrom: provisional ? null : outgoingValueBadge(previousLaid, label),
+    moving: new Map(),
+    cues: tileTransitionCues(plan),
+    cuesDealt: 0,
+  };
+}
+
 export function HexGridRenderer({
   mapGrid,
   terrainFeesPaid,
@@ -754,7 +1285,10 @@ export function HexGridRenderer({
      WHAT IS NOT REMOVED: `ABSOLUTE_MIN_ZOOM_FLOOR`, which guards a degenerate near-zero viewport rather than
      offering a zoom, and `handleWheel`'s `preventDefault`. #773 questioned that one -- "it now blocks a
      gesture while using nothing" -- and this batch settles it the other way: blocking ctrl+wheel is part of
-     "strictly prevents user scaling", so the line finally has the reason it was missing. */
+     "strictly prevents user scaling", so the line finally has the reason it was missing.
+     -- THAT SECOND CLAUSE IS WITHDRAWN BY #1619, twice over: "strictly prevents user scaling" is withdrawn
+     (#1618), and the line was never blocking anything anyway. #773's original objection was right, and the
+     measurement that settles it is in the note where `handleWheel` used to be. */
   const [view, setView] = useState<ViewTransform>({
     panX: width / 2,
     panY: height / 2,
@@ -871,6 +1405,115 @@ export function HexGridRenderer({
     return () => cancelAnimationFrame(handle);
   }, [cursorMode]);
 
+  /* Design note #1465: the running tile transitions, keyed "q,r", and the inputs of the last render they were
+     diffed against. Refs, not state: the draw reads them, and a transition starting must not re-render anything
+     but the canvas. `tileTransitionTick` is the one piece of state, and it exists only to repaint a frame. */
+  const tileTransitionsRef = useRef<Map<string, ActiveTileTransition>>(new Map());
+  /* Design note #1473: the transition a confirm would start from the proposal on the board -- planned once per
+     proposal -- and which pieces it would move, so a piece the confirm will move is drawn at its planned place. */
+  const proposalPlanRef = useRef<{ key: string; plan: TileTransitionPlan | null; moving: Map<string, boolean> } | null>(null);
+  // Design note #1468: hexes whose held ghost left before the grid showed its tile, and the tile each awaits.
+  const awaitedLaysRef = useRef<Map<string, PresentedTile>>(new Map());
+  const presentedInputsRef = useRef<{
+    mapGrid: MapGridResponse;
+    previewTile: HexGridRendererProps["previewTile"];
+    publicCompanies: StationTokenCompany[];
+    boardId: string;
+  } | null>(null);
+  const [tileTransitionEpoch, setTileTransitionEpoch] = useState(0);
+  const [tileTransitionTick, setTileTransitionTick] = useState(0);
+
+  /* A LAYOUT effect, so a transition exists before the draw effect paints the first frame of the new state --
+     the finished tile is never painted first and then animated over. */
+  useLayoutEffect(() => {
+    const previous = presentedInputsRef.current;
+    presentedInputsRef.current = { mapGrid, previewTile, publicCompanies, boardId };
+    if (!previous) return;
+    const transitions = tileTransitionsRef.current;
+    if (previous.boardId !== boardId) {
+      transitions.clear();
+      awaitedLaysRef.current.clear();
+      return;
+    }
+    const previousCommitted = committedPreviewOf(previous.previewTile);
+    const nextCommitted = committedPreviewOf(previewTile);
+    if (previous.mapGrid === mapGrid && sameCommitted(previousCommitted, nextCommitted)) return;
+    const changes = changedPresentedHexes(previous.mapGrid, previousCommitted, mapGrid, nextCommitted);
+    if (changes.length === 0) return;
+    // Supersession: a hex whose picture changes again resolves to the authority at once.
+    changes.forEach((change) => transitions.delete(`${change.q},${change.r}`));
+    // Design note #1468: a lay whose ghost already played it is not played again when the grid lands it late.
+    const landsStagedLay = awaitedLayLands(awaitedLaysRef.current, changes, previousCommitted, nextCommitted);
+    if (changes.length !== 1) return;
+    const [change] = changes;
+    if (landsStagedLay || change.to === null || !isAnimatableChange(change.from, change.to)) return;
+    /* Design note #1471: confirmed from the proposal this board drew on the hex a render ago -- the same tile at the
+       same facing -- so the transition starts from that proposal, not from the old tile. */
+    const proposed = previous.previewTile;
+    const provisional =
+      !!proposed &&
+      proposed.committed !== true &&
+      proposed.q === change.q &&
+      proposed.r === change.r &&
+      proposed.tileId === change.to.tileId &&
+      proposed.orientation === change.to.orientation;
+    let started: ActiveTileTransition | null = null;
+    try {
+      started = beginTileTransition({
+        change: { q: change.q, r: change.r, from: change.from, to: change.to },
+        previousGrid: previous.mapGrid,
+        previousCommitted,
+        previousCompanies: previous.publicCompanies,
+        nextGrid: mapGrid,
+        hexSize,
+        provisional,
+      });
+    } catch {
+      started = null; // presentation only: an unexpected shape simply draws the authoritative tile
+    }
+    if (!started) return;
+    transitions.set(`${change.q},${change.r}`, started);
+    setTileTransitionEpoch((epoch) => epoch + 1);
+  }, [mapGrid, previewTile, publicCompanies, boardId, hexSize]);
+
+  /* The frame clock, running only while a transition does -- #463's pattern. A finished transition is removed
+     here and the tick after it repaints the hex as the authority's. */
+  useEffect(() => {
+    const transitions = tileTransitionsRef.current;
+    if (transitions.size === 0) return undefined;
+    let handle = 0;
+    const step = (now: number) => {
+      // Design note #1474: a proposal on a hex is what the player is looking at; a transition under it is not drawn.
+      const proposal = presentedInputsRef.current?.previewTile ?? null;
+      transitions.forEach((transition, key) => {
+        const elapsed = now - transition.startedAt;
+        const over = elapsed >= transition.plan.durationMs;
+        // Design note #1474: every cue this frame reaches is dealt with once, and sounds only while the hex shows it.
+        const reached = cuesReached(transition.cues, transition.cuesDealt, elapsed);
+        transition.cuesDealt = reached.dealt;
+        const hidden = proposal !== null && proposal.committed !== true && key === `${proposal.q},${proposal.r}`;
+        if (!over && !hidden) {
+          try {
+            reached.due.forEach((cue) => playVariantCue(TILE_TRANSITION_SFX[cue], currentSfxEnabled()));
+          } catch {
+            /* A sound is presentation too: whatever it meets, the frame clock runs on. */
+          }
+        }
+        if (over) transitions.delete(key);
+      });
+      setTileTransitionTick((tick) => tick + 1);
+      if (transitions.size > 0) handle = requestAnimationFrame(step);
+    };
+    handle = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(handle);
+  }, [tileTransitionEpoch]);
+
+  /* Design note #1474: the transition's clips, warmed with the board so a first lay's cues sound on their beats rather
+     than a fetch later (#1420). `preloadCues` keeps what it has warmed, so a remount fetches nothing again. */
+  useEffect(() => {
+    void preloadCues(Object.values(TILE_TRANSITION_SFX));
+  }, []);
+
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -912,6 +1555,98 @@ export function HexGridRenderer({
 
     ctx.translate(view.panX, view.panY);
     ctx.scale(view.zoom, view.zoom);
+
+    /* Design note #1465: the transition running on a hex, and how far through it this frame is. A transition
+       draws only while its hex still presents the tile it was built for; past its end, or on any mismatch, the
+       hex is the authority's again. */
+    const frameNow = typeof performance !== "undefined" ? performance.now() : Date.now();
+    const drawnCommitted = committedPreviewOf(previewTile);
+    /* Design note #1471: the tile being chosen, while it is still a proposal. */
+    const drawnPreview = previewTile ?? null;
+    const proposingAt = (q: number, r: number) =>
+      drawnPreview !== null && drawnPreview.committed !== true && drawnPreview.q === q && drawnPreview.r === r;
+    const transitionAt = (q: number, r: number): { transition: ActiveTileTransition; t: number } | null => {
+      // A proposal on the hex is what the player is looking at; a transition there is drawn only once it is gone.
+      if (proposingAt(q, r)) return null;
+      const transition = tileTransitionsRef.current.get(`${q},${r}`);
+      if (!transition) return null;
+      const t = (frameNow - transition.startedAt) / transition.plan.durationMs;
+      if (t >= 1) return null;
+      if (!samePresented(presentedTileAt(mapGrid, drawnCommitted, q, r), transition.to)) return null;
+      return { transition, t: Math.max(0, t) };
+    };
+    /* The tile a preview puts on its hex -- a proposal (#1471), or a sent lay's held ghost (#1145, #1465) -- joins the
+       board for this frame in place of whatever the grid holds there, so the tile pass draws it and every printed pass
+       yields to it exactly as to a laid tile. Where the grid already holds that very tile, and with no preview at all,
+       this is `mapGrid` itself, and nothing below draws differently. */
+    const laidAtPreview = drawnPreview
+      ? mapGrid.tiles.findIndex((tile) => tile.q === drawnPreview.q && tile.r === drawnPreview.r)
+      : -1;
+    const laidUnderPreview = laidAtPreview >= 0 ? mapGrid.tiles[laidAtPreview] : undefined;
+    const previewEntry: MapTileEntry | null =
+      drawnPreview &&
+      !(laidUnderPreview && laidUnderPreview.tile_id === drawnPreview.tileId && laidUnderPreview.orientation === drawnPreview.orientation)
+        ? {
+            q: drawnPreview.q,
+            r: drawnPreview.r,
+            tile_id: drawnPreview.tileId,
+            orientation: drawnPreview.orientation,
+            paths: TILE_CATALOG_BY_ID.get(drawnPreview.tileId)?.paths ?? null,
+            revenue: (() => {
+              const value = TILE_CATALOG_BY_ID.get(drawnPreview.tileId)?.revenue;
+              return value === undefined ? undefined : String(value);
+            })(),
+            landmark: laidUnderPreview?.landmark ?? null,
+          }
+        : null;
+    const presentedGrid: MapGridResponse = previewEntry
+      ? {
+          ...mapGrid,
+          tiles: laidUnderPreview
+            ? mapGrid.tiles.map((tile, index) => (index === laidAtPreview ? previewEntry : tile))
+            : [...mapGrid.tiles, previewEntry],
+        }
+      : mapGrid;
+    /* Design note #1473: the plan a confirm of the proposal would start -- the same request `beginTileTransition` makes
+       then, from the tile under the proposal -- or none when that confirm would play nothing. */
+    const proposalPlan = (() => {
+      if (!drawnPreview || drawnPreview.committed === true) return null;
+      const from: PresentedTile | null = laidUnderPreview
+        ? { tileId: laidUnderPreview.tile_id, orientation: laidUnderPreview.orientation }
+        : null;
+      const to: PresentedTile = { tileId: drawnPreview.tileId, orientation: drawnPreview.orientation };
+      const reducedMotion = prefersReducedMotion();
+      const key = `${boardId}|${drawnPreview.q},${drawnPreview.r}|${from ? `${from.tileId}@${from.orientation}` : "printed"}|${to.tileId}@${to.orientation}|${reducedMotion}`;
+      if (proposalPlanRef.current?.key !== key) {
+        let plan: TileTransitionPlan | null = null;
+        if (isAnimatableChange(from, to)) {
+          try {
+            plan = planTileTransition({
+              from: from
+                ? { kind: "tile", tileId: from.tileId, orientation: from.orientation }
+                : { kind: "printed", label: boardHexLabel(drawnPreview.q, drawnPreview.r) },
+              to,
+              reducedMotion,
+              provisional: true,
+            });
+          } catch {
+            plan = null; // presentation only: with no plan, every piece is drawn where it lands, as before
+          }
+        }
+        proposalPlanRef.current = { key, plan, moving: new Map() };
+      }
+      return proposalPlanRef.current.plan ? proposalPlanRef.current : null;
+    })();
+    const sampleStaged = (staged: { transition: ActiveTileTransition; t: number }) => {
+      try {
+        return sampleTileTransition(staged.transition.plan, staged.t);
+      } catch {
+        tileTransitionsRef.current.forEach((transition, key) => {
+          if (transition === staged.transition) tileTransitionsRef.current.delete(key);
+        });
+        return null;
+      }
+    };
 
     // Used by every label pass below (moved up from its previous spot
     // right before the landmark labels, since the new terrain-icon labels
@@ -959,7 +1694,7 @@ export function HexGridRenderer({
       if (hex.type !== "Mountain" && hex.type !== "River") continue;
       // A LAID TILE COVERS THE PREPRINT. The isComplexHex test already skipped most tiled hexes as a SIDE EFFECT -- it asks "is this busy", not "is it covered".
       // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #150
-      if (hexHasLaidTile(mapGrid, hex.q, hex.r)) continue;
+      if (hexHasLaidTile(presentedGrid, hex.q, hex.r)) continue;
       const terrainType = hex.type;
       const center = axialToPixel(hex.q, hex.r, hexSize);
       const isComplexHex =
@@ -979,9 +1714,63 @@ export function HexGridRenderer({
     // A printedColor:"Yellow" hex no longer keeps its yellow fill once upgraded -- ERA wins everywhere, which is what tells a player the hex has actually moved tier.
     // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #122
 
-    for (const tile of mapGrid.tiles) {
+    for (const tile of presentedGrid.tiles) {
       const catalogEntry = TILE_CATALOG_BY_ID.get(tile.tile_id);
       const center = axialToPixel(tile.q, tile.r, hexSize);
+
+      /* Design note #1465: a hex mid-transition is drawn from its frame -- the proposal (#1471), the rails and stations
+         between the two tiles, the commit front -- in exactly this pass's place. */
+      const staged = transitionAt(tile.q, tile.r);
+      const stagedFrame = staged ? sampleStaged(staged) : null;
+      if (stagedFrame) {
+        drawTileTransitionFill(ctx, center, hexSize, stagedFrame);
+        withHexClip(ctx, center, hexSize, () => drawTileTransitionArt(ctx, center, hexSize, stagedFrame));
+        continue;
+      }
+
+      /* ==================================================================
+          DESIGN NOTE 822: #222 SAID TOKENS ARE DRAWN LAST, AND THE PREVIEW WAS DRAWN AFTER THEM
+         ==================================================================
+    
+         REPORTED: "the tileselector radial menu renders the stations, but when players click the tile to
+         preview it on the hex, no station marker appears. It's only after they confirm placement that the
+         station marker appears."
+    
+         THE PREVIEW IS OPAQUE ON PURPOSE (#167: "at 0.65 the board bled through and a yellow tile over a
+         green hex became a muddy third colour") and it was painted AFTER `drawStationTokenPass`, so it
+         covered every token on its hex. #222's rule is right there above that pass -- "tokens are drawn
+         LAST, not merely late ... a token says whose network this is, and a route's legality turns on it" --
+         and this one block was the exception nobody had noticed.
+    
+         SO THE PREVIEW MOVES UP RATHER THAN THE TOKENS MOVING DOWN, which keeps #222 as written and makes
+         the ghost tile obey the same ordering as a real one. The pass then draws the carried tokens ON the
+         preview, at the previewed tile's own city geometry -- see the tile lookup in that pass.
+    
+         REPORTED FOR ERIE FIRST and correctly suspected to be general: "I suspect it may be worth checking
+         whether all the double city tiles (OO and NY) continue previewing preexisting stations." It is every
+         tile on every hex -- ERIE's home is simply where a two-city upgrade makes the omission unmissable. */
+      // The preview is FULLY OPAQUE. Transparency was costing the one thing it exists for: at 0.65 the board bled through and a yellow tile over a green hex became a muddy third colour. The dashed outline stays -- the cheap half of the old signal.
+      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #167
+      /* ==================================================================
+          DESIGN NOTE 1471 (renderer half): THE PROPOSAL IS DRAWN WHERE ITS TILE WILL BE
+         ==================================================================
+         The tile being chosen was a ghost painted over the finished board, just under the token pass (#822 above), in
+         full colour and with its own value in a fixed corner -- and a confirm then started the flourish down in this
+         pass from the OLD tile, so a finished-looking candidate became the old tile and animated back into itself.
+         It is drawn in this pass now, by the flourish's own painter, as the washed destination tile
+         (`proposedTileFrame`): the frame a confirmed lay starts from, so the confirm builds into what was already on the
+         hex. Every printed pass yields to it as to a laid tile, and its value is the value pass's own, washed.
+         #167 STANDS: opaque -- washed colours, never a see-through tile. #1145 STANDS: dashed while it is being
+         considered, solid once sent. #822 STANDS: drawn before the token pass, which puts the carried tokens on it. */
+      if (proposingAt(tile.q, tile.r)) {
+        const proposal = proposedTileFrame(tile.tile_id, tile.orientation);
+        if (proposal) {
+          // Design note #1145: dashed while it is a proposal, solid once it has been sent.
+          drawTileTransitionFill(ctx, center, hexSize, proposal, { rimDash: [5, 4] });
+          withHexClip(ctx, center, hexSize, () => drawTileTransitionArt(ctx, center, hexSize, proposal));
+          continue;
+        }
+      }
 
       drawHexPath(ctx, center, hexSize);
       // Design note #122: era, and only era. No terrain keying, and no
@@ -1016,7 +1805,7 @@ export function HexGridRenderer({
     for (const landmark of LANDMARK_HEXES) {
       // A landmark's printed track is STARTING artwork, not a permanent overlay -- once a tile is laid the stubs are physically covered.
       // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #133
-      if (hexHasLaidTile(mapGrid, landmark.q, landmark.r)) continue;
+      if (hexHasLaidTile(presentedGrid, landmark.q, landmark.r)) continue;
       const center = axialToPixel(landmark.q, landmark.r, hexSize);
       // Rail Map Overhaul (design note #42): Hex Boundary Clipping Mask.
       withHexClip(ctx, center, hexSize, () => {
@@ -1062,7 +1851,7 @@ export function HexGridRenderer({
       if (!YELLOW_OO_HEXES.has(hex.label)) continue;
       // "Always drawn" was written when nothing could be laid on these four hexes. Once green #59 could be, an upgraded OO hex rendered FOUR station circles. Not to be confused with the corner OO RESTRICTION badge, which #49 keeps across every tier.
       // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #150
-      if (hexHasLaidTile(mapGrid, hex.q, hex.r)) continue;
+      if (hexHasLaidTile(presentedGrid, hex.q, hex.r)) continue;
       const center = axialToPixel(hex.q, hex.r, hexSize);
       // Design note #55: Strict Hex Boundary Clipping, extended to station
       // markers -- previously only track/text calls were wrapped.
@@ -1078,7 +1867,7 @@ export function HexGridRenderer({
       // Design note #150: a laid tile carries its own town/city artwork, so
       // the "reserved for a Town tile" marker has done its job and is now
       // describing a hex that is no longer blank.
-      if (hexHasLaidTile(mapGrid, hex.q, hex.r)) continue;
+      if (hexHasLaidTile(presentedGrid, hex.q, hex.r)) continue;
       const center = axialToPixel(hex.q, hex.r, hexSize);
       // Design note #55: Strict Hex Boundary Clipping, extended to station/
       // dit markers -- previously only track/text calls were wrapped.
@@ -1101,7 +1890,7 @@ export function HexGridRenderer({
       if (!hex.cityDesignation) continue;
       // A laid MajorCityHub draws its own circle in the same place; stacking two reads as a rendering imprecision rather than an obvious bug, which is worse.
       // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #150
-      if (hexHasLaidTile(mapGrid, hex.q, hex.r)) continue;
+      if (hexHasLaidTile(presentedGrid, hex.q, hex.r)) continue;
       const center = axialToPixel(hex.q, hex.r, hexSize);
       // Design note #55: Strict Hex Boundary Clipping, extended to station
       // markers -- previously only track/text calls were wrapped.
@@ -1152,6 +1941,12 @@ export function HexGridRenderer({
       for (const company of publicCompanies) {
         companiesById.set(company.company_id, company);
       }
+      /* Design note #1473: THREE LAYERS. Each piece is resolved below in this pass's own order, and drawn after: every
+         planned place first, under every piece; then the reservation markers; then the tokens. A planned place is part
+         of the proposal, so no token -- rising out of a gather over a planned place, say -- is ever drawn under one. */
+      const plannedPlaces: Array<() => void> = [];
+      const reservationMarkers: Array<() => void> = [];
+      const tokenMarkers: Array<() => void> = [];
 
       for (const home of stationHomeHexes()) {
         const company = companiesById.get(home.companyId);
@@ -1257,12 +2052,13 @@ export function HexGridRenderer({
            point the tile no longer has a station at.
            THE TWO OO BRANCHES ARE UNTOUCHED. #43 anchors those in neutral hex-margin space ON PURPOSE, because
            the President still gets to choose either slot and committing the badge to one would lie about it. */
-        const homeLaidTile = mapGrid.tiles.find((tile) => tile.q === home.q && tile.r === home.r);
+        const homeLaidTile = presentedGrid.tiles.find((tile) => tile.q === home.q && tile.r === home.r);
         /* Design note #826: THE BADGE THAT STANDS IN THE MARGIN. #43 put the OO hexes' reservations in
            neutral hex-margin space because the President has not chosen a circle yet; every other home hex
            marks the city its token will occupy. That difference is what decides whether a RING belongs --
            see `drawStationTokenMarker`'s `ringed`. */
-        const inMargin = YELLOW_OO_HEXES.has(home.label);
+        /* #826's margin test and #1283's two circles are decided in `homeReservationPoints` now, shared with a
+           starting transition (#1466); the decisions themselves are unchanged. */
         /* ==================================================================
             DESIGN NOTE 1283: THE OO RESERVATION SITS ON BOTH CIRCLES
            ==================================================================
@@ -1277,52 +2073,68 @@ export function HexGridRenderer({
            "reserved". So an unenforced reservation draws in the hex's centre, ringless, which is the one
            place on a hex that is not a slot: present, and plainly not a claim on one. */
         const optional = home.enforced === false;
-        const points: ReadonlyArray<{ x: number; y: number }> =
-          inMargin && !hexHasLaidTile(mapGrid, home.q, home.r)
-            ? twoNodePositions(homeCenter, hexSize)
-            : optional
-              ? [homeCenter]
-              : [stationMarkerPoint(home.q, home.r, hexSize, homeLaidTile)];
-        withHexClip(ctx, homeCenter, hexSize, () => {
-          for (const point of points) {
-            drawStationTokenMarker(
-              ctx,
-              point,
-              hexSize,
-              company?.ticker || stationTickerLabel(home.companyId),
-              stationTickerColor(home.companyId),
-              true,
-              undefined,
-              !optional,
-            );
-          }
+        const settledPoints = homeReservationPoints(home, homeLaidTile, hexSize);
+        /* Design note #1473: a marker is a piece in its city, as a token is (#1466). Each place it stood rides to the
+           nearest place it stands now -- two OO reservations still converge on the one city a tile gives them -- seated
+           in its city wherever the description can read one. It has no planned place: it is already drawn as a faded
+           token. So while a tile is being chosen, a marker the confirm will move is left out of the proposal, and from
+           the confirm the real marker rides in from where it stood; a marker the lay does not move stays as it was. */
+        const homeUnit = (point: { x: number; y: number }): Vec => ({
+          x: (point.x - homeCenter.x) / hexSize,
+          y: (point.y - homeCenter.y) / hexSize,
+        });
+        const onBoard = (at: Vec) => ({ x: homeCenter.x + at.x * hexSize, y: homeCenter.y + at.y * hexSize });
+        const nearestSettled = (from: Vec) => {
+          const start = onBoard(from);
+          return settledPoints.reduce((best, candidate) =>
+            Math.hypot(candidate.x - start.x, candidate.y - start.y) < Math.hypot(best.x - start.x, best.y - start.y)
+              ? candidate
+              : best,
+          );
+        };
+        const stagedHome = transitionAt(home.q, home.r);
+        const reservedFrom = stagedHome?.transition.reservationsFrom.get(home.companyId);
+        let points: ReadonlyArray<{ x: number; y: number }> = settledPoints;
+        if (stagedHome && reservedFrom && reservedFrom.length > 0 && settledPoints.length > 0) {
+          const { plan } = stagedHome.transition;
+          points = reservedFrom.map((from) =>
+            onBoard(reservationPositionAt(plan, stagedHome.t, { from, to: homeUnit(nearestSettled(from)) })),
+          );
+        } else if (proposalPlan?.plan && proposingAt(home.q, home.r) && settledPoints.length > 0) {
+          const { plan, moving } = proposalPlan;
+          const leaving: Array<{ x: number; y: number }> = [];
+          homeReservationPoints(home, laidUnderPreview, hexSize)
+            .map(homeUnit)
+            .forEach((from, index) => {
+              const place = nearestSettled(from);
+              const ride = { from, to: homeUnit(place) };
+              const moves = movesPiece(moving, `home:${home.companyId}:${index}`, plan, ride.from, ride.to, (t) =>
+                reservationPositionAt(plan, t, ride),
+              );
+              if (moves && !leaving.includes(place)) leaving.push(place);
+            });
+          points = settledPoints.filter((point) => !leaving.includes(point));
+        }
+        reservationMarkers.push(() => {
+          withHexClip(ctx, homeCenter, hexSize, () => {
+            for (const point of points) {
+              drawStationTokenMarker(
+                ctx,
+                point,
+                hexSize,
+                company?.ticker || stationTickerLabel(home.companyId),
+                stationTickerColor(home.companyId),
+                true,
+                undefined,
+                !optional,
+              );
+            }
+          });
         });
       }
 
-      // PER-SLOT placement: two tokens at a pill's centre stack and hide whether the city still has room. The chain records WHICH CITY but not which SLOT, because a slot has no meaning in the rules -- so order is chosen here, deterministically, and nothing downstream should read it as authoritative.
-      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #134
-      const occupantsByCity = new Map<string, StationTokenCompany[]>();
-      for (const company of publicCompanies) {
-        if (!company.is_floated) continue;
-        for (const [q, r] of company.station_token_hexes) {
-          /* Design note #251: the bucket key must match the index the draw pass below resolves, or a company
-             would be counted into one city's occupants and drawn from another's slot list.
-             Design note #698 moved the rule itself into `tokenCityBucket`, because the PREVIEW has to count
-             these same buckets to know which slot it is about to fill. The old expression here read
-             `?? (cities === 1 ? 0 : 0)`, both arms zero -- an unfinished thought that had already collapsed to
-             the fallback the helper now states plainly. */
-          const key = `${q},${r},${tokenCityBucket(company, q, r)}`;
-          const bucket = occupantsByCity.get(key);
-          if (bucket) bucket.push(company);
-          else occupantsByCity.set(key, [company]);
-        }
-      }
-      // `forEach`, not `for...of` over `.values()` -- tsconfig targets ES5
-      // without `downlevelIteration`, so iterating a Map iterator is a
-      // compile error here.
-      occupantsByCity.forEach((bucket) => {
-        bucket.sort((a, b) => a.company_id - b.company_id);
-      });
+      /* Design note #1466: the slot order is `occupantsByCityFor`, lifted out of this pass unchanged. */
+      const occupantsByCity = occupantsByCityFor(publicCompanies);
 
       for (const company of publicCompanies) {
         if (!company.is_floated) continue;
@@ -1368,75 +2180,114 @@ export function HexGridRenderer({
             previewTile && previewTile.q === q && previewTile.r === r
               ? previewTile.tokenCities?.find(([id]) => id === company.company_id)?.[1]
               : undefined;
-          const chainCity = previewCity ?? tokenCityIndex(company, q, r);
           const tokenCenter = axialToPixel(q, r, hexSize);
-
-          let point: { x: number; y: number } | undefined;
-          /* Design note #151: the docking RADIUS, resolved from the same artwork the slot position comes
-             from. #699 rewrote the tail of that sentence: it used to be left `undefined` on the fallback path
-             "where there is no pill to dock into and the legacy `size * 0.22` is the correct answer". It was
-             not the correct answer -- a preprinted hex still draws a circle with a size, and 0.22 happened to
-             equal it on a single city and overflow it on an OO pair. `stationMarkerRadius` asks properly. */
-          let dockRadius: number | undefined;
-
-          /* The slot machinery was always right; what gated it was chainCity !== undefined. The original caution holds for a genuinely TWO-city tile, but a one-city tile's index is 0 and there is nothing to guess.
-             See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #251 */
-          const cityCount = laidTile ? tileCitySlotCounts(laidTile.tile_id).length : 0;
-          const resolvedCity = chainCity ?? (cityCount === 1 ? 0 : undefined);
-
-          if (laidTile && resolvedCity !== undefined) {
-            const slotPoints = tileCitySlotPoints(
-              laidTile.tile_id,
-              resolvedCity,
-              laidTile.orientation,
-              tokenCenter,
+          /* Design note #1466: the placement is `stationTokenMark` -- this pass's own body, lifted out so a starting
+             transition can ask it about the tile that was here before. */
+          const mark = stationTokenMark({ company, q, r, hexSize, laidTile, previewCity, occupantsByCity });
+          let resolved = mark.point;
+          let dockRadius = mark.radius;
+          const tokenUnit = (point: { x: number; y: number }): Vec => ({
+            x: (point.x - tokenCenter.x) / hexSize,
+            y: (point.y - tokenCenter.y) / hexSize,
+          });
+          const toRadius = (mark.radius ?? hexSize * STATION_RADIUS_RATIO) / hexSize;
+          /* Design note #1473: how much of this token's planned place shows, and whether the token itself is drawn. */
+          let plannedPresence = 0;
+          let physical = true;
+          /* Design note #1472: on a hex mid-transition the token is a piece seated in its station. It rides the slot
+             that holds it from where it stood to where the authority puts it -- one token, drawn once, never split,
+             merged or re-placed by the flourish -- and this loop's order, not its position, decides which of two
+             tokens overlapping at a gather is drawn on top, the same in every frame. */
+          const stagedToken = transitionAt(q, r);
+          const stoodAt = stagedToken?.transition.tokensFrom.get(company.company_id);
+          if (stagedToken && stoodAt) {
+            const { plan, moving } = stagedToken.transition;
+            const ride: TokenMotion = {
+              from: stoodAt.at,
+              fromRadius: stoodAt.radius,
+              fromAnchor: stoodAt.anchor,
+              to: tokenUnit(mark.point),
+              toRadius,
+              toAnchor: cityAnchor(plan, "to", mark.city),
+              fromCity: stoodAt.city,
+              toCity: mark.city,
+            };
+            const motion = tokenPositionAt(plan, stagedToken.t, ride);
+            // Design note #1473: a token the flourish moves rides in over its planned place -- on a lay this board
+            // proposed; a lay nobody proposed here has none (#1474).
+            if (movesPiece(moving, `token:${company.company_id}`, plan, ride.from, ride.to, (t) => tokenPositionAt(plan, t, ride).at)) {
+              plannedPresence = pieceTargetPresence(plan, stagedToken.t);
+            }
+            resolved = { x: tokenCenter.x + motion.at.x * hexSize, y: tokenCenter.y + motion.at.y * hexSize };
+            dockRadius = motion.radius * hexSize;
+          } else if (proposalPlan?.plan && proposingAt(q, r)) {
+            /* Design note #1473: while the tile is being chosen, a token the confirm will move is drawn only at its
+               planned place -- where the lay puts it, from `mark` above -- faint, as part of the proposal. Where it
+               stands now is asked exactly as a starting transition asks it. */
+            const { plan, moving } = proposalPlan;
+            const stood = stationTokenMark({
+              company,
+              q,
+              r,
               hexSize,
-            );
-            const bucket = occupantsByCity.get(`${q},${r},${resolvedCity}`) ?? [];
-            const slot = bucket.findIndex((entry) => entry.company_id === company.company_id);
-            // A bucket longer than the city has slots means chain and mirror disagree about capacity; clamping keeps the token visible rather than vanishing -- the more debuggable failure.
-            // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #251
-            point = slotPoints[Math.min(Math.max(slot, 0), slotPoints.length - 1)];
-            // Only when a real slot point was found. If `slotPoints` came
-            // back empty the token falls through to the per-hex anchor
-            // below, and a docking radius there would shrink a token that
-            // is not docked in anything.
-            // Design note #699: the CITY's radius, not the tile's -- a tile can carry a shared city beside an
-            // unshared one, and only the shared one owes the pill's inset.
-            if (point) dockRadius = tileCityTokenRadius(laidTile.tile_id, hexSize, resolvedCity);
-          } else if (!laidTile) {
-            /* #1302: a printed two-slot pill (1830+'s Montreal, Norfolk) docks tokens along its axis, exactly
-               as a laid pill does above; a printed circle answers one point and falls through unchanged. */
-            const label = STATIC_BOARD_HEXES.find((hex) => hex.q === q && hex.r === r)?.label;
-            const slotPoints = label ? printedCitySlotPoints(label, tokenCenter, hexSize) : [];
-            if (slotPoints.length > 1) {
-              const bucket = occupantsByCity.get(`${q},${r},${chainCity ?? 0}`) ?? [];
-              const slot = bucket.findIndex((entry) => entry.company_id === company.company_id);
-              point = slotPoints[Math.min(Math.max(slot, 0), slotPoints.length - 1)];
+              laidTile: laidUnderPreview,
+              previewCity: undefined,
+              occupantsByCity,
+            });
+            const ride: TokenMotion = {
+              from: tokenUnit(stood.point),
+              fromRadius: (stood.radius ?? hexSize * STATION_RADIUS_RATIO) / hexSize,
+              fromAnchor: cityAnchor(plan, "from", stood.city),
+              to: tokenUnit(mark.point),
+              toRadius,
+              toAnchor: cityAnchor(plan, "to", mark.city),
+              fromCity: stood.city,
+              toCity: mark.city,
+            };
+            if (movesPiece(moving, `token:${company.company_id}`, plan, ride.from, ride.to, (t) => tokenPositionAt(plan, t, ride).at)) {
+              plannedPresence = 1;
+              physical = false;
             }
           }
-
-          // The city travels to the fallback too: on an UNLAID preprinted OO hex there is no artwork to anchor to, so without it a token in the north-east city was drawn in the south-west one.
-          // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #459
-          const resolved = point ?? stationMarkerPoint(q, r, hexSize, laidTile, chainCity);
-          /* Design note #699: and the radius from the SAME branch that chose the point. Left undefined, the
-             fallback fell to a flat `size * 0.22` -- which on preprinted Baltimore is its circle's exact
-             radius, so a home token painted the circle out, and on a preprinted OO hex overflowed it. That
-             difference is the "border around the second station" report: not a style, just two radii. */
-          dockRadius = dockRadius ?? stationMarkerRadius(q, r, hexSize, laidTile, chainCity);
-          withHexClip(ctx, tokenCenter, hexSize, () => {
-            drawStationTokenMarker(
-              ctx,
-              resolved,
-              hexSize,
-              company.ticker,
-              stationTickerColor(company.company_id),
-              false,
-              dockRadius,
-            );
-          });
+          if (plannedPresence > 0) {
+            plannedPlaces.push(() => {
+              withHexClip(ctx, tokenCenter, hexSize, () => {
+                ctx.save();
+                ctx.globalAlpha = PROVISIONAL.pieceAlpha * plannedPresence;
+                drawStationTokenMarker(
+                  ctx,
+                  mark.point,
+                  hexSize,
+                  company.ticker,
+                  stationTickerColor(company.company_id),
+                  false,
+                  mark.radius,
+                );
+                ctx.restore();
+              });
+            });
+          }
+          if (physical) {
+            tokenMarkers.push(() => {
+              withHexClip(ctx, tokenCenter, hexSize, () => {
+                drawStationTokenMarker(
+                  ctx,
+                  resolved,
+                  hexSize,
+                  company.ticker,
+                  stationTickerColor(company.company_id),
+                  false,
+                  dockRadius,
+                );
+              });
+            });
+          }
         }
       }
+
+      plannedPlaces.forEach((draw) => draw());
+      reservationMarkers.forEach((draw) => draw());
+      tokenMarkers.forEach((draw) => draw());
     };
 
     // A landmark's nameplate anchor is derived from its ARCHETYPE, not a name check -- Boston/Baltimore take the SingleCity wedge, New York the DoubleCity dead-centre anchor.
@@ -1448,7 +2299,7 @@ export function HexGridRenderer({
       if (!showCityNames) continue;
       // Dynamic City Nameplate Suppression: a laid tile physically covers the printed name. The name stays available on hover, which is why describeHex was extended to cover every named hex.
       // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #47
-      if (hexHasLaidTile(mapGrid, landmark.q, landmark.r)) continue;
+      if (hexHasLaidTile(presentedGrid, landmark.q, landmark.r)) continue;
       const center = axialToPixel(landmark.q, landmark.r, hexSize);
       const isHovered = Boolean(
         hoveredHexCoord && hoveredHexCoord.q === landmark.q && hoveredHexCoord.r === landmark.r,
@@ -1501,7 +2352,7 @@ export function HexGridRenderer({
       // landmark pass above -- identical skip, applied here for every
       // remaining `NAMED_HEX_LABELS` city (Washington, Toledo, Providence,
       // Albany, Cleveland, Altoona, and the rest).
-      if (hexHasLaidTile(mapGrid, hex.q, hex.r)) continue;
+      if (hexHasLaidTile(presentedGrid, hex.q, hex.r)) continue;
       const center = axialToPixel(hex.q, hex.r, hexSize);
       const isHovered = Boolean(
         hoveredHexCoord && hoveredHexCoord.q === hex.q && hoveredHexCoord.r === hex.r,
@@ -1548,7 +2399,7 @@ export function HexGridRenderer({
       // Dynamic City Nameplate Suppression (design note #47): see the
       // landmark pass above -- UNCHANGED by design note #49, which only
       // repositions where this nameplate sits, not whether it persists.
-      if (hexHasLaidTile(mapGrid, hex.q, hex.r)) continue;
+      if (hexHasLaidTile(presentedGrid, hex.q, hex.r)) continue;
       const [primaryName, secondaryName] = name.split(" & ");
       if (!primaryName || !secondaryName) continue; // defensive -- every real OO name is "A & B"
       const center = axialToPixel(hex.q, hex.r, hexSize);
@@ -1574,7 +2425,7 @@ export function HexGridRenderer({
       if (!name) continue;
       // Dynamic City Nameplate Suppression (design note #47): see the
       // landmark pass above.
-      if (hexHasLaidTile(mapGrid, hex.q, hex.r)) continue;
+      if (hexHasLaidTile(presentedGrid, hex.q, hex.r)) continue;
       const [primaryName, secondaryName] = name.split(" & ");
       if (!primaryName || !secondaryName) continue; // defensive -- every real double-town name is "A & B"
       const center = axialToPixel(hex.q, hex.r, hexSize);
@@ -1741,6 +2592,9 @@ export function HexGridRenderer({
          badge and the preview were consistent with each other and both wrong about the debit. All three now
          ask `terrainFeeDue`. */
       if (terrainFeeDue(terrainFeesPaid, hex.q, hex.r, terrainBuildFeeAt) <= 0) continue;
+      // Design notes #1465/#1471: a tile a preview puts on the hex -- a proposal, or the sent lay -- is the lay that pays
+      // this fee; its price is not advertised over it.
+      if (drawnPreview && drawnPreview.q === hex.q && drawnPreview.r === hex.r) continue;
       const terrainType = hex.type;
       // Design note #136 (F-2): the printed figure comes from the
       // coordinate-keyed mirror of `hexmap::terrain_build_fee`, so the label
@@ -1821,7 +2675,7 @@ export function HexGridRenderer({
     for (const landmark of LANDMARK_HEXES) {
       // Same yield as the track pass, one step on: once a tile is laid its own chain revenue is the figure that pays, not the hex's printed starting value.
       // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #133
-      if (hexHasLaidTile(mapGrid, landmark.q, landmark.r)) continue;
+      if (hexHasLaidTile(presentedGrid, landmark.q, landmark.r)) continue;
       const override = HEX_START_VALUE_OVERRIDE[landmark.label];
       if (override === 0) continue;
       const center = axialToPixel(landmark.q, landmark.r, hexSize);
@@ -1937,7 +2791,39 @@ export function HexGridRenderer({
         });
       }
     }
-    for (const tile of mapGrid.tiles) {
+    for (const tile of presentedGrid.tiles) {
+      /* Design note #1465: A PRINTED FIGURE CHANGES WITH ITS TILE, NOT BEFORE IT (VF A-2). Mid-transition the value the
+         hex printed goes as its tile gives way, placed on a scratch ledger so it keeps the slot it had and takes none
+         from the incoming one.
+         Design note #1471: a proposal's value is printed washed, like the rest of the proposal, and commits where the
+         commit front crosses it -- the figure resolves with its tile, never before or after it. */
+      const stagedBadge = transitionAt(tile.q, tile.r);
+      const badge: BadgePresentation | null = stagedBadge
+        ? badgePresentationAt(stagedBadge.transition.plan, stagedBadge.t)
+        : proposingAt(tile.q, tile.r)
+          ? PROPOSED_BADGE
+          : null;
+      const outgoingBadge = stagedBadge ? stagedBadge.transition.badgeFrom : null;
+      if (outgoingBadge && badge && badge.outgoingAlpha > 0) {
+        const outgoingCenter = axialToPixel(tile.q, tile.r, hexSize);
+        ctx.save();
+        ctx.globalAlpha = badge.outgoingAlpha;
+        withHexClip(ctx, outgoingCenter, hexSize, () => {
+          drawValueBadge(
+            ctx,
+            outgoingCenter,
+            tile.q,
+            tile.r,
+            outgoingBadge.terrain,
+            hexSize,
+            outgoingBadge.value,
+            outgoingBadge.edges,
+            new Map(),
+            outgoingBadge.blocked,
+          );
+        });
+        ctx.restore();
+      }
       const catalogEntry = TILE_CATALOG_BY_ID.get(tile.tile_id);
       if (!catalogEntry) continue;
       /* NewYorkHub/BostonHub were excluded because the landmark pass "always catches them first" -- true when written and false one note later, once #133 made that pass yield to a laid tile. The parameter is widened rather than the terrains mapped onto a lookalike.
@@ -1973,20 +2859,27 @@ export function HexGridRenderer({
       if (chainRevenue === 0) continue;
       // #1394/#1405: the tile's own rings, dits and sampled rails decide the slots, in place of the edge guess.
       const markerBlocked = slotsBlockedByTileMarkers(tile.tile_id, tile.orientation);
-      withHexClip(ctx, center, hexSize, () => {
-        drawValueBadge(
-          ctx,
-          center,
-          tile.q,
-          tile.r,
-          terrain,
-          hexSize,
-          chainRevenue,
-          tileEdges,
-          claimedHexSlots,
-          markerBlocked,
-        );
-      });
+      const printValue = (alpha: number, ledger: Map<string, Set<number>>) => {
+        ctx.save();
+        ctx.globalAlpha = alpha; // 1 everywhere but a proposal and a hex mid-transition (#1465, #1471)
+        withHexClip(ctx, center, hexSize, () => {
+          drawValueBadge(ctx, center, tile.q, tile.r, terrain, hexSize, chainRevenue, tileEdges, ledger, markerBlocked);
+        });
+        ctx.restore();
+      };
+      if (!badge || badge.front >= REVEAL_SPAN) {
+        printValue(1, claimedHexSlots);
+      } else if (badge.front <= -REVEAL_SPAN) {
+        printValue(badge.provisionalAlpha, claimedHexSlots);
+      } else {
+        // While the front crosses: the committed side claims the slot, and the proposal's side is drawn into that same
+        // slot from the ledger as it stood before the claim.
+        const before = new Map<string, Set<number>>();
+        claimedHexSlots.forEach((slots, key) => before.set(key, new Set(slots)));
+        const provisionalAlpha = badge.provisionalAlpha;
+        withRevealSide(ctx, center, hexSize, badge.front, "west", () => printValue(1, claimedHexSlots));
+        withRevealSide(ctx, center, hexSize, badge.front, "east", () => printValue(provisionalAlpha, before));
+      }
     }
     /* #1390's padlock on final tiles was drawn here and is GONE by ruling ("remove the padlocks from the
        tiles"); the mark lives on the tile SELECTOR's candidates instead (#1393), where the choice is made. */
@@ -2200,70 +3093,12 @@ export function HexGridRenderer({
 
     /* Design note #222/#588: tokens go on last -- above every badge, every
        nameplate AND the focus veil. */
-    /* ==================================================================
-        DESIGN NOTE 822: #222 SAID TOKENS ARE DRAWN LAST, AND THE PREVIEW WAS DRAWN AFTER THEM
-       ==================================================================
-    
-       REPORTED: "the tileselector radial menu renders the stations, but when players click the tile to
-       preview it on the hex, no station marker appears. It's only after they confirm placement that the
-       station marker appears."
-    
-       THE PREVIEW IS OPAQUE ON PURPOSE (#167: "at 0.65 the board bled through and a yellow tile over a
-       green hex became a muddy third colour") and it was painted AFTER `drawStationTokenPass`, so it
-       covered every token on its hex. #222's rule is right there above that pass -- "tokens are drawn
-       LAST, not merely late ... a token says whose network this is, and a route's legality turns on it" --
-       and this one block was the exception nobody had noticed.
-    
-       SO THE PREVIEW MOVES UP RATHER THAN THE TOKENS MOVING DOWN, which keeps #222 as written and makes
-       the ghost tile obey the same ordering as a real one. The pass then draws the carried tokens ON the
-       preview, at the previewed tile's own city geometry -- see the tile lookup in that pass.
-    
-       REPORTED FOR ERIE FIRST and correctly suspected to be general: "I suspect it may be worth checking
-       whether all the double city tiles (OO and NY) continue previewing preexisting stations." It is every
-       tile on every hex -- ERIE's home is simply where a two-city upgrade makes the omission unmissable. */
-    // The preview is FULLY OPAQUE. Transparency was costing the one thing it exists for: at 0.65 the board bled through and a yellow tile over a green hex became a muddy third colour. The dashed outline stays -- the cheap half of the old signal.
-    // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #167
-    if (previewTile) {
-      const previewCatalogEntry = TILE_CATALOG_BY_ID.get(previewTile.tileId);
-      const previewCenter = axialToPixel(previewTile.q, previewTile.r, hexSize);
-      ctx.save();
-      drawHexPath(ctx, previewCenter, hexSize);
-      ctx.fillStyle = previewCatalogEntry ? ERA_TILE_FILL[previewCatalogEntry.color] : "#dddddd";
-      ctx.fill();
-      // Design note #1145: dashed while it is a proposal, solid once it has been sent.
-      if (!previewTile.committed) ctx.setLineDash([5, 4]);
-      ctx.strokeStyle = previewCatalogEntry
-        ? COLOR_TIER_STROKE[previewCatalogEntry.color]
-        : "#c0392b";
-      ctx.lineWidth = 2.5;
-      ctx.stroke();
-      ctx.setLineDash([]);
-      if (previewCatalogEntry) {
-        // Rail Map Overhaul (design note #42): Hex Boundary Clipping Mask.
-        withHexClip(ctx, previewCenter, hexSize, () => {
-          // previewTile is a tile being CONSIDERED, so no MapTileEntry describes it; the catalog mirror is why it must carry paths. #486: showRevenue stays true -- the ghost is not on the board, so nothing else can show its value.
-          // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #119
-          drawTrackPath(
-            ctx,
-            previewCenter,
-            hexSize,
-            previewCatalogEntry,
-            previewTile.orientation,
-            true,
-            undefined,
-            false,
-          );
-        });
-      }
-      ctx.restore();
-    }
-
     drawStationTokenPass();
 
 
     // ---- Off-board hover tooltip (design note #15/item 4), drawn LAST so
-    // it's always on top of everything else, including the ghost preview
-    // tile above.
+    // it's always on top of everything else, including the tile proposal
+    // (drawn in the tile pass since #1471).
     if (hoveredOffboardHex) {
       const hex = STATIC_BOARD_HEXES.find(
         (h) => h.q === hoveredOffboardHex.q && h.r === hoveredOffboardHex.r,
@@ -2349,6 +3184,8 @@ export function HexGridRenderer({
     cursorMode,
     // Design note #1357: the herald artwork arrived, so the board repaints with it.
     heraldTick,
+    // Design note #1465: a tile transition's frame clock.
+    tileTransitionTick,
   ]);
 
   /* Design note #1014: `scheduleDraw` and `rafHandleRef` are GONE. #4 built the coalescer because a drag
@@ -2939,11 +3776,53 @@ export function HexGridRenderer({
   );
 
 
-  /** Scroll-wheel zoom REMOVED entirely, not merely gated, so no dead path can be re-enabled. preventDefault stays -- scroll containment, not zoom.
-   *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #67 */
-  const handleWheel = useCallback((event: React.WheelEvent<HTMLCanvasElement>) => {
-    event.preventDefault();
-  }, []);
+  /* ==================================================================
+      DESIGN NOTE 1619: THE WHEEL HANDLER IS GONE, AND IT HAD NOT BEEN DOING ANYTHING FOR A LONG TIME
+     ==================================================================
+     WHAT WAS HERE: `const handleWheel = useCallback((event) => { event.preventDefault(); }, [])`, wired to the
+     canvas as `onWheel`. #67 removed scroll-wheel zoom and kept the `preventDefault` as "scroll containment,
+     not zoom". #773 objected that by its own rule the canvas was then blocking a gesture it did not use, and
+     left the line alone because a mouse and a finger want different answers. #1014 gave it a new reason:
+     blocking ctrl+wheel served "strictly prevents user scaling". #1618 withdrew that instruction and recorded
+     the leftover as a defect -- a desktop mouse could not browser-zoom over the board -- with `if
+     (event.ctrlKey) return;` as the narrow fix.
+
+     THE NARROW FIX WOULD HAVE BEEN THEATRE, and the measurement is the whole of this note. REACT REGISTERS THE
+     DELEGATED `wheel` LISTENER AS PASSIVE. `react-dom` 18.3.1, `addTrappedEventListener`:
+
+         if (domEventName === 'touchstart' || domEventName === 'touchmove' || domEventName === 'wheel') {
+           isPassiveListener = true;
+         }
+
+     So `preventDefault()` from an `onWheel` prop cannot cancel anything, and has not been able to since the
+     React 17 upgrade. Measured in Chromium 141 on the Rail Map, before any change here:
+       - the wheel event arrives at the canvas with `cancelable: false` and leaves with `defaultPrevented: false`;
+       - Chrome logs "Unable to preventDefault inside passive event listener invocation." on every wheel over
+         the board;
+       - an ordinary wheel over the CANVAS scrolls the page 200px -- exactly what the same wheel does over the
+         header. There is no containment. There never was one, in this React.
+     CONTROLLED: the same synthesized wheel over a `{ passive: false }` listener on a plain page arrives
+     `cancelable: true`, cancels, and stops the scroll. The inertness is React's, not the harness's.
+
+     SO THE DEFECT WAS REAL IN THE SOURCE AND ABSENT IN THE BROWSER, and a `ctrlKey` guard would have made the
+     source read correctly while changing nothing observable -- passing a review and leaving the console
+     warning in place. Removing the handler is what the measurement supports: ordinary wheel behaviour is
+     preserved exactly (it was already the browser's), the browser-zoom gesture is returned before any
+     `preventDefault` because there is none left, no map state is touched, and the warning goes.
+
+     WHAT THIS FILE NOW GUARANTEES, and it is deliberately the smaller claim: THE APP DOES NOT INTERCEPT OR
+     CANCEL WHEEL GESTURES OVER THE RAIL MAP. What a browser then does with a wheel event nobody touched is
+     that browser's policy -- it differs by engine, platform and version, and this repository neither
+     promises it nor re-verifies it. `railMapWheel.test.tsx` tests the guarantee; nothing here tests the
+     policy.
+
+     IF A REAL CONTAINMENT IS EVER WANTED it is a different change from this one -- a non-passive native
+     listener added in an effect -- and it would have to decide which gestures to leave alone. That decision
+     needs current, dated evidence about the engines this app is shipped on rather than a rule of thumb typed
+     into a comment: the modifier conventions differ between platforms and have changed inside a single
+     browser's lifetime. The findings gathered for #1619, with their platforms, versions and sources, are in
+     `claude/railmap-wheel-zoom-2026-09-17.md`; re-check them before relying on any of them, because nothing
+     in this repository keeps them current. */
 
   /* Design note #1014: `handleZoomStep`, `handleZoomIn`, `handleZoomOut` and `handleFitToScreen` are GONE,
      with `clampPanToBoard`, `MIN_ZOOM_MULTIPLIER` and `MAX_ZOOM_MULTIPLIER`. Fit to Screen went with them and
@@ -3021,11 +3900,13 @@ export function HexGridRenderer({
              locked baseline `handlePointerMove` returns without panning, so `none` there was a promise to
              the browser that the map had no intention of keeping -- and on an iPad the board is most of the
              screen, so there was nowhere left to swipe the page. `manipulation` keeps taps arriving. */
-          /* Design note #1014: `pan-x pan-y`, chosen over #773's `manipulation`. Both let a finger scroll the
-             page -- which is the whole of what #773 was reporting -- but `manipulation` still permits PINCH,
-             and "strictly prevents user scaling" is this batch's instruction. This value keeps the page
-             scrollable, keeps taps arriving, and refuses the one gesture that would scale a board that no
-             longer has a zoom to scale to. */
+          /* Design note #1014: `pan-x pan-y`, chosen over #773's `manipulation`, to refuse the pinch while
+             the page-level viewport lock was in force. WITHDRAWN BY #1618: the lock is gone, and the canvas
+             owns no gesture a pinch competes with -- no pan, no capture, no internal zoom, and a
+             `handlePointerCancel` already written for the browser taking a gesture over. The value is
+             #773's `manipulation` again: page still scrolls under a finger, taps still arrive with no
+             double-tap delay, and a second finger now zooms the page instead of being swallowed by a board
+             that had nothing to do with it. See `utils/mapGesture.ts` #1618. */
           touchAction: MAP_TOUCH_ACTION,
           // The cursor is the PIECE: a composed PNG rather than the .webp direct, because cursor:url() has no error path and a broken herald would silently become a crosshair -- the feature would look unbuilt rather than broken. Hotspot 16 16, because a token is placed AT a point.
           // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #496
@@ -3042,7 +3923,9 @@ export function HexGridRenderer({
            outlives the press that set it. */
         onPointerCancel={handlePointerCancel}
         onPointerLeave={handlePointerLeave}
-        onWheel={handleWheel}
+        /* Design note #1619: `onWheel` is GONE. The handler it pointed at could not cancel anything -- React
+           registers the delegated `wheel` listener as passive -- so the canvas now takes the wheel exactly as
+           every other element on the page does. */
       />
       {/* Coordinate + value hover tooltip -- design note #21, enriched by #26/item 2 (drops the "Hovering: "
          prefix so the text matches the specified format literally). Plain `position: fixed` viewport coordinates

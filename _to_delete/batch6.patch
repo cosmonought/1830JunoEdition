@@ -1,0 +1,2548 @@
+diff --git a/BATCH6_ROUTE_AUTHORITY_2026-09-15.md b/BATCH6_ROUTE_AUTHORITY_2026-09-15.md
+new file mode 100644
+index 0000000..e7bb804
+--- /dev/null
++++ b/BATCH6_ROUTE_AUTHORITY_2026-09-15.md
+@@ -0,0 +1,264 @@
++# Batch 6 — Authoritative routes and revenue
++
++Date: 2026-09-15. Design notes **#1550** (route authority), **#1551** (the pin on the state; `RunManualRoute`
++retired), **#1552** (dividend amount), **#1553** (route shape at the door), **#1554** (the PRR $60 → $30 defect).
++Baseline (post-Batch-5.5, owner-validated, `b4f6d38`): 354 suites / 5495 tests. Not committed: awaiting the
++full-suite result.
++
++> **`RULES_ENGINE_VERSION` 3 → 4.** Version 4 makes `RunMultipleRoutes` a judged action: the engine's route
++> evaluator (`gameEngine/routeAuthority.ts`) re-walks every submitted route on the board's own rail model and
++> refuses anything rulebook §6.4 / §6.4.1 / §6.4.2 / §6.3.3 forbid; revenue is the evaluator's figure, never the
++> message's; one run per turn; `DeclareDividends.revenue_amount` must equal what the trains ran (audit C1); at Run
++> Trains a skip or end of turn is refused while a paying route exists; `RunManualRoute` is refused on a pinned
++> board. A version-3 log is refused before replay.
++>
++> **Discrepancy flagged, not decided (S6-10):** the 2018 rulebook lets a route begin or end at a small city
++> ("'city' refers to a large city, a small city, or an off-board red hex"; a route "may begin or end at any
++> city"). This game has never allowed a town terminus (`isRouteTerminusHex`, tracer note #3, `routeDraftEdit`
++> rule 1) and the owner's LPF ruling #1286 says so in words ("unlike small towns the warehouses are also valid
++> termini"). The authority keeps that ruling behind the one shared predicate, so the decision is a one-line switch
++> with a corpus re-run; it is recorded as an owner decision owed, not silently changed either way.
++
++## 1. Rulebook requirements matrix (1830-RE 2018, Lookout; verified before coding)
++
++Read from Lookout's own copy of `en_1830re.html_Rules_1830-RE_EN.pdf` (§6.3.3, §6.4, §6.4.1, §6.4.2, §6.5). Each row
++names the rule, the section, what the authority enforces, and where.
++
++| # | Rule (rulebook wording, paraphrased where quoted text is long) | § | Enforced by |
++|---|---|---|---|
++| R1 | "Each train owned by a railroad may run once during its operating turn"; "trains may not be combined or double headed" | 6.4 / 6.4.2 | `evaluateRouteSet`: each named slot once; routes ≤ trains; one `RunMultipleRoutes` per turn (`routes_run_this_turn`) |
++| R2 | The train's number "represents the maximum number of cities that the train may have on its route"; a Diesel "has no limit" | 6.4.1 | `centres ≤ trainCapacityFor(slot model)`; `isUnlimitedReach` for D |
++| R3 | "'city' refers to a large city, a small city, or an off-board red hex" — towns count against the number | 6.4.1 | `sandboxRouteBreakdown.centres` counts every non-bypassed revenue centre, towns included (test 9) |
++| R4 | "The number of cities on a route includes all of the cities that the route runs through or to. A route may not skip a city that it runs through." | 6.4.1 | a waypoint is counted unless its rails miss the centre (`bypass` only where `traversalsFrom` offers a bow, or the owner's herald #1302) |
++| R5 | "A train may run a shorter route than the maximum … must have at least two cities" | 6.4.1 | `centres ≥ 2` |
++| R6 | "A route … is a continuous segment of track that includes at least one city containing one of the railroad's stations" | 6.4.2 | adjacency + `neighbourAcross` (both sides carry rail) + `traversalsFrom` inside every interior hex; station by circle (`stationTokensOf`, `stopEnteredFrom`) |
++| R7 | "A route may not reverse at a junction"; "may not change track at a crossover" | 6.4.2 | no authored rail joins entry to exit → refused (`traversalsFrom` is port-to-port; #0/#20/#24 cases tested) |
++| R8 | "may not use the same section of track more than once" | 6.4.2 | segment keys (#669/#731) claimed once per route |
++| R9 | "may not include the same city more than once, but it may include different cities in the same hex" | 6.4.2 | visit key `hex:stop` from `stopEnteredFrom` (#1318/#1319); other city / other town of one hex allowed (tests 12, double-town) |
++| R10 | "may not pass through a red off-board area" — start / end only | 6.4.2 | `isOffboardTerminal` on an interior waypoint → refused; LPF warehouses are not terminals (#1320) |
++| R11 | "may not pass through … a large city if all of its circles contain stations belonging to other railroads"; an empty circle or one's own station lets any train through; start/end there is fine | 6.3.3 / 6.4.2 | `cityBlockerFor` (#729 rules 1–3) on the circle the arrival rail enters (`cityForArrival`), interior waypoints only, non-bypass transits only |
++| R12 | "none of those routes may use the same track … may meet or cross at cities, and/or use two separate tracks in the same hex" | 6.4.2 | union of segment sets across runs; cities and separate tracks of one hex share nothing in the segment model (tests 13/14) |
++| R13 | Revenue "equal to the sum of the revenue values of all of the cities … on its route"; the railroad's revenue is the sum of its runs; off-board lesser/greater value by the first 5-train | 6.5 / 2.5 | `sandboxRouteBreakdown` per run, summed; `offboardValueForEra` (unchanged, S6-9) |
++| R14 | Dividends pay the revenue the trains ran; "cannot claim to … pay out dividends of $0" with no revenue | 6.5 | `dividendAmountRefusal`: declared = `last_route_revenue` to the dollar; the derived $0 withhold (#1275) agrees by construction |
++| R15 | "the combination of routes with the highest revenue should be chosen" (opponents may demonstrate a better one) | 6.4 | half: a corporation with a train and a paying route may not skip Run Trains (`routeSkipRefusal`); the optimum stays the president's (S6-3, deferred) |
++| R16 | A train bought this turn does not run | 6.4 note | step order (Run before Buy), unchanged |
++| R17 | Route begins/ends at a city or red area — **owner ruling: towns excluded** | 6.4.1 (rulebook) vs #1286 (owner) | `isRouteTerminusHex(grid, hex, company)` on both endpoints; **S6-10** |
++| R18 | Junction / crossover / "section of track" are not defined by the rulebook | — | taken as the rail model already in `trackSegments.ts`: a section is a rail end or a hex edge; a junction is where authored rails meet |
++
++Audit wording vs rulebook: the audit's C2 summary and S6-1's Detail match the rulebook on every row above. The
++one discrepancy found is R17 (towns as termini), which is between the rulebook and the code/owner ruling, not the
++audit; it is flagged above and in the ledger.
++
++## 2. Architecture before
++
++`RunMultipleRoutes` (`sessionKey.ts`: `routes: RouteWaypointDto[][]` — `{hex, city_node?, bypass?}` per stop;
++parallel `trains[]`, `train_indices[]`; `revenue_seed`, `revenue_turn`) → `applySandboxActionCore` refused only a
++Coal River crossing → the arm priced each path with `sandboxRouteBreakdown(mapGrid, path, era, protocol_id)`,
++summed, applied the Unpredictable Revenue die, wrote `last_route_revenue` / `printed_route_revenue` /
++`last_run_breakdown` / `routes_run_this_turn`, and `settleOperatingCursor` moved the step to Dividends. Nothing
++checked that the corporation owned the trains named, that a train ran once, that the paths were connected, that a
++station was on them, that a full city was not run through, or that the message's `bypass` flags described the
++rails. `DeclareDividends` paid `msg.revenue_amount` (`dividendSplit.dividendRevenue`), falling back to
++`last_route_revenue` only when the message carried none. The legacy `RunManualRoute` arm (one message per train,
++#968 replaced it) added to `printed_route_revenue` per message with no bound and stayed reachable through the
++schema and `operatingIdentity`. The #1183 one-run key was written on the corporation and read off the state — dead
++(S6-11). Every legality rule lived in the shell: `runTrainsRules.ts` (`runnableDrafts` / `runTrainsRefusal`),
++`routeWaypoints.ts` (token, blocked city), `routeConnection.ts`, `routeDraftEdit.ts`, `routeTruncate.ts`, the
++auto-tracer (`routeAutoTrace.ts`, whose search is legal by construction). Facts from the client: the route
++geometry (legitimately), the models (`trains`, trusted for the breakdown), and the dividend amount.
++
++Representations: there was never a competing server model — the engine already owned the rail-level graph
++(`trackSegments.ts`: `traversalsFrom`, `neighbourAcross`, `segmentsTouchingEdge`; `trackReach.ts`: `cityForArrival`,
++`stopEnteredFrom`, `stationTokensOf`; `cityBlocking.ts`; `stationTokens.citySlotCount`; `hexContractTypes.tokenCityIndex`)
++and the tracer, the network walk and the pricing all asked it. What was missing was a reader of a *submitted* path.
++
++## 3. Architecture after
++
++`gameEngine/routeAuthority.ts` (pure; imports only engine modules and the `components/` data tables the engine
++already imports; no React, no DOM):
++
++- `evaluateRouteSet({ state, mapGrid, era?, companyId, routes, trainIndices?, trains? })` →
++  `{ kind: "legal", runs: [{ trainIndex, model, path (bypass-normalised), revenue, centres, segments }], total }`
++  or `{ kind: "refused", reason, route? }`. Identity first (fleet from `owned_trains`, indices in range and
++  distinct, `trains[i]` must equal the slot's model), then each route walked (`walkRoute`: hex exists → adjacency
++  and two-sided rail → interior transit exists (bypass chosen/normalised) → blocked circle → segments claimed →
++  endpoints are termini → `city_node` agrees with the rail → no city twice → a station on the route → priced by
++  `sandboxRouteBreakdown`, ≥ 2 centres), then capacity per slot, then the set (no shared segment). Logs without
++  `train_indices` (pre-#1031) are paired largest-route-to-largest-train.
++- `routeSetRefusal(state, msg, mapGrid, era)` — one run per turn, at the Run Trains step, then the evaluator;
++  without a grid no opinion (#757). Asked in `applySandboxActionCore` (identity no-op) and at ingress
++  (`turnAuthority.operatingLegalityRefusal`, `refused` with the sentence).
++- `dividendAmountRefusal(state, msg)` — C1. `routeSkipRefusal(state, msg, mapGrid)` — Run Trains not skippable
++  past a paying route (pinned boards in the core; every board at ingress; derived entries exempt as before).
++- The arm prices from `evaluateRouteSet`'s runs (`priced = runs.map(r => r.revenue)`); the breakdown's model is
++  the slot's. `last_run_turn_key` now lands on the state (#1183 corrected).
++- `SetupGame` copies `rules_engine_version` onto the state (#1551); `RunManualRoute` refused when it is a number.
++- `messageSchema.ts` (#1553): `routes` is `routes` (array of waypoint arrays of `{hex: string, city_node?: int,
++  bypass?: bool}`; ≤ 64 routes, ≤ 512 waypoints — transport sanity bounds, not rules), `trains: strings?`,
++  `train_indices: ints?`, `RunManualRoute.path: waypoints`. Existence, connectivity and legality stay the reducer's.
++- UI (#1554, minimal): `App.tsx` `trainDrafts.endsOffTerminus` asks `isRouteTerminusHex` for the acting
++  corporation; `handleRunTrains` previews `evaluateRouteSet` and shows its sentence in the route panel instead of
++  dispatching; `routeDraftEdit` takes `forCompanyId` so a route may start on the owner's herald. Route drawing is
++  otherwise untouched. A server refusal still lands in the room banner (S10-1).
++- `gameEngine/index.ts` exports the evaluator family; `ReplayObserver` gains `grid` (additive).
++
++## 4. Corporation / train identity (Part 5)
++
++Preserved: `operatingIdentityRefusal` binds the message to the operating corporation. Added: every
++`train_indices[i]` is an integer in `[0, owned_trains.length)`, none twice; `routes.length ≤ owned_trains.length`;
++`trains[i]` (when present) must equal `owned_trains[train_indices[i]]` — "slot 1 holds a 3-train, not the 4 the run
++claims"; capacity from the slot's model via `MOCK_TRAIN_CATALOG`; an unknown model refuses. A trainless corporation
++cannot run at all (0 trains, ≥ 1 route). Ghost trains are in `owned_trains` and run like any other (#1046 rule
++kept); reprieved trains likewise; no Stage-9 dependency was created (the Yellow Sign event itself is untouched).
++
++## 5–7. Per-route and cross-route legality
++
++Section 1's matrix, rows R2–R12, each with a positive and a negative control in `routeAuthority.test.ts` on real
++tile geometry (a Gulf–city line, a #20 crossover, a #24 fork, a #63 hub with a loop, a #1 double town crossed
++twice, a #59 two-city tile, and the 18XX+ / LPF boards for the herald). Negative controls where two routes are
++individually legal but illegal together: I5–I7 + I5–I7 (same straight), the fork's two prongs sharing its one stub
++(#731's edge key), and I5–I7–I9 + J2–I3–I5–I7 (one shared section among many). Legal sharing kept legal: meeting at
++a city by different stubs, the two straights of a crossover, an off-board destination by different edges.
++
++## 8–9. Revenue and dividend authority
++
++`last_route_revenue` is the evaluator's total (die applied as before); `printed_route_revenue` likewise;
++`last_run_breakdown` carries the slot's model and the evaluator's per-route figure. A crafted `revenue` /
++`printed_revenue` / `last_route_revenue` field on the message changes nothing (test 17). `DeclareDividends`:
++`revenue_amount` stays on the wire for narration and for replay of logs written since #752; it must now equal
++`last_route_revenue` exactly (a mismatched declaration is an identity no-op in the core and a `refused` frame at
++ingress); an absent amount (pre-#752 entries) is judged by `dividendRevenue`'s existing fallback, which reads the
++same field. Payout / withhold / share-price mechanics untouched. Migration: the live shell already declares from
++`last_route_revenue` (#934), so nothing changes for a correct client; a client that computed its own figure (JUNO-Z6C
++418 / 428 / 433 — $10–$20 short of the reducer's on three consecutive LPF + Unpredictable Revenue turns) is refused
++with the authoritative figure in the sentence.
++
++## 10. No-route / zero-revenue / skipping
++
++- Trains, no legal route: `maxRouteRevenueFor` finds nothing → the auto-skip / forced $0 withhold stand; a run is
++  refused for its geometry; a manual skip is allowed.
++- Trains and a paying route: `AdvanceOperatingSubPhase` / `PassTurn` at Run Trains refused ("has a route it can run
++  (worth up to $N), so it must run before its turn moves on") — the shell's #414 obligation, now the authority's.
++  On pinned boards in the core; legacy logs keep their recorded skips (JUNO-CV4 88 / 3XD 226 were the old engine's
++  own verdicts on a corporation it miscounted — refusing them would strand that corporation for the rest of the
++  replay; D-9).
++- Trainless: the Batch-4/5 obligation is untouched (`trainObligationRefusal`, `emergencyFundingFor`); a run from a
++  trainless corporation is refused as "owns 0 trains".
++- A legal $0 route (two blank cities) remains skippable: `maxRouteRevenueFor` = 0 and the shell's `value > 0`
++  filter agree, as before (`runTrainsRules` #883).
++
++## 11. The LPF PRR $60 → $30 defect — root cause (#1554)
++
++Investigated, not assumed. Neither corpus log holds the reported turn (JUNO-CV4 145 is the *bypass* case the
++triage note ruled correct), so the topology was rebuilt on both boards that print the herald: H10 (#57) — H12
++(herald, printed #24) — H14 (#57), PRR with two 2-trains and no token. The authority prices `[H10, H12]` = $30 and
++`[H12, H14]` = $30, total $60 (test block 20, both boards). The reducer was never the fault: it paid what it was
++sent. **The route ending on the herald was never sent.** `App.tsx`'s draft memo computed
++`endsOffTerminus: !isRouteTerminusHex(mapGrid, last.hexLabel)` — without the corporation — and `isRouteTerminusHex`
++answers the herald hex as a terminus only for its owner (#1302). So the draft ending at H12 was marked as ending off a
++terminus, `runnableDrafts` silently skipped it ("invalid drafts are skipped, not refused", #275), and
++`handleRunTrains` dispatched the other route alone: $30, with both chips still drawn. The route *starting* at H12
++survived because the tracer judges its start with the corporation. Category: client-side filtering (route
++serialization), not deduplication, train identity, station handling, city identity, or the authoritative total.
++Repair: the predicate is asked for the acting corporation (`actingProtocolId`), `editRouteDraft` accepts a start on
++the owner's herald, and `handleRunTrains` previews the authority so a dropped route can no longer be silent. Not
++special-cased to PRR: the fix is the missing argument. Regression: `routeAuthority.test.ts` block 20 (evaluator total
++$60 on both boards; the corporation-blind predicate false and the corporation-aware one true on the same hex; a
++source assertion that the shell passes the corporation; `editRouteDraft` start rule with and without it). Broader
++herald authority (the "must count in first turns" clause) stays S6-4 / Stage 9.
++
++## 12. Runtime schema / hostile client (Part 12)
++
++Refused at ingress (`validateGameplayMessage`, shape): non-array routes, non-object waypoints, `hex` not a string,
++`city_node` not an integer, `bypass` not a boolean, `trains` not strings, `train_indices` not integers, more than
++64 routes or 512 waypoints, `RunManualRoute.path` malformed. Refused by the authority (law, at ingress with a reason
++and in the core by identity): nonexistent / another corporation's / duplicate train, off-board hex, non-adjacent or
++rail-less step, over-capacity, blocked pass-through, same-train or cross-train track reuse, fabricated `bypass` or
++`city_node`, fabricated revenue (ignored), a repeated run (any key), a run at the wrong step, a `RunManualRoute` on
++a pinned board. `messageSchema.test.ts` and `serverProtocol.test.ts` unchanged and green.
++
++## 13. Replay / versioning (Part 13)
++
++- `RULES_ENGINE_VERSION` 3 → 4 with the changelog row; `SUPPORTED = [4]`; a version-3 room is `incompatible`
++  before `RoomEngine.apply` (test 23, spied). Same-version logs rebuild identically through `replayLog` and
++  `RoomSession` and `RevertTo` restores the pre-run board and accepts the honest re-dispatch (tests 21, 22).
++- **Corpus sweep** (17 logs: `server/data` ×8, golden ×3, the FCJ prefix-96 fixture, `frontend/sandbox-log-*` ×5;
++  all legacy / undealt; the server policy refuses all 16 legacy logs; sweep under `DEVELOPMENT_CORPUS_POLICY` against
++  the Batch-5 engine, per-index): **14 of 17 gameplay-identical**. Every digest changes where a run occurred because
++  the #1183 key moved from the corporation entry to the state root (S6-11) — representation only; the CV4 golden
++  fixture was re-baselined for exactly that (diff: three `last_run_turn_key` lines leave three companies, one appears
++  on the state). The three that diverge in gameplay:
++  - `server/data/JUNO-FCJ.log.jsonl` **idx 230** (B&M, two 2-trains and a 3): route 2 (G19–F20–F22) touches no B&M
++    station on the log-derived board — B&M's idx-95 token was refused by Batch 3, so the board has been diverging
++    "by construction" since 95; version 3 priced the run anyway, version 4 refuses it ("must pass through a city this
++    corporation has a station token in"), 231's $160 declaration then mismatches, and every later B&M run/dividend
++    cascades. No test replays FCJ past 96; reported, not absorbed.
++  - `server/data/JUNO-Z6C.log.jsonl` **idx 418** (NYC declared $180 on a $190 run; 428 PMQ $290 / $300; 433 NNH
++    $250 / $270): version 3 paid the message, version 4 refuses the mismatch (C1). Treasuries differ from there and
++    the bank no longer breaks at 613. `gameHistory.test.ts` (a UI timeline test on the Z6C fixture) asserted the
++    replay reaches "OR 9.1"; it now asserts the timeline's shape, with the reason in the test.
++  - `frontend/sandbox-log-JUNO-3XD.json` **idx 260** (PRR): the run names a 4-train in slot 1 that the log-derived
++    fleet `[3, 3]` does not hold (the 4 was bought on the queue the #1196 divergence swapped — this log has diverged
++    since 224); version 3 priced it, version 4 refuses it ("slot 1 holds a 3-train, not the 4"), 261's $230 and
++    307/308 the same; PRR's OR-7 price then does not rise, B&O operates first in OR 7.1, and B&O's 313 is
++    identity-refused; **319** (the #1183 duplicate) is refused by the one-run rule and 320's $540 by C1.
++    `replayJuno3XD.test.ts`'s filed-vs-declared table — the line its own note says is where such changes announce
++    themselves — re-pinned with reasons: PRR 170 → 260, B&O 240 → 270, NNH 540 → 340; NYC, C&O unchanged.
++- Payload sufficiency: every stored `RunMultipleRoutes` since #1031 carries `train_indices`; entries without them
++  (none in the corpus) are paired by the evaluator, so no adapter was needed. No legacy entry needed a new field.
++
++## 14. Ledger
++
++`RULES_HARDENING_BACKLOG.md` updated before commit: S6-1, S6-2 `RESOLVED`; S6-3, S6-4 annotated; **new** S6-10
++(town termini — owner decision owed), S6-11 (#1183 dead key — resolved), S6-12 (`RunManualRoute` retired on pinned
++boards), S6-13 (shell validators duplicating the authority — deferred cleanup); S10-1, S10-17, U-17 annotated; Part A
++Stage 6 entry; Part E version-4 row with the three divergences above.
++
++## 15. Files
++
++New: `frontend/src/gameEngine/routeAuthority.ts` (#1550), `frontend/src/utils/routeAuthority.test.ts` (38 cases),
++this file. Modified: `sandboxSession.ts` (core gates; the arm prices from the evaluator; #1183 key relocation;
++`SetupGame` pin), `turnAuthority.ts` (`operatingLegalityRefusal`), `messageSchema.ts` (#1553), `rulesVersion.ts`
++(4 + changelog), `gameState.ts` (`rules_engine_version`), `replayLog.ts` (observer `grid`), `gameEngine/index.ts`
++(exports), `App.tsx` (#1554: terminus with the corporation; evaluator preview before dispatch; draft editor's
++corporation), `utils/routeDraftEdit.ts` (`forCompanyId`), tests: `atomicRunRoutes` (the "adds to a total already
++standing" case now pins one run per turn), `visitOnce` (fixture on real track), `refusedAction` and `dividendNarration` (control
++boards carry the run they declare), `gameHistory` (Z6C shape), `replayJuno3XD` (re-pin with reasons),
++`emergencyFunding` (version assertions relative to the current pin), `__fixtures__/replayGolden/JUNO-CV4.json`
++(re-baselined for the key relocation).
++
++## 16. Focused results
++
++- `routeAuthority.test.ts` 38/38: the brief's 1–23 (15/16 in 2; the PRR block on both boards; 21–23 through
++  `replayLog` and `RoomSession`), plus the topology cases (double town twice, two-city tile by circle, named-city
++  and fabricated-bypass refusals, ghost train, legacy pairing, no-grid neutrality, schema shapes).
++- Green (ran here): `visitOnce`, `atomicRunRoutes`, `batch40/50/51/60`, `levelPlayingFieldRules`, `markKeepsRun`,
++  `multiTrainRun`, `revenueRounding`, `multiTrainDividend`, `dividendStep`, `oneRunPerTurn`, `turnAuthority`,
++  `operatingIdentity`, `emergencyTrainFlow`, `emergencyFunding`, `trainDiscard`, `rulesVersion`, `replayGolden`,
++  `replayJunoCV4`, `replayJuno3XD`, `gameVariants`, `serverProtocol`, `sandboxRoom`, `roomSession`, `actionReceipt`,
++  `refusedAction`, `revenueFlashWiring`, `messageSchema`, `phantomDividend`, `dividendPools`, `doubleWithhold`,
++  `derivedActions`, `heraldHome`, `altoonaBypass`, `altoonaWall`, `routeDraftEdit`, `routeStep`, `runTrainsRules`,
++  `trackContinuity`, `forkedTrackReuse`, `multiTrainRouting`, `perCityRevenue`, `sharedCityRouting`,
++  `reenterOtherCity`, `cityBlocking`, `routeCityBlocking`, `routeTokenRule`, `dieselRouteCap`, `trainReach`,
++  `stationConnectivity`, `stationLegality`, `offboardTerminality`, `chipRunRevenue`, `hexValueAgreement`,
++  `routeRevenueReset`, `logRevert`, `stateDigest`, `logHash`, `gameSetup`, `boardInEffect`, `kanawha*`,
++  `watcherRouteChips`, `routeChip*`, `RoutePlanner*`, `gameHistory`, `turnClock`, `accolades`, `roundReplay`,
++  `stationCityReach`, `gameOutro`, the `batchNN` source-scan family, `sourceScan`, `designNote*`, `actionLog`,
++  `turnSeed`, `sessionKey`, `routeWaypoints`, `cityBypass`, `trackReach`, `trackSegments`, `cityTopology`,
++  `hexBoard*`, `tileLegality`, `layable*`, `homeToken*`, `stationToken*`, `operatingCursor`, `subPhase*`,
++  `operatingRound*`, `autoSkip*`, `settle*`, `divergence*`, every suite that names `DeclareDividends`,
++  `RunMultipleRoutes`, `RunManualRoute`, `AdvanceOperatingSubPhase` or `PassTurn` (70 suites / 1,182 tests), all
++  of `src/components/` (32 suites / 377) and `src/utils/[a-m]*` (158 suites / 2,689) — green here. The complete
++  suite was not run here (the owner's run is the validation).
++- `frontend` typecheck clean; `server` build clean (the server imports `routeAuthority` through `gameEngine/index`).
++- ESLint on the new and changed engine files: clean (the repo's pre-existing lint findings in `sandboxSession.ts`
++  and a few older tests are untouched).
++
++## Expected totals and commands
++
++355 suites / 5533 tests (baseline 354 / 5495 + `routeAuthority.test.ts` 38; every other suite keeps its count —
++`atomicRunRoutes` renames one case, none are added or removed elsewhere).
++
++    cd frontend && npm test -- --watchAll=false
++    cd frontend && npm run typecheck
++    cd server && npm run build
+diff --git a/RULES_HARDENING_BACKLOG.md b/RULES_HARDENING_BACKLOG.md
+index b138321..af5cb94 100644
+--- a/RULES_HARDENING_BACKLOG.md
++++ b/RULES_HARDENING_BACKLOG.md
+@@ -27,9 +27,9 @@ interpretation of, the 2018 rulebook (or a product ruling), recorded so it is ne
+ | 4 | Train lifecycle / forced purchase | done (`53222c7`) |
+ | 4.5 | Replay / rules-version pinning | done (`2aefe13`) |
+ | 4.6 | Interactive excess-train discard | done (`6d55b84`) |
+-| 5 | Emergency funding + bankruptcy | implemented, awaiting full-suite validation and commit |
+-| 5.5 | Repository hygiene / backlog reconciliation | this ledger; cleanup proposal pending owner approval |
+-| 6 | Route authority + revenue | Part B |
++| 5 | Emergency funding + bankruptcy | done (`78f8358`) |
++| 5.5 | Repository hygiene / backlog reconciliation | done (`b4f6d38`; this ledger) |
++| 6 | Route authority + revenue | implemented (Batch 6, #1550–#1554), awaiting full-suite validation and commit |
+ | 7 | Transaction + cash authority / auction | Part B |
+ | 8 | Stock / OR edge cases + timing | Part B |
+ | 9 | Variants + map data + variant authority | Part B |
+@@ -43,7 +43,9 @@ rulebook's. Owner-defined variants (Level Playing Field, Project 18XX+, Delayed
+ Unpredictable Revenue / Yellow Sign) have no rulebook counterpart and are judged against the owner's spec.
+ 
+ **Replay / version boundary.** `RULES_ENGINE_VERSION` (`frontend/src/gameEngine/rulesVersion.ts`, #1520) is
+-**3** in the Batch 5 working tree (1 = post-Batch-4 semantics, 2 = Batch 4.6, 3 = Batch 5). Any item below that
++**4** in the Batch 6 working tree (1 = post-Batch-4 semantics, 2 = Batch 4.6, 3 = Batch 5, 4 = Batch 6). Since
++Batch 6 the pin is also copied onto the state (`rules_engine_version`, #1551) so the reducer can tell a pinned
++board from a legacy one. Any item below that
+ changes what a stored gameplay log *replays to* must bump it and add a `RULES_ENGINE_CHANGELOG` line; UI,
+ protocol-shape and narration changes do not. `DEVELOPMENT_CORPUS_POLICY` (`legacyLogs: "development-corpus"`,
+ `legacyExcessTrains: "engine-chose-cheapest"`) is a best-effort development-corpus mechanism only and is never a
+@@ -111,6 +113,26 @@ Recorded for later → **S8-2 (presidency tie)**, S7-6, S7-1 (`adjustTreasury` f
+ decisions). Replay: JUNO-Z6C differs from idx 614 (old engine applied a `PassTurn` on a `GameEnd` board; v3
+ holds it).
+ 
++### Stage 6 — route authority + revenue (uncommitted, #1550–#1554), version 3 → 4
++`gameEngine/routeAuthority.ts`: one evaluator (`evaluateRouteSet`) re-walks every submitted route on the board's
++rail model (`trackSegments` / `trackReach` / `cityBlocking` / `sandboxRouteBreakdown`) and answers a legal run set
++with authoritative per-train revenues or one refusal; `routeSetRefusal` is asked in `applySandboxActionCore` and
++at ingress (`turnAuthority.operatingLegalityRefusal`), the arm prices from the evaluator's answer. Rules enforced:
++train identity (owned, once, ≤ trains, model from the slot), continuity, no reversal / crossover change, no track
++reused within or across the corporation's routes (cities and separate tracks of one hex may be shared), full cities
++not run through, red areas terminal only, a station of the corporation on the route (by circle), no city twice
++(the other city of a hex is allowed), ≥ 2 cities, ≤ the train's number (Diesel unlimited), one run per turn, at
++the Run Trains step. `DeclareDividends.revenue_amount` must equal `last_route_revenue` (audit C1). A skip / end
++of turn at Run Trains is refused while a paying route exists (pinned boards). `RunManualRoute` is refused on a
++pinned board. Ingress schema checks the shape of `routes` / `trains` / `train_indices` (#1553). The LPF PRR
++$60 → $30 defect was a shell filter (`endsOffTerminus` asked `isRouteTerminusHex` without the corporation, so
++the route ending on the herald was dropped before dispatch, #1554). Found and fixed: the #1183 one-run key was
++written on the corporation and read off the state — it never fired (S6-11). Audit C1, C2 closed.
++Left behind → S6-10 (town termini: rulebook vs the owner's ruling, decision owed), S6-13 (UI validators that
++duplicate the authority), S6-4 (herald "must" clause), S6-3 (optimum), U-17 (bypass control). Replay:
++JUNO-FCJ from 230, JUNO-Z6C from 418, JUNO-3XD from 260 (Part E); the CV4 golden fixture re-baselined for the
++#1183 key's relocation only.
++
+ ### Stage 5.5 — repository hygiene / backlog reconciliation (2026-09-15, this pass)
+ Inventory of every tracked planning/triage document, reconciliation of their unresolved items against code,
+ tests, the audit and the write-ups (migrated below as S6-1's route-drafting debts, S9-3, S10-9, S10-10,
+@@ -134,7 +156,16 @@ implementation**.
+ ### Stage 6 — Route authority + revenue
+ 
+ **S6-1. Routes are priced but never validated by the reducer.**
+-Status `OPEN` — audit **C2**, the largest remaining job. Rulebook §6.4, §6.4.1, §6.4.2. Notes: `RunMultipleRoutes`
++Status `RESOLVED` — Batch 6 (#1550, `gameEngine/routeAuthority.ts`; `routeAuthority.test.ts` 38 cases). Every
++rule in the Detail below is enforced by `evaluateRouteSet` / `routeSetRefusal` in the reducer core and at
++ingress, and revenue is the evaluator's. Drafting debt (a): the authority judges blocked cities by arrival edge
++(`cityForArrival` / `stopEnteredFrom`); the shell's `routeBlockedCityReason` has judged by edge since #1022
++wherever `App.tsx` injects the resolver (it does), so the "recorded as known debt" sentence in #730a is stale
++prose, not a live gap. Debt (b): the reducer accepts either reading of a hex with a bow (`bypass: true` is
++honoured wherever the rails offer one, whether or not the city is shut); the waypoint control is U-17. NOT done:
++the UI validators were not moved to `gameEngine/routes/` — the authority reuses the rail primitives directly and
++the shell keeps its click-by-click validators for drafting feedback; retiring the duplicated halves is S6-13.
++Historical: audit **C2**, the largest remaining job. Rulebook §6.4, §6.4.1, §6.4.2. Notes: `RunMultipleRoutes`
+ arm (`sandboxSession.ts`; refuses only a Coal River crossing and a duplicate `revenue_turn`); validators exist in
+ the UI — `utils/runTrainsRules.ts`, `routeConnection.ts`, `routeWaypoints.ts`, `routeStep.ts`,
+ `routeTruncate.ts`, `routeDraftEdit.ts`, `stationConnectivity.ts` (Batch 1 §6b lists them, ~1,400 lines) and
+@@ -157,7 +188,12 @@ that *could* enter a city cannot choose the bypass by hand (the PRR skipping its
+ needs a waypoint control; the reducer must accept either legal reading once it validates routes.
+ 
+ **S6-2. The dividend amount is trusted from the message.**
+-Status `OPEN` — audit **C1**. Rulebook §6.5. Notes: `DeclareDividends.revenue_amount` → `dividendSplit.ts`
++Status `RESOLVED` — Batch 6 (#1552, `dividendAmountRefusal`): the declared amount must equal
++`last_route_revenue` to the dollar (absent amount = pre-#752 log, judged by the same field; the derived $0
++withhold agrees by construction); refused by identity in the core and with its reason at ingress. Corpus
++evidence found by the Batch-6 sweep: JUNO-Z6C 418 / 428 / 433 declared $180 / $290 / $250 on runs the reducer
++had priced at $190 / $300 / $270 (LPF + Unpredictable Revenue; the client's figure, $10–$20 short each time) —
++the message paid, the authority did not. Historical: audit **C1**. Rulebook §6.5. Notes: `DeclareDividends.revenue_amount` → `dividendSplit.ts`
+ (`dividendRevenue`); `last_route_revenue` written by `RunMultipleRoutes`; #752 chose the message so the toast and
+ the reducer share one figure. Replay: refusal-added; bump. Detail: refuse in `applySandboxActionCore` when
+ `Number(revenue_amount) !== Number(company.last_route_revenue)` (allow `"0"` when `routes_run_this_turn === 0`;
+@@ -169,11 +205,19 @@ default server; dev-corpus only), so no `RevertTo` is owed — the fixture simpl
+ 
+ **S6-3. "Highest-revenue combination if demonstrated" is neither chosen nor checked.**
+ Status `DEFERRED` (rulebook makes it the opponents' burden to demonstrate; a digital game may leave it to the
+-president). Rulebook §6.4. Notes: `maxRouteRevenueFor` exists for derived actions only. Detail: owner ruling
++president). Rulebook §6.4. Notes: `maxRouteRevenueFor` exists for derived actions only. Batch 6 (#1550,
++`routeSkipRefusal`) closed the half that is not a matter of taste: a corporation holding a train and a paying
++route may not skip Run Trains or end its turn there (pinned boards; the same search the auto-skip runs). Which
++route, and whether it is the best, stays the president's. Detail: owner ruling
+ whether the machine enforces the optimum; if not, record as an owner decision in Part D.
+ 
+ **S6-4. LPF / 18XX+ PRR herald-home (Altoona, H12, $10) revenue and reach — verify the authority with S6-1.**
+-Status `DEFERRED` (variant; tied to S6-1). Notes: #1302 (`heraldValueFor` prices the herald in the reducer only
++Status `DEFERRED` (variant). Batch 6 preserved the herald's existing rules in the authority without auditing
++them: it is a station root, a revenue centre and a terminus for its owner only, and its owner may cross it
++uncounted (`bypass: true`); nobody else counts it, ends on it or bypasses it (`routeAuthority.test.ts`, the #1554
++block, on both the 18XX+ and LPF boards). Not enforced: the "must count it in its first turns" clause; whether a
++bypassed herald still satisfies the station requirement (today it does, as before). JUNO-CV4 145 (two 2-trains,
++H16–H18 and H16–H14–H12*–H10) is judged legal by the authority. Notes: #1302 (`heraldValueFor` prices the herald in the reducer only
+ for the running corporation — safe since Stage 3's identity gate), #1277 (herald counts as a network root in
+ `trackReach.ts`), #1280 (herald persists through upgrades), #1332 (float modal), triage 2026-09-08 items 12/23
+ (item 23 ruled "not a bug": the tracer bypassed Altoona correctly with two 2-trains), `hexBoardData.ts` Altoona
+@@ -213,6 +257,47 @@ explicit refusal if it is absent.
+ **S6-9. Off-board lesser/greater values switch at the first 5-train (Brown era).**
+ Status `RESOLVED` (audit PASS; `offboardValueForEra`) — listed so the era switch is not re-audited. Rulebook §2.5 / §6.5.
+ 
++**S6-10. A route may begin or end at a small city (town) under the rulebook; the game has never allowed a town terminus.**
++Status `OWNER DECISION` owed (found by Batch 6's rulebook verification). Rulebook §6.4.1: "for the purposes of
++running trains and choosing routes, 'city' refers to a large city, a small city, or an off-board red hex", a
++route "may begin or end at any city", and the train's number counts every city including small cities. The
++code has excluded towns from termini since the tracer's design note #3 (`isRouteTerminusHex`; `routeDraftEdit`
++rule 1 "towns are not termini (#264)"), and the owner's LPF ruling #1286 says "unlike small towns the
++warehouses are also valid termini" — a stated position. Batch 6 kept the ruling in the authority (one predicate,
++`isRouteTerminusHex`, shared by the tracer, the obligation gate `hasLegalRouteFor` and the evaluator) and
++flagged it rather than switching, because a town-terminus authority with a town-blind tracer would accept runs
++the auto-skip and the Batch-4 forced-purchase gate cannot see. Detail if the rulebook is adopted: widen
++`isRouteTerminusHex` to `SingleTown` / `DoubleTown` (towns still count against the number, still cannot be
++tokened or blocked), re-run the corpus (every "no legal route" auto-skip and forced purchase can change — replay-
++semantic, bump), and re-examine `routeRunObligation` / `runnableDrafts`' `value > 0` rule. If the ruling stands,
++record it in Part D.
++
++**S6-11. The #1183 one-run-per-turn key never fired.**
++Status `RESOLVED` — Batch 6 (#1550, corrected note in the arm). `last_run_turn_key` was declared on
++`GameStateResponse` and read as `state.last_run_turn_key`, but the arm wrote it inside `public_companies.map`,
++on the corporation; the state's field stayed `undefined` and the refusal was unreachable. `oneRunPerTurn.test.ts`
++asserted both strings and could not see they named different objects (#490a in a new shape). Evidence: JUNO-3XD
++319 — the very duplicate the note was written for — was applied in every replay since (NNH 680 printed / 540
++adjusted). The write now lands on the state; the authoritative rule is `routes_run_this_turn > 0` regardless of
++key. Consequence: every replayed log's digest changes where a run occurred (the key moved objects); the CV4
++golden fixture was re-baselined for exactly that and nothing else.
++
++**S6-12. `RunManualRoute` is retired from live play.**
++Status `RESOLVED` (recorded) — Batch 6 (#1551). Nothing has dispatched it since #968; its arm added to
++`printed_route_revenue` once per message with no per-turn bound and now no route judgement, so a hand-built copy
++was an unbounded revenue faucet. A pinned board (`state.rules_engine_version` is a number) refuses it in the
++core and at ingress; unpinned (legacy) logs keep the arm they were played on. The schema keeps the message so a
++legacy entry still parses.
++
++**S6-13. The shell's route validators duplicate the authority.**
++Status `DEFERRED` (cleanup, no rule change). `utils/runTrainsRules.ts`, `routeWaypoints.ts`
++(`routeTokenBlockReason`, `routeBlockedCityReason`), `routeConnection.ts`, `routeDraftEdit.ts`,
++`routeTruncate.ts` still judge drafts for click-by-click feedback; `handleRunTrains` now also asks
++`evaluateRouteSet` before dispatch (#1554) and the reducer judges again. Three answers to one question is
++#1184's shape. Detail: make the draft-time checks read the evaluator's refusal (a per-draft
++`evaluateRouteSet` on the single route) and delete the halves it makes redundant; keep only what a
++half-drawn route needs (rule 2–6 of `editRouteDraft`). Replay: none.
++
+ ### Stage 7 — Transaction + cash authority / auction
+ 
+ **S7-1. Zero floors act as implicit refusals: `adjustCash`, `adjustBank`, `adjustTreasury` clamp at 0.**
+@@ -446,8 +531,10 @@ Destination `frontend/src/gameEngine/board/`.
+ ### Stage 10 — Replay / settlement / release hardening
+ 
+ **S10-1. Refusal transport.** A reducer refusal is an identity no-op that `RoomSession.submit` still answers
+-`applied` and appends (replays as a no-op); the ingress holds (#1530 / #1540) answer `refused` with a reason,
+-every other reducer refusal is still appended. And `actionWasRefused` (#778) compares by identity while the chart
++`applied` and appends (replays as a no-op); the ingress holds (#1530 / #1540) and, since Batch 6, the route,
++dividend-amount and Run-Trains-skip refusals (#1550) answer `refused` with a reason (the shell shows it in the
++room banner; `handleRunTrains` previews the evaluator's sentence in the route panel, #1554), every other reducer
++refusal is still appended. And `actionWasRefused` (#778) compares by identity while the chart
+ step (#1197) returns a new object for every charted state, so the shell's REFUSED receipt cannot fire in room
+ play (Batch 3 §7). `OPEN`. Detail: answer `refused` keyed on `stateDigest(before) === stateDigest(after)` and
+ make the shell's receipt use the same comparison. Replay: appended no-ops are harmless; removing them changes
+@@ -545,8 +632,10 @@ files; `.git/worktrees/prefix` is a stale scratch worktree (`git worktree prune`
+ `frontend/testrun.txt` is a stale UTF-16 test-run capture (253 / 4030) proposed for deletion. `OPEN` (owner).
+ 
+ **S10-17. Message-carried facts the reducer could derive** (audit risk 4): `DeclareDividends.revenue_amount`
+-(S6-2), `LayTile.bonus_lay` (S6-6), `BuyStock.par_value` (S8-9), `PlaceHomeStation` hex (S8-6),
+-`RunMultipleRoutes` paths (S6-1). Cross-reference only.
++(S6-2 — validated against the authority since Batch 6), `LayTile.bonus_lay` (S6-6), `BuyStock.par_value`
++(S8-9), `PlaceHomeStation` hex (S8-6), `RunMultipleRoutes` paths (S6-1 — judged since Batch 6; `trains` is
++checked against the fleet slot, `revenue_seed` / `revenue_turn` remain message-carried by design, #1051 /
++#1183). Cross-reference only.
+ 
+ **S10-18. Test gaps from the audit still without a machine-level test:** sold-out rise order (S8-4), first-SR sale
+ refusal (S8-7), presidency tie (S8-2), auction escrow at the reducer (S7-4), terrain-fee-once for the
+@@ -618,7 +707,8 @@ instrument* — a fit readout rendered outside the action bar to decide whether
+ into it. Decide, then remove it either way. `OPEN`.
+ **U-17.** (sweep) `gameEngine/cityBypass.ts` #808 known debt: no control lets a corporation that *could* enter a
+ one-slot city choose to bypass it (the PRR skipping its own home to save a stop) — new UI on one waypoint. The
+-reducer half is in S6-1. `DEFERRED`.
++reducer half is done (Batch 6: a `bypass: true` waypoint is honoured wherever the rails offer a bow, shut city or
++not); only the control is missing. `DEFERRED`.
+ **U-18.** (sweep) The "reservation" vocabulary (`privateReservations.ts`, seven exported symbols across four
+ files) is a recorded misnomer; rename mechanically when nothing else is in flight. `DEFERRED` (naming only).
+ 
+@@ -663,7 +753,8 @@ files) is a recorded misnomer; rename mechanically when nothing else is in fligh
+ | (pre-pin, "legacy") | ≤ 4 | Stage 3 identity gate; Stage 4 pool destination; #1183/#1184 (one run per turn, bid minimum) | JUNO-3XD idx 224 refused (PRR run 210 → 170, re-pinned with reason); JUNO-3XD idx 255 `returned_trains` `["3"]`; JUNO-FCJ diverges from idx 95 (illegal token refused) — prefix-96 frozen as a fixture |
+ | 1 | 4.5 | pin only; semantics = post-Stage-4 | all 16 legacy logs refused by default; identical under the corpus policy |
+ | 2 | 4.6 | president's `DiscardTrain` replaces the automatic trim; limit-in-force at depot gates; §6.0 row key | JUNO-FCJ idx 474 (C&O's first 5 now allowed, then a discard); 3XD idx 255 supplied by the adapter; row key changes nothing observed |
+-| 3 | 5 (uncommitted) | derived forced-purchase obligation, forced sales, funding offers, bankruptcy → `GameEnd`, holds, D-5 / D-6 | JUNO-Z6C from idx 614 (`PassTurn` on an ended board now held); historical `EmergencyBuyHardware` entries (FCJ ×3, Z6C ×3) identical |
++| 3 | 5 (`78f8358`) | derived forced-purchase obligation, forced sales, funding offers, bankruptcy → `GameEnd`, holds, D-5 / D-6 | JUNO-Z6C from idx 614 (`PassTurn` on an ended board now held); historical `EmergencyBuyHardware` entries (FCJ ×3, Z6C ×3) identical |
++| 4 | 6 (uncommitted) | route legality and revenue judged by `routeAuthority.ts`; one run per turn; dividend amount must equal the run (C1); Run Trains not skippable past a paying route (pinned boards); `RunManualRoute` refused on pinned boards; pin copied onto the state; #1183 key relocated to the state | 14 / 17 logs gameplay-identical to version 3 (every digest changes where a run occurred: the #1183 key moved from the corporation to the state — CV4 golden re-baselined for that alone). **JUNO-FCJ from 230** (B&M's second route touches no B&M station on the log-derived board — the idx-95 token Batch 3 refused; every later B&M dividend then mismatches; cascade). **JUNO-Z6C from 418** (NYC declared $180 on a $190 run; 428 PMQ $290 / $300; 433 NNH $250 / $270 — refused as C1 mismatches; treasuries differ, the bank no longer breaks at 613; `gameHistory.test.ts` relaxed from "reaches OR 9.1"). **JUNO-3XD from 260** (PRR's run names a 4-train in slot 1 that the log-derived fleet [3, 3] does not hold — a Stage-3 queue divergence now refused rather than priced; 307 the same; the OR-7 order then swaps and B&O's 313 is identity-refused; 319 NNH's duplicate run is refused by the one-run rule and 320's $540 by C1 — `replayJuno3XD` re-pinned PRR 170 → 260, B&O 240 → 270, NNH 540 → 340 with reasons) |
+ 
+ Items above that carry "bump" must add a row here when they land. No golden or replay expectation is ever
+ re-pinned silently: the re-pin, its index and its reason go in the batch write-up and in this table.
+diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
+index 4a98e11..47e80ea 100644
+--- a/frontend/src/App.tsx
++++ b/frontend/src/App.tsx
+@@ -38,6 +38,7 @@ import HexGridRenderer, {
+   type StationPreviewMarker,
+ } from "./components/HexGridRenderer";
+ import { assignRouteSet } from "./gameEngine/routeAutoTrace";
++import { evaluateRouteSet } from "./gameEngine/routeAuthority"; // #1554: the authority's own preview
+ import {
+   cityEnteredFrom,
+   layableHexes,
+@@ -4091,6 +4092,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
+              for #850's reason -- this is a click handler the canvas holds across renders, so a closure over
+              `blocksThroughCity` would judge the board as it stood when the handler was built. */
+           blocksThrough: blocksThroughCityRef.current,
++          // #1554: the corporation drawing, so its herald is a legal start (the PRR on 1830+ / LPF).
++          forCompanyId: actingProtocolId ?? undefined,
+         });
+         if (!edit.ok) {
+           setRouteFeedback(edit.reason);
+@@ -4101,9 +4104,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
+       });
+     },
+     // mapGrid joins for #186's track check; the draft and active train are read through refs so the canvas
+-    // click prop is not rebuilt mid-draw.
++    // click prop is not rebuilt mid-draw. #1554: the acting corporation joins -- it changes between turns,
++    // never mid-draw.
+     // See docs/ai_architecture/routing_pathfinding.md - App.tsx #232
+-    [mapGrid],
++    [mapGrid, actingProtocolId],
+   );
+ 
+ /* routeHopCount is deleted: a 2-train is capped at two revenue centres, not two hexes of travel.
+@@ -4162,10 +4166,22 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
+            same question in four places and no two agreed. The sentinel was `!== 999` here and `>= 999` in
+            `routeAutoTrace`; the click path below had no sentinel at all. */
+         exceedsMaxDistance: overrunsReach(centres, train.maxDistance),
+-        // Design note #256/#264: only meaningful once there is a route.
++        /* Design note #256/#264: only meaningful once there is a route.
++           ==================================================================
++            DESIGN NOTE 1554: THE PRR's $60 THAT PAID $30 (Batch 6, the LPF playtest report)
++           ==================================================================
++           REPORTED: two 2-trains, two routes drawn, each between a $20 city and the PRR home; the game showed
++           $30. THE ROUTE THAT ENDED ON THE HERALD WAS SILENTLY DROPPED HERE. `isRouteTerminusHex` answers the
++           herald hex (H12 on 1830+ / LPF) as a terminus only for its owner (#1302), and this line asked
++           without naming one -- so a PRR route ENDING at H12 was marked `endsOffTerminus`, `runnableDrafts`
++           skipped it ("invalid drafts are skipped, not refused", #275), and `handleRunTrains` dispatched the
++           other route alone. The route STARTING at H12 was fine (the tracer judged its start with the
++           corporation). Both chips stayed drawn; one was never sent. The reducer's total was right for what
++           it received; the message was wrong about what the player ran. Asked for the acting corporation now,
++           as the tracer, the pricing above and the authority (`routeAuthority.ts`) already do. */
+         endsOffTerminus:
+           points.length >= 2 && last !== undefined
+-            ? !isRouteTerminusHex(mapGrid, last.hexLabel)
++            ? !isRouteTerminusHex(mapGrid, last.hexLabel, actingProtocolId ?? undefined)
+             : false,
+         /* A route must touch a city this corporation holds a token in - ANY token, anywhere on the run.
+            See docs/ai_architecture/routing_pathfinding.md - App.tsx #474 */
+@@ -4188,7 +4204,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
+           ),
+       };
+     });
+-  }, [ownedTrainRoster, routeDrafts, mapGrid, currentPhase, ownsAnyTrain, routeTokenHexes]);
++  }, [ownedTrainRoster, routeDrafts, mapGrid, currentPhase, ownsAnyTrain, routeTokenHexes, actingProtocolId, tableVariants]);
+ 
+   /* One overlay per drafted train, all in the corporation's colour. The hover cursor is shared by three surfaces and is deliberately not persisted.
+      See docs/ai_architecture/routing_pathfinding.md - App.tsx #373 */
+@@ -8989,6 +9005,31 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
+         path: routePointsToWaypoints(entry.points),
+       }));
+ 
++    /* ==================================================================
++        DESIGN NOTE 1554: THE AUTHORITY IS ASKED BEFORE THE DISPATCH, AND ITS SENTENCE IS SHOWN
++       ==================================================================
++       Batch 6 moved route legality into the reducer (`routeAuthority.ts`, #1550). The reducer's answer is a
++       refusal by identity, and in a room the server's `refused` frame lands in the room-error banner -- true,
++       but not where the player is looking. So the same evaluator is asked here, on the same board, and its
++       reason goes to the route panel instead. A PREVIEW, NEVER A VERDICT: the reducer asks again with the
++       authoritative state, and a draft this passes can still be refused there. */
++    const previewState = sandboxStateRef.current; // #1017: the ref, so `gameState` stays out of the deps.
++    if (turnRoutes.length > 0 && previewState && actingProtocolId !== null) {
++      const preview = evaluateRouteSet({
++        state: previewState,
++        mapGrid,
++        era: tileEraFor(previewState),
++        companyId: actingProtocolId,
++        routes: turnRoutes.map((entry) => entry.path),
++        trainIndices: turnRoutes.map((entry) => entry.trainIndex),
++        trains: turnRoutes.map((entry) => entry.train),
++      });
++      if (preview.kind === "refused") {
++        setRouteFeedback(preview.reason);
++        return;
++      }
++    }
++
+     if (turnRoutes.length > 0) {
+       await runGameplayAction("RunMultipleRoutes", {
+         RunMultipleRoutes: {
+diff --git a/frontend/src/gameEngine/gameState.ts b/frontend/src/gameEngine/gameState.ts
+index b7377d4..9f8b135 100644
+--- a/frontend/src/gameEngine/gameState.ts
++++ b/frontend/src/gameEngine/gameState.ts
+@@ -456,6 +456,11 @@ export interface GameStateResponse {
+    * SELF-SCOPING, so nothing clears it: a different turn mints a different key. That is why this is a key
+    * rather than the counter #1172 needed. */
+   last_run_turn_key?: string | null;
++  /** Design note #1551 (Batch 6): THE RULES ENGINE THIS BOARD IS A PROGRAM FOR, copied onto the state by the
++   *  `SetupGame` arm from the message the server stamped (#1520). Absent on a board dealt from a legacy
++   *  (unpinned) log -- #232's "the log does not say" -- which is the one population the legacy
++   *  `RunManualRoute` arm still serves; a pinned board refuses that message (`applySandboxActionCore`). */
++  rules_engine_version?: number | null;
+   /** Design note #1314: TRAINS TRADED IN FOR A DIESEL AND BACK IN THE BANK'S DEPOT (Project 18XX+). RULED:
+    *  "the traded-in train is not removed from the game. It must be returned to the Bank's Supply Depot, where
+    *  it becomes available for any corporation to purchase at face value (provided it hasn't rusted)." One
+diff --git a/frontend/src/gameEngine/index.ts b/frontend/src/gameEngine/index.ts
+index d346002..2d30db0 100644
+--- a/frontend/src/gameEngine/index.ts
++++ b/frontend/src/gameEngine/index.ts
+@@ -152,3 +152,15 @@ export {
+   type EmergencyFunding,
+   type LegalForcedSale,
+ } from "./emergencyFunding";
++/* #1550: route authority -- the one evaluator of what a corporation's trains may run and what it is worth. */
++export {
++  evaluateRouteSet,
++  routeSetRefusal,
++  routeSkipRefusal,
++  dividendAmountRefusal,
++  trainCapacityFor,
++  type AuthoritativeRun,
++  type RouteSetVerdict,
++  type RouteSetInput,
++  type ProposedWaypoint,
++} from "./routeAuthority";
+diff --git a/frontend/src/gameEngine/messageSchema.ts b/frontend/src/gameEngine/messageSchema.ts
+index 9f7a68e..b09d758 100644
+--- a/frontend/src/gameEngine/messageSchema.ts
++++ b/frontend/src/gameEngine/messageSchema.ts
+@@ -66,6 +66,10 @@ type FieldKind =
+   | "int|null"
+   | "array"
+   | "object"
++  | "waypoints"
++  | "routes"
++  | "ints"
++  | "strings"
+   | `enum:${string}`;
+ 
+ type FieldSpec = FieldKind | `${FieldKind}?`;
+@@ -73,6 +77,25 @@ type FieldSpec = FieldKind | `${FieldKind}?`;
+ /** `Record<string, never>` on the wire: a body that must be an object and carries nothing this file names. */
+ const EMPTY: Readonly<Record<string, FieldSpec>> = {};
+ 
++/** #1553: transport sanity bounds on a run (see the `routes` arm below). Not rules. */
++export const MAX_ROUTES_PER_RUN = 64;
++export const MAX_WAYPOINTS_PER_ROUTE = 512;
++
++function waypointsComplaint(value: unknown): string | null {
++  if (!Array.isArray(value)) return "must be an array of waypoints";
++  if (value.length > MAX_WAYPOINTS_PER_ROUTE) return `has a route of more than ${MAX_WAYPOINTS_PER_ROUTE} waypoints`;
++  for (const waypoint of value) {
++    if (typeof waypoint !== "object" || waypoint === null || Array.isArray(waypoint)) {
++      return "has a waypoint that is not an object";
++    }
++    const { hex, city_node, bypass } = waypoint as { hex?: unknown; city_node?: unknown; bypass?: unknown };
++    if (typeof hex !== "string" || hex.length === 0 || hex.length > 16) return "has a waypoint with no hex label";
++    if (city_node !== undefined && !Number.isInteger(city_node)) return "has a waypoint whose city_node is not a whole number";
++    if (bypass !== undefined && typeof bypass !== "boolean") return "has a waypoint whose bypass is not true or false";
++  }
++  return null;
++}
++
+ function checkField(value: unknown, spec: FieldSpec): string | null {
+   const optional = spec.endsWith("?");
+   const kind = (optional ? spec.slice(0, -1) : spec) as FieldKind;
+@@ -104,6 +127,35 @@ function checkField(value: unknown, spec: FieldSpec): string | null {
+       return typeof value === "object" && value !== null && !Array.isArray(value)
+         ? null
+         : "must be an object";
++    /* ==================================================================
++        DESIGN NOTE 1553: A ROUTE'S SHAPE, AT THE DOOR -- ITS LEGALITY, IN THE REDUCER (Batch 6)
++       ==================================================================
++       `routes` was declared "array", which admitted `[[1, 2], "x", null]` and let the reducer discover the
++       shape by throwing. The element shape is protocol (`RouteWaypointDto`: `hex` string, optional integer
++       `city_node`, optional `bypass`), so it is checked here; whether the hexes exist, connect, or may be run
++       is 1830 and stays `routeAuthority.ts`'s. THE ONE BOUND IS A TRANSPORT SANITY LIMIT, NOT A RULE: no
++       corporation owns more than a handful of trains and no board has more than about a hundred hexes, so a
++       frame with 64 routes or a 512-waypoint route is not a move anybody made -- refused so the reducer's walk
++       is never asked to price a megabyte. The real limits (trains owned, the board) are the reducer's. */
++    case "waypoints":
++      return waypointsComplaint(value);
++    case "routes": {
++      if (!Array.isArray(value)) return "must be an array of routes";
++      if (value.length > MAX_ROUTES_PER_RUN) return `lists more than ${MAX_ROUTES_PER_RUN} routes`;
++      for (const route of value) {
++        const complaint = waypointsComplaint(route);
++        if (complaint !== null) return complaint;
++      }
++      return null;
++    }
++    case "ints":
++      return Array.isArray(value) && value.every((entry) => Number.isInteger(entry))
++        ? null
++        : "must be an array of whole numbers";
++    case "strings":
++      return Array.isArray(value) && value.every((entry) => typeof entry === "string")
++        ? null
++        : "must be an array of strings";
+     default:
+       /* An unreachable arm (#788) written as a real failure rather than a silent pass: a kind added to the
+          union and forgotten here must refuse, not admit. */
+@@ -152,13 +204,16 @@ export const GAMEPLAY_MESSAGE_SCHEMA: Readonly<Record<string, Readonly<Record<st
+   RunManualRoute: {
+     game_id: "int?",
+     protocol_id: "int",
+-    path: "array",
++    path: "waypoints",
+     payout_strategy: "enum:DeclareDividends|Withhold",
+   },
++  // #1553: the element shapes are protocol; `trains` / `train_indices` were undeclared (see the header).
+   RunMultipleRoutes: {
+     game_id: "int?",
+     protocol_id: "int",
+-    routes: "array",
++    routes: "routes",
++    trains: "strings?",
++    train_indices: "ints?",
+     revenue_seed: "finite?",
+     revenue_turn: "string?",
+     payout_strategy: "enum:DeclareDividends|Withhold?",
+diff --git a/frontend/src/gameEngine/replayLog.ts b/frontend/src/gameEngine/replayLog.ts
+index 802fe5d..84d1ebc 100644
+--- a/frontend/src/gameEngine/replayLog.ts
++++ b/frontend/src/gameEngine/replayLog.ts
+@@ -276,6 +276,9 @@ export type ReplayObserver = (event: {
+   msg: GameplayExecuteMsg;
+   /** The state the reducer is about to be handed -- after the grid and chart moved, before the arm ran. */
+   stateBefore: GameStateResponse;
++  /** Batch 6: the grid the reducer is handed with it, so an observer can ask the route authority the same
++   *  question the arm is about to be asked. */
++  grid: MapGridResponse;
+ }) => void;
+ 
+ 
+@@ -427,7 +430,7 @@ export class RoomEngine {
+   /* #1191: observed HERE -- after the this.grid and the chart have moved, before the arm runs -- because that
+      is precisely the this.state the reducer is judged on. Observing earlier would report a board the reducer
+      never saw. */
+-  observe?.({ entry, msg, stateBefore: this.state });
++  observe?.({ entry, msg, stateBefore: this.state, grid: this.grid });
+ 
+   this.state = applySandboxAction(this.state, msg, {
+     ...this.providers.chartInjections(this.state),
+diff --git a/frontend/src/gameEngine/routeAuthority.ts b/frontend/src/gameEngine/routeAuthority.ts
+new file mode 100644
+index 0000000..c659233
+--- /dev/null
++++ b/frontend/src/gameEngine/routeAuthority.ts
+@@ -0,0 +1,558 @@
++// frontend/src/gameEngine/routeAuthority.ts
++//
++// The authoritative route evaluator: what a corporation's trains may run, and what the run is worth.
++//
++// ==================================================================
++//  DESIGN NOTE 1550: THE REDUCER PRICED ROUTES AND NEVER JUDGED THEM
++// ==================================================================
++//
++// AUDIT C2 (Batch 6). Until this batch the `RunMultipleRoutes` arm took whatever waypoint lists the message
++// carried, priced them with `sandboxRouteBreakdown`, and wrote the sum into `last_route_revenue`. Every rule of
++// rulebook §6.4 / §6.4.2 -- a station on the route, the train's number, continuity, no reversal at a junction, no
++// crossover change, no track reused within or between the corporation's trains, full cities not run through,
++// red areas terminal only, each train once, no more runs than trains -- lived in the UI (`runTrainsRules.ts`,
++// `routeWaypoints.ts`, `routeConnection.ts`, `routeDraftEdit.ts`, the auto-tracer). A hand-built message went
++// through all of it and was paid.
++//
++// THIS MODULE IS THE ONE JUDGE. `evaluateRouteSet` consumes authoritative state (the fleet, the tokens, every
++// corporation's tokens for blocking, the licence), the board (`mapGrid` + the board in effect), the era and the
++// message's proposed geometry, and answers either a legal route set with authoritative per-train revenues and
++// the total, or one specific refusal. The reducer asks it before the arm (`applySandboxActionCore`) and the arm
++// prices from its answer; the socket asks it at ingress (`turnAuthority`) so a hostile client is told why. The UI
++// may call it for a preview, and a UI verdict is never authority.
++//
++// NOTHING HERE IS A SECOND NETWORK MODEL. Every geometric question is put to the primitives the auto-tracer,
++// the network walk and the pricing already share: `traversalsFrom` / `neighbourAcross` / `segmentsTouchingEdge`
++// (`trackSegments.ts`, the rail-level model of #0/#669/#731), `stopEnteredFrom` / `cityForArrival`
++// (`trackReach.ts`, #1022/#1319), `cityBlockerFor` (`cityBlocking.ts`, #729), `stationTokensOf` (#686/#1302),
++// `sandboxRouteBreakdown` / `isRouteTerminusHex` (`sandboxSession.ts`, #1318/#737/#1302). A submitted path is
++// re-walked through those exact functions; what the walk cannot reproduce, the route did not do.
++//
++// ------------------------------------------------------------------
++//  THE RULES, AS VERIFIED AGAINST THE 2018 LOOKOUT 1830-RE RULEBOOK (Batch 6, Part 1)
++// ------------------------------------------------------------------
++//
++//   §6.4    each train owned may run once; "trains may not be combined or double headed"; a train bought this
++//           turn does not run (step order).
++//   §6.4.1  the train's number is the maximum number of cities on its route; "city" means a large city, a small
++//           city or an off-board red area; a route includes every city it runs through or to and may not skip
++//           one; a shorter route is allowed; a route needs at least two cities; a Diesel has no maximum.
++//   §6.4.2  a route is a continuous segment of track including at least one city with one of the railroad's
++//           stations; it may not reverse at a junction, change track at a crossover, use the same section of
++//           track more than once, or include the same city more than once (different cities of one hex are
++//           different cities); it may not pass through a red off-board area (start/end only) or through a large
++//           city whose circles are all filled with other railroads' stations (§6.3.3 -- start/end is fine, and
++//           an empty circle or one's own station lets any train through); two or more trains of one railroad
++//           may not use the same track, but may meet or cross at cities and use two separate tracks in one hex.
++//   §6.5    revenue is the sum of the values of the cities on the route; the railroad's revenue is the sum of
++//           its trains' runs; off-board values switch at the first 5-train (`offboardValueForEra`).
++//
++// DISCREPANCY FLAGGED, NOT DECIDED HERE (owner ruling owed; ledger D-15 / S6-10). The rulebook lets a route begin
++// or end at a small city ("city" includes small cities). This codebase has never allowed a route to END on a
++// town (`isRouteTerminusHex`, auto-tracer design note #3) and the owner ruled #1286 with the words "unlike small
++// towns the warehouses are also valid termini". The evaluator keeps that ruling -- `isRouteTerminusHex` is the
++// single predicate, so reversing it is one line here and one in the tracer -- because loosening it in the
++// authority alone would let the reducer accept runs the tracer, the obligation gate (`hasLegalRouteFor`, Batch 4)
++// and the auto-skip cannot see, and the forced-purchase rules are out of this batch's scope.
++//
++// OWNER VARIANTS PRESERVED, NOT AUDITED (S6-4, Stage 9): the PRR herald (#1302) is a station root, a revenue
++// centre and a terminus for its owner only, and its owner may cross it uncounted (`bypass: true`); Coal River is
++// barred without a Kanawha Licence (#1323); LPF warehouses are red areas a route may run through (#1320).
++
++import type { GameStateResponse } from "./gameState";
++import type { GameplayExecuteMsg } from "../utils/sessionKey";
++import type { MapGridResponse } from "../components/hexContractTypes";
++import { tokenCityIndex, type StationTokenCompany } from "../components/hexContractTypes";
++import type { TileColorTier } from "../components/hexTileCatalog";
++import { HEX_NEIGHBOR_OFFSETS, liveEdgesForHex } from "../components/hexGeometry";
++import { boardMemo, heraldAt } from "../components/hexBoardData";
++import {
++  isOffboardTerminal,
++  neighbourAcross,
++  segmentsTouchingEdge,
++  traversalsFrom,
++  type HexTraversal,
++  type SegmentKey,
++} from "./trackSegments";
++import { cityForArrival, stationTokensOf, stopEnteredFrom, type StationToken } from "./trackReach";
++import { cityBlockerFor } from "./cityBlocking";
++import { citySlotCount } from "./stationTokens";
++import { barredHexesFor } from "./kanawhaLicense";
++import { isRevenueCentreHex, isRouteTerminusHex, sandboxRouteBreakdown } from "./sandboxSession";
++import { MOCK_TRAIN_CATALOG } from "./mockFixtures";
++import { isUnlimitedReach } from "./trainReach";
++import { tileEraFor } from "./gameConstants";
++import { operatingCorporationId } from "./dividendGate";
++import { maxRouteRevenueFor } from "./derivedActions";
++
++/** One stop of a proposed route, exactly as `RunMultipleRoutes.routes[i][j]` carries it. */
++export interface ProposedWaypoint {
++  hex: string;
++  city_node?: number;
++  bypass?: boolean;
++}
++
++/** What the reducer needs to know about one legal run. */
++export interface AuthoritativeRun {
++  /** Position in `owned_trains` -- the train's identity (#275/#1031). */
++  trainIndex: number;
++  /** The model in that slot, read from the fleet, never from the message. */
++  model: string;
++  /** The route as the authority will price it: the message's waypoints with `bypass` normalised to the way
++   *  through the hex actually offers. Byte-identical to the input for every route that told the truth. */
++  path: ProposedWaypoint[];
++  /** Printed revenue of this run (rulebook §6.5; before any owner-variant die). */
++  revenue: number;
++  /** Cities counted against the train's number. */
++  centres: number;
++  /** Every section of track the run occupies -- what a second train must keep off. */
++  segments: ReadonlySet<SegmentKey>;
++}
++
++export type RouteSetVerdict =
++  | { kind: "legal"; runs: AuthoritativeRun[]; total: number }
++  | { kind: "refused"; reason: string; route?: number };
++
++export interface RouteSetInput {
++  state: GameStateResponse;
++  mapGrid: MapGridResponse;
++  /** The tile era for off-board values; `tileEraFor(state)` when the caller has no better snapshot. */
++  era?: TileColorTier;
++  companyId: number;
++  routes: ReadonlyArray<ReadonlyArray<ProposedWaypoint>>;
++  /** `RunMultipleRoutes.train_indices` -- which fleet slot runs `routes[i]`. Optional for logs written before
++   *  #1031; then the authority pairs routes to trains itself (see `assignTrains`). */
++  trainIndices?: ReadonlyArray<number> | null;
++  /** `RunMultipleRoutes.trains` -- the models the client claims; must agree with the fleet when present. */
++  trains?: ReadonlyArray<string> | null;
++}
++
++const coordsByLabel = boardMemo(
++  (board): ReadonlyMap<string, { q: number; r: number }> =>
++    new Map(board.hexes.map((hex) => [hex.label, { q: hex.q, r: hex.r }])),
++);
++
++const labelByCoord = boardMemo(
++  (board): ReadonlyMap<string, string> => new Map(board.hexes.map((hex) => [`${hex.q},${hex.r}`, hex.label])),
++);
++
++/** The edge of `from` facing `to`, or `-1` when they are not neighbours. */
++function edgeToward(from: { q: number; r: number }, to: { q: number; r: number }): number {
++  return HEX_NEIGHBOR_OFFSETS.findIndex(([dq, dr]) => from.q + dq === to.q && from.r + dr === to.r);
++}
++
++/** The train's number, from the catalog; `null` for a model the catalog does not know. */
++export function trainCapacityFor(model: string): number | null {
++  const entry = MOCK_TRAIN_CATALOG.find((train) => train.modelType === model);
++  return entry ? entry.maxDistance : null;
++}
++
++interface WalkedWaypoint {
++  q: number;
++  r: number;
++  label: string;
++  /** The stop (city / town) this waypoint stands in, by the rail it uses; `null` on plain track. */
++  stop: number | null;
++  bypass: boolean;
++}
++
++/** One route, judged alone. Returns the run without a train attached, or the sentence that refuses it. */
++function walkRoute(
++  input: RouteSetInput & { era: TileColorTier },
++  path: ReadonlyArray<ProposedWaypoint>,
++  tokens: ReadonlyArray<StationToken>,
++  blocksThrough: (q: number, r: number, cityIndex: number) => boolean,
++): { path: ProposedWaypoint[]; revenue: number; centres: number; segments: Set<SegmentKey> } | string {
++  const { mapGrid, companyId } = input;
++  if (path.length < 2) return "A route needs at least two stops.";
++
++  /* 1. EVERY WAYPOINT IS A HEX OF THIS BOARD, with fields of the declared shape. */
++  const points: Array<{ q: number; r: number; label: string; wp: ProposedWaypoint }> = [];
++  for (const wp of path) {
++    if (typeof wp !== "object" || wp === null || typeof wp.hex !== "string") return "A waypoint must name a hex.";
++    const at = coordsByLabel().get(wp.hex);
++    if (!at) return `${wp.hex} is not a hex on this board.`;
++    if (wp.city_node !== undefined && (!Number.isInteger(wp.city_node) || wp.city_node < 0 || wp.city_node > 1)) {
++      return `${wp.hex} names a city (${String(wp.city_node)}) that no hex has.`;
++    }
++    if (wp.bypass !== undefined && wp.bypass !== true) return `${wp.hex} carries a bypass flag that is not true.`;
++    points.push({ q: at.q, r: at.r, label: wp.hex, wp });
++  }
++
++  /* 2. CONTINUOUS TRACK: each step crosses an edge both hexes carry rail to (`neighbourAcross`, the two-sided
++        join of trackReach #1), and inside every interior hex an authored rail joins the way in to the way out
++        (`traversalsFrom`). A reversal at a junction, a change of track at a crossover, a hop between two
++        unconnected curves of one tile and a run through a red area all fail the same test: no rail does that. */
++  const segments = new Set<SegmentKey>();
++  const walked: WalkedWaypoint[] = [];
++  const normalised: ProposedWaypoint[] = [];
++  const claim = (keys: readonly SegmentKey[], where: string): string | null => {
++    for (const key of keys) {
++      if (segments.has(key)) return `The route uses the same section of track twice at ${where}.`;
++      segments.add(key);
++    }
++    return null;
++  };
++
++  for (let i = 0; i < points.length; i += 1) {
++    const here = points[i];
++    const previous = points[i - 1];
++    const next = points[i + 1];
++    const entry = previous ? edgeToward(here, previous) : -1;
++    const exit = next ? edgeToward(here, next) : -1;
++    if (previous && entry < 0) return `${previous.label} and ${here.label} are not adjacent.`;
++    if (next) {
++      if (exit < 0) return `${here.label} and ${next.label} are not adjacent.`;
++      const across = neighbourAcross(mapGrid, here.q, here.r, exit);
++      if (!across || across.q !== next.q || across.r !== next.r) {
++        return `No track joins ${here.label} to ${next.label}.`;
++      }
++    }
++
++    const heraldOwner = heraldAt(here.label)?.companyId === companyId;
++    let bypass = false;
++    let stop: number | null;
++
++    if (previous && next) {
++      // An interior hex: a transit.
++      if (isOffboardTerminal(here.q, here.r)) {
++        return `${here.label} is a red off-board area, so a route may start or end there but not run through it.`;
++      }
++      const ways = traversalsFrom(mapGrid, here.q, here.r, entry).filter((way) => way.exitEdge === exit);
++      if (ways.length === 0) {
++        return `No rail through ${here.label} joins the way in (from ${previous.label}) to the way out (to ${next.label}) -- a route may not reverse at a junction or change track at a crossover.`;
++      }
++      const wantsBypass = here.wp.bypass === true;
++      let way: HexTraversal | undefined;
++      if (wantsBypass) {
++        way = ways.find((candidate) => candidate.bypass === true);
++        /* #1302: the owner may cross its herald without counting it; the transit is the ordinary one. */
++        if (!way && heraldOwner) way = ways.find((candidate) => candidate.bypass !== true) ?? ways[0];
++        if (!way) return `${here.label} has no track that goes around its revenue centre, so it cannot be bypassed.`;
++        bypass = true;
++      } else {
++        way = ways.find((candidate) => candidate.bypass !== true);
++        if (!way) {
++          /* THE ONLY WAY THROUGH MISSES THE CENTRE, and the message did not say so: normalised to the truth so
++             a route cannot be paid for a city its rails never touched. */
++          way = ways[0];
++          bypass = true;
++        }
++      }
++      /* 3. NO CITY RUN THROUGH WHEN IT IS FULL OF OTHERS (§6.3.3 / §6.4.2) -- judged on the circle the arrival
++            rail actually enters (#1022), and on a barred hex with any circle (#1323). A bypass does not enter. */
++      if (!bypass) {
++        const city = cityForArrival(mapGrid, here.q, here.r, entry);
++        const shut = city === null ? blocksThrough(here.q, here.r, 0) : blocksThrough(here.q, here.r, city);
++        if (shut) {
++          return `${here.label} is tokened out by other corporations, so a train may end its run there but not pass through.`;
++        }
++      }
++      const clash = claim(way.segments, here.label);
++      if (clash) return clash;
++      stop = bypass ? null : stopEnteredFrom(mapGrid, here, previous);
++    } else {
++      // An endpoint: the run starts or stops inside this hex and holds only the rail it uses.
++      if (here.wp.bypass === true) return `${here.label} is where the route ends, so it cannot be bypassed.`;
++      const only = previous ? entry : exit;
++      if (!liveEdgesForHex(mapGrid, here.q, here.r).includes(only)) {
++        return `No track joins ${here.label} to ${(previous ?? next)!.label}.`;
++      }
++      const clash = claim(segmentsTouchingEdge(mapGrid, here.q, here.r, only), here.label);
++      if (clash) return clash;
++      stop = stopEnteredFrom(mapGrid, here, (previous ?? next)!);
++      /* 4. A ROUTE BEGINS AND ENDS AT A CITY OR RED AREA (the owner's terminus rule -- see the module note). */
++      if (!isRouteTerminusHex(mapGrid, here.label, companyId)) {
++        return `${here.label} cannot ${previous ? "end" : "start"} a route: a route runs between cities or red off-board areas.`;
++      }
++    }
++
++    /* 5. A NAMED CITY MUST BE THE ONE THE RAIL ENTERS. `city_node` is a claim about which circle of a two-city
++          hex the stop is in; the rail already says, and a claim that disagrees would re-key the pricing's
++          per-city dedupe (#1318) so one city could be paid twice. */
++    if (here.wp.city_node !== undefined && stop !== here.wp.city_node) {
++      return `${here.label}: the route's track does not enter city ${here.wp.city_node}.`;
++    }
++
++    walked.push({ q: here.q, r: here.r, label: here.label, stop, bypass });
++    const copy: ProposedWaypoint = { hex: here.label };
++    if (here.wp.city_node !== undefined) copy.city_node = here.wp.city_node;
++    if (bypass) copy.bypass = true;
++    normalised.push(copy);
++  }
++
++  /* 6. NO CITY TWICE. Keyed exactly as the pricing keys its dedupe -- the stop the rail enters (#1318/#1319) --
++        so a second visit to the same circle is refused rather than silently paid once. The other city of the
++        same hex is a different key and is allowed (§6.4.2). Plain track carries no stop and may be crossed again
++        on other rails; the track rule above is what bounds that. */
++  const visited = new Set<string>();
++  for (const point of walked) {
++    if (point.bypass) continue;
++    if (!isRevenueCentreHex(mapGrid, point.label, companyId)) continue;
++    const key = `${point.label}:${point.stop ?? 0}`;
++    if (visited.has(key)) return `The route counts ${point.label} twice; a city may be on a route only once.`;
++    visited.add(key);
++  }
++
++  /* 7. A STATION OF THIS CORPORATION ON THE ROUTE -- in the city the route actually passes through (#853),
++        anywhere along it (#474). A token recorded without a circle stands for the hex (#686's fallback); the
++        herald root (#1302) is `[q, r]` and counts for its owner. */
++  const hasStation = walked.some((point) => {
++    const match = tokens.find(([q, r]) => q === point.q && r === point.r);
++    if (!match) return false;
++    if (match.length < 3) return true;
++    if (point.bypass) return false;
++    return point.stop === null || point.stop === match[2];
++  });
++  if (!hasStation) {
++    return tokens.length === 0
++      ? "This corporation has no station token on the board, so it has no route."
++      : "A route must pass through a city this corporation has a station token in.";
++  }
++
++  /* 8. PRICE AND COUNT, through the one pricing function the tracer and the readout share. */
++  const breakdown = sandboxRouteBreakdown(mapGrid, normalised, input.era, companyId);
++  if (breakdown.centres < 2) return "A route must include at least two cities.";
++  return { path: normalised, revenue: breakdown.revenue, centres: breakdown.centres, segments };
++}
++
++/** Pairs routes to fleet slots when the message did not (logs written before #1031). Largest route to the
++ *  largest train: if that pairing does not fit, none does. */
++function assignTrains(
++  fleet: readonly string[],
++  centres: readonly number[],
++): number[] | string {
++  const trains = fleet
++    .map((model, index) => ({ index, capacity: trainCapacityFor(model) }))
++    .filter((train): train is { index: number; capacity: number } => train.capacity !== null)
++    .sort((a, b) => b.capacity - a.capacity);
++  const routes = centres.map((count, index) => ({ index, count })).sort((a, b) => b.count - a.count);
++  const assigned: number[] = new Array(centres.length).fill(-1);
++  for (let at = 0; at < routes.length; at += 1) {
++    const train = trains[at];
++    if (!train) return "The corporation has fewer trains than routes.";
++    if (!isUnlimitedReach(train.capacity) && routes[at].count > train.capacity) {
++      return `A route with ${routes[at].count} stops has no train that can run it.`;
++    }
++    assigned[routes[at].index] = train.index;
++  }
++  return assigned;
++}
++
++/** THE EVALUATOR. Judges the whole set: the trains named, each route, and the routes together. */
++export function evaluateRouteSet(input: RouteSetInput): RouteSetVerdict {
++  const { state, mapGrid, companyId, routes } = input;
++  const era = input.era ?? tileEraFor(state);
++  const company = state.public_companies.find((entry) => entry.company_id === companyId);
++  if (!company) return { kind: "refused", reason: `No corporation #${companyId} is on this board.` };
++  const fleet = company.owned_trains;
++  if (fleet == null) return { kind: "refused", reason: `${company.ticker}'s fleet is not on the board, so nothing can run.` };
++  if (!Array.isArray(routes) || routes.length === 0) {
++    return { kind: "refused", reason: "A run must declare at least one route." };
++  }
++  if (routes.length > fleet.length) {
++    return {
++      kind: "refused",
++      reason: `${company.ticker} owns ${fleet.length} train${fleet.length === 1 ? "" : "s"} and declared ${routes.length} routes; each train runs once.`,
++    };
++  }
++  if (!company.station_token_hexes) {
++    return { kind: "refused", reason: `${company.ticker}'s stations are not on the board, so nothing can run.` };
++  }
++
++  /* WHICH TRAIN RUNS WHICH ROUTE. Named by the message (#1031) and checked against the fleet, or paired here. */
++  let indices: number[];
++  const named = input.trainIndices ?? null;
++  if (named !== null) {
++    if (named.length !== routes.length) {
++      return { kind: "refused", reason: "The run names a different number of trains than routes." };
++    }
++    const seen = new Set<number>();
++    for (const index of named) {
++      if (!Number.isInteger(index) || index < 0 || index >= fleet.length) {
++        return { kind: "refused", reason: `${company.ticker} has no train in slot ${String(index)}.` };
++      }
++      if (seen.has(index)) {
++        return { kind: "refused", reason: `Train ${fleet[index]} (slot ${index}) is named for two routes; each train runs once.` };
++      }
++      seen.add(index);
++    }
++    indices = [...named];
++  } else {
++    indices = [];
++  }
++  const claimed = input.trains ?? null;
++  if (claimed !== null && named !== null) {
++    if (claimed.length !== routes.length) {
++      return { kind: "refused", reason: "The run names a different number of train models than routes." };
++    }
++    for (let i = 0; i < routes.length; i += 1) {
++      if (claimed[i] !== fleet[indices[i]]) {
++        return {
++          kind: "refused",
++          reason: `Slot ${indices[i]} holds a ${fleet[indices[i]]}-train, not the ${claimed[i]} the run claims.`,
++        };
++      }
++    }
++  }
++
++  const tokens = stationTokensOf({ ...company, company_id: company.company_id });
++  const blocksThrough = cityBlockerFor({
++    actingCompanyId: companyId,
++    companies: state.public_companies,
++    slotsAt: (q, r, cityIndex) => citySlotCount(mapGrid, q, r, cityIndex),
++    cityOf: (holder, q, r) => tokenCityIndex(holder as unknown as StationTokenCompany, q, r),
++    barredHexes: barredHexesFor(state, companyId),
++  });
++
++  const walkedRoutes: Array<{ path: ProposedWaypoint[]; revenue: number; centres: number; segments: Set<SegmentKey> }> = [];
++  for (let i = 0; i < routes.length; i += 1) {
++    const verdict = walkRoute({ ...input, era }, routes[i], tokens, blocksThrough);
++    if (typeof verdict === "string") return { kind: "refused", reason: `Route ${i + 1}: ${verdict}`, route: i };
++    walkedRoutes.push(verdict);
++  }
++
++  if (named === null) {
++    const paired = assignTrains(fleet, walkedRoutes.map((route) => route.centres));
++    if (typeof paired === "string") return { kind: "refused", reason: paired };
++    indices = paired;
++  }
++
++  /* THE TRAIN'S NUMBER (§6.4.1), from the slot's model and nothing the message says. */
++  const runs: AuthoritativeRun[] = [];
++  for (let i = 0; i < routes.length; i += 1) {
++    const model = fleet[indices[i]];
++    const capacity = trainCapacityFor(model);
++    if (capacity === null) {
++      return { kind: "refused", reason: `Slot ${indices[i]} holds a ${model}-train, which no catalog prices.`, route: i };
++    }
++    const { centres } = walkedRoutes[i];
++    if (!isUnlimitedReach(capacity) && centres > capacity) {
++      return {
++        kind: "refused",
++        reason: `Route ${i + 1} counts ${centres} cities, more than a ${model}-train's ${capacity}.`,
++        route: i,
++      };
++    }
++    runs.push({
++      trainIndex: indices[i],
++      model,
++      path: walkedRoutes[i].path,
++      revenue: walkedRoutes[i].revenue,
++      centres,
++      segments: walkedRoutes[i].segments,
++    });
++  }
++
++  /* THE SET TOGETHER (§6.4.2): no two of the corporation's trains on one section of track. Cities and hexes may
++     be shared -- a city is a node and a hex may carry two separate tracks -- and both fall out of the segment
++     model (#669/#731): only a shared rail stub or a shared hex edge is a shared section of track. */
++  const occupied = new Map<SegmentKey, number>();
++  for (let i = 0; i < runs.length; i += 1) {
++    let clash: { key: SegmentKey; other: number } | null = null;
++    runs[i].segments.forEach((key) => {
++      const other = occupied.get(key);
++      if (other !== undefined && clash === null) clash = { key, other };
++      occupied.set(key, i);
++    });
++    if (clash !== null) {
++      const { key, other } = clash as { key: SegmentKey; other: number };
++      const hex = key.split("#")[0].split("~")[0];
++      const label = labelByCoord().get(hex) ?? hex;
++      return {
++        kind: "refused",
++        reason: `Routes ${other + 1} and ${i + 1} both use the track at ${label}; two of a corporation's trains may share a city but never a section of track.`,
++        route: i,
++      };
++    }
++  }
++
++  return { kind: "legal", runs, total: runs.reduce((sum, run) => sum + run.revenue, 0) };
++}
++
++/* ------------------------------------------------------------------ */
++/* The reducer's and the socket's questions                           */
++/* ------------------------------------------------------------------ */
++
++/** Why this `RunMultipleRoutes` may not be applied, or `null` when it may.
++ *
++ *  ASKED IN TWO PLACES, deliberately (the #1530/#1540 shape): at ingress, so the submitter hears the sentence,
++ *  and in `applySandboxActionCore`, so a message that reaches the reducer by any other road is a no-op. Without
++ *  a grid the geometry cannot be judged and, on #757's rule, the gate has no opinion -- every live path has a
++ *  grid, and a fixture without one is exercising another rule. */
++export function routeSetRefusal(
++  state: GameStateResponse,
++  msg: { protocol_id: number; routes: ReadonlyArray<ReadonlyArray<ProposedWaypoint>>; trains?: ReadonlyArray<string>; train_indices?: ReadonlyArray<number> },
++  mapGrid: MapGridResponse | undefined,
++  era?: TileColorTier,
++): string | null {
++  const company = state.public_companies.find((entry) => entry.company_id === msg.protocol_id);
++  /* ONE RUN PER TURN, judged on the board rather than on the message's own key (#1183 keeps the key for the
++     undo case). `routes_run_this_turn` is turn-scoped (#777), so a second run in one turn is a duplicate
++     whatever key it carries -- and a duplicate paid twice is the JUNO-3XD 318/319 case (S6-2). */
++  if (company && (company.routes_run_this_turn ?? 0) > 0) {
++    return `${company.ticker} has already run its trains this turn.`;
++  }
++  /* AT THE RUN TRAINS STEP. A run at another step would end the turn's track and token steps on the strength
++     of a message sent out of order; an unknown cursor is let through on the gate family's rule (#232). */
++  if (state.operating_sub_phase !== undefined && state.operating_sub_phase !== "Routes") {
++    return "Trains run at the Run Trains step.";
++  }
++  if (mapGrid === undefined) return null;
++  const verdict = evaluateRouteSet({
++    state,
++    mapGrid,
++    era,
++    companyId: msg.protocol_id,
++    routes: msg.routes,
++    trainIndices: msg.train_indices ?? null,
++    trains: msg.trains ?? null,
++  });
++  return verdict.kind === "refused" ? verdict.reason : null;
++}
++
++/** AUDIT C1 (S6-2): the dividend pays what the trains ran. `revenue_amount` is kept on the wire for narration
++ *  and replay of logs written before this note, and must now agree with `last_route_revenue` to the dollar.
++ *  An absent amount (a log from before #752) is judged by `dividendRevenue`'s fallback, which reads the same
++ *  field. The forced $0 withhold (#1275) is derived from a board whose field is "0", so it agrees by
++ *  construction. */
++export function dividendAmountRefusal(
++  state: GameStateResponse,
++  msg: { protocol_id: number; revenue_amount?: string | null },
++): string | null {
++  const company = state.public_companies.find((entry) => entry.company_id === msg.protocol_id);
++  if (!company) return null;
++  const stated = msg.revenue_amount;
++  if (stated === undefined || stated === null || stated === "") return null;
++  const declared = Number(stated);
++  const earned = Number(company.last_route_revenue ?? 0) || 0;
++  if (!Number.isFinite(declared) || declared !== earned) {
++    return `${company.ticker} ran $${earned} this turn; a dividend declaration of $${String(stated)} does not match it.`;
++  }
++  return null;
++}
++
++/** RUN TRAINS MAY NOT BE SKIPPED WHILE A PAYING ROUTE EXISTS (rulebook §6.4: "the combination of routes with the
++ *  highest revenue should be chosen" -- a railroad with a train and a route runs; §6.5: only a railroad with
++ *  no train or no route has no revenue). `routeStep.ts` has held this rule in the shell since #414 as the
++ *  obligation behind the Skip button; this is the same question asked of the authority, on the same search the
++ *  auto-skip already runs (`maxRouteRevenueFor`), so the server never generates a skip this refuses. Which
++ *  route, and whether it is the best one, stays the president's (S6-3, deferred). Without a grid: no opinion
++ *  (#757). */
++export function routeSkipRefusal(
++  state: GameStateResponse,
++  msg: GameplayExecuteMsg,
++  mapGrid: MapGridResponse | undefined,
++): string | null {
++  if (!("AdvanceOperatingSubPhase" in msg) && !("PassTurn" in msg)) return null;
++  if (mapGrid === undefined) return null;
++  if (state.current_round_type !== "OperatingRound" || state.operating_sub_phase !== "Routes") return null;
++  const companyId = operatingCorporationId(state);
++  if (companyId === null) return null;
++  const company = state.public_companies.find((entry) => entry.company_id === companyId);
++  if (!company || (company.owned_trains?.length ?? 0) === 0) return null;
++  if ((company.routes_run_this_turn ?? 0) > 0) return null;
++  const best = maxRouteRevenueFor(state, companyId, mapGrid);
++  if (best === null || best <= 0) return null;
++  return `${company.ticker} has a route it can run (worth up to $${best}), so it must run before its turn moves on.`;
++}
+diff --git a/frontend/src/gameEngine/rulesVersion.ts b/frontend/src/gameEngine/rulesVersion.ts
+index 2dfaba0..9b7c824 100644
+--- a/frontend/src/gameEngine/rulesVersion.ts
++++ b/frontend/src/gameEngine/rulesVersion.ts
+@@ -62,7 +62,7 @@ import { effectiveActions } from "./logRevert";
+ 
+ /** The rules engine this build carries. Bump it, and add a line below, when a deployment changes what a
+  *  stored log replays to. Do NOT bump it for UI, protocol or narration changes. */
+-export const RULES_ENGINE_VERSION = 3;
++export const RULES_ENGINE_VERSION = 4;
+ 
+ /** Every version this engine can replay faithfully. One entry until somebody builds a versioned reducer;
+  *  the point of the list is that "supported" is an explicit statement rather than "whatever is running". */
+@@ -101,6 +101,22 @@ export const RULES_ENGINE_CHANGELOG: ReadonlyArray<{ version: number; note: stri
+       "authority on the emergency purchase and no reducer-recorded ending, so it is refused, never " +
+       "reinterpreted.",
+   },
++  {
++    version: 4,
++    note:
++      "Batch 6 (2026-09-15, #1550-#1553): routes and revenue are authoritative. `RunMultipleRoutes` is " +
++      "judged by the engine's route evaluator (`routeAuthority.ts`, rulebook 6.4/6.4.1/6.4.2/6.3.3/6.5): " +
++      "every train named must be the corporation's, named once, no more routes than trains; each route is " +
++      "re-walked on the board's rail model (continuous, no reversal at a junction, no crossover change, no " +
++      "track reused within or between the corporation's routes, full cities not run through, red areas " +
++      "terminal only, a station of the corporation on the route, no city counted twice, at least two " +
++      "cities, no more than the train's number); revenue is the evaluator's, never the message's; one run " +
++      "per turn. `DeclareDividends.revenue_amount` must equal `last_route_revenue` (audit C1). At Run " +
++      "Trains, a skip or end of turn is refused while a paying route exists. `RunManualRoute` is refused on " +
++      "a pinned board (legacy replay only). `SetupGame` copies the pin onto the state " +
++      "(`rules_engine_version`). A version-3 log carries runs the reducer priced without judging and " +
++      "dividends it paid from the message, so it is refused, never reinterpreted.",
++  },
+ ];
+ 
+ /** The log's SetupGame field. Named apart from `build` (client identity) and `variants.rules` (a house-rules
+diff --git a/frontend/src/gameEngine/sandboxSession.ts b/frontend/src/gameEngine/sandboxSession.ts
+index dd2ccbe..bfe1582 100644
+--- a/frontend/src/gameEngine/sandboxSession.ts
++++ b/frontend/src/gameEngine/sandboxSession.ts
+@@ -96,6 +96,7 @@ import {
+ // Design note #1019: the purchase gate the reducer never had.
+ import { trainPurchaseRefusal } from "./trainPurchaseGate";
+ import { dividendSplit } from "./dividendSplit";
++import { dividendAmountRefusal, evaluateRouteSet, routeSetRefusal, routeSkipRefusal } from "./routeAuthority";
+ import { layEndsTrackStep } from "./bonusLay";
+ import { stationTokenPrice } from "./stationTokens";
+ // Design note #660: the B&O private's two rules, in one place.
+@@ -2920,6 +2921,40 @@ function applySandboxActionCore(
+   ) {
+     return state;
+   }
++  /* ==================================================================
++      DESIGN NOTE 1550/1551/1552: THE ROUTES, THE DIVIDEND AND THE SKIP ARE JUDGED HERE (Batch 6)
++     ==================================================================
++     AUDIT C2: `routeSetRefusal` (`routeAuthority.ts`) re-walks every submitted route through the board's own
++     rail model and refuses by identity anything the rulebook's §6.4 / §6.4.2 forbid -- a train the corporation
++     does not own or names twice, more routes than trains, a route that is not continuous, reverses, reuses
++     track, runs through a full city or a red area, exceeds the train's number, lacks a station, counts a city
++     twice, or shares track with a sibling route -- and a second run in one turn. Judged with the same grid and
++     era the arm prices on; without a grid the gate has no opinion (#757), and the arm's nominal fallback stands.
++     #1551: `RunManualRoute` is a legacy replay message (#1051): nothing has dispatched it since #968, and a
++     pinned board (one dealt with a `rules_engine_version`) refuses it outright rather than letting a hand-built
++     copy add to `printed_route_revenue` once per message. Legacy (unpinned) logs keep the arm they were played
++     on.
++     AUDIT C1 / #1552: `dividendAmountRefusal` -- the declared amount must equal what the trains ran
++     (`last_route_revenue`), to the dollar; the field stays on the wire for narration.
++     AND THE STEP IS NOT SKIPPED PAST A PAYING ROUTE: `routeSkipRefusal` refuses `AdvanceOperatingSubPhase` /
++     `PassTurn` at Run Trains while the corporation holds a train and `maxRouteRevenueFor` finds a paying route
++     -- the shell's #414 obligation, asked of the authority. */
++  if (
++    "RunMultipleRoutes" in msg &&
++    routeSetRefusal(state, msg.RunMultipleRoutes, ctx?.mapGrid, ctx?.era ?? (ctx?.mapGrid ? "Yellow" : undefined)) !== null
++  ) {
++    return state;
++  }
++  if ("RunManualRoute" in msg && typeof state.rules_engine_version === "number") return state;
++  if ("DeclareDividends" in msg && dividendAmountRefusal(state, msg.DeclareDividends) !== null) return state;
++  /* ON A PINNED BOARD ONLY. A board dealt under this engine never records a skip this refuses (the server
++     derives skips with the same search and refuses a player's at ingress); a legacy log's recorded skips were
++     the old engine's own verdicts (JUNO-CV4 88, JUNO-3XD 226 -- both skipped a corporation the old count
++     thought trainless or rootless), and refusing them would strand that corporation at Run Trains for the rest
++     of the replay. Development-corpus compatibility, not historical fidelity (D-9). */
++  if (typeof state.rules_engine_version === "number" && routeSkipRefusal(state, msg, ctx?.mapGrid) !== null) {
++    return state;
++  }
+   if ("LayTile" in msg) {
+     const { protocol_id, q, r } = msg.LayTile;
+     const key = (msg.LayTile as { ability_key?: unknown }).ability_key;
+@@ -3659,6 +3694,11 @@ function applyOneAction(
+     /* A ROSTER THAT CANNOT BE DEALT LEAVES THE STATE ALONE (#712's rule: a refusal never halts a replay).
+        The shell says so to the player; the board simply does not move. */
+     if (!dealt) return state;
++    /* Design note #1551: the pin travels onto the board, so the reducer can tell a pinned game from a legacy
++       one (the legacy `RunManualRoute` arm is closed to the former). `undefined` stays `undefined` (#232). */
++    const pinned = msg.SetupGame.rules_engine_version;
++    const rulesPin =
++      typeof pinned === "number" && Number.isInteger(pinned) ? { rules_engine_version: pinned } : {};
+ 
+     /* ==================================================================
+         DESIGN NOTE 1228: THE DELAYED AUCTION OPENED ON STOCK ROUND 1 -- IN THE SHELL ONLY
+@@ -3687,6 +3727,7 @@ function applyOneAction(
+ 
+     const dealtState: GameStateResponse = {
+       ...state,
++      ...rulesPin,
+       ...(opensOnStockRound
+         ? {
+             current_round_type: "StockRound" as const,
+@@ -5109,11 +5150,29 @@ function applyOneAction(
+       return state;
+     }
+     const variants = resolveVariants(state.variants);
+-    const priced = routes.map((path) =>
+-      ctx?.mapGrid
+-        ? sandboxRouteRevenue(ctx.mapGrid, path, ctx.era ?? "Yellow", protocol_id)
+-        : SANDBOX_NOMINAL_ROUTE_REVENUE,
+-    );
++    /* ==================================================================
++        DESIGN NOTE 1550: PRICED FROM THE AUTHORITY'S ANSWER, NOT FROM THE MESSAGE
++       ==================================================================
++       With a grid, the routes have already passed `routeSetRefusal` in `applySandboxActionCore`; the same
++       evaluator is asked again here for its figures, so the revenue written to state is the revenue of the
++       routes AS THE BOARD READ THEM (a `bypass` the rails force is normalised on, a `bypass` the rails do not
++       offer was refused). The message can still say WHICH routes and WHICH trains; it can no longer say what
++       they are worth. Without a grid (a fixture) the nominal fallback stands, as it always has. */
++    const verdict = ctx?.mapGrid
++      ? evaluateRouteSet({
++          state,
++          mapGrid: ctx.mapGrid,
++          era: ctx.era ?? "Yellow",
++          companyId: protocol_id,
++          routes,
++          trainIndices: train_indices ?? null,
++          trains: trains ?? null,
++        })
++      : null;
++    if (verdict && verdict.kind === "refused") return state; // the gate already said so; this is the second lock.
++    const priced = verdict
++      ? verdict.runs.map((run) => run.revenue)
++      : routes.map(() => SANDBOX_NOMINAL_ROUTE_REVENUE);
+     const printedThisMessage = priced.reduce((sum, value) => sum + value, 0);
+     /* ==================================================================
+         DESIGN NOTE 1031: THE BREAKDOWN WAS ALREADY COMPUTED AND THEN DISCARDED
+@@ -5134,7 +5193,8 @@ function applyOneAction(
+       train_indices && train_indices.length === routes.length
+         ? routes.map((_path, at) => ({
+             train_index: train_indices[at],
+-            model: trains?.[at] ?? "",
++            // #1550: the model the fleet slot holds, when the authority read it; the message's word otherwise.
++            model: verdict?.runs[at]?.model ?? trains?.[at] ?? "",
+             printed_revenue: String(priced[at]),
+           }))
+         : null;
+@@ -5169,15 +5229,22 @@ function applyOneAction(
+     const running = roll ? roll.adjusted : printedTotal;
+     return {
+       ...state,
++      /* Design note #1183, CORRECTED BY BATCH 6 (#1550): the turn this run belongs to, so a second copy of it
++         is refused above. IT WAS WRITTEN ON THE CORPORATION AND READ OFF THE STATE. The field is declared on
++         `GameStateResponse`, the check above reads `state.last_run_turn_key`, and this spread sat inside the
++         `public_companies.map` below -- so the key landed on the company entry, the state's own field stayed
++         `undefined`, and the refusal never fired once. `oneRunPerTurn.test.ts` asserted both strings and
++         could not see that they named different objects (#490a's warning, in a new shape). Found by the
++         Batch-6 corpus sweep: JUNO-3XD 319 -- the very duplicate the note was written for -- was applied in
++         every replay since, NNH's turn totalling 680 printed. The authoritative one-run-per-turn rule
++         (`routeSetRefusal`, on `routes_run_this_turn`) now refuses it whatever key it carries; this write is
++         moved to where the read is so the key's own undo semantics (#1183's second paragraph) hold as well. */
++      ...(typeof runTurnKey === "string" && runTurnKey !== "" ? { last_run_turn_key: runTurnKey } : {}),
+       public_companies: state.public_companies.map((entry) =>
+         entry.company_id === protocol_id
+           ? {
+               ...entry,
+               last_route_revenue: String(running),
+-              // Design note #1183: the turn this run belongs to, so a second copy of it is refused above.
+-              ...(typeof runTurnKey === "string" && runTurnKey !== ""
+-                ? { last_run_turn_key: runTurnKey }
+-                : {}),
+               printed_route_revenue: String(printedTotal),
+               // Design note #1031: only when the log named the trains; otherwise the field keeps whatever it
+               // held, because "this message could not say" is not "the previous answer was wrong".
+diff --git a/frontend/src/gameEngine/turnAuthority.ts b/frontend/src/gameEngine/turnAuthority.ts
+index 454e3cd..db25c19 100644
+--- a/frontend/src/gameEngine/turnAuthority.ts
++++ b/frontend/src/gameEngine/turnAuthority.ts
+@@ -57,6 +57,8 @@ import {
+   fundingPrivateRescindRefusal,
+ } from "./emergencyFunding";
+ import type { MapGridResponse } from "../components/hexContractTypes";
++import { dividendAmountRefusal, routeSetRefusal, routeSkipRefusal } from "./routeAuthority";
++import { tileEraFor } from "./gameConstants";
+ 
+ export interface TurnAuthorityInput {
+   state: GameStateResponse;
+@@ -228,11 +230,30 @@ export function turnRefusal(input: TurnAuthorityInput): string | null {
+      the strength of a missing field rather than a broken rule". `actingAddress` returns `null` for an empty
+      roster, an unseated president, or a corporation the queue cannot name -- none of which is evidence that
+      THIS player is out of turn. */
+-  if (acting === null) return null;
+-
+-  if (actor === acting) return null;
++  if (acting !== null && actor !== acting) return "It is not your turn.";
++  /* ==================================================================
++      DESIGN NOTE 1550 (ingress): THE ROUTE, THE DIVIDEND AND THE SKIP ARE ANSWERED WITH THEIR REASON
++     ==================================================================
++     Batch 6. The reducer refuses these by identity (`applySandboxActionCore`, the second lock); asked here
++     first, on the seat that is allowed to send them, so the submitter hears the sentence rather than a silent
++     no-op -- the #1530/#1540 shape. Same predicates, same grid, so the two locks cannot disagree. */
++  return operatingLegalityRefusal(state, msg, input.mapGrid);
++}
+ 
+-  return "It is not your turn.";
++/** The Batch-6 authority questions, in the order the reducer asks them. `null` when nothing objects. */
++export function operatingLegalityRefusal(
++  state: GameStateResponse,
++  msg: GameplayExecuteMsg,
++  mapGrid: MapGridResponse | undefined,
++): string | null {
++  if ("RunMultipleRoutes" in msg) {
++    return routeSetRefusal(state, msg.RunMultipleRoutes, mapGrid, mapGrid ? tileEraFor(state) : undefined);
++  }
++  if ("RunManualRoute" in msg && typeof state.rules_engine_version === "number") {
++    return "RunManualRoute is a legacy replay message; a live game runs its trains with RunMultipleRoutes.";
++  }
++  if ("DeclareDividends" in msg) return dividendAmountRefusal(state, msg.DeclareDividends);
++  return routeSkipRefusal(state, msg, mapGrid);
+ }
+ 
+ /* ==================================================================
+diff --git a/frontend/src/utils/__fixtures__/replayGolden/JUNO-CV4.json b/frontend/src/utils/__fixtures__/replayGolden/JUNO-CV4.json
+index 463b853..f0f8b6e 100644
+--- a/frontend/src/utils/__fixtures__/replayGolden/JUNO-CV4.json
++++ b/frontend/src/utils/__fixtures__/replayGolden/JUNO-CV4.json
+@@ -80,7 +80,6 @@
+             0
+           ]
+         ],
+-        "last_run_turn_key": "5.2.1",
+         "printed_route_revenue": "0",
+         "last_run_breakdown": [],
+         "routes_run_this_turn": 0,
+@@ -168,7 +167,6 @@
+             0
+           ]
+         ],
+-        "last_run_turn_key": "5.2.4",
+         "printed_route_revenue": "0",
+         "last_run_breakdown": [],
+         "routes_run_this_turn": 0,
+@@ -208,7 +206,6 @@
+         ],
+         "station_token_limit": 3,
+         "station_tokens": [],
+-        "last_run_turn_key": "5.2.5",
+         "printed_route_revenue": "0",
+         "last_run_breakdown": [],
+         "routes_run_this_turn": 0,
+@@ -425,7 +422,8 @@
+       "2,9",
+       "4,8",
+       "-1,5"
+-    ]
++    ],
++    "last_run_turn_key": "5.2.1"
+   },
+   "waterfall": {
+     "game_id": 0,
+diff --git a/frontend/src/utils/atomicRunRoutes.test.ts b/frontend/src/utils/atomicRunRoutes.test.ts
+index 68ed433..81edea9 100644
+--- a/frontend/src/utils/atomicRunRoutes.test.ts
++++ b/frontend/src/utils/atomicRunRoutes.test.ts
+@@ -151,16 +151,18 @@ describe("the whole turn arrives in one transition (design note #968)", () => {
+     expect(runBulk(board(), 3).operating_sub_phase).toBe("Dividends");
+   });
+ 
+-  it("adds to a total already standing rather than replacing it", () => {
+-    /* The UI does not offer a second run in one turn, but the reducer must not silently discard a prior
+-       total if it ever does -- #777's turn-change clear is what bounds this, not an assumption about the
+-       caller. */
++  it("refuses a second run in the same turn, by identity (Batch 6, #1550)", () => {
++    /* THIS CASE USED TO PIN THE OPPOSITE: "adds to a total already standing rather than replacing it", on the
++       reasoning that #777's turn-change clear bounded a double run. It did not bound it -- JUNO-3XD 318/319
++       ran NNH's two routes twice in one turn and 320 declared the doubled figure, and the #1183 key that was
++       meant to catch it never fired (see the corrected note in the arm). Rulebook 6.4: each train runs once
++       per operating turn. A second `RunMultipleRoutes` while `routes_run_this_turn > 0` is now refused by
++       identity, whatever key it carries; the accumulation arithmetic stays for the legacy `RunManualRoute`
++       arm, which is one message per train. */
+     const first = runBulk(board(), 2);
+     const twice = runBulk(first, 2);
+-    expect(Number(twice.public_companies[0].printed_route_revenue)).toBe(
+-      Number(first.public_companies[0].printed_route_revenue) * 2,
+-    );
+-    expect(twice.public_companies[0].routes_run_this_turn).toBe(4);
++    expect(twice).toBe(first);
++    expect(twice.public_companies[0].routes_run_this_turn).toBe(2);
+   });
+ 
+   it("still replays a log full of the old message", () => {
+diff --git a/frontend/src/utils/dividendNarration.test.ts b/frontend/src/utils/dividendNarration.test.ts
+index 0fca7c9..48309c6 100644
+--- a/frontend/src/utils/dividendNarration.test.ts
++++ b/frontend/src/utils/dividendNarration.test.ts
+@@ -62,7 +62,9 @@ function board(over: Partial<GameStateResponse> = {}): GameStateResponse {
+         ipo_pool_percentage: 20,
+         bank_pool_percentage: 10,
+         treasury: "300",
+-        last_route_revenue: "0",
++        /* Batch 6 (#1552, audit C1): the reducer pays only a declaration that matches the run, so this board
++           carries the $100 the cases below declare. The narration cases read the same figure. */
++        last_route_revenue: "100",
+         player_holdings: [
+           { player: "p1", percentage: 60 },
+           { player: "p2", percentage: 10 },
+diff --git a/frontend/src/utils/emergencyFunding.test.ts b/frontend/src/utils/emergencyFunding.test.ts
+index 84a00a8..c2a0d9a 100644
+--- a/frontend/src/utils/emergencyFunding.test.ts
++++ b/frontend/src/utils/emergencyFunding.test.ts
+@@ -799,10 +799,13 @@ describe("the log (#1540, tests 20-22)", () => {
+     expect(revived.state.bankrupt_president).toBeUndefined();
+   });
+ 
+-  it("22. RULES_ENGINE_VERSION is 3 and a version-2 room is refused before reducer replay", () => {
+-    expect(RULES_ENGINE_VERSION).toBe(3);
+-    expect(SUPPORTED_RULES_ENGINE_VERSIONS).toEqual([3]);
+-    expect(RULES_ENGINE_CHANGELOG.map((row) => row.version)).toEqual([1, 2, 3]);
++  it("22. RULES_ENGINE_VERSION is at least 3 and a version-2 room is refused before reducer replay", () => {
++    /* Batch 6 bumped the pin to 4 (#1550); this case keeps asserting what Batch 5 introduced -- the version-3
++       row and the refusal of a version-2 room -- against whatever the current pin is, as Batch 5 itself
++       relaxed Batch 4.6's `2` to `>= 2`. */
++    expect(RULES_ENGINE_VERSION).toBeGreaterThanOrEqual(3);
++    expect(SUPPORTED_RULES_ENGINE_VERSIONS).toEqual([RULES_ENGINE_VERSION]);
++    expect(RULES_ENGINE_CHANGELOG.map((row) => row.version).slice(0, 3)).toEqual([1, 2, 3]);
+     expect(RULES_ENGINE_CHANGELOG[2].note).toMatch(/forced|bankrupt/);
+     const seedOf = () => ({
+       state: withEmptyRoster(sandboxScenarioState(DEFAULT_SANDBOX_SCENARIO, 0, "default")),
+@@ -810,7 +813,7 @@ describe("the log (#1540, tests 20-22)", () => {
+     });
+     const fresh = new RoomSession({ providers: sandboxReplayProviders(), seed: seedOf(), build: "b", mintId: () => "d" });
+     expect(fresh.submit({ actor: P1, build: "b", msg: { SetupGame: { players: [{ id: P1, nickname: "A" }, { id: P2, nickname: "B" }], variants: {}, build: "b" } } as never, baseIndex: -1 }).kind).toBe("applied");
+-    expect(fresh.rulesEngineVersion()).toBe(3);
++    expect(fresh.rulesEngineVersion()).toBe(RULES_ENGINE_VERSION);
+     const versionTwo = fresh.entries.map((row) => {
+       const parsed = JSON.parse(row.payload) as { SetupGame?: Record<string, unknown> };
+       return parsed.SetupGame ? { ...row, payload: JSON.stringify({ ...parsed, SetupGame: { ...parsed.SetupGame, [RULES_ENGINE_VERSION_FIELD]: 2 } }) } : { ...row };
+@@ -820,7 +823,7 @@ describe("the log (#1540, tests 20-22)", () => {
+       const old = new RoomSession({ providers: sandboxReplayProviders(), seed: seedOf(), build: "b", mintId: () => "x" });
+       old.restore(versionTwo as ServerLogEntry[]);
+       expect(applySpy).not.toHaveBeenCalled();
+-      expect(old.incompatible?.compatibility).toEqual({ kind: "incompatible", version: 2, supported: [3] });
++      expect(old.incompatible?.compatibility).toEqual({ kind: "incompatible", version: 2, supported: [RULES_ENGINE_VERSION] });
+     } finally {
+       applySpy.mockRestore();
+     }
+diff --git a/frontend/src/utils/gameHistory.test.ts b/frontend/src/utils/gameHistory.test.ts
+index 2fbe5fe..d227d7f 100644
+--- a/frontend/src/utils/gameHistory.test.ts
++++ b/frontend/src/utils/gameHistory.test.ts
+@@ -18,7 +18,14 @@ describe("the log replayed as a timeline (design note #1411)", () => {
+     expect(history.rounds[history.rounds.length - 1].label).toBe("Final");
+     const labels = history.rounds.map((r) => r.label);
+     expect(labels[0]).toBe("SR 1");
+-    expect(labels).toContain("OR 9.1");
++    /* Batch 6 (#1550/#1552): this fixture is JUNO-Z6C, a legacy log whose entry 418 declared $180 on a run the
++       reducer had priced at $190 (and 428 / 433 the same, $10-$20 short -- the client's figure, not the
++       authority's). Version 4 refuses those declarations, the treasuries differ from there, the bank does not
++       break where it did, and the log-derived timeline no longer reaches OR 9 before the entries run out. It
++       used to assert `toContain("OR 9.1")`; the timeline's SHAPE is what #1411 is about, so that is what is
++       asserted -- a divergence reported in the Batch 6 write-up, not absorbed silently. */
++    expect(labels).toContain("OR 5.1");
++    expect(labels.filter((label) => label.startsWith("OR ")).length).toBeGreaterThan(10);
+     // No two consecutive samples share a label -- a boundary is a change.
+     for (let i = 1; i < labels.length; i += 1) expect(labels[i]).not.toBe(labels[i - 1]);
+   });
+diff --git a/frontend/src/utils/refusedAction.test.ts b/frontend/src/utils/refusedAction.test.ts
+index 79f49dd..571419a 100644
+--- a/frontend/src/utils/refusedAction.test.ts
++++ b/frontend/src/utils/refusedAction.test.ts
+@@ -89,7 +89,10 @@ describe("a real refusal is recognised", () => {
+   it("leaves a real action alone", () => {
+     /* THE CONTROL. A gate that also flagged legitimate actions would fill the log with false refusals, which
+        is the same disease pointing the other way. */
++    /* Batch 6 (#1552, audit C1): the declared amount must equal what the trains ran, so the control board
++       carries the $100 run its declaration names -- a $100 declaration over a $0 run is now a real refusal. */
+     const before = board();
++    before.public_companies[0].last_route_revenue = "100";
+     const msg = {
+       DeclareDividends: { game_id: 1, protocol_id: CO, revenue_amount: "100", distribute: true },
+     } as never;
+diff --git a/frontend/src/utils/replayJuno3XD.test.ts b/frontend/src/utils/replayJuno3XD.test.ts
+index 7e7a455..0ea206c 100644
+--- a/frontend/src/utils/replayJuno3XD.test.ts
++++ b/frontend/src/utils/replayJuno3XD.test.ts
+@@ -294,26 +294,50 @@ describe("JUNO-3XD replays headless", () => {
+        at 228/229 on the same cursor). #1510 refuses that lay on both atoms, so E13 stays plain, and PRR's
+        run at 307 -- E11, E13, F14 ... -- prices at 170 without it. Re-pinned to what the log-derived board
+        pays, for the reason the paragraph above gives: this line is where such a change announces itself. */
++    /* ==================================================================
++        AND AGAIN, FOR BATCH 6 (#1550) -- THREE OF THE FIVE, EACH FOR A DIFFERENT RULE
++       ==================================================================
++       This is a legacy log (unpinned; development corpus only, D-9) that already diverges from its own play at
++       224 (#1510). Batch 6 judges every run and every declaration, so three more of its entries now refuse:
++         PRR  170 -> 260   Entries 260 and 307 name a 4-train in fleet slot 1; the log-derived fleet holds
++                           [3, 3] (the 4 was bought on the queue the #1196 divergence swapped), so the train-
++                           identity rule refuses both runs and PRR's last filed run is OR 5's $260 (the
++                           declarations of 230 and 210 are refused as mismatches). Cascade: PRR's OR-7 price
++                           does not rise, so B&O operates before PRR in OR 7.1 -- see B&O.
++         B&O  240 -> 270   Entry 313 (B&O's run, declared 240) now lands while PRR is operating (the reordered
++                           queue above) and is refused for identity; B&O's last filed run stays OR 6's $270.
++         NNH  540 -> 340   Entries 318 and 319 are the same two routes twice, the case #1183 was written for.
++                           #1183 never fired -- its key was written on the corporation and read off the state
++                           (see the arm) -- so every replay applied both and filed 680 printed / 540 adjusted.
++                           The one-run-per-turn rule refuses 319, and 320's $540 declaration is refused as a
++                           mismatch: NNH filed the one run, $340.
++       NYC and C&O are untouched. Every figure is what the log-derived board pays under version-4 rules; none
++       is what the table saw, which is the meaning of "not historical-fidelity replay". */
+     expect(
+       rows.map((row) => [row.ticker, row.filed] as const),
+     ).toEqual([
+-      ["PRR", "170"],
++      ["PRR", "260"],
+       ["NYC", "140"],
+-      ["B&O", "240"],
++      ["B&O", "270"],
+       ["C&O", "290"],
+-      ["NNH", "540"],
++      ["NNH", "340"],
+     ]);
+ 
+     /* THE LAST DECLARATION IS THE ONE THE FILED FIGURE MUST MATCH, asserted as a relationship rather than as
+        five more literals -- so a re-export of the log with different numbers still checks the property that
+        matters instead of failing on arithmetic nobody changed. */
++    const exceptions: Record<string, readonly [string, string]> = {
++      /* #1510 / #1550: the documented exceptions (see the re-pins above), asserted as the pair (filed, last
++         declared) so each exception is as loud as the rule. */
++      PRR: ["260", "210"],
++      "B&O": ["270", "240"],
++      NNH: ["340", "540"],
++    };
+     for (const row of rows) {
+       const declarations = row.declarations.split(", ");
+-      /* #1510: PRR is the one documented exception (see the re-pin above). The client declared 210 over a
+-         tile the log-derived board no longer holds; the reducer files 170. Asserted as the pair, so the
+-         exception is as loud as the rule. */
+-      if (row.ticker === "PRR") {
+-        expect([row.filed, declarations[declarations.length - 1]]).toEqual(["170", "210"]);
++      const exception = exceptions[row.ticker];
++      if (exception) {
++        expect([row.filed, declarations[declarations.length - 1]]).toEqual(exception);
+         continue;
+       }
+       expect(row.filed).toBe(declarations[declarations.length - 1]);
+diff --git a/frontend/src/utils/routeAuthority.test.ts b/frontend/src/utils/routeAuthority.test.ts
+new file mode 100644
+index 0000000..54592f7
+--- /dev/null
++++ b/frontend/src/utils/routeAuthority.test.ts
+@@ -0,0 +1,686 @@
++/** @jest-environment node */
++//
++// ==================================================================
++//  DESIGN NOTE 1550 (harness): ROUTES AND REVENUE, JUDGED BY THE AUTHORITY -- Batch 6
++// ==================================================================
++//
++// Rulebook 6.4 / 6.4.1 / 6.4.2 / 6.3.3 / 6.5 (quoted in `routeAuthority.ts`). Every case builds a real board
++// from the tile catalog on the standard board's plain hexes (rows H-J, west of Pittsburgh: I3 I5 I7 I9 with H6,
++// H8, J2 (the Gulf), J4, J6 around them), sends a real `RunMultipleRoutes` through `applySandboxAction` with a
++// grid, and reads the board back. A refusal is the state returned by identity (#778), exactly as the reducer
++// returns it; the sentence is read from `routeSetRefusal`, the same predicate the socket asks (#1550 ingress).
++//
++// EDGES (hexGeometry): 0 E (+1,0)  1 NE (+1,-1)  2 NW (0,-1)  3 W (-1,0)  4 SW (-1,+1)  5 SE (0,+1).
++
++import type { GameStateResponse } from "../gameEngine/gameState";
++import type { MapGridResponse, MapTileEntry } from "../components/hexContractTypes";
++import type { ServerLogEntry } from "./roomSession";
++
++export {};
++
++const { applySandboxAction, isRouteTerminusHex, sandboxRouteBreakdown } = require("../gameEngine/sandboxSession") as typeof import("../gameEngine/sandboxSession");
++const { evaluateRouteSet, routeSetRefusal, routeSkipRefusal, dividendAmountRefusal } = require("../gameEngine/routeAuthority") as typeof import("../gameEngine/routeAuthority");
++const { turnRefusal } = require("../gameEngine/turnAuthority") as typeof import("../gameEngine/turnAuthority");
++const { stateDigest } = require("../gameEngine/stateDigest") as typeof import("../gameEngine/stateDigest");
++const { replayLog, RoomEngine } = require("../gameEngine/replayLog") as typeof import("../gameEngine/replayLog");
++const { sandboxReplayProviders } = require("../gameEngine/replayProviders") as typeof import("../gameEngine/replayProviders");
++const { RoomSession } = require("./roomSession") as typeof import("./roomSession");
++const { DEFAULT_SANDBOX_SCENARIO, sandboxScenario, sandboxWaterfallState, sandboxScenarioState } =
++  require("../gameEngine/sandboxState") as typeof import("../gameEngine/sandboxState");
++const { waterfallForRoster, withEmptyRoster } = require("../gameEngine/gameSetup") as typeof import("../gameEngine/gameSetup");
++const { DEVELOPMENT_CORPUS_POLICY, RULES_ENGINE_VERSION, RULES_ENGINE_CHANGELOG, RULES_ENGINE_VERSION_FIELD, SUPPORTED_RULES_ENGINE_VERSIONS } =
++  require("../gameEngine/rulesVersion") as typeof import("../gameEngine/rulesVersion");
++const { STATIC_BOARD_HEXES, STANDARD_BOARD, activateBoard } = require("../components/hexBoardData") as typeof import("../components/hexBoardData");
++const { EXPANDED_BOARD } = require("../components/hexBoardDataPlus") as typeof import("../components/hexBoardDataPlus");
++const { LPF_BOARD } = require("../components/hexBoardDataLpf") as typeof import("../components/hexBoardDataLpf");
++const { initialGridFor } = require("../gameEngine/initialGrid") as typeof import("../gameEngine/initialGrid");
++const { validateGameplayMessage } = require("../gameEngine/messageSchema") as typeof import("../gameEngine/messageSchema");
++const { editRouteDraft } = require("./routeDraftEdit") as typeof import("./routeDraftEdit");
++const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
++
++/* ------------------------------------------------------------------ */
++/* Boards                                                             */
++/* ------------------------------------------------------------------ */
++
++const CO = 5; // C&O, the corporation running
++const BO = 4; // B&O, the rival
++const PRR = 1;
++const P1 = "p1"; // C&O's president
++const P2 = "p2"; // B&O's president
++
++function at(label: string): { q: number; r: number } {
++  const hex = STATIC_BOARD_HEXES.find((entry) => entry.label === label);
++  if (!hex) throw new Error(`no hex ${label}`);
++  return { q: hex.q, r: hex.r };
++}
++
++type Lay = [label: string, tileId: number, orientation: number];
++const gridOf = (lays: Lay[], base: MapGridResponse = { game_id: 1, tiles: [] }): MapGridResponse => ({
++  ...base,
++  tiles: [...base.tiles, ...lays.map(([label, tile_id, orientation]) => ({ ...at(label), tile_id, orientation }) as MapTileEntry)],
++});
++
++/** A straight of three yellow cities with the Gulf hanging off the west end:  J2(Gulf) - I3 - I5 - I7 - I9. */
++const LINE = gridOf([
++  ["I3", 8, 4], // gentle curve, edges 4 (Gulf) and 0 (I5) -- plain track
++  ["I5", 57, 0], // city, edges 3 / 0
++  ["I7", 57, 0],
++  ["I9", 57, 0],
++]);
++/** LINE plus a straight on J4, so the Gulf has a hex on its far side to be run through to. */
++const PAST_THE_GULF = gridOf([["J4", 9, 0]], LINE);
++/** A crossover (#20) on I7: I5-I7-I9 is one straight, H8-I7-J6 the other; they do not touch. */
++const CROSS = gridOf([
++  ["I5", 57, 0],
++  ["I7", 20, 0],
++  ["I9", 57, 0],
++  ["H8", 57, 1], // edges 1 / 4; 4 faces I7
++  ["J6", 57, 1], // edges 1 / 4; 1 faces I7
++]);
++/** A fork (#24) on I7: both prongs (to H6 and to I5) join the one stub toward I9. */
++const FORK = gridOf([
++  ["I5", 57, 0],
++  ["I7", 24, 0], // rails [0,2] and [0,3]: 0 -> I9, 2 -> H6, 3 -> I5
++  ["I9", 57, 0],
++  ["H6", 57, 2], // edges 2 / 5; 5 faces I7
++]);
++/** A brown hub (#63) on I5 with a loop hanging off it: I5 -> I7 -> J6 -> back into I5. I3 is a city west of it. */
++const LOOP = gridOf([
++  ["I3", 57, 0],
++  ["I5", 63, 0],
++  ["I7", 7, 3], // edges 3 (I5) / 4 (J6)
++  ["J6", 7, 1], // edges 1 (I7) / 2 (I5)
++]);
++/** A double town (#1) on I7 crossed twice on its two separate rails: I5 -> I7 -> H8 -> I9 -> I7 -> J6. */
++const DOUBLE_TOWN = gridOf([
++  ["I5", 57, 0],
++  ["I7", 1, 0], // rails [0,4] and [1,3]: 3 -> I5, 1 -> H8, 0 -> I9, 4 -> J6
++  ["H8", 7, 4], // edges 4 (I7) / 5 (I9)
++  ["I9", 7, 2], // edges 2 (H8) / 3 (I7)
++  ["J6", 57, 1], // edges 1 (I7) / 4
++]);
++/** An OO tile (#59) on I7: city 0 is a spur from I9's side, city 1 a spur from H6's side. */
++const TWO_CITIES = gridOf([
++  ["I7", 59, 0],
++  ["I9", 57, 0], // edge 3 faces I7
++  ["H6", 57, 2], // edge 5 faces I7
++]);
++
++interface Corp {
++  id: number;
++  ticker: string;
++  president: string;
++  trains: string[];
++  tokens: Array<[string, number]>;
++  treasury?: string;
++  holdings?: Array<[string, number]>;
++  home?: string;
++}
++
++function board(input: {
++  corps: Corp[];
++  operating?: number;
++  step?: string;
++  pinned?: boolean;
++  extra?: Partial<GameStateResponse>;
++}): GameStateResponse {
++  const order = input.corps.map((corp) => corp.id);
++  const operating = input.operating ?? CO;
++  return {
++    game_id: 1,
++    player_addresses: [P1, P2],
++    player_cash: [P1, P2].map((player) => ({ player, cash_vgp: "500" })),
++    virtual_bank_vgp: "10000",
++    private_companies: [],
++    variants: {},
++    current_round_type: "OperatingRound",
++    macro_round_number: 3,
++    sub_round_index: 1,
++    operating_round_sequence_length: 1,
++    active_player_index: 0,
++    priority_deal_index: 0,
++    consecutive_passes: 0,
++    active_operating_order: order,
++    active_corporation_index: order.indexOf(operating),
++    operating_sub_phase: input.step ?? "Routes",
++    ...(input.pinned === false ? {} : { rules_engine_version: RULES_ENGINE_VERSION }),
++    market_positions: Object.fromEntries(order.map((id, index) => [id, { price: 100 - index, x: 5 + index, y: 6, enteredAt: index + 1 }])),
++    public_companies: input.corps.map((corp) => ({
++      company_id: corp.id,
++      ticker: corp.ticker,
++      is_floated: true,
++      president: corp.president,
++      par_value: "100",
++      ipo_pool_percentage: 0,
++      bank_pool_percentage: 0,
++      treasury: corp.treasury ?? "300",
++      owned_trains: corp.trains,
++      player_holdings: (corp.holdings ?? [[corp.president, 60]]).map(([player, percentage]) => ({ player, percentage })),
++      station_token_hexes: corp.tokens.map(([label]) => [at(label).q, at(label).r]),
++      station_tokens: corp.tokens.map(([label, city]) => [at(label).q, at(label).r, city]),
++      station_token_limit: 3,
++      home_hex_label: corp.home ?? corp.tokens[0]?.[0] ?? "F6",
++    })),
++    ...input.extra,
++  } as unknown as GameStateResponse;
++}
++
++const co = (trains: string[], tokens: Array<[string, number]> = [["I5", 0]]): Corp => ({ id: CO, ticker: "C&O", president: P1, trains, tokens });
++const bo = (tokens: Array<[string, number]>, trains: string[] = ["2"]): Corp => ({ id: BO, ticker: "B&O", president: P2, trains, tokens });
++
++type Route = Array<{ hex: string; city_node?: number; bypass?: boolean }>;
++const R = (...hexes: string[]): Route => hexes.map((hex) => ({ hex }));
++
++function runMsg(companyId: number, routes: Route[], indices: number[] | null, models?: string[], extra: Record<string, unknown> = {}) {
++  return {
++    RunMultipleRoutes: {
++      game_id: 1,
++      protocol_id: companyId,
++      routes,
++      ...(indices === null ? {} : { train_indices: indices }),
++      ...(models ? { trains: models } : {}),
++      revenue_turn: "3.1.x",
++      ...extra,
++    },
++  } as never;
++}
++
++const run = (state: GameStateResponse, grid: MapGridResponse, routes: Route[], indices: number[] | null = routes.map((_, i) => i), models?: string[], extra?: Record<string, unknown>) =>
++  applySandboxAction(state, runMsg(CO, routes, indices, models, extra), { mapGrid: grid, era: "Yellow" });
++
++const why = (state: GameStateResponse, grid: MapGridResponse, routes: Route[], indices: number[] | null = routes.map((_, i) => i), models?: string[]) =>
++  routeSetRefusal(state, { protocol_id: CO, routes, ...(indices === null ? {} : { train_indices: indices }), ...(models ? { trains: models } : {}) }, grid, "Yellow");
++
++const company = (state: GameStateResponse, id: number) => state.public_companies.find((entry) => entry.company_id === id)!;
++type Verdict = ReturnType<typeof evaluateRouteSet>;
++/** `[trainIndex, model, revenue, centres]` per run of a legal verdict; `null` for a refusal. */
++const legalRuns = (verdict: Verdict) =>
++  verdict.kind === "legal" ? verdict.runs.map((r) => [r.trainIndex, r.model, r.revenue, r.centres] as const) : null;
++/** Refusals are proven by digest: these boards carry a chart, and the chart step rebuilds the object on every
++ *  apply (#1196), so identity cannot be the witness here (the emergency-funding harness's rule). */
++const same = (a: GameStateResponse, b: GameStateResponse) => stateDigest(a) === stateDigest(b);
++const refused = (before: GameStateResponse, after: GameStateResponse) => expect(same(before, after)).toBe(true);
++const applied = (before: GameStateResponse, after: GameStateResponse) => expect(same(before, after)).toBe(false);
++const revenue = (state: GameStateResponse, id = CO) => Number(company(state, id).last_route_revenue ?? NaN);
++
++/* ------------------------------------------------------------------ */
++/* 1-2. Legal runs                                                    */
++/* ------------------------------------------------------------------ */
++
++describe("legal runs (1-2, 15-16)", () => {
++  it("1. a legal single-train route is accepted and priced by the authority", () => {
++    const state = board({ corps: [co(["2"])] });
++    const after = run(state, LINE, [R("I5", "I7")]);
++    applied(state, after);
++    expect(revenue(after)).toBe(40);
++    expect(company(after, CO).routes_run_this_turn).toBe(1);
++    expect(company(after, CO).last_run_breakdown).toEqual([{ train_index: 0, model: "2", printed_revenue: "40" }]);
++    expect(after.operating_sub_phase).toBe("Dividends");
++  });
++
++  it("2 / 15 / 16. a legal multi-train set is accepted, each train priced on its own, the total summed", () => {
++    const state = board({ corps: [co(["2", "3"])] });
++    const verdict = evaluateRouteSet({ state, mapGrid: LINE, era: "Yellow", companyId: CO, routes: [R("I5", "I7"), R("I5", "I3", "J2")], trainIndices: [0, 1] });
++    expect(legalRuns(verdict)).toEqual([
++      [0, "2", 40, 2],
++      [1, "3", 50, 2], // I5 $20 + the Gulf $30 (yellow); I3 is plain track
++    ]);
++    expect(verdict).toMatchObject({ kind: "legal", total: 90 });
++    const after = run(state, LINE, [R("I5", "I7"), R("I5", "I3", "J2")]);
++    expect(revenue(after)).toBe(90);
++    expect(company(after, CO).last_run_breakdown?.map((r) => r.printed_revenue)).toEqual(["40", "50"]);
++  });
++
++  it("3-train through three cities: the same city on two trains' routes is paid on both (#1319 ii)", () => {
++    const state = board({ corps: [co(["3", "3"], [["I7", 0]])] });
++    const after = run(state, LINE, [R("I5", "I7", "I9"), R("J2", "I3", "I5", "I7")], [0, 1]);
++    // I5-I7-I9 and J2-I3-I5-I7 both run the I5-I7 section: refused.
++    refused(state, after);
++    expect(why(state, LINE, [R("I5", "I7", "I9"), R("J2", "I3", "I5", "I7")], [0, 1])).toMatch(/both use the track at I5|both use the track at I7/);
++    // Meeting at I7 only -- separate track -- is legal, and I7 pays on both runs.
++    const legal = run(state, LINE, [R("I5", "I7"), R("I7", "I9")], [0, 1]);
++    expect(revenue(legal)).toBe(80);
++  });
++});
++
++/* ------------------------------------------------------------------ */
++/* 3-5. Corporation / train identity                                  */
++/* ------------------------------------------------------------------ */
++
++describe("train identity (3-5)", () => {
++  it("3. the train must belong to the operating corporation -- another corporation's run is refused for identity", () => {
++    const state = board({ corps: [co(["2"]), bo([["I9", 0]])] });
++    const msg = runMsg(BO, [R("I9", "I7")], [0]);
++    refused(state, applySandboxAction(state, msg, { mapGrid: LINE, era: "Yellow" }));
++    // and a slot the corporation does not have
++    expect(why(state, LINE, [R("I5", "I7")], [1])).toMatch(/no train in slot 1/);
++    refused(state, run(state, LINE, [R("I5", "I7")], [1]));
++  });
++
++  it("4. a train named for two routes is refused", () => {
++    const state = board({ corps: [co(["2", "2"])] });
++    expect(why(state, LINE, [R("I5", "I7"), R("I5", "I3", "J2")], [0, 0])).toMatch(/named for two routes/);
++    refused(state, run(state, LINE, [R("I5", "I7"), R("I5", "I3", "J2")], [0, 0]));
++  });
++
++  it("5. more routes than trains is refused; a trainless corporation cannot run at all", () => {
++    const state = board({ corps: [co(["2"])] });
++    expect(why(state, LINE, [R("I5", "I7"), R("I5", "I3", "J2")], [0, 1])).toMatch(/owns 1 train and declared 2 routes/);
++    const trainless = board({ corps: [co([])] });
++    expect(why(trainless, LINE, [R("I5", "I7")], [0])).toMatch(/owns 0 trains/);
++    refused(trainless, run(trainless, LINE, [R("I5", "I7")], [0]));
++  });
++
++  it("the model and its capacity come from the fleet slot, never from the message", () => {
++    const state = board({ corps: [co(["2"])] });
++    // Claiming the slot holds a Diesel does not make the three-city run legal.
++    expect(why(state, LINE, [R("I5", "I7", "I9")], [0], ["D"])).toMatch(/holds a 2-train, not the D/);
++    refused(state, run(state, LINE, [R("I5", "I7", "I9")], [0], ["D"]));
++    // A message with no train identity at all is paired by the authority (a log from before #1031): the
++    // three-city run has no train that fits.
++    expect(why(state, LINE, [R("I5", "I7", "I9")], null)).toMatch(/no train that can run it/);
++    const two = board({ corps: [co(["2", "3"])] });
++    const paired = evaluateRouteSet({ state: two, mapGrid: LINE, era: "Yellow", companyId: CO, routes: [R("I5", "I7", "I9"), R("I5", "I3", "J2")] });
++    expect(legalRuns(paired)?.map(([index, model]) => [index, model])).toEqual([[1, "3"], [0, "2"]]);
++  });
++
++  it("ghost and reprieved trains run by their existing rules: a ghost in the fleet is a train that runs", () => {
++    const state = board({ corps: [co(["2"])], extra: {} });
++    const ghosted = { ...state, public_companies: state.public_companies.map((c) => ({ ...c, owned_trains: ["2", "3"], ghost_trains: ["3"] })) };
++    expect(revenue(run(ghosted, LINE, [R("I5", "I7"), R("I5", "I3", "J2")], [0, 1]))).toBe(90);
++  });
++});
++
++/* ------------------------------------------------------------------ */
++/* 6-14. Per-route and cross-route legality                           */
++/* ------------------------------------------------------------------ */
++
++describe("per-route legality (6-12)", () => {
++  const state = board({ corps: [co(["3"])] });
++
++  it("6. a disconnected route is refused: a hex off the board, a non-adjacent step, an edge with no rail", () => {
++    expect(why(state, LINE, [R("I5", "Z99")])).toMatch(/not a hex on this board/);
++    expect(why(state, LINE, [R("I5", "I9")])).toMatch(/not adjacent/);
++    expect(why(state, LINE, [R("I5", "J6")])).toMatch(/No track joins I5 to J6/); // adjacent, no rail
++    expect(why(state, LINE, [R("I5")])).toMatch(/at least two stops/);
++    refused(state, run(state, LINE, [R("I5", "I9")]));
++  });
++
++  it("7. a station of the corporation must be on the route, in the city the route actually enters", () => {
++    const rival = board({ corps: [co(["3"], [["I9", 0]])] });
++    expect(why(rival, LINE, [R("I5", "I7")])).toMatch(/station token in/);
++    refused(rival, run(rival, LINE, [R("I5", "I7")]));
++    expect(why(rival, LINE, [R("I7", "I9")])).toBeNull();
++    const tokenless = board({ corps: [co(["3"], [])] });
++    expect(why(tokenless, LINE, [R("I5", "I7")])).toMatch(/no station token on the board/);
++    // Two cities on one hex (#59): the token's circle, not the hex, satisfies the rule (#853).
++    const spur = board({ corps: [co(["2"], [["I7", 1]])] });
++    expect(why(spur, TWO_CITIES, [R("I9", "I7")])).toMatch(/station token in/); // enters city 0
++    expect(why(spur, TWO_CITIES, [R("H6", "I7")])).toBeNull(); // enters city 1
++    expect(revenue(run(spur, TWO_CITIES, [R("H6", "I7")]))).toBe(60);
++  });
++
++  it("8. a city full of other corporations' stations may end a route but not be run through (6.3.3)", () => {
++    const walled = board({ corps: [co(["3"]), bo([["I7", 0]])] });
++    expect(why(walled, LINE, [R("I5", "I7", "I9")])).toMatch(/I7 is tokened out/);
++    refused(walled, run(walled, LINE, [R("I5", "I7", "I9")]));
++    expect(why(walled, LINE, [R("I5", "I7")])).toBeNull();
++    expect(revenue(run(walled, LINE, [R("I5", "I7")]))).toBe(40);
++    // An empty circle, or the corporation's own token, lets the train through.
++    const open = board({ corps: [co(["3"]), bo([["I9", 0]])] });
++    expect(why(open, LINE, [R("I5", "I7", "I9")])).toBeNull();
++  });
++
++  it("9. the train's number caps the cities counted; a Diesel is unlimited; a town counts; a bypass does not", () => {
++    const two = board({ corps: [co(["2"])] });
++    expect(why(two, LINE, [R("I5", "I7", "I9")])).toMatch(/counts 3 cities, more than a 2-train's 2/);
++    refused(two, run(two, LINE, [R("I5", "I7", "I9")]));
++    expect(why(state, LINE, [R("I5", "I7", "I9")])).toBeNull();
++    const diesel = board({ corps: [co(["D"])] });
++    expect(revenue(run(diesel, LINE, [R("J2", "I3", "I5", "I7", "I9")]))).toBe(90);
++    // Towns count against the number (6.4.1: "city" includes a small city) -- four stops on a 3-train is refused.
++    const three = board({ corps: [co(["3"])] });
++    expect(why(three, DOUBLE_TOWN, [R("I5", "I7", "H8", "I9", "I7", "J6")])).toMatch(/counts 4 cities, more than a 3-train's 3/);
++  });
++
++  it("10. a route may not reverse at a junction or change track at a crossover", () => {
++    const forked = board({ corps: [co(["3"])] });
++    expect(why(forked, FORK, [R("I5", "I7", "I9")])).toBeNull();
++    expect(why(forked, FORK, [R("H6", "I7", "I5")])).toMatch(/No rail through I7 joins/); // the two prongs
++    refused(forked, run(forked, FORK, [R("H6", "I7", "I5")]));
++    const crossed = board({ corps: [co(["3"], [["I5", 0], ["H8", 0]])] });
++    expect(why(crossed, CROSS, [R("I5", "I7", "I9")])).toBeNull();
++    expect(why(crossed, CROSS, [R("I5", "I7", "H8")])).toMatch(/No rail through I7 joins/); // straight to straight
++    refused(crossed, run(crossed, CROSS, [R("I5", "I7", "H8")]));
++  });
++
++  it("11. a red off-board area starts or ends a route and is never run through", () => {
++    expect(why(state, PAST_THE_GULF, [R("I5", "I3", "J2")])).toBeNull();
++    expect(why(state, PAST_THE_GULF, [R("J2", "I3", "I5")])).toBeNull();
++    expect(why(state, PAST_THE_GULF, [R("I5", "I3", "J2", "J4")])).toMatch(/J2 is a red off-board area/);
++    refused(state, run(state, PAST_THE_GULF, [R("I5", "I3", "J2", "J4")]));
++    // A route must begin and end at a city or a red area (the owner's terminus rule; see the module note).
++    expect(why(state, LINE, [R("I3", "I5")])).toMatch(/I3 cannot start a route/);
++    expect(why(state, LINE, [R("I5", "I3")])).toMatch(/I3 cannot end a route/);
++  });
++
++  it("12. a train may not use the same section of track twice, nor count the same city twice", () => {
++    const looped = board({ corps: [co(["D"], [["I3", 0]])] });
++    expect(why(looped, LOOP, [R("I3", "I5", "I7", "J6", "I5", "I7")])).toMatch(/same section of track twice at I5/);
++    refused(looped, run(looped, LOOP, [R("I3", "I5", "I7", "J6", "I5", "I7")]));
++    expect(why(looped, LOOP, [R("I3", "I5", "I7", "J6", "I5")])).toMatch(/counts I5 twice/);
++    // I3 -> I5 -> I7 -> J6 ends on plain track; the loop itself is fine when it ends at a city.
++    expect(why(looped, LOOP, [R("I3", "I5", "I7", "J6")])).toMatch(/J6 cannot end a route/);
++  });
++
++  it("the other city (or town) of the same hex may be visited: two rails, two stops, both paid (6.4.2)", () => {
++    const four = board({ corps: [co(["4"])] });
++    const path = R("I5", "I7", "H8", "I9", "I7", "J6");
++    expect(why(four, DOUBLE_TOWN, [path])).toBeNull();
++    const after = run(four, DOUBLE_TOWN, [path]);
++    expect(revenue(after)).toBe(60); // I5 $20, town $10, town $10, J6 $20
++    expect(sandboxRouteBreakdown(DOUBLE_TOWN, path, "Yellow", CO).centres).toBe(4);
++  });
++
++  it("a named city must be the one the rail enters, and a bypass only where the rails offer one", () => {
++    expect(why(state, TWO_CITIES, [[{ hex: "I9" }, { hex: "I7", city_node: 1 }]])).toMatch(/does not enter city 1/);
++    expect(why(state, LINE, [[{ hex: "I5" }, { hex: "I7", bypass: true }, { hex: "I9" }]])).toMatch(/cannot be bypassed/);
++    expect(why(state, LINE, [[{ hex: "I5" }, { hex: "I7", bypass: true }]])).toMatch(/cannot be bypassed/);
++    expect(why(state, LINE, [[{ hex: "I5" }, { hex: "I7", city_node: 7 }]])).toMatch(/names a city/);
++  });
++});
++
++describe("cross-route legality (13-14)", () => {
++  it("13. two of the corporation's trains may not share a section of track", () => {
++    const state = board({ corps: [co(["2", "2"])] });
++    expect(why(state, LINE, [R("I5", "I7"), R("I5", "I7")], [0, 1])).toMatch(/Routes 1 and 2 both use the track at/);
++    refused(state, run(state, LINE, [R("I5", "I7"), R("I5", "I7")], [0, 1]));
++    // The fork's shared stub toward I9 is one piece of track for both prongs (#731).
++    const forked = board({ corps: [co(["2", "2"], [["I5", 0], ["H6", 0]])] });
++    expect(why(forked, FORK, [R("I5", "I7", "I9"), R("H6", "I7", "I9")], [0, 1])).toMatch(/both use the track at I7/);
++  });
++
++  it("14. sharing a city, a hex on separate tracks, or an off-board destination by different edges stays legal", () => {
++    const state = board({ corps: [co(["2", "2"])] });
++    // Meeting at I5: one train leaves east, the other west -- two stubs of one straight (#669).
++    expect(why(state, LINE, [R("I5", "I7"), R("I5", "I3", "J2")], [0, 1])).toBeNull();
++    // Crossing one hex on the two separate straights of a crossover.
++    const crossed = board({ corps: [co(["2", "2"], [["I5", 0], ["H8", 0]])] });
++    expect(why(crossed, CROSS, [R("I5", "I7", "I9"), R("H8", "I7", "J6")], [0, 1])).toBeNull();
++    expect(revenue(run(crossed, CROSS, [R("I5", "I7", "I9"), R("H8", "I7", "J6")], [0, 1]))).toBe(80);
++  });
++});
++
++/* ------------------------------------------------------------------ */
++/* 17-19. Revenue and dividend authority                              */
++/* ------------------------------------------------------------------ */
++
++describe("revenue and dividend authority (17-19)", () => {
++  it("17. a crafted revenue figure on the message cannot change the total", () => {
++    const state = board({ corps: [co(["2"])] });
++    const after = run(state, LINE, [R("I5", "I7")], [0], ["2"], { revenue: "9999", printed_revenue: "9999", last_route_revenue: "9999", total: 9999 });
++    expect(revenue(after)).toBe(40);
++    expect(company(after, CO).printed_route_revenue).toBe("40");
++  });
++
++  it("18. DeclareDividends pays only the authoritative run: a mismatched amount is refused at the reducer and at ingress", () => {
++    const state = board({ corps: [co(["2"])] });
++    const ran = run(state, LINE, [R("I5", "I7")]);
++    expect(ran.operating_sub_phase).toBe("Dividends");
++    const declare = (amount: string) => ({ DeclareDividends: { game_id: 1, protocol_id: CO, revenue_amount: amount, distribute: true } }) as never;
++    expect(dividendAmountRefusal(ran, { protocol_id: CO, revenue_amount: "400" })).toMatch(/ran \$40 this turn; a dividend declaration of \$400/);
++    refused(ran, applySandboxAction(ran, declare("400"), { mapGrid: LINE, era: "Yellow" }));
++    refused(ran, applySandboxAction(ran, declare("0"), { mapGrid: LINE, era: "Yellow" }));
++    expect(turnRefusal({ state: ran, waterfall: null, actor: P1, msg: declare("400"), mapGrid: LINE })).toMatch(/does not match/);
++    const paid = applySandboxAction(ran, declare("40"), { mapGrid: LINE, era: "Yellow" });
++    applied(ran, paid);
++    expect(Number(paid.player_cash.find((row) => row.player === P1)?.cash_vgp)).toBe(524); // 60% of $40
++    expect(paid.operating_sub_phase).toBe("Hardware");
++    // Nothing ran: only $0 may be declared.
++    const idle = board({ corps: [co(["2"])], step: "Dividends" });
++    expect(dividendAmountRefusal(idle, { protocol_id: CO, revenue_amount: "50" })).toMatch(/ran \$0/);
++    expect(dividendAmountRefusal(idle, { protocol_id: CO, revenue_amount: "0" })).toBeNull();
++    // A log written before #752 carries no amount: judged by the field it would have read.
++    expect(dividendAmountRefusal(idle, { protocol_id: CO })).toBeNull();
++  });
++
++  it("19. a repeated or stale run in the same turn cannot double the revenue, whatever key it carries", () => {
++    const state = board({ corps: [co(["2"])] });
++    const once = run(state, LINE, [R("I5", "I7")], [0], ["2"], { revenue_turn: "3.1.5" });
++    expect(revenue(once)).toBe(40);
++    refused(once, run(once, LINE, [R("I5", "I7")], [0], ["2"], { revenue_turn: "3.1.5" }));
++    refused(once, run(once, LINE, [R("I5", "I7")], [0], ["2"], { revenue_turn: "9.9.9" }));
++    refused(once, run(once, LINE, [R("I5", "I7")], [0], ["2"], {}));
++    expect(why(once, LINE, [R("I5", "I7")])).toMatch(/already run its trains this turn/);
++    // The #1183 key now lands where it is read (the state), so its undo semantics hold too.
++    expect(once.last_run_turn_key).toBe("3.1.5");
++    // Out of step: a run at the Track step is refused.
++    const early = board({ corps: [co(["2"])], step: "Track" });
++    expect(why(early, LINE, [R("I5", "I7")])).toMatch(/Run Trains step/);
++    refused(early, run(early, LINE, [R("I5", "I7")]));
++  });
++
++  it("the legacy RunManualRoute arm is closed on a pinned board and open to a legacy log", () => {
++    const pinned = board({ corps: [co(["2"])] });
++    const manual = { RunManualRoute: { game_id: 1, protocol_id: CO, path: R("I5", "I7"), payout_strategy: "Withhold" } } as never;
++    refused(pinned, applySandboxAction(pinned, manual, { mapGrid: LINE, era: "Yellow" }));
++    expect(turnRefusal({ state: pinned, waterfall: null, actor: P1, msg: manual, mapGrid: LINE })).toMatch(/legacy replay message/);
++    const legacy = board({ corps: [co(["2"])], pinned: false });
++    expect(revenue(applySandboxAction(legacy, manual, { mapGrid: LINE, era: "Yellow" }))).toBe(40);
++  });
++});
++
++/* ------------------------------------------------------------------ */
++/* 10 (Part 10). No-route and skip cases                              */
++/* ------------------------------------------------------------------ */
++
++describe("no-route, zero-revenue and skipping (Part 10)", () => {
++  const ADVANCE = { AdvanceOperatingSubPhase: { game_id: 1, protocol_id: CO } } as never;
++  const PASS = { PassTurn: { game_id: 1 } } as never;
++
++  it("a corporation with trains and a paying route may not skip Run Trains or end its turn there", () => {
++    const state = board({ corps: [co(["2"])] });
++    expect(routeSkipRefusal(state, ADVANCE, LINE)).toMatch(/has a route it can run \(worth up to \$50\)/); // I5-I3-Gulf
++    expect(routeSkipRefusal(state, PASS, LINE)).toMatch(/has a route it can run/);
++    refused(state, applySandboxAction(state, ADVANCE, { mapGrid: LINE, era: "Yellow" }));
++    expect(turnRefusal({ state, waterfall: null, actor: P1, msg: ADVANCE, mapGrid: LINE })).toMatch(/has a route it can run/);
++    // Once it has run, the step moves on and nothing objects to the turn ending.
++    const ran = run(state, LINE, [R("I5", "I7")]);
++    expect(routeSkipRefusal(ran, PASS, LINE)).toBeNull();
++  });
++
++  it("a corporation with trains but no legal route skips; a trainless one skips (the forced purchase is Batch 4/5's)", () => {
++    const stranded = board({ corps: [co(["2"], [["I9", 0]])] }); // I9's only rail runs west to I7 -- one city each way? No: I9-I7 pays.
++    expect(routeSkipRefusal(stranded, ADVANCE, LINE)).toMatch(/has a route/);
++    const isolated = board({ corps: [co(["2"], [["H6", 0]])] }); // H6 has no track on LINE
++    expect(routeSkipRefusal(isolated, ADVANCE, LINE)).toBeNull();
++    applied(isolated, applySandboxAction(isolated, ADVANCE, { mapGrid: LINE, era: "Yellow" }));
++    const trainless = board({ corps: [co([])] });
++    expect(routeSkipRefusal(trainless, ADVANCE, LINE)).toBeNull();
++    expect(why(trainless, LINE, [R("I5", "I7")])).toMatch(/owns 0 trains/);
++  });
++
++  it("a legacy (unpinned) board keeps the skips its log recorded", () => {
++    const legacy = board({ corps: [co(["2"])], pinned: false });
++    applied(legacy, applySandboxAction(legacy, ADVANCE, { mapGrid: LINE, era: "Yellow" }));
++  });
++
++  it("without a grid the gate has no opinion (#757), so fixtures exercising other rules still run", () => {
++    const state = board({ corps: [co(["2"])] });
++    const after = applySandboxAction(state, runMsg(CO, [R("I5", "I7")], [0]));
++    applied(state, after);
++  });
++});
++
++/* ------------------------------------------------------------------ */
++/* 20. The PRR $60 -> $30 defect (LPF / 1830+ herald home)             */
++/* ------------------------------------------------------------------ */
++
++describe.each([
++  ["18XX+ (expandedMap)", EXPANDED_BOARD, { expandedMap: true, plusTiles: true }],
++  ["Level Playing Field", LPF_BOARD, { levelPlayingField: true, expandedMap: true, plusTiles: true }],
++] as const)("20. the PRR that ran $60 and was paid $30 (#1554) on the %s board", (_name, BOARD, variants) => {
++  /* The reducer scopes the board from `state.variants` (`withRules`, #1300); the evaluator called directly
++     reads the board in effect, so both are set. The LPF playtest reported it; 18XX+ prints the same herald. */
++  beforeAll(() => activateBoard(BOARD));
++  afterAll(() => activateBoard(STANDARD_BOARD));
++
++  const H10 = { q: 1, r: 7 };
++  const H14 = { q: 3, r: 7 };
++  const plusGrid = (): MapGridResponse => {
++    const base = initialGridFor(BOARD);
++    return { ...base, tiles: [...base.tiles, { ...H10, tile_id: 57, orientation: 0 } as MapTileEntry, { ...H14, tile_id: 57, orientation: 0 } as MapTileEntry] };
++  };
++  const prrBoard = () => board({
++    corps: [{ id: PRR, ticker: "PRR", president: P1, trains: ["2", "2"], tokens: [], home: "H12" }],
++    operating: PRR,
++    extra: { variants: { ...variants } } as never,
++  });
++  const TO_HOME = R("H10", "H12");
++  const FROM_HOME = R("H12", "H14");
++
++  it("both routes are legal for the herald's owner and total $60 in the authority", () => {
++    const state = prrBoard();
++    const grid = plusGrid();
++    const verdict = evaluateRouteSet({ state, mapGrid: grid, era: "Yellow", companyId: PRR, routes: [TO_HOME, FROM_HOME], trainIndices: [0, 1] });
++    expect(legalRuns(verdict)?.map(([, , revenue]) => revenue)).toEqual([30, 30]);
++    expect(verdict).toMatchObject({ kind: "legal", total: 60 });
++    const after = applySandboxAction(state, runMsg(PRR, [TO_HOME, FROM_HOME], [0, 1], ["2", "2"]), { mapGrid: grid, era: "Yellow" });
++    expect(revenue(after, PRR)).toBe(60);
++  });
++
++  it("ROOT CAUSE: the shell's terminus test was asked without the corporation, so the route ENDING on the herald was dropped before dispatch", () => {
++    const grid = plusGrid();
++    // The predicate the draft memo used (no corporation): H12 is not a terminus, so `endsOffTerminus` was true
++    // for TO_HOME and `runnableDrafts` skipped it -- one route dispatched, $30 shown.
++    expect(isRouteTerminusHex(grid, "H12")).toBe(false);
++    // The predicate every other reader used (the tracer, the pricing, and now the shell): H12 is PRR's terminus.
++    expect(isRouteTerminusHex(grid, "H12", PRR)).toBe(true);
++    // FROM_HOME survived because a route's START is judged by the tracer with the corporation. Both are drawn.
++    const app = readStripped("App.tsx");
++    expect(app).toContain("!isRouteTerminusHex(mapGrid, last.hexLabel, actingProtocolId ?? undefined)");
++    expect(app).not.toContain("!isRouteTerminusHex(mapGrid, last.hexLabel)\n");
++    // And a hand-drawn route may now START on the herald for its owner (rule 1 of the draft editor).
++    const start = { q: 2, r: 7, hexLabel: "H12" };
++    expect(editRouteDraft({ mapGrid: grid, points: [], click: start, displayLabel: "Altoona (H12)", maxDistance: 2, forCompanyId: PRR }).ok).toBe(true);
++    expect(editRouteDraft({ mapGrid: grid, points: [], click: start, displayLabel: "Altoona (H12)", maxDistance: 2 }).ok).toBe(false);
++  });
++
++  it("the herald is nobody else's: NYC neither counts it nor may end there, and cannot bypass a plain hex", () => {
++    const grid = plusGrid();
++    const nyc = board({ corps: [{ id: 2, ticker: "NYC", president: P1, trains: ["3"], tokens: [["H10", 0]] }], operating: 2, extra: { variants: { ...variants } } as never });
++    const verdict = evaluateRouteSet({ state: nyc, mapGrid: grid, era: "Yellow", companyId: 2, routes: [R("H10", "H12", "H14")], trainIndices: [0] });
++    expect(verdict).toMatchObject({ kind: "legal", total: 40 });
++    const ends = evaluateRouteSet({ state: nyc, mapGrid: grid, era: "Yellow", companyId: 2, routes: [R("H10", "H12")], trainIndices: [0] });
++    expect(ends.kind === "refused" && ends.reason).toMatch(/H12 cannot end a route/);
++    const bypass = evaluateRouteSet({ state: nyc, mapGrid: grid, era: "Yellow", companyId: 2, routes: [[{ hex: "H10" }, { hex: "H12", bypass: true }, { hex: "H14" }]], trainIndices: [0] });
++    expect(bypass.kind === "refused" && bypass.reason).toMatch(/cannot be bypassed/);
++    // PRR may pass its herald uncounted (#1302) -- two cities on a 2-train, $40, and the flag is kept.
++    const prr = prrBoard();
++    const passed = evaluateRouteSet({ state: prr, mapGrid: grid, era: "Yellow", companyId: PRR, routes: [[{ hex: "H10" }, { hex: "H12", bypass: true }, { hex: "H14" }]], trainIndices: [0] });
++    expect(passed.kind === "legal" && passed.total).toBe(40);
++  });
++});
++
++/* ------------------------------------------------------------------ */
++/* 21-23. Replay, RevertTo, the version                               */
++/* ------------------------------------------------------------------ */
++
++describe("the log (21-23)", () => {
++  const providers = () => ({ ...sandboxReplayProviders(), initialGrid: LINE });
++  const seed = () => ({ state: board({ corps: [co(["2", "2"]), bo([["I9", 0]])] }), waterfall: null });
++  const entry = (index: number, actor: string, msg: unknown) => ({ index, id: `e${index}`, actor, payload: JSON.stringify(msg) });
++  const RUN = runMsg(CO, [R("I5", "I7"), R("I5", "I3", "J2")], [0, 1], ["2", "2"], { revenue_turn: "3.1.5" });
++  const DECLARE = { DeclareDividends: { game_id: 1, protocol_id: CO, revenue_amount: "90", distribute: false } } as never;
++  const REVERT = (index: number, player: string) => ({ RevertTo: { index, player, summary: "undo" } });
++
++  it("21. a same-version route log rebuilds identically through the engine and through a room", () => {
++    const entries = [entry(0, P1, RUN), entry(1, P1, DECLARE)];
++    const once = replayLog(entries, providers(), seed(), undefined, DEVELOPMENT_CORPUS_POLICY);
++    const twice = replayLog(entries, providers(), seed(), undefined, DEVELOPMENT_CORPUS_POLICY);
++    expect(once.applied).toBe(2);
++    expect(stateDigest(once.state)).toBe(stateDigest(twice.state));
++    expect(revenue(once.state)).toBe(90);
++    expect(Number(company(once.state, CO).treasury)).toBe(390);
++
++    const room = new RoomSession({ providers: providers(), seed: seed(), build: "b", mintId: () => `m${Math.random()}` });
++    const submit = (actor: string, msg: never) => room.submit({ actor, build: "b", msg, baseIndex: room.nextIndex - 1, host: P1 });
++    const bad = submit(P1, runMsg(CO, [R("I5", "I7"), R("I5", "I7")], [0, 1], ["2", "2"]));
++    expect(bad.kind).toBe("refused");
++    expect((bad as { reason: string }).reason).toMatch(/both use the track/);
++    expect(submit(P2, RUN).kind).toBe("refused"); // not B&O's president's to send
++    expect(submit(P1, RUN).kind).toBe("applied");
++    expect(submit(P1, RUN).kind).toBe("refused"); // one run per turn
++    const wrong = submit(P1, { DeclareDividends: { game_id: 1, protocol_id: CO, revenue_amount: "180", distribute: false } } as never);
++    expect((wrong as { reason: string }).reason).toMatch(/does not match/);
++    expect(submit(P1, DECLARE).kind).toBe("applied");
++    const restored = new RoomSession({ providers: providers(), seed: seed(), build: "b", mintId: () => "x" });
++    restored.restore(room.entries as ServerLogEntry[]);
++    expect(stateDigest(restored.state)).toBe(stateDigest(room.state));
++    expect(revenue(restored.state)).toBe(90);
++  });
++
++  it("22. RevertTo reconstructs the route and revenue state exactly", () => {
++    const undone = replayLog([entry(0, P1, RUN), entry(1, P1, REVERT(0, P1))], providers(), seed(), undefined, DEVELOPMENT_CORPUS_POLICY);
++    expect(undone.applied).toBe(0);
++    const untouched = replayLog([], providers(), seed(), undefined, DEVELOPMENT_CORPUS_POLICY);
++    expect(stateDigest(undone.state)).toBe(stateDigest(untouched.state));
++    expect(company(undone.state, CO).routes_run_this_turn ?? 0).toBe(0);
++    expect(undone.state.last_run_turn_key).toBeUndefined();
++    // and the honest re-dispatch after an undo is accepted, at the same key (#1183's undo case)
++    const again = replayLog([entry(0, P1, RUN), entry(1, P1, REVERT(0, P1)), entry(2, P1, RUN)], providers(), seed(), undefined, DEVELOPMENT_CORPUS_POLICY);
++    expect(revenue(again.state)).toBe(90);
++  });
++
++  it("23. RULES_ENGINE_VERSION is 4, the changelog says why, and a version-3 room is refused before reducer replay", () => {
++    expect(RULES_ENGINE_VERSION).toBe(4);
++    expect(SUPPORTED_RULES_ENGINE_VERSIONS).toEqual([4]);
++    expect(RULES_ENGINE_CHANGELOG.map((row) => row.version)).toEqual([1, 2, 3, 4]);
++    expect(RULES_ENGINE_CHANGELOG[3].note).toMatch(/route|revenue|dividend/i);
++    const seedOf = () => ({
++      state: withEmptyRoster(sandboxScenarioState(DEFAULT_SANDBOX_SCENARIO, 0, "default")),
++      waterfall: waterfallForRoster(sandboxWaterfallState(sandboxScenario(DEFAULT_SANDBOX_SCENARIO).phase, 0, true), []),
++    });
++    const fresh = new RoomSession({ providers: sandboxReplayProviders(), seed: seedOf(), build: "b", mintId: () => "d" });
++    expect(fresh.submit({ actor: P1, build: "b", msg: { SetupGame: { players: [{ id: P1, nickname: "A" }, { id: P2, nickname: "B" }], variants: {}, build: "b" } } as never, baseIndex: -1 }).kind).toBe("applied");
++    expect(fresh.rulesEngineVersion()).toBe(4);
++    expect(fresh.state.rules_engine_version).toBe(4); // #1551: the pin is on the board
++    const versionThree = fresh.entries.map((row) => {
++      const parsed = JSON.parse(row.payload) as { SetupGame?: Record<string, unknown> };
++      return parsed.SetupGame ? { ...row, payload: JSON.stringify({ ...parsed, SetupGame: { ...parsed.SetupGame, [RULES_ENGINE_VERSION_FIELD]: 3 } }) } : { ...row };
++    });
++    const applySpy = jest.spyOn(RoomEngine.prototype, "apply");
++    try {
++      const old = new RoomSession({ providers: sandboxReplayProviders(), seed: seedOf(), build: "b", mintId: () => "x" });
++      old.restore(versionThree as ServerLogEntry[]);
++      expect(applySpy).not.toHaveBeenCalled();
++      expect(old.incompatible?.compatibility).toEqual({ kind: "incompatible", version: 3, supported: [4] });
++    } finally {
++      applySpy.mockRestore();
++    }
++  });
++});
++
++/* ------------------------------------------------------------------ */
++/* Ingress: the schema refuses shapes, never rules (#1553)            */
++/* ------------------------------------------------------------------ */
++
++describe("the schema at the door (#1553)", () => {
++  const msg = (routes: unknown, extra: Record<string, unknown> = {}) => ({ RunMultipleRoutes: { protocol_id: CO, routes, ...extra } });
++  it("refuses malformed route payloads", () => {
++    expect(validateGameplayMessage(msg("x")).ok).toBe(false);
++    expect(validateGameplayMessage(msg([["I5", "I7"]])).ok).toBe(false);
++    expect(validateGameplayMessage(msg([[{ hex: 5 }]])).ok).toBe(false);
++    expect(validateGameplayMessage(msg([[{ hex: "I5", city_node: "1" }]])).ok).toBe(false);
++    expect(validateGameplayMessage(msg([[{ hex: "I5", bypass: "yes" }]])).ok).toBe(false);
++    expect(validateGameplayMessage(msg([[{ hex: "I5" }, { hex: "I7" }]], { train_indices: ["0"] })).ok).toBe(false);
++    expect(validateGameplayMessage(msg([[{ hex: "I5" }, { hex: "I7" }]], { trains: [2] })).ok).toBe(false);
++    expect(validateGameplayMessage(msg(Array.from({ length: 65 }, () => [{ hex: "I5" }, { hex: "I7" }]))).ok).toBe(false);
++    expect(validateGameplayMessage({ RunManualRoute: { protocol_id: CO, path: [1], payout_strategy: "Withhold" } }).ok).toBe(false);
++  });
++  it("admits every shape the stored logs carry, and leaves the rules to the reducer", () => {
++    expect(validateGameplayMessage(msg([[{ hex: "H16" }, { hex: "H14" }, { bypass: true, hex: "H12" }, { hex: "H10" }]], { trains: ["2"], train_indices: [1], revenue_seed: 1, revenue_turn: "5.1.1", payout_strategy: "Withhold" })).ok).toBe(true);
++    expect(validateGameplayMessage(msg([[{ hex: "Z99" }, { hex: "Q1" }]])).ok).toBe(true); // a rule, not a shape
++    expect(validateGameplayMessage(msg([])).ok).toBe(true); // an empty run is the reducer's to refuse
++  });
++});
+diff --git a/frontend/src/utils/routeDraftEdit.ts b/frontend/src/utils/routeDraftEdit.ts
+index f5eee0e..d5f14d3 100644
+--- a/frontend/src/utils/routeDraftEdit.ts
++++ b/frontend/src/utils/routeDraftEdit.ts
+@@ -67,24 +67,28 @@ export interface RouteDraftEditInput {
+    *
+    * OMITTED MEANS NO BLOCKING, which reproduces every pre-#1023 caller exactly. */
+   blocksThrough?: (q: number, r: number, cityIndex: number) => boolean;
++  /** Design note #1554 (Batch 6): the corporation drawing, so its herald (#1302) is a place a route may start
++   *  and a stop it counts. Omitted keeps the corporation-blind answer, which is every pre-#1554 caller. */
++  forCompanyId?: number;
+ }
+ 
+ /** How many of these points pay. The cap counts revenue CENTRES, not hexes travelled (#156). */
+-function centresIn(mapGrid: MapGridResponse, points: readonly RoutePoint[]): number {
++function centresIn(mapGrid: MapGridResponse, points: readonly RoutePoint[], forCompanyId?: number): number {
+   return points.reduce(
+-    (total, entry) => (isRevenueCentreHex(mapGrid, entry.hexLabel) ? total + 1 : total),
++    (total, entry) => (isRevenueCentreHex(mapGrid, entry.hexLabel, forCompanyId) ? total + 1 : total),
+     0,
+   );
+ }
+ 
+ export function editRouteDraft(input: RouteDraftEditInput): RouteDraftEdit {
+-  const { mapGrid, points, click, displayLabel, maxDistance, blocksThrough } = input;
++  const { mapGrid, points, click, displayLabel, maxDistance, blocksThrough, forCompanyId } = input;
+   const last = points[points.length - 1];
+ 
+   /* RULE 1 -- WHERE A ROUTE MAY START. A route runs between two revenue centres, so the FIRST click is
+      refused outright if it is not one; the LAST is left to the readout, because a player mid-draw has not
+-     finished yet. Towns are not termini (#264). */
+-  if (points.length === 0 && !isRouteTerminusHex(mapGrid, click.hexLabel)) {
++     finished yet. Towns are not termini (#264). #1554: asked for the corporation drawing, so the PRR may
++     start at its herald. */
++  if (points.length === 0 && !isRouteTerminusHex(mapGrid, click.hexLabel, forCompanyId)) {
+     return {
+       ok: false,
+       reason: `${displayLabel} cannot START a route. Routes begin at a city or a red off-board hex — towns and plain track are passed through.`,
+@@ -112,7 +116,7 @@ export function editRouteDraft(input: RouteDraftEditInput): RouteDraftEdit {
+   const cap = reachForDrafting(maxDistance);
+   const commit = (next: RoutePoint[]): RouteDraftEdit => {
+     if (!isUnlimitedReach(cap)) {
+-      const centres = centresIn(mapGrid, next);
++      const centres = centresIn(mapGrid, next, forCompanyId);
+       if (centres > cap) {
+         return {
+           ok: false,
+diff --git a/frontend/src/utils/visitOnce.test.ts b/frontend/src/utils/visitOnce.test.ts
+index ddb284b..8e8377f 100644
+--- a/frontend/src/utils/visitOnce.test.ts
++++ b/frontend/src/utils/visitOnce.test.ts
+@@ -94,8 +94,21 @@ describe("the stop a rail arrives at", () => {
+ });
+ 
+ describe("a second train scores the same city again", () => {
+-  it("prices each route on its own, so two trains through Cleveland both collect it", () => {
+-    const grid: MapGridResponse = { game_id: 1, tiles: [] };
++  it("prices each route on its own, so two trains through the token city both collect it", () => {
++    /* Batch 6 (#1550): the reducer now judges the routes it prices, so the fixture has to be a board the
++       routes can actually run on. It used to run F4-F6 and E5-F6 across a bare grid on which Cleveland's
++       printed track reaches neither neighbour; the pricing did not care. Three yellow cities in a row on
++       plain hexes (C7, C9, C11 -- #57 straights, edges 0/3), the token on the middle one: two 2-trains run
++       C7-C9 and C11-C9, each collecting C9 ($20) plus its own end ($20), on separate track (the two stubs of
++       C9's straight are two sections, #669). */
++    const grid: MapGridResponse = {
++      game_id: 1,
++      tiles: [
++        { q: 2, r: 2, tile_id: 57, orientation: 0, landmark: null },
++        { q: 3, r: 2, tile_id: 57, orientation: 0, landmark: null },
++        { q: 4, r: 2, tile_id: 57, orientation: 0, landmark: null },
++      ],
++    };
+     const state = {
+       game_id: 1,
+       current_round_type: "OperatingRound",
+@@ -112,7 +125,8 @@ describe("a second train scores the same city again", () => {
+           president: "p1",
+           treasury: "100",
+           owned_trains: ["2", "2"],
+-          station_token_hexes: [[0, 5]],
++          station_token_hexes: [[3, 2]],
++          station_tokens: [[3, 2, 0]],
+           station_token_limit: 3,
+           is_floated: true,
+         },
+@@ -120,7 +134,6 @@ describe("a second train scores the same city again", () => {
+       active_operating_order: [5],
+       active_corporation_index: 0,
+     } as unknown as GameStateResponse;
+-    // Two 2-trains, each running Cleveland ($30) to a neighbouring city: Toledo (F4) and Detroit & Windsor (E5).
+     const after = applySandboxAction(
+       state,
+       {
+@@ -128,15 +141,16 @@ describe("a second train scores the same city again", () => {
+           game_id: 1,
+           protocol_id: 5,
+           routes: [
+-            [{ hex: "F4" }, { hex: "F6" }],
+-            [{ hex: "E5" }, { hex: "F6" }],
++            [{ hex: "C7" }, { hex: "C9" }],
++            [{ hex: "C11" }, { hex: "C9" }],
+           ],
+           trains: ["2", "2"],
++          train_indices: [0, 1],
+         },
+       } as never,
+       { mapGrid: grid, era: "Yellow" },
+     );
+     const co = after.public_companies.find((entry) => entry.company_id === 5)!;
+-    expect(Number(co.last_route_revenue)).toBe(60); // $30 for Cleveland on each train's route; F4 and E5 print $0
++    expect(Number(co.last_route_revenue)).toBe(80); // $40 each: C9 is collected by both trains (#1319 (ii))
+   });
+ });

@@ -248,17 +248,42 @@ describe("the client reads them back (design note #1415)", () => {
   });
 
   it("a spectator takes no seat, and a kicked seat does not ask for one back", () => {
+    /* Design note #1441 WIDENS THIS GUARD, and the claim is the one that matters rather than its spelling:
+       #1415 inferred "spectator" from the room's STATUS, which was true of every door that existed then and
+       is wrong about Watch on a table that is still waiting. The intent travels with the code now. */
     const app = readStripped("App.tsx");
-    expect(app).toContain('if (sandboxRoom.status !== "waiting" || (sandboxRoom.kicked ?? []).includes(localId)) return;');
+    /* Design note #1442 makes the intent a ROOM rather than a flag; the three reasons not to claim a seat are
+       the same three, and the first of them now has to be about THIS room. */
+    expect(app).toContain("sandboxWatchRoom === sandboxRoomCode ||");
+    expect(app).toContain('sandboxRoom.status !== "waiting" ||');
+    expect(app).toContain("(sandboxRoom.kicked ?? []).includes(localId)");
     expect(app).toContain("onKick={sandboxRoom?.hostId === localId ? handleKickSandboxPlayer : undefined}");
     expect(app).not.toContain("handleSetSandboxVariants");
   });
 
-  it("the join card lists open and ongoing public games and disables a full table", () => {
+  it("lists open and ongoing public games on the LOBBY, and every one of them can be watched", () => {
+    /* ==================================================================
+        DESIGN NOTE 1440 SUPERSEDES #1415's PLACEMENT, NOT ITS RULES
+       ==================================================================
+       THIS CASE ASKED THE JOIN CARD, because that is where #1415 put the list. The three claims it makes are
+       unchanged and are asked of `LobbyRoomList` instead: open is `waiting`, ongoing is `playing`, and a
+       table at its cap offers a disabled button rather than a refusal the server would have to send.
+       THE FOURTH CLAIM STAYS WITH THE CARD, since it is the card's whole reason for existing now -- and it
+       is asserted as a SENTENCE about private rooms rather than as a list the card no longer draws. */
+    const list = readStripped("components/LobbyRoomList.tsx");
+    expect(list).toContain('row.status === "waiting"');
+    expect(list).toContain('row.status === "playing"');
+    expect(list).toContain("full: seated >= room.seatCap,");
+    /* Design note #1441 SUPERSEDES THE LAST CLAUSE: a full table offered a disabled button, which occupied
+       the one place a control can be, said no, and hid the thing the room could still do. "Full" is written
+       as status and Watch is drawn as the door it always was -- the server having refused a WATCHER only for
+       a private room after the deal, at any point in this file's history. */
+    expect(list).toContain("data-testid={`lobby-full-${row.code}`}");
+    expect(list).not.toContain("disabled={busy || row.full}");
     const card = readStripped("components/JoinGameCard.tsx");
-    expect(card).toContain('room.status === "waiting"');
-    expect(card).toContain('room.status === "playing"');
-    expect(card).toContain("const full = room.players.length >= room.seatCap;");
-    expect(card).toContain("A private game is joined by its code only, and cannot be watched.");
+    expect(card).toContain("the code is their only door, and they cannot be watched");
+    // The list is not rendered twice: the card holds no room summary of any kind.
+    expect(card).not.toContain("SandboxRoomSummary");
+    expect(card).not.toContain("onSpectate");
   });
 });

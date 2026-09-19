@@ -113,10 +113,14 @@ describe("the caption is one shape and one colour, stated once", () => {
   });
 
   it("names the gold instead of typing it a third time", () => {
-    expect(CARD_CAPTION_GOLD).toBe("#8a7332");
-    /* Both `SpecialPowerBlock` call sites on this surface, plus the new caption, now read the constant. */
+    /* THE CLAIM IS THAT THE GOLD IS NAMED, not what it is worth. #1172 darkened the value to clear the 4.5:1
+       floor and this case asserted the old hex, so it failed for the one reason it should not: the constant
+       did its job. The value and its contrast are `crossAppConsistency.test.ts`'s to hold. */
+    expect(CARD_CAPTION_GOLD).toMatch(/^#[0-9a-f]{6}$/);
+    /* Both `SpecialPowerBlock` call sites on this surface, plus the new caption, read the constant. */
+    expect(AUCTION).not.toContain(CARD_CAPTION_GOLD);
     expect(AUCTION).not.toContain("#8a7332");
-    expect(AUCTION).not.toContain("rgba(138, 115, 50, 0.09)");
+    expect(AUCTION).not.toContain("rgba(122, 101, 41, 0.09)");
     expect(AUCTION.split("captionInk={CARD_CAPTION_GOLD}").length - 1).toBe(2);
   });
 

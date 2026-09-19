@@ -37,7 +37,7 @@ const { readStripped, sliceBetween } = require("./sourceScan") as typeof import(
 const { UI_SCALE, CHROME_ZOOM, styles } =
   require("../styles/appStyles") as typeof import("../styles/appStyles");
 /* Design note #1273: the preference behind the constant. */
-const { UI_SCALE_DESIGN, UI_SCALE_STEPS, defaultUiScaleFor, snapUiScale } =
+const { UI_SCALE_DEFAULT, UI_SCALE_DESIGN, UI_SCALE_STEPS, snapUiScale } =
   require("./uiScale") as typeof import("./uiScale");
 
 const APP = readStripped("App.tsx");
@@ -50,7 +50,7 @@ const INTRO = readStripped("components/GameIntroOverlay.tsx");
 const SIGN = readStripped("components/YellowSignOverlay.tsx");
 
 describe("the scale is one number", () => {
-  it("is the figure the player arrived at, not a round one", () => {
+  it("keeps the figure the player arrived at as a step, and starts nobody on it", () => {
     /* A REPORT, NOT A PREFERENCE. A test that only checked "some number is exported" would pass on 0.75 chosen
        because it looked nicer.
        ==================================================================
@@ -61,21 +61,28 @@ describe("the scale is one number", () => {
        lands at `F * s * b` and the board at `W - F * s * b`, so any pair with the same `s * b` is the same
        layout), 0.7 x 0.9 is exactly what the player is looking at rather than an approximation of it.
        ASSERTED AS THE PRODUCT, not as the literal, so the arithmetic is stated where it can be checked. */
-    /* Design note #1273: THE THIRD READING MADE IT A PREFERENCE. `UI_SCALE` now resolves through
-       `utils/uiScale.ts` -- this browser's stored choice, else a guess from the window's width. Outside a
-       browser (this file runs in node) that resolves to the design figure, which is still #1149's product,
-       and the guess still lands on it at the widths #1149 measured. */
-    expect(UI_SCALE).toBeCloseTo(0.7 * 0.9, 10);
-    expect(UI_SCALE).toBe(0.63);
+    /* Design note #1273: THE THIRD READING MADE IT A PREFERENCE. `UI_SCALE` resolves through
+       `utils/uiScale.ts` -- this browser's stored choice, else the default.
+       ==================================================================
+        DESIGN NOTE 1450: THE READING IS A STEP NOW, NOT A START
+       ==================================================================
+       #1273 kept #1149's constant as a width-interpolated DEFAULT. Measured on a clean first run it drew a
+       13px label at 8.19px on a 1920 viewport -- and 20 / 8.19 is the 250% #1273 was written to answer. The
+       default is 1.0 at every width now and NOTHING reads the window.
+       WHAT THIS CASE STILL DEFENDS, because it is the part that was never wrong: 0.63 is #1149's product,
+       it is still a real reading from a real screen, and it is still on the ladder. What it no longer
+       defends is that anybody is STARTED there. `uiScaleDefault.test.ts` owns the default's behaviour. */
+    expect(UI_SCALE_DESIGN).toBeCloseTo(0.7 * 0.9, 10);
     expect(UI_SCALE_DESIGN).toBe(0.63);
-    expect(defaultUiScaleFor(1920)).toBe(0.63);
-    expect(defaultUiScaleFor(1200)).toBe(1);
-    expect(defaultUiScaleFor(1500)).toBeGreaterThan(0.63);
-    expect(defaultUiScaleFor(NaN)).toBe(0.63);
-    expect(UI_SCALE_STEPS).toContain(0.63);
-    expect(UI_SCALE_STEPS).toContain(1);
+    expect(UI_SCALE_STEPS[0]).toBe(UI_SCALE_DESIGN);
+    expect(UI_SCALE_DEFAULT).toBe(1);
+    expect(UI_SCALE).toBe(UI_SCALE_DEFAULT); // node: nothing stored, so the default
+    expect(Array.from(UI_SCALE_STEPS)).toEqual([0.63, 0.75, 0.9, 1, 1.1, 1.25]);
     expect(snapUiScale(0.97)).toBe(1);
     expect(APPSTYLES).toContain("export const UI_SCALE = resolveUiScale();");
+    // #1450: the width path is gone rather than left unused behind a flag.
+    expect(readStripped("utils/uiScale.ts")).not.toContain("defaultUiScaleFor");
+    expect(readStripped("utils/uiScale.ts")).not.toContain("innerWidth");
   });
 
   it("offers a picker in the bar, which changes the scale live (design note #1294)", () => {
@@ -138,7 +145,18 @@ describe("all three screens draw at the same scale", () => {
        would have had its floor at 70vh and shown the body colour beneath it -- #1140's footer band again, by
        another route. The correction lives in the same object as the zoom so that deleting one deletes both. */
     expect(CHROME_ZOOM.minHeight).toBe(`${100 / UI_SCALE}vh`);
-    expect(String(CHROME_ZOOM.minHeight)).not.toBe("100vh");
+    /* ==================================================================
+        DESIGN NOTE 1450: THE PROXY STOPPED WORKING WHEN THE DEFAULT BECAME 1
+       ==================================================================
+       This case used to add `not.toBe("100vh")`, which stood in for "the correction is present" and only
+       worked because the scale was never 1. It is 1 on a clean first run now, and `100 / 1` is `100vh` --
+       arithmetically right, because at 1.0 there is nothing to correct.
+       SO THE CLAIM IS ASKED OF THE FUNCTION INSTEAD, at a scale where the correction is visible. That is the
+       real invariant: whatever the zoom, the floor is divided by it, in the same object. */
+    const { chromeZoomFor } = require("../styles/appStyles") as typeof import("../styles/appStyles");
+    expect(chromeZoomFor(0.63)).toEqual({ zoom: 0.63, minHeight: `${100 / 0.63}vh` });
+    expect(chromeZoomFor(1.25)).toEqual({ zoom: 1.25, minHeight: "80vh" });
+    expect(chromeZoomFor(1)).toEqual({ zoom: 1, minHeight: "100vh" });
   });
 
   it("puts the lobby's cover arithmetic in the same space on both sides of its max()", () => {

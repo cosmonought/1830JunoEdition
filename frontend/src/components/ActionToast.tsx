@@ -376,10 +376,11 @@ export function ActionToast({
         style={{
           ...styles.toast,
           ...(anchor === "bottom-right" ? styles.toastCorner : {}),
-          // Design note #1048: the identity edge, matching the auction card's own left rule.
-          ...(accentColor
-            ? { borderLeftWidth: "5px", borderLeftStyle: "solid", borderLeftColor: accentColor }
-            : {}),
+          /* Design note #1048: the identity edge, matching the auction card's own left rule.
+             #1449: ALWAYS DECLARED, both ways. The base sets the `border` shorthand, so there is no
+             left-side property for a conditional spread to fall back to -- removing one would take the
+             left edge away entirely. A property whose two branches are both real is never removed. */
+          borderLeft: accentColor ? `5px solid ${accentColor}` : styles.toast.border,
         }}
         className={anchor === "bottom-right" ? "app-action-toast-corner" : "app-action-toast"}
       >

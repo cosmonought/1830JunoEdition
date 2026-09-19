@@ -24,7 +24,16 @@ describe("the outro plays on the ending's edge and hands off to the modal (desig
     expect(outro).toContain("export const OUTRO_CUE_SECONDS = 8.0;"); // #1445 // #1437: after the first fireworks
     expect(outro).toContain("if (event.currentTarget.currentTime >= OUTRO_CUE_SECONDS) cue();");
     expect(outro).toContain("zIndex: 1500");
-    expect(modal).toContain("zIndex: 1600");
+    /* "SITS UNDER THE MODAL", SUPERSEDED BY #1651 AND STRONGER FOR IT. This read
+       `expect(modal).toContain("zIndex: 1600")` -- 1600 over the overlay's 1500, a pair two files had to keep
+       in step by hand. `GameOverModal` is now a `<dialog>` opened with `showModal()`, so it is in the TOP
+       LAYER and paints above the outro's 1500 whatever number the overlay is ever given; the pairing cannot
+       come apart because there is no longer a pair. The number is gone from the modal rather than changed,
+       and a new one would be a claim the engine does not honour -- so it is forbidden here, on the scrim's
+       own style block. The overlay keeps its 1500: it is an ordinary z-indexed surface and nothing about it
+       moved. */
+    expect(modal).toContain("<NativeModal");
+    expect(sliceBetween(modal, "backdrop: {", "},")).not.toContain("zIndex");
     expect(outro).toContain("duckRadio(DUCK_FOR_VIDEO)");
     expect(outro).toContain("muted={!sfxEnabled || cued}");
     expect(outro).toContain('src={GAME_OUTRO_SRC}');

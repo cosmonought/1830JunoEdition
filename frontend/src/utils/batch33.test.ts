@@ -190,14 +190,31 @@ describe("the camera is locked and the controls are gone", () => {
     expect(RENDERER).toContain("setView(fitView);");
   });
 
-  it("locks the page against scaling as well as the board", () => {
+  it("no longer locks the page against scaling -- #1014 withdrawn by #1618", () => {
+    /* WAS `it("locks the page against scaling as well as the board")`, asserting that the viewport carried
+       `maximum-scale=1.0` and `user-scalable=no`. That lock protected a board that owns no gesture a pinch
+       competes with, and its only surviving effect was to deny a mobile reader the platform's own
+       magnification. It is withdrawn; this case now defends the absence rather than the presence, so the pair
+       cannot return by a batch33 revert. The full contract lives in `viewportZoom.test.ts`.
+
+       PARSED, NOT SUBSTRING-MATCHED: the design note directly above the tag quotes both directives in the
+       course of explaining why they are gone, so `toContain` on the raw file would now find them in prose. */
     const html = readSource("../public/index.html");
-    expect(html).toContain("maximum-scale=1.0");
-    expect(html).toContain("user-scalable=no");
+    const tag = /<meta\s+name="viewport"[^>]*content="([^"]*)"/i.exec(html);
+    expect(tag).not.toBeNull();
+    const content = (tag as RegExpExecArray)[1];
+    expect(content).not.toContain("user-scalable");
+    expect(content).not.toContain("maximum-scale");
+    expect(content).toContain("width=device-width");
   });
 
-  it("refuses the pinch on the canvas", () => {
-    expect(MAP_TOUCH_ACTION).toBe("pan-x pan-y");
+  it("no longer refuses the pinch on the canvas -- #1014 withdrawn by #1618", () => {
+    /* WAS `expect(MAP_TOUCH_ACTION).toBe("pan-x pan-y")`. #1014 chose that value over #773's `manipulation`
+       for one reason, quoted in `mapGesture.ts`: a pinch "would ... scale the page under a board that is meant
+       to be locked". The page is no longer meant to be locked, so the reason is gone and the value is #773's
+       again. `manipulation` is strictly more permissive, so everything #773 and #1014 both wanted -- page
+       scrollable under a finger, taps with no double-tap delay -- still holds. */
+    expect(MAP_TOUCH_ACTION).toBe("manipulation");
   });
 });
 

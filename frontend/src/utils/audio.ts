@@ -90,6 +90,13 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
   { id: "ontheroad", name: "On the Road", url: "https://stream.rcs.revma.com/cgvrymb6p98uv" },
   { id: "realcountry", name: "Real Country", url: "https://listen.181fm.com/181-realcountry_64k.aac" },
   { id: "thepower", name: "The Power", url: "https://listen.181fm.com/181-powerexplicit_64k.aac" },
+  /* #1446: MAXXIMUM, on the mount that answers. The three IDs first supplied (`6awx0b7k5szuv`,
+     `ay7rt1p37szuv`, `2q32147w4szuv`) all return 404 from revma -- checked in a browser against the same host
+     that streams On the Road. Maxximum's live mount is the one Radio FG's stream directory lists, and it
+     redirects to a node and plays. FG Pop Legends has no public mount: radiofg.com serves it only through a
+     signed CDN URL that answers 422 off the site, so it is not a station this list can carry. FGM's ID was
+     dead too. */
+  { id: "maxximum", name: "Maxximum", url: "https://stream.rcs.revma.com/nwhyn2c6p98uv" },
 ] as const;
 
 const STATION_STORAGE_KEY = "1830juno.radio_station.v1";
@@ -174,6 +181,27 @@ export function setRadioVolume(value: number): void {
 function clampVolume(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.min(1, Math.max(0, value));
+}
+
+/* ==================================================================
+    DESIGN NOTE 1474: THE MASTER SWITCH, MIRRORED WHERE A CUE BELOW THE SHELL CAN READ IT
+   ==================================================================
+   `playVariantCue` takes the switch as an argument, and until #1474 every caller was the shell, which owns it (#1075).
+   The board's tile transitions time their own cues -- the frame clock that draws a transition is the only thing that
+   knows when its beats fall, which is #1062's split -- but the board is not handed the switch, and a cue played
+   without it would ignore a player who had turned sound off.
+   SO THE SWITCH IS MIRRORED HERE, the way the level is (#1074): `AudioControls`, the one control that shows and flips
+   it (#1102), writes it whenever it changes, and a caller below the shell reads it at the moment its cue is due. It
+   starts on, as the shell's own switch does. The shell's own cue sites keep passing their ref, unchanged.
+   ONE WRITER IS THE CONTRACT. Anything that ever flips the switch without that control -- a shortcut, a setting
+   restored on load -- must write here too, or the board keeps sounding with the rest of the game silent. */
+let sfxEnabledMirror = true;
+
+export function currentSfxEnabled(): boolean {
+  return sfxEnabledMirror;
+}
+export function mirrorSfxEnabled(enabled: boolean): void {
+  sfxEnabledMirror = enabled;
 }
 
 /** Start playback and swallow every reason it might not.

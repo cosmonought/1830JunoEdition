@@ -1,0 +1,213 @@
+// frontend/src/components/tileIdentity.ts
+//
+// ==================================================================
+//  DESIGN NOTE 1630 (Slice 9.3, S9-21): WHAT A TILE IS CALLED, AND BY WHOSE AUTHORITY
+// ==================================================================
+//
+// THE PROJECT CONVENTION IS UNCHANGED: prefer the OLD / ORIGINAL 18xx number. This module is the ONE
+// correction the official errata forces on it -- DO NOT CANONIZE AN OLD NUMBER THE ERRATA VOIDS.
+//
+//   - a valid corrected old number exists  -> that corrected old number is canonical, and the erroneous
+//                                             printed number survives only as a deprecated alias;
+//   - the errata voids the printed old number and supplies NO replacement
+//                                          -> the Lookout ID is canonical, and the erroneous printed number
+//                                             survives only as a deprecated alias.
+//
+// THE ERRATA, VERBATIM, for the three tiles this touches:
+//
+//   oo1   "The oo1 (626) should be oo1 (8861) according to one website supporting the older numbering
+//          system"                                                    -> #8861 canonical, #626 deprecated
+//   oo13  "oo13 (36) should have a number that is NOT 36 -- neither support site has a number for this tile"
+//                                                                     -> no old number exists; oo13 canonical
+//   oo14  "oo14 (35) should have a number that is NOT 35 -- neither support site has a number for this tile"
+//                                                                     -> no old number exists; oo14 canonical
+//
+// ==================================================================
+//  WHY THE STORAGE KEY DOES NOT MOVE, AND WHY THAT IS THE FIX AND NOT A COMPROMISE
+// ==================================================================
+//
+// `TileCatalogEntry.tileId` is the REPLAY ABI. `ExecuteMsg::LayTile` carries `tile_id` as an int
+// (`messageSchema.ts`), every stored log in the development corpus holds those ints, `MapTileEntry.tile_id`
+// is the same int, and the frozen goldens digest a board built out of them. Renumbering 626 -> 8861 in the
+// catalog would not merely rename a handle: it would change the recorded shape of persisted state, invalidate
+// v6 logs and move every golden, to buy nothing a rules reader can act on. oo13 and oo14 have no number to
+// move TO at all -- the errata voids 36 and 35 and supplies no replacement -- so for two of the three there is
+// no renumbering available even in principle.
+//
+// So the debt was never "these integers are wrong". It was "the engine treats the errata-voided printed
+// numbers as the tile's IDENTITY, with nothing in the repo recording that they are void". That is what this
+// module fixes: the canonical identity is stated here, the deprecated numbers are recorded AS deprecated, and
+// a boundary that receives one resolves it to the tile rather than to an authority.
+//
+// ==================================================================
+//  FOUR LAYERS, AND THE ONE SENTENCE THAT KEEPS THEM APART
+// ==================================================================
+//
+//   THE INVARIANT: an errata-invalid number may remain a stable MACHINE KEY for compatibility, and is no
+//   longer treated as a canonical RULES IDENTITY. Those are different jobs, and 9.3 separates them rather
+//   than replacing one with the other.
+//
+//   stable storage / ABI key    the integer in `TILE_CATALOG`, in `tile_id` on the wire, in every stored log
+//                               and in every golden's digest: 626 / 36 / 35. **It is written by NEW
+//                               authoritative state too** -- `applySandboxLayTile` puts `tile_id: tileId`
+//                               straight into the grid, so a #626 laid today still serializes as 626. It is
+//                               NOT "input only", and calling it that would be false.
+//   canonical rules identity    what the RULES call this tile after the errata: `#8861`, `oo13`, `oo14`.
+//                               The authority a rules reader, a document or a label should quote.
+//   canonical displayed id      the same string. Deliberately one vocabulary, not two: a second display-only
+//                               spelling is how a third name gets into circulation.
+//   deprecated number           the errata-voided printed number AS AN IDENTIFIER -- `#626`, `#36`, `#35`.
+//                               Deprecated as a rules identity; still the stable storage key above, so it
+//                               keeps appearing in persisted state and that is correct, not a leak.
+//   accepted input spellings    everything `resolveTileKey` will normalize at a boundary: the canonical
+//                               string, the Lookout ID, the corrected old number where one exists, and the
+//                               deprecated number in bare and `#`-prefixed form. Input-side only, and THIS
+//                               is the layer the 9.1 prescription meant by "input alias".
+//
+// So: interpreted or displayed, the storage key normalizes to the canonical semantic identity. Stored, it
+// stays the integer it has always been. Nothing migrates, and nothing pretends the integer went away.
+//
+// NOT A FOURTH TOPOLOGY TABLE. Nothing here describes track, colour, revenue, slots or quantity -- those have
+// their authorities (`hexTileCatalog.ts`, `TileGraphics.ts`, the trays) and this module contradicts none of
+// them. It describes NAMES, and it is the only place in the repo that claims to.
+//
+// AND THE LOOKOUT IDs STAY OUT OF CODE PATHS. `C15`, `A1`, `B24`, `D10` and a dozen more are simultaneously
+// Lookout tile names and real hex labels in `hexBoardData`. They are safe as DISPLAY strings, which is all
+// this module offers them as; they must never become lookup keys.
+
+/** How a tile's canonical identity was arrived at -- the errata clause that decides it. */
+export type CanonicalIdentityBasis =
+  /** The errata voids the printed old number and names a corrected one. */
+  | "corrected-old-number"
+  /** The errata voids the printed old number and supplies no replacement, so the Lookout ID is canonical. */
+  | "lookout-id-only";
+
+export interface TileIdentity {
+  /** The stable historical storage / ABI key: the integer this codebase stores, sends and replays, in NEW
+   *  authoritative state as well as in every historical log. Never changes -- see the note above. */
+  storageKey: number;
+  /** The Lookout (modern) identifier. Display only; never a lookup key. */
+  lookoutId: string;
+  /** The canonical RULES identity after the errata, and the canonical displayed identifier -- one string for
+   *  both, deliberately. Reference and display only; never a lookup key. */
+  canonical: string;
+  /** The errata-voided printed number AS AN IDENTIFIER. Deprecated as a rules identity. NOT "input only":
+   *  it is also `storageKey` above, so it goes on appearing in persisted state, which is the compatibility
+   *  this slice deliberately keeps. */
+  deprecatedNumber: number;
+  basis: CanonicalIdentityBasis;
+  /** The errata clause, so a future reader can argue with the source rather than with this file. */
+  errata: string;
+}
+
+/** The three tiles whose printed old numbers the official errata voids. Every other tile in the catalog is
+ *  canonical at its own old number and needs no record here -- absence means "the number is the name". */
+export const TILE_IDENTITIES: readonly TileIdentity[] = [
+  {
+    storageKey: 626,
+    lookoutId: "oo1",
+    canonical: "#8861",
+    deprecatedNumber: 626,
+    basis: "corrected-old-number",
+    errata:
+      "The oo1 (626) should be oo1 (8861) according to one website supporting the older numbering system.",
+  },
+  {
+    storageKey: 36,
+    lookoutId: "oo13",
+    canonical: "oo13",
+    deprecatedNumber: 36,
+    basis: "lookout-id-only",
+    errata:
+      "oo13 (36) should have a number that is NOT 36 -- neither support site has a number for this tile.",
+  },
+  {
+    storageKey: 35,
+    lookoutId: "oo14",
+    canonical: "oo14",
+    deprecatedNumber: 35,
+    basis: "lookout-id-only",
+    errata:
+      "oo14 (35) should have a number that is NOT 35 -- neither support site has a number for this tile.",
+  },
+];
+
+const BY_KEY: ReadonlyMap<number, TileIdentity> = new Map(
+  TILE_IDENTITIES.map((identity) => [identity.storageKey, identity]),
+);
+
+/** Every accepted INPUT spelling of a tile, mapped to the stable storage key it means.
+ *
+ *  THE INPUT LAYER, and only that. Nothing here is ever ISSUED: a boundary that receives one of these
+ *  normalizes it to the storage key, and a reader that wants a name asks `canonicalTileName`.
+ *
+ *  BOTH DIRECTIONS LAND ON THE SAME TILE, which is the whole compatibility requirement: the deprecated number,
+ *  the canonical string and the Lookout ID all resolve to one record, so a rule that is true of the tile
+ *  cannot be false of one of its names. That is what stops `#626` resurrecting an upgrade edge that `oo1` does
+ *  not have -- there is one tile and one answer. */
+const spellingsOf = (identity: TileIdentity): string[] => [
+  identity.canonical.toLowerCase(),
+  identity.canonical.replace(/^#/, "").toLowerCase(),
+  identity.lookoutId.toLowerCase(),
+  String(identity.deprecatedNumber),
+  `#${identity.deprecatedNumber}`,
+];
+
+const BY_SPELLING: ReadonlyMap<string, number> = new Map(
+  TILE_IDENTITIES.flatMap((identity) =>
+    spellingsOf(identity).map((spelling) => [spelling, identity.storageKey] as const),
+  ),
+);
+
+/** The accepted input spellings for a corrected tile, deduplicated and in a stable order.
+ *
+ *  Exported so the identity table can be READ OFF THE CODE rather than transcribed into a document: the
+ *  "accepted parser / input aliases" column of any report is this function's output. */
+export function acceptedTileSpellings(storageKey: number): string[] {
+  const identity = BY_KEY.get(storageKey);
+  if (!identity) return [];
+  return Array.from(new Set(spellingsOf(identity)));
+}
+
+/** This tile's identity record, or `undefined` when its own number is its name. */
+export function tileIdentity(key: number): TileIdentity | undefined {
+  return BY_KEY.get(key);
+}
+
+/** The canonical RULES identity, which is also the canonical displayed identifier.
+ *
+ *  Falls through to the plain old number, which is right for the other 73 tiles: their printed old number is
+ *  both their storage key and their name, and the errata touches neither. This is the normalization the
+ *  invariant means by "normalized to canonical semantic identity when interpreted or displayed". */
+export function canonicalTileName(key: number): string {
+  return BY_KEY.get(key)?.canonical ?? `#${key}`;
+}
+
+/** Whether this integer is an errata-voided printed number -- i.e. DEPRECATED AS A RULES IDENTIFIER.
+ *
+ *  `true` does NOT mean "must not appear in state". It is simultaneously the tile's stable storage key, so it
+ *  appears in every log and in newly written state by design; what it must not be is quoted as the tile's
+ *  name. `canonicalTileName` is what a reader, a label or a document should use instead. */
+export function isDeprecatedTileNumber(key: number): boolean {
+  const identity = BY_KEY.get(key);
+  return identity !== undefined && identity.deprecatedNumber === key;
+}
+
+/** Resolve any accepted INPUT spelling -- canonical, Lookout, or a deprecated printed number -- to the stable
+ *  storage key.
+ *
+ *  THE COMPATIBILITY BOUNDARY, and deliberately the only one. A number that is already a catalog key resolves
+ *  to itself, so this is safe to put in front of any input path without knowing whether it needs translating;
+ *  a spelling nothing recognises comes back `null` rather than a guess. Historical logs hold the deprecated
+ *  ints and keep parsing because the ints ARE the storage keys -- nothing in the corpus needs translating
+ *  today, and this exists so that a future input spelled the corrected way is understood rather than refused.
+ *  IT NEVER RUNS ON OUTPUT: what this returns is a storage key, which is exactly what gets serialized. */
+export function resolveTileKey(spelling: number | string): number | null {
+  if (typeof spelling === "number") return Number.isInteger(spelling) ? spelling : null;
+  const trimmed = spelling.trim().toLowerCase();
+  const known = BY_SPELLING.get(trimmed);
+  if (known !== undefined) return known;
+  const bare = trimmed.replace(/^#/, "");
+  if (/^\d+$/.test(bare)) return Number.parseInt(bare, 10);
+  return null;
+}

@@ -1,32 +1,27 @@
 // frontend/src/components/JoinGameCard.tsx
 //
 /* ==================================================================
-    DESIGN NOTE 1415: JOIN GAME IS A LIST, WITH THE CODE BOX BESIDE IT
+    DESIGN NOTE 1440 SUPERSEDES #1415: THIS CARD IS THE DOOR WITH NO SIGN ON IT
    ==================================================================
-   ASKED: "When players click 'Join Game' on the Lobby, we need to display all currently open (not yet started)
-   public games alongside the room code textbox" -- each card showing the type, the pace, the ante, who is
-   seated and how many seats there are, and the variants in force -- with an Ongoing tab to watch a public game
-   already under way. Private games are in neither list: the code is their only door, and once dealt not even
-   that (they are not spectatable).
-   THE LIST IS THE SERVER'S `rooms` FRAME (`useSandboxRooms`), pushed on every room write, so a card's seat
-   count moves as people sit down and a room leaves the Open tab the moment its host presses Start. A full
-   table's Join is disabled with the reason -- the server would refuse it anyway (#1415 server), and a button
-   that only ever earns a refusal should say so first.
-   THE CODE BOX STAYS, for the private room and for the player who was told a code aloud; the rejoin-by-code
-   path (#1352) rides with it as before. */
+   RULED: "public games are browsed on the Lobby; Join Game is for entering a room code for an unlisted/private
+   game ... Simplify the Join Game modal accordingly: room-code entry and any directly related
+   private-room/rejoin behavior only."
+   #1415 PUT BOTH DOORS IN ONE CARD and its own note explains why that could not last: the list it mounted is
+   "the server's `rooms` frame, pushed on every room write", which is a page's worth of changing content, and
+   it was being read through a 640px dialog with its own scrollbar. The list is now flow content on the Lobby
+   (`LobbyRoomList`, #1440).
+   WHAT IS LEFT IS THE PART A LIST CANNOT DO. A private room is in no list by construction -- the server drops
+   it before the frame is built -- so the code is its only door; and the rejoin-by-code path (#1352) rides with
+   it, because a returning player also arrives holding a code rather than a room to browse for.
+   THE TABS, THE CARDS, THE ROSTERS AND THE SPECTATE BUTTON ARE GONE, not hidden. Every one of them is on the
+   Lobby now, and a second rendering of a room would be a second thing to keep in step. */
 
-import React, { useState } from "react";
+import React, { useLayoutEffect, useRef, useState } from "react";
 
 import { FONT_SIZE, RADIUS } from "../styles/typography";
-import { BANK_SIZE_BY_LENGTH, GAME_MODE_COPY, GAME_TYPE_COPY, gameTypeOf } from "../gameEngine/gameVariants";
-import type { SandboxRoomSummary } from "../utils/sandboxRoomSummary";
-import { formatJuno } from "../utils/anteMath";
+import { NativeModal } from "./NativeModal";
 
 export interface JoinGameCardProps {
-  rooms: readonly SandboxRoomSummary[];
-  loading: boolean;
-  /** The list's own error -- the server could not be reached -- as opposed to a join's. */
-  listError: string | null;
   /** The join's verdict, owned by the parent (#1137). */
   error: string | null;
   busy: boolean;
@@ -34,60 +29,76 @@ export interface JoinGameCardProps {
   onJoin: (code: string) => void;
   /** Design note #1352: the by-code rejoin. Absent hides the button. */
   onRejoin?: (code: string) => void;
-  onSpectate: (code: string) => void;
   onClearError: () => void;
 }
 
-type Tab = "open" | "ongoing";
-
-/** The rule variants a card names, in the house-rules order, by their short titles. */
-const RULE_TITLES: ReadonlyArray<{ key: "gentleRust" | "dynamicStockMarket" | "delayedAuction" | "unpredictableRevenue" | "plusTiles"; title: string }> = [
-  { key: "plusTiles", title: "18XX+ tiles" },
-  { key: "gentleRust", title: "Gentle Rust" },
-  { key: "dynamicStockMarket", title: "Dynamic Market" },
-  { key: "delayedAuction", title: "Delayed Auction" },
-  { key: "unpredictableRevenue", title: "Unpredictable Routes" },
-];
-
-export function variantChipsFor(room: Pick<SandboxRoomSummary, "variants">): string[] {
-  const chips: string[] = [];
-  if (room.variants.length !== "standard") chips.push(`$${BANK_SIZE_BY_LENGTH[room.variants.length].toLocaleString("en-US")} bank`);
-  for (const rule of RULE_TITLES) {
-    /* The tray is the type's own under the Level Playing Field; a chip for it there says nothing. */
-    if (rule.key === "plusTiles" && room.variants.levelPlayingField) continue;
-    if (room.variants[rule.key]) chips.push(rule.title);
-  }
-  return chips;
-}
-
-export function JoinGameCard({
-  rooms,
-  loading,
-  listError,
-  error,
-  busy,
-  onClose,
-  onJoin,
-  onRejoin,
-  onSpectate,
-  onClearError,
-}: JoinGameCardProps) {
-  const [tab, setTab] = useState<Tab>("open");
+/** ==================================================================
+ *   DESIGN NOTE 1642: BATCH 1 -- THIS CARD JOINS THE DISMISSAL BOUNDARY
+ *  ==================================================================
+ *
+ * The modal audit (`claude/modal-audit-2026-09-18.md`) found this surface carrying `aria-modal="true"` with
+ * **no Escape at all** (H3) and dropping focus on `<body>` from every close route (H4). Measured on the real
+ * card before the change, with focus on the control being pressed:
+ *
+ *     Escape (either state)      -> the dialog stayed open
+ *     x / Cancel / backdrop      -> closed, and `document.activeElement` was BODY every time
+ *
+ * Both are now the native dialog's own policy (#1651; they were `useDialogDismissal` from #1641 until the
+ * element became a `<dialog>`), which is the whole of the change apart from the one
+ * normalisation below. Escape calls `onClose` -- the identical prop the x, Cancel and the backdrop call --
+ * and closing UNMOUNTS this card, so `codeText` is reset by the unmount rather than by any reset code.
+ *
+ * THE BUSY RULE HAD TO BE NORMALISED, and it is the one behaviour change beyond Escape and focus. Measured:
+ * while `busy`, the x was `disabled` and the backdrop was `busy ? undefined : onClose` -- both dead -- but
+ * **Cancel was live**, and pressing it closed the card while the join round trip carried on. On success the
+ * parent then calls `onEnterSandbox(code)` and takes the player into the room they had just backed out of.
+ * The two blocked routes are what the card MEANT; Cancel was the one that had not been given the rule. It is
+ * `disabled={busy}` now, exactly as the "Rejoin seat" secondary button beside it already was -- so all three
+ * visible routes agree, and `dismissible={!busy}` makes Escape the fourth rather than a way around them.
+ * (`styles.disabled` is deliberately NOT applied: within this file the disabled treatment for a secondary
+ * button is the attribute alone -- see "Rejoin seat" -- and only the primary submit is greyed.)
+ *
+ * INITIAL FOCUS IS THE SAME CONTROL AS BEFORE, the room-code field, moved off native `autoFocus` and onto a
+ * local layout effect. Native autofocus fires during React's mutation phase, BEFORE any effect, so it would
+ * beat the hook's opener capture and the card would record its own input as the thing to restore focus to --
+ * a node that leaves with the card. The hook is called first, its capture is a layout effect, and this is the
+ * layout effect after it. */
+export function JoinGameCard({ error, busy, onClose, onJoin, onRejoin, onClearError }: JoinGameCardProps) {
   const [codeText, setCodeText] = useState("");
+  const codeRef = useRef<HTMLInputElement | null>(null);
 
-  const open = rooms.filter((room) => room.status === "waiting");
-  const ongoing = rooms.filter((room) => room.status === "playing");
-  const shown = tab === "open" ? open : ongoing;
+  /* #1651/#1652: THE ESCAPE PATH AND THE OPENER RESTORE MOVED INTO THE ELEMENT ITSELF. `useDialogDismissal`
+     is gone from this file: the scrim below is a native `<dialog>`, its `dismissible` prop becomes the
+     `closedby` attribute the engine enforces, and `restoreOpener` is the same guarded return the hook did.
+     Nothing this file decided changed -- only who carries it out. */
+
+  useLayoutEffect(() => {
+    codeRef.current?.focus();
+  }, []);
 
   return (
-    <div style={styles.backdrop} role="presentation" onClick={busy ? undefined : onClose}>
-      <div style={styles.card} role="dialog" aria-modal="true" aria-label="Join a game" onClick={(event) => event.stopPropagation()}>
+    <NativeModal
+      name="Join by room code"
+      dismissible={!busy}
+      onDismiss={onClose}
+      onScrimClick={busy ? undefined : onClose}
+      restoreOpener
+      scrimStyle={styles.backdrop}
+    >
+      <div style={styles.card} onClick={(event) => event.stopPropagation()}>
         <div style={styles.header}>
-          <span style={styles.heading}>Join a game</span>
+          <span style={styles.heading}>Join by room code</span>
           <button type="button" style={styles.closeButton} onClick={onClose} aria-label="Close" disabled={busy}>
             ×
           </button>
         </div>
+
+        {/* The card says what it is FOR, because the other door is now visible behind it: a player who came
+            here looking for a game to join can see the list on the page they came from. */}
+        <p style={styles.note}>
+          Private games are unlisted — the code is their only door, and they cannot be watched. Public games
+          are listed on the Lobby.
+        </p>
 
         <form
           style={styles.codeRow}
@@ -97,6 +108,7 @@ export function JoinGameCard({
           }}
         >
           <input
+            ref={codeRef}
             style={styles.input}
             value={codeText}
             onChange={(event) => {
@@ -106,7 +118,6 @@ export function JoinGameCard({
             }}
             placeholder="JUNO-4T2"
             aria-label="Room code"
-            autoFocus
           />
           <button type="submit" style={{ ...styles.primaryButton, ...(busy ? styles.disabled : {}) }} disabled={busy} data-testid="join-by-code">
             Join by code
@@ -118,108 +129,25 @@ export function JoinGameCard({
               onClick={() => onRejoin(codeText)}
               disabled={busy}
               title="Already in this game on another device? Rejoin your seat with its four-digit PIN."
+              data-testid="rejoin-by-code"
             >
               Rejoin seat
             </button>
           )}
         </form>
-        <span style={styles.note}>A private game is joined by its code only, and cannot be watched.</span>
 
         {error && <p style={styles.warning}>{error}</p>}
 
-        <div style={styles.tabs} role="tablist">
-          {(["open", "ongoing"] as const).map((candidate) => (
-            <button
-              key={candidate}
-              type="button"
-              role="tab"
-              aria-selected={tab === candidate}
-              style={{ ...styles.tab, ...(tab === candidate ? styles.tabSelected : {}) }}
-              onClick={() => setTab(candidate)}
-              data-testid={`join-tab-${candidate}`}
-            >
-              {candidate === "open" ? `Open (${open.length})` : `Ongoing (${ongoing.length})`}
-            </button>
-          ))}
-        </div>
-
-        <div style={styles.list} role="list" aria-label={tab === "open" ? "Open public games" : "Ongoing public games"}>
-          {listError ? (
-            <span style={styles.warning}>{listError}</span>
-          ) : loading ? (
-            <span style={styles.note}>Fetching the game list…</span>
-          ) : shown.length === 0 ? (
-            <span style={styles.note}>
-              {tab === "open" ? "No public games are waiting for players. Host one, or join by code." : "No public games are under way."}
-            </span>
-          ) : (
-            shown.map((room) => {
-              const full = room.players.length >= room.seatCap;
-              const chips = variantChipsFor(room);
-              return (
-                <div key={room.code} style={styles.room} role="listitem" data-testid={`room-card-${room.code}`}>
-                  <div style={styles.roomHead}>
-                    <span style={styles.roomTitle}>
-                      <span style={styles.roomType}>{GAME_TYPE_COPY[gameTypeOf(room.variants)].label}</span>
-                      <span style={styles.roomMeta}>
-                        {GAME_MODE_COPY[room.variants.mode].label} · ante {formatJuno(room.anteUjuno)} · {room.code}
-                      </span>
-                    </span>
-                    <span style={styles.seats}>
-                      {room.players.length}/{room.seatCap}
-                      {room.playerCount !== null ? " exactly" : ""}
-                    </span>
-                  </div>
-                  <span style={styles.roster}>
-                    {room.players.map((player) => (player.nickname || "unnamed") + (player.isReady ? " ✓" : "")).join(", ") || "Nobody seated"}
-                  </span>
-                  {chips.length > 0 && (
-                    <span style={styles.chips}>
-                      {chips.map((chip) => (
-                        <span key={chip} style={styles.chip}>
-                          {chip}
-                        </span>
-                      ))}
-                    </span>
-                  )}
-                  <div style={styles.roomActions}>
-                    {tab === "open" ? (
-                      <button
-                        type="button"
-                        style={{ ...styles.primaryButton, ...(busy || full ? styles.disabled : {}) }}
-                        disabled={busy || full}
-                        onClick={() => onJoin(room.code)}
-                        title={full ? `This table is full (${room.seatCap} seats).` : `Take a seat at ${room.hostNickname}'s table.`}
-                        data-testid={`join-room-${room.code}`}
-                      >
-                        {full ? "Full" : "Join"}
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        style={{ ...styles.secondaryButton, ...(busy ? styles.disabled : {}) }}
-                        disabled={busy}
-                        onClick={() => onSpectate(room.code)}
-                        title="Watch this game. You will not have a seat."
-                        data-testid={`watch-room-${room.code}`}
-                      >
-                        Watch
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })
-          )}
-        </div>
-
         <div style={styles.footer}>
-          <button type="button" style={styles.secondaryButton} onClick={onClose}>
+          {/* #1642: `disabled={busy}` is the normalisation -- the x and the backdrop already refused while a
+              join was in flight and this one did not, which let a player close the card and still be taken
+              into the room when the round trip landed. */}
+          <button type="button" style={styles.secondaryButton} onClick={onClose} disabled={busy}>
             Cancel
           </button>
         </div>
       </div>
-    </div>
+    </NativeModal>
   );
 }
 
@@ -229,7 +157,8 @@ const styles: Record<string, React.CSSProperties> = {
   backdrop: {
     position: "fixed",
     inset: 0,
-    zIndex: 4200,
+    /* #1651: the `zIndex: 4200` that stood here is gone -- this scrim is a `<dialog>` in the top layer, which
+       is above the whole document by definition, so the number decided nothing. */
     pointerEvents: "auto", // #1360
     display: "flex",
     alignItems: "center",
@@ -239,7 +168,8 @@ const styles: Record<string, React.CSSProperties> = {
     overflowY: "auto",
   },
   card: {
-    width: "min(640px, 100%)",
+    /* Design note #1440: a bounded dialog for one field, not a window onto a list. */
+    width: "min(430px, 100%)",
     maxHeight: "calc(100vh - 48px)",
     overflowY: "auto",
     display: "flex",
@@ -271,44 +201,6 @@ const styles: Record<string, React.CSSProperties> = {
   },
   note: { fontSize: FONT_SIZE.micro, color: "#8a8a86", lineHeight: 1.4, margin: 0 },
   warning: { fontSize: FONT_SIZE.small, color: "#e0b062", lineHeight: 1.4, margin: 0 },
-  tabs: { display: "flex", gap: "6px", borderBottom: "1px solid #2a2a2a", paddingBottom: "6px" },
-  tab: {
-    padding: "5px 12px",
-    borderRadius: RADIUS.card,
-    border: "1px solid transparent",
-    backgroundColor: "transparent",
-    color: "#a8a6a0",
-    fontSize: FONT_SIZE.small,
-    fontWeight: 700,
-    cursor: "pointer",
-  },
-  tabSelected: { borderColor: "#3a3a3a", backgroundColor: "#1c1c1c", color: "#f2f0eb" },
-  list: { display: "flex", flexDirection: "column", gap: "8px", minHeight: "80px" },
-  room: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "6px",
-    padding: "10px 12px",
-    borderRadius: RADIUS.card,
-    border: "1px solid #3a3a3a",
-    backgroundColor: "#1c1c1c",
-  },
-  roomHead: { display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "10px" },
-  roomTitle: { display: "flex", flexDirection: "column", gap: "2px", minWidth: 0 },
-  roomType: { fontSize: FONT_SIZE.body, fontWeight: 800 },
-  roomMeta: { fontSize: FONT_SIZE.micro, color: "#8a8a86", letterSpacing: "0.02em" },
-  seats: { fontSize: FONT_SIZE.small, fontWeight: 800, fontVariantNumeric: "tabular-nums", color: "#c8c6c0", whiteSpace: "nowrap" },
-  roster: { fontSize: FONT_SIZE.small, color: "#c8c6c0", lineHeight: 1.4 },
-  chips: { display: "flex", flexWrap: "wrap", gap: "4px" },
-  chip: {
-    fontSize: FONT_SIZE.micro,
-    fontWeight: 700,
-    padding: "2px 7px",
-    borderRadius: RADIUS.control,
-    border: "1px solid #3a3a3a",
-    color: "#a8a6a0",
-  },
-  roomActions: { display: "flex", justifyContent: "flex-end", gap: "6px" },
   footer: { display: "flex", justifyContent: "flex-end", alignItems: "center", gap: "8px", marginTop: "4px" },
   secondaryButton: {
     padding: "7px 14px",
@@ -331,5 +223,6 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: "pointer",
     whiteSpace: "nowrap",
   },
-  disabled: { borderColor: "#3a3a3a", backgroundColor: "#1c1c1c", color: "#6e6c68", cursor: "not-allowed" },
+  // #1449: the shorthand, not `borderColor` -- the base is `1px solid #3f7a55`.
+  disabled: { border: "1px solid #3a3a3a", backgroundColor: "#1c1c1c", color: "#6e6c68", cursor: "not-allowed" },
 };

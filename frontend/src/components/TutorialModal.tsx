@@ -15,6 +15,7 @@
 
 import React, { useCallback, useEffect, useState } from "react";
 import { CONTROL_PADDING, FONT_FAMILY, FONT_SIZE, LINE_HEIGHT, RADIUS } from "../styles/typography";
+import { useDialogDismissal } from "../utils/useDialogDismissal";
 /* Design note #1122: the sandbox signal ladder. */
 import {
   SANDBOX_INK,
@@ -455,6 +456,30 @@ export interface TutorialLibraryProps {
   onClose: () => void;
 }
 
+/* ==================================================================
+    DESIGN NOTE 1647: TWO ESCAPES IN ONE FILE, AND ONLY ONE OF THEM IS A DISMISSAL
+   ==================================================================
+   This file has carried two hand-written `window` Escape listeners, and the modal audit's batch 6 treated
+   them as one job. They are not. Measured on the real components:
+
+     THE FIRST-TIME NOTICE   Escape closed it and wrote `1830juno.tutorial_seen.v1.<topic>` -- the SAME
+                             callback, and the same storage write, as a backdrop click. A dismissal.
+     THE LIBRARY             Escape from an open topic returned to the list and did NOT call `onClose`; only
+                             from the list did it close. Navigation, with the close as its last step.
+
+   SO ONLY THE NOTICE MIGRATES (#1646's batch, part i). The library keeps its own listener, deliberately --
+   see the note at its site. The one thing both lacked is first refusal, and both get it: the notice through
+   the hook, the library through one added line that changes nothing else.
+
+   THE HOOK LIVES IN A CHILD, as #1643 established, and here the reason is arithmetic: `App.tsx` mounts FOUR
+   `TutorialModal`s for the whole session, one per topic, each switched by its own `active` prop. A hook in
+   the body would hold four listeners and four captured openers from the moment the shell mounts. The child
+   renders only while the notice is up -- measured, `listenersWhileHidden: 0`. */
+function DismissalLifecycle({ onDismiss }: { onDismiss: () => void }) {
+  useDialogDismissal({ onDismiss });
+  return null;
+}
+
 /** The Tutorials front door: pick a topic, read it, come back to the list.
  *
  *  Renders the SAME page shell via `TutorialPager`, so a tutorial read from here
@@ -464,13 +489,22 @@ export interface TutorialLibraryProps {
 export function TutorialLibrary({ open, onClose }: TutorialLibraryProps) {
   const [topicKey, setTopicKey] = useState<string | null>(null);
 
-  // Escape backs out one level -- to the list from a topic, and out of the
-  // library from the list. Matching the modal's own convention that Escape
-  // never traps you, while still not throwing away your place in one step.
+  /* Escape backs out one level -- to the list from a topic, and out of the library from the list. Matching
+     the modal's own convention that Escape never traps you, while still not throwing away your place in one
+     step.
+     DELIBERATELY NOT `useDialogDismissal` (#1647). The shared hook owns ONE authoritative close; this handler
+     has two outcomes and picks between them by reading state, and the common case -- a topic returning to the
+     list -- is not a dismissal at all: measured, it does not call `onClose` and the library stays open.
+     Expressing that through the hook would mean handing it a callback that sometimes closes and sometimes
+     does not, which is the single thing the hook exists to make impossible. It is a small navigation state
+     machine and it stays one.
+     WHAT IT DID BORROW is first refusal. Measured before this line existed, an Escape an inner surface had
+     already consumed navigated anyway; now a consumed key is left alone, exactly as the hook leaves it. */
   useEffect(() => {
     if (!open) return undefined;
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      if (event.defaultPrevented) return;
       setTopicKey((current) => {
         if (current === null) onClose();
         return null;
@@ -666,16 +700,10 @@ export function TutorialModal({ topicKey, heading, pages, active }: TutorialModa
     setOpen(false);
   }, [seenKey, turnOff]);
 
-  // Escape closes, the same as Done. A modal that traps you until you find
-  // its button is a modal people resent.
-  useEffect(() => {
-    if (!open) return undefined;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") dismiss();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, dismiss]);
+  /* #1647: Escape closes, the same as Done and the same as the backdrop -- and it is `useDialogDismissal`
+     that does it now, through the identical `dismiss` this file already had. Escape therefore still records
+     the topic as seen and still honours the "Turn tutorials off" box, because `dismiss` is unchanged and is
+     what all three routes call. There is no second, flag-free exit and this batch did not add one. */
 
   if (!open || pages.length === 0) return null;
 
@@ -691,6 +719,9 @@ export function TutorialModal({ topicKey, heading, pages, active }: TutorialModa
         if (event.target === event.currentTarget) dismiss();
       }}
     >
+      {/* #1647: Escape, its first refusal, and the guarded opener restore -- the same dismissal the backdrop
+          above performs, through the same `dismiss`. */}
+      <DismissalLifecycle onDismiss={dismiss} />
       <div style={styles.card}>
         {/* Design note #158: the page-turner is `TutorialPager`, shared with
            `TutorialLibrary`. It was inlined here until that note added the on-demand

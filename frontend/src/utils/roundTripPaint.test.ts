@@ -50,7 +50,10 @@ describe("the tile ghost is released by the board, not by the click", () => {
     /* THE DASHES ARE THE ONLY DIFFERENCE, which is what makes the swap invisible: the fill and the track were
        always drawn exactly as a laid tile draws them. If the held ghost stayed dashed the player would watch
        a dashed hex become a solid one -- better than an empty flash, and still a flash. */
-    expect(HEX).toContain("if (!previewTile.committed) ctx.setLineDash([5, 4]);");
+    /* Design note #1471: dashes are drawn on the proposal alone -- the branch only a preview not yet sent takes. A sent
+       ghost is drawn by the tile pass exactly as the laid tile is. */
+    expect(HEX).toContain("drawTileTransitionFill(ctx, center, hexSize, proposal, { rimDash: [5, 4] });");
+    expect(sliceBetween(HEX, "const proposingAt = (q: number, r: number) =>", "const transitionAt")).toContain("drawnPreview.committed !== true");
   });
 
   it("waits for the tile, not merely for the hex", () => {

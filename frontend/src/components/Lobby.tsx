@@ -70,7 +70,9 @@ import { RejoinByPinCard } from "./RejoinByPinCard";
 // #1415: the host's setup card -- type, pace, visibility, then the house rules -- before the room exists; and
 // the join card, the public list with the code box beside it.
 import { HostSetupCard } from "./HostSetupCard";
+import { ModalPortal } from "./ModalPortal";
 import { JoinGameCard } from "./JoinGameCard";
+import { LobbyRoomList } from "./LobbyRoomList";
 import { roomDocOnServer } from "../utils/roomDocLink";
 import { writeSandboxResume } from "../utils/activeGame";
 import { CONTROL_PADDING, FONT_FAMILY, FONT_FAMILY_MONO, FONT_SIZE, LINE_HEIGHT, RADIUS } from "../styles/typography";
@@ -162,7 +164,9 @@ export interface LobbyProps {
   /** The escape hatch -- `App.tsx #24`. With a mock contract address you cannot launch, and with a fresh Firebase
    *  there is nothing to spectate, so without this the lobby has no exit at all.
    *  Design note #524: carries the Firebase sandbox room code, or `null` for an ordinary solo sandbox. */
-  onEnterSandbox: (sandboxRoomCode?: string | null) => void;
+  /** Design note #1441: `watchOnly` marks the Lobby's Watch -- the shell then holds the seat claim it would
+   *  otherwise make on a room that is still waiting. */
+  onEnterSandbox: (sandboxRoomCode?: string | null, watchOnly?: boolean) => void;
 }
 
 /** Which half of the room browser is showing.
@@ -222,11 +226,58 @@ const WEB3_LOBBY_ENABLED = false;
 
 /** Design note #1144's cover arithmetic (see `scene`), as a function of the live scale (#1294): every viewport
  *  term is divided by the zoom, so both sides of each `max()` are in layout space. */
+/* ==================================================================
+    DESIGN NOTE 1440: THE PICTURE IS TOP-ANCHORED, BECAUSE THE PAGE NOW HAS A BOTTOM
+   ==================================================================
+   #1131 CENTRED THE SCENE IN ITS CLIP AND #1133 RAN THE CLIP TO THE FOOT OF THE PAGE, and both were right
+   about a page that was ONE SCREEN: with nothing below the buttons, a centred picture is the picture, and a
+   clip that stopped at 100vh left a band of bare ink the footer's strip ran into.
+   THE PUBLIC LIST GIVES THE PAGE A SECOND HALF. Twenty-four rooms is several thousand pixels, and a scene
+   centred in a clip that tall would slide the photograph -- and with it the title and the two buttons
+   anchored INSIDE it -- down to the middle of the scroll. The band #1133 fixed is gone for the better
+   reason: there is content under the picture now, not emptiness.
+   SO THE SCENE'S TOP EDGE IS PINNED TO THE HERO'S. `translate(-50%, -50%)` still does the centring, so `top`
+   is half the scene's own height -- which is why the height expression appears twice here rather than in a
+   local: `lobbyHeroBand.test.ts` asserts the `height:` declaration verbatim, and a `const` would have moved
+   the ratio out of the line that guards it.
+   NOTHING ELSE MOVES. The scene is at least the viewport tall (both `max()`s), so on a one-screen lobby the
+   photograph, the title and the buttons are where they were; the hero window below simply stops the picture
+   above the fold instead of below it. */
 function sceneSizeFor(scale: number): React.CSSProperties {
   return {
     width: `max(100%, calc(${100 / scale}vh * 1920 / 1072))`,
     height: `max(${100 / scale}vh, calc(${100 / scale}vw * 1072 / 1920))`,
+    top: `calc(max(${100 / scale}vh, calc(${100 / scale}vw * 1072 / 1920)) / 2)`,
   };
+}
+
+/* ==================================================================
+    DESIGN NOTE 1440: THE HERO IS A WINDOW ON THE PICTURE, NOT THE WHOLE PAGE
+   ==================================================================
+   RULED: "Once games are available, the list should be easy to find below the main actions, not buried far
+   down by a full-height hero."
+   A 100vh HERO PUTS THE FIRST ROOM AT 100vh, which is exactly one scroll of nothing between the buttons a
+   player just read and the list they were sent to. The window is 74% of the viewport instead, with a floor
+   so a short laptop does not crop the title into the utility row: the photograph runs past the buttons at
+   70% and stops, and the list starts where it ends.
+   THE PICTURE IS NOT RESIZED, ONLY CROPPED. Shrinking the scene would move every anchor inside it (#1131);
+   cropping the bottom of a top-anchored scene moves nothing -- the title and the buttons keep their exact
+   positions, and what is lost is the foreground edge of the table below them.
+   A CUSTOM PROPERTY RATHER THAN A SPREAD, so `styles.sceneClip` stays the one static object three other
+   harnesses read it as (`blendIsolation`, `seatPin`) while the one number in it follows the zoom. */
+const HERO_MIN_PX = 520;
+const HERO_SHARE = 74;
+function heroVars(scale: number, utilityRowPx: number): React.CSSProperties {
+  const hero = `min(${100 / scale}vh, max(${HERO_MIN_PX}px, ${HERO_SHARE / scale}vh))`;
+  return {
+    "--lobby-hero": hero,
+    /* Design note #1441: the action row's narrow extent, in the scene's percentages. */
+    "--lobby-actions-left": `calc(50% - ${50 / scale}vw + 16px)`,
+    "--lobby-actions-width": `calc(${100 / scale}vw - 32px)`,
+    /* The hero's share of the FLOW: the utility row is laid over the picture (#1354), and the root column
+       puts a 16px gap either side of the spacer, so both come off the height it reserves. */
+    "--lobby-hero-flow": `max(0px, calc(${hero} - ${utilityRowPx + 32}px))`,
+  } as React.CSSProperties;
 }
 
 /* ==================================================================
@@ -245,9 +296,19 @@ function sceneSizeFor(scale: number): React.CSSProperties {
    height is measured (`ResizeObserver`) because it wraps. On the 16:9 window this was tuned on the answer
    is 60%, unchanged; only a window that would have clipped it moves the title down. */
 const WORDMARK_HEIGHT_OF_SCENE = "24.6%";
+/* ==================================================================
+    DESIGN NOTE 1440: THE SAFE LINE GOT SIMPLER WHEN THE SCENE STOPPED FLOATING
+   ==================================================================
+   #1354's THIRD TERM WAS THE OVERHANG -- `- 50% + 50vh`, the half of the scene sitting above the window
+   because the scene was CENTRED in a viewport-tall clip. Top-anchoring (#1440) makes that term zero by
+   construction: the scene's top edge and the page's are the same edge, so the title can no longer rise past
+   the window at any aspect, and the only line left to clear is the utility row's.
+   THE CLAIM IS #1354's, UNCHANGED, and so is the arithmetic that survives it: the wordmark is 24.6% of the
+   scene, so its top sits at `100% - bottom - 24.6%`, and that must stay below the row. On the 16:9 window
+   this was tuned on the answer is still 60%. */
 function titleBottomFor(scale: number, utilityRowPx: number): React.CSSProperties {
   return {
-    bottom: `min(60%, calc(100% - ${WORDMARK_HEIGHT_OF_SCENE} - 50% + ${50 / scale}vh - ${utilityRowPx + 16}px))`,
+    bottom: `min(60%, calc(100% - ${WORDMARK_HEIGHT_OF_SCENE} - ${utilityRowPx + 16}px))`,
   };
 }
 
@@ -301,12 +362,18 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
     [onEnterSandbox],
   );
 
+  /* Design note #1440: the join, with its verdict RETURNED as well as shown. `SandboxRoomBar` reports the
+     bar's errors beside the buttons, which is the right place for a code somebody typed there and the wrong
+     place for a row far down the public list -- so the one path both use hands the reason back and each
+     caller says it where the player is looking. */
+  const [roomRefusal, setRoomRefusal] = useState<{ code: string; reason: string } | null>(null);
   const handleJoinSandboxRoom = useCallback(
-    async (raw: string) => {
+    async (raw: string): Promise<string | null> => {
       const code = parseRoomCode(raw);
       if (!code) {
-        setSandboxRoomError("That is not a room code — they look like JUNO-4T2.");
-        return;
+        const reason = "That is not a room code — they look like JUNO-4T2.";
+        setSandboxRoomError(reason);
+        return reason;
       }
       setSandboxRoomBusy(true);
       setSandboxRoomError(null);
@@ -328,17 +395,31 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
         });
         if (!answer.ok) {
           setSandboxRoomError(answer.reason);
-          return;
+          return answer.reason;
         }
         setJoinOpen(false);
         onEnterSandbox(code);
+        return null;
       } catch (error) {
-        setSandboxRoomError(error instanceof Error ? error.message : "Could not join that room.");
+        const reason = error instanceof Error ? error.message : "Could not join that room.";
+        setSandboxRoomError(reason);
+        return reason;
       } finally {
         setSandboxRoomBusy(false);
       }
     },
     [onEnterSandbox],
+  );
+
+  /* The same join, said on the row it was asked from. A success unmounts this screen, so the only state kept
+     is the refusal -- and it is cleared the moment another row is tried. */
+  const handleJoinListedRoom = useCallback(
+    async (code: string) => {
+      setRoomRefusal(null);
+      const reason = await handleJoinSandboxRoom(code);
+      setRoomRefusal(reason === null ? null : { code, reason });
+    },
+    [handleJoinSandboxRoom],
   );
 
   /* ==================================================================
@@ -683,7 +764,7 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
   /* ---------------- Render ---------------- */
 
   return (
-    <div style={{ ...styles.root, ...chromeZoomFor(uiScale) }}>
+    <div style={{ ...styles.root, ...chromeZoomFor(uiScale), ...heroVars(uiScale, utilityRowPx) }}>
       {/* Design note #46 is the standing exception and this is the case it exists for: neither a keyframe nor
           a media query can be expressed as an inline style object.
           Design note #1130: #1123's 860px breakpoint is GONE WITH ITS GRID -- one centred column needs no
@@ -837,7 +918,21 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
               centred at 0.5 lands the two buttons either side of 0.40 and 0.60 -- the positions as given,
               expressed as a width rather than as two absolute anchors so the join form can expand in place
               without a second set of coordinates to keep in step. */}
-          <div style={styles.tableAnchor}>
+          {/* ==================================================================
+               DESIGN NOTE 1441: THE THREE DOORS COME BACK INSIDE THE WINDOW
+              ==================================================================
+              REPORTED: at 430 "'Host game' begins outside the viewport and 'Rejoin game' is cut off."
+              THE ANCHOR IS MEASURED IN THE SCENE, AND THE SCENE IS NOT THE WINDOW. #1131 hung these on the
+              photograph on purpose -- 60% of a box centred at 0.5 is the table on every aspect -- but the
+              scene is `cover`, so on a tall narrow window it is 1669px wide against a 430px viewport, and
+              "60% of the picture" is a box that starts 285px to the left of the screen.
+              SO AT NARROW WIDTHS THE ROW IS RE-HUNG ON THE VIEWPORT, in the scene's own coordinates: the
+              scene's left edge sits `(sceneW - viewportW) / 2` outside the window, which in this box's
+              percentages is `50% - 50vw`. Adding the gutter to that is an exact conversion, not an estimate
+              -- the same "put both sides in one space" move #1144 made for the cover arithmetic.
+              THE DESKTOP POSITION IS UNTOUCHED, and so is the vertical composition: `top: 70%` still puts
+              the row on the table, and only its horizontal extent changes. */}
+          <div className="lobby-table-anchor" style={styles.tableAnchor}>
             {/* Design note #1083: `appliedCount={0}` and `onLeave={() => undefined}` are GONE with the props
                 they fed. Both were placeholders this surface had no use for -- the lobby is never in a room --
                 and a required prop satisfied by a stub is a prop the component did not need. */}
@@ -865,7 +960,15 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
             />
           </div>
         </div>
+        {/* Design note #1440: the room falls into shadow rather than being cut off. A hard edge across the
+            barons' chests is what a bounded hero looks like without this; the fade is on the CLIP, not the
+            scene, because the crop line is the hero's and the scene runs past it. */}
+        <div style={styles.heroFade} aria-hidden="true" />
       </div>
+
+      {/* Design note #1440: the hero's place in the column. `sceneClip` is absolute and reserves no height,
+          so without this the list would start under the utility row and read through the photograph. */}
+      <div style={styles.heroFlow} aria-hidden="true" />
 
       {/* Design note #1114: the width cap.      {/* Design note #1114: the width cap. The HEADER stays full-bleed above it -- its own background is a
           band across the window and capping it would leave two stripes of root either side -- so the cap
@@ -882,21 +985,27 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
           the scene, and each card's backdrop says `pointerEvents: "auto"` itself so no ancestor can do this
           to them again. Enter "worked" only because the PIN field had focus and resubmitted the lookup. */}
       {/* #1415: the host's setup card, at the root for #1360's reason. */}
+      {/* #1648: the pilot for the modal layer. The mount lifecycle is unchanged -- `hostSetup` still decides
+          whether the card exists, and closing still unmounts it, which is still what resets every selection.
+          Only the DOM destination moved: the card now renders into the layer beside this screen rather than
+          inside it, so a later batch can make this screen `inert` without disabling the dialog. React context
+          and event bubbling follow the React tree, not the DOM, so everything this card is handed still
+          arrives and `onClose` still runs here. */}
       {hostSetup && (
-        <HostSetupCard
-          busy={sandboxRoomBusy}
-          error={sandboxRoomError}
-          onClose={() => setHostSetup(false)}
-          onCreate={(variants, setup) => void handleHostSandboxRoom(variants, setup)}
-        />
+        <ModalPortal>
+          <HostSetupCard
+            busy={sandboxRoomBusy}
+            error={sandboxRoomError}
+            onClose={() => setHostSetup(false)}
+            onCreate={(variants, setup) => void handleHostSandboxRoom(variants, setup)}
+          />
+        </ModalPortal>
       )}
-      {/* #1415: the public game list, with the code box beside it. Watching a game is entering the room with
-          no seat -- the shell's own watcher path -- so it is `onEnterSandbox` with no join write first. */}
+      {/* Design note #1440: the code box alone -- the public list moved onto the page (`LobbyRoomList`).
+          Watching a game is entering the room with no seat, which is the shell's own watcher path, so the
+          list's Watch is `onEnterSandbox` with no join write first. */}
       {joinOpen && (
         <JoinGameCard
-          rooms={sandboxRooms.rooms}
-          loading={sandboxRooms.loading}
-          listError={sandboxRooms.error}
           error={sandboxRoomError}
           busy={sandboxRoomBusy}
           onClose={() => {
@@ -907,10 +1016,6 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
           onRejoin={(code) => {
             setJoinOpen(false);
             handleRejoinSandboxRoom(code);
-          }}
-          onSpectate={(code) => {
-            setJoinOpen(false);
-            onEnterSandbox(code);
           }}
           onClearError={() => setSandboxRoomError(null)}
         />
@@ -937,6 +1042,30 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
       )}
 
       <div style={styles.content}>
+
+      {/* ==================================================================
+           DESIGN NOTE 1440: THE PUBLIC ROOMS, BELOW THE TWO DOORS
+          ==================================================================
+          RULED: "Move the public-game list below the Lobby's Host Game / Join Game actions, using the
+          existing room-list data and existing eligibility rules."
+          THE DATA IS THE SAME SUBSCRIPTION #1415 OPENED -- `useSandboxRooms`, the server's `rooms` frame
+          pushed on every room write -- read here instead of being handed to a modal. Private rooms are not
+          in it and never were: the server drops them before the frame is built (`gameServer.ts`,
+          `doc.visibility !== "public") continue;`), which is why nothing on this side has to filter.
+          THE REFUSAL LANDS ON THE ROW. A join attempted from a row eight hundred pixels down cannot report
+          itself beside the buttons at the top of the page, which is where `SandboxRoomBar` carries the
+          bar's own errors; `attemptJoinSandboxRoom` returns the reason so both callers can say it where
+          the player is looking. */}
+      <LobbyRoomList
+        rooms={sandboxRooms.rooms}
+        loading={sandboxRooms.loading}
+        error={sandboxRooms.error}
+        available={sandboxRooms.available}
+        busy={sandboxRoomBusy}
+        refusal={roomRefusal}
+        onJoin={(code) => void handleJoinListedRoom(code)}
+        onWatch={(code) => onEnterSandbox(code, true)}
+      />
 
       {/* Honest, specific banners -- never a silently empty screen. Each
           names what is missing and what still works without it. */}
@@ -1806,6 +1935,21 @@ function Banner({ tone, text }: { tone: "error" | "warn"; text: string }) {
 /* Design note #1123: the one rule inline styles cannot carry. Kept next to the grid it collapses rather
    than in a shared sheet -- this file has no other CSS and a second consumer would be a reason to move it. */
 const LOBBY_CSS = `
+/* ==================================================================
+    DESIGN NOTE 1441: "!important" IS WHAT IT TAKES TO MOVE AN INLINE LENGTH
+   ==================================================================
+   #46's standing exception is that a stylesheet carries what an inline style CANNOT express -- a media query
+   is on that list. What the exception did not have to say before is that the two are not peers: an inline
+   declaration outranks every stylesheet rule that is not "!important", so the narrow layout does not merely
+   need a rule, it needs the one form of rule that can win against "styles.tableAnchor".
+   THE DESKTOP VALUES STAY WHERE THEY ARE. #1131's 20%/60% remains the authored position and is what a reader
+   of the style object sees; this is the narrow window's amendment to it, in one place, said once. */
+@media (max-width: 899px) {
+  .lobby-table-anchor {
+    left: var(--lobby-actions-left) !important;
+    width: var(--lobby-actions-width) !important;
+  }
+}
 @media (prefers-reduced-motion: no-preference) {
   .lobby-wordmark { animation: lobby-wordmark-in 620ms ease-out both; }
 }
@@ -1898,14 +2042,36 @@ const styles: Record<string, React.CSSProperties> = {
     top: 0,
     left: 0,
     right: 0,
-    bottom: 0,
+    /* Design note #1440 SUPERSEDES #1133's `bottom: 0`. That value made the layer the ROOT's height so no
+       band of bare ink was left under a one-screen page; the page has a public list under it now, and a clip
+       that grew with the list would have stretched the window the photograph is seen through down the whole
+       scroll. The height is the hero's, written on the root as `--lobby-hero` so this object stays static. */
+    height: "var(--lobby-hero)",
     overflow: "hidden",
     zIndex: 0,
     pointerEvents: "none",
   },
+  /* Design note #1440: the hero's share of the flow. `sceneClip` is absolute and reserves nothing, so this
+     is what holds `content` below the picture -- an empty box rather than a margin, because the number is
+     the hero's own and belongs in one place. */
+  heroFlow: {
+    height: "var(--lobby-hero-flow)",
+    flexShrink: 0,
+    pointerEvents: "none",
+  },
+  heroFade: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: "112px",
+    backgroundImage: "linear-gradient(rgba(8, 8, 8, 0), #080808)",
+    pointerEvents: "none",
+  },
   scene: {
     position: "absolute",
-    top: "50%",
+    /* Design note #1440: `top` is written per render from `sceneSizeFor(uiScale)` -- half the scene's own
+       height, so `translate(-50%, -50%)` lands its top edge on the hero's rather than centring it. */
     left: "50%",
     transform: "translate(-50%, -50%)",
     /* ==================================================================

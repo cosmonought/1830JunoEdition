@@ -16,6 +16,7 @@ import type { CeremonyCue } from "../utils/ceremonySounds";
 import type { GameHistory } from "../utils/gameHistory";
 
 import { FONT_SIZE, RADIUS } from "../styles/typography";
+import { NativeModal } from "./NativeModal";
 import type { PlayerStanding } from "../gameEngine/endgame";
 import CarcosaMark from "./CarcosaMark";
 
@@ -105,6 +106,36 @@ export interface GameOverModalProps {
   ceremonySoundsReady?: boolean;
 }
 
+/* ==================================================================
+    DESIGN NOTE 1645: BATCH 4A -- ESCAPE MIRRORS THE BACKDROP, AND ONLY THE BACKDROP
+   ==================================================================
+   The modal audit (`claude/modal-audit-2026-09-18.md`) listed four acknowledge-style notices with no Escape
+   (H3). They are not one group, and the split is a product decision rather than a mechanical one: an Escape
+   on a surface whose only exit ADVANCES THE GAME would be a keypress that acts, not a keypress that closes.
+
+   THIS ONE IS ELIGIBLE, and the evidence is measured rather than assumed: its backdrop already dismisses, and
+   it dismisses through `onDismiss` -- the identical callback the visible control uses, with the identical
+   state effect. #900 already says what that callback is -- "`onDismiss` is only ever a hide" -- and `App.tsx`
+   confirms it: `setGameOverDismissed(true)` plus taking the outro's held frame down. The result stands,
+   and the rail below re-raises the modal. The game ACTION on this surface is `onCloseRoom`, which the
+   backdrop does not call and Escape therefore does not either. So Escape here mirrors a route the player already has; it invents nothing.
+
+   `PrivateRevenueModal` AND `FleetLossModal` ARE NOT, and this batch deliberately leaves them alone. Measured:
+   their backdrops are `no-op` -- they have no dismissal route at all, only an acknowledgment button that
+   advances play. "Close the overlay" and "perform its sole action" are different semantics, and a later pass
+   may give those two guarded RESTORATION without Escape. `components/noticeModalDismissal.test.tsx` guards
+   that boundary.
+
+   THE HOOK LIVES IN A CHILD, as #1643 established: `reason` here is a RENDER switch, not a mount switch --
+   this component returns `null` when it is falsy and `App.tsx` keeps it mounted. A hook in the body would
+   capture an opener when the game shell mounted and never run its restore on a close. The child mounts and
+   unmounts with the dialog, and -- because React runs a child's layout effects before its parent's -- its
+   opener capture also lands before anything this component focuses itself. */
+/* #1651: `DismissalLifecycle` stood here. It existed because a hook in the component body would have captured
+   an opener when the game shell mounted and never run its restore on a close -- the render switch keeps the
+   component mounted all session. `NativeModal` is only RENDERED past that switch, so it mounts and unmounts
+   with the dialog, which is the lifecycle the contract was written against. */
+
 export function GameOverModal({
   reason,
   standings,
@@ -188,15 +219,18 @@ export function GameOverModal({
 
   return (
     /* Design note #900: the backdrop dismisses, unlike #896's. Nothing is pending behind it. */
-    <div
-      className="game-over-backdrop"
-      style={styles.backdrop}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Game Over"
-      onClick={(event) => {
+    <NativeModal
+      name="Game Over"
+      /* #1645, carried forward by #1651: Escape performs the same HIDE the backdrop does -- NOT `onCloseRoom`,
+         which is the action on this surface and keeps its own button. */
+      dismissible
+      onDismiss={onDismiss}
+      onScrimClick={(event) => {
         if (event.target === event.currentTarget) onDismiss();
       }}
+      restoreOpener
+      scrimStyle={styles.backdrop}
+      className="game-over-backdrop"
     >
       {/* #1418: the rise over the outro's held frame -- a fade, not a cut. Inline styles cannot express
           keyframes (#46's escape hatch). */}
@@ -391,7 +425,7 @@ export function GameOverModal({
           </span>
         </div>
       </div>
-    </div>
+    </NativeModal>
   );
 }
 
@@ -405,7 +439,8 @@ const styles: Record<string, React.CSSProperties> = {
   backdrop: {
     position: "fixed",
     inset: 0,
-    zIndex: 1600,
+    /* #1651: the `zIndex: 1600` that stood here is gone -- this scrim is a `<dialog>` in the top layer, which
+       is above the whole document by definition, so the number decided nothing. */
     display: "flex",
     alignItems: "center",
     justifyContent: "center",

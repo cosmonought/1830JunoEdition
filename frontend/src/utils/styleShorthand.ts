@@ -49,9 +49,23 @@
  *  gets switched off. Add one when a real toggle appears. */
 export const RISKY_SHORTHANDS: Readonly<Record<string, readonly string[]>> = {
   background: ["backgroundColor", "backgroundImage"],
-  border: ["borderColor", "borderWidth", "borderStyle"],
-  borderTop: ["borderTopColor", "borderTopWidth"],
-  borderBottom: ["borderBottomColor", "borderBottomWidth"],
+  /* Design note #1449: the border family grew, because the toggle this note PREDICTED ("the one this codebase
+     is next likeliest to hit") turned out to be happening in 38 places. Two things were missing:
+       - `border` needs the SIDE longhands as well as the all-sides ones. `ActionToast` set
+         `borderLeftWidth/Style/Color` over a base `border`, which clears the left edge entirely on the way out;
+       - `borderLeft` and `borderRight` were absent, and a real toggle appeared on each -- which is the
+         criterion this list was written with. Eight keys, still the documented ceiling. */
+  border: [
+    "borderColor", "borderWidth", "borderStyle",
+    "borderTopColor", "borderTopWidth", "borderTopStyle",
+    "borderRightColor", "borderRightWidth", "borderRightStyle",
+    "borderBottomColor", "borderBottomWidth", "borderBottomStyle",
+    "borderLeftColor", "borderLeftWidth", "borderLeftStyle",
+  ],
+  borderTop: ["borderTopColor", "borderTopWidth", "borderTopStyle"],
+  borderRight: ["borderRightColor", "borderRightWidth", "borderRightStyle"],
+  borderBottom: ["borderBottomColor", "borderBottomWidth", "borderBottomStyle"],
+  borderLeft: ["borderLeftColor", "borderLeftWidth", "borderLeftStyle"],
   margin: ["marginTop", "marginBottom", "marginLeft", "marginRight"],
   padding: ["paddingTop", "paddingBottom", "paddingLeft", "paddingRight"],
 };

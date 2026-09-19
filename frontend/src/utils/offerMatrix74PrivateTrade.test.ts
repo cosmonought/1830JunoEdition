@@ -22,7 +22,8 @@ const { moneyTotal, moneyConservationBreach } = require("../gameEngine/cashLedge
 const { resolvePrivateExchange } = require("../gameEngine/privateExchange") as typeof import("../gameEngine/privateExchange");
 const { applyPrivateRevenue, boPresidencyRefusal } = require("../gameEngine/sandboxSession") as typeof import("../gameEngine/sandboxSession");
 const { currentPrivateOwner } = require("../gameEngine/privatePurchaseAuthority") as typeof import("../gameEngine/privatePurchaseAuthority");
-const { dhFreeStationAvailableFor } = require("../gameEngine/dhPower") as typeof import("../gameEngine/dhPower");
+const { dhFreeStationAvailableFor, DH_PRIVATE_ID } = require("../gameEngine/dhPower") as typeof import("../gameEngine/dhPower");
+const { privateHexFor } = require("../gameEngine/privateReservations") as typeof import("../gameEngine/privateReservations");
 const { jkTileRefusal, JK_TILE_REFUSALS } = require("../gameEngine/kanawhaLicense") as typeof import("../gameEngine/kanawhaLicense");
 const { JK_PRIVATE_ID } = require("../gameEngine/levelPlayingField") as typeof import("../gameEngine/levelPlayingField");
 const { stockRoundExchangeOffers, ownsPrivateByCorporation } = require("./activePrivatePower") as typeof import("./activePrivatePower");
@@ -381,11 +382,28 @@ describe("§6 D-26: every unexercised ownership-dependent power follows the card
     expect(payouts).toEqual([expect.objectContaining({ privateId: DH, toPlayer: P1, toCompanyId: null })]);
   });
 
-  it("the D&H: the player-held free station answers to the new owner at ingress; the corporate power follows a later corporate purchase", () => {
+  it("the D&H: the still-unexercised free station's ownership follows the card to the new owner; the corporate power itself only exists after a later corporate purchase (S9-12, #1660)", () => {
+    // S9-12 (#1660) retired this sub-test's old premise. The ingress owner check it originally exercised
+    // compared the acting PLAYER against the private's player-owner field -- a question that could only ever
+    // resolve for a player-held D&H, and never for the corporation-owned board the power is actually meant to
+    // run on (`dhStationAuthority.ts`'s own design note #1660 has the finding). The real gate is corporate
+    // ownership (`owner_protocol_id`), and the D&H here is still merely player-held -- traded player to
+    // player, not yet bought by any corporation -- so its free station is not a live power either corporation
+    // can answer to yet. That is not a gap this test papers over: a bare player cannot lay the D&H's own
+    // tile, so there is no "player-held free station" to answer to anyone. What DOES travel with the card at
+    // this stage is provable, and is what this test now proves: ownership of the dormant power follows P1
+    // (`currentPrivateOwner` below), and the power itself, once it exists, follows the later corporate
+    // purchase (`dhFreeStationAvailableFor` below) -- exactly D-26's own title, "every unexercised
+    // ownership-dependent power follows the card."
     const traded = trade(fullBoard({ used_private_abilities: ["dh-tile"] }), DH);
-    const place = (company: number) => ({ PlaceHomeStation: { game_id: 1, company_id: company, q: 0, r: 0, kind: "dh" } });
-    expect(ingress(traded, P1, place(PRR))).toBeNull();
-    expect(ingress(traded, P2, place(NYC))).toBe("Only the Delaware & Hudson's owner can use its free station.");
+    const dhHex = privateHexFor(DH_PRIVATE_ID)!;
+    const place = (company: number) => ({ PlaceHomeStation: { game_id: 1, company_id: company, q: dhHex.q, r: dhHex.r, kind: "dh" } });
+    const notCorpOwned = (ticker: string) =>
+      `Only the corporation that owns the Delaware & Hudson may use its free station, and ${ticker} does not.`;
+    // Neither corporation may answer to it yet -- the D&H is still player-held, so there is no owning
+    // corporation for either PRR (the new owner's own corporation) or NYC (the old owner's) to be.
+    expect(ingress(traded, P1, place(PRR))).toBe(notCorpOwned("PRR"));
+    expect(ingress(traded, P2, place(NYC))).toBe(notCorpOwned("NYC"));
     // The card is P1's to sell to a corporation now, not P2's.
     expect(currentPrivateOwner(toOperating(traded), DH)).toBe(P1);
     const bought = apply(toOperating(traded), M.buyPrivate(PRR, DH, "70"), P1);

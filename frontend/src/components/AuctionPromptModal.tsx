@@ -180,7 +180,8 @@ const styles: Record<string, React.CSSProperties> = {
     fontVariantNumeric: "tabular-nums",
     cursor: "pointer",
   },
-  rungActive: { borderColor: "#4d8ee0", backgroundColor: "#1d3a55", color: "#f2f0eb" },
+  // #1449: the shorthand, not `borderColor` -- the base is `1px solid #3a3a3a`.
+  rungActive: { border: "1px solid #4d8ee0", backgroundColor: "#1d3a55", color: "#f2f0eb" },
   consequence: {
     fontSize: FONT_SIZE.micro,
     color: "#a8a6a0",

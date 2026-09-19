@@ -2062,15 +2062,59 @@ every one of the repo's 34 `626` occurrences (topology source · display · test
 > **PARTIAL by exactly the three call sites above**. Both readings are stated so the owner can pick without
 > re-deriving the scope.
 
-**S9-11. The Blood Price landing is not stamped as an arrival.**
-Status `OPEN` (found by Slice 8.1, 2026-09-16; Yellow Sign / Unpredictable Revenue only). `applySandboxMarketAction`'s
-`BuyTrainFromCorporation` arm writes `projectBloodPriceMove`'s cell straight into `market_positions` instead of through
-`withArrival` (#646: "every place a marker moves goes through here"), so the seller's token carries no arrival ordinal
-after the move. §6.0's stack tie-break then treats it as unstamped: it sorts after every stamped token in its new cell,
-`nextArrival` ignores it, and a LATER stamped arrival into the same cell would sort above it. The Slice 8.1 settle orders
-a waiting corporation moved by the Blood Price deterministically, like any other move, but its stack position is not
-§4.5's. Repair: stamp the landing with `withArrival`. Replay: replay-semantic for Yellow-Sign rooms with a Blood Price
-into an occupied cell — bump with Stage 9.
+**S9-11. ~~The Blood Price landing is not stamped as an arrival.~~ RESOLVED.**
+Status **`RESOLVED`** (Stage 9.4a, 2026-09-19, uncommitted). Was `OPEN` (found by Slice 8.1, 2026-09-16; Yellow
+Sign / Unpredictable Revenue only).
+
+*Root cause, confirmed by trace.* `applySandboxMarketAction`'s `BuyTrainFromCorporation` arm (`sandboxSession.ts`
+~2508) wrote `ctx.projectBloodPrice`'s returned cell straight into `market_positions`, the one call in that
+function that bypassed `withArrival` (#646) — `SellStock` and `DeclareDividends` beside it both already route
+through it. The landed mark therefore carried `enteredAt: undefined`. `operatingOrderKey` (`operatingOrder.ts`)
+reads a missing `enteredAt` as `Infinity` — "unrecorded, sorts after every recorded one" — so the Blood Price
+token sorted last in its cell regardless of when it actually arrived, and #647's ascending comparator then reads
+ANY later, finite, stamped arrival into that same cell as having gotten there first (`finite < Infinity`),
+inverting rule 4.5's stack.
+
+*Repair.* One call site: `prices: { ...prices, [seller_protocol_id]: withArrival(prices, seller_protocol_id,
+landed) }`, the same call the sale and dividend arms already make. No new state and no second history
+mechanism — `nextArrival` already derives the ordinal from the marks on the chart rather than a clock, so the
+fix is replay-safe by construction and needed no replay-ABI change.
+
+*Tests.* `frontend/src/utils/bloodPriceArrival.test.ts` (new, 11 cases): a fresh landing is stamped; the exact
+same-cell regression above (a Blood Price that arrives first still outranks a later stamped arrival into its
+cell); event A-then-B and B-then-A ordering; the "lands where it started" no-op guard is undisturbed; replay
+reproduces the same stamps in one burst; undo/revert leaves no stale counter (the ordinal re-derives from the
+reverted chart rather than continuing); a crafted `BuyTrainFromCorporation` carrying forged `enteredAt`/`arrival`
+fields is ignored (the message schema has no such field and the arm never reads one); trade price, move reason
+and every other corporation's mark are untouched; the non-Carcosan refusal path is unaffected. All 11 fail
+against the pre-fix code (checked by reverting the one-line change and re-running) and pass with it. Directly
+implicated suites re-run clean: `batch60.test.ts`, `doubleWithhold.test.ts`, `holdBeforeChart.test.ts`,
+`presidentCertificateSale.test.ts`, `soldOutRise.test.ts`, `operatingOrderFloatGate.test.ts`,
+`operatingOrderTieBreak.test.ts`, `operatingOrderView.test.ts` (120 combined).
+
+*Corpus.* Checked against the SAME 18-file canonical assembly Stage 8 / 9.2 / 9.3 measure against (the
+`corpus()` builder shared by `moneyConservation.test.ts` / `stage85Closure.test.ts` / `presidencyCorpus.test.ts` /
+`mohawkExchangeCorpus.test.ts`: `replayGolden/logs` (3) + `server/data/*.log.jsonl` (8) +
+`frontend/sandbox-log-JUNO-{3XD,CV4,JJD,QVC,Y8V}.json` (5) + `JUNO-FCJ-prefix96.log.jsonl` (1) + the Z6C
+494-entry fixture (1) — 18/18, not the 13-file partial sweep an earlier pass of this entry reported. Parsed each
+entry's actual message (`payload` JSON-string or `msg`, per `entriesFromExport`) rather than raw-text grep, since
+a raw substring match had first under- and over-counted here. Only `server/JUNO-FCJ` and `export/JUNO-QVC`
+contain any `BuyTrainFromCorporation` (11 each), and neither ever fires a single `YellowSignEvent`. Only
+`server/JUNO-Z6C` (615 rows) and the Z6C fixture fire `YellowSignEvent` — at 203 in both, and a second time at
+567 in the full server log — and neither log contains a single `BuyTrainFromCorporation` anywhere; the 567 mark
+is in any case immediately undone by a `RevertTo` at 569 (`"summary":"YellowSignEvent"`), so it never even
+reaches the state the rest of that log replays from. No file both marks a Carcosan train AND sells one, so
+18/18 are negative and the corpus conclusion stands: no canonical corpus game exercises the Blood Price landing,
+therefore S9-11 causes no corpus/replay delta. `replayGolden.test.ts`, `moneyConservation.test.ts`,
+`replayJuno3XD.test.ts`, `replayJunoCV4.test.ts` and `roundReplay.test.ts` all pass unchanged (54 combined) —
+nothing to re-pin.
+
+*Bump.* Replay-semantic in principle (a Yellow-Sign room with a Blood Price into an occupied cell would differ
+between the two engine versions) but the corpus never reaches that condition. `RULES_ENGINE_VERSION` stays 6,
+to bump collectively with the rest of Stage 9's closure as already planned.
+
+*UI/readiness.* None owed — the chart already reads `enteredAt` off `market_positions` for every other mover;
+nothing downstream needed changing.
 
 **S9-12. The D&H's free station is not judged by the D&H's rules at either lock.**
 Status `OPEN` (found by Slice 8.2, 2026-09-16, by reading the code; pre-existing). `PlaceHomeStation{kind: "dh"}` is

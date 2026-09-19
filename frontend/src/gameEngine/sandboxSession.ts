@@ -2505,7 +2505,12 @@ export function applySandboxMarketAction(
     const landed = ctx.projectBloodPrice(mark);
     if (!landed || (landed.x === mark.x && landed.y === mark.y)) return unchanged;
     return {
-      prices: { ...prices, [seller_protocol_id]: landed },
+      // Design note #646 / S9-11: every landing is stamped with its arrival -- including this one, which
+      // wrote the bare cell straight into `prices` and left the seller's token with no `enteredAt` at all.
+      // Unstamped, #647's 6.0 tie-break (`operatingOrderKey`) reads `arrival` as `Infinity` and the token
+      // sorts after every stamped token sharing its cell, and a later arrival into the same cell would
+      // outrank a Blood Price landing that got there first.
+      prices: { ...prices, [seller_protocol_id]: withArrival(prices, seller_protocol_id, landed) },
       tradePrice: null,
       moved: {
         companyId: seller_protocol_id,

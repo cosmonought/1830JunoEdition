@@ -123,7 +123,7 @@ import type { MapGridResponse, MapTileEntry } from "../components/hexContractTyp
    `homeStationAuthority.homeHexChoicesFor` since Slice 8.2 (#1611), so this file no longer imports the table. */
 import { TILE_CATALOG_BY_ID, type TileColorTier } from "../components/hexTileCatalog";
 import { archetypeForHex, hexValueForEra } from "../components/hexGeometry";
-import { depotInventory, derivePhase, openDepotTiers, TIER_ORDER, trainTier, type GamePhase } from "./gamePhase";
+import { depotInventory, derivePhase, openDepotTiers, realDieselPurchased, TIER_ORDER, trainTier, type GamePhase } from "./gamePhase";
 // Design note #712: the market-zone purchase rules, shared with the Stock Round panel.
 import { sharePurchaseBlock, type PriceZone } from "./sharePurchase";
 import { hasActedThisTurn } from "./turnAction";
@@ -1063,32 +1063,28 @@ function startCarcosanDoomClock(state: GameStateResponse): GameStateResponse {
    DELETED RATHER THAN LEFT UNCALLED: an exported reducer helper with no caller is a second way to take the
    train, waiting for somebody to find it. */
 
-/** Ghost trains become ordinary at the end of an Operating Round, and the fleet is trimmed if that puts a
- *  corporation over the limit -- design note #1046. */
-function expireGhostTrains(state: GameStateResponse): GameStateResponse {
-  const hasGhost = (state.public_companies ?? []).some(
-    (company) => (company.ghost_trains?.length ?? 0) > 0,
-  );
-  if (!hasGhost) return state;
-  const limit = limitForTier(state, derivePhase(state)?.tier ?? "2");
-  return {
-    ...state,
-    public_companies: state.public_companies.map((company) => {
-      if ((company.ghost_trains?.length ?? 0) === 0) return company;
-      const trimmed = trimToTrainLimit({
-        owned: company.owned_trains ?? [],
-        reprieved: company.pending_rust_trains ?? [],
-        limit,
-        cost: (model) => TIER_COST[model] ?? 0,
-      });
-      return {
-        ...company,
-        ...(company.owned_trains == null ? {} : { owned_trains: [...trimmed.owned] }),
-        ghost_trains: [],
-      };
-    }),
-  };
-}
+/* ==================================================================
+    DESIGN NOTE 1672 (S9-2): `expireGhostTrains` IS DELETED
+   ==================================================================
+   IT ENDED THE LIMIT EXEMPTION A WHOLE CARCOSA LIFETIME EARLY, AND THEN TOOK AN ORDINARY TRAIN FOR IT.
+   #1046 read the gift's ruling as "bypasses train limit checks until the end of the Operating Round", so this
+   function emptied `ghost_trains` at every OR boundary and trimmed the fleet to the limit. `trimToTrainLimit`
+   discards CHEAPEST-FIRST, and the gilded train is the newest and dearest -- so what actually left was one of
+   the corporation's ordinary trains, confiscated because a grace on a DIFFERENT train had run out.
+
+   OWNER RULING (2026-09-19): the exemption "lasts for its entire Carcosa lifetime", ending only when the fog
+   removes the train or the Blood Price burns the gilding off; "ending an OR does not make the ghost ordinary,
+   ending an OR set does not make the ghost ordinary, no ordinary train may be trimmed merely because the old
+   short-lived ghost exemption expired."
+
+   SO THE EXEMPTION IS NOW READ FROM `carcosan_trains` (`trainLimit.ts` #1672), which IS the Carcosa lifetime:
+   the fog splices a model out of it and the Blood Price clears it at the seller. Coextensive by construction
+   rather than by a second clock that had to be kept in step -- and with nothing left to expire, this function
+   has no job. DELETED RATHER THAN LEFT UNCALLED, for #1092's reason one field over: a reducer helper that
+   trims a fleet, with no caller, is a second way to take a train, waiting for somebody to find it.
+
+   WHAT DOES NOT CHANGE: the limit still binds every ordinary train, `applyPhaseChange` still trims on a phase
+   change, and #1530's `DiscardTrain` obligation is still how a president resolves an excess. */
 
 /** Applies a phase change's consequences; unchanged state when the purchase triggers nothing.
  *  See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #284 */
@@ -1236,8 +1232,10 @@ export function applyPhaseChange(
        president, so the trim is gone: a corporation this phase change leaves over the new limit simply stays
        over it, `pendingTrainDiscards` (`trainDiscard.ts`) reads that off the board, the reducer refuses every
        other message until the president's `DiscardTrain`s bring the fleet down, and each discard is its own
-       log entry. `limit` is still computed above because `expireGhostTrains` (#1046) keeps its own trim at
-       the round boundary, which is a variant ruling and not this note's. Rules-engine version 2 (#1520). */
+       log entry. Rules-engine version 2 (#1520).
+       #1672 (S9-2): the sentence that used to end this paragraph -- "`limit` is still computed above because
+       `expireGhostTrains` (#1046) keeps its own trim at the round boundary" -- is obsolete. There is no round-
+       boundary trim any more: the Carcosa exemption lasts as long as the gilding, so nothing expires there. */
     const fleet = fleetAfterRust;
     const trimmed = { reprieved: reprievedAfterRust as readonly string[] };
     /* ==================================================================
@@ -1839,7 +1837,52 @@ export function settleTrainSale(
     next.splice(index, 1);
     return next;
   });
-  const settled = withTrains(removed, buyerId, (trains) => [...trains, modelType]);
+  const withTrain = withTrains(removed, buyerId, (trains) => [...trains, modelType]);
+
+  /* ==================================================================
+      DESIGN NOTE 1673 (S9-2): PROVENANCE FOLLOWS THE TRAIN; THE GILDING DOES NOT
+     ==================================================================
+     #1672 SPLIT THE TWO MARKERS AND THIS IS THE HALF IT GOT WRONG. `carcosan_trains` is the gilding -- the
+     limit exemption, the fog's target, the Carcosa lifecycle -- and the Blood Price burns it off, so it must
+     NOT reach the buyer. `ghost_trains` is something else entirely: SYNTHETIC PROVENANCE, "this train never
+     came off the depot shelf". That fact is about the TRAIN, not about who owns it, and a change of owner
+     cannot make a synthetic train physical. #1672 deleted the seller's marker without giving it to the buyer,
+     which is the same bug as leaving it behind, in the other direction: it would have conjured a physical
+     train out of a gift.
+
+     TWO AUTHORITIES READ IT AND BOTH WOULD HAVE BEEN WRONG:
+       `depotInventory`       subtracts ghosts from the tally, so the transferred gift would have started
+                              counting against the bank's shelf -- one printed train removed from sale by a
+                              trade that never touched the depot.
+       `realDieselPurchased`  subtracts ghosts before looking for a Diesel, so a transferred synthetic D
+                              would have become retroactive evidence that a real one was bought -- starting
+                              the Carcosa doom clock for every other gilded train in play (#1672).
+
+     EXACTLY ONE OCCURRENCE, by the project's multiset convention (`countableTrainCount`, `trimToTrainLimit`,
+     the fog's own splice). A corporation holding two 6-trains of which one is synthetic hands over one
+     marker with one train, never both and never none.
+
+     UNCONDITIONAL, unlike everything below it. The carcosan block is gated on the seller's gilding because
+     an ordinary sale must not move a market token; provenance has no such gate. A train that has already
+     been through one Blood Price is synthetic and NOT gilded, and its next sale must still carry the marker
+     -- gating this on the gilding would lose it on the second hop. */
+  const sellerGhosts = seller?.ghost_trains ?? null;
+  const ghostAt = sellerGhosts === null ? -1 : sellerGhosts.indexOf(modelType);
+  const settled =
+    ghostAt < 0
+      ? withTrain
+      : {
+          ...withTrain,
+          public_companies: withTrain.public_companies.map((entry) => {
+            if (entry.company_id === sellerId) {
+              return { ...entry, ghost_trains: sellerGhosts!.filter((_m, at) => at !== ghostAt) };
+            }
+            if (entry.company_id === buyerId) {
+              return { ...entry, ghost_trains: [...(entry.ghost_trains ?? []), modelType] };
+            }
+            return entry;
+          }),
+        };
 
   /* ==================================================================
       DESIGN NOTE 1090: THE BLOOD PRICE, AND WHAT ELSE MOVES WITH THE TRAIN
@@ -1881,6 +1924,11 @@ export function settleTrainSale(
             ...entry,
             carcosan_trains: survivingMarks,
             is_carcosan: false,
+            /* #1673: the SYNTHETIC marker has already moved to the buyer, above and unconditionally. What
+               this block clears is the GILDING, and #1090's rule is untouched by the split: the buyer
+               receives an ORDINARY train -- no gilding, no exemption, no deadline, never taken by the fog,
+               and subject to the buyer's ordinary train limit. Its provenance travels with it because
+               provenance is a fact about the train; its curse does not because the sale burns that off. */
             ...(survivingMarks.length === 0
               ? { carcosan_doom_after_macro_round: undefined }
               : {}),
@@ -3691,20 +3739,22 @@ function settleOperatingCursor(
        #1034's rule, so the newly-ordinary ghost competes with the rest of the fleet on the ordinary terms
        rather than being singled out. It is usually the newest and most expensive train, so it usually
        survives, which is the generous reading of a gift. */
-    const settled = expireGhostTrains(expired);
+    /* #1672 (S9-2): `expireGhostTrains` is gone from this transition and from the file. The limit exemption
+       is no longer an OR-long grace on a separate list -- it lasts as long as the train is gilded -- so there
+       is nothing for an Operating Round's end to expire, and nothing to trim for. */
+    const settled = expired;
     /* ==================================================================
         DESIGN NOTE 1089: THE FOG COMES AT THE END OF THE OR SET, NOT THE OR
+        — AND SINCE #1672 (S9-2), NOTHING CARCOSAN HAPPENS AT THIS TRANSITION AT ALL
        ==================================================================
-       TWO EXPIRIES, ONE TRANSITION, DIFFERENT PERIODS. `expireGhostTrains` runs every Operating Round -- the
-       limit exemption is an OR-long grace. The doom clock is measured in OR SETS, so `expireCarcosanTrains`
-       compares `macro_round_number` against the deadline and does nothing on the rounds in between.
-       WHICH MAKES THIS TRANSITION THE RIGHT HOME FOR BOTH. #898 established that the opening of a Stock
-       Round is exactly the moment an OR set has finished, and the counter has not been incremented yet at
-       this point, so it still names the set that just ended. */
-    /* Design note #1092: `expireCarcosanTrains` IS GONE FROM THIS TRANSITION. #1089 removed the train here;
-       the fog is now the third step of the revenue sequence and takes it on a RUN, where it can be narrated
-       and can ring. What survives at this boundary is `expireGhostTrains` -- the limit exemption, which is a
-       per-Operating-Round grace and has nothing to do with the doom clock. */
+       THIS NOTE USED TO SAY "TWO EXPIRIES, ONE TRANSITION, DIFFERENT PERIODS": `expireGhostTrains` every
+       Operating Round for the limit exemption, and the doom clock measured in OR SETS. There is one clock
+       now. The owner ruled the exemption coextensive with the gilding, so there is no OR-long grace to
+       expire here, and #1092 had already moved the train's removal onto a RUN, where the fog can be narrated
+       and can ring. `fogIsDue` reads the deadline; the `stage === "fog"` arm takes the train.
+       WHAT #898 ESTABLISHED IS STILL TRUE AND STILL USED: the opening of a Stock Round is exactly the moment
+       an OR set has finished, and `macro_round_number` has not been incremented yet at this point, so it
+       still names the set that just ended -- which is what makes `macroRound > doom` the honest test. */
     /* Design note #1660 (S9-12): the D&H's window is exactly as turn-scoped as the sub-phase it rides
        beside, and closes at the same boundary -- leaving the Operating Round entirely ends any turn that was
        in progress. */
@@ -6239,12 +6289,25 @@ function applyYellowSignOutcome(
                is the edge case the end-game egg needed -- a scoreboard keyed on holding the train would
                find nobody once it had rusted. */
             is_carcosan: true,
-            /* THE DOOM CLOCK, STARTED HERE ONLY FOR A GIFTED DIESEL. Ruled: "A Carcosan D-train begins
-               this countdown the moment it is gifted ... completes the OR set in which it is gifted, and
-               then the next OR set before disappearing into the fog." A gifted 5 or 6 waits for the first
-               D-train instead, which `startCarcosanDoomClock` handles at the phase change.
-               `+ 1` IS THE WHOLE RULE: triggered during set N, gone at the conclusion of set N + 1. */
-            ...(trainTier(model) === "D"
+            /* ==================================================================
+                DESIGN NOTE 1672 (S9-2): THE TRIGGER IS WHICHEVER CONDITION LANDS SECOND
+               ==================================================================
+               OWNER RULING (2026-09-19). Two conditions: (A) the gilded ghost exists, (B) the first REAL D
+               train has been purchased through normal depot machinery. "The effective doom trigger occurs
+               when BOTH conditions have become true -- i.e. whichever happens later."
+                 ghost first, D later  -> that D purchase starts the clock (`startCarcosanDoomClock`).
+                 D first, ghost later  -> RECEIVING THE GHOST starts it, which is this line.
+                 both in one OR set    -> that set is the trigger set, which both spellings give.
+               #1046 READ IT AS "a gifted Diesel starts its own clock" AND THAT IS TWO ERRORS. It keyed on the
+               GIFT'S OWN TIER -- so a 5 or 6 gifted after the Diesels were already running waited for a first
+               D that had long since come and never got a deadline at all -- and a synthetic D would have
+               started the clock by arriving, when the ruling says plainly that "the synthetic gift is NOT a
+               real D purchase and does not satisfy/start the real-D condition."
+               SO THE QUESTION IS THE BOARD'S, NOT THE MODEL'S: `realDieselPurchased` (`gamePhase.ts` #1672)
+               subtracts `ghost_trains` before it looks, exactly as the depot tally does.
+               `+ 1` IS STILL THE WHOLE GRACE: triggered during set N, due after the conclusion of N + 1, so
+               the corporation keeps the remainder of N and the whole of N + 1 to operate the gift. */
+            ...(realDieselPurchased(state)
               ? { carcosan_doom_after_macro_round: (state.macro_round_number ?? 0) + 1 }
               : {}),
             has_yellow_sign: false,

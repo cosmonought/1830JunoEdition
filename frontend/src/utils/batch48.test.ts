@@ -258,21 +258,27 @@ describe("a ghost train occupies no limit slot, for now", () => {
     expect(countableTrainCount(["4", "5"], ["4"])).toBe(1);
   });
 
-  it("expires at the Operating Round boundary and trims", () => {
-    /* RULED, when asked: "Becomes an ordinary train; discard if over." The clear and the trim are one
-       transition -- clearing without trimming would leave a corporation over the limit indefinitely, because
-       `applyPhaseChange` is the only other place that trims and a phase change may never come again. */
-    expect(REDUCER).toContain("function expireGhostTrains(state: GameStateResponse)");
-    expect(REDUCER).toContain("const settled = expireGhostTrains(expired);");
-    expect(REDUCER).toContain("ghost_trains: [],");
+  it("does NOT expire at the Operating Round boundary — #1672 (S9-2) superseded that reading", () => {
+    /* THIS BATCH RULED "Becomes an ordinary train; discard if over" and built `expireGhostTrains` to clear
+       the exemption at the next OR boundary and trim the fleet. The trim was cheapest-first, so the gilded
+       train — newest and dearest — survived and an ORDINARY train was confiscated for it.
+       OWNER RULING (2026-09-19): the exemption "lasts for its entire Carcosa lifetime", ending only when the
+       fog takes the train or the Blood Price burns the gilding off. `expireGhostTrains` is deleted, the
+       exemption is read from `carcosan_trains`, and nothing trims at that boundary. Full proof in
+       `utils/stage95GhostLimit.test.ts`. */
+    expect(REDUCER).not.toContain("expireGhostTrains");
+    expect(REDUCER).toContain("const settled = expired;");
   });
 
   it("reaches every surface that counts", () => {
     /* #1006's SHAPE, which this project meets about once a batch. A new exempt kind of train that only some
        counting sites know about is a limit that disagrees with itself. */
-    expect(APP).toContain("company?.ghost_trains,");
-    expect(readStripped("gameEngine/trainPurchaseGate.ts")).toContain("company.ghost_trains");
-    expect(readStripped("components/TrainPurchasePanel.tsx")).toContain("buyer?.ghost_trains");
+    /* #1672 (S9-2): every one of them now counts the GILDING. A surface still exempting on `ghost_trains`
+       would disagree with the authority from the first OR boundary onward, which is exactly the
+       self-disagreeing limit this case exists to catch. */
+    expect(APP).toContain("company?.carcosan_trains,");
+    expect(readStripped("gameEngine/trainPurchaseGate.ts")).toContain("company.carcosan_trains");
+    expect(readStripped("components/TrainPurchasePanel.tsx")).toContain("buyer?.carcosan_trains");
     expect(readStripped("components/TrainBadges.tsx")).toContain("countableTrainCount(trains, reprieved, ghosts)");
     expect(readStripped("panels/ContextualActionBar.tsx")).toContain("activeCorporation?.ghostTrains");
   });

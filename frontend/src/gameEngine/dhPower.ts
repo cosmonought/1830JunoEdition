@@ -318,15 +318,38 @@ export interface CslPowerState {
   layBlockedReason: string | null;
 }
 
+/* ==================================================================
+    DESIGN NOTE 1671 (S9-6): A BONUS LAY, NOT AN UPGRADE RIGHT -- AND NOT A LAPSE RULE
+   ==================================================================
+   OWNER RULING (2026-09-19), correcting the reading this entry was filed under: the C&SL special grants a
+   bonus TILE LAY on B20. It does NOT grant a general track action, and it does NOT grant an upgrade right
+   merely because an ordinary corporation track action may normally be used to lay OR upgrade.
+
+   THE OUTCOME THIS FUNCTION ALREADY PRODUCED IS THE RIGHT ONE and the REASON IT GAVE WAS NOT. The power was
+   offered only while B20 was bare, so it could never reach an upgrade -- a tile onto an empty hex is a lay by
+   definition. But it said so by asserting a D&H-style forfeiture ("the power is gone for the rest of the
+   game"), a rule the C&SL does not have. The rulebook states that lapse for the D&H only.
+
+   SO THE SENTENCE NOW STATES THE REAL REASON: the power is a bonus LAY, and once B20 carries a tile there is
+   no lay left to make there. Tiles are never removed in this game, so "no legal target" and "never again"
+   describe the same future -- which is exactly why the wrong reason survived unnoticed. The distinction
+   matters for the next reader: the D&H has an explicit lapse; the C&SL has an opportunity that can cease to
+   exist. `forfeited` keeps its name because every caller reads it as "this power can no longer be used" and
+   renaming it would be a refactor for a word.
+
+   AND THE TILE'S OWN LEGALITY IS NEVER THIS FUNCTION'S. `filterSandboxPlacements` judges a B20 lay by the
+   ordinary rules whether or not it came through this power -- the power waives CONNECTIVITY and the track
+   step's cost, never the colour tier or the topology. There is no path on which the C&SL makes an otherwise
+   illegal tile legal. */
 export function cslPowerState(input: { hexBuilt: boolean; layUsed: boolean }): CslPowerState {
-  /* Same conjunction as the D&H's and for the same reason: a tile on B20 that this power did not lay can only
-     have come from somewhere else, and testing `hexBuilt` alone would forfeit the power by using it. */
-  const forfeited = input.hexBuilt && !input.layUsed;
-  if (forfeited) {
+  /* Same conjunction as the D&H's, for a different reason: a tile on B20 that this power did not lay means
+     the hex is taken, and testing `hexBuilt` alone would read the power's own lay as the thing that took it. */
+  const spent = input.hexBuilt && !input.layUsed;
+  if (spent) {
     return {
       forfeited: true,
       layAvailable: false,
-      layBlockedReason: `Another corporation has already built on ${CSL_HEX_LABEL}, so the C&SL's power is gone for the rest of the game.`,
+      layBlockedReason: `${CSL_HEX_LABEL} already carries a tile, so the C&SL's bonus lay has no legal target — the power lays track, it does not upgrade.`,
     };
   }
   return {
@@ -339,7 +362,8 @@ export function cslPowerState(input: { hexBuilt: boolean; layUsed: boolean }): C
 export const CSL_POWER_DESCRIPTION =
   `Champlain & St. Lawrence — the owning corporation may lay a tile on ${CSL_HEX_LABEL} (Burlington) free, ` +
   `ignoring track connection rules, IN ADDITION TO its normal tile lay that turn. ` +
-  `If any other corporation builds on ${CSL_HEX_LABEL} first, the power is forfeited.`;
+  /* #1671 (S9-6): a bonus LAY. Once ${CSL_HEX_LABEL} is tiled the power has no target -- it is not an upgrade right. */
+  `It is a tile LAY, not an upgrade: once ${CSL_HEX_LABEL} carries a tile, there is nothing left for it to do.`;
 
 /** The self-lay warning, for either private.
  *

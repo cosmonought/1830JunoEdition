@@ -420,7 +420,8 @@ function autoSkipReasonFor(input: {
     // An unknown fleet is never treated as full: skipping on a guess takes the player's turn away.
     if (owned === undefined) return null;
     const locked = isTrainLocked(
-      countableTrainCount(company.owned_trains, company.pending_rust_trains, company.ghost_trains),
+      // #1672 (S9-2): the exemption is the CARCOSA lifetime, not the OR-long ghost grace.
+      countableTrainCount(company.owned_trains, company.pending_rust_trains, company.carcosan_trains),
       depotInventory(state).find((tier) => tier.isCurrent)?.trainLimit ?? null,
     );
     return locked ? "it is already at its train limit" : null;

@@ -578,6 +578,42 @@ export function pooledTrainsByTier(state: GameStateResponse | null): Map<TrainTi
   return out;
 }
 
+/** ==================================================================
+ *   DESIGN NOTE 1672 (S9-2): A REAL DIESEL, WHICH A SYNTHETIC ONE IS NOT
+ *  ==================================================================
+ *
+ * OWNER RULING (2026-09-19): the Carcosa doom condition needs a D train "purchased through normal depot
+ * purchase machinery", and "if the synthetic gift is a D, that synthetic gift itself is NOT a real D purchase
+ * and does not satisfy/start the real-D condition."
+ *
+ * SO THE PHASE CANNOT ANSWER THIS, and that is the whole reason this function exists. `derivePhase` reads the
+ * highest tier ANYBODY OWNS and counts a ghost toward it deliberately (#1046, forty lines down: "the ghost
+ * still counts toward `highest`, because it is a real train the corporation owns"). A gifted Diesel therefore
+ * turns the phase to D while the depot has not sold one — and asking the phase would start the doom clock on
+ * the gift's own arrival, which is exactly the inference the ruling forbids.
+ *
+ * THE SUBTRACTION IS ALREADY WRITTEN, one field over. `ghost_trains` is the synthetic marker — "a ghost train
+ * was never in the depot" — and `depotInventory` has always used it to keep the gift off the shelf. This walks
+ * the same multiset: a Diesel in a fleet that no ghost entry accounts for came off the shelf, and so did one
+ * sitting in the Bank Pool (#1530: a pooled train was bought). */
+export function realDieselPurchased(gameState: GameStateResponse | null): boolean {
+  if (!gameState) return false;
+  for (const company of gameState.public_companies ?? []) {
+    const owned = company.owned_trains;
+    if (owned == null) continue;
+    const ghosts = [...(company.ghost_trains ?? [])];
+    for (const model of owned) {
+      const at = ghosts.indexOf(model);
+      if (at >= 0) {
+        ghosts.splice(at, 1);
+        continue;
+      }
+      if (trainTier(model) === "D") return true;
+    }
+  }
+  return (gameState.returned_trains ?? []).some((model) => trainTier(model) === "D");
+}
+
 export function derivePhase(gameState: GameStateResponse | null): GamePhase | null {
   if (!gameState) return null;
   const order = tierOrderFor(gameState);

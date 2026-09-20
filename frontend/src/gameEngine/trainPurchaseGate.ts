@@ -129,7 +129,7 @@ export function trainPurchaseRefusal(
      enforced one rule against two different numbers; a refusal that measures one thing and explains another
      is the same fault one layer up. */
   const owned = company.owned_trains;
-  const countable = countableTrainCount(owned, company.pending_rust_trains, company.ghost_trains);
+  const countable = countableTrainCount(owned, company.pending_rust_trains, company.carcosan_trains);
   if (owned !== undefined && owned !== null && isTrainLocked(countable, trainLimit)) {
     return `Train limit reached — ${company.ticker ?? "this corporation"} already holds ${countable} of a maximum ${trainLimit}.`;
   }

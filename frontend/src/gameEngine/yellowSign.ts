@@ -49,8 +49,8 @@ import {
   type RevenueRoll,
   type RevenueSeedParts,
 } from "./gameVariants";
-import { DEPOT_COST, TIER_ORDER, trainTier, type TrainTier } from "./gamePhase";
-import type { PublicCompanyState } from "./gameState";
+import { DEPOT_COST, TIER_ORDER, openDepotTiers, trainTier, type TrainTier } from "./gamePhase";
+import type { GameStateResponse, PublicCompanyState } from "./gameState";
 
 /** The Stage 1 line, verbatim from `criticalMalus`. */
 export const YELLOW_SIGN_MALUS_LINE =
@@ -215,13 +215,46 @@ export function runWithoutTrain(
   };
 }
 
-/** The tier the Escalation gifts: whatever phase the board is in.
+/** The tier the Escalation gifts, read off the PHASE.
  *
  *  Design note #1046: "a train matching the current phase's tier", read off the phase rather than off the
- *  depot -- the depot may have sold out of that tier, and the gift explicitly does not come from the bank. */
+ *  depot -- the depot may have sold out of that tier, and the gift explicitly does not come from the bank.
+ *
+ *  SUPERSEDED FOR THE GIFT ITSELF BY #1672 (S9-2). The owner's rule names the depot, not the phase:
+ *  `carcosaGiftModel` below is what the escalation now hands over. This stays as the phase reading, because
+ *  it is still the honest fallback when the board cannot say what is on the shelf, and because deleting an
+ *  exported answer that two readers still agree about would be churn. */
 export function escalationTier(phaseTier: string): TrainTier | null {
   const at = (TIER_ORDER as readonly string[]).indexOf(phaseTier);
   return at < 0 ? null : TIER_ORDER[at];
+}
+
+/** ==================================================================
+ *   DESIGN NOTE 1672 (S9-2): THE GIFT IS THE DEPOT'S LOWEST, NOT THE PHASE'S TIER
+ *  ==================================================================
+ *
+ * OWNER RULING (2026-09-19): "Carcosa grants a synthetic train matching the LOWEST-VALUE TRAIN CURRENTLY
+ * REPRESENTED BY THE AUTHORITATIVE BANK DEPOT RULE when the gift occurs. Do NOT simply infer the model from
+ * phase if depot state can differ."
+ *
+ * AND THE TWO DO DIFFER, which is why #1046's shortcut has to go. The phase is "the highest tier anybody
+ * owns"; the depot's lowest available tier is what the bank would actually sell next. They agree while a
+ * phase's own tier is still on the shelf and part the moment it sells out -- a phase-5 game whose last 5 has
+ * gone is selling 6s, and #1046 would have gifted a 5 that the depot no longer represents.
+ *
+ * REUSING THE AUTHORITATIVE MACHINERY RATHER THAN RESTATING IT. `openDepotTiers` is the depot rule -- the
+ * first tier with stock, plus the open shelf where one is open -- and its head is the lowest-value train the
+ * depot currently represents. The gift is still SYNTHETIC: it does not decrement that row, because
+ * `depotInventory` subtracts `ghost_trains` from the tally (#1046, `gamePhase.ts`).
+ *
+ * THE PHASE IS THE FALLBACK, not the rule: a board with no readable depot (an unpinned fixture, a roster of
+ * unreported fleets) still has a phase, and #232's "the log does not say" is answered by the old reading
+ * rather than by refusing the gift. */
+export function carcosaGiftModel(
+  state: Parameters<typeof openDepotTiers>[0],
+  phaseTier: string,
+): TrainTier | null {
+  return openDepotTiers(state)[0]?.tier ?? escalationTier(phaseTier);
 }
 
 export interface YellowSignState {
@@ -660,7 +693,11 @@ const NO_RESOLUTION: YellowSignResolution = {
  *  `force` waives the CHANCE and the WINDOW, never the state (#1128). Which stage a waiver lands on is the
  *  board's answer, not the caller's. */
 export function resolveYellowSign(
-  board: YellowSignBoard,
+  /* #1672 (S9-2): the WHOLE board now, not the narrow structural slice. The gift's model is the depot's
+     lowest-value train and the doom trigger asks whether a real Diesel has been bought, and neither question
+     can be answered from a list of companies. `YellowSignBoard` stays exported as the documentation of what
+     this function actually reads. */
+  board: GameStateResponse,
   protocolId: number,
   phaseTier: string,
   options?: { force?: boolean },
@@ -707,7 +744,8 @@ export function resolveYellowSign(
       case "mark":
         return lowestValueTrain(company.owned_trains);
       case "carcosa":
-        return escalationTier(phaseTier);
+        // #1672 (S9-2): the depot's lowest-value train, not the phase's tier.
+        return carcosaGiftModel(board, phaseTier);
       case "fog":
         return (company.carcosan_trains ?? [])[0] ?? null;
       default:

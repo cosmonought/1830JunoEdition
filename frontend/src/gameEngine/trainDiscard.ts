@@ -91,7 +91,8 @@ export interface PendingTrainDiscards {
 export function countableTrainsOf(company: PublicCompanyState): string[] {
   const owned = company.owned_trains;
   if (owned == null) return [];
-  const exempt = [...(company.pending_rust_trains ?? []), ...(company.ghost_trains ?? [])];
+  // #1672 (S9-2): gilded for its whole Carcosa lifetime, not exempt for one Operating Round.
+  const exempt = [...(company.pending_rust_trains ?? []), ...(company.carcosan_trains ?? [])];
   const countable: string[] = [];
   for (const model of owned) {
     const at = exempt.indexOf(model);
@@ -104,7 +105,7 @@ export function countableTrainsOf(company: PublicCompanyState): string[] {
 /** How many trains this corporation holds above the limit, or 0. */
 export function excessTrainCount(company: PublicCompanyState, limit: number): number {
   if (!Number.isFinite(limit)) return 0;
-  const countable = countableTrainCount(company.owned_trains, company.pending_rust_trains, company.ghost_trains);
+  const countable = countableTrainCount(company.owned_trains, company.pending_rust_trains, company.carcosan_trains);
   return Math.max(0, countable - limit);
 }
 

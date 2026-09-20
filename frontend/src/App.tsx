@@ -436,7 +436,7 @@ import {
 import { isBonusBucket, variantCueFor } from "./utils/variantSfx";
 // Design note #1044: the two-stage Easter egg, derived from the replayed log rather than a hidden flag.
 import {
-  escalationTier,
+  carcosaGiftModel,
   ESCALATION_APPENDIX,
   lowestValueTrain,
   markPayout,
@@ -1513,8 +1513,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
          cannot derive this -- the depot outlook has already moved past the tier that doomed them -- so it is
          the one fact about the fleet that has to travel rather than be recomputed. */
       reprievedTrains: company.pending_rust_trains ?? [],
-      // Design note #1046: exempt from the limit until the Operating Round ends.
-      ghostTrains: company.ghost_trains ?? [],
+      /* #1672 (S9-2): exempt for the train's whole Carcosa lifetime, not until the Operating Round ends.
+         The view model keeps the field name; what feeds it is the gilding. */
+      ghostTrains: company.carcosan_trains ?? [],
       /* Design note #1089: the two Carcosa facts, which expire on two clocks neither of which is the one
          above. The train keeps its gold trim for an OR set past the exemption; the corporation keeps the
          curse for the rest of the game unless it sells the train. */
@@ -6914,7 +6915,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
                   );
                 }
               } else if (resolved.stage === "carcosa") {
-                const gifted = escalationTier(derivePhase(before)?.tier ?? "2");
+                /* #1672 (S9-2): the DEPOT's lowest-value train, asked of the same function the reducer
+                   derives with, so the Activity Log cannot name a tier the board did not hand over. */
+                const gifted = carcosaGiftModel(before, derivePhase(before)?.tier ?? "2");
                 if (gifted) {
                   logInfo(`${ticker} received a ${gifted}-train.`, "", yellowSignStamp);
                   // #1661: the request only -- the reducer derives the gifted tier from the phase in force.
@@ -10187,8 +10190,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
       countableTrainCount(
         company?.owned_trains,
         company?.pending_rust_trains,
-        // Design note #1046: and the Yellow Sign's gift, which is exempt until the round ends.
-        company?.ghost_trains,
+        // #1672 (S9-2): and the gilded train, exempt for as long as it is gilded.
+        company?.carcosan_trains,
       ),
       depot.find((tier) => tier.isCurrent)?.trainLimit ?? null,
     );

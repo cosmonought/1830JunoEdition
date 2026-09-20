@@ -80,10 +80,13 @@ describe("a sale settles before the price moves", () => {
   });
 });
 
-describe("the bank pool caps at 50%", () => {
+describe("the bank pool caps at five certificates", () => {
+  /* #1670 (S9-8): the cap is five PIECES OF CARD, not fifty points. In Classic the two are the same claim --
+     these three cases are unchanged in substance and re-worded in the unit the authority now counts. The
+     Scenario-D cases where they part are `bankPoolCertificateCap.test.ts`. */
   it("refuses a sale that would overfill it", () => {
     expect(shareSaleBlock(selling({ state: board({ held: 30, pool: 40 }), percentage: 20 })))
-      .toContain("caps at 50%");
+      .toContain("caps at 5");
   });
 
   it("allows the sale that fills it exactly", () => {
@@ -93,8 +96,8 @@ describe("the bank pool caps at 50%", () => {
 
   it("names how much room is left", () => {
     // #619: the number a player needs in order to pick a smaller bundle.
-    expect(shareSaleBlock(selling({ state: board({ held: 30, pool: 45 }), percentage: 20 })))
-      .toContain("only 5% more");
+    expect(shareSaleBlock(selling({ state: board({ held: 30, pool: 30 }), percentage: 30 })))
+      .toContain("2 certificates more");
   });
 });
 

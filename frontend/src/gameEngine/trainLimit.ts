@@ -143,7 +143,21 @@ export function countableTrainCount(
    * brand new and is exempt because the gift would otherwise be unusable. Merging them would make one
    * argument answer two questions -- #732 -- and the day one expires and the other does not, nothing would
    * say so.
-   * OPTIONAL, so every existing caller keeps its behaviour untouched. */
+   * OPTIONAL, so every existing caller keeps its behaviour untouched.
+   *
+   * ==================================================================
+   *   DESIGN NOTE 1672 (S9-2): AND THE EXEMPTION LASTS AS LONG AS THE GILDING
+   * ==================================================================
+   * #1046's ruling was read as "until the end of the Operating Round", so every caller passed
+   * `ghost_trains` -- a list emptied at the next OR boundary by a function that then trimmed the fleet
+   * cheapest-first. The gilded train is the newest and dearest, so what the trim actually took was one of the
+   * corporation's ORDINARY trains, confiscated because a grace on a different train had run out.
+   * OWNER RULING (2026-09-19): the exemption "lasts for its entire Carcosa lifetime" and ends only when the
+   * fog removes the train or the Blood Price burns the gilding off. So every caller passes
+   * `carcosan_trains` now, which IS that lifetime -- the fog splices a model out of it and the Blood Price
+   * clears it at the seller -- and the exemption is coextensive by construction rather than by a second
+   * clock that had to be kept in step. The argument keeps its name: what it means is still "trains that
+   * occupy no limit slot". */
   ghosts?: readonly string[] | null,
 ): number {
   // #232: `undefined` is "the chain did not say", and a fleet nobody reported has no countable trains to

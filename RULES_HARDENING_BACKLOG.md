@@ -1337,24 +1337,186 @@ blood price. Replay: making the server derive it is a redesign of the Unpredicta
 for Yellow-Sign rooms only; bump.» The bump the old note predicted did not fall due, because the derivation is gated
 on the pin rather than applied to every board.
 
-**S9-2. The Yellow-Sign ghost-train expiry keeps its own automatic round-boundary trim.**
-Status `DEFERRED` (variant ruling). Notes: Batch 4.6 §2 ("out of scope, Part 7"); `expireGhostTrains` (#1046)
-in `sandboxSession.ts` (~954, ~3095). Detail: decide whether a ghost expiry that leaves a corporation over the
-limit should become a `DiscardTrain` obligation (#1530) like every other discard; replay-semantic for
-Yellow-Sign rooms — bump.
+**S9-2. ~~The Yellow-Sign ghost-train expiry keeps its own automatic round-boundary trim.~~ The Carcosa limit exemption is coextensive with the gilding.**
+Status **`RESOLVED`** (Stage 9.5, 2026-09-19, #1672, on the owner's lifecycle ruling). *(Was `DEFERRED`
+(variant ruling); Batch 4.6 §2 "out of scope, Part 7".)*
 
-**S9-3. Yellow Sign "Mark" ruling — the corporation's other trains' legal runs are zeroed (migrated from TRIAGE_2026-09-05 item 22b).**
-Status `OWNER DECISION` owed (spec question, not a bug). Notes: `sandboxSession.ts` `stage === "mark"` (~4974)
-carries the ruling verbatim: the corporation "loses its lowest value train. It receives no standard route revenue
-for this submission. Instead, award the corporation cash equal to 0.5× the deleted train's depot value" — it
-zeroes `last_route_revenue` *and* `printed_route_revenue` (deliberately, #934/#941 double-payment guard). The
-playtest feedback wanted the *other* train's legal run still to pay, with the 0.5× covering only the taken train.
-Both are coherent; they are different rules. Replay: changing it is replay-semantic for Yellow-Sign rooms —
-bump. Detail: owner rules which; if changed, the arm keeps the other routes' revenue and the guard against
-paying the same routes twice must be re-derived per train, not per turn.
+**The original S9-2 theory was WRONG.** It asked whether a ghost expiry that leaves a corporation over the
+limit should become a `DiscardTrain` obligation (#1530) like every other discard. No such obligation should
+exist: under the owner's rule the expiry of a ghost creates no over-limit condition at all, because the ghost
+was never occupying a slot and its removal frees nothing that was in use.
 
-**S9-4. The "1830+" board implemented is the owner's Project 18XX+ spec, not the rulebook's 1830+ (p.25).**
-Status `OWNER DECISION` needed (audit M16). Notes: #1300 / #1301 (`hexBoardDataPlus.ts`, "REQUESTED, verbatim"),
+**The real defect, found by measuring the four properties the owner asked about.** Two held — the exemption is
+PER TRAIN (`countableTrainCount` is a multiset subtraction) and ordinary trains stayed limit-bound. Two did
+not. `ghost_trains` was the exemption and was emptied by `expireGhostTrains` at the **end of the Operating
+Round** (#1046's "bypasses train limit checks until the end of the Operating Round"), while
+`carcosan_trains` — the gilding itself — outlived it by a full OR set. At that boundary the function cleared
+the exemption and called `trimToTrainLimit`, which sorts **cost ascending**: the gilded train is the newest
+and dearest, so it survived and **one of the corporation's ORDINARY trains was confiscated for it**. Measured:
+`owned ["2","3","4","D"]`, limit 3 → discarded `["2"]`.
+
+**Owner ruling (2026-09-19) and the fix.** "WHILE THE TRAIN REMAINS GILDED/CARCOSAN it is individually exempt
+from the owning corporation's train limit; the exemption lasts for its entire Carcosa lifetime; ending an OR
+does not make the ghost ordinary; ending an OR set does not make the ghost ordinary; no ordinary train may be
+trimmed merely because the old short-lived ghost exemption expired." The exemption ends when either the fog
+removes the train or the Blood Price burns the gilding off.
+
+So the exemption is read from **`carcosan_trains`** — which *is* that lifetime, spliced by the fog and cleared
+at the seller by the Blood Price — and is coextensive **by construction** rather than by a second clock that
+had to be kept in step. `expireGhostTrains` is **deleted** (#1092's rule: a reducer helper that trims a fleet
+with no caller is a second way to take a train, waiting to be found), and nothing trims at that transition any
+more. Every counting surface was repointed together (#1006's shape — a limit that disagrees with itself):
+`trainLimit` callers in `trainDiscard`, `trainPurchaseGate`, `trainSaleAuthority`, `derivedActions`, plus
+`App.tsx`'s two sites, `TrainPurchasePanel` and the `ContextualActionBar` view model.
+
+**The two lists keep their names because they now answer two questions that genuinely differ.**
+`ghost_trains` = SYNTHETIC, "this train never came off the depot shelf" — read by `depotInventory` so the gift
+does not deplete supply, and by `realDieselPurchased` so a gifted Diesel is not mistaken for a bought one.
+`carcosan_trains` = the gilding, the fog's target, and now the limit exemption.
+
+**The effective doom trigger, corrected (#1672).** Two conditions — (A) the gilded ghost exists, (B) a **real**
+D has been purchased through normal depot machinery — and the trigger is **whichever lands second**. #1046
+keyed the clock on the GIFT'S OWN TIER, which is two errors: a 5 or 6 gifted after the Diesels were already
+running waited for a first D that had long since come and never got a deadline at all; and a synthetic D would
+have started the clock by arriving, which the ruling forbids explicitly. The phase cannot answer (B) — it
+counts the ghost toward `highest` by design — so `realDieselPurchased` (`gamePhase.ts` #1672) subtracts
+`ghost_trains` before looking, and also counts a Diesel in the Bank Pool (#1530: a pooled train was bought).
+`startCarcosanDoomClock` is unchanged and still idempotent, so a second Diesel cannot push the fog back.
+
+**The grace and the fog, preserved (#1089 / #1092).** Trigger during set N → the train survives the remainder
+of N and **ALL** of N + 1; the deadline is N + 1; the fog becomes due only once N + 1 is complete
+(`macroRound > doom`, `>` not `>=`, because `macro_round_number` increments as the Stock Round opens); and the
+train is then removed on a **narrated run** by the `stage === "fog"` arm, never by a silent boundary deletion.
+A corporation receiving Carcosa on the last operating turn of set N therefore gets the whole of N + 1 to
+operate the gift — and, with the exemption now lasting the whole lifetime, cannot lose an ordinary train in
+the meantime.
+
+**The gift's model (#1672).** "The LOWEST-VALUE TRAIN CURRENTLY REPRESENTED BY THE AUTHORITATIVE BANK DEPOT
+RULE when the gift occurs", not the phase's tier. `carcosaGiftModel` returns `openDepotTiers(state)[0].tier` —
+reusing the depot authority rather than restating it — with the old phase reading (`escalationTier`) kept as
+the fallback for a board that cannot say what is on the shelf. The gift stays synthetic: `depotInventory`
+subtracts `ghost_trains`, so the shelf reads the same before and after. The shell narrates from the same
+function, so the Activity Log cannot name a tier the board did not hand over.
+
+**Blood Price — #1090 PRESERVED AND AUTHORITATIVE.** A successful sale is the escape from the Carcosa
+lifecycle: the seller is absolved (`is_carcosan` cleared, `carcosan_trains` loses the model, the deadline
+cleared), the gilding is **burned off**, and the buyer receives an **ORDINARY** train — not cursed, not
+gilded, no exemption, no deadline, never taken by the fog, and fully subject to the buyer's ordinary train
+limit. Cash and share-price consequences unchanged.
+
+**The one consistency change the split required — corrected at the representation check, #1673.** Once the two
+markers mean different things, the Blood Price has to SPLIT them rather than clear both. `carcosan_trains` is
+the gilding and is burned off, so it does not reach the buyer. `ghost_trains` is SYNTHETIC PROVENANCE — "this
+train never came off the depot shelf" — which is a fact about the TRAIN, not about who owns it, so it
+**travels with the train to the buyer**. #1672's first pass deleted the seller's marker without giving it to
+the buyer, which is the same error as leaving it behind, in the other direction: it would have conjured a
+physical train out of a gift. Both readers would have been wrong — `depotInventory` would have started
+counting the transferred gift against the bank's shelf, and `realDieselPurchased` would have read a
+transferred synthetic Diesel as retroactive evidence that a real one was bought, starting the doom clock for
+every other gilded train in play. The move is **exactly one occurrence** (the project's multiset convention)
+and **unconditional**, outside the carcosan gate, so a train on its second Blood Price — synthetic but no
+longer gilded — still carries its provenance. The marker on the buyer grants **no** train-limit exemption:
+that is read from `carcosan_trains` alone.
+
+**Tests.** `utils/stage95GhostLimit.test.ts` rewritten as the lifecycle suite, **29 cases** in the owner's six
+lettered groups: A the exemption (per train, surviving OR and OR-set boundaries, ordinary trains still bound,
+the trim gone and every surface repointed); B the pre-D gift (no deadline, no fog, the later real D starts the
+clock, idempotent); C the post-D gift (receipt is the trigger, whatever tier); D the grace and the fog (not due
+in N, not due anywhere in N + 1 including its last turn, due only after, still limit-exempt throughout, still
+narrated); E the Blood Price (seller absolved, buyer ordinary and limit-bound, train never disappears; and #1673's
+representation invariant — the synthetic marker moves seller → buyer, `depotInventory` is unchanged by the
+transfer, a transferred synthetic D is still not a real Diesel purchase, exactly one marker moves when two
+trains share a model, provenance survives a second hop, and an ordinary sale moves nothing);
+F the depot model (agrees with the phase while the tier is stocked, differs once it sells out, falls back
+safely, consumes no inventory, and a synthetic D is not a real D). `batch48`'s two ghost pins and `batch60`'s
+two clock pins inverted to the new contract with the superseded reading recorded.
+
+**Corpus — targeted presence check against the established 18-file set.** Replayed all 18 looking for the five
+lifecycle events: **0 Carcosa gifts, 0 fogs, 0 Blood Price transfers, 0 observations of any `ghost_trains` or
+`carcosan_trains`, and no real Diesel purchased in any file.** The Yellow Sign never reaches its second stage
+anywhere in the corpus, so there is no implicated file to replay. **Absent: this fix changes no stored
+replay.** Raw logs untouched, no golden touched.
+
+**Replay / version.** Replay-semantic in principle (Yellow-Sign rooms), corpus-neutral in fact; part of the
+Stage-9 6 → 7 bump, not a bump of its own. `RULES_ENGINE_VERSION` unchanged at 6 by this slice.
+
+**S9-3. ~~Yellow Sign "Mark" ruling — the corporation's other trains' legal runs are zeroed~~ Only the vanished train's run is nullified.**
+Status **`RESOLVED`** (Stage 9.5, 2026-09-19, by owner ruling; the implementation already complied — #1375).
+*(Was `OWNER DECISION` owed, migrated from TRIAGE_2026-09-05 item 22b.)*
+
+**Owner ruling (2026-09-19).** "ONLY THAT TRAIN'S RUN is nullified; revenue legally earned by the corporation's
+OTHER trains remains valid and pays normally." The playtest feedback was right and #1046's original zeroing was
+not. The half-value payout is unchanged: one-half of the disappeared train's face value is deposited directly
+into the corporation treasury.
+
+**The code already does this, and has since #1375.** `runWithoutTrain` (`yellowSign.ts`) takes the vanished
+train's printed route out of the run — identified by fleet slot first, then by model — and re-rolls the remainder
+under the turn's own committed seed; the Mark arm applies it and the shell narrates from the same function, so
+the sentence and the treasury cannot disagree. The zeroing survives on exactly one path and correctly: a stored
+entry on an unpinned board that carries no `revenue_seed` was played under #1046's rule and keeps it, so no
+historical log replays to a different board (#1661's legacy branch). **No correction was required.**
+
+**Tests.** `utils/stage95Rulings.test.ts`, two cases, so this entry rests on its own proof rather than on
+`markKeepsRun.test.ts` next door: the two-train case (only the taken train's printed route leaves,
+`routes_run_this_turn` falls to 1, the remainder is re-rolled and still pays, the treasury gains exactly
+`markPayout`, and the shell's reader agrees with the board); and the single-train boundary (nothing else to
+preserve, the gold still arrives). No corpus effect. `RULES_ENGINE_VERSION` unchanged.
+
+**THE FULL OWNER YELLOW SIGN RULE, recorded verbatim for the later Rules Reference pass** (2026-09-19). This is
+the authoritative Project 18XX statement of the sequence. It is recorded here as the single source; **this slice
+implements only the S9-3 clause above** and makes no other change to Yellow Sign mechanics.
+
+> **MARK.** During Phases 2–4: the player rolls a critical malus (1) under Unpredictable Revenue; the
+> flavour/event roll hits the Yellow Sign; one of that corporation's trains "disappears"; ONLY THAT TRAIN'S RUN
+> is nullified; revenue legally earned by the corporation's OTHER trains remains valid and pays normally; the
+> president finds the strange bag of gold; mechanically, one-half of the disappeared train's face value is
+> deposited directly into the corporation treasury. If the corporation has not received the Mark by the end of
+> Phase 4, the Mark does not newly trigger in Phase 5 or later.
+>
+> **CARCOSA AWAITS.** For a corporation that has already been Marked, during Phases 5–D: a critical bonus roll
+> has an improved probability of triggering the Carcosa Awaits second step; a gilded/ornately decorated train
+> joins the fleet; its train type/value corresponds to the lowest-value train currently represented by the bank
+> depot rule; it is a GHOST train; it is synthetic — it does not remove a physical train from the depot; and it
+> does NOT count toward that corporation's train limit.
+>
+> **GHOST EXPIRY.** The gilded ghost train disappears at the end of the FIRST set of Operating Rounds in which a
+> D train is purchased. Its scheduled disappearance remains attached to the ghost train even if ownership
+> changes.
+>
+> **BLOOD PRICE.** The gilded train may be purchased by another corporation under the Blood Price rule. The
+> purchasing corporation pays the required Blood Price consequences (cash and corporate stock-price consequence
+> under the existing Project 18XX rule). That transfer absolves the originally Marked/cursed corporation. The
+> transferred gilded train remains a ghost train and STILL disappears on the same D-triggered schedule.
+
+**Contradictions between that rule and the implementation, found while recording it — ALL THREE now closed by
+Stage 9.5's lifecycle pass (#1672), see S9-2:** the exemption's lifetime and the cheapest-first trim; the gift's
+tier (`escalationTier` read the phase, and `carcosaGiftModel` now reads the depot's lowest-value train); and the
+doom trigger (which keyed on the gifted train's own tier, and is now "whichever of the gilded ghost and the
+first REAL Diesel purchase lands second"). None of them was touched by S9-3 itself, which changed no code.
+
+**S9-4. ~~The "1830+" board implemented is the owner's Project 18XX+ spec, not the rulebook's 1830+ (p.25).~~ The game is Project 18XX; the expanded board is Project 18XX+.**
+Status **`RESOLVED` — owner/project-authority decision** (2026-09-19). *(Was `OWNER DECISION` needed, audit M16.)*
+
+**Owner ruling (2026-09-19).** The game is **Project 18XX**. Almost no player-facing gameplay/rules surface
+should present the project as "1830" or make the 1830 rulebook appear to be the final player authority. The 1830
+rulebooks are **development source material**: they are used to build the game and to resolve source-rule
+discrepancies. The in-game **Rules Reference is intended to be the sole and final player-facing authority for
+Project 18XX rules.** The currently implemented expanded board/variant is **Project 18XX+**. No separate
+published-"1830+" implementation is to be created during Stage 9.
+
+**Disposition.** The board this entry describes is correct as Project 18XX+ and needs no change; the p.25
+rulebook board is not a target. The differences the entry lists (H12 printed green #24; Montréal one station; no
+D24 preprinted 29; no E5 Detroit exit; B20 double town) are recorded as **Project 18XX+ design**, not as
+divergences to reconcile. This entry's rules-authority question is closed; what remains is naming, and naming is
+a readiness pass, not a rules one. No replay effect.
+
+**Part C (filed, not implemented here — no broad UI rename now).** The readiness pass must check:
+player-facing "1830" terminology; "1830+" terminology that should instead identify **Project 18XX+**; Rules
+Reference wording needed to establish it as the final Project 18XX rules authority; and that
+source/provenance/credits may still identify the historical rulebooks where appropriate, but are not presented
+to players as the gameplay authority. Filed as **U-40**.
+
+*(Original finding, kept.)* Audit M16. Notes: #1300 / #1301 (`hexBoardDataPlus.ts`, "REQUESTED, verbatim"),
 `tileTrayPlus.ts`. Differences: H12 printed green #24 (rulebook: green 23, PRR home anywhere on the hex);
 Montréal one station (rulebook: double circle); no D24 preprinted 29; no E5 Detroit exit; B20 double town ✓.
 Detail: either label the board "Project 18XX+" everywhere (Game Type drop-down #1271 already says 18XX+) and
@@ -1393,22 +1555,116 @@ certificates); the seventh seat colour (#1344 done; `seatColor.test.ts` contrast
 S6-4; LPF-specific route rules (warehouses as termini, `routeConnection` / `assignRouteSet`, decision 21a of
 2026-09-08) to be carried into S6-1.
 
-**S9-6. CS power treated as forfeited when another corporation tiles B20; the rulebook states that lapse for the DH only.**
-Status `OPEN` (UNCLEAR). Rulebook p.11. Notes: audit m10; `cslPowerState`, `bonusLay.ts`. Detail: rulebook does
-not say whether the CS exception survives as an upgrade right; owner ruling, then record in Part D.
+**S9-6. ~~CS power treated as forfeited when another corporation tiles B20~~ The C&SL grants a bonus LAY, not an upgrade right.**
+Status **`RESOLVED`** (Stage 9.5, 2026-09-19, #1671 — wording and rule statement; no behaviour change).
+*(Was `OPEN` (UNCLEAR). Rulebook p.11; audit m10.)*
 
-**S9-7. Gentle Rust / Unpredictable Revenue / Delayed Auction — owner-defined, gated on their flags, not audited for correctness.**
-Status `DEFERRED` (audit "UNCLEAR"). Notes: `gentleRust*`, `variantRules.test.ts`, #905 (delayed auction,
-`boIsLocked`), #1034 (reprieved trains exempt from limits — respected by #1530). Detail: audit each against its
-own spec once the standard game is closed; S7-2 and S8-7 both name Delayed-Auction cases.
+**Owner ruling (2026-09-19), correcting the reading this entry was filed under.** The C&SL special grants a bonus
+TILE LAY on B20. It does **not** grant a general track action, and it does **not** grant an upgrade right merely
+because an ordinary corporation track action may normally be used to lay OR upgrade. While B20 is available the
+owning corporation uses the special under its existing connectivity exemption; once another corporation has
+tiled B20 the unused power does **not** permit an upgrade of that tile. **Do not invent a D&H-style explicit
+"lapse on another corporation's lay" rule for the C&SL** — semantically the unused power simply has no legal
+bonus-lay target once B20 is tiled. The distinction: the D&H has an explicit lapse; the C&SL has a bonus lay
+whose opportunity can cease to exist.
 
-**S9-8. Bank Pool cap is 50 % rather than "5 certificates" — differs only under LPF's 20 % double certificate.**
-Status `OPEN` (LPF-only). Rulebook §5.1 / §4.3. Notes: audit m7; `BANK_POOL_CAP_PERCENT`; `doubleCertificate.ts`.
-Detail: count certificates, not percent, when the variant carries a double certificate. Replay: LPF logs only —
-bump.
+**Did the code treat the bonus lay as an upgrade? No — and it gave the wrong reason for not doing so.**
+`cslPowerState` (`dhPower.ts`) offered the power only while B20 was bare (`forfeited = hexBuilt && !layUsed`),
+and a tile onto an empty hex is a lay by definition, so no path reached an upgrade. But it said so by asserting
+the D&H's forfeiture — the blocked reason read "Another corporation has already built on B20, so the C&SL's
+power is gone for the rest of the game", and `CSL_POWER_DESCRIPTION` ended "the power is forfeited". Both state a
+rule the C&SL does not have, and the first is also factually wrong when the OWNING corporation tiled B20 with its
+ordinary lay. Tiles are never removed in this game, so "no legal target" and "never again" describe the same
+future — which is exactly why the wrong reason survived unnoticed.
 
-**S9-13. The market walks one row per 10 %, not one per certificate, so the LPF other-20 sold as a block drops the token twice.**
-Status `FILED` (LPF-only) — found by Slice 8.3 while auditing the certificate representation for S8-15; **not** fixed
+**Fix (smallest).** The outcome and the function's shape are unchanged; the two player-facing sentences now state
+the real reason ("B20 already carries a tile, so the C&SL's bonus lay has no legal target — the power lays track,
+it does not upgrade"), and #1671 records the ruling and the D&H contrast beside them. `forfeited` keeps its field
+name: every caller reads it as "this power can no longer be used", and renaming it would be a refactor for a word.
+The general track action is untouched.
+
+**And the tile's own legality was never this function's.** `filterSandboxPlacements` — the one predicate the Node
+server and every replay judge a `LayTile` with — takes `{ mapGrid, q, r, era }` and never sees the private at all.
+The power waives connectivity and the track step's cost, never the colour tier or the topology, so there is no
+path on which the C&SL makes an otherwise illegal tile legal.
+
+**Tests.** `utils/stage95Rulings.test.ts`, four cases: offered only on a bare B20; no legal target once tiled,
+with the invented lapse wording asserted absent from both the state and the description; spent once used,
+whoever laid; and the authoritative predicate refusing a second yellow on a yellow B20 identically with or
+without the power. No corpus effect (wording only). `RULES_ENGINE_VERSION` unchanged.
+
+**S9-7. Gentle Rust / Unpredictable Revenue / Delayed Auction — optional variants, full certification deferred.**
+Status **`DEFERRED — PRE-LAUNCH VARIANT CERTIFICATION REQUIRED`**, explicitly OUT of Stage-9 closure scope
+(owner ruling, 2026-09-19). *(Was `DEFERRED` (audit "UNCLEAR").)* Notes: `gentleRust*`, `variantRules.test.ts`,
+#905 (delayed auction, `boIsLocked`), #1034 (reprieved trains exempt from limits — respected by #1530).
+
+**Owner ruling, recorded verbatim in substance.** Gentle Rust, Unpredictable Revenue and Delayed Auction have
+**not** received complete specification audits as independent optional variants. They must **not** be labelled
+audited or resolved. These are optional variants; full independent variant-spec certification is **deferred**;
+that certification is **outside this Stage-9 closure scope**; and **PRE-LAUNCH VARIANT CERTIFICATION remains
+required** before any of them is represented as fully-authoritative supported rules.
+
+**What this deferral does not weaken.** The Yellow Sign rulings recorded at S9-3 are authoritative Project rules
+for the mechanics already implemented, and the Stage-9 authority work on those mechanics (S9-1, S9-3, S9-11) is
+closed on its own terms. The deferral means only that no claim is made of a complete end-to-end audit of every
+optional variant. S7-2 and S8-7 both name Delayed-Auction cases that belong to that certification.
+
+**S9-8. ~~Bank Pool cap is 50 % rather than "5 certificates"~~ The Bank Pool caps at five physical certificates.**
+Status **`RESOLVED`** (Stage 9.5, 2026-09-19, #1670). *(Was `OPEN` (LPF-only). Rulebook §5.1 / §4.3; audit m7.)*
+
+**Owner ruling (2026-09-19).** "The Bank Pool limit is FIVE PHYSICAL CERTIFICATES of one corporation, not 50
+percentage points. A non-president 20 % certificate is ONE physical certificate." Ownership percentage and cash
+proceeds stay percentage-based; presidency rules are unchanged; ordinary Classic behaviour is unchanged.
+
+**Root cause.** `shareSaleBlock` (`gameEngine/shareSale.ts`) — the authority the reducer's `SellStock` arm
+(`sandboxSession.ts`), `stockTransactionAuthority` and the emergency-funding projection all ask — tested
+`percentage > 50 - bank_pool_percentage`. Right about the printed game, where five 10 % cards and 50 % are the
+same sentence, and wrong the moment a card carries two shares. Under Scenario D the ERIE and the N&W print an
+"other" 20 % certificate: a pool holding it and three 10 %s is 50 % and only **four** cards, so the percentage
+test refused a legal fifth; and a pool that had taken that card in as 20 % could reach **six** cards behind it.
+
+**Fix (smallest, no second model).** `BANK_POOL_CAP_CERTIFICATES = 5` beside `BANK_POOL_CAP_PERCENT` in
+`endgame.ts` (the percentage stays: it is still what every sentence quotes, and in Classic it is still true).
+`doubleCertificate.ts` gains `certificateCardsEnteringPool(company, seller, percentage)` and
+`bankPoolCertificateRoom(company)` — the same Stage-8.3 representation S9-13 reused (#1324 / #1650), a third
+named question over one model rather than a second model. `shareSaleBlock` now refuses when
+`certificateCardsInPool(company, "Bank") + certificateCardsEnteringPool(...) > 5`. **The residue rule is the one
+subtlety:** `ordinaryPercentHeld` subtracts both the president's 20 % and the double's 20 %, so "percentage
+beyond the ordinary" is the double for a holder who has one and the PRESIDENT'S BLOCK for one who does not. The
+chart's `certificatesSoldInMarketMove` reads any residue as the double, which is right for the chart and would
+under-count a president's sale by a card here — and a cap that under-counts is a cap that admits a sixth
+certificate. So the double is claimed only when the seller holds it and the rest is counted in tens, which is
+what §5.4's exchange hands the pool. Presidency arithmetic is untouched.
+
+**Tests.** New `utils/bankPoolCertificateCap.test.ts` (7 cases) — the owner's five required behaviours verbatim,
+plus the presidency control (a president's 30 % is three certificates and the successor rule still speaks) and a
+Classic sweep proving the certificate ceiling and the old percentage ceiling refuse *exactly* the same sales at
+every pool level. `utils/shareSale.test.ts`'s three pool cases re-worded into the new unit (same claims).
+
+**Corpus — targeted presence check against the established 18-file set, per the closure protocol.** All 18
+replayed; **15 `SellStock` entries in the whole corpus; zero divergent sites.** The double never reaches the Bank
+Pool in any stored log (it is bought out of the IPO in `server/JUNO-FCJ` from index 674 and stays with the
+player), so at every one of the 15 sales `certificateCardsInPool` equals `bank_pool_percentage / 10` and no
+seller holds the double. **The only Scenario-D sale in the corpus is `server/JUNO-FCJ` index 851** (ERIE, 30 %),
+refused upstream because ERIE is unfloated — unchanged. **Absent: this fix changes no stored replay.** Raw logs
+untouched, no golden touched.
+
+**Replay / version.** Replay-semantic in principle (LPF rooms), corpus-neutral in fact; part of the Stage-9
+6 → 7 bump, not a bump of its own. `RULES_ENGINE_VERSION` unchanged at 6 by this slice.
+
+**Part C (filed, not implemented here).** Two derived readers still express pool room in percent and now
+under-report it when the double sits in the pool: `endgame.sellableHoldings` (the §6.6.3 liquidity/forced-sale
+projection) and `components/StockRoundPanel.tsx`'s own `BANK_POOL_CAP_PERCENT` copy. Both are **conservative** —
+they can only offer less than the authority allows, never more, so neither can admit an illegal sale — but under
+LPF a legal fifth certificate would be unreachable from the panel. Filed as a **LEGALITY SYNC** readiness item
+(U-39). Deliberately not fixed here: `sellableHoldings` bounds the President's Certificate by percentage and the
+owner's ruling says presidency rules remain unchanged.
+
+**S9-13. ~~The market walks one row per 10 %, not one per certificate~~ The chart steps once per physical certificate.**
+Status **`RESOLVED`** (Stage 9.4c, `53f34b0`, #1650; header corrected at Stage 9.5 — the resolution is appended
+at the end of this entry, and the owed canonical 18/18 reconciliation was completed at Stage-9 closure: 15
+`SellStock` entries across the 18 files, the only Scenario-D sale `server/JUNO-FCJ` 851 refused upstream, **no
+stored replay changed**). *(Was `FILED` (LPF-only) — found by Slice 8.3 while auditing the certificate representation for S8-15; **not** fixed
 there (outside the owner's S8-15 scope). Rulebook §5.1 / V-7.2; full rulebook 5.0 p. 34. Notes:
 `sandboxSession.ts` `applySandboxMarketAction` (`blocks = Math.max(1, Math.round(percentage / 10))`),
 `shareSale.ts` `certificatesIn`, `doubleCertificate.ts` `doubleSaleEffect` (#1324). Detail: the token falls one row per
@@ -1510,7 +1766,13 @@ today means *no rule*), so do it with tests that assert the reducer answers the 
 Destination `frontend/src/gameEngine/board/`.
 
 **S9-10. Authoritative tile-upgrade topology preservation.**
-Status `OPEN` — NOT implemented in Batch 7.4, NOT implemented by Stage 9.1. First recorded 2026-09-15 from the
+Status **`RESOLVED`** (header corrected at Stage 9.5, 2026-09-19, from this entry's own body — no new finding). The
+two board/printed-topology halves (F-1 the immutable hex, F-2 printed board topology) were **RESOLVED BY SLICE
+9.2** (`17616c8`, #1620 / #1621); the catalog and #59 halves are discharged by **S9-15**, **S9-19** and **S9-21**
+(all `RESOLVED`, Slice 9.3, `df63500`) and **S9-16** (`RECORDED`, not an engine defect). The four-item exception
+manifest below is closed and the order-of-work checklist's step 4 was executed by Slices 9.2 and 9.3 together —
+a richer generic preservation predicate plus the manifest, exactly as the audit's design answer specified.
+*(Was `OPEN` — NOT implemented in Batch 7.4, NOT implemented by Stage 9.1.)* First recorded 2026-09-15 from the
 visual-flourish VF-5 work as "preprinted-track preservation"; **wording corrected 2026-09-16 (Batch 7.4 final
 review, owner ruling)** after the full 48-page 1830 rulebook with the expanded / LPF tile sets showed the first
 generalisation was too broad; **manifest audit completed and this entry re-stated 2026-09-18
@@ -1783,7 +2045,8 @@ asserts 30.
 > always right.
 
 **S9-16. `oo13 -> oo20` has no legal facing — a contradiction in official material, NOT an engine defect.**
-Status `OPEN — BLOCKED` (found by Stage 9.1, 2026-09-18; **split and narrowed at revision 9.1b the same day**;
+Status **`RECORDED`** (informational — NOT an engine defect; reclassified at revision 9.1c and the header
+corrected at Stage 9.5, from this entry's own body). *(Was `OPEN — BLOCKED`, found by Stage 9.1, 2026-09-18; **split and narrowed at revision 9.1b the same day**;
 `STAGE9_TILE_TOPOLOGY_AUDIT_2026-09-18.md` §8c). This entry used to cover two dead ends. **The oo1 half is
 WITHDRAWN**: the official Mayfair errata states plainly under *Rules* — "**Tile oo1 (8861) is not upgradable**" —
 and the repo already carried the owner's own playtest ruling to the same effect (`App.tsx:3331`, from the LPF report
@@ -1881,8 +2144,10 @@ illegal for the #59 reason (S9-19), so S9-16's outcome does not change that log'
 the same slice: a standing catalog invariant test — *every upgrade edge that survives reconciliation has at least
 one legal facing* — which would have caught this the day the tile was added.
 
-**S9-17. Rule 7.2.2 ❹ — station anchoring and slot capacity — is enforced only in the shell.**
-Status `OPEN` (found by Stage 9.1, 2026-09-18; audit §12 / §13, finding F-5). `utils/stationConnectivity.ts`
+**S9-17. ~~Rule 7.2.2 ❹ — station anchoring and slot capacity — is enforced only in the shell.~~ RESOLVED.**
+Status **`RESOLVED`** (Slice 9.2, `17616c8`, #1623 — `gameEngine/stationAnchorAuthority.ts` puts revised 6.2.2 ❹
+in the reducer, ahead of every mutation; resolution appended at the end of this entry; header corrected at Stage
+9.5). *(Was `OPEN`, found by Stage 9.1, 2026-09-18; audit §12 / §13, finding F-5.)* `utils/stationConnectivity.ts`
 (design note #878) implements the rule correctly and in the rulebook's own terms — a token is anchored to its **edge
 set**, not its city index, and `fitStationsToUpgrade(anchors, candidateCities, slots)` returns `null` for a facing
 that strands any token **or overfills any city** (#1315). ERIE falls out of it rather than being special-cased: a
@@ -1931,8 +2196,12 @@ carrying exactly ONE station**, so the floor cannot fire; the 2 that name no map
 its own call, and collapsing the two call sites into the shared helper is recorded as a narrow UI/legal-sync cleanup
 (see S10 below), not done here, because owner modal/UI work is live in that file.
 
-**S9-18. Level Playing Field is missing T-02's printed straight track at M-11.**
-Status `OPEN` (found by Stage 9.1, 2026-09-18; audit §5 / §10, finding F-6). Printed Scenario D places seven board
+**S9-18. ~~Level Playing Field is missing T-02's printed straight track at M-11.~~ RESOLVED.**
+Status **`RESOLVED`** (Slice 9.2, `17616c8`, #1622 — `hexBoardDataLpf.ts` gains the printed straight `#9@0` at
+M-11; resolution appended at the end of this entry; header corrected at Stage 9.5). The Stage-9 closure
+reconciliation measured its consequence: the tile is in the INITIAL grid, so the board differs from index 0 on
+all **11** Level Playing Field logs and on none of the others — a static/setup difference with **zero** gameplay
+state divergence. *(Was `OPEN`, found by Stage 9.1, 2026-09-18; audit §5 / §10, finding F-6.)* Printed Scenario D places seven board
 tiles (T-02, p. 45; S-1.1 ❷, p. 34): Coal River L-8, the five warehouses M-13 / L-2 / F-2 / A-11 / B-24, and
 **"Straight Track (30g) … use an A-1 tile" at M-11** — A-1 being old **#9**. The engine models the first six
 (`COAL_RIVER_*`, `LPF_WAREHOUSES`) and **not the seventh**: `LPF_BOARD` carries no `printedTile` on any hex, and
@@ -2100,7 +2369,8 @@ legal facing of oo13 exists). Two logs to re-pin and a version bump owed with Sl
 > asserts the qualified form and enumerates all eleven corrected-out rows by class.
 
 **S9-20. ~~oo13 and oo14 carry revenue 50; the official errata records 40 for each.~~ WITHDRAWN — NOT A DEFECT.**
-Status `OPEN` (filed at revision 9.1b, 2026-09-18; audit §5b). The errata's *Tile Numbering — Older* section, in the
+Status **`NOT A DEFECT` — WITHDRAWN** (revision 9.1c; header corrected at Stage 9.5, from this entry's own body).
+*(Was `OPEN`, filed at revision 9.1b, 2026-09-18; audit §5b.)* The errata's *Tile Numbering — Older* section, in the
 same breath as voiding each tile's old number, adds "**(it has a vaue of 40 rather than 50)**" for oo13 and
 "**(it has a value of 40 rather than 50)**" for oo14. The engine has `revenue: 50` for both, pinned at
 `plusTiles.test.ts:160`. This is the same 50 → 40 family as the errata's C15 (#63) item — "The C15 (63) tiles have
@@ -2969,6 +3239,37 @@ returns the identical `` `#${tileId}` `` string for the other 73 tiles, so no ot
 receipt is the sharpest case: it exists *because of* #626 and currently names it by the number the errata voids.
 **No reducer change, no replay effect, no golden.** Blocked only on the owner's files being free; the engine and
 catalog half is done and test-pinned (`utils/stage93TileAuthority.test.ts`).
+
+**U-39.** (S9-8; filed by Stage 9.5, 2026-09-19) **Two derived readers still express Bank Pool room in percent —
+LEGALITY SYNC, conservative, LPF only.** The authority counts five physical certificates (#1670,
+`shareSaleBlock`). Two readers downstream of it still compute `50 - bank_pool_percentage`:
+
+| Site | Consequence when the 20 % card is in the pool |
+|---|---|
+| `gameEngine/endgame.ts` `sellableHoldings` — the §6.6.3 liquidity / forced-sale projection | under-reports the room by one certificate |
+| `components/StockRoundPanel.tsx:2520` — its own `BANK_POOL_CAP_PERCENT` copy | a legal fifth certificate is unreachable from the panel |
+
+**Both are conservative**: they can only offer *less* than the authority allows, never more, so neither can admit
+an illegal sale and there is no authority hole. Not fixed at Stage 9.5 on purpose — `sellableHoldings` bounds the
+President's Certificate by percentage and the owner's S9-8 ruling says presidency rules remain unchanged, so the
+projection wants its own small decision rather than a mechanical substitution. **No reducer change, no replay
+effect, no golden.**
+
+**U-40.** (S9-4; filed by Stage 9.5, 2026-09-19, on the owner's project-authority ruling) **Player-facing naming
+and the Rules Reference's standing — READINESS, no broad rename now.** The game is **Project 18XX**; the expanded
+board is **Project 18XX+**; the 1830 rulebooks are development source material, not the player-facing authority.
+The readiness pass checks:
+
+- player-facing "1830" terminology on gameplay/rules surfaces;
+- "1830+" terminology that should instead identify **Project 18XX+** (the Game Type drop-down #1271 already says
+  18XX+; the board data, tray and variant strings are the rest);
+- **Rules Reference wording needed to establish it as the sole and final player-facing authority** for Project
+  18XX rules;
+- source/provenance/credits may still identify the historical rulebooks where appropriate — they are simply not
+  the gameplay authority presented to players.
+
+Deliberately NOT a Stage-9 rules item: S9-4's rules-authority question is closed (the implemented board is
+correct as Project 18XX+). **No reducer change, no replay effect, no golden.**
 
 ## Part D — Deliberate rules deviations and owner decisions (never to be "fixed" as bugs)
 

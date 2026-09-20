@@ -24,8 +24,30 @@
 
 import type { GameStateResponse } from "./gameState";
 
-/** 1830: no more than half of any company's shares may sit in the pool. */
+/** 1830: no more than half of any company's shares may sit in the pool.
+ *
+ *  Design note #1670 (S9-8): STILL THE PRINTED GAME'S FIGURE AND NO LONGER THE CAP ITSELF. In Classic the two
+ *  say the same thing -- five 10% cards ARE 50% -- so this stays as the percentage every player-facing
+ *  sentence quotes. `BANK_POOL_CAP_CERTIFICATES` below is what the authority now counts. */
 export const BANK_POOL_CAP_PERCENT = 50;
+/** ==================================================================
+ *   DESIGN NOTE 1670 (S9-8): FIVE PIECES OF CARD, NOT FIFTY POINTS
+ *  ==================================================================
+ *
+ * OWNER RULING (2026-09-19): "The Bank Pool limit is FIVE PHYSICAL CERTIFICATES of one corporation, not 50
+ * percentage points. A non-president 20% certificate is ONE physical certificate."
+ *
+ * THE TWO MEASURES AGREE IN THE PRINTED GAME AND PART UNDER SCENARIO D, which is why the percentage survived
+ * this long: a Classic pool full of ordinary 10% cards reaches five cards and 50% in the same breath. The
+ * Level Playing Field prints an "other" 20% certificate for the ERIE and the N&W (full rulebook 5.0, p. 34),
+ * and that card is ONE certificate worth two shares -- so a pool holding it plus four 10%s is 60% and five
+ * cards, and a pool holding it plus three 10%s is 50% and only FOUR. Counting points refused the fifth card
+ * and let a sixth in; counting cards is the rule.
+ *
+ * THE SAME DISTINCTION S9-13 MADE ONE STEP OVER, and deliberately the same representation (#1650,
+ * `doubleCertificate.ts`): the chart walks per card, the cap counts cards, ownership and proceeds stay in
+ * percent. Three questions, one model. A second certificate model would be the thing #1324 already refused. */
+export const BANK_POOL_CAP_CERTIFICATES = 5;
 /** The presidential block. ONE certificate worth 20%, indivisible -- design
  *  note #6. Also the minimum holding a successor needs to take it. */
 export const PRESIDENT_BLOCK_PERCENT = 20;

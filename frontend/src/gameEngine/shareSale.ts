@@ -36,12 +36,17 @@
 // See docs/ai_architecture/stock_market.md, shareSale.ts #713.
 
 import {
-  BANK_POOL_CAP_PERCENT,
+  BANK_POOL_CAP_CERTIFICATES,
   PRESIDENT_BLOCK_PERCENT,
   SHARE_BLOCK_PERCENT,
 } from "./endgame";
 import type { GameStateResponse } from "./gameState";
-import { doubleSaleRefusal, needsDoubleForPresidencyExchange } from "./doubleCertificate";
+import {
+  certificateCardsEnteringPool,
+  certificateCardsInPool,
+  doubleSaleRefusal,
+  needsDoubleForPresidencyExchange,
+} from "./doubleCertificate";
 import { presidentAfterSale } from "./presidencyTransfer";
 
 export interface ShareSaleInput {
@@ -71,9 +76,30 @@ export function shareSaleBlock(input: ShareSaleInput): string | null {
      or as the half-sale when the pool has a 10% card to exchange. */
   const doubleRefusal = doubleSaleRefusal(company, seller, percentage);
   if (doubleRefusal !== null) return doubleRefusal;
-  const poolRoom = Math.max(0, BANK_POOL_CAP_PERCENT - company.bank_pool_percentage);
-  if (percentage > poolRoom) {
-    return `The Bank Pool is at ${company.bank_pool_percentage}% and caps at ${BANK_POOL_CAP_PERCENT}% — only ${poolRoom}% more can be sold into it.`;
+  /* ==================================================================
+      DESIGN NOTE 1670 (S9-8): THE CEILING IS FIVE CARDS
+     ==================================================================
+     OWNER RULING (2026-09-19): "The Bank Pool limit is FIVE PHYSICAL CERTIFICATES of one corporation, not 50
+     percentage points. A non-president 20% certificate is ONE physical certificate."
+     THIS READ `50 - bank_pool_percentage` AND WAS RIGHT ABOUT THE PRINTED GAME. Five 10% cards are 50%, so
+     the two measures never parted in Classic. Under the Level Playing Field the ERIE and the N&W print an
+     "other" 20% certificate, and it is one card carrying two shares: a pool holding it and three 10%s is 50%
+     by the old test -- FULL -- and four cards by the rule, with room for a fifth. The percentage test refused
+     a legal sale there, and at the other end let a sixth card in behind a 20% that had entered as one.
+     COUNTED, NOT INFERRED, and in Stage 8.3's model rather than a second one (#1324 / #1650): what is in the
+     pool is `certificateCardsInPool`, what this sale adds is `certificateCardsEnteringPool`, and the sum may
+     not pass five. OWNERSHIP AND PROCEEDS ARE UNTOUCHED -- `certificatesIn` / `saleProceeds` still price a
+     sale in tens, because a 20% block is worth twice a 10% one whichever card carries it, and the pool still
+     gains `percentage` of stock. Three questions, three units, one model.
+     CLASSIC IS UNCHANGED BY CONSTRUCTION: with no double, cards are tens and five cards is fifty percent. */
+  const poolCards = certificateCardsInPool(company, "Bank");
+  const sellingCards = certificateCardsEnteringPool(company, seller, percentage);
+  if (poolCards + sellingCards > BANK_POOL_CAP_CERTIFICATES) {
+    const room = Math.max(0, BANK_POOL_CAP_CERTIFICATES - poolCards);
+    const cards = (n: number) => `${n} certificate${n === 1 ? "" : "s"}`;
+    return `The Bank Pool holds ${cards(poolCards)} of this corporation and caps at ${BANK_POOL_CAP_CERTIFICATES} — ${
+      room === 0 ? "none" : cards(room)
+    } more can be sold into it, and this sale is ${cards(sellingCards)}.`;
   }
 
   /* ---- The presidency ---------------------------------------------------------------------------

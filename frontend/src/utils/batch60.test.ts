@@ -147,8 +147,13 @@ describe("the clock starts on the trigger and not before", () => {
     /* #1661 (S9-1): the three branches moved into `applyYellowSignOutcome`, which the derived and the legacy
        path share, so the gift is now the tail of that function rather than the tail of the arm. The claim is
        unchanged; only where the slice ends is. */
+    /* #1672 (S9-2): the `+ 1` grace is unchanged and the TRIGGER is no longer the gift's own tier. The clock
+       starts when both conditions hold -- a gilded ghost exists and a REAL Diesel has been bought -- so a gift
+       that arrives after the Diesels are running starts it here whatever tier it is, and a SYNTHETIC Diesel
+       never starts it at all. */
     const gift = sliceBetween(SESSION, 'if (stage === "mark") {', "export function isSeatDrivenRound");
-    expect(gift).toContain('trainTier(model) === "D"');
+    expect(gift).toContain("realDieselPurchased(state)");
+    expect(gift).not.toContain('trainTier(model) === "D"');
     expect(gift).toContain("carcosan_doom_after_macro_round: (state.macro_round_number ?? 0) + 1");
   });
 });
@@ -490,8 +495,12 @@ describe("the third stage moves the board like the other two", () => {
        #718 removed. The helper is deleted rather than left uncalled: an exported way to take the train with
        no caller is a second way to take the train, waiting to be found. */
     expect(SESSION).not.toContain("expireCarcosanTrains");
-    // What stays at that boundary is the limit exemption, which is a different clock entirely.
-    expect(SESSION).toContain("const settled = expireGhostTrains(expired);");
+    /* #1672 (S9-2): AND NEITHER DOES THE LIMIT EXEMPTION, which used to expire at this boundary and trim the
+       fleet cheapest-first -- taking an ordinary train because a grace on the gilded one had run out. The
+       exemption is now `carcosan_trains`, coextensive with the gilding, so `expireGhostTrains` had no job
+       left and is deleted too. Nothing trims at this transition any more. */
+    expect(SESSION).not.toContain("expireGhostTrains");
+    expect(SESSION).toContain("const settled = expired;");
   });
 });
 

@@ -345,7 +345,9 @@ export function TrainPurchasePanel({
      #703's REPORT WAS THIS EXACT FAULT with a different subtrahend: the panel and the auto-skip enforced one
      rule against two different numbers, and the player was refused by the surface the gate had waved through.
      Both now ask `countableTrainCount`. */
-  const ownedTrainCount = countableTrainCount(buyer?.owned_trains, buyer?.pending_rust_trains, buyer?.ghost_trains);
+  // #1672 (S9-2): the gilded train is exempt for its whole Carcosa lifetime, so the panel counts what the
+  // authority counts (`trainPurchaseGate`) rather than the OR-long marker it used to.
+  const ownedTrainCount = countableTrainCount(buyer?.owned_trains, buyer?.pending_rust_trains, buyer?.carcosan_trains);
   const currentTrainLimit = useMemo(
     () => depot.find((row) => row.isCurrent)?.trainLimit ?? null,
     [depot],

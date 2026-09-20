@@ -2246,6 +2246,7 @@ export default function ContextualActionBar({
   const countableTrains = countableTrainCount(
     activeCorporation?.trains,
     activeCorporation?.reprievedTrains,
+    // #1672 (S9-2): `ghostTrains` is fed from `carcosan_trains` now — the exemption lasts as long as the gilding.
     activeCorporation?.ghostTrains,
   );
   const reprievedNames = React.useMemo(() => {

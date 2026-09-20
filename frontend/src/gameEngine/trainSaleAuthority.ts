@@ -130,7 +130,7 @@ export function trainSaleRefusal(
 
   /* ---- 9. The train limit in force (6.6; Stage 4's gate, unchanged) ---------------------------- */
   if (buyer.owned_trains != null) {
-    const countable = countableTrainCount(buyer.owned_trains, buyer.pending_rust_trains, buyer.ghost_trains);
+    const countable = countableTrainCount(buyer.owned_trains, buyer.pending_rust_trains, buyer.carcosan_trains);
     if (isTrainLocked(countable, trainLimitInForce(state))) {
       return `${buyer.ticker} is already at its train limit and may not buy another train.`;
     }

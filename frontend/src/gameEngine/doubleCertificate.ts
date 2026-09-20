@@ -29,6 +29,8 @@
 // reducer (`moveShares`), and no player address can collide with either.
 
 import type { GameStateResponse, PublicCompanyState } from "./gameState";
+// #1670 (S9-8): the cap lives beside the other pool constants; `endgame.ts` imports nothing from here.
+import { BANK_POOL_CAP_CERTIFICATES } from "./endgame";
 
 export const DOUBLE_CERTIFICATE_PERCENT = 20;
 /* Local, not imported from `sandboxSession` (which imports this file) -- the same two figures `sharePurchase.ts`
@@ -199,6 +201,47 @@ export function certificatesSoldInMarketMove(company: CompanyLike, holder: strin
   const fromDouble = percentage - ordinarySold;
   const doubleCerts = fromDouble > 0 ? 1 : 0;
   return Math.max(1, ordinaryCerts + doubleCerts);
+}
+
+/** ==================================================================
+ *   DESIGN NOTE 1670 (S9-8): THE CARDS A SALE PUTS INTO THE POOL
+ *  ==================================================================
+ *
+ * THE CAP'S UNIT, AND IT IS NOT THE CHART'S. `certificatesSoldInMarketMove` above answers "how many rows does
+ * the token drop" and carries a `Math.max(1, ...)` floor for that question -- a sale always moves the chart at
+ * least once. The Bank Pool cap asks a different thing: how many pieces of card land in the pool. A floor
+ * would be wrong here (a sale of nothing adds nothing), and so would the chart's treatment of the residue.
+ *
+ * THE RESIDUE IS THE WHOLE DIFFERENCE. `ordinaryPercentHeld` subtracts BOTH the president's 20% and the
+ * double's 20%, so "percentage beyond the ordinary" is the double for a holder who has one and the
+ * PRESIDENT'S BLOCK for a holder who does not. The chart's helper reads any residue as the double; for the
+ * cap that would under-count a president's sale by a card, and a cap that under-counts is a cap that lets a
+ * sixth certificate in. So the double is claimed only when the seller actually holds it, and whatever is left
+ * is counted in tens -- which is what the presidency exchange hands the pool (§5.4: the 20% card comes back
+ * as two 10%s). PRESIDENCY RULES ARE UNCHANGED BY THIS; it only counts what they already do.
+ *
+ * ONE MODEL, THREE QUESTIONS: `certificateCardsHeld` (a holder), `certificateCardsInPool` (a pool), and this
+ * (a movement into one). All three make the same two subtractions in the same order. */
+export function certificateCardsEnteringPool(
+  company: CompanyLike,
+  seller: string,
+  percentage: number,
+): number {
+  if (percentage <= 0) return 0;
+  const ordinarySold = Math.min(percentage, ordinaryPercentHeld(company, seller));
+  const residue = percentage - ordinarySold;
+  const doubleCard = holdsDouble(company, seller) && residue > 0 ? 1 : 0;
+  const afterDouble = Math.max(0, residue - doubleCard * DOUBLE_CERTIFICATE_PERCENT);
+  return (
+    ordinarySold / SANDBOX_SHARE_PERCENTAGE +
+    doubleCard +
+    Math.ceil(afterDouble / SANDBOX_SHARE_PERCENTAGE)
+  );
+}
+
+/** How many more certificates of `company` the Bank Pool may still accept. */
+export function bankPoolCertificateRoom(company: CompanyLike): number {
+  return Math.max(0, BANK_POOL_CAP_CERTIFICATES - certificateCardsInPool(company, "Bank"));
 }
 
 /* ---- the presidency exchange ------------------------------------------------------ */

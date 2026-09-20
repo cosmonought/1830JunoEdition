@@ -247,14 +247,27 @@ export interface PublicCompanyState {
   ghost_trains?: readonly string[];
   /** ==================================================================
    *   DESIGN NOTE 1089: THE IDENTITY OUTLIVES THE EXEMPTION
+   *   — AMENDED BY #1672 (S9-2): THEY ARE NOW THE SAME LIFETIME
    *  ==================================================================
    *
    * A THIRD LIST BESIDE `pending_rust_trains` AND `ghost_trains`, and the reason is the one #1046 already gave
    * for splitting the first two: THEY EXPIRE ON DIFFERENT CLOCKS.
    *
-   *   `ghost_trains`     "occupies no train-limit slot", emptied at the END OF THE OPERATING ROUND.
-   *   `carcosan_trains`  "this is the gold-trimmed train", emptied when the DOOM CLOCK fires -- a full OR set
-   *                      later, and often several rounds after the exemption has gone.
+   *   `ghost_trains`     SYNTHETIC: "this train never came off the depot shelf". Read by `depotInventory`
+   *                      (#1046) so the gift does not deplete the bank's supply, and by
+   *                      `realDieselPurchased` (#1672) so a gifted Diesel is not mistaken for a bought one.
+   *                      It is NO LONGER the train-limit exemption.
+   *   `carcosan_trains`  "this is the gold-trimmed train" — the Carcosa lifetime, emptied when the fog takes
+   *                      the train or the Blood Price burns the gilding off, and SINCE #1672 also the
+   *                      train-limit exemption, so the two are coextensive by construction.
+   *
+   * WHAT #1672 CHANGED AND WHY. The owner ruled (2026-09-19) that the gilded train "is individually exempt
+   * from the owning corporation's train limit" for "its entire Carcosa lifetime": ending an OR does not make
+   * it ordinary, nor does ending an OR set. `ghost_trains` was emptied at the next OR boundary by
+   * `expireGhostTrains`, which then trimmed the fleet to the limit CHEAPEST-FIRST — so the gilded train, being
+   * the newest and dearest, survived and one of the corporation's ORDINARY trains was confiscated instead.
+   * That function is deleted; `countableTrainCount` reads `carcosan_trains`; the two lists keep their names
+   * because they now answer two questions that genuinely differ (where the train came from, and what it is).
    *
    * REUSING `ghost_trains` FOR BOTH WAS THE FIRST DRAFT AND IT IS WRONG BY A ROUND. The chip icon (#1088) is
    * drawn from this mark, so a train that had merely stopped being limit-exempt would have lost its Yellow

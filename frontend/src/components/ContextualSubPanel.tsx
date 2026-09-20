@@ -429,12 +429,21 @@ function OperatingRoundCorporationPanel({
                     #891's SHAPE, FOUND BY FOLLOWING THIS BATCH'S WIRING rather than by a test: adding
                     `ghosts` to the chips beside it made the omission on the pill visible. The prop, the
                     helper and the note were all already right; only the two call sites were missing. */
-                    /* Design note #1089: THE PILL TAKES THE EXEMPTION, NOT THE IDENTITY. `ghost_trains`
-                    is "occupies no limit slot" and expires at the end of the OR; `carcosan_trains` is the
-                    gold trim and lasts an OR set longer. The pill is counting slots, so it wants the
-                    first -- and this is the one place the two are easy to swap, which is why both call
-                    sites say which they mean. */
-                    ghosts={company.ghost_trains}
+                    /* ==================================================================
+                     DESIGN NOTE 1674 (S9-2): THE PILL TAKES THE EXEMPTION, AND THE EXEMPTION MOVED
+                    ==================================================================
+                    #1089 SAID "the pill wants `ghost_trains`" AND WAS RIGHT AT THE TIME: that list WAS the
+                    train-limit exemption, an OR-long grace, while `carcosan_trains` was only the gold trim.
+                    The owner ruled (2026-09-19) that the gilded train is exempt for its ENTIRE Carcosa
+                    lifetime, so #1672 made `carcosan_trains` the exemption and left `ghost_trains` meaning
+                    SYNTHETIC PROVENANCE alone -- "this train never came off the depot shelf", read by
+                    `depotInventory` and `realDieselPurchased`.
+                    THE SENTENCE IS UNCHANGED AND THE FIELD IS NOT: the pill counts SLOTS, so it wants the
+                    exemption, which is now this one. Left on `ghost_trains` it would part from the gate after
+                    a Blood Price -- the buyer keeps the synthetic marker and gains no gilding, so the pill
+                    would exempt an ordinary train the gate counts, and say "2/3" beside a Buy button that
+                    refuses. #891's shape, and the second site of this split to be missed. */
+                    ghosts={company.carcosan_trains}
                   />
                 </td>
               </tr>

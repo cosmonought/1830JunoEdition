@@ -54,7 +54,8 @@ revised book does not contain. An owner variation from printed Scenario D is rec
 never by labelling the whole scenario owner-defined. Scenario-D facts: `STAGE8_AUTHORITY_DESIGN_2026-09-16.md` §5.1a.
 
 **Replay / version boundary.** `RULES_ENGINE_VERSION` (`frontend/src/gameEngine/rulesVersion.ts`, #1520) is
-**5** after Batch 7.5 (1 = post-Batch-4 semantics, 2 = Batch 4.6, 3 = Batch 5, 4 = Batch 6, 5 = Batch 7 — the one
+**7** after the Stage-9 closure pass (2026-09-19, #1680; 6 was Stage 8.5's). *(Historical note, kept as written:
+it was)* **5** after Batch 7.5 (1 = post-Batch-4 semantics, 2 = Batch 4.6, 3 = Batch 5, 4 = Batch 6, 5 = Batch 7 — the one
 bump deferred across 7.1–7.4 and landed in 7.5). Since
 Batch 6 the pin is also copied onto the state (`rules_engine_version`, #1551) so the reducer can tell a pinned
 board from a legacy one. Any item below that
@@ -1213,6 +1214,119 @@ with no corpus effect; part of the Stage-8 bump at 8.5 — `RULES_ENGINE_VERSION
 
 ### Stage 9 — Variants + map data + variant authority
 
+> ## ✅ STAGE 9 IS CLOSED — 2026-09-19, `RULES_ENGINE_VERSION` **7**
+>
+> **ZERO remaining Stage-9 rules-authority blockers.** Every item below is `RESOLVED`, `RECORDED`, `NOT A
+> DEFECT`, a recorded `OWNER DECISION`, or explicitly deferred out of closure scope with that deferral stated.
+> The closure pass re-read the ledger to confirm it and did **not** re-audit the code.
+>
+> | disposition | items |
+> |---|---|
+> | `RESOLVED` | S9-1, S9-2, S9-3, S9-4, S9-6, S9-8, S9-10, S9-11, S9-12, S9-13, S9-14, S9-15, S9-17, S9-18, S9-19, S9-21 |
+> | `RECORDED` — official-material contradiction, not an engine defect | S9-16 |
+> | `NOT A DEFECT` — withdrawn | S9-20 |
+> | `OWNER DECISION`, recorded and implemented | S9-5 |
+> | `DEFERRED` out of Stage-9 certification scope — **pre-launch variant certification still owed** | S9-7 |
+> | `DEFERRED` — architecture / Part-C follow-up, never a rules-authority blocker | S9-9 |
+>
+> **S9-7 IS NOT AUDITED AND MUST NOT BE READ AS SUCH.** Gentle Rust, Unpredictable Revenue and Delayed
+> Auction have had no independent variant-spec certification. That certification is outside Stage-9 closure
+> and **remains required before any of them is represented as fully-authoritative supported rules.** The
+> Yellow Sign rulings recorded at S9-3 are authoritative for the mechanics already implemented; they are not
+> a variant audit.
+>
+> ### The bump, 6 → 7 (#1680)
+>
+> One deliberate bump for the stage, Stage 7.5's and 8.5's precedent: implementation slices stay on the pin so
+> the corpus can be measured slice by slice against one baseline, and the stage takes a single bump at closure
+> where the whole set of changes is named in one changelog row. `RULES_ENGINE_VERSION = 7`,
+> `SUPPORTED_RULES_ENGINE_VERSIONS` derived `[7]`, `RULES_ENGINE_CHANGELOG` row 7 naming every semantic half:
+> immutable/printed topology authority, station anchoring, the LPF M-11 printed straight, #59
+> `separateSystems`, the #63 supply and canonical tile identity, Blood Price arrival stamping, D&H
+> free-station authority, physical-certificate market movement, authoritative Yellow Sign resolution with
+> server-owned committed randomness, the physical-certificate Bank Pool cap, and the corrected Carcosa ghost
+> lifecycle.
+>
+> **The bump is owed even where no corpus file exercises a changed rule.** A version pin states what a log
+> MEANS, not how many logs happen to notice. A version-6 log carries tile lays judged without the board's
+> printed topology, station placements judged only in the shell, Yellow Sign outcomes chosen by a client and
+> market steps walked per ten percent: it is refused, never reinterpreted.
+>
+> ### The 18/18 reconciliation — MEASURED AT `dea5489`, NOT AT THE TIP
+>
+> The full canonical 18-file reconciliation was measured at **`dea5489`** (the Stage-9.4d tree plus the
+> PrivateTradePanel import fix) against the Stage-9.1 pre-semantic baseline `d837419`, using the existing
+> closure harness. **Stage 9.5 landed afterwards and contained replay-semantic production changes**, so the
+> table is not a measurement of the tip and must not be presented as one. What makes it still applicable is
+> the targeted-presence addendum below, not an assumption.
+>
+> Totals at `dea5489`: **4,105 stored · 3,103 applied · 1,002 dropped · 0 unparseable · 334 `LayTile`** —
+> identical on both sides, and matching Stage 8.5's recorded figures. Every divergence is attributable:
+>
+> | family | files | cause | effect |
+> |---|---|---|---|
+> | **A** | 11 LPF logs | **S9-18** — the printed M-11 straight is in the INITIAL grid | the board differs from index 0; **zero** gameplay-state divergence |
+> | **B** | 7 files | **S9-1** — `last_run_revenue_seed` recorded by the run arm | transient; self-clears at #777's turn change; no value changes |
+> | **C** | `export/JUNO-3XD` only | **S9-12** — entry 115, `PlaceHomeStation{kind:"dh"}` on an unfloated NNH | **permanent, intended** — see below |
+> | **D** | 10 files | **S9-12** — `dh_station_pending` written as `undefined` | field-digest shape only; `stateDigest` agrees everywhere |
+>
+> **Family C is the one real permanent gameplay divergence and is recorded as such, not as neutrality.** The
+> entry is refused on BOTH sides for the same pre-existing reason (NNH is unfloated; no token is placed either
+> way, and the corporation is byte-identical). But the **baseline still consumed the D&H's power while
+> refusing the action** — `used_private_abilities` became `["dh-token"]` — and Stage 9 refuses the message in
+> `dhStationAuthority` ahead of every mutation, so it stays `null`. Baseline final `["dh-token"]`, Stage-9
+> final `null`; the divergence begins at chain position 116 and never reconverges. That a refusal spent the
+> private's one free station is precisely the defect S9-12 fixed.
+>
+> **The four special reconciliation items, discharged.**
+> **S9-13** — the owed canonical 18/18: exactly one `SellStock` against a Scenario-D company in the whole
+> corpus, `server/JUNO-FCJ` index 851 (ERIE, 30 %), with ERIE unfloated so the sale is refused upstream;
+> `server/JUNO-FCJ` has **zero** state divergence at any entry. No stored replay changed.
+> **S9-1 / JUNO-Z6C** — the two stored `YellowSignEvent` entries (both index 203, `server/JUNO-Z6C` and
+> `fixture/JUNO-Z6C-494`) sit on unpinned boards, carry `stage`/`model`/`cash` and no `revenue_seed`, and take
+> the legacy stored-outcome branch keeping #1046's zeroing. Server seed normalization is **live-ingress only**
+> (`RoomSession.submit`, before the append) and is never re-run during replay.
+> **S9-11** — no `BuyTrainFromCorporation` anywhere in the 18 sells a train the seller's `carcosan_trains`
+> names, so the Blood Price landing is never exercised; arrival stamping is corpus-neutral.
+> **S9-12 / JUNO-3XD** — family C above; refused for the flotation reason on both sides, but **not** a full
+> no-op.
+>
+> ### Stage-9.5 targeted-presence addendum — why the reconciliation remains applicable
+>
+> Stage 9.5 (`67a3123`) made two replay-semantic production changes after the table was measured. Neither was
+> assumed neutral; both were measured by targeted presence checks across all 18 canonical files.
+>
+> **S9-8, the physical-certificate Bank Pool cap.** 15 `SellStock` entries across the corpus; **zero divergent
+> sites**. The non-president 20 % certificate never reaches a Bank Pool in any applied stored sale — it is
+> bought out of the IPO in `server/JUNO-FCJ` from index 674 and stays with the player — so at every one of the
+> 15 sales the certificate count equals `bank_pool_percentage / 10` and no seller holds the double. The only
+> Scenario-D sale is FCJ 851, refused upstream.
+>
+> **S9-2, the Carcosa ghost lifecycle.** **0 Carcosa gifts, 0 fog events, 0 Blood Price Carcosa transfers, 0
+> observations of `ghost_trains` or `carcosan_trains`, and no real Diesel purchased in any file.** No stored
+> history reaches the changed lifecycle at all.
+>
+> **Therefore Stage 9.5 is corpus-neutral for the canonical set, and the `dea5489` reconciliation remains
+> applicable at the tip.** The full 18/18 was deliberately NOT re-run at closure.
+>
+> ### Replay goldens
+>
+> `replayGolden`, `replayJunoCV4` and `replayJuno3XD` were green before Stage 9.5, green inside its implicated
+> matrix, and green again after the 6 → 7 bump. **Nothing was repinned at closure.** The only two goldens
+> re-pinned anywhere in Stage 9 are Slice 9.2's `JUNO-CV4.json` and `JUNO-G6J.json` (+1 grid entry each, the
+> printed M-11 tile, pure insertion, reason recorded in the 9.2 row).
+>
+> ### What closure does NOT cover
+>
+> Part-C / readiness items derived from Stage 9 remain open and separate, and are **not** marked complete:
+> **U-38** (canonical tile numbers on three player-visible surfaces), **U-39** (two percentage-based Bank Pool
+> room readers, both conservative), **U-40** (Project 18XX / Project 18XX+ naming, player-facing "1830"
+> cleanup, the Rules Reference's standing as final authority, provenance/credits carve-out), **U-8** (the
+> seventh seat colour), the **U-19 … U-31** block, and **S9-9** (the engine's upward import of `components/`,
+> architecture). None of them blocks rules closure. Stage-10 items **S10-1 … S10-25** are untouched and remain
+> Stage 10.
+
+
 **S9-1. ~~`YellowSignEvent` is client-authoritative.~~ The Yellow Sign outcome AND its input are authoritative.**
 Status **`RESOLVED`** — Slice 9.4d, 2026-09-19 (#1661 the outcome, #1662 the input). *(Was `OPEN` / **HIGH
 PRIORITY**: Stage 2 commit message; `messageSchema.ts` #1451 recorded it as deferred.)* **Direct client outcome
@@ -1404,7 +1518,29 @@ cleared), the gilding is **burned off**, and the buyer receives an **ORDINARY** 
 gilded, no exemption, no deadline, never taken by the fog, and fully subject to the buyer's ordinary train
 limit. Cash and share-price consequences unchanged.
 
-**The one consistency change the split required — corrected at the representation check, #1673.** Once the two
+**Completing the split — three propagation sites, found in three passes (#1673 / #1674 / #1675).** Splitting
+one field into two meanings is a change every reader has to be walked through, and this one was not caught in a
+single sweep. Recorded together so the shape is visible:
+**#1673, the Blood Price buyer** — provenance must travel with the train (below).
+**#1674, the two capacity pills** — `ContextualSubPanel` and `FinancialLedger` passed `ghost_trains` into
+`CapacityPill`, which counts limit slots. Correct while the two lists had the same members, and wrong after a
+Blood Price: the buyer keeps the marker and gains no gilding, so the pill exempted an ordinary train the gate
+counts and would have read one under the Buy button. Both now take `carcosan_trains`, which is what every
+authoritative limit reader takes.
+**#1675, the fog's own removal** — the `stage === "fog"` arm removed one occurrence from `owned_trains` and
+`carcosan_trains` and left the matching `ghost_trains` entry behind. Harmless while `expireGhostTrains` emptied
+the list every Operating Round; permanent once #1672 deleted that function. A marker for a train that no longer
+exists lies to both provenance readers — `depotInventory` would keep one printed train off the bank's shelf for
+the rest of the game, and `realDieselPurchased` would keep masking a real Diesel with a destroyed synthetic one.
+The fog now removes exactly one occurrence from all three multisets.
+A bounded reference audit of the two fields followed (#1676): every production reader and writer of
+`ghost_trains` is provenance or a provenance mutation, every reader of `carcosan_trains` is identity, exemption,
+fog target, display or a Carcosa mutation, and three stale comments asserting the superseded OR-long rule were
+retired. **The one naming hazard left standing is reported, not changed:** `App.tsx`'s view-model field is still
+called `ghostTrains` and is fed `carcosan_trains`, read by `ContextualActionBar`'s count. The value is right and
+the name is #1046's; renaming it would touch two owner-heavy files for a word.
+
+**The consistency change the split required — corrected at the representation check, #1673.** Once the two
 markers mean different things, the Blood Price has to SPLIT them rather than clear both. `carcosan_trains` is
 the gilding and is burned off, so it does not reach the buyer. `ghost_trains` is SYNTHETIC PROVENANCE — "this
 train never came off the depot shelf" — which is a fact about the TRAIN, not about who owns it, so it
@@ -1418,7 +1554,7 @@ and **unconditional**, outside the carcosan gate, so a train on its second Blood
 longer gilded — still carries its provenance. The marker on the buyer grants **no** train-limit exemption:
 that is read from `carcosan_trains` alone.
 
-**Tests.** `utils/stage95GhostLimit.test.ts` rewritten as the lifecycle suite, **29 cases** in the owner's six
+**Tests.** `utils/stage95GhostLimit.test.ts` rewritten as the lifecycle suite, **35 cases** (group G is the field-split guard added at the owner's gate: the fog clearing all three multisets, the same-model multiset case, `depotInventory` and `realDieselPurchased` undistorted after a fog, the Blood-Price buyer counted alike by display and gate, and a role-split source pin over every limit reader, capacity call site and provenance reader) in the owner's six
 lettered groups: A the exemption (per train, surviving OR and OR-set boundaries, ordinary trains still bound,
 the trim gone and every surface repointed); B the pre-D gift (no deadline, no fog, the later real D starts the
 clock, idempotent); C the post-D gift (receipt is the trigger, whatever tier); D the grace and the fog (not due
@@ -3455,6 +3591,8 @@ PMQ — the ruling applies the conditional form to both. Implementation: Slice 8
 
 | 6 (owed until Stage-9 closure) | **9.2** (uncommitted) | **Board / printed-topology authority.** `immutableHexRefusal` (#1620) is rule 0 of `filterSandboxPlacements`, ported from `hexmap.rs:2317` / `:2331` in their order and shared with `evaluateHexForTileLaying` (S9-10 / F-1); `priorTopologyAt` (#1621) feeds rule 5 the hex's LIVE topology in `liveEdgesForHex`'s fallback order, so board-printed track is preserved on a first lay (S9-10 / F-2); `stationAnchorAuthority.stationAnchorRefusal` (#1623) puts revised 6.2.2 ❹ in the reducer, ahead of every mutation (S9-17); and the Level Playing Field gains T-02's seventh board tile, the printed straight `#9@0` at **M-11** (#1622, S9-18). `RULES_ENGINE_VERSION` deliberately NOT bumped — Stage 8's precedent: implementation slices stay on the pin and Stage 9 takes ONE deliberate bump at closure, once S9-19's re-pins are known and can be reconciled with these. **Stage-9 bump is now OWED.** | **Measured against the baseline audit commit `d837419` across ALL 18 current corpus files — 18/18** (3 goldens + 8 `server/data` + 5 `sandbox-log-*` exports + the FCJ-96 prefix + the Z6C-494 fixture; the same set Stage 8.5 used) under `DEVELOPMENT_CORPUS_POLICY`. **Identical stored / applied / dropped / unparseable counts in all 18, and EVERY DYNAMIC STATE FIELD IDENTICAL at every entry and at the end — zero state divergences observed anywhere.** `map_grid` is a separate object and is **never byte-identical on a Level Playing Field log**: the printed M-11 straight is in the INITIAL grid, so the board differs from index 0 — a static/setup difference, not a gameplay one. **Exactly one stored action changes acceptance in the whole corpus**, in one room appearing in two files: **JUNO-Z6C idx 227** (`#8@0` at M-11, no `token_cities`) — ACCEPTED at baseline, **REFUSED** under 9.2, because T-02 prints yellow track on that hex so the lay repeats the colour tier and drops printed edge 3. Its state before and after is identical on both sides (M-11 is Plain, so a $0 refusal leaves no trace); the boards never converge. `server/JUNO-FCJ` idx 159 (`#9@0` at M-11) was already refused by `operatingIdentityRefusal` and still is — **no change**. F-1, F-2 and S9-17 are **measured corpus-neutral**. **RE-PINNED (2, both explained):** `replayGolden` fixtures `JUNO-CV4.json` and `JUNO-G6J.json`, each +1 grid entry (the printed M-11 tile) and nothing else — pure insertion, 14 lines, zero deletions — reason *"S9-18 — restore printed LPF M-11 straight from T-02"*. `JUNO-7NZ.json` untouched. **All raw logs byte-unchanged.** The focused Stage-9.2 gate is green |
 | 6 (owed until Stage-9 closure) | **9.3** (uncommitted) | **Tile separation, physical supply and canonical identity.** `TileCatalogEntry.separateSystems` (#1628) carries revised 6.2.2 ❹'s separation clause as **tile metadata**, on old **#59** alone; `priorTopologyAt` rotates its `cityGroups` onto `HexTopology.separateSystems`, and `separationPreserved` is **rule 5b** of `filterSandboxPlacements` — the first rule in that file to compare CONNECTIVITY (union-find over the destination's rotated `paths`) rather than segments, and a no-op for every prior that names no systems (S9-19). `tileTrayPlus.RECOUNTED` corrects #63's PHYSICAL supply `1 → 4` ahead of every scenario removal (#1629, S9-15). `TileCatalogEntry.canonicalId` on the live catalog (#1630) gives the three tiles whose printed old NUMBERS the errata voids their canonical rules/display identity — `#8861` / `oo13` / `oo14` — read through `canonicalTileName` by three real production consumers (the Activity Log sentence `actionLog.describeGameplayAction`, the hex-finished message `hexGeometry.evaluateHexForTileLaying`, and the tile-picker tooltip), while the integers stay the **stable storage / ABI key** and are deprecated only as **rules identifiers** (S9-21). **Newly written state still serializes `tile_id: 626 / 36 / 35`** — that is the compatibility, not a leak. Display remainder in three owner-dirty files filed as **U-38**. `RULES_ENGINE_VERSION` deliberately NOT bumped, and **this slice does not force one** — see the corpus column. **Stage-9 bump remains OWED at Stage-9 closure.** | **Measured against `fdc4b9a` (HEAD) across ALL 18 corpus files — 18/18**, same assembly as 9.2, under `DEVELOPMENT_CORPUS_POLICY`. **Identical applied / dropped / unparseable counts, identical state digest at EVERY entry, identical `map_grid` at every entry, identical verdict on every one of the 334 replayed `LayTile` actions (3,131 observed entries in all), identical final state, identical final state field digests, identical final board — in all 18 files. ZERO divergence of any kind.** The three transitions S9-19 was predicted to make refusal-added (**JUNO-FCJ 640**, **JUNO-FCJ 1047**, **JUNO-Z6C 399**) are refused by the 9.3 predicate — pinned directly by reconstructing each source configuration — but in live replay they never reach it: `operatingIdentityRefusal` refuses each **upstream and identically at baseline** (FCJ 555/640/988/1047, wrong round; Z6C 378/399, wrong corporation), so the #59 never lands on E5 or E11 and the destination hexes are bare. §14b's adjudication of the STORED ACTIONS stands; its predicted replay consequence does not materialise. **NO log re-pinned, NO golden re-pinned, `replayGolden` green, no version bump forced.** S9-15 is corpus-neutral as predicted (tray never exhausted); S9-21 changes no persisted representation at all — the storage keys are untouched and new state serializes them exactly as before. **All raw logs byte-unchanged.** |
+
+| **7** | **9.4a–9.5 + closure** (`4704f6e`, `677ed0e`, `53f34b0`, `69f4275`, `67a3123`, + this pass) | **The bump, and the rules that earned it.** 9.4a Blood Price arrival stamping (S9-11); 9.4b the D&H free station judged by the D&H's own conditions at both locks, a refusal no longer consuming the power (S9-12); 9.4c the chart stepping once per PHYSICAL CERTIFICATE (S9-13); 9.4d the Yellow Sign's outcome DERIVED by the authoritative reducer and the turn's draw and turn key supplied by the SERVER at ingress, with the playtest waiver dropped there and refused by the reducer on any pinned board (S9-1); 9.5 the five-physical-certificate Bank Pool cap (S9-8), the C&SL as a bonus lay with no upgrade right (S9-6), the Mark nullifying only the vanished train's run (S9-3), and the corrected Carcosa lifecycle — exemption coextensive with the gilding, doom trigger on whichever of the gift and the first REAL Diesel lands second, gift model from the depot, synthetic provenance following a Blood Price while the gilding burns off (S9-2). **Closure:** `RULES_ENGINE_VERSION` **6 → 7**, `SUPPORTED_RULES_ENGINE_VERSIONS` derived `[7]`, changelog row 7, `stage9Closure.test.ts` (8 cases), and `stage85Closure`'s three literal-6 pins narrowed to prefix/derived pins so a Stage-8 case no longer owns the current version. | **The canonical 18/18 was measured at `dea5489`, NOT at the tip** — see the closure banner in the Stage 9 section for the table, the four divergence families and the four special items. **Stage 9.5 followed and was measured separately by targeted presence checks across all 18: S9-8 15 `SellStock` entries / zero divergent sites / the double never in a pool; S9-2 zero gifts, fogs, Blood Price transfers, ghost or carcosan observations, and no real Diesel anywhere.** Both absent, so 9.5 is corpus-neutral and the earlier reconciliation still applies. The one permanent gameplay divergence in the whole stage is **`export/JUNO-3XD` entry 115** (S9-12): refused on both sides because NNH is unfloated, but the baseline consumed `used_private_abilities: ["dh-token"]` while refusing and Stage 9 does not. **No golden repinned at closure**; `replayGolden` / `replayJunoCV4` / `replayJuno3XD` green. **All raw logs byte-unchanged.** |
 
 Items above that carry "bump" must add a row here when they land. No golden or replay expectation is ever
 re-pinned silently: the re-pin, its index and its reason go in the batch write-up and in this table.

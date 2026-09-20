@@ -72,8 +72,24 @@ describe("the two captions differ where the powers differ", () => {
     expect(CSL_POWER_DESCRIPTION).toMatch(/ignoring track connection rules/i);
   });
 
-  it("names the forfeit", () => {
-    expect(CSL_POWER_DESCRIPTION).toMatch(/forfeited/i);
+  it("names what the power IS, and no longer a forfeiture it never had", () => {
+    /* ==================================================================
+        UPDATED BY #1671 (S9-6): A BONUS LAY, NOT A LAPSE RULE
+       ==================================================================
+       This used to be `toMatch(/forfeited/i)`, and the caption it pinned ended "If any other corporation
+       builds on B20 first, the power is forfeited." OWNER RULING (2026-09-19): the C&SL special grants a
+       bonus TILE LAY and nothing else. It does NOT grant an upgrade right merely because an ordinary track
+       action may be used to lay OR upgrade, and it has NO D&H-style lapse -- the rulebook states that lapse
+       for the D&H alone. Once B20 carries a tile the unused power simply has no legal bonus-lay target.
+       THE OUTCOME WAS ALWAYS RIGHT AND THE REASON WAS NOT, which is why this is a wording pin and not a
+       behaviour change: the power was only ever offered on a bare B20, so it could never reach an upgrade.
+       PINNED POSITIVELY. Asserting the absence of one word would pass on a caption that said nothing at all,
+       so the three halves of the rule are each named, and the obsolete word is asserted absent beside them. */
+    expect(CSL_POWER_DESCRIPTION).toMatch(/tile LAY/);
+    expect(CSL_POWER_DESCRIPTION).toMatch(/not an upgrade/i);
+    expect(CSL_POWER_DESCRIPTION).toMatch(/once B20 carries a tile/i);
+    expect(CSL_POWER_DESCRIPTION).toMatch(/nothing left for it to do/i);
+    expect(CSL_POWER_DESCRIPTION).not.toMatch(/forfeited/i);
   });
 });
 

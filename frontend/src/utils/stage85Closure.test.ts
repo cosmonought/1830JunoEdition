@@ -94,9 +94,15 @@ const repinned = (entries: readonly ServerLogEntry[], version: number): ServerLo
 /* ================================================================================================= */
 
 describe("RULES_ENGINE_VERSION 6 (Stage 8.5)", () => {
-  it("is 6, the changelog's sixth row says why, and a new deal is stamped 6 on the log and on the board", () => {
-    expect(RULES_ENGINE_VERSION).toBe(6);
-    expect(RULES_ENGINE_CHANGELOG.map((row) => row.version)).toEqual([1, 2, 3, 4, 5, 6]);
+  it("the changelog's sixth row says why version 6 exists, and a deal is stamped with the engine it was dealt on", () => {
+    /* #1680 (Stage-9 closure): THIS CASE NO LONGER OWNS THE CURRENT VERSION. It used to assert
+       `RULES_ENGINE_VERSION === 6` and an exact changelog list, which is the right claim for the batch that
+       MADE 6 and the wrong one for every batch after it -- Stage 9's 6 -> 7 bump would fail a Stage-8 case
+       that has nothing to say about Stage 9. Narrowed to a PREFIX pin, matching what `batch75Closure`,
+       `emergencyFunding` and `routeAuthority` already do for their own rows: row 6 is still asserted in full,
+       and the current version belongs to `stage9Closure.test.ts`. */
+    expect(RULES_ENGINE_CHANGELOG.map((row) => row.version).slice(0, 6)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(RULES_ENGINE_VERSION).toBeGreaterThanOrEqual(6);
     const note = RULES_ENGINE_CHANGELOG[5].note;
     /* Every semantic half of Stage 8 is named in the row, because the number is meaningless without it. */
     for (const phrase of [
@@ -115,8 +121,8 @@ describe("RULES_ENGINE_VERSION 6 (Stage 8.5)", () => {
       expect(`row6 matches ${String(phrase)}: ${phrase.test(note)}`).toBe(`row6 matches ${String(phrase)}: true`);
     }
     const room = dealtRoom();
-    expect(room.rulesEngineVersion()).toBe(6);
-    expect(room.state.rules_engine_version).toBe(6);
+    expect(room.rulesEngineVersion()).toBe(RULES_ENGINE_VERSION);
+    expect(room.state.rules_engine_version).toBe(RULES_ENGINE_VERSION);
   });
 
   it("supports exactly this version -- the list is derived, as every bump since version 1 has left it", () => {
@@ -125,7 +131,11 @@ describe("RULES_ENGINE_VERSION 6 (Stage 8.5)", () => {
        never reinterpreted". The bump therefore replaces the supported version rather than accumulating one;
        nothing had to be edited for that to happen, which is the point of deriving it. */
     expect(SUPPORTED_RULES_ENGINE_VERSIONS).toEqual([RULES_ENGINE_VERSION]);
-    expect(SUPPORTED_RULES_ENGINE_VERSIONS).toEqual([6]);
+    /* #1680 (Stage-9 closure): the literal `[6]` was this case's own demonstration that the derived list had
+       followed the 5 -> 6 bump without an edit. It has now followed 6 -> 7 the same way, which is the claim
+       -- so the derivation is what stays pinned here and the current number belongs to
+       `stage9Closure.test.ts`. */
+    expect(SUPPORTED_RULES_ENGINE_VERSIONS).toHaveLength(1);
   });
 
   it("refuses a version-5 room before the reducer sees a single entry, on restore and headless, under EVERY policy", () => {
@@ -134,7 +144,8 @@ describe("RULES_ENGINE_VERSION 6 (Stage 8.5)", () => {
     try {
       const held = new RoomSession({ providers: sandboxReplayProviders(), seed: seed(), build: "b", mintId: () => "x" });
       held.restore(versionFive);
-      expect(held.incompatible?.compatibility).toEqual({ kind: "incompatible", version: 5, supported: [6] });
+      // #1680: the refusal names whatever this engine supports; version 5 is refused either way.
+      expect(held.incompatible?.compatibility).toEqual({ kind: "incompatible", version: 5, supported: [RULES_ENGINE_VERSION] });
       /* #1520: the development-corpus opt-in admits the UNPINNED, never the differently pinned. */
       const underCorpusPolicy = new RoomSession({
         providers: sandboxReplayProviders(),
@@ -144,7 +155,7 @@ describe("RULES_ENGINE_VERSION 6 (Stage 8.5)", () => {
         replayPolicy: DEVELOPMENT_CORPUS_POLICY,
       });
       underCorpusPolicy.restore(versionFive);
-      expect(underCorpusPolicy.incompatible?.compatibility).toEqual({ kind: "incompatible", version: 5, supported: [6] });
+      expect(underCorpusPolicy.incompatible?.compatibility).toEqual({ kind: "incompatible", version: 5, supported: [RULES_ENGINE_VERSION] });
       expect(() => replayLog(versionFive as ReplayEntry[], sandboxReplayProviders(), seed())).toThrow(ReplayIncompatibleError);
       expect(() =>
         replayLog(versionFive as ReplayEntry[], sandboxReplayProviders(), seed(), undefined, DEVELOPMENT_CORPUS_POLICY),

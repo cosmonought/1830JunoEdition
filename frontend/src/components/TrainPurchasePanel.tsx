@@ -55,11 +55,14 @@ export interface TrainPurchaseCompany {
    *  headroom. Optional, and absent means "none marked" rather than "unknown": a standard game never has one,
    *  and treating absence as unknown would make every ordinary purchase unanswerable. */
   pending_rust_trains?: readonly string[];
-  /** Design note #1046: the Yellow Sign's gift, exempt from the limit until the Operating Round ends. Same
-   *  optional-and-absent-means-none convention as the reprieve above. */
+  /** SYNTHETIC PROVENANCE -- "this train never came off the depot shelf" (#1672, S9-2). Declared because
+   *  the caller passes whole company objects and NOT READ BY THIS PANEL: it used to be the train-limit
+   *  exemption, and the count below reads `carcosan_trains` now. Same optional-and-absent-means-none
+   *  convention as the reprieve above. */
   ghost_trains?: readonly string[];
   /** Design note #1090: the gold-trimmed train, so the offer form can warn about the Blood Price before
-   *  anybody commits. Distinct from `ghost_trains` above -- see `gameState.ts` #1089 for the two clocks. */
+   *  anybody commits. #1672 (S9-2): ALSO the train-limit exemption, which is what `ownedTrainCount` below
+   *  counts against -- see `gameState.ts` #1089 for the split. */
   carcosan_trains?: readonly string[];
   /** Models currently held, e.g. `["2", "2", "4"]` -- duplicates are meaningful and drive the badge counts.
    *  `null`/`undefined` means UNKNOWN (a chain predating `owned_trains`), NOT "owns nothing": the corporate

@@ -648,14 +648,24 @@ describe("the three states a corporation can be in", () => {
     expect(bar).toContain("activeCorporation.isCarcosan && activeCorporation.carcosanTrains.length === 0");
   });
 
-  it("keeps the chip pointed at the identity and the pill at the exemption", () => {
-    /* THE SPLIT THIS BATCH IS BUILT ON, asserted where it is easiest to undo. `TrainChips` draws the sign
-       and wants `carcosan_trains`; `CapacityPill` counts slots and wants `ghost_trains`. Swapping them is a
-       one-word edit that nothing else would catch. */
+  it("keeps the chip pointed at the identity and the pill at the exemption — now the same list", () => {
+    /* THE SPLIT THIS BATCH IS BUILT ON, asserted where it is easiest to undo. `TrainChips` draws the sign and
+       wants the identity; `CapacityPill` counts slots and wants the exemption.
+       ==================================================================
+        AMENDED BY #1672 / #1674 (S9-2): THE TWO QUESTIONS NOW HAVE ONE ANSWER
+       ==================================================================
+       This batch could assert the two apart because they named different fields: the identity was
+       `carcosan_trains` and the exemption was `ghost_trains`, an OR-long grace. The owner ruled (2026-09-19)
+       that the gilded train is exempt for its ENTIRE Carcosa lifetime, so both questions resolve to
+       `carcosan_trains` and `ghost_trains` means SYNTHETIC PROVENANCE alone -- read by `depotInventory` and
+       `realDieselPurchased`, and by nothing that counts limit slots.
+       SO THE CLAIM IS NOW THE OPPOSITE ONE and is worth just as much: neither surface may take provenance.
+       On `ghost_trains` the pill would part from the gate after a Blood Price, where the buyer keeps the
+       marker and gains no gilding. */
     for (const file of ["components/ContextualSubPanel.tsx", "components/FinancialLedger.tsx"]) {
       const source = readStripped(file);
       expect(source).toContain("ghosts={company.carcosan_trains}");
-      expect(source).toContain("ghosts={company.ghost_trains}");
+      expect(source).not.toContain("ghosts={company.ghost_trains}");
     }
     expect(readStripped("panels/ContextualActionBar.tsx"))
       .toContain("ghosts={activeCorporation.carcosanTrains}");

@@ -220,7 +220,19 @@ describe("the capacity pill stops counting the gift", () => {
       /* AND THE PILL KEEPS `ghost_trains`, which is the half of the split easiest to undo: the pill counts
          LIMIT SLOTS and the exemption is what it wants, while the chip draws the SIGN and wants the
          identity. One word apart, in the same file, meaning opposite things. */
-      for (const pill of pills) expect(pill).toContain("ghosts={company.ghost_trains}");
+      /* ==================================================================
+          AND SINCE #1674 (S9-2) THE PILL TAKES `carcosan_trains`
+         ==================================================================
+         THE SENTENCE ABOVE IS STILL THIS CASE'S CLAIM -- the pill counts LIMIT SLOTS, so it wants the
+         exemption and not the identity -- and the exemption moved. #1672 made it the whole Carcosa lifetime
+         (`carcosan_trains`) and left `ghost_trains` meaning SYNTHETIC PROVENANCE alone; these two call sites
+         were the last readers still on the old field, and on it they would part from the gate after a Blood
+         Price: the buyer keeps the marker and gains no gilding, so the pill would exempt an ordinary train
+         the gate counts. Reported at the owner's full-suite gate and fixed on the owner's instruction.
+         The chips beside each pill take `carcosan_trains` too, for the opposite reason -- they draw the SIGN
+         -- which is why both call sites still say which they mean. */
+      for (const pill of pills) expect(pill).toContain("ghosts={company.carcosan_trains}");
+      for (const pill of pills) expect(pill).not.toContain("ghosts={company.ghost_trains}");
     }
   });
 
@@ -233,10 +245,22 @@ describe("the capacity pill stops counting the gift", () => {
 
   it("agrees with the gate that already exempts it", () => {
     /* THE TWO SURFACES, READ TOGETHER. Both call the same helper with the same three arguments, which is what
-       makes them one answer rather than two that happen to match today. */
+       makes them one answer rather than two that happen to match today.
+       ==================================================================
+        UPDATED BY #1672 (S9-2): THE EXEMPTION'S SOURCE MOVED, THE CLAIM DID NOT
+       ==================================================================
+       This batch passed `ghost_trains` because that WAS the train-limit exemption: #1046 read the gift's
+       ruling as "bypasses train limit checks until the end of the Operating Round", and `expireGhostTrains`
+       emptied the list at that boundary. The owner ruled otherwise (2026-09-19) -- the gilded train is exempt
+       for its ENTIRE Carcosa lifetime -- so the exemption is read from `carcosan_trains`, which is that
+       lifetime, and `ghost_trains` is left meaning SYNTHETIC PROVENANCE alone ("this train never came off the
+       depot shelf", read by `depotInventory` and `realDieselPurchased`).
+       THE CLAIM THIS CASE MAKES IS UNCHANGED and is the reason it is updated rather than deleted: the gate
+       and the panel must ask ONE question with the SAME three arguments. Only the third argument's name
+       moved. Putting `ghost_trains` back here would put provenance back into train-limit authority. */
     expect(readStripped("gameEngine/trainPurchaseGate.ts"))
-      .toContain("countableTrainCount(owned, company.pending_rust_trains, company.ghost_trains)");
+      .toContain("countableTrainCount(owned, company.pending_rust_trains, company.carcosan_trains)");
     expect(readStripped("components/TrainPurchasePanel.tsx"))
-      .toContain("countableTrainCount(buyer?.owned_trains, buyer?.pending_rust_trains, buyer?.ghost_trains)");
+      .toContain("countableTrainCount(buyer?.owned_trains, buyer?.pending_rust_trains, buyer?.carcosan_trains)");
   });
 });

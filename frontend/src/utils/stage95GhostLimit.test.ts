@@ -190,7 +190,8 @@ describe("D. trigger set N, the whole of N+1, then the fog", () => {
 /* E. BLOOD PRICE — #1090 PRESERVED                                    */
 /* ------------------------------------------------------------------ */
 
-const { settleTrainSale } = require("../gameEngine/sandboxSession") as typeof import("../gameEngine/sandboxSession");
+const { settleTrainSale, applySandboxAction } =
+  require("../gameEngine/sandboxSession") as typeof import("../gameEngine/sandboxSession");
 
 describe("E. the Blood Price burns the gilding off (#1090, authoritative and unchanged)", () => {
   const SELLER = 1;
@@ -333,6 +334,129 @@ describe("E. the Blood Price burns the gilding off (#1090, authoritative and unc
     expect(of(after, SELLER).ghost_trains).toBeUndefined();
     expect(of(after, BUYER).ghost_trains).toBeUndefined();
     expect(of(after, BUYER).owned_trains).toEqual(["4"]);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* G. THE FIELD SPLIT, GUARDED (#1674 / #1675)                         */
+/* ------------------------------------------------------------------ */
+
+/** A board `applySandboxAction` can actually run on: the reducer reads the seat cursor on every action. */
+const fogBoard = (company: Partial<PublicCompanyState>, macroRound = 6): GameStateResponse =>
+  ({
+    current_round_type: "OperatingRound",
+    macro_round_number: macroRound,
+    sub_round_index: 1,
+    operating_sub_phase: "Routes",
+    active_operating_order: [1],
+    active_corporation_index: 0,
+    player_addresses: ["p1"],
+    active_player_index: 0,
+    priority_deal_index: 0,
+    consecutive_passes: 0,
+    private_companies: [],
+    rules_engine_version: 7,
+    public_companies: [co({ company_id: 1, ticker: "B&O", president: "p1", treasury: "300", ...company })],
+  }) as unknown as GameStateResponse;
+
+const fog = (state: GameStateResponse, model: string) =>
+  applySandboxAction(state, { YellowSignEvent: { game_id: 0, protocol_id: 1, stage: "fog", model } } as never);
+
+describe("G. the two markers cannot be reconflated", () => {
+  /* THIS SPLIT HAS NOW PRODUCED THREE MISSED PROPAGATION SITES -- the Blood Price buyer (#1673), two capacity
+     pills (#1674) and the fog's own removal (#1675) -- so the invariants get a guard of their own rather than
+     living only inside the cases that happened to notice. Behavioural where a behaviour exists; a source pin
+     only for the JSX call sites, which have no reachable behaviour without a renderer. */
+
+  it("the fog removes the train, its gilding AND its provenance — one occurrence of each", () => {
+    const c = fog(
+      fogBoard({ owned_trains: ["4", "D"], ghost_trains: ["D"], carcosan_trains: ["D"], is_carcosan: true, carcosan_doom_after_macro_round: 4 }),
+      "D",
+    ).public_companies[0];
+    expect(c.owned_trains).toEqual(["4"]);          // 1. the occurrence is gone
+    expect(c.carcosan_trains).toEqual([]);          // 2. no active marker remains
+    expect(c.ghost_trains).toEqual([]);             // 3. no provenance marker for a train that does not exist
+    expect(c.carcosan_doom_after_macro_round).toBeUndefined();
+  });
+
+  it("…and exactly one, when a physical and a synthetic train share a model", () => {
+    /* MULTISET, not set: a bought 6 beside a gilded 6 loses one train, one gilding and one marker. */
+    const c = fog(
+      fogBoard({ owned_trains: ["6", "6"], ghost_trains: ["6"], carcosan_trains: ["6"], is_carcosan: true, carcosan_doom_after_macro_round: 4 }),
+      "6",
+    ).public_companies[0];
+    expect(c.owned_trains).toEqual(["6"]);
+    expect(c.carcosan_trains).toEqual([]);
+    expect(c.ghost_trains).toEqual([]);
+    // The surviving 6 is an ordinary train and counts.
+    expect(countableTrainsOf(c)).toEqual(["6"]);
+  });
+
+  it("4. depotInventory is not distorted by a stale provenance marker after the fog", () => {
+    /* `depotInventory` subtracts ghosts from the tally, so a marker left behind would keep one printed train
+       off the bank's shelf for the rest of the game. Measured across every tier, against the same board with
+       the synthetic train never gifted at all. */
+    const gifted = fogBoard({ owned_trains: ["4", "6"], ghost_trains: ["6"], carcosan_trains: ["6"], is_carcosan: true, carcosan_doom_after_macro_round: 4 });
+    const neverGifted = fogBoard({ owned_trains: ["4"] });
+    const rows = (st: GameStateResponse) => depotInventory(st).map((r) => `${r.tier}:${r.remaining}`).join(" ");
+    expect(rows(fog(gifted, "6"))).toBe(rows(neverGifted));
+  });
+
+  it("5. realDieselPurchased is not distorted by a stale synthetic-D marker after the fog", () => {
+    /* A stale marker would keep masking a real Diesel; its absence must not invent one either. */
+    const doomedD = fogBoard({ owned_trains: ["6", "D"], ghost_trains: ["D"], carcosan_trains: ["D"], is_carcosan: true, carcosan_doom_after_macro_round: 4 });
+    expect(realDieselPurchased(doomedD)).toBe(false);
+    const fogged = fog(doomedD, "D");
+    expect(fogged.public_companies[0].ghost_trains).toEqual([]);
+    expect(fogged.public_companies[0].owned_trains).toEqual(["6"]);
+    expect(realDieselPurchased(fogged)).toBe(false);
+  });
+
+  it("a Blood Price buyer's cleansed train is counted by the DISPLAY exactly as the gate counts it", () => {
+    /* #1674's behaviour, without a renderer: `CapacityPill` computes `countableTrainCount(trains, reprieved,
+       ghosts)` and the two call sites now feed it `carcosan_trains`. Fed provenance instead, it would exempt
+       the cleansed train and read one under the gate. Both readings are computed here so the divergence is
+       measured rather than asserted. */
+    const before = {
+      macro_round_number: 3,
+      public_companies: [
+        co({ company_id: 1, ticker: "B&O", owned_trains: ["4", "D"], ghost_trains: ["D"], carcosan_trains: ["D"], is_carcosan: true, carcosan_doom_after_macro_round: 4, treasury: "500" }),
+        co({ company_id: 2, ticker: "PRR", owned_trains: ["3"], treasury: "900" }),
+      ],
+    } as unknown as GameStateResponse;
+    const afterSale = settleTrainSale(before, 2, 1, "D", "400");
+    const buyer = afterSale.public_companies.find((c) => c.company_id === 2)!;
+    expect(buyer.ghost_trains).toEqual(["D"]);
+    expect(buyer.carcosan_trains ?? []).toEqual([]);
+    const byGilding = countableTrainCount(buyer.owned_trains, buyer.pending_rust_trains, buyer.carcosan_trains);
+    const byProvenance = countableTrainCount(buyer.owned_trains, buyer.pending_rust_trains, buyer.ghost_trains);
+    expect(byGilding).toBe(2);      // what the gate says, and now what the pill says
+    expect(byProvenance).toBe(1);   // what the pill USED to say -- one under the gate
+    expect(byGilding).not.toBe(byProvenance);
+  });
+
+  it("every limit reader and every capacity call site takes the gilding; the provenance readers take the marker", () => {
+    /* THE SOURCE PIN, for the surfaces that have no behaviour to measure. Split by ROLE so a future reader
+       sees which field each question wants. */
+    for (const file of [
+      "gameEngine/trainPurchaseGate.ts",
+      "gameEngine/trainDiscard.ts",
+      "gameEngine/trainSaleAuthority.ts",
+      "gameEngine/derivedActions.ts",
+      "components/TrainPurchasePanel.tsx",
+    ]) {
+      expect(readStripped(file)).toContain("carcosan_trains");
+    }
+    // The two capacity pills -- #1674's fix, and the sites this split missed twice.
+    for (const file of ["components/ContextualSubPanel.tsx", "components/FinancialLedger.tsx"]) {
+      const src = readStripped(file);
+      expect(src).toContain("ghosts={company.carcosan_trains}");
+      expect(src).not.toContain("ghosts={company.ghost_trains}");
+    }
+    // And the provenance readers still take the provenance.
+    const PHASE = readStripped("gameEngine/gamePhase.ts");
+    expect(PHASE).toContain("const ghosts = [...(company.ghost_trains ?? [])];");
+    expect(PHASE).toContain("export function realDieselPurchased(");
   });
 });
 

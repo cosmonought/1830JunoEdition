@@ -884,12 +884,13 @@ function CorporationAssetsSection({
                         compact
                         reprieved={company.pending_rust_trains}
                         // Design note #1088: the same omission as the chips beside it -- see the subpanel.
-                        /* Design note #1089: THE PILL TAKES THE EXEMPTION, NOT THE IDENTITY. `ghost_trains`
-                        is "occupies no limit slot" and expires at the end of the OR; `carcosan_trains` is the
-                        gold trim and lasts an OR set longer. The pill is counting slots, so it wants the
-                        first -- and this is the one place the two are easy to swap, which is why both call
-                        sites say which they mean. */
-                        ghosts={company.ghost_trains}
+                        /* Design note #1674 (S9-2): THE PILL TAKES THE EXEMPTION, AND THE EXEMPTION MOVED
+                        from `ghost_trains` (an OR-long grace) to `carcosan_trains` (the whole gilded
+                        lifetime) -- see the subpanel's copy of this note. The pill counts SLOTS, so it wants
+                        the exemption; on `ghost_trains` it would exempt a Blood-Price buyer's ordinary
+                        train, which the gate counts. `ghost_trains` is synthetic provenance now, and the
+                        chips above take the identity. */
+                        ghosts={company.carcosan_trains}
                       />
                     </td>
                     <td style={styles.tdNumB}>

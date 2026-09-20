@@ -956,9 +956,14 @@ export default function ContextualActionBar({
     trains: readonly string[];
     /** Design note #1004: the models on their final run under Gentle Rust. Empty in every standard game. */
     reprievedTrains: readonly string[];
-    /** Design note #1046: the Yellow Sign's gift, exempt from the limit until the round ends. */
+    /** THE TRAIN-LIMIT EXEMPTION, and since #1672 (S9-2) it is fed from `carcosan_trains`, not from
+     *  `ghost_trains` -- the gilded train is exempt for its whole Carcosa lifetime rather than until the
+     *  Operating Round ends. The FIELD NAME is #1046's and is left alone deliberately: renaming it would
+     *  touch two owner-heavy files for a word, and the value is what the limit reads. See `App.tsx`'s
+     *  view-model builder for the feed and `gameState.ts` #1089 for the split. */
     ghostTrains: readonly string[];
-    /** Design note #1089: the gold-trimmed train, which outlives `ghostTrains` by an OR set. */
+    /** Design note #1089: the gold-trimmed train — the same list `ghostTrains` above is fed from, read here
+     *  for the chips' Yellow Sign icon rather than for the count. */
     carcosanTrains: readonly string[];
     /** Design note #1089: the permanent curse, which outlives the train itself. */
     isCarcosan: boolean;

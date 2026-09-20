@@ -62,7 +62,7 @@ import { effectiveActions } from "./logRevert";
 
 /** The rules engine this build carries. Bump it, and add a line below, when a deployment changes what a
  *  stored log replays to. Do NOT bump it for UI, protocol or narration changes. */
-export const RULES_ENGINE_VERSION = 6;
+export const RULES_ENGINE_VERSION = 7;
 
 /** Every version this engine can replay faithfully. One entry until somebody builds a versioned reducer;
  *  the point of the list is that "supported" is an explicit statement rather than "whatever is running". */
@@ -174,6 +174,45 @@ export const RULES_ENGINE_CHANGELOG: ReadonlyArray<{ version: number; note: stri
       "A version-5 log carries an operating order frozen on a stale chart, home tokens placed at the float, " +
       "presidencies settled by holdings order and M&H exchanges applied unjudged, so it is refused, never " +
       "reinterpreted.",
+  },
+  {
+    version: 7,
+    note:
+      "Stage 9 (9.1-9.5, 2026-09-18/19, #1620-#1673): the board, the tile catalog and the Yellow Sign are " +
+      "authoritative, and the turn's randomness is the server's. 9.2: `immutableHexRefusal` is rule 0 of the " +
+      "placement filter, ported from `hexmap.rs` and shared with the click gate so the message a player is " +
+      "shown and the refusal a replay applies cannot drift; `priorTopologyAt` feeds rule 5 the hex's LIVE " +
+      "topology, so board-PRINTED track is preserved on a first lay and not only track a tile laid; revised " +
+      "6.2.2 (4)'s station anchoring and slot capacity move from the shell into the reducer " +
+      "(`stationAnchorAuthority`), ahead of every mutation; and the Level Playing Field gains T-02's seventh " +
+      "board tile, the printed straight at M-11, which is in the INITIAL grid and therefore changes the board " +
+      "every LPF log is replayed against from index 0. 9.3: revised 6.2.2 (4)'s separation clause is tile " +
+      "metadata on old #59 alone, and `separationPreserved` is rule 5b of the filter -- the first rule to " +
+      "compare CONNECTIVITY rather than segments, so the two pre-printed exits of a #59 can never be joined " +
+      "by an upgrade; #63's physical supply is corrected 1 -> 4 ahead of every scenario removal; and the " +
+      "three tiles whose printed old numbers the official errata voids carry a canonical rules identity, " +
+      "with the integers kept as the stable storage key. 9.4a: a Blood Price landing is stamped as a market " +
+      "ARRIVAL, so the 6.0 tie-break can see it. 9.4b: the D&H's free station is judged by the D&H's own " +
+      "conditions at both locks -- its hex, the owning corporation, once, and the base game's rule that a " +
+      "station not placed on the turn the tile is laid needs an ordinary connected one -- and a refusal no " +
+      "longer consumes the private's power. 9.4c: the stock market steps once per PHYSICAL CERTIFICATE rather " +
+      "than once per 10%, so the Scenario-D other-20 sold as a block drops the token one row and not two; " +
+      "proceeds stay percentage-based. 9.4d: the Yellow Sign's outcome is DERIVED by the authoritative " +
+      "reducer from the committed board -- the stage, the corporation's train, the Mark's award and the gift " +
+      "are no longer carried on the message, and a client cannot choose the result of a random event; the " +
+      "turn's draw and turn key are supplied by the SERVER at ingress before the entry is committed, so a " +
+      "crafted client can no longer grind seeds, and the playtest waiver is dropped at ingress and refused " +
+      "by the reducer on any pinned board. 9.5: the Bank Pool caps at FIVE PHYSICAL CERTIFICATES rather than " +
+      "50 percentage points (the Scenario-D other-20 is one card); the C&SL's special is a bonus LAY with no " +
+      "upgrade right; the Mark nullifies only the vanished train's run and the fleet's other legal revenue " +
+      "still pays; and the Carcosa lifecycle is corrected -- the gilded train's train-limit exemption lasts " +
+      "as long as the gilding instead of expiring at the next Operating Round boundary (which had been " +
+      "trimming an ORDINARY train in its place), the doom clock starts on whichever of the gift and the first " +
+      "REAL Diesel purchase lands second, the gift's model is the depot's lowest-value train rather than the " +
+      "phase's tier, and a Blood Price carries the train's SYNTHETIC provenance to the buyer while burning " +
+      "the gilding off. A version-6 log carries tile lays judged without the board's printed topology, " +
+      "station placements judged only in the shell, Yellow Sign outcomes chosen by a client and market steps " +
+      "walked per ten percent, so it is refused, never reinterpreted.",
   },
 ];
 

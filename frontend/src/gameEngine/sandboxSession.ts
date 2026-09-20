@@ -6188,6 +6188,22 @@ function applyYellowSignOutcome(
       const at = survivors.indexOf(model);
       if (at >= 0) survivors.splice(at, 1);
     }
+    /* ==================================================================
+        DESIGN NOTE 1675 (S9-2): THE FOG TAKES THE TRAIN, SO IT TAKES ITS PROVENANCE TOO
+       ==================================================================
+       THE THIRD MULTISET, AND IT WAS BEING LEFT BEHIND. This arm removed one occurrence from `owned_trains`
+       and one from `carcosan_trains` and never touched `ghost_trains`. That was invisible while
+       `expireGhostTrains` emptied the list at every Operating Round boundary -- something else always cleaned
+       up after it -- and #1672 deleted that function, so the marker now outlives the train forever.
+       A MARKER FOR A TRAIN THAT NO LONGER EXISTS IS A LIE TO TWO AUTHORITIES. `depotInventory` subtracts
+       ghosts from the tally, so a stale entry keeps one printed train off the bank's shelf for the rest of
+       the game; `realDieselPurchased` subtracts them before looking for a Diesel, so a stale synthetic D
+       keeps masking a real one. Exactly the fault #1673 fixed on the Blood Price path, on the path where the
+       train is destroyed rather than sold.
+       ONE OCCURRENCE, positionally, like the two removals above it. A corporation holding a bought 6 and a
+       gilded 6 loses one train, one gilding and one provenance marker -- never both copies, never none. */
+    const ghosts = company.ghost_trains ?? null;
+    const ghostAt = ghosts === null ? -1 : ghosts.indexOf(model);
     return {
       ...state,
       public_companies: state.public_companies.map((entry) =>
@@ -6196,6 +6212,7 @@ function applyYellowSignOutcome(
               ...entry,
               ...(survivors === null ? {} : { owned_trains: survivors }),
               carcosan_trains: survivingMarks,
+              ...(ghostAt < 0 ? {} : { ghost_trains: ghosts!.filter((_m, at) => at !== ghostAt) }),
               ...(survivingMarks.length === 0
                 ? { carcosan_doom_after_macro_round: undefined }
                 : {}),
@@ -6276,13 +6293,20 @@ function applyYellowSignOutcome(
             owned_trains: [...(entry.owned_trains ?? []), model],
             ghost_trains: [...(entry.ghost_trains ?? []), model],
             /* ==================================================================
-                DESIGN NOTE 1089: THREE MARKS, THREE CLOCKS, ONE GIFT
+                DESIGN NOTE 1089: THREE MARKS, ONE GIFT
+                — AMENDED BY #1672 / #1675 (S9-2): TWO CLOCKS BECAME ONE
                ==================================================================
-               `ghost_trains` IS THE LIMIT EXEMPTION and empties at the end of this Operating Round (#1046).
-               `carcosan_trains` IS THE IDENTITY -- the gold trim, the chip icon, the thing the doom clock
-               comes for -- and outlives it by a full OR set. Written together here and separated
-               everywhere after, because this is the one moment they are the same train for the same
-               reason. */
+               THIS NOTE USED TO READ "`ghost_trains` IS THE LIMIT EXEMPTION and empties at the end of this
+               Operating Round (#1046)", and that is the superseded ruling. The owner ruled the exemption
+               coextensive with the gilding, so the two lists now answer two questions that differ in KIND
+               rather than in duration:
+               `ghost_trains`     SYNTHETIC PROVENANCE -- "this train never came off the depot shelf". Read by
+                                  `depotInventory` and `realDieselPurchased`, carried to the buyer by a Blood
+                                  Price (#1673), and removed with the train by the fog (#1675).
+               `carcosan_trains`  THE IDENTITY -- the gold trim, the chip icon, the train-limit exemption, and
+                                  the thing the doom clock comes for.
+               Written together here because this is the one moment they are the same train for the same
+               reason; separated everywhere after, and they now END together too. */
             carcosan_trains: [...(entry.carcosan_trains ?? []), model],
             /* THE CURSE IS ON THE COMPANY. Ruled: "the only way a corporation loses the flag is by
                successfully transferring the Carcosa train". It survives the train's own destruction, which

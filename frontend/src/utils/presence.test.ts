@@ -163,6 +163,7 @@ describe("the label comes from state, and only the join comes from presence", ()
   };
   const app = read("../App.tsx");
   const CHIPS = read("watcherRouteChips.ts").replace(/\/\*[\s\S]*?\*\//g, "");
+  const OVERLAY_SOURCE = read("routeOverlaySource.ts").replace(/\/\*[\s\S]*?\*\//g, "");
 
   it("names the actual train rather than its index", () => {
     /* Design note #740, corrected on report: "Nobody knows what 'Train 1' is. Have it display the actual
@@ -193,8 +194,13 @@ describe("the label comes from state, and only the join comes from presence", ()
     /* The join key, and the one thing here that is still a runtime decision. Attributing a rival's routes to
        the wrong fleet would put a 6-Train's revenue on a 2-Train's chip, which is worse than a vague label.
        RE-SPELLED BY #875: presence carries one entry per connected PLAYER, so the entry that matters is
-       whoever is publishing for the company now operating -- not whoever happens to be first. */
-    expect(app).toContain("rivalPresence.find((entry) => entry.actingCompanyId === actingProtocolId)");
+       whoever is publishing for the company now operating -- not whoever happens to be first.
+       MOVED BY [PRESENTATION CORRECTION]: the join itself now lives in `selectActingPresenceEntry`
+       (`routeOverlaySource.ts`), shared by this chip row AND the map overlay in `App.tsx`'s
+       `manualRouteOverlay` -- the two surfaces used to compute this independently, which is how the map
+       came to draw presence entries the chip row would never have shown. One function, read by both. */
+    expect(OVERLAY_SOURCE).toContain("entry.actingCompanyId === actingProtocolId");
+    expect(app).toContain("selectActingPresenceEntry(rivalPresence, actingProtocolId)");
     /* AND `null` WHEN NOBODY IS PUBLISHING, which is the ordinary state at the start of Run Routes and the
        exact case #875 found producing no row at all. */
     expect(app).toContain("actorDrafts: actor?.routeDrafts ?? null,");

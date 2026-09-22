@@ -137,7 +137,9 @@ function Harness({ which, withOpener, extraOpener }: { which: Which; withOpener:
       )}
       {which === "revenue" && open && <PrivateRevenueModal round={ROUND} roundLabel="OR 1" onAcknowledge={acknowledge} />}
       {which === "fleet" && open && (
-        <FleetLossModal notice={FLEET} silenced={false} onToggleSilence={() => {}} onAcknowledge={acknowledge} />
+        /* Design note (VF-8): `silenced`/`onToggleSilence` are gone with the per-corporation opt-out;
+           this modal has one control again. The dismissal property under test is untouched. */
+        <FleetLossModal notice={FLEET} onAcknowledge={acknowledge} />
       )}
     </>
   );

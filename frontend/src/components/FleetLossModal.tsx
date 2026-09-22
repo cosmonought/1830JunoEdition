@@ -36,35 +36,32 @@ import { NativeModal } from "./NativeModal";
 import {
   noticeBody,
   noticeHeadline,
-  silenceLabel,
   type FleetLossNotice,
 } from "../utils/fleetLossNotice";
 
 export interface FleetLossModalProps {
   /** The one notice being shown. `null` renders nothing -- notices queue and are shown one at a time. */
   notice: FleetLossNotice | null;
-  /** Whether this cause is already silenced for this corporation, as the store has it on open. */
-  silenced: boolean;
-  onToggleSilence: (silenced: boolean) => void;
   /** Acknowledge and move on. The ONLY way out of this modal. */
   onAcknowledge: () => void;
 }
 
 export function FleetLossModal({
   notice,
-  silenced,
-  onToggleSilence,
   onAcknowledge,
 }: FleetLossModalProps) {
   /* ==================================================================
-      THE CHECKBOX IS LOCAL, AND IT HAS TO BE
+      DESIGN NOTE (VF-8): THE LOCAL CHECKBOX STATE IS GONE WITH THE CHECKBOX
      ==================================================================
-     Ticking "don't notify me about this" makes the notice silenced, and a modal whose visibility is computed
-     from the silence store would therefore CLOSE ITSELF the instant the player ticked the box -- before they
-     had read the thing it was interrupting them for, and without their acknowledgement being recorded.
-     So the box owns its own state and the write goes out to the store immediately; the caller mounts a fresh
-     instance per notice (`key`), which is what re-seeds it. The player still leaves by the one button. */
-  const [checked, setChecked] = React.useState(silenced);
+     IT READ: "ticking 'don't notify me about this' makes the notice silenced, and a modal whose
+     visibility is computed from the silence store would therefore CLOSE ITSELF the instant the player
+     ticked the box -- before they had read the thing it was interrupting them for, and without their
+     acknowledgement being recorded. So the box owns its own state and the write goes out to the store
+     immediately." That reasoning was correct and is now about nothing: both fleet-loss causes are gated
+     on tutorial mode, the per-corporation store is retired (`fleetLossNotice.ts`), and this modal has
+     one control again -- the button that acknowledges it. Recorded rather than deleted, because the
+     trap it names (a modal whose visibility is derived from a value the modal itself writes) is a real
+     one that the next dismissible-preference feature would walk straight into. */
 
   if (!notice) return null;
 
@@ -134,35 +131,10 @@ export function FleetLossModal({
           </span>
         </div>
 
-        <label style={styles.silenceRow}>
-          <input
-            type="checkbox"
-            checked={checked}
-            onChange={(event) => {
-              setChecked(event.target.checked);
-              onToggleSilence(event.target.checked);
-            }}
-            style={styles.checkbox}
-          />
-          <span style={styles.rowText}>
-            <span style={styles.rowLabel}>{silenceLabel(notice)}</span>
-            {/* ==================================================================
-                 DESIGN NOTE 992: THE CAPTION SAID "MODAL" TO A PLAYER
-                ==================================================================
-                RULED: "Normal people don't use the word 'modals.'" With the replacement given verbatim.
-                AND THE OLD SENTENCE WAS WRITTEN FROM THE INSIDE in more than that one word -- "this kind of
-                event" is the code's vocabulary for `FleetLossCause`, and "for the rest of this session" is a
-                fact about `sessionStorage`. Every clause described the implementation to somebody who wanted
-                to know what the tick box does.
-                THE HALF WORTH KEEPING SURVIVES INTACT and is the reason the toggle is safe to offer at all:
-                nothing is hidden, the Activity Log still has it. That is the sentence's second half, in the
-                ruling's own words. */}
-            <span style={styles.rowCaption}>
-              This disables Rust/Train Limit notifications for this company. They will still print in the
-              Activity Log.
-            </span>
-          </span>
-        </label>
+        {/* Design note (VF-8): THE SILENCE CHECKBOX IS GONE. #896a's per-corporation opt-out existed
+             because this modal was unavoidable; both causes are gated on tutorial mode now, so the
+             answer to "stop telling me this" is one application-wide setting rather than a box ticked
+             once per corporation per cause. See `fleetLossNotice.ts` for the full retirement. */}
 
         <div style={styles.footer}>
           <button type="button" style={styles.primaryButton} onClick={onAcknowledge} autoFocus>

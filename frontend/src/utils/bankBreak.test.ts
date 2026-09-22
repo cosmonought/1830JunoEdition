@@ -20,11 +20,24 @@ describe("the Bank Break countdown (design note #1410)", () => {
     expect(bankBreakWarning(Number.NaN)).toBeNull();
   });
 
-  it("sits beside the phase badge on both rails, pulsing only when critical", () => {
+  it("sits beside the phase badge on both rails", () => {
+    /* ==================================================================
+        AMENDED BY VF-6: THE CAPSULE BECAME A TICKET, AND THE MARKUP MOVED
+       ==================================================================
+       IT PINNED THE INLINE SPAN -- `&#9888; {bankBreak.label}` twice, the `app-phase-shift-critical`
+       ternary and the `phaseShiftBadgeCritical`/`Warn` spread -- which was the right assertion while the
+       Bank countdown was one more alert capsule written out at both call sites. VF-6 makes it one
+       continuous object across three states (amber, critical, and the post-break railroad ticket), so
+       that markup now lives in `BankTicket.tsx` and the bar passes a reading to it.
+       WHAT THIS CASE IS ACTUALLY ABOUT SURVIVES UNCHANGED and is what it still checks: the Bank indicator
+       is on BOTH rails, beside the phase, and there is exactly one of it per rail. The pulse, the tones
+       and the silhouette are `components/bankTicketFlourish.test.tsx`'s, where they can be asserted
+       against a rendered badge rather than against a string.
+       THE THRESHOLD CASES ABOVE ARE UNTOUCHED -- #1410's arithmetic is this file's real subject and this
+       batch did not go near it. */
     const BAR = readStripped("panels/ContextualActionBar.tsx");
-    expect(BAR.split("&#9888; {bankBreak.label}").length - 1).toBe(2);
-    expect(BAR).toContain('className={bankBreak.critical ? "app-phase-shift-critical" : undefined}');
-    expect(BAR).toContain("...(bankBreak.critical ? styles.phaseShiftBadgeCritical : styles.phaseShiftBadgeWarn),");
+    expect((BAR.match(/<BankTicket reading=\{bankBreak\}/g) ?? []).length).toBe(2);
+    expect(BAR).toContain("const bankBreak = bankTicketReading(bankBroken ?? null, bankRemaining);");
     const APP = readStripped("App.tsx");
     expect(APP).toContain("bankRemaining={gameState ? Number(gameState.virtual_bank_vgp) : null}");
   });

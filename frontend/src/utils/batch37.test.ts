@@ -146,6 +146,13 @@ describe("a dismissed notice stays dismissed into the next round", () => {
     "4",
     3,
   );
+  /* Design note (VF-7): the silenceable cause, for the one case below that needs a toggle to exist.
+     Every other case here is about the DISMISSAL key, which is unchanged and still per cause. */
+  const [limit] = fleetLossNotices(
+    { companyId: 1, ticker: "PRR", rusted: [], discarded: ["2"] },
+    "4",
+    3,
+  );
 
   it("keys the dismissal on the event rather than the showing", () => {
     /* THE BUG, STATED AS THE PROPERTY THAT WAS MISSING. The key was `turnGuardKey(turn, company, cause)`, so
@@ -155,7 +162,7 @@ describe("a dismissed notice stays dismissed into the next round", () => {
   });
 
   it("suppresses the notice once it has been answered", () => {
-    expect(nextDueNotice([rust], () => false, new Set([noticeDismissKey(rust)]))).toBeNull();
+    expect(nextDueNotice([rust], new Set([noticeDismissKey(rust)]))).toBeNull();
   });
 
   it("does not suppress a different phase change's notice", () => {
@@ -166,14 +173,22 @@ describe("a dismissed notice stays dismissed into the next round", () => {
       "6",
       2,
     );
-    expect(nextDueNotice([later], () => false, new Set([noticeDismissKey(rust)]))).toBe(later);
+    expect(nextDueNotice([later], new Set([noticeDismissKey(rust)]))).toBe(later);
   });
 
-  it("does not let silencing stand in for having been seen", () => {
-    /* #896'S DISTINCTION, RE-ASSERTED because this batch rewrote the function that enforces it. A notice
-       skipped for being silenced was never dismissed, so switching the toggle back off raises it again. */
-    expect(nextDueNotice([rust], (n) => n.cause === "rust", new Set())).toBeNull();
-    expect(nextDueNotice([rust], () => false, new Set())).toBe(rust);
+  it("suppresses only the event that was answered", () => {
+    /* ==================================================================
+        AMENDED BY VF-8: SILENCING NO LONGER EXISTS TO BE TOLD APART FROM DISMISSAL
+       ==================================================================
+       THIS CASE WAS "does not let silencing stand in for having been seen" -- #896's distinction between
+       a standing per-corporation preference and "you have already seen this". VF-8 retires the
+       preference entirely (both causes are gated on tutorial mode now), so `nextDueNotice` takes the
+       dismissed set and nothing else, and there is no second state to confuse with it.
+       WHAT SURVIVES IS THE HALF THAT WAS ALWAYS THE POINT: a dismissal is per EVENT, so answering one
+       notice leaves an unrelated one standing. */
+    expect(nextDueNotice([limit], new Set())).toBe(limit);
+    expect(nextDueNotice([limit], new Set([noticeDismissKey(limit)]))).toBeNull();
+    expect(nextDueNotice([limit], new Set([noticeDismissKey(rust)]))).toBe(limit);
   });
 });
 

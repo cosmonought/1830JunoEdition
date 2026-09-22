@@ -387,7 +387,7 @@ import { SeatPinModal } from "./components/SeatPinModal";
 // Design note #818: the D&H's free station, asked for rather than left to be noticed.
 import { filterSandboxPlacements, isTokenableHex } from "./components/sandboxTileLegality";
 // Design note #716: the whole tray at every facing, so the glow can ask what actually fits a hex.
-import { describeHex, localCatalogPlacements, tileCityCount } from "./components/hexGeometry";
+import { boardHexLabel, describeHex, localCatalogPlacements, tileCityCount } from "./components/hexGeometry";
 
 // Design note #823: `describeTokenMigration` is no longer imported -- the ring stopped printing its
 // sentence. The function survives in `tokenMigration.ts` with its own note; the arithmetic beside it is
@@ -476,6 +476,58 @@ import { gameHistoryFrom, type GameHistory } from "./utils/gameHistory"; // #141
 import { replaySnapshotAtRound, type ReplaySnapshot } from "./utils/roundReplay"; // #1425
 import RoundScrubber from "./components/RoundScrubber";
 import { bankIsBroken, rankPlayers, PLACEHOLDER_TOTAL_ANTE, type PlayerStanding } from "./gameEngine/endgame";
+/* ==================================================================
+    DESIGN NOTE (VF-6): THE BANK'S RAILROAD TICKET
+   ==================================================================
+   Same shape as VF-4 above: this shell notices the edge between two SETTLED states and hands the
+   result down; `BankTicket.tsx` plays it; `bankBreakFlourish.ts` owns the schedule.
+   `bankBrokenStatus` is the ONE place the endgame countdown is derived, and it derives it from the
+   reducer's own calendar rather than from anything this shell remembers. */
+import { bankBrokenStatus } from "./utils/bankBreakEndgame";
+import { bankBreakWarning, bankTicketReading } from "./utils/bankBreak";
+import { BankTicket } from "./components/BankTicket";
+import {
+  BANK_BREAK_SFX,
+  BANK_BREAK_TOTAL_MS,
+  bankBreakCueAtMs,
+  type BankBreakFlipEvent,
+} from "./components/bankBreakFlourish";
+/* ==================================================================
+    DESIGN NOTE (VF-7): RUST, AND WHAT IT LOOKS LIKE WHEN A TRAIN IS DESTROYED
+   ==================================================================
+   Same shape as VF-4 and VF-6: this shell notices the authoritative event between two SETTLED states
+   and hands the result down; `TrainBadges.tsx` plays it; `trainRustFlourish.ts` owns the schedule.
+   THE EVENT IS THE EXISTING NARRATORS' OWN ANSWER. `describeFleetLosses` and `describeReprieveExpiries`
+   are already the authority on which trains rust and whose they were (#704, #1002, #1099); this batch
+   adds no second derivation, and in particular does not look at the phase tier, the model numbers or a
+   warning disappearing. `RUST_TOTAL_MS` is the full-motion upper bound for clearing a stale event, the
+   same convention VF-3 records for the float. */
+import {
+  destroyedRustedModels,
+  RUST_SFX,
+  RUST_TOTAL_MS,
+  rustCueAtMs,
+  rustMilestoneMs,
+  type RustedFleet,
+  type RustFlourishEvent,
+  type RustMilestone,
+} from "./components/trainRustFlourish";
+/* ==================================================================
+    DESIGN NOTE (VF-8): THE TRAIN-LIMIT DISCARD, WHICH IS A TRANSFER AND NOT A LOSS
+   ==================================================================
+   Raised from the authoritative `DiscardTrain` dispatch and nowhere else -- not from a phase change, not
+   from an over-limit state, not from the existence of an obligation. The president has to choose first,
+   and `msg.DiscardTrain.model_type` is that choice; `discardedOccurrence` takes the reducer's own
+   position for it so the chip that animates is the chip whose slot the reducer emptied. */
+import {
+  DISCARD_SFX,
+  DISCARD_TOTAL_MS,
+  discardCueAtMs,
+  discardMilestoneMs,
+  discardedOccurrence,
+  type DiscardMilestone,
+  type TrainDiscardEvent,
+} from "./components/trainDiscardFlourish";
 import { turnGuardKey } from "./gameEngine/turnGuardKey";
 import {
   CURRENT_RULES_REVISION, // #1443
@@ -509,10 +561,8 @@ import {
 } from "./utils/closeRoomPayout";
 import {
   fleetLossNotices,
-  isNoticeSilenced,
   nextDueNotice,
   noticeDismissKey,
-  setNoticeSilenced,
   type FleetLossNotice,
 } from "./utils/fleetLossNotice";
 import { dividendRefused, operatingCorporationId } from "./gameEngine/dividendGate";
@@ -661,12 +711,13 @@ import {
 } from "./gameEngine/privateExchange";
 import { effectiveActions, undoReachFor } from "./gameEngine/logRevert";
 import { buildSandboxLogExport } from "./utils/logExport";
-import { RIVAL_ROUTE_INDEX_BASE, watcherTrainDrafts } from "./utils/watcherRouteChips";
+import { watcherTrainDrafts } from "./utils/watcherRouteChips";
 import { autoSkipExit } from "./gameEngine/autoSkipExit";
 // Design note #1247: the accepted offer's purchase, owed by the board and sent here only where no server can.
 import { nextDerivedAction } from "./gameEngine/derivedActions";
 import { overrunsReach, reachForDrafting } from "./gameEngine/trainReach";
 import { editRouteDraft } from "./utils/routeDraftEdit";
+import { isRouteBuilderArmed, selectActingPresenceEntry } from "./utils/routeOverlaySource";
 // Design note #1024: the splice is a rule about an array, so it lives where it can be tested as one.
 import { stopsRemovedByTruncating, truncateRouteAtHex } from "./utils/routeTruncate";
 import { runnableDrafts, runTrainsRefusal } from "./utils/runTrainsRules";
@@ -703,7 +754,30 @@ import { RevenueModifierFlash, type RevenueFlashSignal } from "./components/Reve
    across the shell is the treasury's vocabulary (#1272) and a certificate is not a dollar. */
 import { describeStockTransaction } from "./utils/stockTransaction";
 import { buildFocusSequence, PRESIDENCY_SFX } from "./components/stockTransferFocus";
-import type { StockTransactionEvent } from "./components/StockRoundPanel";
+import type { StockTransactionEvent, CorporationFloatEvent } from "./components/StockRoundPanel";
+/* Design note (VF-3): Approach C's own cue, timed by the card (`corporationFloatFocus.ts`) and played here
+   under the same master SFX switch every other cue goes through (#1041/#1062). `FLOAT_TOTAL_MS` is the
+   full-motion upper bound, used to clear a stale float event even when the card itself is playing the
+   shorter reduced-motion timeline -- harmless, because the card's own hook derives its progress from the
+   event's `token` and its own `prefersReducedMotion()` read, not from how long the shell holds the prop. */
+import { FLOAT_SFX, FLOAT_TOTAL_MS } from "./components/corporationFloatFocus";
+/* ==================================================================
+    DESIGN NOTE (VF-4): THE PHASE BADGE'S FLIP, RAISED HERE AND PLAYED THERE
+   ==================================================================
+   Same shape as VF-1/VF-3 above: this shell notices the edge between two SETTLED states and hands the
+   result down; `PhaseBadge.tsx` plays it; `phaseBadgeFlip.ts` owns the schedule and the comparison.
+   `PHASE_BADGE_TOTAL_MS` is the full-motion upper bound, used to clear a stale event even when the badge
+   is playing the shorter reduced-motion timeline -- harmless for the reason VF-3 records just above, that
+   the badge derives its own progress from the event's `token` and its own `prefersReducedMotion()` read
+   rather than from how long this shell holds the prop. */
+import {
+  phaseBadgeChange,
+  phaseBadgeMilestoneMs,
+  PHASE_BADGE_TOTAL_MS,
+  type PhaseBadgeFace,
+  type PhaseBadgeFlipEvent,
+  type PhaseBadgeMilestone,
+} from "./components/phaseBadgeFlip";
 import { RADIUS } from "./styles/typography";
 import { numberedPrivate, setPrivateOrder } from "./gameEngine/privateOrdinal";
 import { isUpgradeDeadEnd } from "./utils/tileUpgrades"; // #1390
@@ -732,11 +806,13 @@ const TURN_REFUSAL = "It is not your turn.";
 /** #1407: what a click during the reload's replay is told, in place of a turn refusal about a historical board. */
 const CATCHING_UP_BANNER = "Catching up with the room — try that again in a moment.";
 
-/* Design note #875: `RIVAL_ROUTE_INDEX_BASE` moved to `watcherRouteChips.ts`, which is now the thing that
-   applies it. #740's reasoning travels with it: "rivals' live routes are keyed above any real train index, so
-   a watcher's overlay can never collide with their own on the key three surfaces join by (#373)." Imported
-   rather than redeclared, because the map overlay below keys rival routes the same way and a second literal
-   1000 is how that join quietly breaks. */
+/* Design note #875: `RIVAL_ROUTE_INDEX_BASE` lives in `watcherRouteChips.ts`, which is now the only thing
+   that applies it -- for chip rows built with `watcherTrainDrafts` outside an Operating Round's Routes step,
+   where more than one corporation's chips can legitimately be on screen at once. #740's original reasoning
+   ("rivals' live routes are keyed above any real train index, so a watcher's overlay can never collide with
+   their own on the key three surfaces join by #373") no longer applies to `App.tsx`'s own map overlay: the
+   [PRESENTATION CORRECTION] pass removed the second, non-actor population that offset was guarding against
+   there (see `manualRouteOverlay`), so this file no longer imports or needs the constant. */
 
 /* Design note #887: `ownsPrivate` MOVED to `activePrivatePower.ts` as `ownsPrivateByCorporation`, with
    #727's note. It was module-private here -- not exported, so not callable, so the corporate half of #441's
@@ -814,6 +890,14 @@ let lastLogStampMs = 0;
    GATED AT THE TWO DOORS rather than at the three call sites, which is #748a's rule: a call site that has to
    remember is a call site that will forget, and the next toast added would have forgotten too. */
 let replayingHistory = false;
+
+/** Design note (VF-8): the one message shape this flourish reads, narrowed once rather than cast at the
+ *  call site -- the shell's `msg` is a union wide enough that an inline cast would compile for anything. */
+function isDiscardTrainMsg(
+  msg: unknown,
+): msg is { DiscardTrain: { protocol_id: number; model_type: string } } {
+  return typeof msg === "object" && msg !== null && "DiscardTrain" in msg;
+}
 
 /** The instant to stamp the next entry with. `at` when the caller has one (a
  *  replayed action), the replay clock when a derived line is being written
@@ -1293,6 +1377,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
   // Derived, not queried. Declared above runGameplayAction because its sandbox branch prices a route from the board and the era.
   // See docs/ai_architecture/state_machine.md - App.tsx #36
   const currentPhase = useMemo(() => derivePhase(gameState), [gameState]);
+  /* ==================================================================
+      DESIGN NOTE (VF-6): HOW MUCH GAME IS LEFT, ASKED ONCE
+     ==================================================================
+     Derived beside the phase and for the same reason: two surfaces want it (the action bar's ticket
+     and the spectator dock's) and a second derivation is how two counts of the same rounds come to
+     disagree. `bankBrokenStatus` reads the latch and the reducer's own calendar -- see
+     `utils/bankBreakEndgame.ts` for why the locked set length and the phase-derived one are different
+     questions. `null` while the Bank is solvent AND once the game has ended, which is what hands the
+     screen to the outro without this file knowing the outro exists. */
+  const bankBroken = useMemo(() => bankBrokenStatus(gameState), [gameState]);
   /* Design note #1312: the table's rules, resolved once -- `eraForPhase` needs them beside the phase at every
      site that used to index `ERA_FOR_PHASE_TINT` by tint. */
   const tableVariants = useMemo(() => resolveVariants(gameState?.variants), [gameState]);
@@ -2068,6 +2162,278 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
     }
   }, [gameEndReason]);
 
+
+  /* ==================================================================
+      DESIGN NOTE (VF-4): HOLDING A FOLLOW-ON SURFACE UNTIL THE BADGE HAS CHANGED
+     ==================================================================
+     Brief: "let the phase badge change visually before follow-on explanatory UI dominates attention", and
+     the named case is the Phase 3 notice modal covering the badge before the flip is perceptible.
+     A PRESENTATION HOLD, AND ONLY EVER THAT. What it delays is a toast and a notice -- both of which were
+     pure presentation before this batch and still are. The reducer has committed, the badge is already
+     holding the new phase, and every rule the two surfaces describe is already true. Nothing authoritative
+     is behind this timer, and the hold is a fifth of a second for the toast and half a second for the
+     notice: "do not create long serialization" is the constraint, and these are the shortest holds that
+     buy the ordering.
+     ONE SHARED HELPER rather than a timer ref per surface, because both want the same thing and a second
+     copy is a second thing to remember to clear on unmount. */
+  const flourishHoldTimersRef = useRef<number[]>([]);
+  /* ==================================================================
+      DESIGN NOTE (VF-7): THE BOOKKEEPING IS SHARED; THE SCHEDULE IS NOT
+     ==================================================================
+     Two flourishes now hold a follow-on surface, and they answer to two different timelines. What they
+     genuinely share is the timer list and its cleanup -- so THAT is extracted, and each caller resolves
+     its own milestone against its own schedule. A single helper taking a raw number would have pushed
+     the milestone lookup back out to the call sites, which is where VF-4 shipped it wrong the first
+     time: the number has to come from the timeline actually being played, and the only place that knows
+     which is the helper that owns the schedule. */
+  const scheduleFlourishHold = useCallback((holdMs: number, run: () => void) => {
+    const timer = window.setTimeout(() => {
+      flourishHoldTimersRef.current = flourishHoldTimersRef.current.filter(
+        (pending) => pending !== timer,
+      );
+      run();
+    }, holdMs);
+    flourishHoldTimersRef.current.push(timer);
+  }, []);
+  /* THE HOUSE IDIOM, optional-chained twice, matching every other reader of this preference in the tree
+     (`TrainBadges` VF-7, `BankTicket` VF-6, `PhaseBadge` VF-4, `StockRoundPanel` VF-3,
+     `HexGridRenderer` #496): a test environment has a `window` and no `matchMedia`. Read at SCHEDULE
+     time, which is the same commit the flourish builds its own sequence in, so the hold and the
+     animation can never be resolved against different timelines. */
+  const reducedMotionNow = useCallback(
+    () =>
+      typeof window !== "undefined" &&
+      window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true,
+    [],
+  );
+  /* ==================================================================
+      DESIGN NOTE (AUDIO WIRING): ONE CUE PER EVENT, FROM THE RAISER AND NOT FROM THE ROW
+     ==================================================================
+     WHERE THIS LIVES IS THE WHOLE MULTIPLICITY RULE. `TrainBadges` renders once per corporation, so a
+     cue fired from the chip row would sound once per fleet -- six corporations rusting in one phase
+     change would play six copies of one event, which is precisely what the brief forbids. The raisers
+     below run ONCE per authoritative event, already guarded on `replayingHistory`, so a cue scheduled
+     from there is one cue by construction rather than by a de-duplicating ref somebody has to maintain.
+     THE SAME TIMER LIST AS THE HOLDS, for the same reason they share one: what a cue and a modal hold
+     genuinely have in common is that both are scheduled against a flourish beat and both must be
+     cancelled if this component goes away. The schedule is NOT shared -- the caller resolves its own
+     offset against its own timeline, which is VF-4's correction restated.
+     AND THE PLAYING IS `playVariantCue`'S, not this line's: the master SFX mute, the shared volume, the
+     concurrency cap and the radio ducking all come with it (#1041), exactly as they do for the
+     presidency and float stingers. `sfxEnabled` alone and no category of its own -- #1457's rule, and
+     these three events are no more a "turn", "revenue" or "payout" than a presidency is. */
+  const scheduleFlourishCue = useCallback(
+    (cueAtMs: number, file: string) => {
+      scheduleFlourishHold(cueAtMs, () => playVariantCue(file, sfxEnabledRef.current));
+    },
+    [scheduleFlourishHold],
+  );
+
+  /* ==================================================================
+      DESIGN NOTE (VF-6): THE BANK BREAK'S OWN EVENT
+     ==================================================================
+     A SEPARATE state from the phase flip's, for the reason VF-3's note gives about the float: the two are
+     independent and can land on the same action -- the train purchase that turns the phase is exactly the
+     kind of payment that can empty the Bank -- and a shared slot would make one supersede the other for
+     no reason either rule gives.
+     THE REPLAY GUARD LIVES HERE, in the raiser, as #825 puts `showDividendToast`'s inside its own. A
+     rebuild walks the whole log forward and crosses the break on the way; a ticket stamped on every
+     refresh would be announcing an hour-old event as news. The dispatch site guards too -- belt and
+     braces, and the structural half of "history/replay rebuild does not replay old Bank-break
+     flourishes".
+     NOTHING WAITS FOR IT (A-3). The latch was written by `cashLedger.debitBank` inside the reducer arm
+     (#1560/#1561) before this line runs, and the ticket has already been handed the broken reading; the
+     stamp is what happens next to a surface that is already correct. */
+  const bankBreakStampTokenRef = useRef(0);
+  const bankBreakStampTimerRef = useRef<number | null>(null);
+  const [bankBreakStamp, setBankBreakStamp] = useState<BankBreakFlipEvent | null>(null);
+  const showBankBreakStamp = useCallback((fromLabel: string | null) => {
+    if (replayingHistory) return;
+    bankBreakStampTokenRef.current += 1;
+    const token = bankBreakStampTokenRef.current;
+    setBankBreakStamp({ fromLabel, token });
+    /* The thunk, on the stamp. ONE PER GENUINE BREAK: this raiser is reached only on a false->true
+       crossing of `bankIsBroken` (the trigger below), so a Bank that refills and dips again produces
+       true->true and never gets here, and the persistent rainbow ticket that follows is a state rather
+       than an event and has no cue of its own. */
+    scheduleFlourishCue(bankBreakCueAtMs(reducedMotionNow()), BANK_BREAK_SFX);
+    if (bankBreakStampTimerRef.current !== null) {
+      window.clearTimeout(bankBreakStampTimerRef.current);
+    }
+    bankBreakStampTimerRef.current = window.setTimeout(() => {
+      bankBreakStampTimerRef.current = null;
+      /* Only if nothing newer has arrived -- the supersession rule every raiser here keeps. Reachable:
+         an Undo back past the break and a re-dispatch is two breaks inside a second. */
+      setBankBreakStamp((live) => (live !== null && live.token === token ? null : live));
+    }, BANK_BREAK_TOTAL_MS);
+  }, [scheduleFlourishCue, reducedMotionNow]);
+  useEffect(
+    () => () => {
+      if (bankBreakStampTimerRef.current !== null) {
+        window.clearTimeout(bankBreakStampTimerRef.current);
+      }
+    },
+    [],
+  );
+  const holdForPhaseBadgeFlip = useCallback(
+    (milestone: PhaseBadgeMilestone, run: () => void) => {
+      /* THE MILESTONE IS NAMED; THE ACTIVE SCHEDULE SUPPLIES THE NUMBER. A reduced-motion reader waits
+         80ms for the toast and 200ms for the notice (their timeline's own midpoint and total) instead of
+         the full-motion 200/520, which would have been 120ms and 320ms of dead air after their badge had
+         already finished. See `phaseBadgeFlip.ts`'s correction note. */
+      scheduleFlourishHold(phaseBadgeMilestoneMs(milestone, reducedMotionNow()), run);
+    },
+    [scheduleFlourishHold, reducedMotionNow],
+  );
+  /* Design note (VF-7): the same contract against the rust schedule -- 530ms of full motion, 240ms of
+     reduced. The Tutorial rust modal waits on `settled`, so the chips have oxidised, fractured, failed
+     and left the row before a top-layer dialog can cover them. */
+  const holdForRustFlourish = useCallback(
+    (milestone: RustMilestone, run: () => void) => {
+      scheduleFlourishHold(rustMilestoneMs(milestone, reducedMotionNow()), run);
+    },
+    [scheduleFlourishHold, reducedMotionNow],
+  );
+  /* Design note (VF-8): the same contract against the discard schedule -- 500ms of full motion, 260ms of
+     reduced. The Tutorial limit modal waits on `settled`, so the cut has fallen, the halves have left and
+     the Bank Pool has acknowledged the arrival before a top-layer dialog can cover the row. */
+  const holdForDiscardFlourish = useCallback(
+    (milestone: DiscardMilestone, run: () => void) => {
+      scheduleFlourishHold(discardMilestoneMs(milestone, reducedMotionNow()), run);
+    },
+    [scheduleFlourishHold, reducedMotionNow],
+  );
+
+  /* ==================================================================
+      DESIGN NOTE (VF-8): ONE DISCARD, ONE PRESIDENT, ONE FLOURISH
+     ==================================================================
+     A SINGLE SUBJECT, unlike the rust event beside it, and that is the rules speaking rather than a
+     simplification: `pendingTrainDiscards` names ONE corporation at a time (6.6.1's order with 6.0's
+     tie-break), its president answers with one `DiscardTrain`, and only then is the next one named. So
+     there is no list here and nothing to serialise -- the serialisation is the reducer's, and this
+     follows it one action at a time.
+     THE REPLAY GUARD LIVES HERE, as #825 puts `showDividendToast`'s inside its own: a rebuild replays
+     every discard in the log, and chips cut open on each of them would be re-enacting a decision the
+     player made an hour ago.
+     THE TUTORIAL NOTICE IS HELD FROM THE SAME PLACE, because the two are one event: the cut is the
+     explanation's subject, and a dialog that covers the row before the cut has fallen explains something
+     the player never saw. */
+  const [discardNoticeHeld, setDiscardNoticeHeld] = useState(false);
+  const discardEventTokenRef = useRef(0);
+  const discardEventTimerRef = useRef<number | null>(null);
+  const [discardEvent, setDiscardEvent] = useState<TrainDiscardEvent | null>(null);
+  const showTrainDiscard = useCallback(
+    (discard: TrainDiscardEvent["discard"]) => {
+      if (replayingHistory) return;
+      discardEventTokenRef.current += 1;
+      const token = discardEventTokenRef.current;
+      setDiscardEvent({ discard, token });
+      /* The blade, on the cut. ONE PER SUCCESSFUL ACTION: the raise site tests `before !== after`, the
+         reducer's own refusal signal (#778), so a discard the gate declined never reaches here -- and a
+         second corporation answering its own obligation is a second action and gets its own cut. */
+      scheduleFlourishCue(discardCueAtMs(reducedMotionNow()), DISCARD_SFX);
+      setDiscardNoticeHeld(true);
+      holdForDiscardFlourish("settled", () => setDiscardNoticeHeld(false));
+      if (discardEventTimerRef.current !== null) {
+        window.clearTimeout(discardEventTimerRef.current);
+      }
+      discardEventTimerRef.current = window.setTimeout(() => {
+        discardEventTimerRef.current = null;
+        /* Only if nothing newer has arrived -- the supersession rule every raiser here keeps, and a
+           reachable one: a corporation two trains over the limit discards twice in a row. */
+        setDiscardEvent((live) => (live !== null && live.token === token ? null : live));
+      }, DISCARD_TOTAL_MS);
+    },
+    [holdForDiscardFlourish, scheduleFlourishCue, reducedMotionNow],
+  );
+  useEffect(
+    () => () => {
+      if (discardEventTimerRef.current !== null) {
+        window.clearTimeout(discardEventTimerRef.current);
+      }
+    },
+    [],
+  );
+
+  /* ==================================================================
+      DESIGN NOTE (VF-7): ONE GLOBAL RUST EVENT, HOWEVER MANY FLEETS IT EMPTIED
+     ==================================================================
+     A PHASE CHANGE RUSTS EVERY DOOMED TRAIN IN ONE REDUCER CALL, so this holds ONE event with every
+     affected corporation inside it rather than a queue of per-corporation events. That is what puts
+     every chip on the board on one clock, and it is what makes "one cue per event, never one per train"
+     expressible at all -- a per-corporation event would have had to decide which of six was allowed to
+     make the sound.
+     THE REPLAY GUARD LIVES HERE, in the raiser, as #825 puts `showDividendToast`'s inside its own. A
+     rebuild replays the whole log and crosses every phase change on the way; chips that fractured on
+     each of them would be destroying trains that died an hour ago. The dispatch site guards too -- belt
+     and braces, and the structural half of "history/rebuild does not replay old Rust flourishes".
+     NOTHING WAITS FOR IT (A-3). `applyPhaseChange` has already rewritten the fleets and the chips have
+     already been handed the new rosters; the flourish is what happens next to surfaces that are already
+     correct. */
+  /* ==================================================================
+      DESIGN NOTE (VF-7): THE TUTORIAL MODAL WAITS FOR THE CHIPS TO FINISH DYING
+     ==================================================================
+     Brief: "play the physical Rust flourish first; then allow the explanatory Rust modal to appear. The
+     top-layer modal must not cover the train chips before the visual event becomes perceptible."
+     A HOLD ON THE SHOWING, NOT ON THE QUEUEING, and the difference matters. The notice is queued the
+     instant the reducer settles, exactly as before -- so a refresh, an Undo or a closed tab cannot lose
+     it, and #1032's replay-stable dedupe key still does its job. What waits is `dueFleetNotice`'s
+     willingness to hand a RUST notice to the modal, which is a purely visual gate on a purely visual
+     surface.
+     IT ONLY BITES IN THE CASE THAT NEEDS IT. Most rust notices are shown at the top of the president's
+     own next turn (#896), minutes later, and the hold has long since lapsed. The one that lands in the
+     same instant as the flourish is the Gentle Rust expiry (#1002), which fires for the ACTING
+     corporation as its cursor enters Buy Trains -- the president watching those very chips.
+     `settled`, NOT `fractured`: a dialog is a top layer covering the whole row, so it waits for the row
+     to finish rather than for the event to become legible. Half a second in full motion, a quarter under
+     reduced motion, resolved from whichever schedule the chips are actually playing. */
+  const [rustNoticeHeld, setRustNoticeHeld] = useState(false);
+  const rustEventTokenRef = useRef(0);
+  const rustEventTimerRef = useRef<number | null>(null);
+  const [rustEvent, setRustEvent] = useState<RustFlourishEvent | null>(null);
+  const showRustFlourish = useCallback((corporations: readonly RustedFleet[]) => {
+    if (replayingHistory) return;
+    if (corporations.length === 0) return;
+    rustEventTokenRef.current += 1;
+    const token = rustEventTokenRef.current;
+    setRustEvent({ corporations, token });
+    /* ONE CUE FOR THE WHOLE EVENT, on the fracture. `corporations` is every fleet the reducer emptied in
+       this one dispatch and this is one call; six fleets rusting together are one crack, which is what
+       the reducer did and what the chips show -- they all run off one clock (I-4). */
+    scheduleFlourishCue(rustCueAtMs(reducedMotionNow()), RUST_SFX);
+    setRustNoticeHeld(true);
+    holdForRustFlourish("settled", () => setRustNoticeHeld(false));
+    if (rustEventTimerRef.current !== null) {
+      window.clearTimeout(rustEventTimerRef.current);
+    }
+    rustEventTimerRef.current = window.setTimeout(() => {
+      rustEventTimerRef.current = null;
+      /* Only if nothing newer has arrived -- the supersession rule every raiser here keeps. Reachable:
+         an Undo back past a phase change and a re-dispatch is two rust events inside a second. */
+      setRustEvent((live) => (live !== null && live.token === token ? null : live));
+    }, RUST_TOTAL_MS);
+  }, [holdForRustFlourish, scheduleFlourishCue, reducedMotionNow]);
+  useEffect(
+    () => () => {
+      if (rustEventTimerRef.current !== null) {
+        window.clearTimeout(rustEventTimerRef.current);
+      }
+    },
+    [],
+  );
+
+  useEffect(
+    () => () => {
+      flourishHoldTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+      flourishHoldTimersRef.current = [];
+    },
+    [],
+  );
+
+  /* DECLARED HERE, WELL ABOVE ITS OTHER CALLER, because the Phase 3 notice's effect names it in a
+     dependency array a few dozen lines below -- a `const` read during render cannot be declared three
+     thousand lines further down. The float and stock-transaction raisers it belongs beside are all called
+     from the dispatch drain, which runs long after every declaration in this component. */
   /* ==================================================================
       DESIGN NOTE 1418: THE OUTRO PLAYS ON THE EDGE, AND THE MODAL WAITS FOR ITS CUE
      ==================================================================
@@ -2091,6 +2457,21 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
      Raised when the derived phase goes from 2 to 3 while the log is live -- seeded from the first observed
      phase like the outro above, so a tab that loads into Phase 3 (or later) sees no edge and no notice.
      `currentPhase.tier` is what the badge shows, so the notice and the badge agree about when Phase 3 began. */
+  /* ==================================================================
+      DESIGN NOTE (VF-4): AND IT WAITS FOR THE BADGE TO TURN OVER
+     ==================================================================
+     Brief, naming this case exactly: "phase badge flips to Phase 3; then PhaseThreeNoticeModal may appear.
+     Do not allow the PhaseThreeNoticeModal to cover the badge before the flip is perceptible."
+     A HOLD ON THE MODAL, NOT A CHANGE TO THE EDGE. #1441's rule is untouched, character for character: the
+     same 2 -> 3 comparison, the same seeded first observation, the same `currentPhase.tier` the badge
+     reads. What moved is only WHEN `setPhaseThreeNotice(true)` runs -- on the badge's `settled` milestone,
+     whichever timeline is playing (520ms in full motion, 200ms under reduced motion), so the plate has
+     folded, swapped and settled on Phase 3 before the notice takes the screen and not one frame longer.
+     NOTHING AUTHORITATIVE IS BEHIND IT. Phase 3 is already true, the badge already says so, and privates
+     are already buyable; the notice explains a rule that does not wait for it. A player who acts inside
+     that half-second is refused or allowed by the reducer exactly as they would have been.
+     ITS OWN TIMER IS CLEARED ON UNMOUNT by `holdForPhaseBadgeFlip`'s own cleanup, which is why the hold
+     goes through that helper rather than a bare `setTimeout` here. */
   const [phaseThreeNotice, setPhaseThreeNotice] = useState(false);
   const previousPhaseTier = useRef<string | null | undefined>(undefined);
   useEffect(() => {
@@ -2098,8 +2479,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
     const previous = previousPhaseTier.current;
     previousPhaseTier.current = tier;
     if (previous === undefined) return; // the first observation seeds; it is not an edge
-    if (previous === "2" && tier === "3") setPhaseThreeNotice(true);
-  }, [currentPhase]);
+    if (previous === "2" && tier === "3") {
+      holdForPhaseBadgeFlip("settled", () => setPhaseThreeNotice(true));
+    }
+  }, [currentPhase, holdForPhaseBadgeFlip]);
 
   /* #1420: warm the ceremony's clips the moment the ending arrives, under the outro's eight seconds.
      #1423: and say when they are ready, so a modal opened cold (a reload into a finished game) holds its
@@ -3926,20 +4309,29 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
   // See docs/ai_architecture/routing_pathfinding.md - App.tsx #33
   const inRunTrainsSubPhase =
     (gameState?.current_round_type ?? null) === "OperatingRound" && orSubPhase === "Routes";
+  /* Design note [PRESENTATION CORRECTION]: THE BUILDER ARMS FOR THE ACTING PLAYER ONLY.
+     `routeSelectMode` used to follow `inRunTrainsSubPhase` alone, so every seated client -- and every
+     spectator -- got a live canvas click handler during somebody else's Routes step. Nothing dispatched from
+     those clicks (they only ever wrote this client's own local `routeDrafts`), but that local state was then
+     drawn as though it were the board's real route line (see `manualRouteOverlay` below), so a stray click on
+     someone else's turn could paint a phantom route, in the operating corporation's own colour, on the
+     clicker's own screen. Gated on `isMyTurn` so a watcher's map stays read-only for route purposes, matching
+     the turn-gate every other Routes control already carries (`mayActThisTurn` in ContextualActionBar). */
   useEffect(() => {
-    if (inRunTrainsSubPhase) return;
+    if (isRouteBuilderArmed({ inRunTrainsSubPhase, isMyTurn })) return;
     setRouteSelectMode(false);
     setRouteDrafts({});
     setActiveTrainIndex(0);
     setRouteFeedback(null);
-  }, [inRunTrainsSubPhase]);
+  }, [inRunTrainsSubPhase, isMyTurn]);
 
   /* Entering the step engages the builder: a visible builder whose map clicks go nowhere is worse than none.
-     See docs/ai_architecture/routing_pathfinding.md - App.tsx #266 */
+     See docs/ai_architecture/routing_pathfinding.md - App.tsx #266
+     Design note [PRESENTATION CORRECTION]: only for the client whose turn it actually is -- see above. */
   useEffect(() => {
-    if (!inRunTrainsSubPhase) return;
+    if (!isRouteBuilderArmed({ inRunTrainsSubPhase, isMyTurn })) return;
     setRouteSelectMode(true);
-  }, [inRunTrainsSubPhase]);
+  }, [inRunTrainsSubPhase, isMyTurn]);
 
 
 
@@ -4081,14 +4473,21 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
      See docs/ai_architecture/routing_pathfinding.md - App.tsx #286 */
   const autoDraftedForRef = useRef<number | null>(null);
   useEffect(() => {
-    if (!inRunTrainsSubPhase) {
+    /* Design note [PRESENTATION CORRECTION]: only the acting player's client computes a local auto-draft.
+       This used to run on every client, watcher included -- which mostly went unnoticed because the same
+       deterministic pathfinder run against the same shared game state usually agrees with the acting
+       player's own auto-draft, but it silently diverges the moment the acting player edits their route by
+       hand: the watcher's stale local auto-draft then competed with the acting player's live presence entry
+       for the SAME train index inside `manualRouteOverlay`. A watcher must consume the acting player's
+       presence, never calculate a competing draft of its own. */
+    if (!isRouteBuilderArmed({ inRunTrainsSubPhase, isMyTurn })) {
       autoDraftedForRef.current = null;
       return;
     }
     if (autoDraftedForRef.current === actingProtocolId) return;
     autoDraftedForRef.current = actingProtocolId;
     handleAutoRoute();
-  }, [inRunTrainsSubPhase, actingProtocolId, handleAutoRoute]);
+  }, [inRunTrainsSubPhase, isMyTurn, actingProtocolId, handleAutoRoute]);
 
   /* Design note #493: re-draft on demand. What the toggle's "auto" position
      did minus the mode change -- the tracer runs, the map stays editable,
@@ -4125,6 +4524,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
          See docs/ai_architecture/routing_pathfinding.md - App.tsx #243 */
       const boardLabel = info.boardLabel;
       if (boardLabel === null) return;
+      /* Design note [PRESENTATION CORRECTION]: belt-and-suspenders against the arming effects above --
+         `routeSelectMode` should never be true for a client whose turn this is not, so `onHexClick` should
+         never route here for one, but this handler is a stable `useCallback` the canvas holds across
+         renders (the same reason `isMyTurnRef` exists at all -- #536), so it reads the ref rather than
+         trusting the prop wiring alone. */
+      if (!isMyTurnRef.current) return;
 
       /* Editing a draft makes it yours; with no auto/manual toggle there is nothing to correct.
          See docs/ai_architecture/routing_pathfinding.md - App.tsx #266 */
@@ -4425,9 +4830,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
      from `actingProtocolId` against `gameState`, so it is the same list on every client in the room --
      replayed from the same log. A watcher needs no channel to know which trains are running; they need one
      to know what the president has plotted for them, which is what presence is for and all it is for.
-     THE INDEX CONVENTION SURVIVES. `RIVAL_ROUTE_INDEX_BASE` keeps a watcher's chips from colliding with
-     their own drafts on the key three surfaces join by (#373/#740), and the map overlay below still keys
-     rival routes the same way -- so hovering a chip still lights the right line. */
+     THE INDEX CONVENTION SURVIVES, IN THE NARROWER FORM IT ACTUALLY NEEDS. These chips keep the acting
+     corporation's real train indices (#373/#740), and after the [PRESENTATION CORRECTION] pass the map
+     overlay below reads the same single `actingPresenceEntry` this row does and keys its routes the same
+     way -- so hovering a chip still lights the right line, and there is no second, differently-indexed
+     population left for the two surfaces to disagree about. */
   /** Design note #1031: what the acting corporation's trains actually earned, once the run is committed.
    *
    *  ITS OWN MEMO RATHER THAN A READ INSIDE THE CHIP MEMO, for two reasons. The narrow one is dependencies:
@@ -4447,22 +4854,34 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
   /* Design note #875: the rule lives in `watcherRouteChips.ts` so it can be tested as arithmetic rather than
      scanned for. This memo supplies the board -- the roster from game state, the pricing and the hex names --
      and fills in the fields a watcher's row does not carry. */
+  /** Design note [PRESENTATION CORRECTION]: THE ONE PRESENCE ENTRY THAT COUNTS.
+   *
+   *  Presence carries one entry per connected, currently-drafting player. Precisely one of them is worth
+   *  showing anybody during Run Routes -- whoever is publishing for the corporation actually operating --
+   *  and every reader of presence (this chip row, and the map overlay in `manualRouteOverlay` below) must
+   *  agree on which one that is, or the board and the chips can end up naming different drafts for the same
+   *  train index.
+   *
+   *  `actingCompanyId` is the primary key. The fallback below predates this correction (#1386): an older or
+   *  malformed presence document can omit `actingCompanyId` entirely. An Operating Round has exactly one
+   *  drafter, so if nothing names the corporation but exactly one entry is drafting anything at all, that
+   *  entry IS the drafter.
+   *
+   *  THIS USED TO BE COMPUTED ONLY HERE, for the chip row -- `manualRouteOverlay` separately, and
+   *  incorrectly, drew every fresh presence entry it could see regardless of which corporation published it,
+   *  which is exactly the disagreement #1386's own comment (now removed) predicted: "the map draws every
+   *  visible entry's drafts, the chips only the entry whose `actingCompanyId` matches". One memo, one answer,
+   *  read by both surfaces now. */
+  const actingPresenceEntry = useMemo(
+    () => selectActingPresenceEntry(rivalPresence, actingProtocolId),
+    [rivalPresence, actingProtocolId],
+  );
+
   const rivalTrainDrafts = useMemo<TrainRouteDraft[]>(() => {
     const era = eraForPhase(currentPhase, tableVariants);
-    /* THE ACTING CORPORATION'S OWN ENTRY, not "any rival". Presence carries one entry per connected player;
-       the one that matters is whoever is publishing drafts for the company now operating. `null` when nobody
-       is -- the ordinary case at the start of the step, and the case that used to produce no row at all. */
-    /* #1386: REPORTED "the train chips in the Action Bar do not list the values of those routes" while the
-       routes themselves were on the map -- the map draws every visible entry's drafts, the chips only the
-       entry whose `actingCompanyId` matches this tab's acting corporation. An Operating Round has one
-       drafter, so when no entry names the corporation, the one entry that IS publishing drafts is that
-       drafter, and the chips take it rather than showing dashes beside routes the map is already drawing. */
-    const actor =
-      rivalPresence.find((entry) => entry.actingCompanyId === actingProtocolId) ??
-      (() => {
-        const drafting = rivalPresence.filter((entry) => Object.keys(entry.routeDrafts ?? {}).length > 0);
-        return drafting.length === 1 ? drafting[0] : null;
-      })();
+    // The acting corporation's own presence entry -- see `actingPresenceEntry` above, the one answer this
+    // row and the map overlay below both read.
+    const actor = actingPresenceEntry;
     return watcherTrainDrafts({
       roster: ownedTrainRoster,
       actorDrafts: actor?.routeDrafts ?? null,
@@ -4517,7 +4936,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
       tokenBlockReason: null,
     }));
   }, [
-    rivalPresence,
+    actingPresenceEntry,
     mapGrid,
     currentPhase,
     ownedTrainRoster,
@@ -4527,75 +4946,111 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
     actingRunBreakdown,
   ]);
 
+  /** Design note [PRESENTATION CORRECTION]: ONE ROUTE OVERLAY POPULATION.
+   *
+   *  There is exactly one operating corporation during a Routes step, and the map should show exactly one
+   *  set of drafts for it. This used to draw the acting VIEWER's local state (this loop, unconditionally)
+   *  and THEN append every fresh presence entry it could see (the loop below this comment, formerly keyed
+   *  by seat with an index offset for anyone who was not the acting corporation) -- two populations, drawn
+   *  together, whose only guarantee of agreement was that a non-actor client no longer had a way to
+   *  generate a competing draft (see the `routeSelectMode`/auto-draft gates above). That guarantee held
+   *  only once this correction also closed those two holes; before it, a watcher's own stray click or its
+   *  own local auto-draft could sit alongside -- or silently diverge from -- the acting player's live
+   *  presence entry for the exact same train index.
+   *
+   *  THE ACTING VIEWER'S OWN CLIENT is authoritative for its own routes: `routeDrafts` is this client's own
+   *  React state, editable only because `isMyTurn` is true (enforced above, not re-checked here -- a
+   *  non-acting client's `routeDrafts` is permanently `{}` by construction, so this branch is naturally
+   *  empty for a watcher even without the `isMyTurn` branch below).
+   *
+   *  A WATCHER draws ONE thing: `actingPresenceEntry`, the same single presence document
+   *  `rivalTrainDrafts` prices the chip row from (defined above, shared rather than recomputed, so the
+   *  board and the chips cannot name two different drafts for one train). A stale or malformed entry from
+   *  a player who is not publishing for the operating corporation is never reached -- there is no loop over
+   *  `rivalPresence` here any more, only a lookup of the one entry that matters. */
   const manualRouteOverlay = useMemo<RouteOverlay[]>(() => {
     const overlays: RouteOverlay[] = [];
-    for (const train of ownedTrainRoster) {
-      const points = routeDrafts[train.trainIndex] ?? [];
-      // `drawRouteOverlays` skips anything shorter, but filtering here keeps
-      // the array identity stable for the canvas's dependency check.
-      if (points.length < 2) continue;
-      overlays.push({
-        trainLabel: `${train.model}-Train`,
-        /* Design note #494: PER TRAIN. This was one corporation colour
-           computed above the loop and given to every route, so overlapping
-           runs were literally the same line drawn twice. */
-        color: routeTrainColor(train.trainIndex),
-        hexes: points.map((point) => [point.q, point.r] as [number, number]),
-        /* Design note #820: and WHICH WAY THROUGH each one. #808 taught `RoutePoint` to carry the variant so
-           the wire and the pricing agree; the drawing was the last surface still guessing, so a route priced
-           on Altoona's bow was drawn through its station. Index-aligned with `hexes` above, from the same
-           `points` in the same order. */
-        variants: points.map((point) => point.variant),
-        // Design note #373: the join key the three surfaces share.
-        trainIndex: train.trainIndex,
-        /* Connects highlightedTrainIndex to the renderer's primary/muted emphasis; normal when nothing is highlighted.
-           See docs/ai_architecture/routing_pathfinding.md - App.tsx #495 */
-        emphasis: routeEmphasisFor(train.trainIndex, highlightedTrainIndex),
-      });
-    }
-    /* Design note #740: AND THE RIVALS' LIVE DRAFTS. Appended rather than merged, and after the local ones, so
-       the viewer's own routes are drawn last and stay on top -- their emphasis is the one they are steering.
-       IDENTIFIED BY SEAT, not by train index: two clients both drafting train 0 would otherwise collide on
-       `trainIndex`, which is the key the highlight and the chip row join on. Offsetting into a private range
-       keeps a rival's line un-hoverable from this player's chips, which is correct -- hovering somebody else's
-       chip row is not a thing that exists. */
-    for (const entry of rivalPresence) {
-      /* ==================================================================
-          DESIGN NOTE 890: THE OPERATING CORPORATION'S ROUTES ARE NOT "SOMEBODY ELSE'S"
-         ==================================================================
-         REPORTED: "the highlighting of the route dims the route for non-active players, whereas for the
-         operating corporation it brightens (and slightly widens?). Everyone should get the brighter (and
-         wider?) route highlighting."
-         #740 WROTE ONE RULE FOR TWO POPULATIONS. Its sentence -- "a live draft belonging to somebody else is
-         context, and drawing it at the same weight as the reader's own route would make the board argue
-         about whose turn it is" -- is right about a RIVAL, and a rival is what it was written for. In an
-         Operating Round there is one acting corporation, and the presence entry carrying its drafts is not
-         somebody else's context: it is THE run, the only one on the board, and the thing every player at the
-         table is watching. Muting it makes the board argue that nothing is happening.
-         SO THE POPULATION IS SPLIT RATHER THAN THE RULE REWRITTEN. The offset and the mute survive for
-         entries that are not the acting corporation's -- two clients drafting at once is still a real state
-         in a sandbox, and #740's collision argument still holds there. */
-      const isActor =
-        entry.actingCompanyId !== null &&
-        entry.actingCompanyId !== undefined &&
-        entry.actingCompanyId === actingProtocolId;
-      for (const [index, hexes] of Object.entries(entry.routeDrafts ?? {})) {
-        if (hexes.length < 2) continue;
+    const routeSignalEra = eraForPhase(currentPhase, tableVariants);
+
+    if (isMyTurn) {
+      for (const train of ownedTrainRoster) {
+        const points = routeDrafts[train.trainIndex] ?? [];
+        // `drawRouteOverlays` skips anything shorter, but filtering here keeps
+        // the array identity stable for the canvas's dependency check.
+        if (points.length < 2) continue;
         overlays.push({
-          trainLabel: isActor ? `${index}` : `${entry.playerId}'s route`,
-          color: routeTrainColor(Number(index)),
-          hexes: hexes.map((hex) => [hex[0], hex[1]] as [number, number]),
-          /* THE REAL INDEX FOR THE ACTOR, so the chip row and the highlight join on it -- which is also what
-             gives the route its emphasis, since `routeEmphasisFor` compares against the hovered chip. */
-          trainIndex: isActor ? Number(index) : RIVAL_ROUTE_INDEX_BASE + Number(index),
-          emphasis: isActor
-            ? routeEmphasisFor(Number(index), highlightedTrainIndex)
-            : "muted",
+          trainLabel: `${train.model}-Train`,
+          /* Design note #494: PER TRAIN. This was one corporation colour
+             computed above the loop and given to every route, so overlapping
+             runs were literally the same line drawn twice. */
+          color: routeTrainColor(train.trainIndex),
+          hexes: points.map((point) => [point.q, point.r] as [number, number]),
+          /* Design note #820: and WHICH WAY THROUGH each one. #808 taught `RoutePoint` to carry the variant so
+             the wire and the pricing agree; the drawing was the last surface still guessing, so a route priced
+             on Altoona's bow was drawn through its station. Index-aligned with `hexes` above, from the same
+             `points` in the same order. */
+          variants: points.map((point) => point.variant),
+          // Design note #373: the join key the three surfaces share.
+          trainIndex: train.trainIndex,
+          /* Connects highlightedTrainIndex to the renderer's primary/muted emphasis; normal when nothing is highlighted.
+             See docs/ai_architecture/routing_pathfinding.md - App.tsx #495 */
+          emphasis: routeEmphasisFor(train.trainIndex, highlightedTrainIndex),
+          /* Train Route Pulse flourish only: the SAME breakdown `trainDrafts` already priced this train's
+             draft with (both read `sandboxRouteBreakdown` off the same `points`), rather than a second call
+             that could disagree with the chip row about which stops pay. */
+          revenueStops: trainDrafts.find((draft) => draft.trainIndex === train.trainIndex)?.stops,
         });
       }
+      return overlays;
+    }
+
+    // A watcher: the ONLY source is the operating corporation's own published presence, keyed by real train
+    // index (never the RIVAL_ROUTE_INDEX_BASE offset -- there is nothing left to collide with, since this
+    // branch never also draws local state or another corporation's entry).
+    const actor = actingPresenceEntry;
+    if (!actor) return overlays;
+    for (const [index, hexes] of Object.entries(actor.routeDrafts ?? {})) {
+      if (hexes.length < 2) continue;
+      // Train Route Pulse flourish only -- a watched draft carries no `TrainRouteDraft` of its own to
+      // borrow from (unlike the local loop above), so this is priced the same way `rivalTrainDrafts`'
+      // own `stopsFor` callback prices it: the same pricer, the same hex-label resolution.
+      const actorLabels = hexes
+        .map(([q, r]) => boardHexLabel(q, r))
+        .filter((label): label is string => label !== null);
+      const actorStops =
+        actorLabels.length >= 2
+          ? sandboxRouteBreakdown(
+              mapGrid,
+              actorLabels.map((hex) => ({ hex })),
+              routeSignalEra,
+              actingProtocolId ?? undefined,
+            ).stops
+          : undefined;
+      const trainIndex = Number(index);
+      overlays.push({
+        trainLabel: `${trainIndex}`,
+        color: routeTrainColor(trainIndex),
+        hexes: hexes.map((hex) => [hex[0], hex[1]] as [number, number]),
+        // THE REAL INDEX, so the chip row and the highlight join on it -- which is also what gives the
+        // route its emphasis, since `routeEmphasisFor` compares against the hovered chip.
+        trainIndex,
+        emphasis: routeEmphasisFor(trainIndex, highlightedTrainIndex),
+        revenueStops: actorStops,
+      });
     }
     return overlays;
-  }, [ownedTrainRoster, routeDrafts, highlightedTrainIndex, rivalPresence, actingProtocolId]);
+  }, [
+    isMyTurn,
+    ownedTrainRoster,
+    routeDrafts,
+    highlightedTrainIndex,
+    actingPresenceEntry,
+    actingProtocolId,
+    trainDrafts,
+    mapGrid,
+    currentPhase,
+    tableVariants,
+  ]);
 
   /* handleTileDispatched/handleCloseTilePopup removed: the radial selector confirms through runGameplayAction, so there is one dispatch route and one log writer.
      See docs/ai_architecture/canvas_rendering.md - App.tsx #162 */
@@ -4875,6 +5330,88 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
     [],
   );
 
+  /* ==================================================================
+      DESIGN NOTE (VF-3): THE FLOAT CEREMONY'S OWN EVENT, SAME SHAPE AS THE STOCK TRANSACTION'S
+     ==================================================================
+     A SEPARATE state, not folded into `stockTransaction` above: the two ceremonies are independent (the
+     backlog's VF-3 cross-reference names the case where a purchase's transfer focus and a float focus land
+     on the same card in the same beat) and a shared slot would make one supersede the other for no reason
+     either rule gives.
+     NO `buildFocusSequence`-STYLE PRE-CHECK, UNLIKE THE STOCK TRANSACTION ABOVE: a float event is only ever
+     raised from a genuine `false -> true` edge on `is_floated` (below, beside the herald-home float notice),
+     so there is never a "nothing to show" case the way an arbitrary stock message can fail to describe a
+     transfer. `FLOAT_TOTAL_MS` is a constant rather than a built sequence's own `totalMs` for the same
+     reason -- there is only one shape of event here, not several kinds that might fail to build one. */
+  const floatEventTokenRef = useRef(0);
+  const floatEventTimerRef = useRef<number | null>(null);
+  const [floatEvent, setFloatEvent] = useState<CorporationFloatEvent | null>(null);
+  const showCorporationFloat = useCallback((descriptor: { companyId: number; ticker: string }) => {
+    if (replayingHistory) return;
+    floatEventTokenRef.current += 1;
+    const token = floatEventTokenRef.current;
+    setFloatEvent({ ...descriptor, token });
+    if (floatEventTimerRef.current !== null) {
+      window.clearTimeout(floatEventTimerRef.current);
+    }
+    floatEventTimerRef.current = window.setTimeout(() => {
+      floatEventTimerRef.current = null;
+      /* Only if nothing newer has arrived -- the same supersession rule `showStockTransaction` keeps just
+         above, for the same reason: a second float (a different corporation; `is_floated` cannot re-fire for
+         the same one) owns the ceremony now. */
+      setFloatEvent((live) => (live !== null && live.token === token ? null : live));
+    }, FLOAT_TOTAL_MS);
+  }, []);
+  useEffect(
+    () => () => {
+      if (floatEventTimerRef.current !== null) {
+        window.clearTimeout(floatEventTimerRef.current);
+      }
+    },
+    [],
+  );
+
+  /* ==================================================================
+      DESIGN NOTE (VF-4): THE PHASE BADGE'S OWN EVENT, SAME SHAPE AS THE TWO ABOVE
+     ==================================================================
+     A SEPARATE state, like the float ceremony's: a phase change and a float can land on the same action
+     (a train purchase that turns the phase cannot float anything, but an Undo replayed forward can put two
+     unrelated flourishes in one commit), and a shared slot would make one supersede the other for no
+     reason either rule gives.
+     THE REPLAY GUARD LIVES HERE, in the raiser, exactly as #825 put `showDividendToast`'s inside its own:
+     a rebuild walks the phase from 2 up to wherever the game actually is, and a badge that flipped five
+     times on a refresh would be announcing an hour-old history as news. The dispatch site guards too --
+     belt and braces, and the structural half of "replay/rebuild does not animate".
+     NOTHING WAITS FOR IT (A-3). `setPhaseBadgeFlip` is a `setState` after the reducer has already settled
+     and after the badge has already been handed the new phase; the flourish is what happens next to a
+     surface that is already correct. */
+  const phaseBadgeFlipTokenRef = useRef(0);
+  const phaseBadgeFlipTimerRef = useRef<number | null>(null);
+  const [phaseBadgeFlip, setPhaseBadgeFlip] = useState<PhaseBadgeFlipEvent | null>(null);
+  const showPhaseBadgeFlip = useCallback((from: PhaseBadgeFace) => {
+    if (replayingHistory) return;
+    phaseBadgeFlipTokenRef.current += 1;
+    const token = phaseBadgeFlipTokenRef.current;
+    setPhaseBadgeFlip({ ...from, token });
+    if (phaseBadgeFlipTimerRef.current !== null) {
+      window.clearTimeout(phaseBadgeFlipTimerRef.current);
+    }
+    phaseBadgeFlipTimerRef.current = window.setTimeout(() => {
+      phaseBadgeFlipTimerRef.current = null;
+      /* Only if nothing newer has arrived -- the supersession rule the two raisers above keep, and it is
+         reachable here in a way it is not for a float: two phase changes inside one second is exactly what
+         an Undo and a re-dispatch produce. */
+      setPhaseBadgeFlip((live) => (live !== null && live.token === token ? null : live));
+    }, PHASE_BADGE_TOTAL_MS);
+  }, []);
+  useEffect(
+    () => () => {
+      if (phaseBadgeFlipTimerRef.current !== null) {
+        window.clearTimeout(phaseBadgeFlipTimerRef.current);
+      }
+    },
+    [],
+  );
+
   /* Design note #1291 (9): the spend's whoosh, through the same helper as every cue (#1041), under the
      payout category's mute -- it is the same kind of sound about the same kind of event. */
   const handleTreasuryMachineCue = useCallback(() => {
@@ -4895,6 +5432,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
      `stockTransferFocus.ts` and knows nothing about the clip's tail, and no gameplay path reads this. */
   const handlePresidencyCue = useCallback(() => {
     playVariantCue(PRESIDENCY_SFX, sfxEnabledRef.current);
+  }, []);
+
+  /* Design note (VF-3): the float ceremony's own cue, on the same rule as the presidency cue just above --
+     master `sfxEnabled` alone, no category of its own (`floated.mp3` is exactly as one-off an event as a
+     presidency change). The card owns the TIMING (`corporationFloatFocus.ts`'s `stampImpactAt`); this is
+     only the PLAYING. */
+  const handleFloatCue = useCallback(() => {
+    playVariantCue(FLOAT_SFX, sfxEnabledRef.current);
   }, []);
 
   const showActionToast = useCallback((text: string, durationMs?: number) => {
@@ -7196,6 +7741,19 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
                  line is written from. Not during a rebuild (`replayingHistory`), which would raise every
                  past float again on reload. */
               if (previously && !previously.is_floated && company.is_floated && !replayingHistory) {
+                /* ==================================================================
+                    DESIGN NOTE (VF-3): THE CARD-FLIP CEREMONY RIDES THE SAME EDGE
+                   ==================================================================
+                   THE THIRD READER OF THIS COMPARISON, not a second computation of it -- `describeFloat`'s
+                   line above and the herald modal below already trust exactly this
+                   `!previously.is_floated && company.is_floated && !replayingHistory` edge to mean "this
+                   corporation just floated, and this is not a reload replaying it again"; the corporation
+                   card ceremony asks the identical question rather than re-deriving it from `is_floated`
+                   alone (which would fire on every render of an already-floated corporation -- brief
+                   sections 6/16, and exactly the failure this shared `if` already guards the herald modal
+                   against). ONE CORPORATION AT A TIME, by construction: `is_floated` only ever latches
+                   false -> true once per corporation, so this branch cannot run twice for the same company. */
+                showCorporationFloat({ companyId: company.company_id, ticker: company.ticker });
                 const herald = heraldHexFor(company.company_id);
                 if (herald?.herald) {
                   setHeraldFloatNotice({
@@ -7244,10 +7802,62 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
             const arrivingTier = derivePhase(after)?.tier ?? null;
             const gentleRustOn = resolveVariants(after.variants).gentleRust;
             const queuedNotices = [...pendingFleetNoticesRef.current];
+            /* ==================================================================
+                DESIGN NOTE (VF-7): THE CHIPS THAT ARE ABOUT TO BE DESTROYED, COLLECTED ONCE
+               ==================================================================
+               GATHERED ACROSS BOTH NARRATORS AND RAISED ONCE, below the expiry block. A dispatch can in
+               principle produce a standard rust AND a reprieve expiry, and two `showRustFlourish` calls
+               would make the second supersede the first -- half the board's chips cut off mid-fracture.
+               One list, one event, one clock.
+               `before`'s OWN ROSTER travels with each member, because staging needs the fleet AS IT WAS
+               (see `trainRustFlourish.ts`): pushing the lost models onto the end of the authoritative
+               roster would put them in the wrong places and reorder the survivors. This shell has
+               `before` in hand at exactly this point -- #704's division -- so it hands it over rather
+               than making the chip reconstruct it.
+               ONLY `loss.rusted`, NEVER `loss.discarded`. Rust destroys; the train-limit trim is a
+               different cause with a different remedy and, when its own vocabulary is built, a different
+               look. #896 split them in the copy and this keeps them split in the motion. */
+            const rustedFleets: RustedFleet[] = [];
+            /* `before` is `GameStateResponse | null` at this point in the drain and non-null on every path
+               that reaches here; bound once so the helper below does not carry the narrowing itself. */
+            const settledBefore = before as GameStateResponse;
+            const settledAfter = after as GameStateResponse;
+            const rosterOf = (
+              state: GameStateResponse,
+              companyId: number,
+            ): readonly string[] | null =>
+              (state.public_companies ?? []).find((entry) => entry.company_id === companyId)
+                ?.owned_trains ?? null;
+            /* ==================================================================
+                DESIGN NOTE (VF-7): COLLECTED ONLY WHERE A TRAIN REALLY LEFT
+               ==================================================================
+               `loss.rusted` is the narrator's answer to "what did rust take", and under Gentle Rust at a
+               phase change that answer is the newly MARKED models (#979: "trains newly ADDED to
+               `pending_rust_trains` are the rust event") -- which are still in the fleet and still
+               drawn. Destroying those chips is exactly what section 8 of this batch's brief forbids.
+               `destroyedRustedModels` intersects the answer with the rosters, so a marking yields
+               nothing and an expiry yields everything, with no variant test anywhere in this shell.
+               See the module's own note for why a destruction test beats a `!gentleRustOn` guard. */
+            const collectRust = (loss: { companyId: number; ticker: string; rusted: readonly string[] }) => {
+              const was = rosterOf(settledBefore, loss.companyId);
+              const destroyed = destroyedRustedModels(was, rosterOf(settledAfter, loss.companyId), loss.rusted);
+              /* A roster the chain never reported is "unknown" (#232/#897), and a flourish cannot stage a
+                 fleet it cannot see -- the chips fall through to the authoritative roster, which is A-3's
+                 rule that every measurement failure degrades to plain rendering. */
+              if (!was || destroyed.length === 0) return;
+              rustedFleets.push({
+                companyId: loss.companyId,
+                ticker: loss.ticker,
+                before: was,
+                rusted: destroyed,
+              });
+            };
             // #1245: the message, so a train SOLD in a trade is not narrated as a discard.
             for (const loss of describeFleetLosses(before, after, msg)) {
               const sentence = describeFleetLoss(loss, limitNow);
               if (sentence) logInfo("Phase Change", sentence);
+
+              collectRust(loss);
 
               for (const notice of fleetLossNotices(loss, arrivingTier, limitNow)) {
                 /* ==================================================================
@@ -7264,6 +7874,23 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
                    change for every corporation, which is #896's standing rule -- silencing or deferring a
                    modal changes WHEN a player finds out, never whether the game told them. */
                 if (gentleRustOn && notice.cause === "rust") continue;
+                /* ==================================================================
+                    DESIGN NOTE (VF-7): THE RUST MODAL IS A TUTORIAL, AND ONLY A TUTORIAL
+                   ==================================================================
+                   RULED: with tutorial mode ON the explanatory rust modal stays, because a novice should
+                   be told in words what just happened and why; with it OFF there is no click-through,
+                   because the chips have just oxidised, fractured and left the row in front of the
+                   player and a dialog restating that is an interruption charging for information
+                   already delivered.
+                   #896's STANDING RULE IS UNTOUCHED, and it is what makes this safe: "silencing a notice
+                   changes WHEN a player finds out, never whether the game told them." The Activity Log
+                   line is written above, unconditionally, for every corporation, under both settings.
+                   THE LIMIT NOTICE IS DELIBERATELY NOT GATED. This batch's scope is rust; a train-limit
+                   drop still has no visual vocabulary of its own, so its modal is still the only thing
+                   that says a train was taken -- and gating it now would remove the only notice a
+                   president gets. `notice.cause` is the whole of the distinction, which is #896's split
+                   earning its keep for the third time. */
+                if (notice.cause === "rust" && !tutorialModeEnabled()) continue;
                 /* IDEMPOTENT, for #706's reason one function over: the Undo path replays the whole log, so
                    this block runs again for a phase change the player already saw. Keyed by CONTENT rather
                    than by position -- two different phase changes carry different arriving tiers and both
@@ -7308,7 +7935,23 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
               const expiryLimit =
                 depotInventory(after).find((row) => row.isCurrent)?.trainLimit ?? null;
               for (const loss of expiries) {
+                /* ==================================================================
+                    DESIGN NOTE (VF-7): GENTLE RUST DESTROYS HERE, AND ONLY HERE
+                   ==================================================================
+                   THE MARKING IS NOT A DESTRUCTION and must not fracture anything. Under this variant a
+                   phase change puts models into `pending_rust_trains` and leaves `owned_trains` untouched
+                   (#979), so `describeFleetLosses` above reports NO rust for them and the loop that
+                   collects fleets finds nothing to stage -- which is the correct answer arrived at by
+                   construction rather than by a special case. The existing reprieve presentation (the
+                   deeper `app-train-final-run` fade, #1004) goes on saying "this train runs once more",
+                   and it is still the authority on that.
+                   THIS is the destruction edge: `describeReprieveExpiries` reports the dispatch in which
+                   the marks cleared and the fleet actually shrank (#1002, #1099). Same event shape, same
+                   clock, same flourish -- the train really is gone now. */
+                collectRust(loss);
                 for (const notice of fleetLossNotices(loss, expiryTier, expiryLimit)) {
+                  // Design note (VF-7): the same tutorial gate as the phase-change queue above.
+                  if (notice.cause === "rust" && !tutorialModeEnabled()) continue;
                   /* IDEMPOTENT ON A REPLAY, by content, exactly as the phase-change queue above is: Undo
                      rebuilds by replaying the log, so this block runs again for an expiry the player has
                      already acknowledged. Design note #1032: and the dismissed set is consulted here too --
@@ -7324,6 +7967,78 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
               if (expiryQueue.length !== pendingFleetNoticesRef.current.length) {
                 pendingFleetNoticesRef.current = expiryQueue;
                 setPendingFleetNotices(expiryQueue);
+              }
+            }
+
+            /* ==================================================================
+                DESIGN NOTE (VF-7): ONE RAISE, AFTER BOTH NARRATORS HAVE SPOKEN
+               ==================================================================
+               BELOW BOTH BLOCKS, so a dispatch that somehow produced a standard rust and a reprieve
+               expiry together yields ONE event containing both rather than two that supersede each
+               other. The raiser itself refuses an empty list and refuses a rebuild (`replayingHistory`),
+               so an ordinary action that rusted nothing costs a length check and nothing else. */
+            showRustFlourish(rustedFleets);
+
+            /* ==================================================================
+                DESIGN NOTE (VF-8): THE PRESIDENT'S DISCARD, FROM THE ACTION AND NOT FROM THE DIFF
+               ==================================================================
+               READ OFF THE MESSAGE, which is the one place the CHOICE exists. `describeFleetLosses`
+               deliberately splices a `DiscardTrain` out of its diff (#1530: "narrated by the Activity
+               Log as the action it is, not as a loss the phase took"), so the fleet diff reports
+               nothing here and asking it would find nothing to animate. The message names the model the
+               president picked; `discardedOccurrence` resolves that to the position the reducer's own
+               `owned.indexOf(model_type)` will empty.
+
+               NO CHEAPEST-FIRST ANYWHERE. #1530 replaced the engine's cheapest-first trim with this
+               action precisely so the president chooses; nothing on this path reads a price, a tier
+               order or an age, and the only lookup is for the model the message already names.
+
+               A SUCCESSFUL DISPATCH ONLY. `before !== after` is the reducer's own refusal signal
+               (#778: "every gate refuses by returning the state it was handed"), so a discard the gate
+               declined -- wrong corporation, not its president, a train it does not hold -- reaches
+               this line as an identity and raises nothing. */
+            if (!replayingHistory && before !== null && before !== after && isDiscardTrainMsg(msg)) {
+              const { protocol_id, model_type } = msg.DiscardTrain;
+              const was = rosterOf(settledBefore, protocol_id);
+              const at = was ? discardedOccurrence(was, model_type) : -1;
+              const ticker =
+                (before.public_companies ?? []).find((entry) => entry.company_id === protocol_id)
+                  ?.ticker ?? `#${protocol_id}`;
+              if (was && at >= 0) {
+                showTrainDiscard({ companyId: protocol_id, ticker, before: was, model: model_type, at });
+                /* ==================================================================
+                    DESIGN NOTE (VF-8): AND THE TUTORIAL'S EXPLANATION, RE-HOMED
+                   ==================================================================
+                   #896's limit notice was queued from the phase-change fleet diff, and #1530 made that
+                   path unreachable in the same breath as it created this action: the diff splices the
+                   discard out, so `loss.discarded` has been empty for every v2 dispatch and the Train
+                   Limit modal has not fired since. Audited by running the reducer, not by reading.
+                   SO THE EXPLANATION MOVES TO THE EVENT IT EXPLAINS. Same `FleetLossNotice` shape, same
+                   copy (#704/#980), same replay-stable dismiss key (#1032) -- raised from the action the
+                   president just took, which is also the only place the chosen train is known.
+                   TUTORIAL-GATED, on VF-7's rule for the rust notice: with tutorials off the cut and the
+                   Activity Log have just said this, and a dialog restating it charges an interruption
+                   for information already delivered. */
+                if (tutorialModeEnabled()) {
+                  const limitInForce = derivePhase(after)?.trainLimit ?? null;
+                  const notice = fleetLossNotices(
+                    { companyId: protocol_id, ticker, rusted: [], discarded: [model_type] },
+                    derivePhase(after)?.tier ?? null,
+                    limitInForce,
+                  )[0];
+                  if (notice) {
+                    const key = noticeDismissKey(notice);
+                    const queue = pendingFleetNoticesRef.current;
+                    const already =
+                      dismissedFleetNoticesRef.current.has(key) ||
+                      queue.some((entry) => noticeDismissKey(entry) === key);
+                    if (!already) {
+                      const next = [...queue, notice];
+                      pendingFleetNoticesRef.current = next;
+                      setPendingFleetNotices(next);
+                    }
+                  }
+                }
               }
             }
 
@@ -7793,6 +8508,28 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
         ]);
         }
           /* ==================================================================
+              DESIGN NOTE (VF-4): THE DISPLAYED-PHASE CHANGE, ON THE SAME EDGE AS THE ERA CROSSING
+             ==================================================================
+             #1094'S SHAPE, FOR #1094'S REASON. Two settled states, one comparison, nothing stored: a
+             `useEffect` watching the derived phase sees every intermediate commit of a rebuild, which is
+             precisely how the era toast came to announce an hour-old history on every refresh. The phase
+             badge would flip 2->3->4->5 down a reload, which is the same bug wearing a different surface.
+             There is no previous-phase ref here to go stale, because there is no previous stored at all.
+
+             GUARDED ON `replayingHistory`, NOT ON `options?.isRemoteReplay`, for the reason the era block
+             below states at length: this is not a receipt for a transition the local client drove, it is a
+             change in the world that every player derives from the same state. A live action arriving from
+             another browser IS a phase change that just happened, and `isRemoteReplay` cannot tell that
+             apart from a rebuild while `replayingHistory` is exactly that distinction.
+
+             THE COMPARISON IS OF WHAT THE BADGE PRINTS, never of the tier -- see `phaseBadgeFlip.ts` for
+             why, and for the Level Playing Field 7-train that makes it matter. */
+          if (!replayingHistory && before !== null) {
+            const phaseBadgeFrom = phaseBadgeChange(derivePhase(before), derivePhase(after));
+            if (phaseBadgeFrom !== null) showPhaseBadgeFlip(phaseBadgeFrom);
+          }
+
+          /* ==================================================================
               DESIGN NOTE 1094: THE ERA CROSSING, WHERE THE GUARD CAN SEE IT
              ==================================================================
              #868'S TOAST, MOVED HERE FROM THE RENDER EFFECT -- see the note where that effect used to be for
@@ -7825,14 +8562,22 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
                  repertoires" -- it is the second line that was doing nothing the first did not.
                  DERIVED FROM THE TRANSITION, not written per era, so the Brown crossing reads the same way
                  without a table of sentences. */
-              showDividendToast(
-                `Corporations can now upgrade ${from.toLowerCase()} tiles to ${to.toLowerCase()}.`,
-                null,
-                /* Design note #929: the two eras the graphic draws -- a transition with one hex would be a
-                   statement about nothing. */
-                { from, to },
-                /* Design note #1094: and its own window, 30% shorter than the standard one. */
-                PHASE_CHANGE_TOAST_MS,
+              /* Design note (VF-4): THE TOAST IS UNCHANGED; ONLY ITS CUE MOVED. Same sentence, same
+                 graphic, same window, same `showDividendToast` door with #825's guard behind it -- held
+                 back to the badge's own `faceSwapped` milestone -- the fold's end under whichever
+                 timeline is playing -- so the plate has already turned over when the toast draws the eye. Every era crossing IS a displayed-phase change (2->3, 4->5, and
+                 #1312's brown->gray at the first Diesel), so there is no case where this waits for a
+                 flip that is not running. */
+              holdForPhaseBadgeFlip("faceSwapped", () =>
+                showDividendToast(
+                  `Corporations can now upgrade ${from.toLowerCase()} tiles to ${to.toLowerCase()}.`,
+                  null,
+                  /* Design note #929: the two eras the graphic draws -- a transition with one hex would be
+                     a statement about nothing. */
+                  { from, to },
+                  /* Design note #1094: and its own window, 30% shorter than the standard one. */
+                  PHASE_CHANGE_TOAST_MS,
+                ),
               );
             }
           }
@@ -7876,6 +8621,33 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
                 announcing,
               );
             }
+          }
+          /* ==================================================================
+              DESIGN NOTE (VF-6): THE BANK BREAKS ONCE, AND THE TICKET IS STAMPED ONCE
+             ==================================================================
+             VF-4'S SHAPE, FOR VF-4'S REASON. Two settled states, one comparison, nothing stored: a
+             `useEffect` watching `bankIsBroken(gameState)` sees every intermediate commit of a rebuild,
+             so a refresh of a broken game would stamp the ticket again for an event an hour old. There
+             is no previous-value ref here to go stale, because there is no previous stored at all --
+             which is also why an Undo back past the break needs no un-latching: the rebuilt state simply
+             never reached it, exactly as #1561 records for the latch itself.
+
+             `bankIsBroken` ON BOTH SIDES, never a balance comparison. The latch is the authority (#1561)
+             and asking it twice is what makes this a false -> true EDGE rather than a "the balance went
+             negative" guess -- a Bank already broken whose balance dips again produces `true -> true` and
+             no second stamp.
+
+             GUARDED ON `replayingHistory`, NOT ON `options?.isRemoteReplay`, for the reason the era block
+             above states at length: this is not a receipt for something the local client drove. Every
+             player derives the break from the same state, and a live action arriving from another
+             browser IS a Bank break that just happened.
+
+             THE STAGED LABEL IS THE TICKET'S OWN PREVIOUS TEXT -- `before`'s countdown, so the stamp
+             lands on the figure the player was watching. `null` when the Bank went from comfortable to
+             broken in one payout and there was no ticket on screen to stage; `BankTicket` handles that
+             case rather than this one inventing a figure. */
+          if (!replayingHistory && before !== null && !bankIsBroken(before) && bankIsBroken(after)) {
+            showBankBreakStamp(bankBreakWarning(Number(before.virtual_bank_vgp))?.label ?? null);
           }
         }
 
@@ -7958,6 +8730,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
          it are -- an omitted stable dependency is indistinguishable from a forgotten one to the next
          reader. */
       showStockTransaction,
+      /* Design note (VF-4): stable for the same reason as the four above -- `useCallback` with an empty
+         list -- and named for the same reason, that an omitted stable dependency is indistinguishable from
+         a forgotten one. */
+      showPhaseBadgeFlip,
+      holdForPhaseBadgeFlip,
       session,
       refreshGameState,
       spectator,
@@ -10359,6 +11136,27 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
        implementation of avoiding it. */
     if (privatePayoutPhase !== null) return null;
     /* ==================================================================
+        DESIGN NOTE (VF-7): AND THE RUST FLOURISH FINISHES BEFORE ITS TUTORIAL SPEAKS
+       ==================================================================
+       #1049a's argument one surface over, and the same mechanism: "withholding the notice ... is enough
+       to produce that -- the queue is untouched, `dismissedFleetNoticesRef` is untouched, and the memo
+       recomputes when this clears because the state it reads is in its dependency list. Nothing is lost
+       by waiting; the notice is exactly as due a moment later."
+       HELD FOR THE LENGTH OF THE ACTIVE RUST SCHEDULE, from `showRustFlourish` -- 530ms of full motion,
+       240ms of reduced. The case it exists for is the Gentle Rust expiry (#1002), which raises the notice
+       for the ACTING corporation in the same dispatch that destroys its chips: without this the dialog
+       would be over the row before the first frame of oxidation.
+       RUST ONLY. A train-limit notice has no flourish to wait for -- that vocabulary is a later batch --
+       so holding it would be delaying a modal for an animation that is not running. */
+    /* Design note (VF-8): both causes now have a flourish to wait for, and each waits on its own
+       schedule. A notice whose flourish is still running is simply not due yet -- #1049a's mechanism,
+       and the queue, the dismissed set and the key are all untouched by the wait. */
+    const candidates = pendingFleetNotices.filter(
+      (notice) =>
+        !(notice.cause === "rust" && rustNoticeHeld) &&
+        !(notice.cause === "limit" && discardNoticeHeld),
+    );
+    /* ==================================================================
         DESIGN NOTE 981: A BLOCKING MODAL FOR SOMEBODY ELSE'S CORPORATION
        ==================================================================
        REPORTED: "the Rust and Train Limit modals pop up for every player in the room ... Inactive players
@@ -10378,17 +11176,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
        -- a modal one dismiss away -- where hiding it loses the notice for that turn permanently. */
     const presidentOf = (companyId: number) =>
       gameState?.public_companies?.find((entry) => entry.company_id === companyId)?.president ?? null;
-    const mine = pendingFleetNotices.filter((notice) => {
+    const mine = candidates.filter((notice) => {
       if (notice.companyId !== actingProtocolId) return false;
       const president = presidentOf(notice.companyId);
       if (president === null || viewerAddress === null) return true;
       return president === viewerAddress;
     });
-    return nextDueNotice(
-      mine,
-      (notice) => isNoticeSilenced(sandboxRoomCode, notice.companyId, notice.cause),
-      dismissedFleetNoticesRef.current,
-    );
+    return nextDueNotice(mine, dismissedFleetNoticesRef.current);
   }, [
     gameState?.current_round_type,
     gameState?.public_companies,
@@ -10398,6 +11192,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
     turnIdentity,
     sandboxRoomCode,
     viewerAddress,
+    /* Design note (VF-7): and what makes the rust hold lift on its own, for exactly #1049a's reason one
+       line down -- this memo has to re-run when the flourish finishes, and a ref read would leave the
+       notice suppressed until something else happened to change. */
+    rustNoticeHeld,
+    discardNoticeHeld,
     /* Design note #1049a: what makes the suppression above lift on its own. Listed rather than read through a
        ref precisely BECAUSE this memo must re-run when the payout modal closes -- a ref read would suppress
        the notice and then never notice it was safe to show it. */
@@ -10417,15 +11216,6 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
     pendingFleetNoticesRef.current = next;
     setPendingFleetNotices(next);
   }, [dueFleetNotice, rememberDismissed]);
-
-  const toggleFleetNoticeSilence = useCallback(
-    (silenced: boolean) => {
-      const notice = dueFleetNotice;
-      if (!notice) return;
-      setNoticeSilenced(sandboxRoomCode, notice.companyId, notice.cause, silenced);
-    },
-    [dueFleetNotice, sandboxRoomCode],
-  );
 
   const autoSkipReason = useMemo<string | null>(() => {
     if ((gameState?.current_round_type ?? null) !== "OperatingRound") return null;
@@ -12725,28 +13515,31 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
         roomContext={
           <>
         {/* ==================================================================
-             DESIGN NOTE 901: THE BANK IS BROKEN AND THE GAME HAS NOT STOPPED
+             DESIGN NOTE 901, RETIRED BY VF-6: ONE PERSISTENT BANK AUTHORITY, NOT TWO
             ==================================================================
-            REQUESTED: "Add a persistent Bank Broken warning badge to the main UI once the bank has broken so
-            all players are visually aware that they are in the final set of rounds."
-            AND #898 IS WHAT MAKES IT NECESSARY. Before that fix the bank breaking ended the game on the spot,
-            so there was no interval to warn about -- the modal WAS the notification. Now there is a stretch of
-            real play between the break and the ending, during which every decision is a last decision, and
-            nothing on screen said so. A player buying a train to set up next round needs to know there is no
-            next round.
-            IT NAMES WHAT IS LEFT rather than just raising an alarm. "Bank broken" alone tells a player
-            something is wrong; the second half tells them what to do about it, and the two cases differ --
-            finish this set, or play one more.
-            NOT GATED ON `sandbox`, unlike the ending used to be. A broken bank is a fact about the game, not
-            about which build is running it. */}
-        {bankIsBroken(gameState) && gameState?.current_round_type !== "GameEnd" && (
-          <span style={styles.bankBrokenBadge} title="The Bank cannot pay. The game ends when this Operating Round set finishes.">
-            ⚠ BANK BROKEN &middot;{" "}
-            {gameState?.current_round_type === "OperatingRound"
-              ? "final OR set"
-              : "one final OR set to play"}
-          </span>
-        )}
+            #901 PUT A PERSISTENT "BANK BROKEN" BADGE HERE and its reasoning was right and is inherited
+            whole: "there is a stretch of real play between the break and the ending, during which every
+            decision is a last decision, and nothing on screen said so. A player buying a train to set up
+            next round needs to know there is no next round." It also insisted the badge NAME WHAT IS
+            LEFT rather than merely raise an alarm, and was not gated on `sandbox`, because a broken Bank
+            is a fact about the game rather than about which build is running it. All three survive.
+
+            WHAT DID NOT SURVIVE IS THE BADGE BEING A SECOND THING. VF-6 makes the Bank indicator one
+            continuous object -- the action bar's railroad ticket, which counts dollars down to the break
+            and Operating Rounds after it -- and this badge said the same fact, less precisely, in another
+            bar. "Final OR set" is #901 doing the best it could from the Top Bar, which cannot see the
+            calendar; the ticket says "2 ORs remaining" and then "1 OR remaining", derived from the round
+            machine itself (`bankBreakEndgame.ts`). Two surfaces answering one question two ways is #891,
+            and the less precise one goes.
+
+            THE COVERAGE WAS AUDITED BEFORE IT WENT, not assumed. The action bar renders on every tab
+            (#1084), so a playing client has the ticket wherever this badge used to be -- and it is
+            REPLACED in the two places the bar is not rendered: the spectator dock carries the same
+            component (see the note there), and at `GameEnd` the game-over strip takes the bar's slot
+            (#1442), which is the handoff this batch wants rather than a hole. The one narrowing is the
+            replay scrub, where the dock says in words that the board shown is historical; the live
+            ticket returns with the Final position. Recorded in VISUAL_FLOURISH_BACKLOG.md rather than
+            left for someone to find. */}
 
         {/* Design note #23: says plainly what mode this is, because a
             read-only board is otherwise indistinguishable from a board where
@@ -12905,6 +13698,19 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
         <div style={styles.spectatorNotice}>
           👁 Watching game #{gameId}. Board, ledger and market are live; every action
           control is hidden. Join a room from the lobby to play.
+          {/* ==================================================================
+               DESIGN NOTE (VF-6): THE ONE COVERAGE HOLE THE ACTION BAR LEAVES
+              ==================================================================
+              THE TICKET LIVES IN THE ACTION BAR, and since #1084 that bar renders on every tab -- so for a
+              playing client it is on screen wherever the endgame status matters. A SPECTATOR NEVER SEES
+              IT: this branch replaces the bar entirely, because a read-only viewer has no controls. That
+              is exactly the coverage the Top Bar's persistent "BANK BROKEN" badge (#901) was providing,
+              and it is why removing that badge without this line would have cost spectators the fact.
+              THE SAME COMPONENT, NOT A SECOND BADGE. One `BankTicket`, one `bankBroken` derivation, one
+              sentence -- which is what "one persistent Bank-broken authority" has to mean if it is to
+              mean anything. It carries no `stamp`: a spectator gets the persistent state, and the
+              one-time ceremony belongs to the bar. */}
+          <BankTicket reading={bankTicketReading(bankBroken, null)} />
         </div>
       ) : scrubbing ? (
         <div style={styles.spectatorNotice}>
@@ -12983,6 +13789,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
            limit badge vanish when the step turned rather than when the threshold cleared. */
         depot={depot}
         bankRemaining={gameState ? Number(gameState.virtual_bank_vgp) : null} // #1410
+        /* Design note (VF-6): the latch's own answer, and the one-time stamp. The bar prints them;
+           it derives neither. */
+        bankBroken={bankBroken}
+        bankBreakStamp={bankBreakStamp}
+        /* Design note (VF-7): the acting corporation's chips are the buyer's own -- the player who just
+           caused the rust is looking at this bar. */
+        rust={rustEvent}
+        /* Design note (VF-8): and the discard, for the corporation whose president just answered. */
+        discard={discardEvent}
         // Design note #1033: the rust countdown's wording, and whether that badge pulses.
         gentleRust={resolveVariants(gameState?.variants).gentleRust}
         orSequence={
@@ -13261,6 +14076,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
                 dieselExchange: dieselExchangeOffer, // #1303
                 onExchangeForDiesel: handleExchangeForDiesel,
                 returnedTrains: returnedTrainsForSale, // #1314
+                /* Design note (VF-8): the Bank Pool's end of a live discard. `null` for all but half
+                   a second of the game, and for every viewer whose panel is shut. */
+                discardReceipt: discardEvent
+                  ? { model: discardEvent.discard.model, token: discardEvent.token }
+                  : null,
                 onBuyReturnedTrain: handleBuyReturnedTrain,
                 onProposeTrade: handleProposeTrainTrade,
                 labelForAddress: (address: string) =>
@@ -13324,6 +14144,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
           ) : null
         }
         phase={currentPhase}
+        /* Design note (VF-4): the displayed-phase change the badge plays. `null` for all but half a
+           second of the game, which is the ordinary persistent badge. */
+        phaseFlip={phaseBadgeFlip}
         // Design note #493: an action, not a mode.
         onAutoRoute={handleAutoRouteAgain}
         onSelectRouteTrain={handleSelectRouteTrain}
@@ -13568,6 +14391,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
                        reports nothing back; every figure on it is the committed one either way. */
                     transaction={stockTransaction}
                     onPresidencyCue={handlePresidencyCue}
+                    floatEvent={floatEvent}
+                    onFloatCue={handleFloatCue}
                     purchaseBlockFor={purchaseBlockFor}
                     saleBlockFor={saleBlockFor}
                     salePriceAfter={salePriceAfter}
@@ -13802,6 +14627,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
                 {/* Automated contextual block underneath the board. */}
                 <ContextualSubPanel
                   gameState={gameState}
+                  /* Design note (VF-7): the Round Detail table is the one surface that shows every
+                     corporation's fleet at once, so it is where a multi-corporation rust is actually
+                     watched. One event for the whole table; each row takes its own share. */
+                  rust={rustEvent}
+                  discard={discardEvent}
                   // Design note #405: the footer now renders the ledger's
                   // Player Assets table, which needs the same net-worth
                   // query the ledger runs and a way to name a seat.
@@ -14157,16 +14987,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
         onAcknowledge={() => setPrivatePayoutPhase(null)}
       />
       {/* Design note #896: unskippable, and above everything -- the turn does not start until it is answered.
-          `key` remounts it per notice so the silence checkbox re-seeds from the store for each one. */}
+          Design note (VF-8): the `key` used to exist so the silence checkbox re-seeded per notice; the
+          checkbox is gone and the key stays, because remounting per notice is still what stops one
+          notice's dismissal state being reused by the next. */}
       <FleetLossModal
         key={dueFleetNotice ? `${dueFleetNotice.companyId}:${dueFleetNotice.cause}` : "none"}
         notice={dueFleetNotice}
-        silenced={
-          dueFleetNotice
-            ? isNoticeSilenced(sandboxRoomCode, dueFleetNotice.companyId, dueFleetNotice.cause)
-            : false
-        }
-        onToggleSilence={toggleFleetNoticeSilence}
         onAcknowledge={acknowledgeFleetNotice}
       />
 
@@ -14459,6 +15285,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
             setIntroPlaying(false);
           }}
           sfxEnabled={sfxEnabled}
+          /* Design note (intro editorial pass): the RESOLVED type, from the same authority every other
+             surface asks (`gameTypeOf`), never a label or a filename. `resolveVariants` fills a room dealt
+             by an older build, so a document that predates the drop-down still names a film. */
+          gameType={gameTypeOf(resolveVariants(gameState?.variants))}
         />
       )}
       {/* #1418: the outro, under the Game Over modal -- which rises over it at the cue and keeps its last

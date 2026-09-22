@@ -111,8 +111,21 @@ describe("the board stages a lay (#1465)", () => {
   it("changes the printed passes only through the presented grid, which is the grid itself when nothing is previewed", () => {
     expect(RENDERER).toContain("const presentedGrid: MapGridResponse = previewEntry");
     expect(RENDERER).toContain(": mapGrid;");
-    const draw = sliceBetween(RENDERER, "const draw = useCallback(() => {", "tileTransitionTick,\n  ]);");
+    /* ==================================================================
+        AMENDED: THE END ANCHOR WAS THE LAST DEPENDENCY, WHICH IS NOT A STABLE THING TO BE
+       ==================================================================
+       It read `tileTransitionTick,\n  ]);` -- the draw callback's dependency array, identified by whatever
+       happened to be last in it. VF-2 then appended `routeSignalTick` for the route pulse's own frame
+       clock, and this slice stopped resolving: `sliceBetween` threw, so the case failed loudly rather
+       than passing over an empty region (#886's whole reason for making it throw).
+       NOTHING WAS WRONG WITH THE CODE. A dependency array grows every time the callback reads something
+       new, so anchoring on its last entry is anchoring on the next feature. Re-anchored past it, on the
+       effect that CALLS `draw` -- the first `useEffect` after the callback, which is structural rather
+       than incidental and cannot be pushed along by another dependency. */
+    const draw = sliceBetween(RENDERER, "const draw = useCallback(() => {", "useEffect(() => {\n    draw();");
     expect(count(draw, "hexHasLaidTile(mapGrid,")).toBe(0);
+    // The slice really covers the callback, which is the check that keeps this from going vacuous again.
+    expect(draw).toContain("for (const tile of presentedGrid.tiles) {");
   });
 });
 
@@ -159,8 +172,29 @@ describe("the tile being chosen is a proposal, and the confirm builds into it (#
     expect(values).toContain("badgePresentationAt(stagedBadge.transition.plan, stagedBadge.t)");
     expect(values).toContain(": proposingAt(tile.q, tile.r)");
     expect(values).toContain("PROPOSED_BADGE");
-    expect(values).toContain('withRevealSide(ctx, center, hexSize, badge.front, "west", () => printValue(1, claimedHexSlots));');
-    expect(values).toContain('withRevealSide(ctx, center, hexSize, badge.front, "east", () => printValue(provisionalAlpha, before));');
+    /* ==================================================================
+        AMENDED: THE PAINTER SPLIT IN TWO, AND THIS SIDE DELIBERATELY TAKES THE UNDEFERRED HALF
+       ==================================================================
+       It named `printValue`, which was the only painter when #1471 wrote this. VF-2's route pulse split
+       it: `paintTileBadge` still draws the badge, and `printValue` now wraps it in `paintBadge`, which
+       DEFERS a reacting badge so it can be elevated above the tokens.
+       AND THE REVEAL-CROSSING SPLIT MUST NOT BE DEFERRED, which is why the code reads the way it does
+       rather than the way this case did. Each half here is drawn inside a `withRevealSide` clip; deferring
+       one of them would replay it later, outside that clip, and paint the whole badge twice at two
+       different alphas. VF-2 records the decision in place ("keeps the pre-existing draw order ... for
+       this one edge case only") and it is the correct one.
+       SO THE ASSERTION FOLLOWS THE CODE TO `paintTileBadge`, and the rule #1471 was really making is
+       unchanged and still asserted: the committed side claims the slot at full alpha, the proposal's side
+       is drawn into the ledger AS IT STOOD BEFORE THE CLAIM at the provisional alpha, and the two are
+       separated by the reveal front. The `printValue` absence is asserted too, so a future tidy-up that
+       "unifies" these onto the deferring painter fails here instead of drawing the badge twice. */
+    expect(values).toContain('withRevealSide(ctx, center, hexSize, badge.front, "west", () => paintTileBadge(1, claimedHexSlots));');
+    expect(values).toContain('withRevealSide(ctx, center, hexSize, badge.front, "east", () => paintTileBadge(provisionalAlpha, before));');
+    const crossing = values.slice(values.indexOf("const before = new Map<string, Set<number>>();"));
+    expect(crossing).not.toContain("printValue(");
+    // And the ordinary, non-crossing cases DO go through the deferring painter, which is the control.
+    expect(values).toContain("printValue(1, claimedHexSlots);");
+    expect(values).toContain("printValue(badge.provisionalAlpha, claimedHexSlots);");
   });
 });
 
@@ -344,14 +378,19 @@ describe("a piece the lay moves rides in, and a token's planned place waits for 
   });
 
   it("while a tile is being chosen, draws a token the confirm will move only at its planned place", () => {
-    const proposing = sliceBetween(pass, "} else if (proposalPlan?.plan && proposingAt(q, r)) {", "if (plannedPresence > 0) {");
+    /* NAMED APART FROM THE `proposing` SLICE ABOVE, which is a slice of RENDERER while this is a slice of
+       `pass`. Both were called `proposing`, and `sourceScanSweep` reported five phantom missing anchors
+       for this case because it cannot follow a slice-of-a-slice and bound these to the other declaration
+       instead. The suite passed throughout -- a `toContain` against the wrong region would have failed --
+       so this is a naming fault that only the sweep could see, which is the sweep earning its keep. */
+    const proposalToken = sliceBetween(pass, "} else if (proposalPlan?.plan && proposingAt(q, r)) {", "if (plannedPresence > 0) {");
     // Where the token stands now, asked exactly as a starting transition asks it: of the tile under the proposal.
-    expect(proposing).toContain("laidTile: laidUnderPreview,");
-    expect(proposing).toContain("previewCity: undefined,");
+    expect(proposalToken).toContain("laidTile: laidUnderPreview,");
+    expect(proposalToken).toContain("previewCity: undefined,");
     // Of the very ride a confirm plays, so the token that is only planned here is the token that rides in.
-    expect(proposing).toContain("tokenPositionAt(plan, t, ride)");
-    expect(proposing).toContain("plannedPresence = 1;");
-    expect(proposing).toContain("physical = false;");
+    expect(proposalToken).toContain("tokenPositionAt(plan, t, ride)");
+    expect(proposalToken).toContain("plannedPresence = 1;");
+    expect(proposalToken).toContain("physical = false;");
   });
 
   it("from the confirm, keeps a moving token's planned place under the real token until the commit settles it there", () => {
@@ -400,7 +439,9 @@ describe("a transition sounds its own beats, through the one shared helper (#147
     expect(clock).toContain("playVariantCue(TILE_TRANSITION_SFX[cue], currentSfxEnabled())");
     expect(count(RENDERER, "playVariantCue(")).toBe(1);
     expect(count(RENDERER, "cuesReached(")).toBe(1);
-    const draw = sliceBetween(RENDERER, "const draw = useCallback(() => {", "tileTransitionTick,\n  ]);");
+    // AMENDED: re-anchored past the dependency array -- see the note on the same slice above.
+    const draw = sliceBetween(RENDERER, "const draw = useCallback(() => {", "useEffect(() => {\n    draw();");
+    expect(draw).toContain("for (const tile of presentedGrid.tiles) {");
     const detection = sliceBetween(RENDERER, "useLayoutEffect(() => {", "}, [mapGrid, previewTile, publicCompanies, boardId, hexSize]);");
     for (const elsewhere of [draw, detection]) {
       expect(elsewhere).not.toContain("playVariantCue");

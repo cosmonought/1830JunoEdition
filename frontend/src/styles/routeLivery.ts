@@ -50,6 +50,13 @@ export function routeTrainColor(trainIndex: number): string {
   return ROUTE_TRAIN_COLORS[Math.floor(trainIndex) % ROUTE_TRAIN_COLORS.length];
 }
 
+// Design note (VF-2 finalize pass, 2026-09-21): the badge-hit interior tint that used to live here
+// (BADGE_HIT_MAX_TINT_SOLO / _COINCIDENCE, BADGE_HIT_NEUTRAL_COLOR) is RETIRED. A visual-prototype comparison
+// (VISUAL_FLOURISH_BACKLOG.md) resolved in favour of a scale-only mechanical pop instead of a colour flush --
+// the badge's interior stays plain white at all times now; see hexCanvasPrimitives.ts's `BadgeHitVisual` and
+// routeSignalGeometry.ts's `badgePopScale` for the current presentation. Nothing replaces these constants: a
+// badge's hit reaction takes no colour input at all any more.
+
 /* Design note #495: every piece of the click-to-highlight existed and none were
    joined. `drawRouteOverlays` has honoured `emphasis` since #373 and the planner
    rows and chips have raised `highlightedTrainIndex` for just as long;

@@ -7,27 +7,37 @@
 // REQUESTED: an unavoidable blocking modal at the start of a corporation's Operating Round turn when it lost
 // trains to rust or to a train limit drop, with a per-corporation silence toggle for each notification type.
 //
-// THREE PROPERTIES CARRY THE FEATURE, and they are what this file is about:
-//   1. ONE LOSS IS UP TO TWO NOTICES. The toggle is per cause, so rust and limit must never travel together.
+// THREE PROPERTIES CARRIED THE FEATURE, and two of them are what this file is still about:
+//   1. ONE LOSS IS UP TO TWO NOTICES. Rust and limit are separate events and must never travel together.
 //   2. A DISMISSED NOTICE STAYS DISMISSED ACROSS A REPLAY. Undo rebuilds state by replaying the log, which
 //      re-queues every notice; the dismissal key is derived from game state so a rebuild reproduces it.
 //   3. SILENCED AND DISMISSED ARE DIFFERENT QUESTIONS. Collapsing them would make silencing a notice
 //      retroactively mark it seen, which surfaces the moment a player switches it back on.
 //
-// NODE, NOT JSDOM, AND THE STORE STILL WORKS. `isNoticeSilenced` answers from its in-memory Map first and
-// treats `window` being absent exactly as it treats private browsing -- so the toggle is fully exercised here
-// without a browser, which is also the guarantee a player in a locked-down browser is relying on.
+// ==================================================================
+//  AMENDED BY VF-8: (3) HAS NO SUBJECT LEFT, AND (1) IS NO LONGER ABOUT A TOGGLE
+// ==================================================================
+// The per-corporation silence store is retired. VF-7 gated the RUST notice on tutorial mode and narrowed
+// the store to the train-limit cause because that dialog still had a real reader; VF-8's audit found it
+// unreachable under v2 rules besides -- #1530 splices a `DiscardTrain` out of the fleet diff and the phase
+// change takes nothing, so `describeFleetLosses` has reported no discard since -- and re-homed the
+// explanation onto the president's action, where the chosen train is actually known. With no reader on
+// either half, `isNoticeSilenced`, `setNoticeSilenced`, `silenceLabel` and `SilenceableCause` are gone,
+// `nextDueNotice` takes the queue and the dismissed set, and ONE system decides whether either dialog
+// appears: the tutorial setting. `components/trainDiscardFlourish.test.ts` asserts the absence.
+//
+// (1) SURVIVES AS A FACT ABOUT THE EVENTS rather than about the toggle: a rust and a limit drop are two
+// things that happened, they are explained separately, and each waits on its own flourish.
+//
+// NODE, NOT JSDOM, AND NOTHING HERE NEEDS A BROWSER ANY MORE -- which is now true by construction rather
+// than by the store's care over a missing `window`: no function under test touches storage at all.
 
 import {
   fleetLossNotices,
-  isNoticeSilenced,
   nextDueNotice,
   noticeBody,
   noticeDismissKey,
   noticeHeadline,
-  resetNoticeSilenceCache,
-  setNoticeSilenced,
-  silenceLabel,
   type FleetLossNotice,
 } from "./fleetLossNotice";
 import type { FleetLoss } from "../gameEngine/sandboxSession";
@@ -45,8 +55,6 @@ const loss = (over: Partial<FleetLoss> = {}): FleetLoss => ({
 /* Design note #1032: THE TURN IS NO LONGER PART OF A NOTICE'S IDENTITY, so this fixture is gone with the
    parameter it fed. It described the showing; the key now describes the event, which is what made a dismissal
    survive into the next operating round. */
-
-beforeEach(() => resetNoticeSilenceCache());
 
 describe("one loss becomes one notice per cause (design note #896)", () => {
   it("splits a phase change that both rusted and trimmed", () => {
@@ -177,15 +185,13 @@ describe("the copy tells a president what happened and what it costs", () => {
     expect(readStripped("components/FleetLossModal.tsx")).not.toContain("noticeGentleRustLine");
   });
 
-  it("labels the toggle for the cause AND the corporation, never for both causes at once", () => {
-    expect(silenceLabel(rust)).toContain("rust");
-    expect(silenceLabel(rust)).toContain("PRR");
-    expect(silenceLabel(limit)).toContain("train limit");
-    /* THE CONTROL ON THE COPY. A label that mentioned the other cause would be promising a scope the store
-       does not implement -- the keys are per cause, and a player reading "rust and limit" would be misled. */
-    expect(silenceLabel(rust)).not.toContain("limit");
-    expect(silenceLabel(limit)).not.toContain("rust");
-  });
+  /* ==================================================================
+      RETIRED BY VF-8: "labels the toggle for the cause AND the corporation"
+     ==================================================================
+     There is no toggle to label. Both fleet-loss causes are gated on tutorial mode, so `silenceLabel`
+     and the store it named are gone (`fleetLossNotice.ts`'s retirement note carries the reasoning).
+     The copy this case guarded -- that a label must not promise a scope the keys do not implement -- has
+     no subject left; the modal's remaining copy is `noticeHeadline`/`noticeBody`, checked above. */
 });
 
 describe("the dismissal key names the event, not the showing (design notes #896, #1032)", () => {
@@ -232,83 +238,55 @@ describe("the dismissal key names the event, not the showing (design notes #896,
 describe("choosing which notice to raise", () => {
   const [rust, limit] = fleetLossNotices(loss({ rusted: ["2"], discarded: ["3"] }), "4", 3);
   const queue = [rust, limit];
-  const noneSilenced = () => false;
 
   it("raises the first unanswered one", () => {
-    expect(nextDueNotice(queue, noneSilenced, new Set())).toBe(rust);
+    expect(nextDueNotice(queue, new Set())).toBe(rust);
   });
 
   it("skips a silenced cause and still raises the other", () => {
-    /* THE CONTROL THAT MATTERS MOST for a per-cause toggle: silencing rust must leave the limit notice
-       standing. A store keyed per corporation and not per cause would fail exactly here. */
-    const rustSilenced = (notice: FleetLossNotice) => notice.cause === "rust";
-    expect(nextDueNotice(queue, rustSilenced, new Set())).toBe(limit);
+    /* ==================================================================
+        AMENDED BY VF-8: THE PER-CAUSE TOGGLE IS GONE; THE PER-CAUSE KEY IS NOT
+       ==================================================================
+       This case checked that silencing one cause left the other standing -- "a store keyed per
+       corporation and not per cause would fail exactly here." There is no store. The property that
+       survives is the one the DISMISSAL key still carries, and it fails in the same way for the same
+       reason if the key ever stops naming the cause: answering the rust notice must leave the limit
+       notice of the same phase change standing. */
+    expect(nextDueNotice(queue, new Set([noticeDismissKey(rust)]))).toBe(limit);
+    expect(nextDueNotice(queue, new Set([noticeDismissKey(limit)]))).toBe(rust);
   });
 
   it("moves to the next once the first is dismissed", () => {
     const dismissed = new Set([noticeDismissKey(rust)]);
-    expect(nextDueNotice(queue, noneSilenced, dismissed)).toBe(limit);
+    expect(nextDueNotice(queue, dismissed)).toBe(limit);
   });
 
   it("raises nothing when everything is answered", () => {
     const dismissed = new Set([noticeDismissKey(rust), noticeDismissKey(limit)]);
-    expect(nextDueNotice(queue, noneSilenced, dismissed)).toBeNull();
-    expect(nextDueNotice([], noneSilenced, new Set())).toBeNull();
+    expect(nextDueNotice(queue, dismissed)).toBeNull();
+    expect(nextDueNotice([], new Set())).toBeNull();
   });
 
-  it("does not let silencing stand in for having been seen", () => {
-    /* SILENCED AND DISMISSED ARE ASKED SEPARATELY, and this is the case that shows why. A notice skipped
-       because it was silenced was never DISMISSED, so switching the toggle back off raises it again. If the
-       two were collapsed, a player who silenced a notice and changed their mind would silently never see it. */
-    const silencedNow = (notice: FleetLossNotice) => notice.cause === "rust";
-    expect(nextDueNotice([rust], silencedNow, new Set())).toBeNull();
-    expect(nextDueNotice([rust], noneSilenced, new Set())).toBe(rust);
-  });
+  /* ==================================================================
+      RETIRED BY VF-8: "does not let silencing stand in for having been seen"
+     ==================================================================
+     #896's distinction between a standing preference and "you have already seen this" needed two
+     states to keep apart. VF-8 retires the preference, so `nextDueNotice` asks one question and there
+     is nothing to confuse it with. The dismissal half is checked by the three cases above. */
 });
 
-describe("the silence toggles are scoped so they cannot leak (design note #896a)", () => {
-  it("is off until somebody turns it on", () => {
-    /* THE SAFE DIRECTION, and the one a storage failure also lands on: the player is told something true
-       rather than quietly not told it. */
-    expect(isNoticeSilenced("JUNO-Y8V", PRR, "rust")).toBe(false);
-  });
-
-  it("remembers a toggle without a browser to remember it in", () => {
-    /* THE FALLBACK, ASSERTED RATHER THAN ASSUMED. There is no `window` in this environment, so every storage
-       call throws and the Map is the only thing answering. `TutorialModal`'s wrapper drops the value in that
-       case, which is right there and wrong here: a toggle the player just set doing nothing is worse than one
-       that does not persist past the tab. */
-    setNoticeSilenced("JUNO-Y8V", PRR, "rust", true);
-    expect(isNoticeSilenced("JUNO-Y8V", PRR, "rust")).toBe(true);
-    setNoticeSilenced("JUNO-Y8V", PRR, "rust", false);
-    expect(isNoticeSilenced("JUNO-Y8V", PRR, "rust")).toBe(false);
-  });
-
-  it("keeps the two causes apart", () => {
-    setNoticeSilenced("JUNO-Y8V", PRR, "rust", true);
-    expect(isNoticeSilenced("JUNO-Y8V", PRR, "limit")).toBe(false);
-  });
-
-  it("keeps two corporations apart", () => {
-    setNoticeSilenced("JUNO-Y8V", PRR, "rust", true);
-    expect(isNoticeSilenced("JUNO-Y8V", 8, "rust")).toBe(false);
-  });
-
-  it("keeps two rooms apart, which is why this is not localStorage", () => {
-    /* THE LEAK THE ROOM SCOPE EXISTS TO CLOSE. 1830's corporations are the same eight every game, so a toggle
-       keyed only by corporation would silence PRR in a game the player has not started yet -- with nothing on
-       screen to explain why they were never told their trains had rusted. */
-    setNoticeSilenced("JUNO-Y8V", PRR, "rust", true);
-    expect(isNoticeSilenced("JUNO-ABC", PRR, "rust")).toBe(false);
-  });
-
-  it("gives a room-less local game a working switch of its own", () => {
-    // Not every game has a code; the toggle still has to work, and must not collide with a coded room.
-    setNoticeSilenced(null, PRR, "rust", true);
-    expect(isNoticeSilenced(null, PRR, "rust")).toBe(true);
-    expect(isNoticeSilenced("JUNO-Y8V", PRR, "rust")).toBe(false);
-  });
-});
+/* ==================================================================
+    RETIRED BY VF-8: THE SILENCE TOGGLES, AND EVERY CASE THAT CHECKED THEM
+   ==================================================================
+   THIS DESCRIBE PINNED #896a's SCOPING -- room-scoped `sessionStorage` rather than `localStorage` so a
+   toggle set for PRR in one game could not silence PRR in a game the player had not started; the
+   in-memory Map as the truth and storage as the mirror, so a toggle still worked in private browsing;
+   one key per corporation per cause. Every one of those arguments was right, and all of them are now
+   about a mechanism that no longer exists: both fleet-loss causes are gated on tutorial mode, so the
+   answer to "stop telling me this" is one application-wide setting rather than a box per corporation.
+   DELETED RATHER THAN LEFT SKIPPED. A suite that checks a retired store is a suite that will be
+   "repaired" by the next reader who finds it red. The reasoning is preserved in `fleetLossNotice.ts`'s
+   own retirement note, which is where somebody rebuilding a per-corporation preference would look. */
 
 describe("the modal is genuinely unavoidable (design note #896)", () => {
   /* ==================================================================

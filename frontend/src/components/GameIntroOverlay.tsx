@@ -29,6 +29,7 @@
 
 import React from "react";
 
+import { gameTypeOf, type GameType } from "../gameEngine/gameVariants";
 import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { duckRadio, DUCK_FOR_VIDEO } from "../utils/audio";
 // Design note #1144: the chrome's scale, so this layer can divide back out of it.
@@ -38,6 +39,82 @@ import { useUiScale } from "../utils/useUiScale";
 /** Served from `public/`, like the haunting clips. `video/` rather than `audio/`: those three live beside
  *  the variant SFX they belong to, and this is not a sound effect. */
 export const GAME_INTRO_SRC = `${process.env.PUBLIC_URL ?? ""}/video/game-intro.mp4`;
+
+/* ==================================================================
+    DESIGN NOTE (INTRO EDITORIAL PASS): THREE TITLES, ONE FILM, THREE DIFFERENT HANDOFFS
+   ==================================================================
+   THE RULESET NOW NAMES THE TITLE. A room playing 18XX+ opened on a wordmark reading 18XX, which is the
+   same class of fault #961a names: one variant wearing another's name on a screen the table reads before
+   agreeing to it.
+
+   AND THE THREE TITLE CLIPS ARE NOT INTERCHANGEABLE, which is the whole of this pass. They are the same
+   nominal length (~4s) and have completely different internal editing, measured frame by frame at 24fps:
+
+     BASE (inside `game-intro.mp4`) -- the wordmark is COMPLETE AT FRAME ZERO. It never constructs; the
+       whole clip is specular shimmer over a finished title. Its decorative phase is therefore ~3.0s long.
+     PLUS (`18XXPlus.mp4`) -- the lettering is present but unlit at t=0 and a travelling burst illuminates
+       it left to right. Readable by ~1.96s; the burst clears the wordmark's right edge at 2.917s and after
+       that only a sparkle trail drifts. Decorative phase ~1.08s.
+     LPF (`18xxLPF.mp4`) -- "Project 18XX" is lit from t=0, the "+" is struck at ~1.5s, and then
+       "A LEVEL PLAYING FIELD" materialises letter by letter and does not finish kerning until 3.167s.
+       Settled at 3.208s. Decorative phase ~0.79s -- a quarter of the base's.
+
+   SO THE RULE IS EDITORIAL, NOT NUMERICAL: every variant hands off when its title has finished being
+   BUILT and only decoration remains, and the crossfade eats that decoration. The base's handoff is late
+   (3.011s) because its decorative phase is long, not because 3.011 is a good number -- and forcing LPF to
+   the same figure would cross-fade the body over a subtitle that was still drawing itself.
+
+   THE BODY IS ONE AUTHORITY. All three films are composed from the same 10.006s master
+   (`docs/ai_architecture/source_assets/intro/intro-body.mp4`) by the same script, and the base is the file
+   that was already shipping -- itself composed from that master, verified here frame-for-frame. */
+
+export type IntroCut = {
+  src: string;
+  /** Where the SHARED BODY's own t=0 lands in this film -- which is also where the crossfade starts. */
+  handoffAtSeconds: number;
+  /** How long the title and the body overlap. */
+  crossfadeSeconds: number;
+};
+
+/* ==================================================================
+    DESIGN NOTE (INTRO EDITORIAL PASS): THE MEASUREMENTS, AND WHY THEY ARE CONSTANTS AND NOT SETTINGS
+   ==================================================================
+   These are the cut points of three specific pieces of footage. They are not tunable, they are not game
+   rules, and a settings surface offering them would be offering to break the film. They live here because
+   the credit cue below has to be derived from them -- that is the only reason a running program needs to
+   know where a crossfade was.
+
+   MEASURED (24fps, frame-aligned; see the composition script beside the body master):
+
+     film   semanticResolve  visualSettle  crossfadeStart  duration  titleGone  total
+     base   0.000            ~0.0          3.011           1.000     4.011      13.042
+     plus   1.958            2.917         2.917           1.000     3.917      12.959
+     lpf    3.167            3.208         3.250           0.750     4.000      13.292
+
+   LPF'S OVERLAP IS THE SHORTEST BECAUSE ITS FOOTAGE LEAVES NOTHING ELSE. Its subtitle finishes at 3.167s
+   of a 4.000s clip, so 0.75s is every frame there is after settle. Padding the clip with a frozen last
+   frame would have bought another quarter-second of reading time and was rejected on measurement: both
+   supplied titles carry continuous audio to 3.9s, so a video freeze would have needed a silent audio pad
+   under it, and a gain dip at the handoff is the one thing section 9 of the brief rules out by name. */
+export const INTRO_CUTS: Readonly<Record<GameType, IntroCut>> = {
+  standard: {
+    src: GAME_INTRO_SRC,
+    handoffAtSeconds: 3.011,
+    crossfadeSeconds: 1.0,
+  },
+  plus: {
+    src: `${process.env.PUBLIC_URL ?? ""}/video/game-intro-plus.mp4`,
+    // Frame 70 of 24fps. The burst has just cleared the wordmark; everything after is sparkle.
+    handoffAtSeconds: 2.916667,
+    crossfadeSeconds: 1.0,
+  },
+  levelPlayingField: {
+    src: `${process.env.PUBLIC_URL ?? ""}/video/game-intro-lpf.mp4`,
+    // Frame 78. One frame after the subtitle stops moving, and 0.75s is all the clip has left.
+    handoffAtSeconds: 3.25,
+    crossfadeSeconds: 0.75,
+  },
+};
 
 /* Design note #1186: `TITLE_FADE_IN_MS`, `TITLE_HOLD_UNTIL_MS` and `TITLE_FADE_MS` are GONE with the card
    they timed. #1166's long note measured the footage frame by frame to choose them -- which half second was
@@ -108,8 +185,29 @@ const CREDIT_WORD_STAGGER_MS = 140;
    SO THE OFFSET IS ADDED RATHER THAN RE-DERIVED. 8.6 + 3.011 = 11.611, rounded to 11.6 because the cue is a
    `timeupdate` threshold and the event does not fire on millisecond boundaries. #1166a's reasoning carries
    verbatim: four words at 140ms plus a 320ms fade finish about 740ms after the cue, landing on the mark as
-   it resolves. Re-measuring would risk choosing a different frame of a picture that has not changed. */
-const CREDIT_CUE_SECONDS = 11.6;
+   it resolves. Re-measuring would risk choosing a different frame of a picture that has not changed.
+
+   ==================================================================
+    DESIGN NOTE (INTRO EDITORIAL PASS): THE CUE BELONGS TO THE BODY, NOT TO THE FILM
+   ==================================================================
+   #1186 WAS RIGHT AND ITS AUTHORITY WAS WRONG, and the difference only shows up now. It added the prepend
+   to the body-relative cue and wrote down the SUM -- which was correct while there was exactly one prepend
+   and would have been silently wrong the moment a second title with a different handoff arrived. A cue
+   expressed as "11.6s into the film" is a fact about one edit; the thing it is actually about is a frame of
+   the Neta mark, which lives in the body.
+   SO THE CONSTANT IS THE BODY'S OWN 8.6s, and each film's cue is that plus its own handoff. The base comes
+   back out at 8.6 + 3.011 = 11.611 -> 11.6, the number #1186 hand-wrote, which is the check that this
+   refactor changed nothing for the film it was measured on. */
+const BODY_CREDIT_CUE_SECONDS = 8.6;
+
+/** When the credit is cued in a given ruleset's film: the body's own moment, moved by that film's handoff.
+ *
+ *  ROUNDED TO A TENTH, keeping #1186's reason: this is a `timeupdate` threshold and the event does not
+ *  fire on millisecond boundaries, so a figure finer than the event is a figure pretending to a precision
+ *  the browser does not offer. */
+export function creditCueSecondsFor(type: GameType): number {
+  return Math.round((INTRO_CUTS[type].handoffAtSeconds + BODY_CREDIT_CUE_SECONDS) * 10) / 10;
+}
 
 /** How long before the skip offers itself. Long enough that the opening is not competing with a control,
  *  short enough that nobody feels held. */
@@ -166,9 +264,20 @@ export interface GameIntroOverlayProps {
   onDone: () => void;
   /** Design note #1111: the clip carries a soundtrack, and a player who muted effects meant it. */
   sfxEnabled: boolean;
+  /** ==================================================================
+   *   THE RESOLVED TYPE, NOT A LABEL AND NOT A FILENAME
+   *  ==================================================================
+   *  `gameTypeOf` is the one authority on which of the three a room is playing -- it reads the flags back
+   *  into the choice, so a room dealt by an older build or a document written by hand still resolves
+   *  (gameVariants.ts #1445's note). Passed in rather than read here, because this component has no
+   *  business knowing where game state lives.
+   *  DEFAULTS TO `standard`, so a caller that cannot say gets the film that was already shipping. */
+  gameType?: GameType;
 }
 
-export function GameIntroOverlay({ onDone, sfxEnabled }: GameIntroOverlayProps) {
+export function GameIntroOverlay({ onDone, sfxEnabled, gameType = "standard" }: GameIntroOverlayProps) {
+  const cut = INTRO_CUTS[gameType];
+  const creditCueSeconds = creditCueSecondsFor(gameType);
   /* Design note #1294: the chrome scale, live. */
   const uiScale = useUiScale();
   const [skipVisible, setSkipVisible] = React.useState(false);
@@ -202,9 +311,12 @@ export function GameIntroOverlay({ onDone, sfxEnabled }: GameIntroOverlayProps) 
      and the hold no longer owns it -- `holding` still governs the title card's removal and the delay before
      `finish`, which are the two things that really do belong to the end. */
   const [creditVisible, setCreditVisible] = React.useState(false);
-  const onTimeUpdate = React.useCallback((event: React.SyntheticEvent<HTMLVideoElement>) => {
-    if (event.currentTarget.currentTime >= CREDIT_CUE_SECONDS) setCreditVisible(true);
-  }, []);
+  const onTimeUpdate = React.useCallback(
+    (event: React.SyntheticEvent<HTMLVideoElement>) => {
+      if (event.currentTarget.currentTime >= creditCueSeconds) setCreditVisible(true);
+    },
+    [creditCueSeconds],
+  );
   const holdEnded = React.useCallback(() => {
     setHolding(true);
     // Design note #1166a: the fallback for an engine that never fired `timeupdate`.
@@ -239,7 +351,10 @@ export function GameIntroOverlay({ onDone, sfxEnabled }: GameIntroOverlayProps) 
       <div style={styles.stage}>
       <video
         style={styles.video}
-        src={GAME_INTRO_SRC}
+        /* KEYED ON THE SOURCE so a ruleset change between mounts reloads the element rather than leaving
+           a decoded film from the previous room in it. */
+        key={cut.src}
+        src={cut.src}
         autoPlay
         playsInline
         muted={!sfxEnabled}

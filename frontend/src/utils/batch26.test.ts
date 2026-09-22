@@ -325,26 +325,31 @@ describe("the modals say true things in plain words (design notes #990-#992)", (
     expect(NOTICE).not.toContain("export function noticeConsequence");
   });
 
-  it("uses the ruled toggle caption, with no implementation vocabulary in it", () => {
-    /* RULED: "Normal people don't use the word 'modals.'" -- and the old sentence was written from the inside
-       in more than that one word: "this kind of event" is the code's name for `FleetLossCause`, and "for the
-       rest of this session" is a fact about `sessionStorage`.
-       ASSERTED AS BOTH HALVES: the new sentence present, and the three insider words absent. */
-    expect(MODAL).toContain(
-      "This disables Rust/Train Limit notifications for this company. They will still print in the",
-    );
-    expect(MODAL).toContain("Activity Log.");
+  it("has no toggle caption to get wrong, because the toggle is gone", () => {
+    /* ==================================================================
+        AMENDED BY VF-8
+       ==================================================================
+       RULED, at #990-#992: "Normal people don't use the word 'modals.'" -- and the old sentence was
+       written from the inside in more than that one word: "this kind of event" was the code's name for
+       `FleetLossCause`, and "for the rest of this session" was a fact about `sessionStorage`. Those
+       three absences are the ruling and they are KEPT below, because they are about how this dialog
+       talks and not about the control that occasioned them.
+
+       WHAT WENT IS THE CONTROL. VF-7 narrowed the silence store to the train-limit cause; VF-8's audit
+       found that dialog unreachable under v2 rules (#1530: the phase diff reports nothing and the
+       `DiscardTrain` is spliced out of it), re-homed the explanation onto the action the president
+       takes, and retired the store outright -- so there is no checkbox, and a caption assertion would
+       be pinning copy that no longer renders. The ruling's own subject, "nothing is hidden, the
+       Activity Log still records every loss", survives as a property of the shell rather than as a
+       promise printed beside a switch, and `trainDiscardFlourish.test.ts` is where it is now asserted.
+       Restated here as the absence, so the copy cannot come back without the control coming back too. */
+    expect(MODAL).not.toContain("This disables Rust/Train Limit notifications");
+    expect(MODAL).not.toContain('type="checkbox"');
+    expect(MODAL).not.toContain("onToggleSilence");
+    // The ruling on the vocabulary stands whatever this dialog goes on to say.
     expect(MODAL).not.toContain("Stops this modal");
     expect(MODAL).not.toContain("this kind of event");
     expect(MODAL).not.toContain("rest of this session");
-  });
-
-  it("keeps the promise the toggle depends on", () => {
-    /* THE HALF WORTH SAVING FROM THE OLD CAPTION, and #896's reason for offering the toggle at all: nothing
-       is hidden, the Activity Log still records every loss. A silence switch without that sentence is asking
-       a player to turn off a warning with no idea what they lose. */
-    expect(MODAL).toContain("still print in the");
-    expect(MODAL).toContain("Activity Log");
   });
 
   it("puts the herald in the title beside the acronym", () => {

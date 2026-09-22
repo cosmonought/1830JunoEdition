@@ -30,6 +30,8 @@ import { depotInventory, derivePhase, rustOutlook } from "../gameEngine/gamePhas
 // Design note #1035: how close the privates are to closing, for the pills that show them.
 import { privateClosureAlert } from "../utils/purchaseWarnings";
 import { CapacityPill, LastRoutePayout, lastRunFigure, TrainChips } from "./TrainBadges";
+import type { RustFlourishEvent } from "./trainRustFlourish"; // VF-7
+import type { TrainDiscardEvent } from "./trainDiscardFlourish"; // VF-8
 import { stationTickerColor } from "./hexContractTypes";
 import type { MarketGridResponse } from "./StockMarketRenderer";
 import { FONT_SIZE, RADIUS } from "../styles/typography";
@@ -71,6 +73,12 @@ export interface ContextualSubPanelProps {
   contractAddress?: string;
   gameId?: number;
   playerLabel?: (address: string) => string | null;
+  /** Design note (VF-7): the live rust event, forwarded to the corporations table's train chips. One
+   *  object for the whole table, because a phase change rusts several fleets in one reducer call and
+   *  they must run on one clock. Optional: absent, every row renders its authoritative roster. */
+  rust?: RustFlourishEvent | null;
+  /** Design note (VF-8): the live train-limit discard, forwarded to the same table. */
+  discard?: TrainDiscardEvent | null;
 }
 
 export function ContextualSubPanel({
@@ -86,6 +94,8 @@ export function ContextualSubPanel({
   contractAddress,
   gameId,
   playerLabel,
+  rust = null,
+  discard = null,
 }: ContextualSubPanelProps) {
   if (!gameState) {
     return (
@@ -114,7 +124,12 @@ export function ContextualSubPanel({
            `null` -- a component that renders nothing is an invitation to find a use for it. */
         null
       ) : (
-        <OperatingRoundCorporationPanel gameState={gameState} marketGrid={marketGrid} />
+        <OperatingRoundCorporationPanel
+          gameState={gameState}
+          marketGrid={marketGrid}
+          rust={rust}
+          discard={discard}
+        />
       )}
       {error && <p style={styles.staleNote}>Showing last known state — latest refresh failed: {error}</p>}
     </div>
@@ -169,9 +184,15 @@ function WaterfallAuctionNotice() {
 function OperatingRoundCorporationPanel({
   gameState,
   marketGrid,
+  rust = null,
+  discard = null,
 }: {
   gameState: GameStateResponse;
   marketGrid?: MarketGridResponse | null;
+  /** Design note (VF-7): the whole event; each row picks out its own share by `company_id`. */
+  rust?: RustFlourishEvent | null;
+  /** Design note (VF-8): the discard, for the row whose corporation just answered. */
+  discard?: TrainDiscardEvent | null;
 }) {
   const activeCompanyId = gameState.active_operating_order[gameState.active_corporation_index];
   // Design note #9: the train LIMIT is a property of the phase, not of the
@@ -409,6 +430,13 @@ function OperatingRoundCorporationPanel({
                     reprieved={company.pending_rust_trains}
                     // Design note #1088: the Carcosa gift, so its chip shows the sign rather than a locomotive.
                     ghosts={company.carcosan_trains}
+                    /* Design note (VF-7): THIS is the surface a multi-corporation rust is watched on -- the
+                       one table that shows every fleet at once. The row is told which corporation it is
+                       drawing (it has never needed to know before) and handed the whole event; it takes its
+                       own share and ignores the rest. */
+                    companyId={company.company_id}
+                    rust={rust}
+                    discard={discard}
                   />
                 </td>
 

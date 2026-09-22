@@ -319,15 +319,34 @@ describe("RevertTo past the breaking payout rebuilds a board without the latch",
 });
 
 describe("the badge and the ending read the same predicate (U-27)", () => {
-  it("App.tsx draws the badge from the shared bankIsBroken and defines no second notion", () => {
+  it("the badge draws from the shared bankIsBroken and defines no second notion", () => {
     /* U-27 records that the badge needs NO implementation of its own: it has drawn from
        `bankIsBroken(gameState)` -- the same function `settleRoundTransitions` asks -- since #898, so teaching
        that one function about the latch made the badge correct at the same instant. This assertion is what
-       stops a later batch from "fixing" the badge with a second, divergent rule. */
+       stops a later batch from "fixing" the badge with a second, divergent rule.
+       ==================================================================
+        AMENDED BY VF-6: THE CALL SITE MOVED; THE CLAIM DID NOT
+       ==================================================================
+       IT ASSERTED `app.toContain("bankIsBroken(gameState)")`, which pinned U-27's property TO ONE LINE of
+       `App.tsx` -- the Top Bar badge #901 rendered there. VF-6 replaces that badge with the action bar's
+       railroad ticket, whose state comes from `bankBrokenStatus` in `utils/bankBreakEndgame.ts`; the shell
+       still asks `bankIsBroken`, now of the two settled states either side of a dispatch, to know when the
+       break HAPPENED rather than whether it has.
+       SO THE CLAIM IS ASSERTED WHERE IT NOW LIVES, and in the stronger form the move makes available: the
+       badge's own module calls the shared predicate, and carries neither the field nor a balance test of
+       its own. A second notion of "broken" would have to appear in one of these four files, and all four
+       are checked. */
     const app = readStripped("App.tsx");
     expect(app).toContain('from "./gameEngine/endgame"');
-    expect(app).toContain("bankIsBroken(gameState)");
+    expect(app).toContain("bankIsBroken(before)");
+    expect(app).toContain("bankIsBroken(after)");
     expect(app).not.toContain("bank_broken");
+
+    const badge = readStripped("utils/bankBreakEndgame.ts");
+    expect(badge).toContain("bankIsBroken(state)");
+    expect(badge).not.toContain("bank_broken");
+    // Not a second balance test, either -- #1561's fallback belongs to `bankIsBroken` alone.
+    expect(badge).not.toContain("virtual_bank_vgp");
 
     const reducer = readStripped("gameEngine/sandboxSession.ts");
     expect(reducer).toContain("bankIsBroken(state)");

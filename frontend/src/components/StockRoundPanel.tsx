@@ -11,7 +11,7 @@
 // Design notes: see `docs/ai_architecture/stock_market.md`.
 
 import PresidentCrown from "./PresidentCrown";
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
   PrivateCompanyState,
   PublicCompanyState,
@@ -107,6 +107,26 @@ import {
   type FocusSequence,
   type FocusStage,
 } from "./stockTransferFocus";
+/* ==================================================================
+    DESIGN NOTE (VF-3): THE FLOAT CEREMONY'S OWN SCHEDULE, NEXT DOOR
+   ==================================================================
+   Approach C (VISUAL_FLOURISH_BACKLOG.md A-1, as amended): the actual corporation card lifts, translates and
+   scales toward the Stock Round's own centre, stamps, flips and returns -- all inside this file's existing
+   DOM subtree and the existing `uiScale` zoom, exactly as #1451 kept the stock-transfer proxy inside the
+   card. `corporationFloatFocus.ts` owns the SCHEDULE only, the same split `stockTransferFocus.ts` keeps. */
+import {
+  buildFloatFocusSequence,
+  CORPORATION_FLOAT_CSS,
+  FLOAT_REDUCED_SCALE,
+  FLOAT_SCALE,
+  FLOAT_SFX,
+  FLOAT_STAMP_OFFSET_X_PERCENT,
+  FLOAT_STAMP_OFFSET_Y_PERCENT,
+  PRE_FLOAT_LIVERY_SATURATION,
+  type CorporationFloatDescriptor,
+  type FloatFocusSequence,
+  type FloatFocusStageKind,
+} from "./corporationFloatFocus";
 import {
   BANK_HOLDER,
   IPO_HOLDER,
@@ -123,6 +143,13 @@ export interface StockRoundPanelProps {
   transaction?: StockTransactionEvent | null;
   /** Design note #1457: the presidency cue, played by the shell on the beat this panel draws the crown. */
   onPresidencyCue?: () => void;
+  /** Design note (VF-3): the corporation-float ceremony, described by the shell from the same
+   *  `!previously.is_floated && company.is_floated` edge the herald-home float modal already reads
+   *  (`App.tsx`). PRESENTATION ONLY, forwarded straight to `CorporationRoster` -- see #799's lesson on
+   *  `transaction` just above; this follows the same rule. */
+  floatEvent?: CorporationFloatEvent | null;
+  /** The stamp's impact cue -- the card owns the timing, the shell plays `FLOAT_SFX` (#1457's split). */
+  onFloatCue?: () => void;
   publicCompanies: readonly PublicCompanyState[];
   /** Design note #712: why this purchase is illegal, or `null` if it is allowed. Resolved by `App`, which
    *  holds the whole board -- the certificate limit needs the private companies and the room's size, neither
@@ -380,6 +407,18 @@ export interface StockTransactionEvent extends StockTransaction {
   token: number;
 }
 
+/** What the shell hands down once a corporation's `is_floated` has just flipped false -> true on this
+ *  action -- the edge `App.tsx` already detects for the herald-home float modal and the Activity Log's
+ *  `describeFloat` line, forwarded here as a THIRD reader of the same comparison rather than a second
+ *  computation of it. Same `token` idiom as `StockTransactionEvent`, for the same reason (#1060). */
+export interface CorporationFloatEvent extends CorporationFloatDescriptor {
+  token: number;
+}
+
+/** FLOAT_SFX re-exported from here so `App.tsx` can import one thing from this file for both the transaction
+ *  cue and the float cue, matching how it already imports `PRESIDENCY_SFX` from `stockTransferFocus.ts`. */
+export { FLOAT_SFX };
+
 /** The house idiom, optional-chained twice because a test environment has a `window` and no `matchMedia`
  *  (`TreasuryMoneyMachine` #1272, `HexGridRenderer` #496). */
 function prefersReducedMotion(): boolean {
@@ -540,6 +579,164 @@ function useStockTransferFocus(
     stageIndex: live.stageIndex,
     applied: live.applied,
   };
+}
+
+/* ==================================================================
+    DESIGN NOTE (VF-3): THE FLOAT CEREMONY'S OWN PROGRESS, ONE FIELD WIDE
+   ==================================================================
+   `AppliedSteps` above has two fields because a takeover has two things that can land; a float has exactly
+   one -- `is_floated` itself -- so its own applied-state is the one-field equivalent, kept separate rather
+   than folded into `AppliedSteps` because the two ceremonies are independent and CAN run on two different
+   cards (or, per the backlog's VF-3 cross-reference, on the SAME card) at once. */
+interface FloatAppliedSteps {
+  floated: boolean;
+}
+const NOTHING_APPLIED_FLOAT: FloatAppliedSteps = { floated: false };
+
+interface FloatFocusProgress {
+  sequence: FloatFocusSequence | null;
+  stageIndex: number;
+  applied: FloatAppliedSteps;
+}
+
+function startOfFloatSequence(sequence: FloatFocusSequence | null): FloatFocusProgress {
+  return { sequence, stageIndex: 0, applied: NOTHING_APPLIED_FLOAT };
+}
+
+/** The float ceremony's own timers, geometry-independent -- #1456's "the reset is a render, not an effect"
+ *  applies here for the same reason: a superseding float must not let a stale `applied.floated` paint one
+ *  frame of the new sequence's stage list, which is why the mismatch is resolved DURING render rather than
+ *  in a passive effect, exactly as `useStockTransferFocus` does it. */
+function useCorporationFloatFocus(
+  event: CorporationFloatEvent | null,
+  reducedMotion: boolean,
+  /** Fired once per sequence, on the beat the stamp's impact lands -- the shell plays `FLOAT_SFX` there,
+   *  the same TIMING-here/PLAYING-there split #1457 uses for the presidency cue. */
+  onStampImpact?: () => void,
+): {
+  sequence: FloatFocusSequence | null;
+  stage: FloatFocusStageKind | null;
+  applied: FloatAppliedSteps;
+} {
+  const descriptor: CorporationFloatDescriptor | null = event
+    ? { companyId: event.companyId, ticker: event.ticker }
+    : null;
+  // Keyed on the EVENT'S OWN TOKEN, not just the descriptor -- two floats of the same corporation cannot
+  // happen (`is_floated` only ever latches on), but keying on the token rather than the descriptor's own
+  // identity keeps this consistent with `useStockTransferFocus`'s "a new token is a new sequence" rule.
+  const sequence = useMemo(
+    () => buildFloatFocusSequence(descriptor, reducedMotion),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [event?.token, reducedMotion],
+  );
+  const [progress, setProgress] = useState<FloatFocusProgress>(() => startOfFloatSequence(null));
+
+  const live = progress.sequence === sequence ? progress : startOfFloatSequence(sequence);
+  if (live !== progress) setProgress(live);
+
+  useEffect(() => {
+    if (!sequence) return undefined;
+    const timers: number[] = [];
+    const advance = (at: number, step: (was: FloatFocusProgress) => FloatFocusProgress) => {
+      timers.push(
+        window.setTimeout(() => {
+          setProgress((was) => (was.sequence !== sequence ? was : step(was)));
+        }, at),
+      );
+    };
+    sequence.stages.forEach((stage, index) => {
+      if (index === 0) return;
+      advance(stage.at, (was) => ({ ...was, stageIndex: index }));
+    });
+    sequence.applications.forEach((application) => {
+      advance(application.at, (was) => {
+        const applied = { ...was.applied };
+        application.applies.forEach((field) => {
+          applied[field] = true;
+        });
+        return { ...was, applied };
+      });
+    });
+    return () => timers.forEach((timer) => window.clearTimeout(timer));
+  }, [sequence]);
+
+  /* The stamp's impact cue, once per sequence -- mirrors `useStockTransferFocus`'s `cuedForRef` exactly. A
+     superseded sequence's timers are cleared above, so this cannot fire late for a ceremony no longer on
+     screen. */
+  const cuedForRef = useRef<FloatFocusSequence | null>(null);
+  useEffect(() => {
+    if (!sequence) return;
+    const timer = window.setTimeout(() => {
+      if (cuedForRef.current === sequence) return;
+      cuedForRef.current = sequence;
+      onStampImpact?.();
+    }, sequence.stampImpactAt);
+    return () => window.clearTimeout(timer);
+  }, [sequence, onStampImpact]);
+
+  return {
+    sequence,
+    stage: sequence ? (sequence.stages[live.stageIndex]?.kind ?? null) : null,
+    applied: live.applied,
+  };
+}
+
+interface FloatCardTarget {
+  sequenceCompanyId: number;
+  /** Layout-pixel translation from the card's own centre to the target's centre, measured inside the same
+   *  `uiScale`-zoomed subtree as the card itself -- Approach C's whole point (see the module note at the top
+   *  of this file and #1144's zoom note): no viewport coordinates, no manual scale factor, because both
+   *  rects are read from the SAME zoomed tree and a delta between two same-space measurements is already in
+   *  the right units. */
+  dx: number;
+  dy: number;
+  /** Clamped against the container's own width, so a narrow viewport cannot push the enlarged card past the
+   *  Stock Round content it is centring on. */
+  scale: number;
+}
+
+/** Measured ONCE per sequence, not per stage -- the target (the roster grid's own centre) and the card's
+ *  start position do not move between the lift and the return, only the CSS transition direction does. `null`
+ *  is the ordinary answer (A-3): the wrong tab, a card not mounted, a zero-size rect from a hidden ancestor --
+ *  and the fallback is `StockRoundPanel.tsx`'s own gating, which renders the plain authoritative (already
+ *  floated) card with no ceremonial displacement attempted at all when this is `null`. Reduced motion never
+ *  calls this at all -- the reduced sequence travels nowhere, so no measurement is needed and cannot fail. */
+function useFloatCardTarget(
+  cardRef: React.MutableRefObject<HTMLDivElement | null>,
+  containerRef: React.MutableRefObject<HTMLDivElement | null>,
+  sequence: FloatFocusSequence | null,
+): FloatCardTarget | null {
+  const [target, setTarget] = useState<FloatCardTarget | null>(null);
+
+  useLayoutEffect(() => {
+    if (!sequence || sequence.reducedMotion) {
+      setTarget(null);
+      return;
+    }
+    const card = cardRef.current;
+    const container = containerRef.current;
+    if (!card || !container) {
+      setTarget(null);
+      return;
+    }
+    const cardRect = card.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    if (cardRect.width === 0 || cardRect.height === 0 || containerRect.width === 0) {
+      setTarget(null);
+      return;
+    }
+    const dx = containerRect.left + containerRect.width / 2 - (cardRect.left + cardRect.width / 2);
+    const dy = containerRect.top + containerRect.height / 2 - (cardRect.top + cardRect.height / 2);
+    // The safety clamp: never let the scaled card exceed 92% of the container's own width. `FLOAT_SCALE` is
+    // the playtest default; this only pulls it DOWN, never up, on a narrow Stock Round pane.
+    const widthCap = (containerRect.width * 0.92) / cardRect.width;
+    const scale = Math.min(FLOAT_SCALE, Math.max(1, widthCap));
+    setTarget({ sequenceCompanyId: sequence.companyId, dx, dy, scale });
+  }, [cardRef, containerRef, sequence]);
+
+  return target !== null && sequence !== null && target.sequenceCompanyId === sequence.companyId
+    ? target
+    : null;
 }
 
 interface ProxyPath {
@@ -770,6 +967,62 @@ function TransferProxy({
   );
 }
 
+/* ==================================================================
+    DESIGN NOTE (VF-3): A GENERATED STAMP, NOT A PASTED BITMAP
+   ==================================================================
+   The brief's own preference: a code-rendered/procedural treatment over a bitmap asset, using the supplied
+   reference images for STYLE only. This is inline SVG rather than a canvas painter -- `HexGridRenderer.tsx`'s
+   canvas machinery exists because the board repaints every frame; a stamp that plays once and holds does not
+   need a frame clock, only a `<filter>` for the ink's grain, which SVG already gives it for free.
+
+   THE DISTRESS IS ONE `feTurbulence` -> `feDisplacementMap` PAIR, applied to the border rect and the text
+   together (`filter="url(#app-float-stamp-grain)"`), which breaks up both the rule's straight edges and the
+   glyphs' clean strokes into the same uneven, ink-on-worn-rubber texture rather than two unrelated effects
+   that happen to sit on top of each other. `feColorMatrix` at the end thins the alpha unevenly, which is what
+   keeps the ink from reading as a flat, glossy fill.
+
+   BELONGS TO THE PRE-FLOAT FACE ONLY -- the caller only ever mounts this while `!applied.floated`, and it is
+   removed from the tree (not merely hidden) the instant the midpoint swap lands, so it cannot survive as a
+   screen-space overlay on the arriving face (brief section 7) or linger as permanent UI (brief section 19). */
+function FloatedStamp() {
+  return (
+    <div className="app-float-stamp" aria-hidden="true">
+      <svg
+        viewBox="0 0 400 130"
+        style={{
+          width: "88%",
+          maxWidth: "360px",
+          transform: `translate(${FLOAT_STAMP_OFFSET_X_PERCENT}%, ${FLOAT_STAMP_OFFSET_Y_PERCENT}%)`,
+        }}
+      >
+        <defs>
+          <filter id="app-float-stamp-grain" x="-20%" y="-60%" width="140%" height="220%">
+            <feTurbulence type="fractalNoise" baseFrequency="0.9 1.3" numOctaves={2} seed={7} result="grain" />
+            <feDisplacementMap in="SourceGraphic" in2="grain" scale={4.5} />
+            <feColorMatrix type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 1.35 -0.18" />
+          </filter>
+        </defs>
+        <g filter="url(#app-float-stamp-grain)">
+          <rect x="8" y="8" width="384" height="114" rx="4" fill="none" stroke="#a3311f" strokeWidth="7" />
+          <rect x="16" y="16" width="368" height="98" rx="2" fill="none" stroke="#a3311f" strokeWidth="3" />
+          <text
+            x="200"
+            y="82"
+            textAnchor="middle"
+            fontFamily="'Georgia', 'Times New Roman', serif"
+            fontWeight={700}
+            fontSize="58"
+            letterSpacing="6"
+            fill="#a3311f"
+          >
+            FLOATED
+          </text>
+        </g>
+      </svg>
+    </div>
+  );
+}
+
 function CorporationRoster({
   publicCompanies,
   phase,
@@ -802,6 +1055,8 @@ function CorporationRoster({
   lockedCompanyIds = [],
   transaction,
   onPresidencyCue,
+  floatEvent,
+  onFloatCue,
 }: {
   publicCompanies: readonly PublicCompanyState[];
   /** Design note #713: why this SALE is illegal, or `null`. Resolved by `App` for the same reason
@@ -873,6 +1128,10 @@ function CorporationRoster({
    *  the TIMING and the shell owns the PLAYING -- #1062's split for every cue in this app, which is what
    *  keeps the mute and the radio ducking in the one helper. */
   onPresidencyCue?: () => void;
+  /** Design note (VF-3): the corporation-float ceremony -- see `StockRoundPanelProps.floatEvent` above,
+   *  which this mirrors exactly (#799's rule: declared here too, or invisible past this component). */
+  floatEvent?: CorporationFloatEvent | null;
+  onFloatCue?: () => void;
 }) {
   /* Design note #464: recomputed at the Operating Round BOUNDARY. `null` until the first one
      establishes an order, leaving the contract's own table order as a neutral start. `prevRoundRef`
@@ -909,6 +1168,55 @@ function CorporationRoster({
   const proxy = useTransferProxyGeometry(focusTableRef, sequence, stage, stageIndex);
   useRosterReorderFlip(focusTableRef, sequence, stageIndex, applied, publicCompanies);
 
+  /* ==================================================================
+      DESIGN NOTE (VF-3): A SECOND, INDEPENDENT FOCUS -- SAME RULE, OWN STATE
+     ==================================================================
+     PANEL-LEVEL for the identical structural reason #1451 gives just above: the cards are inline JSX inside
+     one `.map`, so a card cannot hold its own hooks. A SEPARATE piece of state from the stock-transfer focus
+     above, deliberately -- the backlog's VF-3 cross-reference already anticipates the purchase that crosses
+     60% floating its own corporation on the SAME beat a transfer focuses it, and two independent focuses
+     that happen to name the same `company_id` compose (the merge is below, where `company` is rebound) rather
+     than one flourish having to know the other exists.
+     READ ONCE PER RENDER, NOT WATCHED: `prefersReducedMotion()` is a plain query with no side effect, and
+     every other reader of it in this file (`useTransferProxyGeometry`, `useRosterReorderFlip`) already calls
+     it fresh rather than subscribing to a `change` event -- a reader who flips the OS setting mid-ceremony
+     gets the new answer on the next one, which is the same behaviour those two already have. */
+  const floatReducedMotion = prefersReducedMotion();
+  /* ==================================================================
+      DESIGN NOTE (VF-3): NO SOUND FOR A CEREMONY THAT NEVER VISIBLY PLAYED
+     ==================================================================
+     The stamp-impact cue is scheduled purely off `sequence.stampImpactAt` inside the hook below, which knows
+     nothing about geometry -- but a full-motion sequence whose card could not be measured (A-3) never shows
+     a lift, a stamp or a flip on screen, and `floated.mp3` firing anyway would be a sound with no ceremony
+     behind it. This ref is the gate: set fresh every render from the same `reducedMotion || floatTarget !==
+     null` test `floatFocusedHere` uses below, but read from inside the timer's callback rather than passed
+     as a reactive prop, so the gate can update every render without tearing down and re-arming the hook's own
+     `setTimeout` (which a changing callback IDENTITY would do, and which could starve the cue entirely on a
+     busy screen that re-renders faster than `FLOAT_STAMP_AT_MS`). By the time this timer fires the geometry
+     effect below has long since settled (`useLayoutEffect`, mount-time), so the gate is never read stale. */
+  const floatCueGateRef = useRef(false);
+  const floatCue = useCallback(() => {
+    if (floatCueGateRef.current) onFloatCue?.();
+  }, [onFloatCue]);
+  const { sequence: floatSequence, stage: floatStage, applied: floatApplied } = useCorporationFloatFocus(
+    floatEvent ?? null,
+    floatReducedMotion,
+    floatCue,
+  );
+  /* Attached only to the card the float sequence names (below) -- same one-ref-because-only-one-focus
+     reasoning as `focusTableRef` just above. */
+  const floatCardRef = useRef<HTMLDivElement | null>(null);
+  /* The Stock Round content this card comes forward to the centre of -- the roster grid itself, the most
+     specific in-subtree container that reads as "this corporation card has come forward to centre stage
+     within the Stock Round" per the approved centring target, rather than the literal viewport (which would
+     need `window` geometry outside this component's own subtree) or the whole panel (which would pull the
+     target up toward the sticky header this card must stay clear of -- see the report on why it naturally
+     does not). */
+  const floatGridRef = useRef<HTMLDivElement | null>(null);
+  const floatTarget = useFloatCardTarget(floatCardRef, floatGridRef, floatSequence);
+  floatCueGateRef.current =
+    floatSequence !== null && (floatSequence.reducedMotion || floatTarget !== null);
+
   if (publicCompanies.length === 0) {
     return (
       <div style={styles.section}>
@@ -932,8 +1240,13 @@ function CorporationRoster({
          roster, unconditionally, since `<style>` is this codebase's escape hatch for what inline styles
          cannot express (#46). */}
       <style>{STOCK_TRANSFER_CSS}</style>
+      {/* Design note (VF-3): same escape hatch, same reason -- the flip rotation and the stamp's impact
+         keyframes cannot be expressed as inline styles. */}
+      <style>{CORPORATION_FLOAT_CSS}</style>
       <h2 style={styles.sectionLabel}>Corporations</h2>
-      <div style={styles.rosterGrid}>
+      <div style={styles.rosterGrid} ref={floatGridRef}>
+        {/* Design note (VF-3): the centring target for the float ceremony below -- see the report on why
+           this container rather than the viewport or the sticky-header-adjacent panel above it. */}
         {/* Design note #464 (supersedes #446): the order is HELD. #446 sorted floated companies to the front
            on every render -- right about the order, wrong about the moment, since buying is what causes floats
            and the act of using the screen rearranged it. `cardOrder` is recomputed only when an Operating Round
@@ -960,7 +1273,28 @@ function CorporationRoster({
              this is the committed company, unchanged, exactly as it renders today. */
           const focusedHere = sequence !== null && sequence.companyId === committed.company_id;
           const staged = focusedHere ? stagedOwnership(transaction ?? null, applied) : null;
-          const company = staged ? { ...committed, ...staged } : committed;
+          /* ==================================================================
+              DESIGN NOTE (VF-3): A SECOND, INDEPENDENT OVERLAY, COMPOSED THE SAME WAY
+             ==================================================================
+             `floatTarget !== null` IS THE A-3 FALLBACK, HERE: a full-motion sequence whose geometry could
+             not be measured (wrong tab, unmounted card, a zero-size rect) never sets `floatFocusedHere`, so
+             this card falls straight through to `committed` -- the plain, already-floated, authoritative
+             card -- with no stamp, no flip and no lift attempted. Reduced motion never depends on geometry
+             (`useFloatCardTarget` returns `null` for it by construction) and so is never gated on it.
+             A THIRD SPREAD, NOT A REPLACEMENT: `staged` (the stock-transfer focus) and the float override
+             are independent and can both be live on the same card at once -- the backlog's VF-3
+             cross-reference names exactly this case. Only `is_floated` is overridden, and only before the
+             flip's hidden midpoint; `stagedOwnership` already owns every other field this card can stage. */
+          const floatFocusedHere =
+            floatSequence !== null &&
+            floatSequence.companyId === committed.company_id &&
+            (floatSequence.reducedMotion || floatTarget !== null);
+          const floatPreSwap = floatFocusedHere && !floatApplied.floated;
+          const company = {
+            ...committed,
+            ...(staged ?? {}),
+            ...(floatPreSwap ? { is_floated: false } : {}),
+          };
           const color = tickerColor(company.company_id);
           /* Design note #447: the field is optional and `gameState.ts` is explicit that `undefined` means
              "this build cannot tell you" while "0" means "it earned nothing" -- and a company that never
@@ -1130,7 +1464,25 @@ function CorporationRoster({
                    take white, so any fixed choice is wrong for at least three corporations. White fails on ERIE's yellow
                    `#f5cd3a`; black fails on B&O's dark blue `#12408f`. (An earlier version of this note cited C&O's
                    amber and CPR's purple -- both stale since design note #408 replaced the palette with the board's.) */}
-                <div style={{ ...styles.rosterLivery, backgroundColor: color, color: liveryInk }}>
+                <div
+                  style={{
+                    ...styles.rosterLivery,
+                    backgroundColor: color,
+                    color: liveryInk,
+                    /* ==================================================================
+                        DESIGN NOTE (VF-3): MUTED, NEVER GREYSCALE
+                       ==================================================================
+                       `saturate()`, not `filter: grayscale` -- design note #948 (the locked B&O card) uses
+                       grayscale deliberately for a card that is fully dead; this card is merely dormant, and
+                       the brief is explicit that the hue must stay identifiable so corporations remain
+                       distinguishable mid-stock-round. Only the STRIPE is filtered, not the whole card, per
+                       the same brief: "do not desaturate the entire corporation card." Applied only before
+                       the flip's hidden midpoint -- `floatPreSwap` is `false` again the instant the swap
+                       lands, so the arriving face is always full-strength livery with no transition to
+                       chase (the flip's own rotation is what reads as the change). */
+                    ...(floatPreSwap ? { filter: `saturate(${PRE_FLOAT_LIVERY_SATURATION})` } : {}),
+                  }}
+                >
                   {/* Design note #501: the mark and the handle, ONE line. `rosterNameStack` is a column and #465 added the
                      acronym as its second child -- so "beside the logo", which is what that note asked for and what its own
                      text says, came out underneath it. The stack keeps its column for the FULL NAME, which is read second,
@@ -1739,9 +2091,46 @@ function CorporationRoster({
              alone cannot. */
           const locked = lockedCompanyIds.includes(company.company_id);
 
+          /* ==================================================================
+              DESIGN NOTE (VF-3): APPROACH C -- THE ACTUAL CARD CARRIES ITSELF FURTHER
+             ==================================================================
+             `floatTarget` IS ALREADY THE A-3 GATE (computed above, folded into `floatFocusedHere`): a
+             translate/scale is only ever attempted once geometry has been measured against this card's OWN
+             `getBoundingClientRect`, inside the same `uiScale`-zoomed subtree `floatGridRef` lives in -- no
+             viewport coordinates, no manual scale conversion (see the module import note and the report).
+             THE STAGE NAMES THE DIRECTION. `"return"` is the only stage whose transform target is the
+             identity -- everything else (lift, stamp, flip) holds the card at the measured centre, because
+             the stamp lands and the flip turns while the card is AT the centre, not while it is travelling. */
+          const floatLiftMs =
+            floatSequence?.stages.find((entry) => entry.kind === "lift")?.durationMs ?? 480;
+          const floatReturnMs =
+            floatSequence?.stages.find((entry) => entry.kind === "return")?.durationMs ?? 420;
+          const floatFlipMs = floatSequence?.stages.find((entry) => entry.kind === "flip")?.durationMs ?? 640;
+          const floatAtRest = !floatFocusedHere || floatStage === "return" || floatStage === null;
+          const floatCardTransform =
+            floatFocusedHere && floatTarget
+              ? floatAtRest
+                ? "translate(0px, 0px) scale(1)"
+                : `translate(${floatTarget.dx}px, ${floatTarget.dy}px) scale(${floatTarget.scale})`
+              : undefined;
+          const floatCardTransition =
+            floatFocusedHere && floatTarget
+              ? `transform ${floatAtRest ? floatReturnMs : floatLiftMs}ms ${
+                  floatAtRest ? "ease-in" : "ease-out"
+                }`
+              : undefined;
+          /* Rises above sibling roster cards only -- any element with a non-`none` `transform` already opens
+             its own stacking context, and this panel's ancestors (`rosterGrid`, `section`, the tab pane)
+             set no `z-index` of their own, so this can never out-rank the sticky action dock (`zIndex: 50`)
+             several stacking contexts up; see the report. */
+          const floatCardZIndex = floatFocusedHere && !floatAtRest ? 5 : undefined;
+          const floatStampVisible = floatFocusedHere && !floatApplied.floated && floatStage !== "lift";
+          const floatFlipStarted = floatFocusedHere && (floatStage === "flip" || floatStage === "return");
+
           return (
             <div
               key={company.company_id}
+              ref={floatFocusedHere ? floatCardRef : undefined}
               className="app-stock-card"
               style={{
                 ...styles.rosterCard,
@@ -1768,10 +2157,61 @@ function CorporationRoster({
                    transaction rather than two things that happened. */
                 ...(focusedHere ? { borderColor: color } : {}),
                 ...(locked ? styles.rosterCardLocked : {}),
+                /* Design note (VF-3): translate + scale, inline and measured -- see the note above this
+                   return. `undefined` when this card is not the one floating, which leaves every other
+                   card's style object exactly as it was before this batch. */
+                ...(floatCardTransform ? { transform: floatCardTransform } : {}),
+                ...(floatCardTransition ? { transition: floatCardTransition } : {}),
+                ...(floatCardZIndex ? { zIndex: floatCardZIndex } : {}),
               }}
               aria-disabled={locked ? true : undefined}
             >
-              {cardFace}
+              {floatFocusedHere && !(floatSequence?.reducedMotion ?? false) ? (
+                /* ==================================================================
+                    DESIGN NOTE (VF-3): THE FLIP, IN THE SAME SUBTREE, NO SECOND CARD
+                   ==================================================================
+                   TWO WRAPPER `div`s, NOT A SECOND CARD: `perspective` has to sit on an ANCESTOR of the
+                   rotated element to give the rotation depth, and the classic two-rotateY trick (the outer
+                   turns 0->180, the inner carries a FIXED rotateY(180deg)) is what lets the arriving face
+                   read right-way-round instead of mirrored -- neither wrapper duplicates `cardFace`, both
+                   just carry the one copy of it that already exists. */
+                <div style={{ perspective: "1400px" }}>
+                  <div
+                    className={floatFlipStarted ? "app-float-flip" : undefined}
+                    style={{
+                      animationDuration: floatFlipStarted ? `${floatFlipMs}ms` : undefined,
+                      transform: !floatFlipStarted ? "rotateY(0deg)" : undefined,
+                    }}
+                  >
+                    {/* The un-mirror: fixed once the swap has landed, so the arriving face reads forwards
+                       rather than backwards. Toggled by `applied.floated`, the same JS-timer-driven flag that
+                       swaps `company.is_floated` above -- one condition, two readers, never two clocks to
+                       keep in step (the presidency crown's own rule, #1457). */}
+                    <div style={floatApplied.floated ? { transform: "rotateY(180deg)" } : undefined}>
+                      {cardFace}
+                      {floatStampVisible && <FloatedStamp />}
+                    </div>
+                  </div>
+                </div>
+              ) : floatFocusedHere ? (
+                /* Reduced motion: no rotation at all (brief section 17) -- a brief centred scale and an
+                   opacity dip carry the same "pre-float -> stamp -> state becomes floated -> final card"
+                   order without turning anything in 3D. */
+                <div
+                  style={{
+                    transform: `scale(${
+                      floatStage === "lift" || floatStage === "stamp" ? FLOAT_REDUCED_SCALE : 1
+                    })`,
+                    opacity: floatStage === "flip" ? 0.4 : 1,
+                    transition: "transform 160ms ease-out, opacity 160ms ease-in-out",
+                  }}
+                >
+                  {cardFace}
+                  {floatStampVisible && <FloatedStamp />}
+                </div>
+              ) : (
+                cardFace
+              )}
               {locked && (
                 /* THE NOTE IS PART OF THE CARD, not a tooltip and not a toast: it is a standing fact about
                    this corporation for the whole of the early game, and the player it is for is the one who
@@ -2763,6 +3203,8 @@ export function StockRoundPanel({
   lockedCompanyIds,
   transaction,
   onPresidencyCue,
+  floatEvent,
+  onFloatCue,
 }: StockRoundPanelProps) {
   /* Design note #32: out of phase counts as "controls disabled" exactly the
      same way an unready session does -- one flag, so no control can be
@@ -2860,6 +3302,8 @@ export function StockRoundPanel({
         /* Design note #1451: the one hop #799 was written about. */
         transaction={transaction}
         onPresidencyCue={onPresidencyCue}
+        floatEvent={floatEvent}
+        onFloatCue={onFloatCue}
         publicCompanies={publicCompanies}
         phase={phase}
         outlook={outlook}

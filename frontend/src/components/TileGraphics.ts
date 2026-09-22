@@ -2014,8 +2014,13 @@ function distanceToMarkerSpine(
 }
 
 /** The rail `d`, cut where it meets whichever authored marker lies on it.
- *  Returns the original when no marker does -- design notes #244/#277. */
-function railTruncatedAtMarker(
+ *  Returns the original when no marker does -- design notes #244/#277.
+ *
+ *  Exported for the Train Route Pulse flourish (`routeSignalGeometry.ts`), which needs the identical cut
+ *  string `terminalRailAtEdge`/`printedTerminalRailAtEdge` already build internally -- reusing this rather
+ *  than re-deriving the cubic-bezier cut is what keeps the traveling signal's stop point pixel-identical to
+ *  the static line it rides. Purely additive: no existing call site or behaviour changes. */
+export function railTruncatedAtMarker(
   d: string,
   markers: readonly TileArtworkMarker[],
   keepStart: boolean,

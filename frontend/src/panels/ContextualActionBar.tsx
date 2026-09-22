@@ -85,14 +85,33 @@ import {
 } from "../utils/stickyCollapse";
 import type { DepotTier } from "../gameEngine/gamePhase";
 import { purchaseWarnings } from "../utils/purchaseWarnings";
-import { bankBreakWarning } from "../utils/bankBreak"; // #1410
+import { RustMark, WarningMark } from "../components/WarningMarks";
+/* Design note (VF-6): #1410's countdown is now one of the Bank ticket's three readings -- the other
+   two are the same object after the break. `bankTicketReading` composes them; `bankBreakWarning`
+   itself is untouched and still owns the thresholds. */
+import { bankTicketReading } from "../utils/bankBreak"; // #1410 / VF-6
+import { BankTicket } from "../components/BankTicket";
+import type { BankBrokenStatus } from "../utils/bankBreakEndgame";
+import type { BankBreakFlipEvent } from "../components/bankBreakFlourish";
+/* Design note (VF-7): the acting corporation's chips are the buyer's own, and the buyer is the player
+   who just caused the rust -- so this bar is the second surface the flourish has to reach. */
+import { rustedFleetFor, type RustFlourishEvent } from "../components/trainRustFlourish";
+import { discardFor, type TrainDiscardEvent } from "../components/trainDiscardFlourish"; // VF-8
 // Design note #1034: the one place that says a reprieved train occupies no limit slot.
 import { countableTrainCount } from "../gameEngine/trainLimit";
 import { dividendDeclaration, marketMoveDirection } from "../utils/dividendStep";
 // Design note #494: the per-train route ink, so the collapsed chips match
 // the lines on the map.
 import { routeTrainColor } from "../styles/routeLivery";
-import { styles, PHASE_TINT_STYLES } from "../styles/appStyles";
+/* Design note (VF-4): `PHASE_TINT_STYLES` left with the badge. It had exactly two readers in this file,
+   both of them the phase badge, and `PhaseBadge.tsx` is where they went -- an import with no reader is
+   how the inline copy of the badge comes back. */
+import { styles } from "../styles/appStyles";
+/* Design note (VF-4): the persistent phase badge, and the mechanical flip it plays when the DISPLAYED
+   phase changes. Extracted from the two inline spans that used to live at the two call sites below --
+   see `PhaseBadge.tsx` for why one component rather than two copies of one ceremony. */
+import { PhaseBadge } from "../components/PhaseBadge";
+import type { PhaseBadgeFlipEvent } from "../components/phaseBadgeFlip";
 /* Design note #1294: the chrome scale at the moment of each measurement. */
 import { getUiScale } from "../utils/uiScale";
 // Design note #975: the chip's own type scale and the x-height ratio, so its star can be derived from the
@@ -808,6 +827,10 @@ export default function ContextualActionBar({
   trainPurchase = null,
   depot = [],
   bankRemaining = null,
+  bankBroken = null,
+  bankBreakStamp = null,
+  rust = null,
+  discard = null,
   gentleRust = false,
   armedErrand = null,
   mapEl = null,
@@ -859,6 +882,7 @@ export default function ContextualActionBar({
   isMyTurn,
   turnGlowActive,
   phase,
+  phaseFlip,
 }: {
   roundType: RoundType | null;
   /** Design note #899: closes the room and settles the payout. `undefined` outside a room that can be
@@ -1049,6 +1073,20 @@ export default function ContextualActionBar({
   /** #1410: the Bank's balance, for the Bank Break countdown badge beside the phase badge. `null` when
    *  unknown, which shows nothing. */
   bankRemaining?: number | null;
+  /* ==================================================================
+      DESIGN NOTE (VF-6): THE BREAK IS HANDED DOWN, NEVER DERIVED HERE
+     ==================================================================
+     `bankBrokenStatus(gameState)` -- the latch (#1561) and the round machine's own calendar (#898,
+     #511), asked once in the shell. The bar never compares this with `bankRemaining`, never asks
+     whether the Bank is broken, and never counts a round: it is handed the answer and prints it.
+     `null` is both 'solvent' and 'the game has ended', and the bar needs to tell neither apart. */
+  bankBroken?: BankBrokenStatus | null;
+  /** The live false -> true break to stamp, or `null` for the ordinary persistent ticket. */
+  bankBreakStamp?: BankBreakFlipEvent | null;
+  /** Design note (VF-7): the live rust event, for the acting corporation's own train chips. */
+  rust?: RustFlourishEvent | null;
+  /** Design note (VF-8): the live train-limit discard, for the same chips. */
+  discard?: TrainDiscardEvent | null;
   /** Design note #1033: whether the table is playing Gentle Rust. It changes the rust countdown's WORDING and
    *  whether that one badge animates -- see `purchaseWarnings`. Defaults to `false`, so a caller that has not
    *  been taught to pass it shows the standard strings rather than nothing. */
@@ -1195,6 +1233,9 @@ export default function ContextualActionBar({
     /** Design note #1314: the returned trains, resolved by the shell; the bar forwards them. */
     returnedTrains?: ReadonlyArray<{ model: string; cost: number; problem: string | null }>;
     onBuyReturnedTrain?: (modelType: string) => void;
+    /** Design note (VF-8): the Bank Pool's end of a discard, forwarded. Conduit only -- the bar does not
+     *  know a discard happened and does not decide which row acknowledges it. */
+    discardReceipt?: { model: string; token: number } | null;
     onProposeTrade: (proposal: TrainTradeProposal) => void;
     labelForAddress: (address: string) => string;
     /** Design note #914: the seller roster paints each president in their own seat colour. Conduit only --
@@ -1320,6 +1361,15 @@ export default function ContextualActionBar({
      left unread -- an unused prop is an invitation to render it again.
      Derived phase (`gameEngine/gamePhase.ts`) for the far-right badge -- design note #40 for why it moved here. */
   phase?: GamePhase | null;
+  /* ==================================================================
+      DESIGN NOTE (VF-4): THE DISPLAYED-PHASE CHANGE, RAISED BY THE SHELL
+     ==================================================================
+     The staged OLD face of a phase change the shell has already seen land -- see `phaseBadgeFlip.ts`.
+     PRESENTATION ONLY, AND OPTIONAL AT BOTH ENDS (A-3): absent, `null`, superseded, or arriving at a
+     bar that is not mounted, the badge below renders `phase` exactly as it did before this batch. The
+     bar never asks what phase this describes and never compares it with `phase`; the comparison
+     happened in the dispatch, against two settled states, and this is its result. */
+  phaseFlip?: PhaseBadgeFlipEvent | null;
 }) {
   /* Design note #839: what the next purchase destroys, as badges rather than as hover text and rather than
      as a line inside a table the scroll folds away.
@@ -1351,7 +1401,9 @@ export default function ContextualActionBar({
      changes are both shown BEFORE that. A proxy that is empty in exactly the case it is consulted for is
      #1006's shape. */
   // #1410: the Bank Break badge, from the balance the shell passes.
-  const bankBreak = bankBreakWarning(bankRemaining);
+  /* Design note (VF-6): the latch arm is taken FIRST inside `bankTicketReading`, so a Bank that
+     receives money after breaking never gets its dollar countdown back. */
+  const bankBreak = bankTicketReading(bankBroken ?? null, bankRemaining);
 
   const buyWarnings = React.useMemo(
     () => purchaseWarnings(phase ?? null, depot, gentleRust),
@@ -2973,7 +3025,19 @@ export default function ContextualActionBar({
                       reads identically wherever it appears -- including the
                       amber tint on a tier that is about to rust. */}
                   {/* Design note #372: chips survive the pin. */}
-                  {activeCorporation.trains.length === 0 ? (
+                  {/* ==================================================================
+                       DESIGN NOTE (VF-7): "NONE" MUST NOT WIN A RACE AGAINST THE FLOURISH
+                      ==================================================================
+                      A corporation can lose its WHOLE fleet to one rust -- two 2-trains and nothing else is
+                      an ordinary Phase 4 -- and the authoritative roster is empty the instant the reducer
+                      settles. This guard read that empty roster and printed "none", so the chips would have
+                      vanished before anything was shown to fail, which is precisely the staging A-2
+                      forbids. Asking the event as well keeps the row alive for the half-second it takes to
+                      destroy what was in it; `TrainChips` does the same thing one level down for its own
+                      placeholder, and both have to, because either one alone loses the case. */}
+                  {activeCorporation.trains.length === 0 &&
+                  rustedFleetFor(rust, activeCorporation.companyId) === null &&
+                  discardFor(discard, activeCorporation.companyId) === null ? (
                     <span style={{ ...styles.orContextFactNone, color: corporationBarInk.inkMuted }}>
                       none
                     </span>
@@ -2983,6 +3047,12 @@ export default function ContextualActionBar({
                       reprieved={activeCorporation.reprievedTrains}
                       // Design note #1088: already on the bar's corporation since #1046 -- it gates the limit.
                       ghosts={activeCorporation.carcosanTrains}
+                      // Design note (VF-7): the acting corporation's own share of the global rust event.
+                      companyId={activeCorporation.companyId}
+                      rust={rust}
+                      /* Design note (VF-8): and its own discard, when this is the corporation whose
+                         president just answered a train-limit obligation. */
+                      discard={discard}
                       phase={phase ?? null}
                       surface="dark"
                       // Design note #259: the rust countdown, matching the Round Detail table below the board. Without
@@ -3134,23 +3204,11 @@ export default function ContextualActionBar({
                  same screen". `TopTicker` has the same feed, the same filter and an accordion for the history.
                  `latestFeedItem` and `onOpenActivityLog` go with it -- a prop with no reader is how the line comes back. */}
               {phase && (
-                <span style={{ ...styles.phaseBadge, ...PHASE_TINT_STYLES[phase.tint] }}>
-                  {phase.label}
-                </span>
+                <PhaseBadge label={phase.label} tint={phase.tint} flip={phaseFlip ?? null} />
               )}
-              {/* #1410: the Bank Break countdown, beside the phase on both rails. */}
-              {bankBreak && (
-                <span
-                  className={bankBreak.critical ? "app-phase-shift-critical" : undefined}
-                  style={{
-                    ...styles.phaseShiftBadge,
-                    ...(bankBreak.critical ? styles.phaseShiftBadgeCritical : styles.phaseShiftBadgeWarn),
-                  }}
-                  aria-label={bankBreak.detail}
-                >
-                  &#9888; {bankBreak.label}
-                </span>
-              )}
+              {/* #1410 / VF-6: the Bank ticket, beside the phase on both rails -- counting dollars before
+                 the break and Operating Rounds after it, in the same silhouette either way. */}
+              <BankTicket reading={bankBreak} stamp={bankBreakStamp ?? null} />
               {/* Design note #920: THE TURN ORDER MOVED OUT OF THIS RAIL. It sat beside the phase badge,
                   on the same row as the contextual buttons and the rust/limit warnings -- three unrelated
                   kinds of thing competing for one line. It now shares the sub-phase trail's row, which is
@@ -3220,7 +3278,19 @@ export default function ContextualActionBar({
                     style={{ ...styles.phaseShiftBadge, ...styles.phaseShiftBadgeCritical }}
                     aria-label={reprieveWarning.detail}
                   >
-                    &#9888; {reprieveWarning.label}
+                    {/* ==================================================================
+                         DESIGN NOTE (WARNING-MARK PASS): THE FINAL-RUN BADGE IS A RUST BADGE
+                        ==================================================================
+                        IT TAKES THE CRACK TOO, and the alternative was worse rather than merely different.
+                        This badge and the rust countdown beside it are the same rule at two moments -- the
+                        trains are one purchase from rusting, versus they have rusted and are running once
+                        more (#1004/#1033) -- so leaving the generic `⚠` here would have put two different
+                        classification marks on two states of one rule, in the same group, at the same
+                        escalation. That is the exact confusion this pass is for.
+                        FLAGGED FOR OWNER REVIEW (Part K) rather than assumed: a reader could reasonably
+                        want the final run to be its OWN category, since it is the only badge in the row
+                        describing something that has already happened rather than something coming. */}
+                    <RustMark /> {reprieveWarning.label}
                   </span>
                 )}
                 {buyWarnings.map((warning) => (
@@ -3233,7 +3303,7 @@ export default function ContextualActionBar({
                     }}
                     aria-label={warning.detail}
                   >
-                    &#9888; {warning.label}
+                    <WarningMark kind={warning.key} capacity={warning.capacity} /> {warning.label}
                   </span>
                 ))}
               </span>
@@ -4009,24 +4079,9 @@ export default function ContextualActionBar({
               between themselves but not on the bar. */}
           {/* Design note #654: the phase group leads the row, flush left. */}
           <span style={styles.actionBarRailLead}>
-          {phase && (
-            <span style={{ ...styles.phaseBadge, ...PHASE_TINT_STYLES[phase.tint] }}>
-              {phase.label}
-            </span>
-          )}
-          {/* #1410: the Bank Break countdown, beside the phase on both rails. */}
-          {bankBreak && (
-                <span
-                  className={bankBreak.critical ? "app-phase-shift-critical" : undefined}
-                  style={{
-                    ...styles.phaseShiftBadge,
-                    ...(bankBreak.critical ? styles.phaseShiftBadgeCritical : styles.phaseShiftBadgeWarn),
-                  }}
-                  aria-label={bankBreak.detail}
-                >
-                  &#9888; {bankBreak.label}
-                </span>
-              )}
+          {phase && <PhaseBadge label={phase.label} tint={phase.tint} flip={phaseFlip ?? null} />}
+          {/* #1410 / VF-6: the Bank ticket, beside the phase on both rails. */}
+          <BankTicket reading={bankBreak} stamp={bankBreakStamp ?? null} />
 
           {/* ==================================================================
                 DESIGN NOTE 868: THE BADGE THAT ONLY SAID SOMETHING WAS COMING
@@ -4061,7 +4116,7 @@ export default function ContextualActionBar({
               }}
               aria-label={warning.detail}
             >
-              &#9888; {warning.label}
+              <WarningMark kind={warning.key} capacity={warning.capacity} /> {warning.label}
             </span>
           ))}
           </span>
@@ -4404,6 +4459,7 @@ export default function ContextualActionBar({
           dieselExchange={trainPurchase.dieselExchange}
           onExchangeForDiesel={trainPurchase.onExchangeForDiesel}
           returnedTrains={trainPurchase.returnedTrains}
+          discardReceipt={trainPurchase.discardReceipt}
           onBuyReturnedTrain={trainPurchase.onBuyReturnedTrain}
           onProposeTrade={trainPurchase.onProposeTrade}
           labelForAddress={trainPurchase.labelForAddress}

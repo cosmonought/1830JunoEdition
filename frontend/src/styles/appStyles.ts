@@ -829,17 +829,11 @@ export const styles: Record<string, React.CSSProperties> = {
      is not a mode the player is in, it is a countdown they cannot stop, and it has to out-rank every other
      badge in the same strip. Complete `border` shorthand rather than a longhand beside a sibling's shorthand
      -- #840/#732. */
-  bankBrokenBadge: {
-    fontSize: FONT_SIZE.micro,
-    fontWeight: 800,
-    letterSpacing: "0.5px",
-    padding: "4px 12px",
-    borderRadius: RADIUS.pill,
-    backgroundColor: "#3d1a18",
-    border: "1px solid #8a3a30",
-    color: "#f0a898",
-    flexShrink: 0,
-  },
+  /* Design note (VF-6): `bankBrokenBadge` IS GONE WITH #901's TOP BAR BADGE. Its one reader was that
+     badge, and the Bank's persistent state is the action bar's railroad ticket now (`BankTicket.tsx`),
+     which is built on `phaseShiftBadge` plus its own stylesheet rather than on a pill of its own. Deleted
+     rather than left unread: a style with no consumer is how the second badge comes back, and this table
+     has had exactly that pointed out in it before (the `PRIVATE_POWER_GLOW_STOPS` import, #976). */
   spectatorBadge: {
     fontSize: FONT_SIZE.micro,
     fontWeight: 800,

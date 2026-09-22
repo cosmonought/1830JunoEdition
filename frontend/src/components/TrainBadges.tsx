@@ -15,7 +15,7 @@
 //
 // See docs/ai_architecture/contract_economy.md, TrainBadges.tsx #0 / #1 / #2.
 
-import React from "react";
+import React, { useEffect, useMemo, useState } from "react";
 
 import {
   /* Design note #702: `ALERT_CRITICAL_BG` and `ALERT_WARN_BG` are gone from this import, and their absence is
@@ -43,6 +43,38 @@ import {
 } from "../gameEngine/gamePhase";
 // Design note #1034: the one place that says a reprieved train occupies no limit slot.
 import { countableTrainCount } from "../gameEngine/trainLimit";
+/* Design note (VF-7): the rust flourish's schedule, crack geometry and stylesheet. This component owns
+   the staging and the timers; that module owns everything testable without a DOM. */
+import {
+  buildRustSequence,
+  crackFragments,
+  crackPath,
+  crackSeedFor,
+  rustChipStageClass,
+  rustCrackClass,
+  rustedFleetFor,
+  rustingPositions,
+  TRAIN_RUST_CSS,
+  type RustFlourishEvent,
+  type RustSequence,
+  type RustStageKind,
+} from "./trainRustFlourish";
+/* Design note (VF-8): the train-limit discard's own vocabulary. A SEPARATE module from the rust one,
+   deliberately and not merely tidily: the two flourishes mean opposite things (destroyed versus
+   transferred), and two vocabularies that shared an implementation would drift into looking alike. */
+import {
+  buildDiscardSequence,
+  discardChipStageClass,
+  discardCut,
+  discardCutClass,
+  discardCutSeedFor,
+  discardFor,
+  discardIsSplit,
+  TRAIN_DISCARD_CSS,
+  type DiscardSequence,
+  type DiscardStageKind,
+  type TrainDiscardEvent,
+} from "./trainDiscardFlourish";
 
 export type BadgeSurface = "dark" | "light";
 
@@ -118,6 +150,30 @@ export interface TrainChipsProps extends TrainBadgeCommonProps {
    * OPTIONAL, and absent means "none marked" rather than "unknown" -- the safe direction, since a missing
    * mark shows an ordinary train where a standard game has no ghosts at all. */
   ghosts?: readonly string[] | null;
+  /** ==================================================================
+   *   DESIGN NOTE (VF-7): WHOSE FLEET THIS IS, AND THE RUST THAT JUST TOOK PART OF IT
+   *  ==================================================================
+   *
+   * `companyId` IS NEW AND IS ONLY FOR THE FLOURISH. This component has never needed to know which
+   * corporation it is drawing -- `trains` was the whole of its subject -- and it still does not, for
+   * anything but deciding whether a global rust event is about this fleet. Optional, because two of the
+   * five call sites draw a roster in a context where no rust can be live (the Stock Round card fronts and
+   * the Ledger) and passing an id they would never match is noise.
+   *
+   * `rust` IS THE WHOLE EVENT, not this corporation's share of it, and that is deliberate: a phase change
+   * rusts several fleets in one reducer call, and handing every chip row the same object is what keeps
+   * them on one clock. The row picks out its own member with `rustedFleetFor` and ignores the rest.
+   *
+   * PRESENTATION ONLY, AND OPTIONAL AT BOTH ENDS (A-3): absent, `null`, superseded, or naming a
+   * corporation this row is not, the chips render `trains` exactly as they did before this batch. */
+  companyId?: number | null;
+  rust?: RustFlourishEvent | null;
+  /** Design note (VF-8): the president's train-limit discard, if this row's corporation is the one that
+   *  just answered its obligation. One discard per event -- the rules never produce two at once -- so
+   *  unlike `rust` this carries a single subject rather than a list. Optional and inert at both ends
+   *  (A-3): absent, `null`, superseded, or naming a corporation this row is not, the chips render
+   *  `trains` exactly as they did before this batch. */
+  discard?: TrainDiscardEvent | null;
   /* Design note #375: the index is the position in `trains`, the same key the
      Route Planner rows and map overlays use -- two 3-trains are two different
      trains, get two rows and highlight independently (`RoutePlannerPanel #5`).
@@ -196,6 +252,156 @@ const STATIC_RUST_TRIGGER: Readonly<Partial<Record<TrainTier, TrainTier>>> = {
   "4": "D",
 };
 
+/** The house idiom, optional-chained twice because a test environment has a `window` and no `matchMedia`
+ *  (`BankTicket` VF-6, `PhaseBadge` VF-4, `StockRoundPanel` VF-3, `HexGridRenderer` #496). */
+function prefersReducedMotion(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
+}
+
+interface RustProgress {
+  sequence: RustSequence | null;
+  stageIndex: number;
+  vacated: boolean;
+}
+
+const NO_RUST: RustProgress = { sequence: null, stageIndex: 0, vacated: false };
+
+function startOfRust(sequence: RustSequence | null): RustProgress {
+  return { sequence, stageIndex: 0, vacated: false };
+}
+
+const NO_POSITIONS: ReadonlySet<number> = new Set<number>();
+
+/** This row's share of a global rust event, and where the sequence has got to.
+ *
+ *  #1456's "the reset is a render, not an effect", for the reason VF-1, VF-3, VF-4 and VF-6 all keep it: a
+ *  superseding rust must not let a stale `vacated` paint one frame of the new sequence, so the mismatch is
+ *  resolved DURING render rather than in a passive effect. */
+function useTrainRust(
+  event: RustFlourishEvent | null | undefined,
+  companyId: number | null,
+): {
+  sequence: RustSequence | null;
+  stage: RustStageKind | null;
+  vacated: boolean;
+  before: readonly string[] | null;
+  rustingAt: ReadonlySet<number>;
+  reducedMotion: boolean;
+} {
+  const reducedMotion = prefersReducedMotion();
+  const fleet = rustedFleetFor(event, companyId);
+  /* Keyed on the EVENT'S OWN TOKEN and this row's id: two rust events in a row (an Undo past a phase
+     change, then the same purchase again) are two ceremonies, and the models alone cannot tell them
+     apart. A row the event does not name builds no sequence and schedules no timers at all. */
+  const sequence = useMemo(
+    () => (fleet ? buildRustSequence({ corporations: [fleet] }, reducedMotion) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [event?.token, companyId, reducedMotion],
+  );
+  const [progress, setProgress] = useState<RustProgress>(() => NO_RUST);
+
+  const live = progress.sequence === sequence ? progress : startOfRust(sequence);
+  if (live !== progress) setProgress(live);
+
+  useEffect(() => {
+    if (!sequence) return undefined;
+    const timers: number[] = [];
+    const advance = (at: number, step: (was: RustProgress) => RustProgress) => {
+      timers.push(
+        window.setTimeout(() => {
+          setProgress((was) => (was.sequence !== sequence ? was : step(was)));
+        }, at),
+      );
+    };
+    sequence.stages.forEach((stage, index) => {
+      if (index === 0) return;
+      advance(stage.at, (was) => ({ ...was, stageIndex: index }));
+    });
+    sequence.applications.forEach((application) => {
+      advance(application.at, (was) => ({ ...was, vacated: true }));
+    });
+    return () => timers.forEach((timer) => window.clearTimeout(timer));
+  }, [sequence]);
+
+  const staging = sequence !== null && fleet !== null && !live.vacated;
+  return {
+    sequence,
+    stage: sequence ? (sequence.stages[live.stageIndex]?.kind ?? null) : null,
+    vacated: live.vacated,
+    before: staging && fleet ? fleet.before : null,
+    rustingAt: staging && fleet ? rustingPositions(fleet.before, fleet.rusted) : NO_POSITIONS,
+    reducedMotion,
+  };
+}
+
+interface DiscardProgress {
+  sequence: DiscardSequence | null;
+  stageIndex: number;
+  transferred: boolean;
+}
+
+const NO_DISCARD: DiscardProgress = { sequence: null, stageIndex: 0, transferred: false };
+
+function startOfDiscard(sequence: DiscardSequence | null): DiscardProgress {
+  return { sequence, stageIndex: 0, transferred: false };
+}
+
+/** This row's discard, and where the sequence has got to. VF-7's `useTrainRust` exactly, one event shape
+ *  over -- including #1456's "the reset is a render, not an effect", so a superseding discard cannot let
+ *  a stale `transferred` paint one frame of the new sequence. */
+function useTrainDiscard(
+  event: TrainDiscardEvent | null | undefined,
+  companyId: number | null,
+): {
+  sequence: DiscardSequence | null;
+  stage: DiscardStageKind | null;
+  before: readonly string[] | null;
+  at: number;
+  reducedMotion: boolean;
+} {
+  const reducedMotion = prefersReducedMotion();
+  const mine = discardFor(event, companyId);
+  const sequence = useMemo(
+    () => (mine ? buildDiscardSequence({ discard: mine }, reducedMotion) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [event?.token, companyId, reducedMotion],
+  );
+  const [progress, setProgress] = useState<DiscardProgress>(() => NO_DISCARD);
+
+  const live = progress.sequence === sequence ? progress : startOfDiscard(sequence);
+  if (live !== progress) setProgress(live);
+
+  useEffect(() => {
+    if (!sequence) return undefined;
+    const timers: number[] = [];
+    const advance = (at: number, step: (was: DiscardProgress) => DiscardProgress) => {
+      timers.push(
+        window.setTimeout(() => {
+          setProgress((was) => (was.sequence !== sequence ? was : step(was)));
+        }, at),
+      );
+    };
+    sequence.stages.forEach((stage, index) => {
+      if (index === 0) return;
+      advance(stage.at, (was) => ({ ...was, stageIndex: index }));
+    });
+    sequence.applications.forEach((application) => {
+      advance(application.at, (was) => ({ ...was, transferred: true }));
+    });
+    return () => timers.forEach((timer) => window.clearTimeout(timer));
+  }, [sequence]);
+
+  const staging = sequence !== null && !live.transferred;
+  return {
+    sequence,
+    stage: sequence ? (sequence.stages[live.stageIndex]?.kind ?? null) : null,
+    before: staging ? sequence.discard.before : null,
+    at: staging ? sequence.discard.at : -1,
+    reducedMotion,
+  };
+}
+
 export function TrainChips({
   trains,
   phase,
@@ -204,6 +410,9 @@ export function TrainChips({
   outlook,
   reprieved = null,
   ghosts = null,
+  companyId = null,
+  rust = null,
+  discard = null,
   highlightedTrainIndex = null,
   onHighlightTrain,
   selectedTrainIndex = null,
@@ -212,6 +421,27 @@ export function TrainChips({
 }: TrainChipsProps) {
   const ink = surface === "light" ? lightInk : darkInk;
   const size = compact ? FONT_SIZE.small : FONT_SIZE.strong;
+
+  /* ==================================================================
+      DESIGN NOTE (VF-7): THE ROW RENDERS THE FLEET AS IT WAS, UNTIL THE SLOT IS GIVEN UP
+     ==================================================================
+     A-2, and the whole reason the event carries `before`. The authoritative roster has ALREADY lost the
+     rusted trains by the time this renders -- the reducer settled before the shell narrated (#704) -- so
+     a row drawing `trains` would show the final state and then, at best, mime a destruction that had
+     already happened. Instead the row draws the pre-rust fleet, rusts the chips that are leaving, holds
+     their slots until they are invisible, and only then falls through to `trains`.
+     ABOVE THE EARLY RETURNS, AND THAT IS LOAD-BEARING TWICE OVER. Hooks cannot sit behind a conditional
+     return -- and the "none" placeholder below is exactly the case a corporation whose WHOLE fleet rusted
+     would hit: `trains` is `[]`, so without staging the chips would vanish on the spot and the row would
+     print "none" before anything had been shown to fail. */
+  const rustState = useTrainRust(rust, companyId ?? null);
+  /* Design note (VF-8): the discard stages the same way and for the same reasons. The two can never be
+     live for one corporation at once -- rust fires on a phase change or a reprieve expiry, a discard on
+     the president's own answer to an obligation -- and if a future rule ever produced both, rust's
+     staged roster wins by being asked first, which is the safe direction: a destroyed train must not be
+     drawn as merely transferred. */
+  const discardState = useTrainDiscard(discard, companyId ?? null);
+  const staged = rustState.before ?? discardState.before ?? trains;
 
   // Design note #3: the empty and unknown states are chips too. They used to be
   // bare text beside a floated corporation's pills, so the two read as different
@@ -244,8 +474,8 @@ export function TrainChips({
       </span>
     </span>
   );
-  if (trains == null) return placeholderChip("?");
-  if (trains.length === 0) return placeholderChip("none");
+  if (staged == null) return placeholderChip("?");
+  if (staged.length === 0) return placeholderChip("none");
 
   const doomed = phase?.rustingTier ?? null;
   // Design note #7 (`gamePhase.ts`): severity comes from the SHARED countdown, not
@@ -280,9 +510,75 @@ export function TrainChips({
      `trimToTrainLimit` records and the reprieve pool above was written to avoid. */
   const ghostPool = [...(ghosts ?? [])];
 
+  const rustAnimationMs =
+    rustState.sequence?.stages.find(
+      (entry) => entry.kind === (rustState.stage === "fail" ? "fail" : "oxidise"),
+    )?.durationMs ?? null;
+
+  /* ==================================================================
+      DESIGN NOTE (VF-7): THE KEY DECIDES WHICH DUPLICATE SURVIVES, AND IT WAS DECIDING WRONGLY
+     ==================================================================
+     FOUND BY PROBING THE DOM ACROSS THE VACATE BOUNDARY, in the case the models are indistinguishable:
+     a corporation holding ["3", "3", "5"] that loses ONE 3. The SELECTION was always right -- the
+     multiset marks staged position 0 and only position 0, stably, on every stage render. The KEYING was
+     not.
+
+     `key={model-index}` NAMES A POSITION IN WHICHEVER ARRAY IS BEING RENDERED, and the two arrays are
+     different lengths. Staged ["3","3","5"] gives 3-0, 3-1, 5-2; authoritative ["3","5"] gives 3-0, 5-1.
+     So at the handover React matched `3-0` to `3-0` -- REUSING THE DYING CHIP'S DOM NODE FOR THE
+     SURVIVING 3 -- unmounted `3-1`, which was the survivor that had been sitting there untouched, and
+     remounted the 5 because its key moved from `5-2` to `5-1`. Measured, not reasoned: a probe tagging
+     each node found the post-vacate "3" carrying the dying node's tag and the "5" carrying none.
+
+     THAT IS THE BRIEF'S "do not rust both and recreate one afterward" arriving by the back door, and it
+     breaks section 6's "preserve each corporation's unaffected chip order/identity" for the 5 as well --
+     a chip that had nothing to do with the event was destroyed and rebuilt.
+
+     SO A STAGED CHIP IS KEYED BY WHERE IT WILL BE, NOT BY WHERE IT IS. A survivor takes the key it will
+     have in the authoritative roster (`after` is `before` minus the rusted models, order preserved, so
+     counting non-rusting positions gives exactly that index); a dying chip takes a key of its own that
+     simply disappears at the handover. React then unmounts precisely the chips that died and touches
+     nothing else.
+     AND WITH NOTHING RUSTING THE KEY IS BYTE-IDENTICAL to what it always was -- `survivorIndex` and
+     `index` advance together -- so the ordinary row is unchanged. */
+  let survivorIndex = 0;
+  const chipKeys = staged.map((model, index) => {
+    if (rustState.rustingAt.has(index)) return `rusting:${index}`;
+    /* Design note (VF-8): the same rule for the departing chip, and it matters for the same reason --
+       ["3","3","5"] discarding one 3 has the identical key collision VF-7's probe found in the DOM. */
+    if (discardState.at === index) return `discarding:${index}`;
+    const key = `${model}-${survivorIndex}`;
+    survivorIndex += 1;
+    return key;
+  });
+
+  /* ==================================================================
+      DESIGN NOTE (VF-7): AND THE INTERACTION INDICES BELONG TO THE OTHER ARRAY
+     ==================================================================
+     `onSelectTrain(index)` and `onHighlightTrain(index)` hand out a position in the roster the caller
+     knows about -- the AUTHORITATIVE one -- and while staging, `index` is a position in the pre-rust
+     roster instead. A click during those few hundred milliseconds would open a different train's route
+     than the one under the pointer.
+     UNREACHABLE TODAY AND GUARDED ANYWAY. The chips are interactive only on the Routes step
+     (`ContextualActionBar`: `interactive={orSubPhase === "Routes"}`), and a rust fires on a train
+     purchase or a reprieve expiry, both of which happen elsewhere in the turn. But "cannot happen" is
+     an argument about today's cursor rules made in a file that knows nothing about them, and this
+     codebase's notes are full of exactly that argument going stale. One boolean makes the mismatch
+     impossible instead. */
+  const interactiveNow =
+    interactive && rustState.before === null && discardState.before === null;
+
   return (
     <span style={styles.chipRow}>
-      {trains.map((model, index) => {
+      {/* #46/#18's escape hatch: keyframes, a dash-offset draw and a `::before`-free SVG overlay are what
+         an inline style cannot express. Injected only for a row that is ACTUALLY rusting, unlike the
+         roster-level sheets VF-1/VF-3 inject unconditionally -- this component renders once per
+         corporation and there are eight of them, so an unconditional sheet would put eight identical
+         copies in the table for an event that touches two. The style element and the class arrive in the
+         same commit, so the keyframes are registered before the browser paints either. */}
+      {rustState.sequence !== null && <style>{TRAIN_RUST_CSS}</style>}
+      {discardState.sequence !== null && <style>{TRAIN_DISCARD_CSS}</style>}
+      {staged.map((model, index) => {
         const tier = trainTier(model);
         // Design note #4: the TINT is still depot-driven and still only
         // applies to the tier actually next in line to rust. Preserved
@@ -307,12 +603,64 @@ export function TrainChips({
         /* Design note #375: highlighted, faded, or neither. The muted state
            matters as much as the primary one -- with three chips in a row,
            "this one" is only legible if the others step back. */
-        const isPrimary = interactive && highlightedTrainIndex === index;
+        const isPrimary = interactiveNow && highlightedTrainIndex === index;
         const isMuted =
-          interactive && highlightedTrainIndex !== null && highlightedTrainIndex !== index;
-        return (
+          interactiveNow && highlightedTrainIndex !== null && highlightedTrainIndex !== index;
+        /* Design note (VF-7): this chip's own place in the event. `rustingAt` is a multiset match against
+           the staged roster, so a corporation holding two 2-trains that loses one rusts exactly one of
+           them -- #1004's reprieve pool and #1088's ghost pool, a third time. */
+        const isRusting = rustState.rustingAt.has(index);
+        const rustClass = isRusting ? rustChipStageClass(rustState.stage) : undefined;
+        /* ==================================================================
+            DESIGN NOTE (AUDIO WIRING PASS): THE CHIP COMES APART AT `fail`
+           ==================================================================
+           ONLY AT `fail`, and only in full motion. Oxidation and the fracture are drawn on an intact chip
+           -- the crack has to be readable ON something before that something gives way -- and reduced
+           motion has no separation at all, by its own brief. So this is `null` for every other stage and
+           every reduced-motion frame, and the row below then takes exactly the path it did before.
+           THE SAME SEED AS THE CRACK, so the pieces are the pieces THAT crack made rather than a second
+           fracture nobody saw drawn. */
+        const shatterInto =
+          isRusting && rustState.stage === "fail" && !rustState.reducedMotion
+            ? crackFragments(crackSeedFor(companyId ?? 0, index))
+            : null;
+        const crackClass = isRusting ? rustCrackClass(rustState.stage, rustState.reducedMotion) : null;
+        /* Design note (VF-8): this chip's place in a discard. ONE position, taken straight from the
+           reducer's own `owned.indexOf(model_type)` (#1530) rather than matched here -- so the chip
+           that animates is by construction the chip whose slot the reducer emptied. */
+        const isDiscarding = discardState.at === index;
+        const discardClass = isDiscarding ? discardChipStageClass(discardState.stage) : undefined;
+        const bladeClass = isDiscarding
+          ? discardCutClass(discardState.stage, discardState.reducedMotion)
+          : null;
+        const blade = isDiscarding ? discardCut(discardCutSeedFor(companyId ?? 0, index)) : null;
+        const splitHere =
+          isDiscarding && discardIsSplit(discardState.stage, discardState.reducedMotion);
+        const discardAnimationMs = isDiscarding
+          ? (discardState.sequence?.stages.find((entry) => entry.kind === discardState.stage)
+              ?.durationMs ?? null)
+          : null;
+        /* ==================================================================
+            DESIGN NOTE (VF-8): THE HALVES ARE SIBLINGS, NOT CHILDREN
+           ==================================================================
+           A `clip-path` clips its element AND its descendants, so a chip clipped to its own left half
+           cannot contain its own right half -- the obvious arrangement is the one arrangement that
+           cannot work. So during the split the row renders a SLOT: the left half in normal flow (which
+           is what keeps the slot the chip's own size, and therefore reserved) and the right half
+           absolutely positioned over it. Both are the same chip element, emitted twice.
+           STILL INSIDE THE ROW (A-1): a wrapper span in the chip's own place, no portal, no
+           `position: fixed`, no second fleet renderer. The wrapper exists for ~240ms and only for the
+           one chip that is leaving. */
+        const chipFor = (half: "whole" | "left" | "right", shard: number | null = null) => (
           <span
-            key={`${model}-${index}`}
+            /* The WRAPPER carries the destination-stable key when the chip is split; the halves are two
+               fixed children of it and need only be told apart. */
+            key={shard !== null ? `shard:${shard}` : half === "whole" ? chipKeys[index] : half}
+            /* The right half is a duplicate of what the left half already says -- one chip read twice
+               would be a chip that owns two trains. */
+            /* One chip read three times would be a corporation that owns three trains: only the piece in
+               normal flow is left in the accessibility tree. */
+            aria-hidden={half === "right" || (shard !== null && shard > 0) ? true : undefined}
             /* Design note #755: THE PULSE IS THE CRITICAL STEP ONLY, matching the badge it was asked to match
                -- `phaseShiftBadgeCritical` animates and `phaseShiftBadgeWarn` does not. That keeps #702's
                rule that "the two countdown steps differ in COLOUR and not merely in whether they pulse", and
@@ -322,12 +670,29 @@ export function TrainChips({
                shared countdown pulse for one that is merely close. Two states, two classes -- see
                `animations.ts` for why a deeper version of the same keyframe would have read as the same
                warning turned up. */
+            /* Design note (VF-7): RUST OUTRANKS BOTH WARNINGS, because both are warnings ABOUT this
+               moment and this is the moment. A chip that is being destroyed must not also be breathing
+               the "one purchase away" pulse or the reprieve's deeper fade -- two motions on one element
+               read as a rendering fault, and the thing they were counting down to has arrived. */
             className={
-              isFinalRun
-                ? "app-train-final-run"
-                : inDangerWindow === "doomed"
-                  ? "app-train-rust-critical"
-                  : undefined
+              [
+                /* Design note (VF-8): a discard outranks the warnings for VF-7's reason, and rust
+                   outranks a discard because a destroyed train must never be drawn as merely
+                   transferred. The two cannot both be live for one corporation today. */
+                rustClass ??
+                  discardClass ??
+                  (isFinalRun
+                    ? "app-train-final-run"
+                    : inDangerWindow === "doomed"
+                      ? "app-train-rust-critical"
+                      : undefined),
+                half === "left" ? "app-train-cut-left" : undefined,
+                half === "right" ? "app-train-cut-right" : undefined,
+                shard !== null ? "app-train-rust-shard" : undefined,
+                shard !== null && shard > 0 ? "app-train-rust-shard-over" : undefined,
+              ]
+                .filter(Boolean)
+                .join(" ") || undefined
             }
             style={{
               ...styles.chip,
@@ -348,21 +713,55 @@ export function TrainChips({
               // Every chip carries a tooltip now (design note #4), so every
               // chip gets the help cursor -- and never the text I-beam,
               // which is wrong on a badge regardless.
-              cursor: interactive ? "pointer" : warning ? "help" : "default",
+              cursor: interactiveNow ? "pointer" : warning ? "help" : "default",
+              /* The stage that OWNS the running animation supplies its length -- `oxidise` for the wash
+                 that spans oxidation and fracture, `fail` for the collapse. Held steady across the
+                 oxidise -> fracture boundary on purpose: changing `animation-duration` mid-flight
+                 retimes a running animation rather than restarting it, and the oxide would visibly jump. */
+              ...(isRusting && rustAnimationMs !== null
+                ? { animationDuration: `${rustAnimationMs}ms` }
+                : {}),
+              /* Design note (VF-8): each half is clipped to its own side of the blade, along the blade's
+                 own line -- a polygon rather than an `inset`, so a slanted cut separates on the slant
+                 instead of splitting vertically underneath a diagonal line. */
+              ...(half === "left" && blade !== null
+                ? {
+                    clipPath: `polygon(0% 0%, ${blade.xPercent}% 0%, ${blade.xPercent + blade.slantPercent}% 100%, 0% 100%)`,
+                  }
+                : {}),
+              ...(half === "right" && blade !== null
+                ? {
+                    clipPath: `polygon(${blade.xPercent}% 0%, 100% 0%, 100% 100%, ${blade.xPercent + blade.slantPercent}% 100%)`,
+                  }
+                : {}),
+              ...(isDiscarding && discardAnimationMs !== null
+                ? { animationDuration: `${discardAnimationMs}ms` }
+                : {}),
+              /* The piece's own clip and its own direction. The custom properties are read by
+                 `app-train-rust-shard`'s keyframe, which is why one keyframe can serve every piece --
+                 cast because React's `CSSProperties` has no index signature for `--*`. */
+              ...(shard !== null && shatterInto !== null
+                ? ({
+                    clipPath: shatterInto[shard].clipPath,
+                    "--shard-dx": `${shatterInto[shard].dx}px`,
+                    "--shard-dy": `${shatterInto[shard].dy}px`,
+                    "--shard-rot": `${shatterInto[shard].rotateDeg}deg`,
+                  } as React.CSSProperties)
+                : {}),
             }}
             title={warning}
-            onMouseEnter={interactive ? () => onHighlightTrain?.(index) : undefined}
-            onMouseLeave={interactive ? () => onHighlightTrain?.(null) : undefined}
+            onMouseEnter={interactiveNow ? () => onHighlightTrain?.(index) : undefined}
+            onMouseLeave={interactiveNow ? () => onHighlightTrain?.(null) : undefined}
             /* Design note #801: a click OPENS this train's route. `role`/`tabIndex`/`onKeyDown` rather than a
                `<button>` because the chip is a styled `span` shared by four surfaces, and wrapping it would
                change its layout everywhere to give one of them a handler. The keyboard half is not optional:
                a control reachable only by mouse is not a control on a tablet or for a keyboard player. */
-            role={interactive && onSelectTrain ? "button" : undefined}
-            tabIndex={interactive && onSelectTrain ? 0 : undefined}
-            aria-pressed={interactive && onSelectTrain ? selectedTrainIndex === index : undefined}
-            onClick={interactive && onSelectTrain ? () => onSelectTrain(index) : undefined}
+            role={interactiveNow && onSelectTrain ? "button" : undefined}
+            tabIndex={interactiveNow && onSelectTrain ? 0 : undefined}
+            aria-pressed={interactiveNow && onSelectTrain ? selectedTrainIndex === index : undefined}
+            onClick={interactiveNow && onSelectTrain ? () => onSelectTrain(index) : undefined}
             onKeyDown={
-              interactive && onSelectTrain
+              interactiveNow && onSelectTrain
                 ? (event) => {
                     if (event.key !== "Enter" && event.key !== " ") return;
                     // Space scrolls a page by default, which is the wrong answer inside a sticky bar.
@@ -372,6 +771,31 @@ export function TrainChips({
                 : undefined
             }
           >
+            {/* ==================================================================
+                 DESIGN NOTE (VF-7): THE FRACTURE, DRAWN OVER WHAT IT BREAKS
+                ==================================================================
+                ON TOP OF THE TEXT AND THE GLYPH, because a crack runs across whatever is printed on the
+                thing that cracked -- and because the model must stay readable THROUGH the fracture: the
+                player's question at this instant is what they just lost, and a chip that dissolves before
+                it can be read answers the wrong one. The crack darkens the number; it does not hide it.
+                A 0-100 VIEWBOX WITH `preserveAspectRatio="none"`, so one generator serves the 26px
+                compact chip and the 34px full one and whatever a future surface asks for -- the brief's
+                "not a raster image tied to one chip size", taken at its word.
+                SEEDED FROM THE CORPORATION AND THE POSITION. The chip re-renders on every stage boundary,
+                and a crack regenerated from `Math.random` would redraw itself mid-fracture -- a different
+                crack every frame, which is not a crack. Same chip, same fracture, every render; two chips
+                in a row, never the same one. */}
+            {crackClass !== null && (
+              <svg
+                className={crackClass}
+                viewBox="0 0 100 100"
+                preserveAspectRatio="none"
+                aria-hidden="true"
+                focusable="false"
+              >
+                <path d={crackPath(crackSeedFor(companyId ?? 0, index))} />
+              </svg>
+            )}
             {/* ==================================================================
                 DESIGN NOTE 755: THE GLYPH TINTS TOO, AND THE PULSE TAKES OVER ITS OLD JOB
                 ==================================================================
@@ -446,6 +870,47 @@ export function TrainChips({
               />
             )}
             {model}
+            {/* Design note (VF-8): THE BLADE. One straight, near-vertical line, full height, arriving at
+               once rather than travelling -- a guillotine falls, it does not propagate, which is the
+               whole contrast with VF-7's crack drawing itself across the chip. Drawn in the chip's own
+               ink (`currentColor`): this event adds no colour, because nothing about it is a warning.
+               On BOTH halves, so the kerf has an edge on each side as they part. */}
+            {bladeClass !== null && blade !== null && (
+              <svg
+                className={bladeClass}
+                viewBox="0 0 100 100"
+                preserveAspectRatio="none"
+                aria-hidden="true"
+                focusable="false"
+                style={
+                  discardAnimationMs !== null ? { animationDuration: `${discardAnimationMs}ms` } : {}
+                }
+              >
+                <line
+                  x1={blade.xPercent}
+                  y1={0}
+                  x2={blade.xPercent + blade.slantPercent}
+                  y2={100}
+                />
+              </svg>
+            )}
+          </span>
+        );
+        /* A chip cannot be discarded and rusting at once (see the staging note above), so these two are
+           alternatives rather than a case that has to compose. Rust is asked first, for the same reason
+           its staged roster wins: a destroyed train must not be drawn as merely cut. */
+        if (shatterInto !== null) {
+          return (
+            <span key={chipKeys[index]} className="app-train-rust-shatter">
+              {shatterInto.map((_piece, piece) => chipFor("whole", piece))}
+            </span>
+          );
+        }
+        if (!splitHere) return chipFor("whole");
+        return (
+          <span key={chipKeys[index]} className="app-train-cut-slot">
+            {chipFor("left")}
+            {chipFor("right")}
           </span>
         );
       })}

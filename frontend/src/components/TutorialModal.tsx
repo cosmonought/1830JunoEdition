@@ -487,6 +487,13 @@ function DismissalLifecycle({ onDismiss }: { onDismiss: () => void }) {
  *  flag is written and no off-switch checkbox is offered, because neither applies
  *  to content the player went looking for. */
 export function TutorialLibrary({ open, onClose }: TutorialLibraryProps) {
+  /* Design note (VF-7): mirrored into state so the box re-renders when it is ticked. `localStorage` is
+     the truth and this is the reflection, which is the arrangement `fleetLossNotice.ts` #896a spells out
+     for its own toggle -- read once when the dialog opens, because nothing else in the app writes it. */
+  const [tutorialMode, setTutorialModeState] = useState(false);
+  useEffect(() => {
+    if (open) setTutorialModeState(tutorialModeEnabled());
+  }, [open]);
   const [topicKey, setTopicKey] = useState<string | null>(null);
 
   /* Escape backs out one level -- to the list from a topic, and out of the library from the list. Matching
@@ -563,6 +570,44 @@ export function TutorialLibrary({ open, onClose }: TutorialLibraryProps) {
                   <span style={styles.libraryRowCount}>{entry.pages.length} pages</span>
                 </button>
               ))}
+              {/* ==================================================================
+                   DESIGN NOTE (VF-7): TUTORIAL MODE GETS A CONTROL, BECAUSE IT NOW DECIDES SOMETHING
+                  ==================================================================
+                  #412 ADDED THE FLAG AND DELIBERATELY GAVE IT NO UI. Its whole job was to gate one
+                  navigation -- the first-Operating-Round redirect to the market chart -- and its own note
+                  says the polarity is opt-IN so the redirect does not fire "for everyone who never
+                  touched the setting". A flag nobody can set was exactly right for that: the default WAS
+                  the behaviour, and turning it on was for somebody deliberately teaching.
+                  VF-7 GIVES IT A SECOND READER AND A LOUDER ONE. The explanatory Rust modal now appears
+                  only in tutorial mode, which means the flag decides whether a blocking dialog
+                  interrupts a phase change -- and a setting that consequential with no way to reach it
+                  would ship the "tutorial ON" half of this batch as code nobody can run.
+                  HERE RATHER THAN IN A SETTINGS SCREEN, because this is the Tutorials front door and it
+                  already carries the other tutorial preference's shape ("Turn tutorials off", one
+                  paragraph down in `TutorialPager`). A second home for tutorial settings is the thing
+                  #891 keeps naming.
+                  IT DOES NOT TOUCH `tutorialsDisabled`. Those are two preferences with two lifetimes:
+                  one says "stop showing me explainers I have not asked for", the other says "I am
+                  teaching somebody, be more explicit than usual". #159 already records keeping them
+                  apart. */}
+              <label style={styles.libraryToggleRow}>
+                <input
+                  type="checkbox"
+                  checked={tutorialMode}
+                  onChange={(event) => {
+                    setTutorialMode(event.target.checked);
+                    setTutorialModeState(event.target.checked);
+                  }}
+                  style={styles.libraryToggleBox}
+                />
+                <span>
+                  <span style={styles.libraryRowHeading}>Tutorial mode</span>
+                  <span style={styles.libraryRowBlurb}>
+                    Explain events as they happen — including a notice when a phase change destroys a
+                    corporation&rsquo;s trains. The Activity Log records every event either way.
+                  </span>
+                </span>
+              </label>
             </div>
             <div style={styles.footer}>
               <button type="button" onClick={onClose} style={styles.primaryButton}>
@@ -834,6 +879,18 @@ const styles: Record<string, React.CSSProperties> = {
   },
   libraryRowHeading: { fontSize: FONT_SIZE.strong, fontWeight: 700 },
   libraryRowBlurb: { fontSize: FONT_SIZE.small, color: "#a8a6a0", lineHeight: 1.4 },
+  libraryToggleRow: {
+    display: "flex",
+    gap: "10px",
+    alignItems: "flex-start",
+    padding: "10px 12px",
+    borderRadius: RADIUS.control,
+    border: `1px solid ${SANDBOX_RULE_STRONG}`,
+    background: SANDBOX_RAISED,
+    cursor: "pointer",
+    textAlign: "left",
+  },
+  libraryToggleBox: { marginTop: "3px", flex: "none" },
   libraryRowCount: {
     fontSize: FONT_SIZE.micro,
     color: "#6e6c68",

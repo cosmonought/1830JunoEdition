@@ -34,6 +34,9 @@ import { STICKY_OPTIONAL } from "../utils/stickyCollapse";
 // Design note #702: moved to its own file, because the train CHIPS draw it now too.
 import { TrainGlyph } from "./TrainGlyph";
 import PresidentCrown from "./PresidentCrown";
+/* Design note (VF-8): one rule borrowed from the discard flourish -- the Bank Pool acknowledging an
+   arrival is that event seen from the other end, so the two lengths live in one file. */
+import { TRAIN_DISCARD_CSS } from "./trainDiscardFlourish";
 import type { DepotTier, PhaseTint } from "../gameEngine/gamePhase";
 // Design note #632: one tier-to-era lookup, shared with the phase badge.
 // Design note #1007: the shared namer, so this panel and the rust badges spell a tier the same way. It used to
@@ -150,6 +153,25 @@ export interface TrainPurchasePanelProps {
    *  "Pay $X". `problem` is the gate's sentence for a dead button, per train. Empty means no line. */
   returnedTrains?: ReadonlyArray<{ model: string; cost: number; problem: string | null }>;
   onBuyReturnedTrain?: (modelType: string) => void;
+  /** ==================================================================
+   *   DESIGN NOTE (VF-8): THE BANK POOL'S END OF A DISCARD
+   *  ==================================================================
+   *
+   * THE DESTINATION WAS AUDITED BEFORE THE TRANSFER WAS DESIGNED, and it is not reliably on screen. The
+   * only surface that draws a pooled train is this panel's returned-train rows, which exist during the
+   * Buy Trains step for the ACTING corporation's president -- while a discard is answered off-turn by
+   * whichever president owes one, usually with this panel closed and often on another client entirely.
+   * So the brief's Option A (animate the chip toward the destination) would be a flight toward something
+   * that is usually not there, needing viewport arithmetic across the `uiScale` zoom for a target that
+   * may not exist. Option B instead: the chip leaves its own row cleanly, the authoritative pool row
+   * appears as it always does, and IF this panel happens to be open the arriving row acknowledges it.
+   *
+   * ONE SHOT, AND ONLY THAT. A scale pop, no glow, no colour, no money -- "received into inventory".
+   * The token is what makes it once-per-discard rather than once-per-render: the matching row is keyed
+   * on it, so a new discard remounts that row and replays the animation, and nothing else does.
+   * ABSENT IS THE ORDINARY CASE and costs nothing: no panel, no reaction, and the pool is still correct
+   * because the pool was never this flourish's to report (A-3). */
+  discardReceipt?: { model: string; token: number } | null;
   /** Raises a proposal. Dispatches nothing itself: whether this completes
    *  immediately or waits on the seller is the caller's decision, because
    *  only the caller knows who is signing. */
@@ -198,6 +220,7 @@ export function TrainPurchasePanel({
   onExchangeForDiesel,
   returnedTrains = [],
   onBuyReturnedTrain,
+  discardReceipt = null,
   onProposeTrade,
   labelForAddress,
   colorForAddress,
@@ -977,9 +1000,24 @@ export function TrainPurchasePanel({
                line above -- the sentence names the train, the button carries the price -- because it IS the
                same transaction with a different source. Two returned 5-trains are two lines; pressing either
                buys one. */}
+            {/* Design note (VF-8): injected only while a receipt is live -- the sheet belongs to the
+               discard flourish and this panel borrows one rule from it. */}
+            {discardReceipt !== null && <style>{TRAIN_DISCARD_CSS}</style>}
             {onBuyReturnedTrain &&
-              returnedTrains.map((train, index) => (
-                <div key={`${train.model}-${index}`} style={styles.buyRow}>
+              returnedTrains.map((train, index) => {
+                /* THE FIRST ROW OF THE ARRIVING MODEL, which is deterministic and is as close to "the
+                   train that just came in" as a list of interchangeable models can get: two pooled
+                   5-trains are two identical rows, and popping either says the same true thing. */
+                const receiving =
+                  discardReceipt !== null &&
+                  discardReceipt.model === train.model &&
+                  returnedTrains.findIndex((entry) => entry.model === discardReceipt.model) === index;
+                return (
+                <div
+                  key={receiving ? `${train.model}-${index}-${discardReceipt.token}` : `${train.model}-${index}`}
+                  className={receiving ? "app-train-discard-received" : undefined}
+                  style={styles.buyRow}
+                >
                   <span style={styles.quantityLabel}>Buy a returned {train.model}-train</span>
                   <button
                     type="button"
@@ -1004,7 +1042,8 @@ export function TrainPurchasePanel({
                   )}
                   {train.problem && <p style={styles.problem}>{train.problem}</p>}
                 </div>
-              ))}
+                );
+              })}
             {onEmergencyPurchase && emergencyAvailable && (
               <button
                 type="button"

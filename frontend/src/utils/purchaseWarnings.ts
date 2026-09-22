@@ -81,6 +81,22 @@ export interface PurchaseWarning {
    *  variant delays rust, and delays nothing about the limit, so its urgency is unchanged and pretending
    *  otherwise would soften a warning the player still needs at full volume. */
   pulses: boolean;
+  /* ==================================================================
+      DESIGN NOTE (WARNING-MARK PASS): THE FIGURES, CARRIED RATHER THAN FORMATTED AND READ BACK
+     ==================================================================
+     The Action Bar's train-limit badge now identifies itself with the capacity it is about to take away --
+     `4→3`, `3→2` -- which distinguishes it from the rust badge beside it without either one having to be
+     read as a sentence.
+     AND BOTH NUMBERS WERE ALREADY HERE. `phase.trainLimit` and `limitAfterNextPhase(phase, depot)` are what
+     the `if` below tests to decide the warning exists at all; until now they were formatted into `detail`
+     and nowhere else. So this field carries them rather than adding a source -- the presentation gets the
+     same two values the rule was decided on.
+     THE ALTERNATIVE WAS PARSING `detail`, AND IT IS THE THING THIS FIELD EXISTS TO PREVENT. A regex over
+     "lowers the train limit from 4 to 3" makes the copy load-bearing: #889 has already rewritten this
+     module's strings once, #1033 twice more, and either edit would have silently emptied the badge.
+     `null` FOR EVERY WARNING THAT IS NOT A CAPACITY CHANGE, rust included -- an optional field with one
+     populated case is clearer than a second warning type for one pair of integers. */
+  capacity: { from: number; to: number } | null;
 }
 
 /** The train limit once `phase`'s successor arrives, or `null` when nothing follows or the depot cannot say.
@@ -296,6 +312,8 @@ export function purchaseWarnings(
          demoted the warning's colour as well -- one field answering two questions, which is #732's rule. */
       imminent,
       pulses: imminent && !gentleRust,
+      // Rust destroys trains; it changes no ceiling. See `capacity` above for why the field is on both.
+      capacity: null,
     });
   }
 
@@ -326,6 +344,10 @@ export function purchaseWarnings(
          while the rust badge beside it loses one, which is the whole point: the two events stopped happening
          at the same moment, and the row should stop implying they still do. */
       pulses: imminent,
+      /* The two figures this branch was entered on, unformatted. `after < phase.trainLimit` is the guard
+         directly above, so a populated `capacity` here is always a genuine reduction -- the badge cannot
+         render `3→4`. */
+      capacity: { from: phase.trainLimit, to: after },
     });
   }
 

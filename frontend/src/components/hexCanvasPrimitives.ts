@@ -141,6 +141,11 @@ export interface RouteOverlay {
      See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #373 */
   trainIndex?: number;
   emphasis?: RouteEmphasis;
+  /** Design note (Train Route Pulse flourish): this train's own priced revenue stops -- hex label + printed
+   *  value, in path order, exactly `SandboxRouteBreakdown.stops` -- so the badge-recolour/pulse flourish can
+   *  tell which of `hexes` actually pay without re-deriving the authoritative per-city dedup itself. `undefined`
+   *  for an overlay nobody has priced yet (drawing is unaffected either way; only the flourish reads this). */
+  revenueStops?: ReadonlyArray<{ hex: string; value: number }>;
 }
 
 export type RouteEmphasis = "normal" | "primary" | "muted";
@@ -996,6 +1001,41 @@ export function drawRouteOverlays(
   return { paths: hitPaths, routeWidth: baseRouteWidth };
 }
 
+/** ==================================================================
+ *  TRAIN ROUTE PULSE FLOURISH: THE TRAVELING SIGNAL ITSELF
+ *  ==================================================================
+ *  Design notes 3, 17-18, 27: "a brighter/narrower moving band ... traveling along that same line", the
+ *  base route line unchanged and always visible underneath, no particle trail, no bloom, no train sprite.
+ *  Drawn as a short capsule between two points sampled a small distance apart on the route's OWN geometry
+ *  (`pointOnRouteTrack`, `routeSignalGeometry.ts`) -- so it automatically follows the line's local tangent
+ *  through a curve without this function doing any tangent math of its own. `color` is the route's own ink;
+ *  this function brightens it, never introduces a second palette (design note 17). */
+export function drawRouteSignalBand(
+  ctx: CanvasRenderingContext2D,
+  size: number,
+  tail: { x: number; y: number },
+  head: { x: number; y: number },
+  color: string,
+): void {
+  const railWidth = Math.max(3, size * 0.12);
+  const bandWidth = railWidth * 0.5;
+  ctx.save();
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = brightenTowardWhite(color, 0.55);
+  ctx.lineWidth = bandWidth;
+  ctx.shadowBlur = Math.max(4, size * 0.16);
+  ctx.shadowColor = color;
+  ctx.beginPath();
+  ctx.moveTo(tail.x, tail.y);
+  ctx.lineTo(head.x, head.y);
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+  ctx.shadowColor = "transparent";
+  ctx.stroke();
+  ctx.restore();
+}
+
 /** The pan/zoom the board was drawn under. Structural, so the hit test can
  *  be called with a plain object rather than the renderer's view state. */
 export interface RouteHitView {
@@ -1231,6 +1271,34 @@ export const VALUE_BADGE_SHAPE: Readonly<Record<ValueBadgeTerrain, "square" | "d
 
 /** One uniform white fill with a navy stroke; the city/town distinction moves from COLOUR to SHAPE. The square's half-side is radius*SQRT1_2, so its farthest corner sits at exactly radius -- the same reach as the circle it replaces.
  *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #62 */
+/** A revenue badge's transient reaction to the travelling route signal reaching it (VF-2 finalize pass --
+ *  SUPERSEDES both the original persistent route-coloured perimeter-border design AND the colour-flush
+ *  interior tint that replaced it; see `routeSignalGeometry.ts`'s "Revenue-badge hit reaction" section for
+ *  the decision record). A visual-prototype comparison resolved this in favour of a PHYSICAL reaction: the
+ *  badge briefly scales up around its own centre and settles back, with no colour change at all -- fill is
+ *  always plain white, border always plain black, exactly as at rest. */
+export interface BadgeHitVisual {
+  /** The badge's current scale, 1 = resting size. Already fully derived by the caller (`badgePopScale` in
+   *  routeSignalGeometry.ts) from the reaction's kind (solo/coincidence) and elapsed time -- this module
+   *  holds no opinion on peak scale, timing, or easing shape, it only draws. */
+  scale: number;
+}
+
+/** Mixes `hex` toward white by `amount` (0-1). Originally written for pulse-brightening a route-coloured
+ *  BORDER (design notes 12/18 of the retired perimeter-border spec), then reused for a badge-hit interior
+ *  tint (VF-2 simplification pass) that has itself since been retired in favour of a scale-only mechanical
+ *  pop (VF-2 finalize pass) -- the badge no longer calls this at all. Kept for its other live use, brightening
+ *  the travelling route signal band's own colour (`drawRouteSignalBand` below). */
+function brightenTowardWhite(hex: string, amount: number): string {
+  const clamped = Math.max(0, Math.min(1, amount));
+  const n = parseInt(hex.replace("#", ""), 16);
+  const r = (n >> 16) & 0xff;
+  const g = (n >> 8) & 0xff;
+  const b = n & 0xff;
+  const mix = (channel: number) => Math.round(channel + (255 - channel) * clamped);
+  return `rgb(${mix(r)}, ${mix(g)}, ${mix(b)})`;
+}
+
 export function drawBadgeShape(
   ctx: CanvasRenderingContext2D,
   center: { x: number; y: number },
@@ -1248,8 +1316,12 @@ export function drawBadgeShape(
     ctx.lineTo(center.x - radius, center.y);
     ctx.closePath();
   }
+  // VF-2 finalize: the badge's interior is plain white at all times now -- see `BadgeHitVisual`'s own doc
+  // comment. A hit reaction is drawn as a scale transform around the whole badge (shape + text), applied by
+  // the caller (`drawValueBadgeAt`), never as a fill-colour change here.
   ctx.fillStyle = "#FFFFFF";
   ctx.fill();
+
   ctx.strokeStyle = "#1c1c1c";
   ctx.lineWidth = 1.5;
   ctx.stroke();
@@ -1398,6 +1470,9 @@ export function drawValueBadge(
   // #1394/#1405: the laid tile's own drawing -- rings, dits and sampled rails. When given, it REPLACES the
   // edge guess below, which is a proxy for rails this module cannot see on a printed hex.
   tileBlocked?: ReadonlySet<number>,
+  // Revenue-badge hit reaction only (VF-2 simplification pass): this badge's current interior-tint state, or
+  // undefined for the ordinary plain white/black badge every other caller still gets.
+  hit?: BadgeHitVisual,
 ): void {
   const value = valueOverride ?? terrainBaseValue(terrain);
   // The same four-tier dead/live-edge search, now via the shared engine: slotsBlockedByEdges marks a corner blocked when either guard edge carries live track, derived generically rather than hand-encoded.
@@ -1422,7 +1497,7 @@ export function drawValueBadge(
 
   // Bold font fixed first, shape sized to the measured text; padding tightened to the file's 2px convention and the floor dropped to a flat safety minimum, which was silently dominating for every 2-digit value. The $ prefix is dropped -- the white square already reads as revenue.
   // See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #66
-  drawValueBadgeAt(ctx, badgeCenter, size, terrain, value);
+  drawValueBadgeAt(ctx, badgeCenter, size, terrain, value, hit);
 }
 
 /** THE revenue badge artwork, extracted VERBATIM so the board and the picker cannot render a value differently. What stayed behind is PLACEMENT, not art: the caller decides WHERE, this decides WHAT.
@@ -1433,12 +1508,27 @@ export function drawValueBadgeAt(
   size: number,
   terrain: ValueBadgeTerrain,
   value: number,
+  // Revenue-badge hit reaction only (VF-2 finalize: scale-only mechanical pop) -- see `BadgeHitVisual`'s own
+  // doc comment. `undefined` draws the ordinary resting badge, pixel-equivalent to `{ scale: 1 }`.
+  hit?: BadgeHitVisual,
 ): void {
   const label = `${value}`;
   const fontSizePx = Math.max(9, size * 0.2) - 1;
   ctx.font = `bold ${fontSizePx}px ${FONT_FAMILY_STACK}`;
   const shape = VALUE_BADGE_SHAPE[terrain];
   const badgeRadius = badgeRadiusForLabel(ctx.measureText(label), fontSizePx, shape, 2, 1.5, 5);
+
+  // VF-2 finalize: the WHOLE printed badge -- shape, border and text -- scales together as one object,
+  // pivoted on its own centre, so the revenue value stays exactly centred throughout the pop. No rotation, no
+  // translation, no colour: this is the only transform a hit reaction ever applies.
+  const scale = hit?.scale ?? 1;
+  const scaling = scale !== 1;
+  if (scaling) {
+    ctx.save();
+    ctx.translate(badgeCenter.x, badgeCenter.y);
+    ctx.scale(scale, scale);
+    ctx.translate(-badgeCenter.x, -badgeCenter.y);
+  }
 
   // Design note #62: solid white fill/dark-navy stroke, shape-coded by
   // terrain (square for MajorCityHub/DoubleCityHub, diamond for
@@ -1453,6 +1543,8 @@ export function drawValueBadgeAt(
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText(label, badgeCenter.x, badgeCenter.y);
+
+  if (scaling) ctx.restore();
 }
 
 /** The per-tile overlay pass, in one place so all exits get identical treatment. #486: the tile-level restriction label is gated exactly like showRevenue -- on the board a tile and its hex CANNOT differ, because 1830 only permits an OO tile on an OO hex.

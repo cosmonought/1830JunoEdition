@@ -156,22 +156,46 @@ describe("the intro sequence gains a beginning and an end", () => {
   it("cues the credit off the picture's own clock, not a timer", () => {
     /* A `setTimeout` from play start drifts the moment the clip stutters or begins late, and would then put
        the words against a frame they were not written for. `currentTime` cannot drift from the picture. */
-    expect(INTRO).toContain("event.currentTarget.currentTime >= CREDIT_CUE_SECONDS");
+    /* AMENDED BY THE INTRO EDITORIAL PASS: the threshold is per-ruleset now, because three title clips
+       hand into the shared body at three different moments. The rule this case is about -- the picture's
+       own clock, never a timer -- is untouched and is what the comparison still reads. */
+    expect(INTRO).toContain("event.currentTarget.currentTime >= creditCueSeconds");
     expect(INTRO).toContain("onTimeUpdate={onTimeUpdate}");
+    // And nothing anywhere counts to the cue with a timer.
+    expect(INTRO).not.toContain("setTimeout(() => setCreditVisible");
   });
 
   it("lands the credit on the mark being drawn rather than after it", () => {
     /* MEASURED: the mark draws from ~7.5s and resolves by ~9.5s. The cue plus four staggered words plus the
        fade must finish inside that window, or the line is arriving at a still frame again -- which is the
        thing this replaced. */
-    const cue = Number((RAW_INTRO.match(/const CREDIT_CUE_SECONDS = ([\d.]+);/) ?? [])[1]) * 1000;
+    /* ==================================================================
+        AMENDED BY THE INTRO EDITORIAL PASS: THE WINDOW IS THE BODY'S, AND SO IS THE CUE
+       ==================================================================
+       #1186 checked the cue against a window in WHOLE-FILM time (10.5s-12.6s), which was correct while
+       there was one film and would have quietly passed or quietly failed for the other two the moment a
+       second title with a different handoff arrived. The mark is in the shared body and has never moved:
+       it draws from body ~7.5s and resolves by body ~9.5s. So the window is stated in the body's own clock
+       -- where it is a fact about the footage -- and the per-ruleset cue is checked by converting each
+       film's cue back through its own handoff.
+       THE BASE'S NUMBER IS THE CONTROL. 8.6 + 3.011 rounds to 11.6, which is the figure #1186 hand-wrote,
+       so this refactor is asserted to have changed nothing for the film those measurements were taken on. */
+    const body = Number((RAW_INTRO.match(/const BODY_CREDIT_CUE_SECONDS = ([\d.]+);/) ?? [])[1]) * 1000;
     const stagger = Number((RAW_INTRO.match(/const CREDIT_WORD_STAGGER_MS = (\d+);/) ?? [])[1]);
-    const finishes = cue + stagger * (CREDIT_WORDS.length - 1) + 320;
-    /* Design note #1186: the window moved three seconds later with the footage it describes -- the prepend is
-       4.011s cross-faded over 1.000s, so the original's timeline starts at output t=3.011. The mark still
-       draws from ~10.5s and resolves by ~12.5s; only its arrival time changed. */
-    expect(cue).toBeGreaterThan(10500);
-    expect(finishes).toBeLessThan(12600);
+    const finishes = body + stagger * (CREDIT_WORDS.length - 1) + 320;
+    expect(body).toBeGreaterThan(7500);
+    expect(finishes).toBeLessThan(9500);
+
+    const { INTRO_CUTS, creditCueSecondsFor } =
+      require("../components/GameIntroOverlay") as typeof import("../components/GameIntroOverlay");
+    // The base still cues where #1186 put it, to the tenth the browser can actually act on.
+    expect(creditCueSecondsFor("standard")).toBe(11.6);
+    // And every ruleset lands the same body frame, because each cue is that film's own handoff plus 8.6.
+    for (const type of ["standard", "plus", "levelPlayingField"] as const) {
+      const bodyRelative = creditCueSecondsFor(type) - INTRO_CUTS[type].handoffAtSeconds;
+      expect(bodyRelative * 1000).toBeGreaterThan(7500);
+      expect(bodyRelative * 1000 + stagger * (CREDIT_WORDS.length - 1) + 320).toBeLessThan(9500);
+    }
   });
 
   it("still shows the credit if the engine never fires timeupdate", () => {

@@ -83,7 +83,18 @@ describe("the controls split by what they act on", () => {
 
 describe("a chip is a handle", () => {
   it("opens a route on click", () => {
-    expect(CHIPS).toContain("onClick={interactive && onSelectTrain");
+    /* ==================================================================
+        AMENDED BY VF-8 (the rename dates from VF-7)
+       ==================================================================
+       The predicate is `interactiveNow` rather than the bare `interactive` prop. VF-7 introduced it
+       because the row can now render a STAGED roster -- the fleet as it was, while a chip is destroyed
+       -- and `onSelectTrain(index)` means a position in the roster the CALLER knows about, so a click
+       during staging would hand out an index into the wrong array. VF-8 gave the row a second staging
+       source (a discard) and widened the same boolean. The rule this case states is unchanged: a chip
+       is a handle only where a handle was asked for, and `interactiveNow` is `interactive` plus the
+       two staging guards. Pinned as the identifier here and as its definition in
+       `components/trainRustFlourish.test.ts`, which is where the guards belong. */
+    expect(CHIPS).toContain("onClick={interactiveNow && onSelectTrain");
     expect(BAR).toContain("onSelectTrain={(index) => {");
   });
 
@@ -95,8 +106,9 @@ describe("a chip is a handle", () => {
   it("is reachable from a keyboard", () => {
     /* A control that only answers a mouse is not a control on a tablet or for a keyboard player -- and the
        chip is a styled `span` shared by four surfaces, so it gets the role rather than being rewrapped. */
-    expect(CHIPS).toContain('role={interactive && onSelectTrain ? "button" : undefined}');
-    expect(CHIPS).toContain("tabIndex={interactive && onSelectTrain ? 0 : undefined}");
+    // AMENDED BY VF-8: `interactiveNow`, for the reason recorded on the click case above.
+    expect(CHIPS).toContain('role={interactiveNow && onSelectTrain ? "button" : undefined}');
+    expect(CHIPS).toContain("tabIndex={interactiveNow && onSelectTrain ? 0 : undefined}");
     expect(CHIPS).toContain("onKeyDown={");
     expect(CHIPS).toContain("event.preventDefault();");
   });
@@ -104,7 +116,9 @@ describe("a chip is a handle", () => {
   it("keeps hover and selection apart", () => {
     /* #375's hover still previews on the map and is transient; the click is durable. Collapsing the two would
        make the strip flicker as the pointer crossed the row. */
-    expect(CHIPS).toContain("onMouseEnter={interactive ? () => onHighlightTrain?.(index) : undefined}");
+    // AMENDED BY VF-8: `interactiveNow`, for the reason recorded on the click case above. The hover is
+    // guarded with the click because it too names a roster position (#375 previews it on the map).
+    expect(CHIPS).toContain("onMouseEnter={interactiveNow ? () => onHighlightTrain?.(index) : undefined}");
     expect(CHIPS).toContain("selectedTrainIndex === index ? styles.chipSelected");
   });
 

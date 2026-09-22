@@ -208,12 +208,33 @@ const count = (notice: FleetLossNotice) => (notice.trains.length === 1 ? "is" : 
  * fourth as an always-null predicate is how the next reader concludes there is a slot to fill. */
 
 
-/** The toggle's own label, phrased as the request asked and scoped as narrowly as it actually behaves. */
-export function silenceLabel(notice: FleetLossNotice): string {
-  return notice.cause === "rust"
-    ? `Don't notify me about rust events for ${notice.ticker}`
-    : `Don't notify me about train limit drops for ${notice.ticker}`;
-}
+/* ==================================================================
+    DESIGN NOTE (VF-8): THE SILENCE MACHINERY IS GONE, BOTH HALVES OF IT
+   ==================================================================
+   #896a BUILT A PER-CORPORATION, PER-CAUSE OPT-OUT because both fleet-loss modals were unavoidable: a
+   player running six corporations through a Phase 4 got six of them, and the only remedy on offer was a
+   checkbox per corporation per cause.
+
+   VF-7 RETIRED THE RUST HALF and kept this one, with a reason that was true at the time: "a train-limit
+   drop has no visual vocabulary of its own -- that is a later batch -- so its modal is still the only
+   thing that tells a president a train was taken." This IS that later batch. The discard now has its own
+   flourish and its modal is tutorial-gated like rust's, so the question "do I want to be told about
+   train limit drops for PRR" has been replaced by "am I still being taught" -- one setting, for the
+   whole application, reachable in one place.
+
+   SO THE WHOLE STORE GOES, not the rust arm of it. What is left would be a `sessionStorage` map, a
+   memory mirror, a key builder, a label and a type guard, reachable only from inside a dialog that only
+   appears to somebody who has asked to be taught -- and whose answer, if they do not want teaching, is
+   to turn teaching off. Two independent systems deciding whether one modal appears is what the brief
+   rules out, and #891 is the shape.
+
+   WHAT SURVIVES IS #896's STANDING RULE, which never depended on the toggle: silencing or gating a
+   notice changes WHEN a player finds out, never whether the game told them. `describeFleetLoss` still
+   writes the Activity Log line for every loss, under every setting.
+
+   AND `nextDueNotice` LOSES ITS PREDICATE rather than keeping one that always answers false. A
+   parameter with one reachable answer is #788's unreachable arm wearing a signature, and the next
+   reader would take it for a slot waiting to be filled. */
 
 /** Names the EVENT a notice is about, so a dismissed one can never be raised again.
  *
@@ -261,89 +282,16 @@ export function noticeDismissKey(notice: FleetLossNotice): string {
  *  ONE AT A TIME, IN THE ORDER THE RULES FIRED: rust destroys trains, and only then does the trim take what is
  *  still over the limit. A modal showing both at once would have to pick a headline, and the two causes have
  *  different remedies.
- *  SILENCED AND DISMISSED ARE ASKED SEPARATELY because they mean different things -- one is a standing player
- *  preference, the other is "you have already seen this". Collapsing them would make silencing a notice
- *  retroactively mark it seen, which matters the moment the player switches it back on. */
+ *  Design note (VF-8): THE SILENCE ARGUMENT IS GONE. It existed so a standing preference and "you have
+ *  already seen this" could not be collapsed into one another; there is no standing preference any more,
+ *  so there is nothing to keep apart and the only question left is whether this event was answered. */
 export function nextDueNotice(
   queued: readonly FleetLossNotice[],
-  isSilenced: (notice: FleetLossNotice) => boolean,
   dismissed: ReadonlySet<string>,
 ): FleetLossNotice | null {
   for (const notice of queued) {
-    if (isSilenced(notice)) continue;
     if (dismissed.has(noticeDismissKey(notice))) continue;
     return notice;
   }
   return null;
-}
-
-/* ------------------------------------------------------------------ */
-/* The silence toggles -- design note #896a                            */
-/* ------------------------------------------------------------------ */
-
-/* SCOPED TO THE ROOM, AND THAT IS THE WHOLE REASON THIS IS NOT `localStorage`.
-   The request said "localStorage or component state ... so they persist for the current session", and those
-   three are three different lifetimes. Component state dies on refresh, which loses a preference the player
-   set thirty seconds ago. `localStorage` outlives the GAME -- and because the toggle is keyed per corporation,
-   and 1830's corporations are the same eight every time, a rust notice silenced for PRR in one game would
-   silence PRR in a different game a month later, with nothing on screen explaining why. `Lobby.tsx` already
-   worried about exactly this shape for rooms and chose `sessionStorage` for it.
-   So: `sessionStorage`, keyed by ROOM. That is "the current session" read literally, and it is the only one of
-   the three that cannot leak into a game the player has not started yet.
-   THE IN-MEMORY MAP IS THE TRUTH and storage is the mirror, which `TutorialModal`'s wrapper does not do
-   because it had no need to: there, a throw means the tutorial shows again, and showing is the safe direction.
-   Here a throw would mean a toggle the player just set silently doing nothing, so the Map answers first and
-   private browsing costs persistence rather than the feature. */
-
-const SILENCE_PREFIX = "1830juno.fleet_loss_silence.v1.";
-
-const memory = new Map<string, boolean>();
-
-function storageKey(roomCode: string | null, companyId: number, cause: FleetLossCause): string {
-  // A null room is a local game with no code; it still gets a stable key so the toggle works within the tab.
-  return `${SILENCE_PREFIX}${roomCode ?? "local"}.${companyId}.${cause}`;
-}
-
-/** Whether this corporation's notices of this cause are switched off. */
-export function isNoticeSilenced(
-  roomCode: string | null,
-  companyId: number,
-  cause: FleetLossCause,
-): boolean {
-  const key = storageKey(roomCode, companyId, cause);
-  const remembered = memory.get(key);
-  if (remembered !== undefined) return remembered;
-  try {
-    const stored = window.sessionStorage.getItem(key) === "1";
-    memory.set(key, stored);
-    return stored;
-  } catch {
-    /* Storage disabled, or no `window` at all. Not silenced is the safe direction: the player is told
-       something true rather than quietly not told it. */
-    return false;
-  }
-}
-
-/** Set or clear the toggle. The Map is written first so the answer is right even when storage refuses. */
-export function setNoticeSilenced(
-  roomCode: string | null,
-  companyId: number,
-  cause: FleetLossCause,
-  silenced: boolean,
-): void {
-  const key = storageKey(roomCode, companyId, cause);
-  memory.set(key, silenced);
-  try {
-    if (silenced) window.sessionStorage.setItem(key, "1");
-    else window.sessionStorage.removeItem(key);
-  } catch {
-    /* see `isNoticeSilenced` -- losing persistence is acceptable, losing the toggle is not. */
-  }
-}
-
-/** Test seam: drops the in-memory mirror so a case can start from a known state.
- *  Exported rather than reached around because a test that pokes at module internals stops testing the
- *  module's own contract, which is the thing that has to keep working. */
-export function resetNoticeSilenceCache(): void {
-  memory.clear();
 }

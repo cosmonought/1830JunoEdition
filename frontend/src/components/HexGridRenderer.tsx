@@ -149,6 +149,8 @@ import {
   drawRestrictionBadge,
   drawReservationBadge,
   drawRouteOverlays,
+  drawRouteSignalBand,
+  type BadgeHitVisual,
   hitTestRoutes,
   type RouteHitPaths,
   drawSingleNodeNameplate,
@@ -200,6 +202,19 @@ import {
   type Vec,
 } from "./tileTransition";
 import { drawTileTransitionArt, drawTileTransitionFill, withRevealSide } from "./tileTransitionCanvas";
+/* Train Route Pulse / Revenue Badge Animation flourish: pure geometry (no canvas, no React) that turns the
+   SAME authored track data drawRouteOverlays strokes into a sampleable travel path, plus which of a route's
+   hexes are its priced revenue stops and which single reaction (if any) a badge shared by several arrivals
+   should show right now. See routeSignalGeometry.ts's own header for why this re-parses rather than reusing
+   drawRouteOverlays's Path2Ds. */
+import {
+  badgePopScale,
+  buildRouteSignalTrack,
+  pointOnRouteTrack,
+  selectBadgeHitReaction,
+  type BadgeHitCandidate,
+  type RouteSignalTrack,
+} from "./routeSignalGeometry";
 /* Design note #1474: the transition's cues go through the helper every cue goes through (#1041), which owns the master
    switch's effect, the shared level, the concurrency cap, the radio's duck and the browser's refusals. */
 import { currentSfxEnabled, playVariantCue, preloadCues } from "../utils/audio";
@@ -222,6 +237,22 @@ function heraldArtwork(ticker: string): HTMLImageElement | null {
   image.src = logoSrcFor(ticker);
   return null;
 }
+
+/* ==================================================================
+    TRAIN ROUTE PULSE FLOURISH -- PLAYTEST VARIABLES (design notes 5, 28)
+   ==================================================================
+   Deliberately not hand-tuned beyond a first coherent guess (the brief's own instruction, design note 28).
+   `ROUTE_SIGNAL_SPEED_UNITS_PER_SEC` is unit-hex-space distance per second: every route's own duration is
+   DERIVED from this one shared speed against its own geometry length, so a short route finishes sooner and a
+   long one takes longer without either crawling or racing (design note 5) -- nothing else needs retuning if
+   this one number moves. Chosen so a representative medium route (~5-6 hexes of through-track, each roughly
+   0.8-1.7 unit-lengths) lands near the 1.5-2s the brief asks for; WATCH at playtest and adjust here only. */
+const ROUTE_SIGNAL_SPEED_UNITS_PER_SEC = 3.2;
+/** How long a revenue-badge arrival stays eligible to drive (or coincide with) the mechanical pop reaction
+ *  before `selectBadgeHitReaction` drops it -- "short and crisp" per design note 12, unplaytested. The pop
+ *  itself (`badgePopScale`) always settles back to rest well before this elapses (260ms vs 350ms here); this
+ *  constant only bounds how long the underlying reaction bookkeeping stays "live". */
+const ROUTE_SIGNAL_PULSE_DURATION_SEC = 0.35;
 
 /* ------------------------------------------------------------------ */
 /* Contract data mirrors -- see design note #2                        */
@@ -1345,6 +1376,24 @@ export function HexGridRenderer({
   /* The tooltip WAITS. What is not delayed is hoveredHexCoord -- that is feedback about what you are pointing at, and delaying it would make the map feel unresponsive. The timer is RESTARTED per hex. #380: the last repaint's route geometry, in board pixels.
      See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #365 */
   const routeHitRef = useRef<RouteHitPaths | null>(null);
+  /* Train Route Pulse flourish: the expensive part (parsing authored track strings into a sampleable
+     travel path, per design note in routeSignalGeometry.ts) runs only when `routeOverlays` or `mapGrid`
+     actually change identity -- gated below by reference comparison -- never once per animation frame.
+     `assignments`: which routes' signals reach each hex and when, for the revenue-badge hit-reaction pass
+     (VF-2 simplification pass -- see routeSignalGeometry.ts); built in the same rebuild pass since both come
+     from the same per-overlay walk. */
+  const routeSignalCacheRef = useRef<{
+    overlaysRef: readonly RouteOverlay[] | null;
+    mapGridRef: MapGridResponse | null;
+    tracks: Map<number, RouteSignalTrack>;
+    assignments: Map<string, Array<{ trainIndex: number; atDistances: number[] }>>;
+  }>({ overlaysRef: null, mapGridRef: null, tracks: new Map(), assignments: new Map() });
+  /* When each route's signal started looping, by trainIndex. Persists across frames (a ref, not state) so
+     the signal's elapsed time is continuous rather than reset on every repaint; reset only for a route whose
+     own geometry actually changed (design note 22 -- an edited route restarts, an untouched one does not),
+     via the signature map below. */
+  const routeSignalStartRef = useRef<Map<number, number>>(new Map());
+  const routeSignalSignatureRef = useRef<Map<number, string>>(new Map());
 
   const tooltipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cancelTooltipTimer = useCallback(() => {
@@ -1404,6 +1453,27 @@ export function HexGridRenderer({
     handle = requestAnimationFrame(step);
     return () => cancelAnimationFrame(handle);
   }, [cursorMode]);
+
+  /* Train Route Pulse flourish's own frame clock -- #463's pattern, extended rather than duplicated: a tick
+     state exists only to make `draw` (below) re-run each frame, GATED on there being anything to animate at
+     all, exactly like the tile-transition clock a few lines down. prefers-reduced-motion stops it entirely
+     (design note 25): under reduced motion every badge draws as the ordinary plain white/black badge, same
+     as the static route highlight standing in for the continuously moving signal -- there is no longer a
+     persistent badge state left to keep drawing once the animation itself stops (VF-2 simplification pass). */
+  const [routeSignalTick, setRouteSignalTick] = useState(0);
+  useEffect(() => {
+    if (routeOverlays.length === 0) return undefined;
+    if (typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+      return undefined;
+    }
+    let handle = 0;
+    const step = () => {
+      setRouteSignalTick((tick) => tick + 1);
+      handle = requestAnimationFrame(step);
+    };
+    handle = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(handle);
+  }, [routeOverlays]);
 
   /* Design note #1465: the running tile transitions, keyed "q,r", and the inputs of the last render they were
      diffed against. Refs, not state: the draw reads them, and a transition starting must not re-render anything
@@ -1913,25 +1983,167 @@ export function HexGridRenderer({
 
     /* The draw hands back the flattened stroke geometry for the pointer to test against. A ref, not state -- re-rendering because the hit geometry moved would repaint the canvas, which rebuilds the geometry.
        See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #380 */
+    // Named rather than inlined: the Train Route Pulse flourish's geometry (below) needs the IDENTICAL two
+    // resolvers, and a caller that built its own copy could silently select a different rail than the base
+    // line for the same hex (routeSignalGeometry.ts's own header explains why that matters).
+    const tilesAtForRoutes = (q: number, r: number) => mapGrid.tiles.find((tile) => tile.q === q && tile.r === r);
+    const printedLabelAtForRoutes = (q: number, r: number) => {
+      const boardHex = STATIC_BOARD_HEXES.find((hex) => hex.q === q && hex.r === r);
+      if (boardHex && GRAY_HEXES[boardHex.label]) return boardHex.label;
+      /* Design note #895: the red areas answer here too. They were absent, so a route running onto an
+         off-board hex resolved no label, found no authored rail, and was drawn in no colour at all. Their
+         stubs are generated into `PRINTED_GRAPHICS_CATALOG` from `OFFBOARD_TRACKS`, so from this callback's
+         point of view an off-board hex is simply another preprinted one -- which is what it is. */
+      if (boardHex && OFFBOARD_TRACKS[boardHex.label]) return boardHex.label;
+      const landmark = LANDMARK_HEXES.find((entry) => entry.q === q && entry.r === r);
+      return landmark?.label;
+    };
+
     routeHitRef.current = drawRouteOverlays(
       ctx,
       hexSize,
       emphasised,
-      (q, r) => mapGrid.tiles.find((tile) => tile.q === q && tile.r === r),
+      tilesAtForRoutes,
       // Endpoints resolve to a single authored rail, so no branch needs to know how a hex was drawn. #215: the printed label, so a route across a gray hex lights the ONE rail it runs along.
       // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #226
-      (q, r) => {
-        const boardHex = STATIC_BOARD_HEXES.find((hex) => hex.q === q && hex.r === r);
-        if (boardHex && GRAY_HEXES[boardHex.label]) return boardHex.label;
-        /* Design note #895: the red areas answer here too. They were absent, so a route running onto an
-           off-board hex resolved no label, found no authored rail, and was drawn in no colour at all. Their
-           stubs are generated into `PRINTED_GRAPHICS_CATALOG` from `OFFBOARD_TRACKS`, so from this callback's
-           point of view an off-board hex is simply another preprinted one -- which is what it is. */
-        if (boardHex && OFFBOARD_TRACKS[boardHex.label]) return boardHex.label;
-        const landmark = LANDMARK_HEXES.find((entry) => entry.q === q && entry.r === r);
-        return landmark?.label;
-      },
+      printedLabelAtForRoutes,
     );
+
+    /* ==================================================================
+        TRAIN ROUTE PULSE / REVENUE BADGE ANIMATION
+       ==================================================================
+       Rebuilt only when `routeOverlays` or `mapGrid` change IDENTITY (an edit, a new draft, a tile laid) --
+       never on an unrelated repaint, and never once per animation frame (design notes 26, PERFORMANCE
+       PRIORITY). Everything below this rebuild gate is cheap per-frame arithmetic against the cached
+       geometry: sampling one point per route and a little modular-distance math per revenue badge. */
+    const cache = routeSignalCacheRef.current;
+    if (cache.overlaysRef !== routeOverlays || cache.mapGridRef !== mapGrid) {
+      const tracks = new Map<number, RouteSignalTrack>();
+      const assignments = new Map<string, Array<{ trainIndex: number; atDistances: number[] }>>();
+      for (const overlay of routeOverlays) {
+        if (overlay.trainIndex === undefined) continue;
+        const track = buildRouteSignalTrack(overlay, tilesAtForRoutes, printedLabelAtForRoutes, overlay.revenueStops);
+        if (!track) continue;
+        tracks.set(overlay.trainIndex, track);
+        for (const event of track.revenueEvents) {
+          const hex = overlay.hexes[event.hexIndex];
+          if (!hex) continue;
+          const key = `${hex[0]},${hex[1]}`;
+          const list = assignments.get(key) ?? [];
+          let entry = list.find((candidate) => candidate.trainIndex === overlay.trainIndex);
+          if (!entry) {
+            entry = { trainIndex: overlay.trainIndex, atDistances: [] };
+            list.push(entry);
+          }
+          entry.atDistances.push(event.atDistance);
+          assignments.set(key, list);
+        }
+      }
+      // Design note 22 (route-edit lifecycle): a route whose GEOMETRY genuinely changed restarts its loop
+      // from zero; a route that is still exactly the same shape keeps its existing elapsed time, so editing
+      // ONE train's draft does not resynchronise every other train's signal.
+      const signatureOf = (track: RouteSignalTrack) =>
+        `${track.totalLength.toFixed(3)}|${track.segments.map((segment) => `${segment.q},${segment.r}:${segment.rot}`).join(",")}`;
+      tracks.forEach((track, trainIndex) => {
+        const signature = signatureOf(track);
+        if (routeSignalSignatureRef.current.get(trainIndex) !== signature) {
+          routeSignalSignatureRef.current.set(trainIndex, signature);
+          routeSignalStartRef.current.set(trainIndex, performance.now());
+        }
+      });
+      for (const trainIndex of Array.from(routeSignalStartRef.current.keys())) {
+        if (!tracks.has(trainIndex)) {
+          routeSignalStartRef.current.delete(trainIndex);
+          routeSignalSignatureRef.current.delete(trainIndex);
+        }
+      }
+      routeSignalCacheRef.current = { overlaysRef: routeOverlays, mapGridRef: mapGrid, tracks, assignments };
+    }
+    const routeSignalTracks = routeSignalCacheRef.current.tracks;
+    const badgeRouteAssignments = routeSignalCacheRef.current.assignments;
+    const routeSignalReducedMotion =
+      typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
+    const routeSignalNow = performance.now();
+
+    // The traveling signal itself -- design notes 3-6, 17-18. Drawn OVER the base route line (already
+    // stroked above) and under everything token/badge related, same as the base line's own layering.
+    // Design note 25 (VF-2 simplification pass): suppressed entirely under reduced motion, same as every
+    // revenue-badge hit reaction below -- the static route highlight alone already carries every piece of
+    // route/revenue information a player needs; the traveling signal and the badge reaction are both pure
+    // motion on top of it, never its sole carrier.
+    if (!routeSignalReducedMotion) {
+      for (const overlay of routeOverlays) {
+        if (overlay.trainIndex === undefined) continue;
+        const track = routeSignalTracks.get(overlay.trainIndex);
+        if (!track) continue;
+        const start = routeSignalStartRef.current.get(overlay.trainIndex) ?? routeSignalNow;
+        const elapsedSec = (routeSignalNow - start) / 1000;
+        const distance = elapsedSec * ROUTE_SIGNAL_SPEED_UNITS_PER_SEC;
+        const bandSpan = Math.min(track.totalLength * 0.14, 0.4);
+        const head = pointOnRouteTrack(track, distance, hexSize);
+        const tail = pointOnRouteTrack(track, distance - bandSpan, hexSize);
+        if (head && tail) drawRouteSignalBand(ctx, hexSize, tail, head, overlay.color);
+      }
+    }
+
+    /** This revenue badge's current hit-reaction scale at `(q, r)`, or `undefined` for a badge with nothing
+     *  to show right now -- reduced motion, no route currently earning it, or its most recent arrival
+     *  already settled back to rest -- which draws exactly as it always has (plain white interior, plain
+     *  black border, scale 1). Read by every `drawValueBadge`/`drawValueBadgeAt` call in this function.
+     *
+     *  VF-2 finalize pass: SUPERSEDES both the original persistent route-coloured perimeter-border design
+     *  and the colour-flush interior tint that replaced it -- the route highlight already carries
+     *  route/revenue identity, so this badge reaction is a transient, secondary, PHYSICAL acknowledgement
+     *  only (a brief scale-up and settle), never a colour change. See routeSignalGeometry.ts's "Revenue-badge
+     *  hit reaction" section for the full decision record. */
+    const badgeHitVisualForHex = (q: number, r: number): BadgeHitVisual | undefined => {
+      if (routeSignalReducedMotion) return undefined;
+      const entries = badgeRouteAssignments.get(`${q},${r}`);
+      if (!entries || entries.length === 0) return undefined;
+
+      // One candidate per (route, arrival) pair -- NOT per route -- so a route that legitimately reaches
+      // this same rendered badge more than once per loop (rule set item 9) still lets each occurrence
+      // coincide with, or stay clear of, any other occurrence on its own terms.
+      const candidates: BadgeHitCandidate[] = [];
+      for (const entry of entries) {
+        const track = routeSignalTracks.get(entry.trainIndex);
+        const start = routeSignalStartRef.current.get(entry.trainIndex);
+        if (!track || start === undefined) continue;
+        const elapsedSec = (routeSignalNow - start) / 1000;
+        const distanceNow = elapsedSec * ROUTE_SIGNAL_SPEED_UNITS_PER_SEC;
+        for (const atDistance of entry.atDistances) {
+          candidates.push({ totalLength: track.totalLength, distanceNow, atDistance });
+        }
+      }
+
+      const reaction = selectBadgeHitReaction(
+        candidates,
+        ROUTE_SIGNAL_SPEED_UNITS_PER_SEC,
+        ROUTE_SIGNAL_PULSE_DURATION_SEC * 1000,
+      );
+      if (!reaction) return undefined;
+
+      // `badgePopScale` is the whole presentation now: attack -> overshoot -> settle, no colour, no rotation.
+      // Once it has settled back to exactly 1 the badge is visually indistinguishable from rest, so this
+      // returns `undefined` rather than `{ scale: 1 }` -- which also means a badge only asks for the late,
+      // token-elevated redraw pass (below) while it is genuinely still moving.
+      const scale = badgePopScale(reaction);
+      return scale !== 1 ? { scale } : undefined;
+    };
+
+    // VF-2 finalize pass, item 5 (draw order): a RESTING badge (the overwhelming majority, every frame) must
+    // keep the exact draw order it has always had -- this array stays empty for it, `paintBadge` draws it
+    // immediately, nothing about the board's normal layering changes. An ACTIVELY REACTING badge (genuinely
+    // mid-pop, per `badgeHitVisualForHex` above) is instead skipped in its normal spot and queued here, then
+    // drawn once, after `drawStationTokenPass()` below -- so a nearby station token can never paint over the
+    // enlarged corner of a popping badge (demonstrated in the visual-prototype comparison's draw-order check).
+    // No permanent z-order rewrite, no duplicate badge, no DOM overlay: this is a short late PRESENTATION
+    // pass over the same canvas, gone as soon as the reaction ends.
+    const activeBadgeRedraws: Array<() => void> = [];
+    const paintBadge = (hit: BadgeHitVisual | undefined, draw: () => void): void => {
+      if (hit) activeBadgeRedraws.push(draw);
+      else draw();
+    };
 
     /* Tokens are drawn LAST, not merely late. A badge covering a token is worse than a badge covering track: a token says whose network this is, and a route's legality turns on it.
        See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #222 */
@@ -2003,13 +2215,15 @@ export function HexGridRenderer({
                 false,
               );
             }
-            drawValueBadgeAt(
-              ctx,
-              { x: badge.x + hexSize * 0.42, y: badge.y },
-              hexSize,
-              "MajorCityHub",
-              herald.revenue,
-            );
+            {
+              const heraldHit = badgeHitVisualForHex(home.q, home.r);
+              const heraldBadgeCenter = { x: badge.x + hexSize * 0.42, y: badge.y };
+              paintBadge(heraldHit, () =>
+                withHexClip(ctx, heraldCenter, hexSize, () =>
+                  drawValueBadgeAt(ctx, heraldBadgeCenter, hexSize, "MajorCityHub", herald.revenue, heraldHit),
+                ),
+              );
+            }
           });
           continue;
         }
@@ -2684,19 +2898,26 @@ export function HexGridRenderer({
       const landmarkEdges = (LANDMARK_TRACKS[landmark.name] ?? []).flatMap((segment) => segment.edges);
       // Design note #55: Strict Hex Boundary Clipping, extended to value
       // badges -- previously only track/text calls were wrapped.
-      withHexClip(ctx, center, hexSize, () => {
-        drawValueBadge(
-          ctx,
-          center,
-          landmark.q,
-          landmark.r,
-          "MajorCityHub",
-          hexSize,
-          override,
-          landmarkEdges,
-          claimedHexSlots,
+      {
+        const hit = badgeHitVisualForHex(landmark.q, landmark.r);
+        paintBadge(hit, () =>
+          withHexClip(ctx, center, hexSize, () => {
+            drawValueBadge(
+              ctx,
+              center,
+              landmark.q,
+              landmark.r,
+              "MajorCityHub",
+              hexSize,
+              override,
+              landmarkEdges,
+              claimedHexSlots,
+              undefined,
+              hit,
+            );
+          }),
         );
-      });
+      }
     }
     for (const hex of STATIC_BOARD_HEXES) {
       const override = HEX_START_VALUE_OVERRIDE[hex.label];
@@ -2740,55 +2961,98 @@ export function HexGridRenderer({
             ctx.restore();
           });
         }
-        withHexClip(ctx, center, hexSize, () => {
+        {
+          const hit = badgeHitVisualForHex(hex.q, hex.r);
           const badgeSlot = PLATE_LAYOUT[hex.label]?.badge;
-          drawValueBadgeAt(
-            ctx,
-            /* Design note #1288: the board's slot when it names one; top right otherwise (#1282). */
+          const offboardBadgeCenter =
             badgeSlot !== undefined
               ? plateSlotPoint(center, badgeSlot)
-              : { x: center.x + hexSize * 0.42, y: center.y - hexSize * 0.5 },
-            hexSize,
-            "MajorCityHub",
-            offboardValueForEra(ownTiers, currentEra),
+              : { x: center.x + hexSize * 0.42, y: center.y - hexSize * 0.5 };
+          paintBadge(hit, () =>
+            withHexClip(ctx, center, hexSize, () => {
+              drawValueBadgeAt(
+                ctx,
+                /* Design note #1288: the board's slot when it names one; top right otherwise (#1282). */
+                offboardBadgeCenter,
+                hexSize,
+                "MajorCityHub",
+                offboardValueForEra(ownTiers, currentEra),
+                hit,
+              );
+            }),
           );
-        });
+        }
         continue;
       }
       if (grayTrack && grayTrack.marker !== "none" && !valueIsTiered) {
         if (override !== 0) {
           const center = axialToPixel(hex.q, hex.r, hexSize);
-          withHexClip(ctx, center, hexSize, () => {
-            drawValueBadge(
-              ctx,
-              center,
-              hex.q,
-              hex.r,
-              grayTrack.marker === "city" ? "MajorCityHub" : "SmallTown",
-              hexSize,
-              override,
-              grayTrack.edges,
-              claimedHexSlots,
-            );
-          });
+          const hit = badgeHitVisualForHex(hex.q, hex.r);
+          paintBadge(hit, () =>
+            withHexClip(ctx, center, hexSize, () => {
+              drawValueBadge(
+                ctx,
+                center,
+                hex.q,
+                hex.r,
+                grayTrack.marker === "city" ? "MajorCityHub" : "SmallTown",
+                hexSize,
+                override,
+                grayTrack.edges,
+                claimedHexSlots,
+                undefined,
+                hit,
+              );
+            }),
+          );
         }
         continue;
       }
       if (YELLOW_OO_HEXES.has(hex.label)) {
         if (override !== 0) {
           const center = axialToPixel(hex.q, hex.r, hexSize);
-          withHexClip(ctx, center, hexSize, () => {
-            drawValueBadge(ctx, center, hex.q, hex.r, "MajorCityHub", hexSize, override, [], claimedHexSlots);
-          });
+          const hit = badgeHitVisualForHex(hex.q, hex.r);
+          paintBadge(hit, () =>
+            withHexClip(ctx, center, hexSize, () => {
+              drawValueBadge(
+                ctx,
+                center,
+                hex.q,
+                hex.r,
+                "MajorCityHub",
+                hexSize,
+                override,
+                [],
+                claimedHexSlots,
+                undefined,
+                hit,
+              );
+            }),
+          );
         }
       }
       // REVERTED: only the three gray hexes with REAL printed track show a town badge. The seven blank town-designated hexes are placeholders, not scored destinations, until a tile is laid -- the backend already treats them that way, so this was a frontend-only display bug.
       // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #35
       if (hex.cityDesignation && override !== 0) {
         const center = axialToPixel(hex.q, hex.r, hexSize);
-        withHexClip(ctx, center, hexSize, () => {
-          drawValueBadge(ctx, center, hex.q, hex.r, "MajorCityHub", hexSize, override, [], claimedHexSlots);
-        });
+        const hit = badgeHitVisualForHex(hex.q, hex.r);
+        paintBadge(hit, () =>
+          withHexClip(ctx, center, hexSize, () => {
+            drawValueBadge(
+              ctx,
+              center,
+              hex.q,
+              hex.r,
+              "MajorCityHub",
+              hexSize,
+              override,
+              [],
+              claimedHexSlots,
+              undefined,
+              hit,
+            );
+          }),
+        );
       }
     }
     for (const tile of presentedGrid.tiles) {
@@ -2806,23 +3070,28 @@ export function HexGridRenderer({
       const outgoingBadge = stagedBadge ? stagedBadge.transition.badgeFrom : null;
       if (outgoingBadge && badge && badge.outgoingAlpha > 0) {
         const outgoingCenter = axialToPixel(tile.q, tile.r, hexSize);
-        ctx.save();
-        ctx.globalAlpha = badge.outgoingAlpha;
-        withHexClip(ctx, outgoingCenter, hexSize, () => {
-          drawValueBadge(
-            ctx,
-            outgoingCenter,
-            tile.q,
-            tile.r,
-            outgoingBadge.terrain,
-            hexSize,
-            outgoingBadge.value,
-            outgoingBadge.edges,
-            new Map(),
-            outgoingBadge.blocked,
-          );
+        const outgoingAlpha = badge.outgoingAlpha;
+        const outgoingHit = badgeHitVisualForHex(tile.q, tile.r);
+        paintBadge(outgoingHit, () => {
+          ctx.save();
+          ctx.globalAlpha = outgoingAlpha;
+          withHexClip(ctx, outgoingCenter, hexSize, () => {
+            drawValueBadge(
+              ctx,
+              outgoingCenter,
+              tile.q,
+              tile.r,
+              outgoingBadge.terrain,
+              hexSize,
+              outgoingBadge.value,
+              outgoingBadge.edges,
+              new Map(),
+              outgoingBadge.blocked,
+              outgoingHit,
+            );
+          });
+          ctx.restore();
         });
-        ctx.restore();
       }
       const catalogEntry = TILE_CATALOG_BY_ID.get(tile.tile_id);
       if (!catalogEntry) continue;
@@ -2859,14 +3128,29 @@ export function HexGridRenderer({
       if (chainRevenue === 0) continue;
       // #1394/#1405: the tile's own rings, dits and sampled rails decide the slots, in place of the edge guess.
       const markerBlocked = slotsBlockedByTileMarkers(tile.tile_id, tile.orientation);
-      const printValue = (alpha: number, ledger: Map<string, Set<number>>) => {
+      const tileHit = badgeHitVisualForHex(tile.q, tile.r);
+      const paintTileBadge = (alpha: number, ledger: Map<string, Set<number>>) => {
         ctx.save();
         ctx.globalAlpha = alpha; // 1 everywhere but a proposal and a hex mid-transition (#1465, #1471)
         withHexClip(ctx, center, hexSize, () => {
-          drawValueBadge(ctx, center, tile.q, tile.r, terrain, hexSize, chainRevenue, tileEdges, ledger, markerBlocked);
+          drawValueBadge(
+            ctx,
+            center,
+            tile.q,
+            tile.r,
+            terrain,
+            hexSize,
+            chainRevenue,
+            tileEdges,
+            ledger,
+            markerBlocked,
+            tileHit,
+          );
         });
         ctx.restore();
       };
+      const printValue = (alpha: number, ledger: Map<string, Set<number>>) =>
+        paintBadge(tileHit, () => paintTileBadge(alpha, ledger));
       if (!badge || badge.front >= REVEAL_SPAN) {
         printValue(1, claimedHexSlots);
       } else if (badge.front <= -REVEAL_SPAN) {
@@ -2877,8 +3161,14 @@ export function HexGridRenderer({
         const before = new Map<string, Set<number>>();
         claimedHexSlots.forEach((slots, key) => before.set(key, new Set(slots)));
         const provisionalAlpha = badge.provisionalAlpha;
-        withRevealSide(ctx, center, hexSize, badge.front, "west", () => printValue(1, claimedHexSlots));
-        withRevealSide(ctx, center, hexSize, badge.front, "east", () => printValue(provisionalAlpha, before));
+        // VF-2 finalize, item 5: the reveal-crossing split (mid tile-lay-transition) keeps its EXISTING draw
+        // order even for an actively-reacting badge -- deferring one of its two halves here risks drawing the
+        // full (unclipped) badge twice at two different alphas once replayed outside the reveal-side clip.
+        // This overlap (a badge popping at the exact instant its own hex's tile-lay transition front is
+        // crossing it) is narrow and rare enough in real play that the smallest-local fix is to simply not
+        // elevate it here -- it keeps the pre-existing draw order (under tokens) for this one edge case only.
+        withRevealSide(ctx, center, hexSize, badge.front, "west", () => paintTileBadge(1, claimedHexSlots));
+        withRevealSide(ctx, center, hexSize, badge.front, "east", () => paintTileBadge(provisionalAlpha, before));
       }
     }
     /* #1390's padlock on final tiles was drawn here and is GONE by ruling ("remove the padlocks from the
@@ -3095,6 +3385,11 @@ export function HexGridRenderer({
        nameplate AND the focus veil. */
     drawStationTokenPass();
 
+    // VF-2 finalize pass, item 5: any badge that queued itself above (genuinely mid-pop right now) draws
+    // here, ONCE, after every token -- so it clears nearby station-token artwork while reacting, without
+    // ever touching the resting draw order above. Empty on the overwhelming majority of frames.
+    activeBadgeRedraws.forEach((draw) => draw());
+
 
     // ---- Off-board hover tooltip (design note #15/item 4), drawn LAST so
     // it's always on top of everything else, including the tile proposal
@@ -3186,6 +3481,8 @@ export function HexGridRenderer({
     heraldTick,
     // Design note #1465: a tile transition's frame clock.
     tileTransitionTick,
+    // Train Route Pulse flourish's own frame clock -- see its useEffect above.
+    routeSignalTick,
   ]);
 
   /* Design note #1014: `scheduleDraw` and `rafHandleRef` are GONE. #4 built the coalescer because a drag

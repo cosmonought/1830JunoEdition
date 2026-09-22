@@ -7,7 +7,21 @@ describe("the Phase 3 notice (design note #1441)", () => {
   const modal = readStripped("components/PhaseThreeNoticeModal.tsx");
 
   it("is raised on the 2 -> 3 edge of the derived phase, seeded from the first observation", () => {
-    expect(app).toContain('if (previous === "2" && tier === "3") setPhaseThreeNotice(true);');
+    /* ==================================================================
+        AMENDED BY VF-4: THE EDGE IS THE SAME; THE RAISE IS HELD
+       ==================================================================
+       IT ASSERTED THE WHOLE LINE, `if (previous === "2" && tier === "3") setPhaseThreeNotice(true);`, which
+       pinned the EDGE and the TIMING of the raise together in one string -- so a batch changing only the
+       second broke a case about the first. RULED for the phase-badge flourish: "do not allow the
+       PhaseThreeNoticeModal to cover the badge before the flip is perceptible", and the notice is a modal,
+       so it waits for the badge's own sequence to settle (`PHASE_BADGE_NOTICE_HOLD_MS`, half a second).
+       #1441'S RULE IS UNTOUCHED AND IS WHAT THIS CASE STILL CHECKS: the same 2 -> 3 comparison on the same
+       derived tier, the same seeded first observation, the same modal wiring. The two are now asserted
+       separately, so the next batch that moves one is not stopped by a case about the other.
+       THE HOLD ITSELF is `phaseBadgeFlip.test.ts`'s ("holds the Phase 3 notice until the plate has
+       settled"), which is where the reason for it is recorded. */
+    expect(app).toContain('if (previous === "2" && tier === "3") {');
+    expect(app).toContain("setPhaseThreeNotice(true)");
     expect(app).toContain("if (previous === undefined) return; // the first observation seeds; it is not an edge");
     expect(app).toContain("<PhaseThreeNoticeModal open={phaseThreeNotice} onAcknowledge={() => setPhaseThreeNotice(false)} />");
   });

@@ -211,8 +211,12 @@ describe("the surfaces share one answer", () => {
        exactly -- one atom accepting what the other refused, permanently out of step. */
     const app = read("App.tsx");
     expect(app).toContain("const layRefused = (q: number, r: number, tileId: number, orientation: number)");
-    expect(app).toContain("lay.orientation,\n            layRefused,");
+    /* Stage 10.1 (#1683): the grid takes the AUTHORITY's verdict, built once from that same `layRefused`
+       geometry; the reducer takes the geometry and asks the same authority in its gate block. One predicate,
+       one layer up -- `holdBeforeChart.test.ts` and `oneLayPerTurn.test.ts` pin the composition. */
+    expect(app).toContain("lay.orientation,\n            layRefusedByAuthority,");
     expect(app).toContain("layRefused,\n          });");
+    expect(app).toContain("const layRefusedByAuthority = (): boolean =>");
   });
 
   it("reads the grid through the ref, ONCE", () => {
@@ -231,8 +235,10 @@ describe("the surfaces share one answer", () => {
   });
 
   it("gates before anything settles", () => {
-    expect(read("gameEngine/sandboxSession.ts")).toContain(
-      'if ("LayTile" in msg && ctx?.layRefused) {',
-    );
+    /* Stage 10.1 (#1683): the gate is the one `LayTile` composition, asked in the core gate block ahead of the
+       arm and the cursor; the geometry is its second question, through the same `ctx.layRefused`. */
+    const reducer = read("gameEngine/sandboxSession.ts");
+    expect(reducer).toContain('if ("LayTile" in msg) {\n    if (layTileLegalityRefusal(state, msg.LayTile, ctx) !== null) return state;');
+    expect(read("gameEngine/layTileAuthority.ts")).toContain("if (ctx?.layRefused && ctx.layRefused(q, r, tile_id, orientation)) {");
   });
 });

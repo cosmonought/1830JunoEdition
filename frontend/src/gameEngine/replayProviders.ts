@@ -56,11 +56,28 @@ import {
 } from "./marketGeometry";
 import { filterSandboxPlacements } from "../components/sandboxTileLegality";
 import { STATIC_BOARD_HEXES } from "../components/hexBoardData";
+import type { MapGridResponse } from "../components/hexContractTypes";
+import type { TileColorTier } from "../components/hexTileCatalog";
 
 /** The providers a room replays with.
  *
  *  TRANSCRIBED FROM `App.tsx`'s CALL SITE, never derived from the types. Where this file and the shell
  *  differ, this file is wrong until proven otherwise -- #1194 is what that rule is made of. */
+/** Design note #1683 (Stage 10.1): THE BOARD GEOMETRY, AS ONE FUNCTION. This is `ReplayProviders.layRefused` --
+ *  `filterSandboxPlacements` asked of one placement -- exported on its own so `App.tsx`'s grid step hands the
+ *  `LayTile` authority the same geometry the engine's providers hand it, rather than a second closure over the
+ *  same call. #757, and the snapshot discipline #766 asked for: the grid and the era are both passed in. */
+export function boardLayRefused(
+  grid: MapGridResponse,
+  q: number,
+  r: number,
+  tileId: number,
+  orientation: number,
+  era: TileColorTier,
+): boolean {
+  return filterSandboxPlacements([{ tile_id: tileId, orientation }], { mapGrid: grid, q, r, era }).length === 0;
+}
+
 export function sandboxReplayProviders(): ReplayProviders {
   const zeroState = sandboxScenario(DEFAULT_SANDBOX_SCENARIO).zeroState ?? false;
 
@@ -69,13 +86,7 @@ export function sandboxReplayProviders(): ReplayProviders {
     /* #757, and the snapshot discipline #766 asked for: the grid and the era are both passed in, so the two
        halves of the predicate judge the same instant. `App.tsx` got this wrong once by giving the grid a ref
        and leaving the phase reading state. */
-    layRefused: (grid, q, r, tileId, orientation, era) =>
-      filterSandboxPlacements([{ tile_id: tileId, orientation }], {
-        mapGrid: grid,
-        q,
-        r,
-        era,
-      }).length === 0,
+    layRefused: boardLayRefused,
 
     initialMarket: sandboxInitialMarketPrices(marketCellForPrice, parBoxCellFor, zeroState),
 

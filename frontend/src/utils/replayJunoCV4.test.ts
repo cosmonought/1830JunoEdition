@@ -123,6 +123,9 @@ describe("JUNO-CV4 replays headless on the Level Playing Field", () => {
     const app = readStripped("App.tsx");
     const check = sliceBetween(app, "const rulesBeforeAction =", "if (\"LayTile\" in msg)");
     expect(check).toContain("withRules(");
-    expect(check).toContain("filterSandboxPlacements(");
+    /* Stage 10.1 (#1683): the geometry is `boardLayRefused` -- the engine providers' own `filterSandboxPlacements`
+       call, exported from `replayProviders.ts` -- and the authority verdict is scoped by `withRules` too. */
+    expect(check).toContain("boardLayRefused(");
+    expect(readStripped("gameEngine/replayProviders.ts")).toContain("layRefused: boardLayRefused,");
   });
 });

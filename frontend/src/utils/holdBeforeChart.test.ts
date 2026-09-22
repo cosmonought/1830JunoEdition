@@ -212,11 +212,18 @@ describe("S8-13 on the grid: a lay under a hold lands on neither the grid nor th
   });
 
   it("both grid steps -- the room engine's and the shell's -- ask the reducer's hold predicate on the lay's snapshot", () => {
+    /* Stage 10.1 (#1683): the grids no longer name the hold predicate themselves -- they ask `layTileRefusal`,
+       the one `LayTile` composition, whose FIRST question is `authoritativeHoldRefusal`. Same guard, one
+       layer up: the holds are still asked on the lay's snapshot, through the function the reducer asks. */
+    const authority = readStripped("gameEngine/layTileAuthority.ts");
+    expect(sliceBetween(authority, "export function layTileRefusal(", "return layTileLegalityRefusal(")).toContain(
+      "authoritativeHoldRefusal(state, msg, ctx)",
+    );
     const engine = readStripped("gameEngine/replayLog.ts");
-    expect(sliceBetween(engine, 'if ("LayTile" in msg) {', "this.grid = applySandboxLayTile(")).toContain("authoritativeHoldRefusal(stateBefore, msg, {");
+    expect(sliceBetween(engine, 'if ("LayTile" in msg) {', "this.grid = applySandboxLayTile(")).toContain("layTileRefusal(stateBefore, msg, {");
     const app = readStripped("App.tsx");
-    const predicate = sliceBetween(app, "const layRefused = (q: number, r: number, tileId: number, orientation: number) =>", 'if ("LayTile" in msg) {');
-    expect(predicate).toContain("authoritativeHoldRefusal(stateBeforeAction, msg as GameplayExecuteMsg, {");
+    const predicate = sliceBetween(app, "const layRefusedByAuthority = (): boolean =>", 'if ("LayTile" in msg) {');
+    expect(predicate).toContain("layTileRefusal(stateBeforeAction, msg as GameplayExecuteMsg, {");
     expect(predicate).toContain("mapGrid: gridBeforeAction,");
     expect(predicate).toContain("homeHexToAxial,");
   });

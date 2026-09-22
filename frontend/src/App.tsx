@@ -392,7 +392,9 @@ import { boardHexLabel, describeHex, localCatalogPlacements, tileCityCount } fro
 // Design note #823: `describeTokenMigration` is no longer imported -- the ring stopped printing its
 // sentence. The function survives in `tokenMigration.ts` with its own note; the arithmetic beside it is
 // still what the radial thumbnails read.
-import { planTokenUpgrade, tokenLandingsFor } from "./utils/tokenMigration";
+// Design note #1682 (Stage 10.1): the station authority's plan, landings and verdict -- one answer for the ring,
+// the preview and the reducer.
+import { stationAnchorPlan, stationLegalFacings } from "./gameEngine/stationAnchorAuthority";
 /* Design note #889: the rotate odometer. `tokenDestinationChoices` is no longer imported -- it reached the
    superseded `previewTokenMigration` to decide whether a choice exists, and #878's `ownIsFree` answers that
    directly. It survives in `tokenMigration.ts` as the record, with no caller in the shell. */
@@ -566,7 +568,9 @@ import {
   type FleetLossNotice,
 } from "./utils/fleetLossNotice";
 import { dividendRefused, operatingCorporationId } from "./gameEngine/dividendGate";
-import { operatingIdentityRefusal } from "./gameEngine/operatingIdentity";
+// Design note #1683 (Stage 10.1): the one `LayTile` authority the grid asks, and the one board geometry it is handed.
+import { layTileRefusal } from "./gameEngine/layTileAuthority";
+import { boardLayRefused } from "./gameEngine/replayProviders";
 import { cheapestPurchasableTrain } from "./gameEngine/trainAvailability";
 import { pendingTrainDiscards } from "./gameEngine/trainDiscard"; // #1530
 import { emergencyFundingFor } from "./gameEngine/emergencyFunding"; // #1540
@@ -594,7 +598,6 @@ import {
      owns that now, which is the whole point of the change -- a round can only
      be opened by the path that replays. */
   pendingHomeTokens,
-  authoritativeHoldRefusal, // #1613 (Slice 8.2): the lay's grid step asks the holds the reducer asks
   describePrivatePayout,
   /* Design note #1049: the ROUND, not just the viewer's slice of it. `summarisePrivateRevenueForPlayer` is
      still the thing that itemises the viewer's own privates -- this wraps it and adds the other seats' totals,
@@ -6627,29 +6630,31 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
            against the state as it stood before this action, so the tile cannot land for a lay the fee and
            the cursor refused. */
         const stateBeforeAction = sandboxStateRef.current;
+        /* ==================================================================
+            DESIGN NOTE 1683 (Stage 10.1, S10-26): THE GRID ASKS THE ONE LAY AUTHORITY, NOT A LIST OF ITS OWN
+           ==================================================================
+           This predicate was a hand-built list -- the identity (#1510), the four holds (#1613), the board
+           geometry (#757) -- and the reducer's list was longer (station anchoring, the JK, the terrain fee), so a
+           lay the reducer refused still landed on this grid, exactly the split #757 exists to prevent, one
+           predicate later. `layTileRefusal` (`gameEngine/layTileAuthority.ts`) is the one composition the
+           reducer, the server's grid and this grid ask, on the snapshot this action is judged against, with the
+           board and tray in effect (#1279) -- and the GEOMETRY is the only part still injected, because
+           `filterSandboxPlacements` is the shell's (#273): `boardLayRefused` is the same function the server's
+           providers hand the engine, so the two grids cannot be handed two geometries either. */
         const layRefused = (q: number, r: number, tileId: number, orientation: number) =>
-          (stateBeforeAction !== null &&
-            operatingIdentityRefusal(stateBeforeAction, msg as GameplayExecuteMsg) !== null) ||
-          /* #1613 (Slice 8.2, S8-13): a lay held by an authoritative hold -- above all the home owed at a
-             corporation's first turn -- lands on neither atom: the reducer's own predicate, same snapshot. */
-          (stateBeforeAction !== null &&
-            withRules(
-              rulesBeforeAction,
-              () =>
-                authoritativeHoldRefusal(stateBeforeAction, msg as GameplayExecuteMsg, {
-                  mapGrid: gridBeforeAction,
-                  homeHexToAxial,
-                }) !== null,
-            )) ||
+          withRules(rulesBeforeAction, () =>
+            boardLayRefused(gridBeforeAction, q, r, tileId, orientation, eraForPhase(phaseBeforeAction, rulesBeforeAction)),
+          );
+        const layRefusedByAuthority = (): boolean =>
+          stateBeforeAction !== null &&
           withRules(
             rulesBeforeAction,
             () =>
-              filterSandboxPlacements([{ tile_id: tileId, orientation }], {
+              layTileRefusal(stateBeforeAction, msg as GameplayExecuteMsg, {
                 mapGrid: gridBeforeAction,
-                q,
-                r,
-                era: eraForPhase(phaseBeforeAction, rulesBeforeAction),
-              }).length === 0,
+                homeHexToAxial,
+                layRefused,
+              }) !== null,
           );
 
         if ("LayTile" in msg) {
@@ -6663,7 +6668,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
             lay.r,
             lay.tile_id,
             lay.orientation,
-            layRefused,
+            layRefusedByAuthority, // #1683: the authority's verdict; the reducer below reaches the same one
           );
           /* ==================================================================
               DESIGN NOTE 1029: THE INSTRUMENT KEEPS ITS ALARM AND LOSES ITS TICKING
@@ -11620,20 +11625,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
          it.
          AN EMPTY HEX AND A FREE TOKEN BOTH PASS. The plan only refuses when there is a network to sever, so
          ordinary lays and ERIE's unconnected home keep every facing they had. */
-      .filter(
-        (placement) =>
-          planTokenUpgrade(
-            mapGrid,
-            previewTile.q,
-            previewTile.r,
-            gameState?.public_companies ?? [],
-            placement.tile_id,
-            placement.orientation,
-          ) !== null,
-      )
       .map((placement) => placement.orientation);
-    return Array.from(new Set(angles)).sort((a, b) => a - b);
-  }, [radialCandidates, previewTile, mapGrid, gameState]);
+    /* Design note #1682 (Stage 10.1, S10-25): THE AUTHORITY'S OWN LIST. This asked raw `planTokenUpgrade`, and
+       the reducer asks more -- the per-city occupancy and #1625's total-slot floor, judged on the landings the
+       lay would carry -- so a facing the ring offered could still be refused by the authority. `stationLegalFacings`
+       keeps a facing exactly when `stationAnchorPlan` finds nothing to refuse for THIS president's lay, which is
+       the verdict the reducer then reaches on the message the shell sends. Station grounds only: whether the lay
+       can be CONFIRMED right now (the fee, the step) is the action bar's question, not the ring's. */
+    if (gameState === null) return Array.from(new Set(angles)).sort((a, b) => a - b);
+    return stationLegalFacings(gameState, mapGrid, previewTile.q, previewTile.r, previewTile.tileId, angles, actingProtocolId);
+  }, [radialCandidates, previewTile, mapGrid, gameState, actingProtocolId]);
 
   /* ==================================================================
       DESIGN NOTE 874: LEAVING THE PICKER LEAVES THE POWER
@@ -11796,19 +11797,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
      thumbnails, the board's ghost and the dispatched lay now read one answer. */
   const derivePreviewLandings = useCallback(
     (q: number, r: number, tileId: number, orientation: number, chosenCity: number | undefined) => {
-      const plan = planTokenUpgrade(
-        mapGrid,
-        q,
-        r,
-        gameState?.public_companies ?? [],
-        tileId,
-        orientation,
-      );
-      const tokenCities = tokenLandingsFor({
-        plan,
-        actingCompanyId: actingProtocolId,
-        chosenCity,
-      });
+      /* Design note #1682 (Stage 10.1, S10-25): the plan, the landings and the verdict are ONE answer from the
+         station authority -- the landings here are byte-for-byte the `token_cities` the lay then sends, and
+         `legal` is the sentence the reducer would answer that message with. */
+      const verdict = gameState
+        ? stationAnchorPlan(gameState, mapGrid, { q, r, tileId, orientation }, actingProtocolId, chosenCity)
+        : { plan: { landings: [], anyFree: false }, tokenCities: [], refusal: null };
+      const { plan, tokenCities } = verdict;
       /* THE TOKEN THE CYCLE IS ABOUT, kept beside the map because the rotate cycle needs to know whether it
          was ANCHORED (the board decided) or FREE (the president is cycling). #1400: the FREE token on the hex,
          whoever's it is -- N&W upgrading ERIE's unbuilt home cycles ERIE's marker -- and the acting
@@ -11820,7 +11815,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
         tokenCities,
         ownCity: own?.toCityIndex ?? chosenCity,
         ownIsFree: own !== null && own.toCityIndex === null,
-        legal: plan !== null,
+        legal: verdict.refusal === null,
+        refusal: verdict.refusal,
       };
     },
     [mapGrid, gameState, actingProtocolId],
@@ -11962,30 +11958,24 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
          AND AN ILLEGAL CANDIDATE DRAWS NO MARKER, which is honest: if no facing of this tile can seat the
          tokens, there is no destination to promise. The candidate itself is filtered out of the ring by the
          same rule (#879 in `legalRotations`), so this is the belt to that braces. */
-      const companies = gameState?.public_companies ?? [];
-      const facing = radialCandidates
-        .filter((placement) => placement.tile_id === tileId)
-        .map((placement) => placement.orientation)
-        .sort((a, b) => a - b)
-        .find(
-          (orientation) =>
-            planTokenUpgrade(
-              mapGrid,
-              radialSelector.q,
-              radialSelector.r,
-              companies,
-              tileId,
-              orientation,
-            ) !== null,
-        );
-      if (facing === undefined) return [];
-      const plan = planTokenUpgrade(
+      /* Design note #1682 (Stage 10.1, S10-25): the same authority answer the rotation list is built from --
+         the lowest facing `stationLegalFacings` keeps, and that facing's plan from `stationAnchorPlan`. */
+      if (gameState === null) return [];
+      const facing = stationLegalFacings(
+        gameState,
         mapGrid,
         radialSelector.q,
         radialSelector.r,
-        companies,
         tileId,
-        facing,
+        radialCandidates.filter((placement) => placement.tile_id === tileId).map((placement) => placement.orientation),
+        actingProtocolId,
+      )[0];
+      if (facing === undefined) return [];
+      const { plan } = stationAnchorPlan(
+        gameState,
+        mapGrid,
+        { q: radialSelector.q, r: radialSelector.r, tileId, orientation: facing },
+        actingProtocolId,
       );
       if (!plan) return [];
       /* ==================================================================

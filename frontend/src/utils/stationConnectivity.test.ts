@@ -166,8 +166,13 @@ describe("the shell asks the rule at all three surfaces (design note #879)", () 
     const at = APP.indexOf("const legalRotations");
     expect(at).toBeGreaterThan(-1);
     const body = APP.slice(at, APP.indexOf("}, [radialCandidates", at));
-    expect(body).toContain("planTokenUpgrade(");
-    expect(body).toContain("!== null");
+    /* Stage 10.1 (#1682, S10-25): the memo asks `stationLegalFacings` -- the station authority's own list,
+       which keeps a facing exactly when `stationAnchorPlan(...).refusal === null` -- rather than the raw plan.
+       The stranding rule is still inside it (a stranded token is `planTokenUpgrade === null`, which the
+       authority reports as a refusal); what the memo gained is the occupancy and #1625's floor. */
+    expect(body).toContain("stationLegalFacings(");
+    const AUTHORITY = read("gameEngine/stationAnchorAuthority.ts");
+    expect(AUTHORITY).toContain("stationAnchorPlan(state, mapGrid, { q, r, tileId, orientation }, actingCompanyId).refusal === null");
   });
 
   it("derives the city per facing instead of carrying it", () => {
@@ -199,7 +204,9 @@ describe("the shell asks the rule at all three surfaces (design note #879)", () 
     const dv = APP.indexOf("const derivePreviewLandings");
     expect(dv).toBeGreaterThan(-1);
     const derive = APP.slice(dv, APP.indexOf("[mapGrid, gameState, actingProtocolId]", dv));
-    expect(derive).toContain("planTokenUpgrade(");
+    // Stage 10.1 (#1682): the plan arrives inside the authority's verdict, with the landings and the refusal.
+    expect(derive).toContain("stationAnchorPlan(");
+    expect(derive).toContain("const { plan, tokenCities } = verdict;");
     expect(derive).toContain("ownIsFree: own !== null && own.toCityIndex === null,");
     // #1400: the token the cycle is about is the FREE one on the hex, whoever's it is.
     expect(derive).toContain("const free = plan?.landings.find((entry) => entry.toCityIndex === null) ?? null;");
@@ -233,7 +240,9 @@ describe("the shell asks the rule at all three surfaces (design note #879)", () 
        facing cannot be computed by a function with no facing in it. */
     const at = APP.indexOf("const radialStationMarkersFor");
     const body = APP.slice(at, at + 2000);
-    expect(body).toContain("planTokenUpgrade(");
+    // Stage 10.1 (#1682): the thumbnail's facing is the lowest the authority keeps, and its plan is the authority's.
+    expect(body).toContain("stationLegalFacings(");
+    expect(body).toContain("stationAnchorPlan(");
     expect(body).toContain("facing");
   });
 

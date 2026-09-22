@@ -36,6 +36,7 @@ import { applySandboxAction, pendingHomeTokens } from "../gameEngine/sandboxSess
 import { homeTokenBlock, homeTokenOwed } from "../gameEngine/homeTokenGate";
 import { STATIC_BOARD_HEXES } from "../components/hexBoardData";
 import type { GameStateResponse } from "../gameEngine/gameState";
+import { readStripped, sliceBetween } from "./sourceScan";
 
 const PRR = 1;
 const BO = 2;
@@ -248,7 +249,23 @@ describe("both surfaces ask one function", () => {
   };
 
   it("is enforced by the reducer, before anything moves (#1613)", () => {
-    expect(read("gameEngine/sandboxSession.ts")).toContain("homeStationHold(state, msg, ctx.homeHexToAxial)");
+    /* Stage 10.1 (#1681, S10-26) moved the four-hold composition itself out of this file into
+       `authoritativeHolds.ts`, so the literal call this test pinned here no longer appears on this file --
+       `sandboxSession.ts` now only asks the composed function, one layer up, and re-exports it so every
+       existing importer (this file's own `homeTokenGate.ts` included) still resolves. The production
+       behaviour did not change: `applySandboxActionOnBoard` still asks the hold, still before its first
+       mutating step (#1580's auction atom), and the composed function it asks still carries the home
+       station hold as one of its four. Two narrower assertions replace the one collapsed one -- proving
+       each half of that chain on the file that now actually states it, rather than re-widening into "these
+       words exist somewhere in the repository". */
+    const board = readStripped("gameEngine/sandboxSession.ts");
+    expect(sliceBetween(board, "function applySandboxActionOnBoard(", "applyAuctionStep(")).toContain(
+      "authoritativeHoldRefusal(state, msg, ctx)",
+    );
+    const holds = readStripped("gameEngine/authoritativeHolds.ts");
+    expect(sliceBetween(holds, "export function authoritativeHoldRefusal(", "}")).toContain(
+      "homeStationHold(state, msg, ctx.homeHexToAxial)",
+    );
     expect(read("gameEngine/homeTokenGate.ts")).toContain("return homeStationHold(state, msg as GameplayExecuteMsg | undefined, homeHexToAxial, labelForAddress);");
   });
 

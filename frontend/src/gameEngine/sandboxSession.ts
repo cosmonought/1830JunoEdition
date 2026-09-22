@@ -41,7 +41,7 @@ import {
   type RevenueSeedParts,
 } from "./gameVariants";
 // Design note #723: the terrain fee is charged on the FIRST build of a hex and never again.
-import { terrainFeeDue, withTerrainPaid } from "./terrainFee";
+import { withTerrainPaid } from "./terrainFee";
 // Design note #736: which arriving tier closes the private companies.
 import { closesPrivateCompanies } from "./depotSchedule";
 // Design note #979: which train the limit takes is a rule, and it lives with the other train-limit rules.
@@ -193,7 +193,6 @@ import {
   heraldAt,
   heraldHexFor,
   offboardValueForEra,
-  terrainBuildFeeAt,
 } from "../components/hexBoardData";
 import { withRules } from "./boardSelection";
 import { stopEnteredFrom } from "./trackReach";
@@ -224,8 +223,6 @@ import { resolveYellowSign, runWithoutTrain, type YellowSignOutcome } from "./ye
 import {
   JK_TILE_ABILITY_KEY,
   KANAWHA_LICENSE_COST,
-  jkHalfFee,
-  jkTileRefusal,
   kanawhaLicenseRefusal,
   kanawhaLicensesInPlay,
   licensesHeldBy,
@@ -233,7 +230,8 @@ import {
   routeCrossesCoalRiver,
 } from "./kanawhaLicense";
 import { tileCitySlotCounts } from "../components/TileGraphics";
-import { stationAnchorRefusal } from "./stationAnchorAuthority";
+// Design note #1683 (Stage 10.1): the lay's legality, judged once in the gate block; the arm charges its fee.
+import { layTerrainFee, layTileLegalityRefusal } from "./layTileAuthority";
 import { DIESEL_TIER, dieselExchangeCostFor, dieselExchangeRefusal } from "./dieselExchange";
 import { numberedPrivate } from "./privateOrdinal";
 
@@ -2780,23 +2778,11 @@ function settleAuctionLifecycle(state: GameStateResponse, msg: GameplayExecuteMs
   return waterfall === state.waterfall ? state : { ...state, waterfall };
 }
 
-/** Design note #1613: the four authoritative holds in their priority -- the excess-train discard (#1530), the
- *  forced train purchase and the finished game (#1540), a standing ordinary offer (#1590), the operating
- *  corporation's home station (#1612) -- the first sentence that applies, or `null`. The same predicates ingress
- *  asks (`turnRefusal`), in the same order. The home hold needs the board's label table, as the placement arm
- *  always has (#550): a caller that hands in none is judged on the other three. */
-export function authoritativeHoldRefusal(
-  state: GameStateResponse,
-  msg: GameplayExecuteMsg,
-  ctx?: Pick<SandboxActionContext, "mapGrid" | "homeHexToAxial">,
-): string | null {
-  return (
-    pendingDiscardBlock(state, msg) ??
-    emergencyFundingBlock(state, msg, ctx?.mapGrid) ??
-    pendingOfferBlock(state, msg) ??
-    (ctx?.homeHexToAxial ? homeStationHold(state, msg, ctx.homeHexToAxial) : null)
-  );
-}
+/* Design note #1613: the four authoritative holds in their priority. The composition itself lives in
+   `authoritativeHolds.ts` since Stage 10.1 (design note #1681) so the `LayTile` authority can ask it beneath
+   this file; re-exported here so every existing caller keeps its import. */
+import { authoritativeHoldRefusal } from "./authoritativeHolds";
+export { authoritativeHoldRefusal };
 
 function applySandboxActionOnBoard(
   state: GameStateResponse,
@@ -3221,20 +3207,19 @@ function applySandboxActionCoreJudged(
     if (stationPlacementRefusal(state, msg.PlaceStationToken, ctx?.mapGrid) !== null) return state;
   }
 
-  if ("LayTile" in msg && ctx?.layRefused) {
-    const { q, r, tile_id, orientation } = msg.LayTile;
-    if (ctx.layRefused(q, r, tile_id, orientation)) return state;
-  }
-
-  /* Design note #1623 (Slice 9.2, S9-17): AND THE STATIONS ON THAT HEX, which `layRefused` cannot judge --
-     `filterSandboxPlacements`' whole input is `{ mapGrid, q, r, era }` and a token is state. Revised 6.2.2 ❹
-     ("all stations on the replaced tile must be placed on the new tile with the same connections as
-     before") was enforced only by `App.tsx`'s `legalRotations` memo until this line; the shell keeps calling
-     it for the rotation list, and this is the copy a crafted message, a socket and a replay all meet.
-     HERE, BESIDE `layRefused`, FOR #757's REASON: both atoms -- the state and the tile grid -- refuse
-     together or apply together, and this arm sits ahead of every mutation the `LayTile` arm performs. */
+  /* ==================================================================
+      DESIGN NOTE 1683 (Stage 10.1, S10-26): THE LAY IS JUDGED ONCE, HERE, AND NOWHERE LATER
+     ==================================================================
+     This block used to ask two of the lay's five questions -- the geometry (#757, `ctx.layRefused`) and the
+     station anchoring (#1623) -- and left the JK's eligibility (#1323) to a gate further down and the terrain
+     fee (#891) to the arm itself, AFTER `abilitySpentBy` had recorded the power and BEFORE
+     `settleOperatingCursor` stepped the turn: an unaffordable lay spent its power, closed the JK, kept its
+     treasury and moved Track -> Tokens, while the tile grids, asking only geometry, laid the tile.
+     `layTileLegalityRefusal` is the one composition of all five (`layTileAuthority.ts`), in the order they
+     were asked, and it is asked here -- ahead of every stage, so a refusal returns the board by identity with
+     the cursor where it stood. The two tile grids and the live ingress ask the same function. */
   if ("LayTile" in msg) {
-    if (stationAnchorRefusal(state, msg.LayTile, ctx?.mapGrid) !== null) return state;
+    if (layTileLegalityRefusal(state, msg.LayTile, ctx) !== null) return state;
   }
 
   /* Design note #774: ONE CORPORATION, ONE DIVIDEND DECLARATION, AT THE STEP THAT OWNS THE CHOICE.
@@ -3522,11 +3507,7 @@ function applySandboxActionCoreJudged(
   if (typeof state.rules_engine_version === "number" && routeSkipRefusal(state, msg, ctx?.mapGrid) !== null) {
     return state;
   }
-  if ("LayTile" in msg) {
-    const { protocol_id, q, r } = msg.LayTile;
-    const key = (msg.LayTile as { ability_key?: unknown }).ability_key;
-    if (key === JK_TILE_ABILITY_KEY && jkTileRefusal(state, protocol_id, q, r) !== null) return state;
-  }
+  // #1323's JK gate stood here; it is the fourth question of `layTileLegalityRefusal` now (#1683, above).
   if ("SellStock" in msg && ctx?.actor) {
     const company = state.public_companies.find((entry) => entry.company_id === msg.SellStock.protocol_id);
     if (company && doubleSaleEffect(company, ctx.actor, msg.SellStock.percentage).kind === "refused") {
@@ -5262,9 +5243,11 @@ function applyOneAction(
        reads to tell "laid, and this is still that turn" from "laid, sometime" -- see design note #1660 on
        `dh_station_pending` in `gameState.ts`. */
     const dhLay = abilityKey === "dh-tile";
-    if (jkLay && jkTileRefusal(state, protocol_id, q, r) !== null) return state;
-    const fullFee = terrainFeeDue(state.terrain_fees_paid, q, r, terrainBuildFeeAt);
-    const fee = jkLay ? jkHalfFee(fullFee) : fullFee;
+    /* #1683 (Stage 10.1): the JK's eligibility and the fee's affordability were judged in the core gate block
+       before this arm ran -- `layTileLegalityRefusal`, the same function the grids and ingress ask -- so this
+       arm no longer refuses anything. The FEE it charges is the authority's own figure (`layTerrainFee`: the
+       hex's fee unless already paid, halved for a JK lay), so the amount judged and the amount charged are one. */
+    const fee = layTerrainFee(state, msg.LayTile);
     if (jkLay) {
       state = {
         ...state,
@@ -5295,10 +5278,9 @@ function applyOneAction(
        the rule 1830 actually has. A corporation that cannot pay the terrain cost may not build there.
        THE UI REFUSES FIRST (`App.tsx` #891) so a player is told rather than ignored; this is the authority
        behind that, and it is the one that survives a replay. */
-    const layingTreasury = Number(
-      state.public_companies.find((company) => company.company_id === protocol_id)?.treasury ?? 0,
-    );
-    if (fee > 0 && (!Number.isFinite(layingTreasury) || layingTreasury < fee)) return state;
+    /* The affordability check that stood here (#891) is `terrainAffordabilityRefusal`, asked in the gate block
+       (#1683). By the time this arm runs the treasury covers `fee`, and `transfer` below is the ledger's own
+       statement of that fact. */
     const recorded: GameStateResponse = {
       ...state,
       terrain_fees_paid: withTerrainPaid(state.terrain_fees_paid, q, r, fee),

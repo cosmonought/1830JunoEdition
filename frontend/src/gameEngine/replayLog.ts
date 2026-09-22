@@ -54,10 +54,11 @@ import {
   applySandboxAction,
   applySandboxLayTile,
   applySandboxMarketAction,
-  authoritativeHoldRefusal,
   type SandboxActionContext,
   type SandboxMarketContext,
 } from "./sandboxSession";
+// Design note #1683 (Stage 10.1): the grid lays a tile only when the one `LayTile` authority accepts it.
+import { layTileRefusal } from "./layTileAuthority";
 import type { SandboxMarketPrices } from "./sandboxState";
 
 import { isSetupGameMsg } from "./gameSetup";
@@ -66,7 +67,6 @@ import { initialGridFor } from "./initialGrid";
 import { withRules } from "./boardSelection";
 import { resolveVariants } from "./gameVariants";
 import { derivedEntryKey, nextDerivedAction } from "./derivedActions";
-import { operatingIdentityRefusal } from "./operatingIdentity";
 import { effectiveActions } from "./logRevert";
 import {
   ReplayIncompatibleError,
@@ -392,24 +392,20 @@ export class RoomEngine {
        held message before the auction, the chart and the core see it -- but a lay touches a third atom, and this
        one moves first. A `LayTile` sent under a hold (the home owed at a corporation's first turn makes a lay the
        most natural held message there is) laid its tile here while the reducer refused the lay by identity: a
-       board and a grid that disagree about a tile. Asked on the same snapshot, with the one predicate the reducer
-       asks, and the same injections it is handed. */
-    const heldLay =
-      authoritativeHoldRefusal(stateBefore, msg, {
+       board and a grid that disagree about a tile.
+       Design note #1683 (Stage 10.1, S10-26): AND EVERYTHING ELSE THE REDUCER REFUSES A LAY FOR. This predicate
+       was a hand-built list -- the holds, the identity, the geometry -- and the reducer's list was longer (station
+       anchoring, the JK, the terrain fee), so a lay the core refused still landed here. `layTileRefusal` is the
+       ONE composition both atoms and the ingress ask, on the same snapshot, with the same injections the reducer
+       is about to be handed; the grid moves only when it answers `null`. */
+    const refused =
+      layTileRefusal(stateBefore, msg, {
         mapGrid: gridBefore,
         homeHexToAxial: this.providers.chartInjections(stateBefore).homeHexToAxial,
+        layRefused: (q: number, r: number, tileId: number, orientation: number) =>
+          this.providers.layRefused(gridBefore, q, r, tileId, orientation, eraBefore),
       }) !== null;
-    this.grid = applySandboxLayTile(
-      gridBefore,
-      lay.q,
-      lay.r,
-      lay.tile_id,
-      lay.orientation,
-      (q: number, r: number, tileId: number, orientation: number) =>
-        heldLay ||
-        operatingIdentityRefusal(stateBefore, msg) !== null ||
-        this.providers.layRefused(gridBefore, q, r, tileId, orientation, eraBefore),
-    );
+    this.grid = applySandboxLayTile(gridBefore, lay.q, lay.r, lay.tile_id, lay.orientation, () => refused);
   }
 
   /* ==================================================================

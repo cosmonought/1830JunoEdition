@@ -174,6 +174,13 @@ describe("the preview derives once and everybody reads it (design note #886)", (
        the count is not three is a fact I got wrong by guessing before counting; it is written down here so
        the next person does not have to. A fifth would be a new path to a token's destination, which is how
        two surfaces come to disagree (#879). */
-    expect((APP.match(/planTokenUpgrade\(/g) ?? []).length).toBe(4);
+    /* Stage 10.1 (#1682, S10-25): the shell no longer calls `planTokenUpgrade` at all. The legality question is
+       `stationLegalFacings` (the rotation list, and the facing search in `radialStationMarkersFor`) and the
+       destination question is `stationAnchorPlan` (that facing's plan, and this callback) -- both answers of
+       `stationAnchorAuthority`, the module the reducer asks. A `planTokenUpgrade(` appearing here again would be
+       the second derivation #879 warned about, back under a new name. */
+    expect((APP.match(/planTokenUpgrade\(/g) ?? []).length).toBe(0);
+    expect((APP.match(/stationLegalFacings\(/g) ?? []).length).toBe(2);
+    expect((APP.match(/stationAnchorPlan\(/g) ?? []).length).toBe(2);
   });
 });

@@ -2786,7 +2786,10 @@ reinterpreted (#1520). `OWNER DECISION` — recorded (also D-9).
 calls `applySandboxAction` / `applySandboxWaterfallAction` itself); #1281 was the second drift (all-pass private
 income paid on the client only — TRIAGE_2026-09-08_JUNO-G6J, migrated). Class stays open until the live client
 goes through `RoomEngine` or a compile-time coupling exists; a regression test at the engine (replay an all-pass
-through `replayLog`, assert the bank paid) is still owed. `OPEN`.
+through `replayLog`, assert the bank paid) is still owed. `OPEN`. **Slice 10.1 (2026-09-22): the LayTile / grid-predicate
+half is closed** — both grid steps ask `layTileRefusal` and hand it `boardLayRefused`, the one geometry the engine's
+providers use (`replayProviders.ts`), so there is no hand-built predicate list left to drift. The reducer-context mirror
+(`marketContext`, `chartInjections`, `parCellFor` built inline in `App.tsx`) and the all-pass test remain (Slice 10.3).
 
 **S10-5. Server smoke test:** 5 pre-existing lobby/chat roster failures (`{kind:'chat', room:'LOBBY'}`),
 reproduce on `53222c7` and earlier; transport, not rules (Batch 1 §2, Batch 4.5 §9). `OPEN`.
@@ -2940,6 +2943,15 @@ authority's helper rather than assembling the anchors itself, so the rotation li
 refusal a replay applies are computed by one function end to end. **Deliberately not done in Slice 9.2**: `App.tsx`
 was carrying live owner modal / UI / wallet work throughout the slice, and editing it to deduplicate a memo would
 have collided with that for no rules gain. No behaviour depends on this; it is a seam, not a defect.
+**Slice 10.1 (2026-09-22): `RESOLVED`** (#1682). The seam had an authority half the audit missed: the memo asked raw
+`planTokenUpgrade` and the reducer also asks the per-city occupancy and #1625's total-slot floor, so a facing the ring
+offered could be refused on capacity. `stationAnchorAuthority.stationAnchorPlan(state, grid, lay, actingCompanyId,
+chosenCity)` returns the plan, the `token_cities` the lay would write (`tokenLandingsFor`, exactly as the dispatch
+builds them) and `stationAnchorRefusal` of those landings; `stationLegalFacings` is the rotation list. `App.tsx`'s
+`legalRotations`, the ring thumbnails and `derivePreviewLandings` consume those two and call `planTokenUpgrade`
+nowhere (pinned by `previewTokenLanding.test.ts`). The ring is asked without a free-token choice (station grounds
+only); the preview and the confirmation carry the choice. Behaviour-neutral for every legal lay; the one visible
+change is that a facing the authority would refuse on the floor is no longer offered.
 
 **S10-22. The Batch-4.6 discard adapter's "do not spin" guard cannot see a refusal on a charted board.**
 Status `OPEN` (development-corpus only; found by Slice 8.2, 2026-09-16). `LegacyLogAdapters.apply` (formerly `replayLog`'s
@@ -2964,6 +2976,48 @@ rows ARE distinctly identified applies entries normally, which `stage85Closure.t
 Repair (whoever owns the export): stamp an id at export time, or fall back to the entry index as the identity when a
 log carries none. Replay: none for any log with ids; a repair would make this one file replay for the first time, so it
 belongs with a bump, not between them.
+
+**S10-26. A `LayTile` the reducer refused still landed on the tile grid — and, for the terrain fee, still spent the power and stepped the cursor.**
+Status **`RESOLVED`** (Slice 10.1, 2026-09-22, uncommitted; design notes **#1681–#1683**). *(Found by the Stage-10
+orientation audit, 2026-09-22, and proved on the frozen JUNO-CV4 golden: B&O's $80 river lay at index 27, replayed with
+the treasury zeroed, left the treasury at $0, LANDED THE TILE ON THE GRID and moved `operating_sub_phase` Track → Tokens.)*
+The two grid-step predicates (`RoomEngine.applyOnBoard`, `App.tsx`'s grid step) mirrored the four holds (#1613), the
+operating identity (#1510) and the tile geometry (#757) and nothing else, while the reducer also refused on station
+anchoring (#1623, in the core gate block), the JK's eligibility (#1323, a later gate) and the terrain fee (#891 —
+INSIDE the arm, after `abilitySpentBy` had recorded the power and, for a JK lay, after the JK had been closed, and
+before `settleOperatingCursor` stepped the turn regardless). Ingress had no `LayTile` arm at all, so a crafted lay
+through the live server produced a free terrain tile visible to the route authority — a materially different legal
+result. **Fix:** `gameEngine/layTileAuthority.ts` — `layTileLegalityRefusal` (identity ▸ geometry ▸ anchoring ▸ JK ▸
+terrain, in the reducer's own order, every predicate the one that already judged the lay) and `layTileRefusal`
+(the four holds, then that); the hold composition moved to `authoritativeHolds.ts` (#1681, re-exported from
+`sandboxSession.ts`). The core asks `layTileLegalityRefusal` in its gate block ahead of the arm and the cursor; both
+grids ask `layTileRefusal` on the lay's snapshot; `turnRefusal` asks `layTileLegalityRefusal` after its holds
+(`RoomSession.submit` hands it the providers' geometry); the arm charges `layTerrainFee`, the gate's own figure, and
+refuses nothing itself. The shell's geometry is `boardLayRefused` (exported from `replayProviders.ts`), the same
+function the engine's providers hand the engine (the LayTile half of S10-4). **Replay: refusal-added, measured
+corpus-neutral** — 18/18 canonical files, 334 stored `LayTile` entries, 134 applied and 200 refused on both the
+baseline and this slice, zero old-vs-new decision differences, every final state digest, grid and cursor identical.
+**Not this slice's:** connectivity is still not judged by the authority (S6-5) and `bonus_lay` / `csl-tile` / `dh-tile`
+claims are still message-carried (S6-6 / S10-17). **Provisional Stage-10 closure bump 7 → 8 owed** (owner ruling
+2026-09-22): a live-reachable change to supported authority, even though the corpus is neutral.
+**10.1b (same day, #1684) — the Lay Track step.** 10.1's measurement found that `LayTile` had NO timing question: every
+other operating action is asked its step, and a lay was accepted at Tokens, Routes, Dividends or Hardware whenever the
+named corporation was operating, the geometry fit and the fee was affordable — the shell never offers one, so only a
+crafted message met it. Inventory (all timings pinned by `stage101bLayTileTiming.test.ts`): the ordinary lay, the
+C&SL's `bonus_lay` (does not consume; Track stays), the D&H's `dh-tile` (consumes) and the JK's `jk-tile` (consumes)
+are ALL made at Lay Track; a power key says which lay, never when; no other message or variant emits `LayTile`.
+`layTimingRefusal` is the composition's second question (after identity) and refuses a lay off `Track` (`BuyPrivate`,
+the pre-#1440 cursor, is accepted as Track) — **on a pinned board only.** Why: 68 stored lays across the canonical
+corpus (JUNO-CV4 ×3 copies: 106, 113, 125, 131, 137, 151, 163, 169; JUNO-Z6C ×2: 109 … 287, 22 each; JUNO-FCJ / its
+prefix: 94, 172) were APPLIED while the replayed cursor read Tokens (FCJ: Hardware). CV4 106 is the shape of all of
+them: the turn's first press is a manual `AdvanceOperatingSubPhase` and the lay follows — a legal lay made when a
+Phase-3 turn opened on `BuyPrivate`, which #1440 (2026-09-14) now replays as Track → Tokens. A representation the
+current engine puts on a legal history, not an illegality in it; an unconditional gate would change what six
+canonical files replay to (measured: final state, grid and cursor all differ). So, as #1551 does for `RunManualRoute`
+and `routeSkipRefusal` for the skip, a legacy board keeps the arm it was played on and every pinned board — every room
+dealt since #1520 — is judged. **Corpus-neutral by construction and re-measured: 18/18, 334 lays, 134 applied / 200
+refused on both sides, 0 decision differences, every final digest, grid and cursor identical.** Live-ingress and
+`RoomSession.submit` cases pinned. The observation above is resolved.
 
 **S10-24. The excess-train discard hold is the only one of the four that does not admit `RevertTo`.**
 Status `OPEN` (unreachable today; found by Slice 8.5's §12 hold matrix, 2026-09-17). Three of the four authoritative
@@ -3593,6 +3647,7 @@ PMQ — the ruling applies the conditional form to both. Implementation: Slice 8
 | 6 (owed until Stage-9 closure) | **9.3** (uncommitted) | **Tile separation, physical supply and canonical identity.** `TileCatalogEntry.separateSystems` (#1628) carries revised 6.2.2 ❹'s separation clause as **tile metadata**, on old **#59** alone; `priorTopologyAt` rotates its `cityGroups` onto `HexTopology.separateSystems`, and `separationPreserved` is **rule 5b** of `filterSandboxPlacements` — the first rule in that file to compare CONNECTIVITY (union-find over the destination's rotated `paths`) rather than segments, and a no-op for every prior that names no systems (S9-19). `tileTrayPlus.RECOUNTED` corrects #63's PHYSICAL supply `1 → 4` ahead of every scenario removal (#1629, S9-15). `TileCatalogEntry.canonicalId` on the live catalog (#1630) gives the three tiles whose printed old NUMBERS the errata voids their canonical rules/display identity — `#8861` / `oo13` / `oo14` — read through `canonicalTileName` by three real production consumers (the Activity Log sentence `actionLog.describeGameplayAction`, the hex-finished message `hexGeometry.evaluateHexForTileLaying`, and the tile-picker tooltip), while the integers stay the **stable storage / ABI key** and are deprecated only as **rules identifiers** (S9-21). **Newly written state still serializes `tile_id: 626 / 36 / 35`** — that is the compatibility, not a leak. Display remainder in three owner-dirty files filed as **U-38**. `RULES_ENGINE_VERSION` deliberately NOT bumped, and **this slice does not force one** — see the corpus column. **Stage-9 bump remains OWED at Stage-9 closure.** | **Measured against `fdc4b9a` (HEAD) across ALL 18 corpus files — 18/18**, same assembly as 9.2, under `DEVELOPMENT_CORPUS_POLICY`. **Identical applied / dropped / unparseable counts, identical state digest at EVERY entry, identical `map_grid` at every entry, identical verdict on every one of the 334 replayed `LayTile` actions (3,131 observed entries in all), identical final state, identical final state field digests, identical final board — in all 18 files. ZERO divergence of any kind.** The three transitions S9-19 was predicted to make refusal-added (**JUNO-FCJ 640**, **JUNO-FCJ 1047**, **JUNO-Z6C 399**) are refused by the 9.3 predicate — pinned directly by reconstructing each source configuration — but in live replay they never reach it: `operatingIdentityRefusal` refuses each **upstream and identically at baseline** (FCJ 555/640/988/1047, wrong round; Z6C 378/399, wrong corporation), so the #59 never lands on E5 or E11 and the destination hexes are bare. §14b's adjudication of the STORED ACTIONS stands; its predicted replay consequence does not materialise. **NO log re-pinned, NO golden re-pinned, `replayGolden` green, no version bump forced.** S9-15 is corpus-neutral as predicted (tray never exhausted); S9-21 changes no persisted representation at all — the storage keys are untouched and new state serializes them exactly as before. **All raw logs byte-unchanged.** |
 
 | **7** | **9.4a–9.5 + closure** (`4704f6e`, `677ed0e`, `53f34b0`, `69f4275`, `67a3123`, + this pass) | **The bump, and the rules that earned it.** 9.4a Blood Price arrival stamping (S9-11); 9.4b the D&H free station judged by the D&H's own conditions at both locks, a refusal no longer consuming the power (S9-12); 9.4c the chart stepping once per PHYSICAL CERTIFICATE (S9-13); 9.4d the Yellow Sign's outcome DERIVED by the authoritative reducer and the turn's draw and turn key supplied by the SERVER at ingress, with the playtest waiver dropped there and refused by the reducer on any pinned board (S9-1); 9.5 the five-physical-certificate Bank Pool cap (S9-8), the C&SL as a bonus lay with no upgrade right (S9-6), the Mark nullifying only the vanished train's run (S9-3), and the corrected Carcosa lifecycle — exemption coextensive with the gilding, doom trigger on whichever of the gift and the first REAL Diesel lands second, gift model from the depot, synthetic provenance following a Blood Price while the gilding burns off (S9-2). **Closure:** `RULES_ENGINE_VERSION` **6 → 7**, `SUPPORTED_RULES_ENGINE_VERSIONS` derived `[7]`, changelog row 7, `stage9Closure.test.ts` (8 cases), and `stage85Closure`'s three literal-6 pins narrowed to prefix/derived pins so a Stage-8 case no longer owns the current version. | **The canonical 18/18 was measured at `dea5489`, NOT at the tip** — see the closure banner in the Stage 9 section for the table, the four divergence families and the four special items. **Stage 9.5 followed and was measured separately by targeted presence checks across all 18: S9-8 15 `SellStock` entries / zero divergent sites / the double never in a pool; S9-2 zero gifts, fogs, Blood Price transfers, ghost or carcosan observations, and no real Diesel anywhere.** Both absent, so 9.5 is corpus-neutral and the earlier reconciliation still applies. The one permanent gameplay divergence in the whole stage is **`export/JUNO-3XD` entry 115** (S9-12): refused on both sides because NNH is unfloated, but the baseline consumed `used_private_abilities: ["dh-token"]` while refusing and Stage 9 does not. **No golden repinned at closure**; `replayGolden` / `replayJunoCV4` / `replayJuno3XD` green. **All raw logs byte-unchanged.** |
+| 7 (owed: **8** at Stage-10 closure) | **10.1** (uncommitted, 2026-09-22) | **`LayTile` authority unification (S10-26, S10-25, LayTile half of S10-4; #1681–#1683).** One `LayTile` composition — the four holds, then identity ▸ geometry ▸ station anchoring ▸ JK ▸ terrain — asked by the reducer's gate block ahead of the arm and the cursor, by both tile grids on the lay's snapshot, and by the live ingress (`turnRefusal`, with the providers' geometry). An unaffordable or ineligible lay now returns the board by identity with the cursor, the power and the JK where they stood, and lands on no grid. No rule moved; where each is asked did. `RULES_ENGINE_VERSION` stays **7**; the owner's ruling records a **provisional closure bump 7 → 8** for Stage 10 because supported live authority changed. | **Canonical 18/18 measured, old (`server/dist` built from HEAD) vs new (a scratch build): 334 stored `LayTile` entries, 134 applied / 200 refused on BOTH sides, 0 decision differences, every final state digest, grid and cursor identical.** No golden, fixture or log touched. **10.1b (#1684):** `layTimingRefusal` — a `LayTile` off the Lay Track step is refused on a PINNED board; the 68 off-step lays the legacy corpus carries (CV4 106 …, Z6C 109 …, FCJ 94/172 — legal lays from the pre-#1440 `BuyPrivate`-opening turn) keep the arm they were played on, so the measurement stands unchanged: 334 / 134 / 200 / 0 on both sides. |
 
 Items above that carry "bump" must add a row here when they land. No golden or replay expectation is ever
 re-pinned silently: the re-pin, its index and its reason go in the batch write-up and in this table.

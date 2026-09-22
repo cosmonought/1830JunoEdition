@@ -58,6 +58,7 @@
 import { RoomEngine, type ReplayEntry, type ReplayProviders, type ReplaySeed } from "../gameEngine/replayLog";
 import { fieldDigests, stateDigest } from "../gameEngine/stateDigest";
 import { turnRefusal } from "../gameEngine/turnAuthority";
+import { tileEraFor } from "../gameEngine/gameConstants"; // #1683: the era the lay is judged in
 import { effectiveActions } from "../gameEngine/logRevert";
 import {
   SERVER_REPLAY_POLICY,
@@ -429,6 +430,10 @@ export class RoomSession {
       log: this.log,
       // #1540: the grid, for the forced-purchase hold (the route walk needs it).
       mapGrid: this.engine.snapshot.grid,
+      /* #1683 (Stage 10.1): the providers' own geometry, era-bound on the board as it stands, so the ingress
+         answer for a `LayTile` is judged on exactly what `RoomEngine.applyOnBoard` will judge it on. */
+      layRefused: (q, r, tileId, orientation) =>
+        this.options.providers.layRefused(this.engine.snapshot.grid, q, r, tileId, orientation, tileEraFor(this.state)),
     });
     if (refusal !== null) {
       /* A REFUSAL STILL REPORTS THE REPAIR. The board moved before the refusal, so a client told only "not

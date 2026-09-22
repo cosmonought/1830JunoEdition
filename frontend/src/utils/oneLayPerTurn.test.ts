@@ -198,8 +198,14 @@ describe("the shell captures the board once per dispatch", () => {
 
   it("still hands the same predicate to both atoms", () => {
     /* #757's point survives: one answer governs the grid, the terrain fee and the sub-phase cursor. What
-       changed is only which board that one answer is about. */
-    expect(APP).toContain("lay.orientation,\n            layRefused,");
+       changed is only which board that one answer is about.
+       Stage 10.1 (#1683): the grid now takes the AUTHORITY's verdict (`layRefusedByAuthority`, which asks
+       `layTileRefusal` with the geometry `layRefused`), and the reducer takes that same geometry `layRefused`
+       and asks the same authority in its gate block -- so the two atoms still read one answer. */
+    expect(APP).toContain("lay.orientation,\n            layRefusedByAuthority,");
     expect(APP).toContain("layRefused,\n          });");
+    const verdict = APP.slice(APP.indexOf("const layRefusedByAuthority = (): boolean =>"), APP.indexOf('if ("LayTile" in msg) {'));
+    expect(verdict).toContain("layTileRefusal(stateBeforeAction, msg as GameplayExecuteMsg, {");
+    expect(verdict).toContain("layRefused,");
   });
 });

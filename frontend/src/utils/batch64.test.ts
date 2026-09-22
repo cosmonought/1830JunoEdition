@@ -369,15 +369,17 @@ describe("a replayed tile lay is judged against the reducer's phase", () => {
     // Design note #1279: the variants are read ONCE into `rulesBeforeAction`, which also scopes the board and
     // tray for the check (`withRules`) -- same snapshot, one read, both consumers.
     expect(APP).toContain("const rulesBeforeAction = resolveVariants(sandboxStateRef.current?.variants);");
-    expect(APP).toContain("era: eraForPhase(phaseBeforeAction, rulesBeforeAction),");
-    expect(APP).toContain("withRules(\n            rulesBeforeAction,");
+    // Stage 10.1 (#1683): the era rides into `boardLayRefused` as its last argument, inside the same `withRules`.
+    expect(APP).toContain("boardLayRefused(gridBeforeAction, q, r, tileId, orientation, eraForPhase(phaseBeforeAction, rulesBeforeAction))");
+    expect(APP).toContain("withRules(rulesBeforeAction, () =>\n            boardLayRefused(");
   });
 
   it("no longer asks render state for it", () => {
     /* THE NEGATIVE THAT MATTERS: `currentPhase` is still right for everything that renders, and wrong only
        inside a dispatch. Asserted on the predicate's own region so a render-time use elsewhere is untouched. */
     // Design note #1279: the predicate now closes inside a `withRules(...)` call, so its last line is `.length === 0,`.
-    const predicate = sliceBetween(APP, "const gridBeforeAction = mapGridRef.current;", ").length === 0,");
+    // Stage 10.1 (#1683): the predicate is one `boardLayRefused` call; the region ends at the authority verdict.
+    const predicate = sliceBetween(APP, "const gridBeforeAction = mapGridRef.current;", "const layRefusedByAuthority");
     expect(predicate).not.toContain("currentPhase");
     expect(predicate).toContain("phaseBeforeAction");
   });

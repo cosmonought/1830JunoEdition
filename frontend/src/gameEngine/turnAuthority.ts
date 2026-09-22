@@ -63,6 +63,7 @@ import type { MapGridResponse } from "../components/hexContractTypes";
 import { dividendAmountRefusal, routeSetRefusal, routeSkipRefusal } from "./routeAuthority";
 // Design note #1617 (Slice 8.2, S8-14): the paid station placement's two reducer questions, asked at the lock too.
 import { operatingIdentityRefusal } from "./operatingIdentity";
+import { layTileLegalityRefusal } from "./layTileAuthority"; // #1683 (Stage 10.1)
 import { stationPlacementRefusal } from "./stationPlacementGate";
 import { tileEraFor } from "./gameConstants";
 /* Design note #1570 (Batch 7.2): the SAME predicates the reducer's core asks, so the two locks cannot
@@ -129,6 +130,11 @@ export interface TurnAuthorityInput {
   /** #1540: the board's grid, for the one obligation that needs a route walk (the forced train purchase).
    *  `undefined` -- a test, a caller without a grid -- skips that hold, on #757's rule. */
   mapGrid?: MapGridResponse;
+  /** Design note #1683 (Stage 10.1, S10-26): the board geometry for a `LayTile`, era-bound by the caller exactly
+   *  as the reducer's `SandboxActionContext.layRefused` is (`RoomSession.submit` hands the providers' own). It is
+   *  the shell's predicate (#273) and so arrives injected; `undefined` -- a test, a caller without one -- skips the
+   *  geometry question, on #757's rule, and the lay's other four questions are still asked. */
+  layRefused?: (q: number, r: number, tileId: number, orientation: number) => boolean;
 }
 
 /** Why this actor may not send this message now, or `null` if they may. */
@@ -402,6 +408,21 @@ export function turnRefusal(input: TurnAuthorityInput): string | null {
     return (
       operatingIdentityRefusal(state, msg) ??
       withTableRules(state, () => stationPlacementRefusal(state, msg.PlaceStationToken, input.mapGrid))
+    );
+  }
+  /* ==================================================================
+      DESIGN NOTE 1683 (ingress, Stage 10.1 -- S10-26): THE LAY IS ANSWERED WITH ITS REASON
+     ==================================================================
+     Ingress had no `LayTile` arm at all. A crafted lay -- unaffordable terrain, an ineligible JK, a station
+     landing ❹ forbids -- passed the seat rule, was appended, and met the reducer's refusal only after the tile
+     grid had moved (the split the orientation audit proved on JUNO-CV4 27). The holds were asked above for
+     every message; this asks the lay's own five questions -- the identity, the geometry, the anchoring, the JK,
+     the fee -- through `layTileLegalityRefusal`, the SAME function the reducer's gate block and both tile grids
+     ask, with this table's board in effect (#1300), so the submitter hears the sentence and the log never
+     grows by a lay no atom will apply. */
+  if ("LayTile" in msg) {
+    return withTableRules(state, () =>
+      layTileLegalityRefusal(state, msg.LayTile, { mapGrid: input.mapGrid, layRefused: input.layRefused }),
     );
   }
   /* ==================================================================

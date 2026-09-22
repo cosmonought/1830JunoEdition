@@ -55,7 +55,7 @@ import type { GameStateResponse } from "./gameState";
 import type { MapGridResponse, StationTokenCompany } from "../components/hexContractTypes";
 import { tokenCityIndex } from "../components/hexContractTypes";
 import { tileCitySlotCounts } from "../components/TileGraphics";
-import { planTokenUpgrade } from "../utils/tokenMigration";
+import { planTokenUpgrade, tokenLandingsFor, type UpgradeTokenPlan } from "../utils/tokenMigration";
 
 /** The fields of `ExecuteMsg::LayTile` this gate reads. Declared structurally so the reducer can hand over
  *  `msg.LayTile` unchanged and a test can hand over a literal. */
@@ -173,4 +173,79 @@ export function stationAnchorRefusal(
   }
 
   return null;
+}
+
+/* ==================================================================
+    DESIGN NOTE 1682 (Stage 10.1, S10-25): THE PLAN AND THE VERDICT ARE ONE ANSWER
+   ==================================================================
+   Slice 9.2 put ❹ in the reducer by calling the same `planTokenUpgrade` the shell's `legalRotations` memo
+   calls -- one implementation, two call sites. What the memo did NOT ask was the rest of this file: the
+   per-city occupancy and the #1625 total-slot floor, which `stationAnchorRefusal` judges on the landings the
+   message actually carries. So a rotation the ring offered could still be refused by the authority on
+   capacity grounds, and the preview's landings were assembled in the shell from the raw plan.
+
+   `stationAnchorPlan` is the one answer both halves now consume: the authority's plan, the landings a lay
+   FROM THIS PRESIDENT would write (`tokenLandingsFor`, exactly as the dispatch builds `token_cities`), and
+   `stationAnchorRefusal` asked of precisely those landings. The shell's rotation list keeps a facing when
+   `refusal` is `null`; the preview draws `tokenCities`; the reducer, handed the message the shell then sends,
+   asks `stationAnchorRefusal` of the same landings and reaches the same verdict. Nothing is re-derived.
+
+   `chosenCity` is the president's choice for a FREE token (ERIE's unbuilt home, #824/#879). The rotation
+   list is asked without one -- which facings are station-legal is a question about anchored tokens and the
+   floor, not about where the president then parks a free marker -- and the preview and the confirmation
+   are asked with it, so a choice that would overfill a city is refused where it is made, not by hiding the
+   facing. That keeps the ring's legality and the confirm button's legality the two questions they were. */
+export interface StationAnchorVerdict {
+  /** `planTokenUpgrade`'s answer for this facing: `null` when no landing keeps every station connected. */
+  plan: UpgradeTokenPlan | null;
+  /** The `token_cities` a lay by `actingCompanyId` at this facing writes, given `chosenCity` for a free token. */
+  tokenCities: Array<[number, number]>;
+  /** `stationAnchorRefusal` asked of exactly those landings -- the sentence a replay applies, or `null`. */
+  refusal: string | null;
+}
+
+export function stationAnchorPlan(
+  state: GameStateResponse,
+  mapGrid: MapGridResponse | undefined,
+  lay: { q: number; r: number; tileId: number; orientation: number },
+  actingCompanyId: number | null,
+  chosenCity?: number,
+): StationAnchorVerdict {
+  const { q, r, tileId, orientation } = lay;
+  if (!mapGrid) return { plan: null, tokenCities: [], refusal: null }; // #757: no board, no opinion
+  const companies = state.public_companies as unknown as readonly StationTokenCompany[];
+  /* Judged exactly as `stationAnchorRefusal` judges "is there a station here": a fixture corporation that
+     carries no `station_token_hexes` at all has none, and `planTokenUpgrade` is not asked about an empty hex. */
+  const occupied = companies.some((company) =>
+    (company.station_token_hexes ?? []).some(([tq, tr]) => tq === q && tr === r),
+  );
+  const plan: UpgradeTokenPlan | null = occupied
+    ? planTokenUpgrade(mapGrid, q, r, companies, tileId, orientation)
+    : { landings: [], anyFree: false };
+  const tokenCities = tokenLandingsFor({ plan, actingCompanyId, chosenCity });
+  const refusal = stationAnchorRefusal(
+    state,
+    { q, r, tile_id: tileId, orientation, ...(tokenCities.length > 0 ? { token_cities: tokenCities } : {}) },
+    mapGrid,
+  );
+  return { plan, tokenCities, refusal };
+}
+
+/** The facings of `tileId` at `(q, r)`, out of `candidates`, that the station authority accepts -- ascending,
+ *  de-duplicated. THE SHELL'S ROTATION LIST (`App.tsx` `legalRotations`, #173/#879) and its ring thumbnails
+ *  are this function; a facing is offered exactly when `stationAnchorPlan` finds nothing to refuse for a lay
+ *  by `actingCompanyId` with no free-token choice yet made (see the note above on `chosenCity`). */
+export function stationLegalFacings(
+  state: GameStateResponse,
+  mapGrid: MapGridResponse | undefined,
+  q: number,
+  r: number,
+  tileId: number,
+  candidates: readonly number[],
+  actingCompanyId: number | null,
+): number[] {
+  const legal = candidates.filter(
+    (orientation) => stationAnchorPlan(state, mapGrid, { q, r, tileId, orientation }, actingCompanyId).refusal === null,
+  );
+  return Array.from(new Set(legal)).sort((a, b) => a - b);
 }

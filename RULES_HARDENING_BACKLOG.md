@@ -2814,11 +2814,11 @@ there is no follow-up task attached.
 > | disposition | items |
 > |---|---|
 > | `RESOLVED` in Stage 10 | S10-1 (10.2), S10-4 (10.1 / 10.3 / 10.3b), S10-5 (10.4), S10-9 (10.5), S10-13 (10.4 / 10.4a), S10-20 (10.2), S10-22 (10.4), S10-23 (10.4 / 10.4a), S10-25 (10.1), S10-26 (10.1 / 10.1b); and, filed under Stages 6–7 but closed here, S6-5 / S6-6 / S6-7 (10.6), S6-8 (confirmed by 9.2's rule, proved in 10.6), S7-17 (superseded by 10.2 / 10.3b / 10.4) |
-> | **A** `DEFERRED` — a later deployment / settlement / retirement phase | S10-2 (per-deploy `BUILD_ID` — deployment), S10-6 (mine `src/tests.rs` — Rust retirement), S10-7 (engine tests / `shared/` packaging — refactor), S10-8 (vestigial on-chain gameplay path — Phase 4), S10-10 (settlement / money readiness, `MIGRATION_PLAN.md` 2.5b → 4 — including the session-key signing and attestation work), S10-11 (Firestore retirement), S10-14 (duplicated constants — refactor), S10-19 (August audits — Phase-4 pre-check) |
-> | **B** `OWNER` decision / housekeeping | S10-3 (no historical reducer bundle — recorded owner decision, D-9), S10-12 (owner-authored release items), S10-16 (host housekeeping: stale worktree / `index.lock`) |
-> | **C** observation / cross-reference | S10-15 (brittle string-pinning tests — note, no action), S10-17 (message-carried facts — each listed fact is now judged by the authority: S6-2, S6-6, S8-9, S8-6, S6-1; `revenue_seed` / `revenue_turn` are message-carried by recorded design and the seed is server-supplied at ingress since 9.4d), S10-18 (remaining dedicated machine-level tests: first-SR sale refusal, reducer auction escrow, terrain-fee-once on an upgrade of preprinted track — the rules themselves are implemented: S8-7 and S7-4 `RESOLVED` in 7.2 / 7.3, the terrain fee part of 10.1's LayTile authority) |
-> | **D** test-substrate capture | **S10-21** (a completed Yellow Sign game as a committed fixture) |
-> | **E** superseded / obsolete | S10-24 (unreachable under the current architecture — verified in 10.2) |
+> | **A** `DEFERRED` — a later deployment / settlement / retirement phase (**destination named per item**; see the routing map below) | S10-2 (per-deploy `BUILD_ID`) → AWS / live multiplayer · S10-6 **split**: auction-interrupt mining → Variant Certification (Delayed Auction); remaining mining → Phase-4 Rust retirement preflight, before `src/` is deleted · S10-7 (engine tests / `shared/` packaging) → front-end / shared-engine refactor · S10-8 (vestigial on-chain gameplay path) → Phase-4 Rust / on-chain gameplay retirement · S10-10 **split by subpart** across AWS / live multiplayer, escrow / contract lifecycle, attestation / settlement, Phase 4 and Keplr / testnet E2E · S10-11 (Firestore retirement) → AWS / live multiplayer transition, after a server-path playtest · S10-14 (duplicated constants) → front-end / shared-engine refactor · S10-19 **split**: surviving-contract findings → escrow / contract lifecycle preflight; Rust-only findings → Phase-4 retirement preflight |
+> | **B** `OWNER` decision / housekeeping | S10-3 (no historical reducer bundle — recorded owner decision, D-9; no further action) · S10-12 (owner-authored release items) → escrow / release readiness, **before the first real deposit** · S10-16 (host housekeeping: stale worktree / `index.lock`) → sanitized production-repo cut (earlier if convenient) |
+> | **C** observation / cross-reference | S10-15 (brittle string-pinning tests — replaced opportunistically when a surface is touched; high-value cases in the UI / readiness sweep), S10-17 (message-carried facts — each listed fact is now judged by the authority: S6-2, S6-6, S8-9, S8-6, S6-1; `revenue_seed` / `revenue_turn` are message-carried by recorded design and the seed is server-supplied at ingress since 9.4d), S10-18 (remaining dedicated machine-level tests: first-SR sale refusal, reducer auction escrow, terrain-fee-once on an upgrade of preprinted track — the rules themselves are implemented: S8-7 and S7-4 `RESOLVED` in 7.2 / 7.3, the terrain fee part of 10.1's LayTile authority) — **split**: reducer auction-escrow coverage → Variant Certification (Delayed Auction); first-SR sale refusal and terrain-fee-once → UI / readiness + residual test-gap sweep. S10-17 stays a cross-reference with no implementation phase |
+> | **D** test-substrate capture | **S10-21** (a completed Yellow Sign game as a committed fixture) → **Variant Certification — Unpredictable Revenue** |
+> | **E** superseded / obsolete | S10-24 (unreachable under the current architecture — verified in 10.2) — no action, no phase |
 > | **F** genuine Stage-10 blocker | **none** |
 >
 > **S10-21 is a test-substrate capture task, not a closure blocker.** It asks for a fixture (a completed
@@ -2877,6 +2877,71 @@ there is no follow-up task attached.
 > certify Unpredictable Revenue as a whole. The Level Playing Field work hardened through Stages 8–10 remains
 > implemented. Deployment, escrow, settlement and attestation work (S10-2, S10-10 and the `MIGRATION_PLAN.md` track)
 > is a later phase, not part of this closure. Part-C UI items remain governed by the Playtest Readiness gate (Part F).
+>
+> ### Post-Stage-10 routing map (documentation pass, 2026-09-23 — Stage 10 stays CLOSED)
+>
+> Every remaining S10 item has a named destination, so `DEFERRED` cannot quietly become forgotten. Routing an item here
+> does **not** reopen Stage 10, and no item below is a live authority blocker. Each item's own entry carries the same
+> routing line. `MIGRATION_PLAN.md` stays the specification of the settlement track (#1254 order); this map says
+> which phase picks each piece up.
+>
+> | item | remaining work | destination | trigger / must happen before |
+> |---|---|---|---|
+> | S10-2 | a real per-deploy `BUILD_ID` in place of `"dev"` | **AWS / live multiplayer** | set up with the durable production deploy / build pipeline; before the deal-build pin is relied on for production multiplayer or money-game diagnostics |
+> | S10-6 (A) | mine `src/tests.rs` for **auction-interrupt** cases | **Variant Certification — Delayed Auction** | a required input to that certification; do not wait for Phase 4 |
+> | S10-6 (B) | mine the remaining forced-purchase / other useful Rust cases | **Phase-4 Rust retirement preflight** | **must be done before `src/` / the Rust gameplay crate is deleted** |
+> | S10-7 | engine suites out of `frontend/src/utils/`; repo-root `shared/` package (CRA / Babel / tsconfig / `sourceScan`) | **Front-end / shared-engine architecture refactor** | together with the `App.tsx` / front-end breakup, when the move no longer causes needless churn; not a rules blocker |
+> | S10-8 | retire the non-sandbox `UndoLastAction`, the old emergency-purchase contract wording, the superseded session-key gameplay blueprint and related gameplay-contract remnants | **Phase-4 Rust / on-chain gameplay retirement** | only after the server / settlement replacement has shown the old path is unnecessary |
+> | S10-10 2.5b | session-key-signed hello and entries, server verification, retire `trustClaimedIdentity` | **AWS / live multiplayer + pre-deposit security readiness** | before real-value play is trusted (authenticates live participants and messages; not result attestation) |
+> | S10-10 2.5d (roster) | `SetupGame` seats from the chain roster; a disagreeing room is refused | **Escrow / contract lifecycle** | before the first real-deposit game |
+> | S10-10 2.5d (undo consent) | consent-gated `RevertTo` / deeper-undo consent | **AWS / live multiplayer** | verified again in pre-deposit readiness |
+> | S10-10 2.5g | clocks, forfeits, offer deadlines, restart re-arm | **AWS / live multiplayer** | final verification before escrow / real-deposit play |
+> | S10-10 3a | contract lifecycle (Lobby → Started → Settling → Settled; Start / Checkpoint / Settle / AnnulByConsent / Challenge / liveness settlement) | **Escrow / contract lifecycle** | core escrow work |
+> | S10-10 3b | server checkpoints, result submission, client auto-sign / challenge UI | **Attestation / settlement** | after 3a |
+> | S10-10 3c | forfeit and clemency settlement | **Attestation / settlement** | after 3a |
+> | S10-10 Phase 4 | retire the old Rust gameplay | **Phase-4 Rust / on-chain gameplay retirement** | only after the replacement has completed real testnet / end-to-end settlement flows |
+> | S10-10 verification list | restart / reconnect / negotiation / close-race / live `RevertTo` scenarios; payout / settlement / chain-roster / signed-result scenarios | **AWS / live multiplayer** (the first group); **Keplr / testnet E2E** (the second) | each group in its phase's validation |
+> | S10-11 | retire Firestore as the authoritative room path (and its dead weight) | **AWS / live multiplayer transition** | after the server path is exercised and a manual multiplayer playtest confirms it; before real-value play relies on the server. Chat may stay on Firestore for a while but is never dispute evidence for a money game |
+> | S10-12 | Terms page, one-person-two-seats rule, 2-player vote edge cases, gas-payment policy, feegrant sizing | **Escrow / release readiness** (owner-authored) | **before the first real deposit**; "owner" means owner-authored policy content, not optional work |
+> | S10-14 | consolidate duplicated constants / logic (share percentages, exempt-zone and cap predicates, train limits, token costs, private face values, the Rules Reference OR sub-phase labels, the `privateReservations` naming debt) | **Front-end / shared-engine architecture refactor** | not during Variant Certification: tidiness must not disturb a surface being certified |
+> | S10-15 | brittle string-pinning tests | observation — **opportunistic** replacement (behavioural / structural evidence) when each surface is touched; high-value pre-playtest cases in the **UI / readiness + residual test-gap sweep** | no standalone project |
+> | S10-16 | stale worktree / `index.lock` / scratch cleanup on the host | **Sanitized production-repo cut** (owner; earlier if convenient) | disposed of before the production / public snapshot; blocks neither certification nor playtesting |
+> | S10-17 | none — the listed facts are judged by the authority; the rest are message-carried by recorded design | observation / cross-reference | revisit a field only if a later architecture / security audit finds a concrete benefit or vulnerability |
+> | S10-18 (A) | machine-level test: first-SR sale refusal (rule implemented, S8-7) | **UI / readiness + residual test-gap sweep** | before the manual substantive playtest |
+> | S10-18 (B) | machine-level test: auction cash escrow at the reducer (rule implemented, S7-4 — auction bidding funds, **not** the blockchain escrow) | **Variant Certification — Delayed Auction** (preferred: one coherent auction test audit) | no later than the UI / readiness sweep |
+> | S10-18 (C) | machine-level test: terrain fee once on an upgrade of preprinted track (rule implemented) | **UI / readiness + residual test-gap sweep** | before the manual substantive playtest |
+> | S10-19 (A) | old-audit findings touching `escrow.rs` / `contract.rs`, which survive | **Escrow / contract lifecycle preflight** | inspected **before** the 3a contract revision; carry forward what still applies |
+> | S10-19 (B) | findings that belong only to the gameplay Rust crate | **Phase-4 Rust retirement preflight** | adjudicated before Phase-4 deletion; retired, not ported |
+> | S10-21 | a completed Yellow Sign / Unpredictable Revenue fixture restoring the displaced coverage | **Variant Certification — Unpredictable Revenue** (a concrete deliverable) | from legal play under the current engine, or a deliberately constructed legal test game with stated provenance — never a hand-edited historical log |
+> | S10-24 | none | obsolete — no action | — |
+> | S10-3 | none — recorded owner decision (D-9) | — | — |
+>
+> ### Forward roadmap after Stage 10 (the default dependency order; independent work may overlap)
+>
+> 1. **Variant Certification** — Gentle Rust, Unpredictable Revenue, Delayed Auction; includes S10-6's auction-interrupt
+>    mining, S10-21's Yellow Sign fixture and S10-18's auction-escrow coverage.
+> 2. **UI / readiness + residual test-gap sweep** — S10-18's remaining gaps (first-SR sale, terrain-fee-once), the
+>    relevant S10-15 cleanup, and the Part-C UX / readiness backlog (Playtest Readiness gate, Part F).
+> 3. **Manual substantive playtest.**
+> 4. **AWS / live multiplayer** — S10-2; S10-10 2.5b, undo consent and 2.5g; the server-path verification scenarios;
+>    S10-11 once a playtest has confirmed the server path.
+> 5. **Escrow / contract lifecycle** — S10-19's surviving-contract preflight; S10-10 2.5d chain roster and 3a; S10-12
+>    before the first real deposit.
+> 6. **Attestation / settlement** — S10-10 3b and 3c.
+> 7. **Phase-4 Rust / on-chain gameplay retirement** — S10-6's remaining mining (before deletion), S10-8, S10-19's
+>    Rust-only adjudication.
+> 8. **Front-end / shared-engine architecture refactor** — S10-7, S10-14, the `App.tsx` / front-end breakup.
+> 9. **Keplr / testnet E2E** — end-to-end identity, contract and settlement validation (S10-10's settlement scenarios).
+> 10. **Final polish / tutorial / release readiness.**
+> 11. **Sanitized production-repo cut** — S10-16 disposed of by this point.
+>
+> ### Handoff
+>
+> **THE NEXT ACTIVE PHASE IS VARIANT CERTIFICATION** of three independently certified variants: **Gentle Rust**,
+> **Unpredictable Revenue** and **Delayed Auction**. The Yellow Sign hardening of Stages 9–10 does not by itself
+> certify Unpredictable Revenue. S10-21 now belongs to Unpredictable Revenue certification; S10-6's auction-interrupt
+> mining (and S10-18's reducer auction-escrow coverage) now belong to Delayed Auction certification. The rest of the
+> routed S10 work stays dormant until its named phase or trigger.
 
 **S10-1. Refusal transport.** A reducer refusal is an identity no-op that `RoomSession.submit` still answers
 `applied` and appends (replays as a no-op); the ingress holds (#1530 / #1540) and, since Batch 6, the route,
@@ -2907,6 +2972,9 @@ entries are untouched (a derived no-op still appends — it carries the #1208 gu
 **S10-2. `BUILD_ID` / `SetupGame.build` (#1252) is `"dev"` everywhere,** so the deal-build pin is nominal; the
 rules-engine version (#1520) carries the replay boundary, but a per-deploy `BUILD_ID` would make the build pin
 real (Batch 3 §6, Batch 4.5 §1). `DEFERRED` (deployment).
+**Routing (post-Stage-10, 2026-09-23):** → **AWS / live multiplayer.** Implement a real per-deploy `BUILD_ID` when the durable production deploy / build
+pipeline is set up; it must exist before the deal-build pin is relied on for production multiplayer or money-game
+diagnostics. Not implemented here.
 
 **S10-3. No historical reducer bundle exists by design:** a room pinned to an old version is held, never
 reinterpreted (#1520). `OWNER DECISION` — recorded (also D-9).
@@ -2975,17 +3043,28 @@ the transcript and presence frames' shape, the orphan write's drop (unchanged `n
 **S10-6. `src/tests.rs` (17.5k lines) should be mined for auction-interrupt and forced-purchase cases** before the
 Rust crate is retired (audit "Test gaps"; `MIGRATION_PLAN.md` §4 / Phase 4; AUDIT_SETTLEMENT §8 gives the module
 triage). `DEFERRED`.
+**Routing (post-Stage-10, 2026-09-23):** **split.** (A) The **auction-interrupt** cases → **Variant Certification — Delayed Auction**: a required input
+to that certification, inspected there rather than at Phase 4. (B) The remaining **forced-purchase / other useful**
+cases → **Phase-4 Rust retirement preflight**, which **must finish before `src/` / the Rust gameplay crate is
+deleted**. Nothing mined in the routing pass.
 
 **S10-7. Engine tests and packaging.** 304 engine-adjacent suites still live in `frontend/src/utils/` (Jest
 `roots` + per-suite classification, Batch 1 §6d); a repo-root `shared/` package needs CRA's `ModuleScopePlugin`,
 babel `include`, `tsconfig` `include` and the `sourceScan.ts` reader (137 tests) patched (Batch 1 §3).
 `DEFERRED`.
+**Routing (post-Stage-10, 2026-09-23):** → **Front-end / shared-engine architecture refactor.** Architectural packaging debt — not Variant
+Certification and not a rules blocker; to be taken together with the later `App.tsx` / front-end breakup, when moving
+shared engine code no longer causes needless churn.
 
 **S10-8. The on-chain gameplay path is vestigial and should be retired together:** `UndoLastAction` (`return
 state`, non-sandbox path only; kept in the schema so validation does not reject a dead message — Stage 2);
 `EmergencyTrainPurchaseModal`'s non-sandbox string "Emergency purchases are not yet wired to the contract";
 `frontend_blueprint.md`'s session-key gameplay design (superseded: session keys now sign log entries, not
 contract messages). `DEFERRED` — with Phase 4.
+**Routing (post-Stage-10, 2026-09-23):** → **Phase-4 Rust / on-chain gameplay retirement.** Covers the non-sandbox `UndoLastAction`, the old
+emergency-purchase contract wording, the superseded session-key gameplay blueprint and related gameplay-contract
+remnants. Trigger: only once the server / settlement architecture that replaces them has been shown to make the old
+path unnecessary. Nothing deleted here.
 
 **S10-9. Type debt the audits named and nothing closed (verified 2026-09-15):** the `LoggedMsg` union (#530 —
 `App.tsx` still says "the honest fix is the `LoggedMsg` union" at three cast sites), and
@@ -3064,17 +3143,45 @@ client mid-negotiation (the derived purchase arrives in the same applied frame a
 room is closed." line plus the payout line on every client, none for the closes that lost the race, no second
 payout stub after reloading a closed room; a non-host `RevertTo` past somebody else's move refused with the
 button's sentence while the host's deeper undo lands; and the Batch-0 retest of #1237 / #1238 (U-1).
+**Routing (post-Stage-10, 2026-09-23):** S10-10 is an index into several phases, not one task. The specification above stands; the pieces are
+picked up as follows.
+- **2.5b** (session-key-signed hello and entries, server verification, `trustClaimedIdentity` retired) → **AWS / live
+  multiplayer + pre-deposit security readiness**; must land before real-value play is trusted. It authenticates live
+  room participants and messages — it is not final result attestation.
+- **2.5d, roster from chain** (`SetupGame` seat agreement) → **Escrow / contract lifecycle**, before the first
+  real-deposit game.
+- **2.5d, consent-gated `RevertTo` / deeper-undo consent** → **AWS / live multiplayer**, verified again in pre-deposit
+  readiness (it depends on real multiplayer identity and room semantics, not the rules engine).
+- **2.5g** (clocks, forfeits, offer deadlines, restart re-arm) → **AWS / live multiplayer**, finally verified before
+  escrow / real-deposit play.
+- **3a** (contract lifecycle: Lobby → Started → Settling → Settled; Start, Checkpoint, Settle, AnnulByConsent,
+  Challenge, liveness settlement) → **Escrow / contract lifecycle**.
+- **3b** (server checkpoints, result submission, client auto-sign / challenge UI) and **3c** (forfeit + clemency) →
+  **Attestation / settlement**.
+- **Phase 4** (retire the old Rust gameplay) → **Phase-4 Rust / on-chain gameplay retirement**, only after the
+  replacement has completed real testnet / end-to-end settlement flows.
+- **The verification list above:** restart-restore, reconnection banner / outage, both negotiation flows and mid-
+  negotiation reloads, close-race lines, and live `RevertTo` refusal / host undo → **AWS / live multiplayer**
+  validation; the payout line / payout stub, settlement, chain-roster and signed-result behaviour → **Keplr / testnet
+  E2E** (settlement validation). Nothing implemented here.
 
 **S10-11. Retire the Firestore room path and its dead weight** (DECISIONS B4, TRIAGE_2026-09-06 §3.4 — migrated):
 `sandboxRoom.ts` index allocation, the Firestore append / subscribe / room-doc code and Firestore-only effects
 in `App.tsx`; chat stays on Firestore (#644) for now but must not be a money game's dispute evidence. Also
 retire `frontend/sandbox-log-*.json` / `dump-sandbox-log.mjs` if the CLI export (#1334) has replaced them.
 `DEFERRED` (after the next playtest confirms the server path).
+**Routing (post-Stage-10, 2026-09-23):** → **AWS / live multiplayer transition.** Sequence: (1) establish and exercise the server path; (2) a manual
+multiplayer playtest confirms it; (3) retire Firestore as the authoritative gameplay-room path; (4) chat may stay on
+Firestore temporarily, but it must never serve as dispute evidence for a money game. Before real-value production
+play relies on the server. Nothing deleted here.
 
 **S10-12. Owner-authored release items** (DECISIONS C2–C4, AUDIT_SETTLEMENT §10): a Terms page (bonded challenge,
 forfeit, operator-resolved dispute) readable in the lobby before the deposit; a rules line on one person in two
 seats; the 2-player vote edge cases stated; who pays gas for what and the feegrant sizing re-derived (~5 player
 txs per game, not 400). `DEFERRED` (owner).
+**Routing (post-Stage-10, 2026-09-23):** → **Escrow / release readiness**, deadline **before the first real deposit**. Still `OWNER`, meaning
+owner-authored policy content — not optional work: the Terms page, the one-person-two-seats rule, the 2-player vote edge
+cases, the gas-payment policy and the feegrant sizing.
 
 **S10-13. Stale design comments found by the Stage 5.5 marker sweep — resolved in code, not yet in prose** (fix
 in a comment-only commit; no behaviour): `gameEngine/replayLog.ts` header says "six `isSandboxOnlyMsg` messages
@@ -3093,15 +3200,26 @@ settle-point logic (`autoSkipReason`, the forced withhold) "is still in the shel
 (catalog vs fixture vs `waterfall.privates.face_value` — the auction marks down the fixture copy), the OR
 sub-phase label table hand-copied in `RulesReference.tsx`, and the "reservation" misnomer across seven exported
 symbols (`privateReservations.ts`, recorded as known debt). `DEFERRED`.
+**Routing (post-Stage-10, 2026-09-23):** → **Front-end / shared-engine architecture refactor** — every example above (share percentages, the
+exempt-zone and cap predicates, train limits, token costs, private face values, the Rules Reference OR sub-phase labels,
+the `privateReservations` naming debt). Consolidation, not rules: it should not disturb a surface under Variant
+Certification merely for tidiness. No refactor here.
 
 **S10-15. Brittle string-pinning tests** (`variantCopy`, `privateCardText`, `dividendNarration`, the `batchNN`
 family) will not catch a rule regression whose text is unchanged. `DEFERRED` — note, no action.
+**Routing (post-Stage-10, 2026-09-23):** an OBSERVATION, not a standalone phase. Replace a string pin with behavioural / structural evidence
+**opportunistically, when the test or surface is already being modified**; any high-value example that bears directly
+on pre-playtest confidence goes to the **UI / readiness + residual test-gap sweep**. No project to replace every
+string-pinning test.
 
 **S10-16. Host housekeeping the VM cannot do:** `_to_delete/` holds scratch probes and stale `index.lock`
 files; `.git/worktrees/prefix` is a stale scratch worktree (`git worktree prune` on the host);
 `frontend/testrun.txt` is a stale UTF-16 test-run capture (253 / 4030) proposed for deletion. `OPEN` (owner).
 **Stage-10 closure (2026-09-23): classified B — owner housekeeping, not a blocker.** (`_to_delete/` and `testrun.txt`
 were already gone at the Stage-10 orientation; the registered stale worktree remains the owner's to prune.)
+**Routing (post-Stage-10, 2026-09-23):** → **Sanitized production-repo cut** (still `OWNER`; earlier if convenient). The stale worktree,
+`index.lock` and scratch-file cleanup must be disposed of before the production / public snapshot is cut; it blocks
+neither Variant Certification nor playtesting. No host cleanup performed here.
 
 **S10-17. Message-carried facts the reducer could derive** (audit risk 4): `DeclareDividends.revenue_amount`
 (S6-2 — validated against the authority since Batch 6), `LayTile.bonus_lay` (S6-6 — validated against the board
@@ -3109,6 +3227,11 @@ since Stage 10.6, #1693), `BuyStock.par_value`
 (S8-9), ~~`PlaceHomeStation` hex (S8-6)~~ *(closed by Slice 8.2: hex and circle judged by `homePlacementRefusal`)*, `RunMultipleRoutes` paths (S6-1 — judged since Batch 6; `trains` is
 checked against the fleet slot, `revenue_seed` / `revenue_turn` remain message-carried by design, #1051 /
 #1183). Cross-reference only.
+**Routing (post-Stage-10, 2026-09-23):** stays an OBSERVATION / CROSS-REFERENCE with no implementation phase. The listed facts are now checked by
+the authority; the values still carried on messages are carried by deliberate design (and `revenue_seed` is supplied by
+the server at ingress since 9.4d). S10-17 is therefore not an outstanding migration merely because a value could in
+theory be derived; a field is revisited only if a later architecture / security audit finds a concrete benefit or
+vulnerability.
 
 **S10-18. Test gaps from the audit still without a machine-level test:** ~~sold-out rise order (S8-4)~~ *(closed by
 Slice 8.1, `soldOutRise.test.ts`, 2026-09-16)*, first-SR sale
@@ -3116,6 +3239,12 @@ refusal (S8-7), ~~presidency tie (S8-2)~~ *(closed by Slice 8.3, `presidencyAuth
 plus `presidencyCorpus.test.ts`, 2026-09-17)*, auction escrow at the reducer (S7-4), terrain-fee-once for the
 upgrade-of-preprinted case, ~~all-pass private income through `replayLog` (S10-4)~~ *(closed by Slice 10.3,
 `stage103CompositionCoupling.test.ts` A, 2026-09-22)*. Cross-reference.
+**Routing (post-Stage-10, 2026-09-23):** **split** — every remaining gap is missing direct coverage of an implemented rule, not a new rule.
+(A) **First-SR sale refusal** (S8-7) → **UI / readiness + residual test-gap sweep**, before the manual substantive
+playtest if still missing. (B) **Auction escrow at the reducer** (S7-4 — auction bidding funds, **not** the blockchain
+escrow) → **Variant Certification — Delayed Auction**, preferred so the auction authority gets one coherent test audit;
+no later than the UI / readiness sweep. (C) **Terrain-fee-once on an upgrade of preprinted track** → **UI / readiness +
+residual test-gap sweep**. No tests added here.
 
 **S10-19. August 2026 audits (`AUDIT_PART1_BACKEND.md`, `AUDIT_PART2_FRONTEND.md`).** Their actionable items
 were either fixed then (code cites "Audit G-5/G-9/G-11/G-12/G-15", "F-3", `config.ts` env for F-4,
@@ -3123,6 +3252,10 @@ were either fixed then (code cites "Audit G-5/G-9/G-11/G-12/G-15", "F-3", `confi
 valuation moves to the server's appraisal; G-5 on-chain tile inventory is moot). Before Phase 4, confirm which
 Part-1 items concern `escrow.rs` / `contract.rs` (which stay on chain) and carry them into the 3a contract
 revision. `DEFERRED` (Phase 4 pre-check).
+**Routing (post-Stage-10, 2026-09-23):** **split.** (A) Findings touching `escrow.rs` / `contract.rs`, which survive → **Escrow / contract lifecycle
+preflight**: inspected **before** the 3a contract revision, carrying forward whatever still applies — this must not wait
+until after the surviving contract is rewritten. (B) Findings belonging only to the gameplay Rust crate → **Phase-4
+Rust retirement preflight**: adjudicated before Phase-4 deletion, then retired rather than ported.
 
 **S10-20. O2 — an UNATTRIBUTED duplicate `BuyTrainFromCorporation` skips the consent rule and takes the seller's second train; the private purchase is idempotent, the train sale is not.**
 Status `OPEN` (derived-action / ingress hardening). Found by the Opus 7.4 matrix (`offerMatrix74Settlement.test.ts`
@@ -3178,6 +3311,13 @@ completed Yellow Sign game is still owed.
 **Stage-10 closure (2026-09-23): still `OPEN`, classified D — test-substrate capture, NOT a closure blocker.** No rule
 depends on it; it restores displaced assertions. Not created in the closure pass. (Under the current engine the
 fixture would be dealt, and pinned, at version 8.)
+**Routing (post-Stage-10, 2026-09-23):** → **Variant Certification — Unpredictable Revenue**, as a concrete deliverable of that phase (category D
+kept). The fixture should restore, as far as feasible, the coverage described above: a Mark, rust / obsolescence awards,
+a Bagholder, a Little Engine, and the displaced timeline / accolade assertions. It must come from legal play under the
+current engine or from a deliberately constructed legal test game whose provenance is stated — whichever the
+certification design chooses — and **never** from fabricating or hand-editing an old historical log to make assertions
+pass. The title's "version 5" records how the coverage was lost; a new fixture would be pinned at the current version
+(8). Not created in the routing pass.
 
 **S10-25. `legalRotations` and the authority now ask the station rule separately, and should ask it once.**
 Status `OPEN` (opened by Slice 9.2, 2026-09-18). S9-17 put revised 6.2.2 ❹ in the reducer
@@ -3315,6 +3455,8 @@ still applied by REBUILD (`RoomSession.submit`'s `RevertTo` branch returns befor
 10.2's judgement) — the reducer is never called with a `RevertTo`; `replayLog` resolves it in `effectiveActions`
 before the loop; ingress exempts it (`turnAuthority.ts`); the shell resolves it before its dispatch. 10.2 opened no
 new path. Not added to the escape list merely for symmetry.
+**Routing (post-Stage-10, 2026-09-23):** stays **OBSOLETE — no action**; no future phase. The asymmetry is unreachable under the current
+architecture, as verified behaviourally in 10.2.
 
 ---
 
@@ -3954,7 +4096,10 @@ stage, the audit's own priority holds: the one-line refusals with outsized integ
 then the identity/legality gates (S6-5…S6-8, S7-7, S7-8), then the large validator move (S6-1 with S6-4), the
 auction rewrite as one function (S7-2…S7-4), the Stage-8 ordering repairs (S8-1 → S8-4) before the timing rulings
 (S8-5 … S8-10), and the variant rulings (S9-3, S9-4, S9-6) before variant authority (S9-1, S9-2). Stage 10's
-settlement items follow `MIGRATION_PLAN.md` #1254 (2.5b → 2.5d → 2.5g → 3a → 3b → 3c → 4). UI/polish items in
+settlement items follow `MIGRATION_PLAN.md` #1254 (2.5b → 2.5d → 2.5g → 3a → 3b → 3c → 4). **After Stage 10** (closed
+2026-09-23): the forward roadmap and the phase each remaining S10 item is routed to are in the Stage-10 closure section
+(Part B, "Post-Stage-10 routing map" and "Forward roadmap after Stage 10"); the next active phase is Variant
+Certification. UI/polish items in
 Part C run in parallel and never gate a stage. The owner's roadmap governs; this paragraph is a recommendation
 inside it.
 

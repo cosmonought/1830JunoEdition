@@ -2845,6 +2845,18 @@ Corpus: 109 stored chart moves, 0 declined by the core (measured before the chan
 
 **S10-5. Server smoke test:** 5 pre-existing lobby/chat roster failures (`{kind:'chat', room:'LOBBY'}`),
 reproduce on `53222c7` and earlier; transport, not rules (Batch 1 §2, Batch 4.5 §9). `OPEN`.
+**Stage 10.4 (2026-09-23, uncommitted): `RESOLVED` — the harness was stale; the protocol was not changed.**
+Reproduced on `55db610` (`npm run smoke`, `server/src/smokeTest.ts`): 5 FAIL — "a write sent before the hello is
+answered still lands (#1216)" (got `{kind:"chat", room:"LOBBY", messages:[]}`), "a write to an unhosted room does not
+invent one", "a joiner appears in the roster" (got the joiner's `chat` frame), "and the HOST sees them" and "a rename
+updates in place" (each one frame behind). Cause: since #1361a `room-hello` is answered with THREE frames — `room`,
+`chat`, `presence` — and the harness's roster client returned whatever frame came next as the document. Server and
+client agree (`roomDocLink.ts` routes `room` to the document listeners and every other kind to its bus listeners).
+Repair (harness only): the roster client queues frames BY KIND like the client does (`next()` = `room`, `nextOf(kind)`),
+records the arrival order, and the checks now ASSERT the hello's exact `room, chat, presence` sequence (host and orphan),
+the transcript and presence frames' shape, the orphan write's drop (unchanged `null` document, no refusal), and a real
+`chat-send` round trip (stamped author, trimmed text, identical transcript to both sockets); the frame types come from
+`roomDocLink.ts`. Result: `SMOKE PASSED`, 39 ok / 0 FAIL, three runs (was `SMOKE FAILED`, 5 FAIL; 7 checks added, none removed or loosened).
 
 **S10-6. `src/tests.rs` (17.5k lines) should be mined for auction-interrupt and forced-purchase cases** before the
 Rust crate is retired (audit "Test gaps"; `MIGRATION_PLAN.md` §4 / Phase 4; AUDIT_SETTLEMENT §8 gives the module
@@ -2905,6 +2917,10 @@ in a comment-only commit; no behaviour): `gameEngine/replayLog.ts` header says "
 are still shell-owned (#1189)" — all ten came off the shell (#1230–#1248); `RoomEngine`'s class note says the
 settle-point logic (`autoSkipReason`, the forced withhold) "is still in the shell" — it lives in
 `gameEngine/derivedActions.ts` and `RoomSession.settleOwed` runs it (#1202/#1203/#1275). `OPEN` (docs).
+**Stage 10.4 / 10.4a (2026-09-23, uncommitted): `RESOLVED`, comment-only** — the three known stale statements in
+`gameEngine/replayLog.ts`: the file header's "six `isSandboxOnlyMsg` messages" paragraph, `RoomEngine`'s class note
+(settle-point logic "still in the shell"), and — found during 10.4, corrected in 10.4a — `applyOnBoard`'s #1189 note
+"Seven of the ten `isSandboxOnlyMsg` messages are still outstanding". No other prose touched; no behaviour.
 
 **S10-14. Duplicated constants / logic to consolidate, flagged not refactored** (audit risk 5): share percentages
 (`sandboxSession` / `endgame` / `sharePurchase` / `doubleCertificate`), `isExemptZone` vs
@@ -3020,6 +3036,15 @@ core refuses), so a refused synthetic discard would not be recognised and the lo
 stands. Unreached: no corpus file owes a legacy discard under version 5 (`legacyDiscards` is empty everywhere). The home
 adapter reads its outcome off the corporation for exactly this reason (#1614). Repair: compare `stateDigest` or re-ask
 `pendingTrainDiscards` for a change. Replay: none (development tooling).
+**Stage 10.4 (2026-09-23, uncommitted): `RESOLVED`.** The guard asks #1685's `atomsUnchanged` of the engine's
+`{ state, grid }` before and after the synthetic discard (content, not identity, not the digest) — the same
+definition `RoomEngine.submit` and the shell's receipt use. `stage104HarnessHardening.test.ts`, on the real charted
+`RoomEngine` (a refusal produced by the real reducer — a model the corporation does not hold): the premise (a refused
+discard returns a fresh state object with identical content); (1) a refused discard is recognised, the loop breaks,
+nothing is recorded; (2) an accepted discard removes the train and is recorded; (3) two owed discards (C&O and B&O)
+are both supplied and the loop stops when nothing is owed; (4) a refusal after one success keeps the success and
+does not retry. With the pre-10.4 identity guard restored, cases 1 and 4 fail with the harness's spin cap.
+Corpus: **0** `legacyDiscards` supplied in all 18 files (replay-neutral, measured).
 
 **S10-23. A hand-exported log whose rows carry no `id` replays to its seed: every entry dies on the first `RevertTo`.**
 Status `OPEN` (development corpus / export tooling only; found by Slice 8.5's corpus reconciliation, 2026-09-17;
@@ -3035,6 +3060,31 @@ rows ARE distinctly identified applies entries normally, which `stage85Closure.t
 Repair (whoever owns the export): stamp an id at export time, or fall back to the entry index as the identity when a
 log carries none. Replay: none for any log with ids; a repair would make this one file replay for the first time, so it
 belongs with a bump, not between them.
+**Stage 10.4 (2026-09-23, uncommitted): `RESOLVED` in normalisation — engine rules unchanged.** `entriesFromExport`
+keeps a non-empty real `id` verbatim and gives a row without one `legacyExportId(index, row, rows)` =
+`legacy-export:<index>:<row position, zero-padded to max(6, digits)>` — per ROW, never the index alone (#1026: two
+different old entries can share an index), deterministic, and in export order under `replayLog`'s `(index, id)` sort.
+`ExportedEntry.id` is now optional (real files omit it); `ReplayEntry.id` / `RevertableAction.id` stay required and
+`effectiveActions` is untouched: `RevertTo { index }` still ranges by index, only the kill-list identity is new.
+Tests (`stage104HarnessHardening.test.ts`): real id byte-for-byte; missing and empty ids → unique; two id-less rows at
+one index → distinct and ordered; repeatable; range by index; an entry raced onto a revert's own index (and a reverted
+revert's twin) survives, where an index-only identity would have killed it. **JUNO-Y8V:** 668 rows, all id-less, 17
+`RevertTo`, no duplicate index; before: 0 effective / 0 applied (seed); after: **628 effective = 628 applied, 40
+dropped**, deterministic, no incompatibility, 0 unparseable, final `OperatingRound 13`, digest `b4fae877c35604fe`;
+money conserved at every entry (`moneyConservation`). It diverges from its played game as other legacy logs do (332
+reducer no-ops, first at idx 18 — the legacy home-at-float the #1614 adapter remembers; 4 remembered homes placed);
+not diagnosed here. **The 17 files with ids:** normalisation byte-identical, final state and grid identical, 3,437
+stored / 3,103 applied as before. **Exporter:** the current producer is `logExport.ts` (Ctrl+Shift+L,
+`buildSandboxLogExport`), which already stamps `id`; the server store's `.log.jsonl` carries ids. `dump-sandbox-log.mjs`
+(the Firestore dump that produced Y8V) is obsolete and was left as is. For the Stage-10 closure record: development
+export compatibility, distinct from 10.1 / 10.3's rules-authority changes.
+**Stage 10.4a (2026-09-23):** collision-safe. Every non-empty real id is reserved (and proven unique) before any id is
+generated; an id-less row whose candidate is already held takes `<candidate>~1`, `~2`, … (first free, source order,
+reserved at once); a real id is never altered. Two rows with the SAME non-empty real id throw
+`DuplicateExportIdError` (rows and id named) instead of collapsing to one identity; the 18-file corpus has no such file
+and no real id with the `legacy-export:` prefix, so replay is unchanged. `stage85Closure`'s S10-23 characterization
+(vacuous once no log collapsed) now asserts the invariant — every corpus row distinctly identified, no log applies
+nothing — and names `stage104HarnessHardening.test.ts` as S10-23's owner.
 
 **S10-26. A `LayTile` the reducer refused still landed on the tile grid — and, for the terrain fee, still spent the power and stepped the cursor.**
 Status **`RESOLVED`** (Slice 10.1, 2026-09-22, uncommitted; design notes **#1681–#1683**). *(Found by the Stage-10
@@ -3717,6 +3767,7 @@ PMQ — the ruling applies the conditional form to both. Implementation: Slice 8
 | 7 (owed: **8** at Stage-10 closure) | **10.2** (uncommitted, 2026-09-22) | **Refusal transport and the author-less train settlement (S10-1, S10-20; S10-24 verified obsolete; #1685, #1685a, #1686).** A reducer-declined submission (atoms unchanged by content, `actionOutcome.ts`) is no longer appended or answered `applied`: `refused`, nonce not consumed, the reducer's sentence where `refusalReasonFor` has one; a repair before a refusal travels with it (`refused.catchUp`). `CloseRoom`'s race stays applied. `trainSaleRefusal` asks consent of the board when there is no author. **Follow-up (#1687):** a consent answer that finds nothing to answer (the board's question, not the message type's) stays a harmless applied duplicate; `sandboxSession.ts`'s mid-module `authoritativeHolds` import moved to the import block (ESLint `import/first`, the Vercel build failure at `f75811a`). **No stored entry's interpretation changes** — the transport only stops NEW logs recording no-ops; S10-20 is refusal-added on author-less entries, which the corpus does not contain. `RULES_ENGINE_VERSION` stays **7**; the Stage-10 closure bump **7 → 8** (from 10.1) remains owed; 10.2 adds none. | **Canonical 18/18, old (scratch build of `f75811a`) vs new (scratch build of the working tree): 4,105 stored / 3,103 applied / 1,002 dropped by `RevertTo`; 3,131 engine applications (3,103 stored + 28 adapter-supplied) compared entry by entry on the (state, grid) digest — 0 differences; every final state and grid digest identical.** Reducer no-ops among applied stored entries: **1,081** = 79 derived (10.2 still appends them) + 3 `CloseRoom` race losers + **4 harmless duplicate answers** (#1687: 2 `AnswerTrainPurchase`, 2 `AnswerPrivatePurchase`, all still appended) + **995 authority refusals** a 10.2 server would not have appended. Replaying each effective log WITHOUT them leaves every final state and grid identical, 18/18 — save for **45** legacy `PlaceHomeStation` no-ops that the development corpus's home-choice adapter (#1614, legacy logs only, never a pinned room) reads as remembered choices, which the simulation keeps. No golden, fixture or log touched. |
 | 7 (owed: **8** at Stage-10 closure) | **10.3** (uncommitted, 2026-09-22) | **Composition coupling (S10-4 remainder; #1690).** `gameEngine/actionContext.ts` — `sandboxActionContext` and `layAuthorityContext` — is the one builder of the reducer's context and of the `LayTile` grid step's, called by `RoomEngine.apply` and by `App.tsx` (over `SHELL_PROVIDERS = sandboxReplayProviders()`); the shell's inline transcription is gone. The shell's market sentence is `sandboxChartStepReport`, the reducer's own chart step. **One semantic correction, corpus-neutral:** the Blood Price (#1090) is asked by the reducer (`chartStepContext.isCarcosanSale`: the gilding AND `trainSaleRefusal` at settlement) — the server now charges it on a legal Carcosan transfer (it never did: the providers carried no `isCarcosanSale`), and no client charges it for a refused one. No stored entry's interpretation changes. `RULES_ENGINE_VERSION` stays **7**; the closure bump **7 → 8** remains owed and its changelog row should name the Blood Price. | **Canonical 18/18, old (scratch build of `f8ff424`) vs new (scratch build of the working tree): 4,105 stored / 3,103 applied / 3,131 engine applications compared entry by entry on (state digest, grid hash) — 0 differences; every final state digest, grid hash and cursor identical. 11 stored `BuyTrainFromCorporation`, 0 Carcosan transfers.** Composition parity (`stage103CompositionCoupling.test.ts` B): every engine application of the corpus reduced under the pre-10.3 shell context (transcribed oracle) and under `sandboxActionContext` — 0 differences. No golden, fixture or log touched. |
 | 7 (owed: **8** at Stage-10 closure) | **10.3b** (uncommitted, 2026-09-22) | **Chart/core atomicity (#1691).** `marketTransaction`: the chart step is committed only if the core accepts the action; a declined core (identity or content-unchanged) discards the move, and `sandboxChartStepReport` reads the same transaction. Closes two reproduced leaks the pre-chart list missed — a mismatched `DeclareDividends` amount and an author-less `SellStock` — and makes the Blood Price's atomicity structural. Accepted actions unchanged by construction. `RULES_ENGINE_VERSION` stays **7**; closure bump **7 → 8** owed (row should name the Blood Price and #1691). | **Canonical 18/18, old (scratch build of `f8ff424`) vs new: 4,105 stored / 3,103 applied / 3,131 engine applications, per-entry (state digest, grid hash) — 0 differences; final state, grid and cursor identical. 109 stored chart moves; 0 declined by the core.** No golden, fixture or log touched. |
+| 7 (owed: **8** at Stage-10 closure) | **10.4** (uncommitted, 2026-09-23) | **Tooling only; no rule changed.** S10-5 smoke harness routed by frame kind (protocol unchanged); S10-22 legacy discard adapter's refusal test is `atomsUnchanged`; **S10-23 `entriesFromExport` gives an id-less export row a per-row identity** (`legacyExportId`); S10-13 two stale comments. `RULES_ENGINE_VERSION` stays **7**; closure bump **7 → 8** owed (its row should list S10-23 as development-export compatibility). | **17 files with ids: normalisation byte-identical, final state and grid identical, 3,437 stored / 3,103 applied.** **JUNO-Y8V (expected change): 0 → 628 applied** (668 rows, 17 reverts, 40 dropped), ends OR 13, digest `b4fae877c35604fe`, money conserved. 0 `legacyDiscards` corpus-wide. No golden, fixture, export or log touched or re-pinned. |
 
 Items above that carry "bump" must add a row here when they land. No golden or replay expectation is ever
 re-pinned silently: the re-pin, its index and its reason go in the batch write-up and in this table.

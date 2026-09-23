@@ -21,6 +21,8 @@ import type { Server as HttpServer } from "http";
 import { WebSocket } from "ws";
 
 import { createGameServer, trustClaimedIdentity } from "./gameServer";
+// S10-5: the client's own chat frame shapes, so the harness cannot drift from what a browser reads.
+import type { ChatFrame, ChatSendRequest } from "../../frontend/src/utils/roomDocLink";
 
 /* ==================================================================
     A PORT THE OPERATING SYSTEM CHOOSES, AND WHY IT IS NOT 8917
@@ -92,42 +94,69 @@ function connect(claim: string, room: string): Promise<{
   });
 }
 
-/** The same tiny client, speaking the waiting room's protocol instead of the log's (#1215). */
+/** The same tiny client, speaking the waiting room's protocol instead of the log's (#1215).
+ *
+ *  ==================================================================
+ *   STAGE 10.4 (S10-5): ROUTED BY KIND, THE WAY THE CLIENT ROUTES THEM
+ *  ==================================================================
+ *  THIS CLIENT USED TO HAND BACK WHATEVER FRAME CAME NEXT, and every check below read that frame as the room
+ *  document. That was true until #1361a/#1361b put chat and presence on the same socket: `room-hello` is now
+ *  answered with THREE frames -- `room`, then `chat` (the transcript), then `presence`. Five checks then read
+ *  a chat frame (or, one step later, the frame the chat had displaced) as the roster and failed, although
+ *  server and client agree
+ *  (`roomDocLink.ts`: `room` goes to the document listeners, `error` to the error / refusal listeners, every
+ *  other kind to its own listeners on the bus).
+ *  SO THE HARNESS NOW DOES WHAT THE CLIENT DOES: one queue per kind. `next()` is the document channel and
+ *  `nextOf(kind)` any other. Nothing is skipped silently: every frame is recorded in `seen`, in arrival order,
+ *  and the checks below assert the hello's exact sequence, the orphan's, and a chat round trip. */
 function connectRoom(claim: string, room: string): Promise<{
   socket: WebSocket;
   next: () => Promise<Frame>;
+  nextOf: (kind: string) => Promise<Frame>;
+  pending: (kind: string) => number;
+  seen: string[];
   write: (write: unknown) => void;
+  send: (frame: unknown) => void;
 }> {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(`ws://127.0.0.1:${port}`);
-    const queue: Frame[] = [];
-    let waiting: ((frame: Frame) => void) | null = null;
+    const queues = new Map<string, Frame[]>();
+    const waiting = new Map<string, (frame: Frame) => void>();
+    const seen: string[] = [];
 
     socket.on("message", (raw) => {
       const frame = JSON.parse(String(raw)) as Frame;
-      if (waiting) {
-        const resolveWith = waiting;
-        waiting = null;
-        resolveWith(frame);
+      seen.push(frame.kind);
+      const waiter = waiting.get(frame.kind);
+      if (waiter) {
+        waiting.delete(frame.kind);
+        waiter(frame);
       } else {
+        const queue = queues.get(frame.kind) ?? [];
         queue.push(frame);
+        queues.set(frame.kind, queue);
       }
     });
     socket.on("error", reject);
+    const nextOf = (kind: string) =>
+      withTimeout(
+        new Promise<Frame>((res) => {
+          const queued = queues.get(kind)?.shift();
+          if (queued) res(queued);
+          else waiting.set(kind, res);
+        }),
+        `a ${kind} frame for ${claim} in ${room}`,
+      );
     socket.on("open", () => {
       socket.send(JSON.stringify({ kind: "room-hello", room, build: BUILD, claim }));
       resolve({
         socket,
         write: (write) => socket.send(JSON.stringify({ kind: "room-write", room, write })),
-        next: () =>
-          withTimeout(
-            new Promise<Frame>((res) => {
-              const queued = queue.shift();
-              if (queued) res(queued);
-              else waiting = res;
-            }),
-            `a frame for ${claim} in ${room}`,
-          ),
+        send: (frame) => socket.send(JSON.stringify(frame)),
+        next: () => nextOf("room"),
+        nextOf,
+        pending: (kind) => queues.get(kind)?.length ?? 0,
+        seen,
       });
     });
   });
@@ -328,23 +357,50 @@ async function main(): Promise<void> {
   const emptyForHost = await hostRoom.next();
   check("an unhosted room is empty rather than absent", emptyForHost.doc === null, emptyForHost);
 
+  /* S10-5: the rest of the hello's answer (#1361a), asserted rather than skipped -- the transcript and the
+     presence hints, each for this room, in the order the server sends them. */
+  const hostChat = await hostRoom.nextOf("chat");
+  check(
+    "the hello also carries the room's chat transcript (#1361a)",
+    hostChat.room === "LOBBY" && Array.isArray(hostChat.messages) && (hostChat.messages as unknown[]).length === 0,
+    hostChat,
+  );
+  const hostPresence = await hostRoom.nextOf("presence");
+  check(
+    "and its presence hints (#1361a)",
+    hostPresence.room === "LOBBY" && Array.isArray(hostPresence.entries) && typeof hostPresence.now === "number",
+    hostPresence,
+  );
+
   const hosted = await hostRoom.next();
   check(
     "a write sent before the hello is answered still lands (#1216)",
     roster(hosted).length === 1,
     hosted,
   );
+  check(
+    "the hello is answered room, chat, presence -- then the write's broadcast",
+    JSON.stringify(hostRoom.seen.slice(0, 4)) === JSON.stringify(["room", "chat", "presence", "room"]),
+    hostRoom.seen,
+  );
 
   const joinRoom = await connectRoom(BOB, "LOBBY");
   const joinerFirst = await joinRoom.next();
   check("a joiner's first frame carries the room that already exists", roster(joinerFirst).length === 1);
+  await joinRoom.nextOf("chat");
+  await joinRoom.nextOf("presence");
 
   // A write to a room nobody hosted is dropped: a room whose host was whoever wrote first would hand out
-  // the Start button by accident.
+  // the Start button by accident. The server answers with the document it still does not have.
   const orphan = await connectRoom(CAROL, "NOBODY");
   orphan.write({ op: "upsert-player", player: { id: CAROL, nickname: "Carol", isReady: false } });
-  await orphan.next();
+  check("an orphan's hello finds no room", (await orphan.next()).doc === null);
   check("a write to an unhosted room does not invent one", (await orphan.next()).doc === null);
+  check(
+    "and is dropped, not refused: hello (room, chat, presence), then the unchanged document",
+    JSON.stringify(orphan.seen) === JSON.stringify(["room", "chat", "presence", "room"]),
+    orphan.seen,
+  );
   orphan.socket.close();
 
   joinRoom.write({ op: "upsert-player", player: { id: BOB, nickname: "Bob", isReady: false } });
@@ -364,6 +420,26 @@ async function main(): Promise<void> {
     renamed,
   );
   await joinRoom.next();
+
+  /* S10-5: THE CHAT FRAME THE OLD HARNESS TRIPPED OVER, EXERCISED ON PURPOSE. A line sent by the joiner is
+     stamped with the connection's identity and the whole transcript is broadcast to everyone in the room. */
+  const line: ChatSendRequest = { kind: "chat-send", room: "LOBBY", text: "  hello table  ", displayName: "Bob" };
+  joinRoom.send(line);
+  const hostHeard = (await hostRoom.nextOf("chat")) as unknown as ChatFrame;
+  const joinerHeard = (await joinRoom.nextOf("chat")) as unknown as ChatFrame;
+  check(
+    "a chat line reaches the whole room, stamped with its sender (#1361a)",
+    hostHeard.messages.length === 1 &&
+      hostHeard.messages[0].author === BOB &&
+      hostHeard.messages[0].text === "hello table" &&
+      JSON.stringify(joinerHeard.messages) === JSON.stringify(hostHeard.messages),
+    hostHeard,
+  );
+  check(
+    "and no refusal was left unread on either roster socket",
+    hostRoom.pending("error") === 0 && joinRoom.pending("error") === 0 && hostRoom.pending("room") === 0 && joinRoom.pending("room") === 0,
+    { host: hostRoom.seen, joiner: joinRoom.seen },
+  );
 
   hostRoom.socket.close();
   joinRoom.socket.close();

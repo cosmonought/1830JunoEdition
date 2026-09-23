@@ -547,17 +547,18 @@ describe("§5-§7 Stage-8 corpus reconciliation, measured from HEAD under engine
      goldens, the server logs and the prefix fixture all replay normally.
 
      WHAT WOULD FIX IT, when someone owns it: stamp an id at export time, or fall back to the index as the
-     identity when a log carries none. Both are export/replay-harness changes and neither is a rule. */
-  it("S10-23 (filed, not fixed): a log that applies nothing carries no entry ids, and no log with ids is affected", () => {
-    const empty = rows.filter((row) => row.stored > 0 && row.applied === 0);
-    for (const row of empty) {
-      // One identity for the whole file, and at least one revert to weaponise it.
-      expect({ name: row.name, distinctIds: row.distinctIds, hasRevert: row.reverts > 0 }).toEqual({
-        name: row.name,
-        distinctIds: 1,
-        hasRevert: true,
-      });
-    }
+     identity when a log carries none. Both are export/replay-harness changes and neither is a rule.
+
+     STAGE 10.4: FIXED in `entriesFromExport` (a per-row identity for an id-less row, `legacyExportId`). The
+     characterization that stood here ("the empty log has one identity and a revert") could no longer find its
+     subject, so it would have passed checking nothing; it is replaced by the invariant the fix establishes. The
+     owner of S10-23's evidence -- JUNO-Y8V's counts, the id algorithm, #1026's duplicate-index case -- is
+     `stage104HarnessHardening.test.ts`. */
+  it("S10-23 (resolved in 10.4): no corpus log collapses to nothing, and every one is distinctly identified", () => {
+    // Every stored row reaches `effectiveActions` with an identity of its own ...
+    expect(rows.filter((row) => row.distinctIds !== row.stored).map((row) => row.name)).toEqual([]);
+    // ... so no log with a row to replay replays to its seed.
+    expect(rows.filter((row) => row.stored > 0 && row.applied === 0).map((row) => row.name)).toEqual([]);
     // And the converse: every log whose rows ARE distinctly identified applied something.
     const identified = rows.filter((row) => row.stored > 1 && row.distinctIds > 1);
     expect(identified.filter((row) => row.applied === 0).map((row) => row.name)).toEqual([]);

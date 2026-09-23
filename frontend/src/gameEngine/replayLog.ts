@@ -36,9 +36,10 @@
 //
 // WHAT THIS DOES NOT YET DO, stated plainly rather than discovered later:
 //
-//   SIX `isSandboxOnlyMsg` MESSAGES ARE STILL SHELL-OWNED (#1189): the two negotiation pairs and
-//   `CloseRoom`. None of them appears in `JUNO-3XD`, so this replay does not exercise them -- which is not
-//   the same as their being done.
+//   (S10-13, Stage 10.4: the note that stood here -- "six `isSandboxOnlyMsg` messages are still shell-owned",
+//   #1189 -- is obsolete. All ten came off the shell in #1230-#1248: every one is a reducer arm, applied here
+//   through the same `applySandboxAction` call as any gameplay message, so this file special-cases none of
+//   them.)
 //
 //   THE AUCTION'S CASH IS NOW APPLIED (#1192), AND IT WAS THE PHASE 2 LOCK. The note that used to sit here
 //   said player cash was untrustworthy, and that this did not matter for the first question because route
@@ -129,7 +130,11 @@ export interface ReplayEntry {
  *  format is decided. */
 export interface ExportedEntry {
   index: number;
-  id: string;
+  /** S10-23 (Stage 10.4): OPTIONAL HERE, BECAUSE REAL FILES OMIT IT. The current exporter (`logExport.ts`,
+   *  Ctrl+Shift+L) and the server's store stamp every entry's id; hand dumps made with the retired Firestore
+   *  helper `dump-sandbox-log.mjs` (JUNO-Y8V) do not. `entriesFromExport` supplies one -- see there. After
+   *  normalisation `ReplayEntry.id` is required, as #1026 requires it. */
+  id?: string;
   actor: string;
   at?: number;
   derived?: boolean;
@@ -139,14 +144,77 @@ export interface ExportedEntry {
   msg?: unknown;
 }
 
+/** ==================================================================
+ *   S10-23 (Stage 10.4): AN EXPORT ROW WITHOUT AN ID GETS ONE OF ITS OWN -- NEVER ITS INDEX ALONE
+ *  ==================================================================
+ *  A hand dump whose rows carry no `id` (JUNO-Y8V: 668 rows, 17 `RevertTo`) used to reach `effectiveActions`
+ *  with ONE identity for the whole file, `undefined`; the first revert it read put that identity on the kill
+ *  list and every row died. `effectiveActions` is right to kill by identity (#1026) and is not touched.
+ *  The repair is here, at normalisation: a row with no usable id gets
+ *
+ *      `legacy-export:<index>:<row>`  -- `row` is the row's position in the export, zero-padded,
+ *
+ *  so every row is distinct EVEN WHEN TWO SHARE AN INDEX (#1026: old logs can hold two different entries at
+ *  one index, and an identity built from the index alone would reunite them on the kill list). The same file
+ *  always yields the same ids. Padding keeps `replayLog`'s `(index, id)` sort in export order for two id-less
+ *  rows at one index. A non-empty real id is kept verbatim; only a missing or empty one is replaced.
+ *  `RevertTo { index }` still defines its RANGE by index -- only the identity on the kill list comes from here.
+ *
+ *  STAGE 10.4a: DISTINCT FROM EVERY REAL ID TOO. Every real id in the input is reserved BEFORE any is generated,
+ *  so in a mixed file a generated candidate that a real row already holds (however unlikely) is passed over:
+ *  the id-less row takes `<candidate>~1`, `~2`, ... -- the first free one, in source order, reserved at once.
+ *  A real id is never altered to make room. And two rows carrying the SAME real id are refused outright
+ *  (`DuplicateExportIdError`): that is two entries claiming one identity, which the kill list would collapse
+ *  into one, and no log this project writes produces it (the corpus holds none). */
+export const LEGACY_EXPORT_ID_PREFIX = "legacy-export:";
+
+export function legacyExportId(index: number, row: number, rows: number): string {
+  const width = Math.max(6, String(Math.max(0, rows - 1)).length);
+  return `${LEGACY_EXPORT_ID_PREFIX}${index}:${String(row).padStart(width, "0")}`;
+}
+
+/** Stage 10.4a: an export in which two rows carry one non-empty real id. Refused rather than normalised --
+ *  `effectiveActions` would treat the two as one entry (#1026). */
+export class DuplicateExportIdError extends Error {
+  readonly id: string;
+  readonly rows: readonly [number, number];
+  constructor(id: string, first: number, second: number) {
+    super(`Export rows ${first} and ${second} carry the same id "${id}"; an entry's identity must be unique (#1026).`);
+    this.name = "DuplicateExportIdError";
+    this.id = id;
+    this.rows = [first, second];
+  }
+}
+
+const realIdOf = (entry: ExportedEntry): string | null =>
+  typeof entry.id === "string" && entry.id.length > 0 ? entry.id : null;
+
 /** Normalise either shape into what the replay reads.
  *
  *  RE-SERIALIZES ONLY WHEN IT MUST, and says so above. An entry that already carries `payload` is passed
- *  through untouched, so a log read from the room keeps its exact bytes. */
+ *  through untouched, so a log read from the room keeps its exact bytes. S10-23: and an entry that carries no
+ *  id is given `legacyExportId` (above); one that carries a real id keeps it. */
 export function entriesFromExport(entries: readonly ExportedEntry[]): ReplayEntry[] {
-  return entries.map((entry) => ({
+  // 10.4a: every real id is known -- and proven unique -- before one is generated.
+  const realRow = new Map<string, number>();
+  entries.forEach((entry, row) => {
+    const real = realIdOf(entry);
+    if (real === null) return;
+    const first = realRow.get(real);
+    if (first !== undefined) throw new DuplicateExportIdError(real, first, row);
+    realRow.set(real, row);
+  });
+  const taken = new Set<string>(Array.from(realRow.keys()));
+  const allocate = (index: number, row: number): string => {
+    const candidate = legacyExportId(index, row, entries.length);
+    let id = candidate;
+    for (let suffix = 1; taken.has(id); suffix += 1) id = `${candidate}~${suffix}`;
+    taken.add(id);
+    return id;
+  };
+  return entries.map((entry, row) => ({
     index: entry.index,
-    id: entry.id,
+    id: realIdOf(entry) ?? allocate(entry.index, row),
     actor: entry.actor,
     at: entry.at,
     derived: entry.derived,
@@ -322,10 +390,11 @@ export type ReplayObserver = (event: {
  *
  *  WHAT IT DOES NOT DO IS DECIDE WHEN TO EMIT. A settle point is the end of a burst -- a player action plus
  *  the derived consequences that follow it -- and the server cannot know a burst has ended until it
- *  GENERATES those consequences itself. That logic (`autoSkipReason` and the forced withhold) is still in
- *  the shell, reading route reachability and station legality memos, and moving it is its own piece of work.
- *  Until then this class reports what it applied and lets the transport decide what to send. Inventing a
- *  settle rule that cannot yet be implemented correctly would be worse than not having one. */
+ *  GENERATES those consequences itself. (S10-13, Stage 10.4: that logic -- `autoSkipReason`, the forced
+ *  withhold -- is no longer in the shell. It lives in `gameEngine/derivedActions.ts` (`nextDerivedAction`),
+ *  and this class runs it: `settleOwed` below applies everything the board owes until it owes nothing, and
+ *  `RoomSession.settleOwed` calls it for the room, #1202 / #1203 / #1275.) `apply` itself still reports only
+ *  what it applied; `submit` and `settleOwed` are where a burst is settled. */
 export class RoomEngine {
   private state: GameStateResponse;
   private grid: MapGridResponse;
@@ -374,7 +443,8 @@ export class RoomEngine {
      THAT WAS THE WHOLE POINT OF THE HARNESS. A shim here would have made the replay work and left the
      reducer exactly as unable to drive a game as it was -- which is the failure the migration is trying to
      avoid, one layer earlier. Anything this file has to special-case is a gap in the reducer, and belongs
-     there instead. Seven of the ten `isSandboxOnlyMsg` messages are still outstanding. */
+     there instead. (Stage 10.4a: all ten `isSandboxOnlyMsg` messages are reducer arms now, #1230-#1248; none
+     is outstanding.) */
 
   /* SNAPSHOTTED TOGETHER, per #766's "a snapshot, not a reorder": both halves of the legality predicate
      must judge the same instant. `App.tsx` learned this the hard way -- it gave the GRID a ref and left
@@ -770,9 +840,12 @@ export class LegacyLogAdapters {
           payload: JSON.stringify({ DiscardTrain: { game_id: 0, protocol_id: required.companyId, model_type: model } }),
           derived: true,
         };
-        const before = engine.snapshot.state;
+        /* S10-22 (Stage 10.4): REFUSED MEANS THE ATOMS DID NOT MOVE, BY CONTENT -- #1685's criterion, not
+           identity. On a charted board the chart step hands back a fresh state object for a refused discard too,
+           so `state === before` said "applied" to a refusal and the loop retried the standing obligation forever. */
+        const before: AuthoritativeAtoms = { state: engine.snapshot.state, grid: engine.snapshot.grid };
         engine.apply(synthetic, observe);
-        if (engine.snapshot.state === before) break; // refused: do not spin
+        if (atomsUnchanged(before, { state: engine.snapshot.state, grid: engine.snapshot.grid })) break; // refused: do not spin
         legacyDiscards.push({ afterIndex: entry.index, companyId: required.companyId, model });
       }
     }

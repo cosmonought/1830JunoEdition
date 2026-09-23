@@ -35,6 +35,7 @@ import type { MapGridResponse } from "../components/hexContractTypes";
 import { tileEraFor } from "./gameConstants";
 import { resolveVariants } from "./gameVariants";
 import { withRules } from "./boardSelection";
+import type { LayNetwork } from "./layConnectivity";
 
 /** What a caller supplies. See the header: exactly the facts that differ between the shell and the engine. */
 export interface SandboxActionContextInput {
@@ -59,11 +60,12 @@ export function layGeometryFor(
   providers: Pick<ReplayProviders, "layRefused">,
   gridBefore: MapGridResponse,
   state: GameStateResponse | null,
-): (q: number, r: number, tileId: number, orientation: number) => boolean {
+): (q: number, r: number, tileId: number, orientation: number, network?: LayNetwork) => boolean {
   const era = tileEraFor(state); // #1279/#1312: the board and the era the state itself names
   const rules = resolveVariants(state?.variants);
-  return (q, r, tileId, orientation) =>
-    withRules(rules, () => providers.layRefused(gridBefore, q, r, tileId, orientation, era));
+  // #1692: the network, when the authority hands one, passes straight through to rule 6 of the same filter.
+  return (q, r, tileId, orientation, network) =>
+    withRules(rules, () => providers.layRefused(gridBefore, q, r, tileId, orientation, era, network));
 }
 
 /** #1683: the injections the `LayTile` authority is asked with at the GRID step, before the reducer runs. */
@@ -76,6 +78,8 @@ export function layAuthorityContext(
     mapGrid: gridBefore,
     homeHexToAxial: providers.chartInjections(state).homeHexToAxial,
     layRefused: layGeometryFor(providers, gridBefore, state),
+    // #1692: `mapGrid` IS the pre-lay grid here; stated anyway so the two builders read alike.
+    layGrid: gridBefore,
   };
 }
 
@@ -105,5 +109,8 @@ export function sandboxActionContext(
     parCellFor: providers.parCellFor,
     parValue: parValueFromMessage(msg),
     layRefused: layGeometryFor(providers, gridBefore, state),
+    /* #1692 (Stage 10.6): the grid the LAY is judged against. `mapGrid` above includes this entry's lay (#1380);
+       the `LayTile` authority's power claims and connectivity must see the board as it stood before it. */
+    layGrid: gridBefore,
   };
 }

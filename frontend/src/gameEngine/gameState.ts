@@ -749,6 +749,20 @@ export interface GameStateResponse {
      later reader to puzzle over. A game with no D&H power ever exercised never writes this field. */
   dh_station_pending?: number | null;
   /* ==================================================================
+      DESIGN NOTE 1697 (Stage 10.6, S6-6): THE ORDINARY LAY IS TAKEN, AND THE C&SL'S BONUS STILL STANDS
+     ==================================================================
+     The C&SL's lay is IN ADDITION to the corporation's ordinary lay and the rule does not say which comes first --
+     and order can matter, since the first tile may be what connects the second. The cursor alone cannot hold
+     "one of two placements made": the ordinary lay used to END the Track step, so a president who laid first lost
+     the bonus. This is the one extra fact that lets either order stand: the company id that has made its ORDINARY
+     lay this turn while its C&SL bonus lay is still live, the step held on Track for it.
+     WRITTEN only by the `LayTile` arm, only on a PINNED board (#1696), only when the lay was ordinary and the
+     corporation still holds a live bonus afterwards. READ by the cursor (a later bonus lay then ends the step) and
+     by the `LayTile` authority (a second ORDINARY lay is refused). CLEARED where every turn-scoped fact is cleared
+     (`settleOperatingCursor`'s turn-change and leaving-the-Operating-Round branches, beside `dh_station_pending`).
+     A game in which no C&SL-owning corporation lays first never writes it. */
+  ordinary_lay_taken?: number | null;
+  /* ==================================================================
       DESIGN NOTE 1323: THE LEVEL PLAYING FIELD'S GAME-WIDE COUNTERS
      ==================================================================
      Three facts that belong to the game rather than to any corporation, all optional per #232 -- absent is

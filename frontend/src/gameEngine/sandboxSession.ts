@@ -234,6 +234,9 @@ import {
 import { tileCitySlotCounts } from "../components/TileGraphics";
 // Design note #1683 (Stage 10.1): the lay's legality, judged once in the gate block; the arm charges its fee.
 import { layTerrainFee, layTileLegalityRefusal } from "./layTileAuthority";
+import type { LayNetwork } from "./layConnectivity";
+import { cslBonusEntitlement } from "./privateLayClaim";
+import { stage106LayAuthorityInForce } from "./rulesVersion";
 import { DIESEL_TIER, dieselExchangeCostFor, dieselExchangeRefusal } from "./dieselExchange";
 import { numberedPrivate } from "./privateOrdinal";
 
@@ -842,8 +845,12 @@ export interface SandboxActionContext {
    *  the legality engine lives in `components/` and `utils/` may not import it.
    *
    *  Absent means "no opinion", which is the honest answer for a caller with no board rules to hand and the
-   *  reason this cannot make an existing test stricter by accident. */
-  layRefused?: (q: number, r: number, tileId: number, orientation: number) => boolean;
+   *  reason this cannot make an existing test stricter by accident.
+   *  #1692 (Stage 10.6, S6-5): handed a `network`, the same predicate also asks rule 6 -- the join. */
+  layRefused?: (q: number, r: number, tileId: number, orientation: number, network?: LayNetwork) => boolean;
+  /** #1692: the grid a `LayTile` is judged against -- BEFORE it lands. `mapGrid` above includes the lay (#1380);
+   *  `sandboxActionContext` supplies both. Absent: the `LayTile` authority judges on `mapGrid`. */
+  layGrid?: MapGridResponse;
   /** Share price injected for the same reason (#272). Omitted falls back to the flat nominal.
    *  See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #273 */
   sharePrice?: number;
@@ -3916,8 +3923,15 @@ function settleOperatingCursor(
     /* Design note #1660 (S9-12): the D&H's window is exactly as turn-scoped as the sub-phase it rides
        beside, and closes at the same boundary -- leaving the Operating Round entirely ends any turn that was
        in progress. */
-    if (settled.operating_sub_phase === undefined && settled.dh_station_pending === undefined) return settled;
-    return { ...settled, operating_sub_phase: undefined, dh_station_pending: undefined };
+    if (
+      settled.operating_sub_phase === undefined &&
+      settled.dh_station_pending === undefined &&
+      settled.ordinary_lay_taken === undefined
+    ) {
+      return settled;
+    }
+    // #1697: the C&SL hold is as turn-scoped as the D&H window; absent again rather than null (#232).
+    return { ...settled, operating_sub_phase: undefined, dh_station_pending: undefined, ordinary_lay_taken: undefined };
   }
 
   const turnChanged =
@@ -4051,6 +4065,8 @@ function settleOperatingCursor(
          cleared here rather than left to expire on its own. A corporation that laid F16 and let its turn end
          without placing the token needs an ordinary, connected station there from now on. */
       dh_station_pending: undefined,
+      // #1697: and the ordinary-lay-taken hold, the same turn's fact.
+      ordinary_lay_taken: undefined,
     };
   }
 
@@ -4130,7 +4146,14 @@ function stepAfterMessage(
      lay being taken away. `layEndsTrackStep` reads a flag the shell sets; an unflagged lay is ordinary, so
      every message written before #776 behaves exactly as it did. */
   if ("LayTile" in msg) {
-    return layEndsTrackStep(msg) ? settleSubPhase(state, "Tokens") : settleSubPhase(state, current);
+    /* Design note #1697 (Stage 10.6, S6-6): EITHER ORDER. On a pinned board the step ends once BOTH placements a
+       C&SL-owning corporation is entitled to have been made, or the one it still had: an ordinary lay that left a
+       live bonus has written `ordinary_lay_taken` (the arm) and stays on Track; the bonus lay that follows it ends
+       the step. A legacy board keeps #776's cursor exactly. */
+    const laidBy = msg.LayTile.protocol_id;
+    const heldForBonus = stage106LayAuthorityInForce(state) && state.ordinary_lay_taken === laidBy;
+    if (layEndsTrackStep(msg)) return heldForBonus ? settleSubPhase(state, current) : settleSubPhase(state, "Tokens");
+    return heldForBonus ? settleSubPhase(state, "Tokens") : settleSubPhase(state, current);
   }
   // One station placement per turn likewise.
   if ("PlaceStationToken" in msg) return settleSubPhase(state, "Routes");
@@ -5556,8 +5579,20 @@ function applyOneAction(
        build. A refused transfer refuses the WHOLE lay -- `state`, not `merged` -- which is #891's own rule. */
     /* Design note #1660 (S9-12): the window opens on this same return, win or lose the fee -- a mountain
        lay with a $0 terrain cost is still a lay. */
-    const withDhWindow = (s: GameStateResponse): GameStateResponse =>
-      dhLay ? { ...s, dh_station_pending: protocol_id } : s;
+    /* Design note #1697 (Stage 10.6, S6-6): a lay that uses the corporation's ORDINARY placement -- a plain lay, the
+       D&H's lay (#548: "instead of" the normal lay) or the JK's (#1323: "counts as" the normal lay) -- by a
+       corporation that still holds a live C&SL bonus holds the step on Track for that bonus, pinned boards only
+       (#1696). What those two powers ARE is unchanged: each still uses up the ordinary placement, which is exactly
+       why the bonus, being "in addition", may still follow. Judged on the grid INCLUDING this lay (`ctx.mapGrid`,
+       #1380): an ordinary lay ON B20 builds the hex and so leaves no bonus to wait for. */
+    const holdsForBonus =
+      stage106LayAuthorityInForce(state) &&
+      layEndsTrackStep(msg) &&
+      cslBonusEntitlement(state, protocol_id, ctx?.mapGrid);
+    const withDhWindow = (s: GameStateResponse): GameStateResponse => {
+      const windowed = dhLay ? { ...s, dh_station_pending: protocol_id } : s;
+      return holdsForBonus ? { ...windowed, ordinary_lay_taken: protocol_id } : windowed;
+    };
     if (fee <= 0) return withDhWindow(merged);
     const paid = transfer(merged, { corporation: protocol_id }, BANK, fee);
     return paid.ok ? withDhWindow(paid.state) : state;

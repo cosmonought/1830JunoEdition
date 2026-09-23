@@ -58,6 +58,7 @@ import { filterSandboxPlacements } from "../components/sandboxTileLegality";
 import { STATIC_BOARD_HEXES } from "../components/hexBoardData";
 import type { MapGridResponse } from "../components/hexContractTypes";
 import type { TileColorTier } from "../components/hexTileCatalog";
+import type { LayNetwork } from "./layConnectivity";
 
 /** The providers a room replays with.
  *
@@ -78,8 +79,22 @@ export function boardLayRefused(
   tileId: number,
   orientation: number,
   era: TileColorTier,
+  /* Design note #1692 (Stage 10.6, S6-5): AND, WHEN HANDED ONE, THE NETWORK -- passed through as rule 6's
+     `networkHexes` / `networkPorts`, together (#483). This is the picker's own join (`orientationJoinsNetwork`),
+     so the shell, both grids, the reducer and ingress judge connectivity with one function. Absent: geometry
+     only, exactly as before. */
+  network?: LayNetwork,
 ): boolean {
-  return filterSandboxPlacements([{ tile_id: tileId, orientation }], { mapGrid: grid, q, r, era }).length === 0;
+  return (
+    filterSandboxPlacements([{ tile_id: tileId, orientation }], {
+      mapGrid: grid,
+      q,
+      r,
+      era,
+      networkHexes: network?.hexes,
+      networkPorts: network?.ports,
+    }).length === 0
+  );
 }
 
 export function sandboxReplayProviders(): ReplayProviders {

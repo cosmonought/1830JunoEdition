@@ -252,7 +252,19 @@ add a `JUNO-CV4` replay case pricing the idx-145 route with H12 counted per the 
 clause as an owner decision or drop it.
 
 **S6-5. Server-side tile legality omits connectivity (`networkHexes` / `networkPorts` not supplied to `layRefused`).**
-Status `OPEN`. Rulebook §6.2.1 (1) / §6.2.2 (1), and the four exceptions (CS B20, DH 57 on F16, NYC 57 on E19,
+Status `RESOLVED` — **Stage 10.6** (#1692, #1696). `gameEngine/layConnectivity.ts` (`layReachFor` / `layNetworkFor`) is the
+shell's Lay Track reach assembly moved out of `App.tsx` (station tokens + herald, `cityBlockerFor`, the Coal River bar);
+the network reaches the authority through the SAME injected geometry as rule 6 of `filterSandboxPlacements`
+(`layRefused(q, r, tile, facing, network?)`, `orientationJoinsNetwork`), so the picker, both grid steps, the reducer
+(on the pre-lay `layGrid`) and ingress ask one walk and one join. Surviving exceptions are the powers, validated
+(#1693): the C&SL's bonus on B20 and the D&H's lay on F16, each only while owned by the acting corporation and live;
+the NYC E19 / Erie E11 exceptions are satisfied by the home token (a network root since 8.2) and need no code; the
+JK's lay is the ordinary lay and is judged for connectivity (the shell never waived it). **Pinned boards only**
+(#1696, `stage106LayAuthorityInForce`, the #1684 precedent): legacy unpinned development logs keep their reading.
+Unconditional probe over the 18 files: 148 stored applied lays — 132 connected, **14 disconnected**, 2 power
+exceptions, 0 without a network. Tests: `stage106LayTileClosure.test.ts`.
+(**Stage-10.6 unconditional-probe ledger:** imposed on every board, the three new rules would change **21 file-occurrences = 15 distinct stored lays in 4 legacy rooms / 7 files**, all unpinned: S6-7 — CV4 idx 125 `smtrx2f0r-126` (B&O #59@3 H18, C&A player-owned; golden + server + export), Z6C 91 `smtvxij5h-93` (#8@3 D18, M&H player-owned) and 163 `smtvxij5h-165` (B&O #626@4 H18, C&A player-owned; server + 494 fixture), FCJ 330 `smu0nm4pu-455` (B&M #1@2 B20, CSL player-owned, also disconnected); S6-5 — FCJ 99 `smu0nm4pu-224` (B&O #57@1 K13), 115 `-240` (B&O #8@5 L12), 120 `-245` (PRR #57@0 H16), 579 `-704` (B&M #8@2 E3), 1052 `-1177` (N&W #8@1 D20); Z6C 239 `smtvxij5h-241` (C&O #8@3 L10) and 269 `-271` (B&O `jk-tile` #9@0 L6) (server + fixture); Y8V 141, 356, 423, 565 (ERIE #8@4 D12, B&O #7@5 F14, ERIE #58@1 E7, ERIE #7@0 E3); S6-6 — none. Recorded as evidence of the historical gaps; **not repinned**, and the #1696 seam keeps every one on its historical reading.)
+*(Original entry, kept:)* Status `OPEN`. Rulebook §6.2.1 (1) / §6.2.2 (1), and the four exceptions (CS B20, DH 57 on F16, NYC 57 on E19,
 Erie 59 on E11). Notes: audit M4; `gameEngine/replayProviders.ts` (`layRefused` → `filterSandboxPlacements`
 in `components/sandboxTileLegality.ts`, `orientationJoinsNetwork`), `trackReach.ts`. Replay: refusal-added —
 sweep the corpus; any historical disconnected lay would become a divergence — bump.
@@ -262,19 +274,42 @@ four printed exceptions (vacuously honoured today because nothing checks connect
 under Stage 6 because it shares `trackReach`; move if the owner prefers.)
 
 **S6-6. One lay / one upgrade per turn and `bonus_lay` are cursor-only; the flag is trusted.**
-Status `OPEN`. Rulebook §6.2 (one lay), CS power (p.11). Notes: audit M3 (second half); `bonusLay.ts`,
+Status `RESOLVED` — **Stage 10.6** (#1693, #1697, #1696). `privateLayClaimRefusal` validates the claim at one boundary
+(the `LayTile` composition, asked by reducer, both grids and ingress): `ability_key` ∈ {`csl-tile`, `dh-tile`,
+`jk-tile`}; `bonus_lay: true` only with `csl-tile` (or no key — a pre-#1204 log) and `csl-tile` only with the flag; a
+C&SL / D&H claim needs the private open and owned by THIS corporation, the lay on its hex, the power live on the pre-lay
+grid. A forged flag no longer holds Track. **Either order** (#1697): `ordinary_lay_taken` (turn-scoped, cleared with
+`dh_station_pending`) lets an ordinary lay (also the D&H's and the JK's, which use the ordinary placement) hold Track
+while a live C&SL bonus remains; a second ordinary lay is refused; the bonus then ends the step; bonus-first works as
+before. At most one ordinary + one bonus; skipping Track strands nothing (the bonus is then mistimed). **Pinned boards
+only** (#1696). Corpus: the one stored `bonus_lay` (Y8V 86, no key, B&O without the C&SL) is refused on both sides.
+*(Original entry, kept:)* Status `OPEN`. Rulebook §6.2 (one lay), CS power (p.11). Notes: audit M3 (second half); `bonusLay.ts`,
 `stepAfterMessage`, `LayTile.bonus_lay`. Replay: refusal-added — bump after a sweep. Detail: in
 `applySandboxActionCore` refuse a second `LayTile` in one turn unless the corporation owns the CS, the hex is
 B20, and the CS power has not lapsed — derive it, never trust the flag; keep the flag for narration.
 
 **S6-7. No tile may be laid on a hex holding a player-owned private (SV G15, CS B20, DH F16, MH D18, CA H18, BO I13/I15).**
-Status `OPEN` (missing everywhere; `privateReservations.ts` is a badge). Rulebook §6.2.1 (4). Notes: audit M5.
+Status `RESOLVED` — **Stage 10.6** (#1694, #1694a, #1695, #1696). One variant-aware location table in
+`privateReservations.ts` (SV G15, CSL B20, DH F16, MH D18, CA H18, BO I13 + I15; **JK K9 + K11 under the Level Playing
+Field only**, separate from the JK's Coal River power). `privateHexStatuses` — open AND player-owned (`owner`, no
+`owner_protocol_id`); corporation-owned, closed and unsold release — feeds the authority (`privateHexRefusal`), the
+board marks (`privateHexMarkers`: a framed-initials mark for a barred hex, the #714 star for a live power, star inside
+the frame for a player-owned C&SL) and the hover / click sentence (`describePrivateHexStatus`). **D&H exception
+(#1694a, owner ruling on the revised 2018 text):** F16 is NOT barred — any railroad may lay there under the ordinary
+rules (connectivity included), which forfeits the D&H's powers (`dhPowerState`); its mark stays the star, never the
+frame, and the hover says so. #714 corrected precisely (blanket "never a restriction" wrong; F16 exception right).
+**Pinned boards only** (#1696): the status is empty on a legacy board, so the marks follow the replay.
+*(Original entry, kept:)* Status `OPEN` (missing everywhere; `privateReservations.ts` is a badge). Rulebook §6.2.1 (4). Notes: audit M5.
 Replay: refusal-added — sweep; bump. Detail: add to `filterSandboxPlacements` (and therefore to both atoms):
 refuse when the hex is a private's hex and that private has a player `owner` (closed or corporation-owned
 privates release it). LPF/18XX+ hex sets differ (JK / Coalfields) — read the private catalog in effect.
 
 **S6-8. A bare `LayTile` on a gray or red hex — no explicit refusal was confirmed.**
-Status `OPEN` (UNCLEAR in the audit). Rulebook §6.2. Notes: `grayRedTrack.test.ts` covers track *drawing*;
+Status `RESOLVED` by **Stage 9.2's immutable-hex authority** (`immutableHexRefusal`, rule 0 of
+`filterSandboxPlacements`, #1620) — proved directly in Stage 10.6: crafted lays on a gray hex (A9) and a red off-board
+hex (A11), every yellow tile × facing, on pinned AND legacy boards, are refused with no grid, state, cursor, fee or
+power change (`stage106LayTileClosure.test.ts`). No production change; not part of the #1696 legacy seam.
+*(Original entry, kept:)* Status `OPEN` (UNCLEAR in the audit). Rulebook §6.2. Notes: `grayRedTrack.test.ts` covers track *drawing*;
 `filterSandboxPlacements` may refuse through the missing `archetype` path. Detail: write the direct test; add the
 explicit refusal if it is absent.
 
@@ -614,7 +649,12 @@ untouched. No corpus entry is affected. Replay: refusal-added; bump stays 7.5.
 *(Original finding, kept: probe-proved — `percentage: 15` left a 5 % holding.)*
 
 **S7-17. Refusal-by-identity is dead on every board that carries `market_positions`.**
-Status `OPEN` (cross-reference S10-1) — design pass. `applySandboxActionAfterAuction` allocates `settled` before the
+Status `RESOLVED / SUPERSEDED` — Stage 10.2 (`actionOutcome`, content-aware refusal transport, #1685), 10.3b
+(chart/core transaction, #1691) and 10.4 (discard adapter on `atomsUnchanged`). Stage-10.6 audit: no authority,
+replay or refusal decision compares boards by identity; the remaining `before`/`after` equalities are two phase-TIER
+value comparisons in `sandboxSession.ts` and one cosmetic identity test (`App.tsx`'s discard flourish). Pinned in
+`stage106LayTileClosure.test.ts` (authority modules carry zero such comparisons; the three classified ones counted).
+*(Original status, kept:)* `OPEN` (cross-reference S10-1) — design pass. `applySandboxActionAfterAuction` allocates `settled` before the
 core runs, so every reducer refusal on a pinned board returns a new object and `actionWasRefused` / `after !== before`
 cannot see it. Stage-7 tests assert refusals by `stateDigest` equality, never by identity. No gameplay change.
 **Batch 7.2 note:** its two new suites do exactly that (`stockTransactionAuthority.test.ts`,
@@ -2988,7 +3028,8 @@ files; `.git/worktrees/prefix` is a stale scratch worktree (`git worktree prune`
 `frontend/testrun.txt` is a stale UTF-16 test-run capture (253 / 4030) proposed for deletion. `OPEN` (owner).
 
 **S10-17. Message-carried facts the reducer could derive** (audit risk 4): `DeclareDividends.revenue_amount`
-(S6-2 — validated against the authority since Batch 6), `LayTile.bonus_lay` (S6-6), `BuyStock.par_value`
+(S6-2 — validated against the authority since Batch 6), `LayTile.bonus_lay` (S6-6 — validated against the board
+since Stage 10.6, #1693), `BuyStock.par_value`
 (S8-9), ~~`PlaceHomeStation` hex (S8-6)~~ *(closed by Slice 8.2: hex and circle judged by `homePlacementRefusal`)*, `RunMultipleRoutes` paths (S6-1 — judged since Batch 6; `trains` is
 checked against the fleet slot, `revenue_seed` / `revenue_turn` remain message-carried by design, #1051 /
 #1183). Cross-reference only.
@@ -3819,6 +3860,7 @@ PMQ — the ruling applies the conditional form to both. Implementation: Slice 8
 | 7 (owed: **8** at Stage-10 closure) | **10.3b** (uncommitted, 2026-09-22) | **Chart/core atomicity (#1691).** `marketTransaction`: the chart step is committed only if the core accepts the action; a declined core (identity or content-unchanged) discards the move, and `sandboxChartStepReport` reads the same transaction. Closes two reproduced leaks the pre-chart list missed — a mismatched `DeclareDividends` amount and an author-less `SellStock` — and makes the Blood Price's atomicity structural. Accepted actions unchanged by construction. `RULES_ENGINE_VERSION` stays **7**; closure bump **7 → 8** owed (row should name the Blood Price and #1691). | **Canonical 18/18, old (scratch build of `f8ff424`) vs new: 4,105 stored / 3,103 applied / 3,131 engine applications, per-entry (state digest, grid hash) — 0 differences; final state, grid and cursor identical. 109 stored chart moves; 0 declined by the core.** No golden, fixture or log touched. |
 | 7 (owed: **8** at Stage-10 closure) | **10.4** (uncommitted, 2026-09-23) | **Tooling only; no rule changed.** S10-5 smoke harness routed by frame kind (protocol unchanged); S10-22 legacy discard adapter's refusal test is `atomsUnchanged`; **S10-23 `entriesFromExport` gives an id-less export row a per-row identity** (`legacyExportId`); S10-13 two stale comments. `RULES_ENGINE_VERSION` stays **7**; closure bump **7 → 8** owed (its row should list S10-23 as development-export compatibility). | **17 files with ids: normalisation byte-identical, final state and grid identical, 3,437 stored / 3,103 applied.** **JUNO-Y8V (expected change): 0 → 628 applied** (668 rows, 17 reverts, 40 dropped), ends OR 13, digest `b4fae877c35604fe`, money conserved. 0 `legacyDiscards` corpus-wide. No golden, fixture, export or log touched or re-pinned. |
 | 7 (owed: **8** at Stage-10 closure) | **10.5** (uncommitted, 2026-09-23) | **S10-9: the logged-message type boundary and the private-offer price wire.** `SandboxLogMsg` = `GameplayExecuteMsg \| SandboxOnlyMsg` types every log-wide boundary; `GameplayExecuteMsg` / `GAMEPLAY_MESSAGE_KEYS` unwidened. New `ProposePrivatePurchase` prices are the canonical string; legacy numbers read and kept verbatim; `vgpAmount.ts` compares by value and refuses malformed spellings (`BuyPrivateCompany` `"1e2"` now refused). `RULES_ENGINE_VERSION` stays **7**; closure bump **7 → 8** owed. | **Canonical 18/18, old (scratch build of `4954d0e`) vs new: 4,105 stored / 3,731 applied / 3,763 engine applications — 0 (state, grid) differences; final state, grid, cursor identical; payload bytes untouched.** 2 stored numeric proposals (FCJ 205 / 273, refused both sides), 0 string. Y8V 628 applied, `b4fae877c35604fe`. No golden, fixture, export or log touched. |
+| 7 (owed: **8** at Stage-10 closure) | **10.6** (uncommitted, 2026-09-23) | **The last `LayTile` authority gaps, on PINNED boards (#1696).** S6-5 connectivity judged by the authority through the shell's own walk and join (#1692); S6-6 the private-power claim validated and the C&SL's bonus in either order with one ordinary lay (#1693, #1697, new turn-scoped `ordinary_lay_taken`); S6-7 player-owned private hexes barred, with the D&H's F16 exception and the JK's K9/K11 under LPF, and the board's marks on the same status (#1694, #1694a, #1695). One compatibility predicate, `stage106LayAuthorityInForce`: legacy unpinned logs keep their reading (#1684 precedent). S6-8 proved by 9.2; S7-17 superseded. `RULES_ENGINE_VERSION` stays **7**; closure bump **7 → 8** owed (its row should name 10.6's three rules and the pinned-only scope). | **Canonical 18/18, old (git archive of `638e2df`) vs new (scratch build of the working tree): 4,105 stored / 3,731 applied / 374 dropped / 3,763 engine applications — 0 (state digest, grid hash) differences, final state, grid and cursor identical; Y8V 628 applied / 40 dropped, OR 13, `b4fae877c35604fe`.** Unconditional probe (seam forced on, scratch only): 148 stored applied lays — 132 connected / 14 disconnected / 2 power exceptions / 0 no network; 21 file-occurrences (15 distinct lays, 4 rooms: CV4, FCJ, Z6C, Y8V) would change — itemised under S6-5; **recorded, not repinned**. No golden, fixture, export or log touched. |
 
 Items above that carry "bump" must add a row here when they land. No golden or replay expectation is ever
 re-pinned silently: the re-pin, its index and its reason go in the batch write-up and in this table.

@@ -41,9 +41,32 @@
 // NO RULE MOVED. Every predicate here is the one that already judged the lay somewhere; this file decides
 // only WHERE it is asked -- once, and before any mutation. `filterSandboxPlacements` stays injected rather
 // than imported: the pure board-geometry module is the shell's (#273), and the reducer's context already
-// carries it as `layRefused`. Connectivity to the corporation's network is still not judged by the authority
-// (S6-5, a recorded Stage-6 item), and a `bonus_lay` / `csl-tile` / `dh-tile` claim is still message-carried
-// (S6-6 / S10-17); neither is this note's to change.
+// carries it as `layRefused`. (Stage 10.6 closes what this paragraph recorded as open: connectivity, S6-5,
+// #1692; the `bonus_lay` / `ability_key` claims, S6-6, #1693; the player-owned private's hex, S6-7, #1694 --
+// see the Stage-10.6 addendum below.)
+//
+// ==================================================================
+//  STAGE 10.6 ADDENDUM (#1692 / #1693 / #1694): THREE MORE QUESTIONS, SAME COMPOSITION, SAME PLACE
+// ==================================================================
+//
+// The order is now:
+//
+//   1. the operating identity            (#1510)
+//   1a. the Lay Track step               (#1684)                              -- on a pinned board
+//   1b. the private-power claim          (#1693, `privateLayClaim.ts`)        -- `bonus_lay` / `ability_key`
+//   1c. the player-owned private's hex   (#1694, `privateReservations.ts`)    -- SV … JK, board and variant aware
+//   2. the board geometry                (#757, injected)
+//   2a. connectivity to the network      (#1692, `layConnectivity.ts`)        -- the SAME injected geometry,
+//                                                                              handed the network (rule 6)
+//   3. station anchoring / capacity      (#1623 / #1625)
+//   4. the JK's half-price lay           (#1323)
+//   5. the terrain fee, affordable       (#891)
+//
+// Every one is asked of the board BEFORE the lay lands: the grid step and ingress hand the pre-lay grid as
+// `mapGrid`; the reducer's context carries the grid INCLUDING the lay as `mapGrid` (#1380, what routes and tokens
+// are judged on) and so also hands `layGrid`, the grid the lay is judged against -- without it a D&H lay would
+// see F16 already built by itself and read its own power as forfeited. Every refusal returns before the arm, the
+// power ledger and the cursor, so the Stage-10.1 invariant (a refused lay changes nothing) covers all three.
 
 import type { GameStateResponse } from "./gameState";
 import type { GameplayExecuteMsg } from "../utils/sessionKey";
@@ -55,6 +78,11 @@ import { JK_TILE_ABILITY_KEY, jkHalfFee, jkTileRefusal } from "./kanawhaLicense"
 import { terrainFeeDue } from "./terrainFee";
 import { STATIC_BOARD_HEXES, terrainBuildFeeAt } from "../components/hexBoardData";
 import { OPERATING_SUB_PHASE_LABELS } from "./operatingSubPhase";
+import type { MapGridResponse } from "../components/hexContractTypes";
+import { layNetworkFor, type LayNetwork } from "./layConnectivity";
+import { ordinaryLayTakenRefusal, privateLayClaimRefusal, privateLayWaivesConnectivity } from "./privateLayClaim";
+import { stage106LayAuthorityInForce } from "./rulesVersion";
+import { privateHexRefusal } from "./privateReservations";
 
 /** The fields of `ExecuteMsg::LayTile` this authority reads. Structural, so the reducer hands over
  *  `msg.LayTile` unchanged and a test hands over a literal. */
@@ -62,13 +90,19 @@ export interface LayTileBody extends StationAnchorLay {
   protocol_id: number;
   /** #1204: the private power this lay spends, when it spends one. */
   ability_key?: unknown;
+  /** #776: the C&SL's bonus lay, when claimed -- validated by #1693, never trusted. */
+  bonus_lay?: unknown;
 }
 
 /** What the composition needs beyond the state: the grid, the board's label table (the home hold), and the
  *  shell's geometry predicate, era-bound by the caller exactly as `SandboxActionContext.layRefused` is. A
  *  caller that hands in no `layRefused` gets no opinion on geometry (#757), as the reducer always has. */
 export interface LayTileAuthorityContext extends HoldContext {
-  layRefused?: (q: number, r: number, tileId: number, orientation: number) => boolean;
+  /** #757 / #1692: the board geometry, and -- when handed a `network` -- rule 6 of the same filter, the join. */
+  layRefused?: (q: number, r: number, tileId: number, orientation: number, network?: LayNetwork) => boolean;
+  /** #1692: the grid the lay is judged AGAINST (before it lands). Absent means `mapGrid` already is that grid --
+   *  the grid step and ingress. The reducer, whose `mapGrid` includes the lay (#1380), hands it explicitly. */
+  layGrid?: MapGridResponse;
 }
 
 /** Whether this lay spends the JK's half-price power (#1323). */
@@ -154,8 +188,35 @@ export function layTileLegalityRefusal(
   if (identity !== null) return identity;
   const timing = layTimingRefusal(state, lay);
   if (timing !== null) return timing;
+  const judgedOn = ctx?.layGrid ?? ctx?.mapGrid;
+  /* #1696: THE STAGE-10.6 QUESTIONS (1b, 1b', 1c, 2a) ARE ASKED ON A PINNED BOARD ONLY -- one predicate,
+     `stage106LayAuthorityInForce`; a legacy development log keeps the reading it was played under. Everything else
+     in this function is asked exactly as before, on every board. */
+  const stage106 = stage106LayAuthorityInForce(state);
+  if (stage106) {
+    // 1b. #1693: a `bonus_lay` / `ability_key` claim is a power this corporation must actually hold, now.
+    const claim = privateLayClaimRefusal(state, lay, judgedOn);
+    if (claim !== null) return claim;
+    // 1b'. #1697: one ORDINARY lay a turn, even while the step is held on Track for the C&SL's bonus.
+    const taken = ordinaryLayTakenRefusal(state, lay);
+    if (taken !== null) return taken;
+    // 1c. #1694: a player-owned private bars its printed hex(es) -- all but the D&H's F16 (#1694a). The status is
+    //     itself pinned-only (`privateHexStatuses`), which is what keeps the board's marks on the same seam.
+    const restricted = privateHexRefusal(state, q, r);
+    if (restricted !== null) return restricted;
+  }
   if (ctx?.layRefused && ctx.layRefused(q, r, tile_id, orientation)) {
     return `Tile #${tile_id} cannot be laid at ${hexLabel(q, r)} at that rotation.`;
+  }
+  /* 2a. #1692: THE SAME GEOMETRY, handed the network -- rule 6 of `filterSandboxPlacements`, which is exactly what
+     the picker asks. Not asked without a geometry or a grid (#757: no opinion), for a corporation with no rooted
+     token (`unconstrained`, #2), or for the two lays whose power waives it -- their claim already validated above. */
+  if (stage106 && ctx?.layRefused && judgedOn !== undefined && !privateLayWaivesConnectivity(lay)) {
+    const network = layNetworkFor(state, judgedOn, lay.protocol_id);
+    if (network !== null && ctx.layRefused(q, r, tile_id, orientation, network)) {
+      const who = state.public_companies.find((entry) => entry.company_id === lay.protocol_id)?.ticker ?? `Corporation ${lay.protocol_id}`;
+      return `Tile #${tile_id} at ${hexLabel(q, r)} at that rotation does not connect to ${who}'s network.`;
+    }
   }
   const anchored = stationAnchorRefusal(state, lay, ctx?.mapGrid);
   if (anchored !== null) return anchored;

@@ -994,7 +994,7 @@ const PRIVATE_REFERENCE: Readonly<Record<number, { name: string; abbr: string; h
   4: { name: "Mohawk & Hudson", abbr: "MH", hex: "D-18", special: "Free 10% NYC share" },
   5: { name: "Camden & Amboy", abbr: "CA", hex: "H-18", special: "Free 10% PRR share" },
   6: { name: "Baltimore & Ohio", abbr: "BO", hex: "I-13/I-15", special: "Free B&O President's Certificate" },
-  7: { name: "James River & Kanawha", abbr: "JK", hex: "—", special: "Half-cost lay by Coal River; free Kanawha Licence" },
+  7: { name: "James River & Kanawha", abbr: "JK", hex: "K-9/K-11", special: "Half-cost lay by Coal River; free Kanawha Licence" },
 };
 
 /* ------------------------------------------------------------------ */

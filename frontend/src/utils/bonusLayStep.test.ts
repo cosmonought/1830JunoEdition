@@ -175,7 +175,20 @@ describe("the shell says which lay it is", () => {
        BOTH HALVES ARE ASSERTED ON PURPOSE -- asserting only the call would let the rule quietly change its
        mind about which private it means, and asserting only the rule would let the shell stop asking it.
        That pair of one-sided assertions is how #776's fault survived being written down in two places. */
-    expect(APP).toContain("const bonusLay = errandLaysBonus(homeStationPlacement);");
+    /* Stage 10.6 (#1693): the flag is a CLAIM the authority now validates -- this corporation's live C&SL, on B20 --
+       so the shell raises it only for the lay that lands on the errand's own hex. Pinned as STRUCTURE (the one
+       `bonusLay` expression asks both rules) and as BEHAVIOUR (the two rules composed), not as a line of text. */
+    const start = APP.indexOf("const bonusLay =");
+    expect(start).toBeGreaterThan(-1);
+    const expression = APP.slice(start, APP.indexOf(";", start));
+    expect(expression).toContain("errandLaysBonus(homeStationPlacement)");
+    expect(expression).toContain("errandClaimsLay(homeStationPlacement, q, r)");
+    const { errandLaysBonus } = require("../gameEngine/bonusLay") as typeof import("../gameEngine/bonusLay");
+    const { errandClaimsLay } = require("./privateErrand") as typeof import("./privateErrand");
+    const armed = { kind: "private-tile", abilityKey: "csl-tile", q: 9, r: 1 } as never;
+    const flagFor = (q: number, r: number) => errandLaysBonus(armed) && errandClaimsLay(armed, q, r);
+    expect(flagFor(9, 1)).toBe(true); // the errand's own hex
+    expect(flagFor(2, 2)).toBe(false); // anywhere else: an ordinary lay, never a bonus claim
     expect(RULE).toContain('export const CSL_ABILITY_KEY = "csl-tile";');
     expect(RULE).toContain("return errand.abilityKey === CSL_ABILITY_KEY;");
   });

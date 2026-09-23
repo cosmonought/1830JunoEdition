@@ -61,6 +61,7 @@ import {
 import { layAuthorityContext, sandboxActionContext } from "./actionContext"; // #1690 (Stage 10.3)
 // Design note #1683 (Stage 10.1): the grid lays a tile only when the one `LayTile` authority accepts it.
 import { layTileRefusal } from "./layTileAuthority";
+import type { LayNetwork } from "./layConnectivity";
 import type { SandboxMarketPrices } from "./sandboxState";
 
 import { isSetupGameMsg } from "./gameSetup";
@@ -247,6 +248,8 @@ export interface ReplayProviders {
     tileId: number,
     orientation: number,
     era: TileEra,
+    /** #1692 (Stage 10.6, S6-5): when handed, the network the lay must join -- rule 6 of the same filter. */
+    network?: LayNetwork,
   ) => boolean;
 
   // ---- the market chart: PHASE 1 DELETES EVERYTHING BELOW ---------------

@@ -218,8 +218,12 @@ describe("every toast is mounted behind a rule", () => {
     /* #1390 ADDED THE THIRD: a click on a tile with no upgrade in this game (626 on H18) says so, where before
        it silently did nothing -- "a click that does nothing looks like the board being broken". Guarded on
        `isUpgradeDeadEnd`, listed below. */
+    /* #1694 (Stage 10.6, S6-7) ADDED THE FOURTH: the acting president's click on a hex a player-owned private bars
+       says why, in the `LayTile` authority's own sentence (`describePrivateHexStatus`), where before the glow left
+       the hex out and the click did nothing. Guarded on `restrictedHere`, which exists only for the acting viewer
+       on a barred hex -- listed below. */
     const calls = APP.match(/^\s*showActionToast\(/gm) ?? [];
-    expect(calls).toHaveLength(3);
+    expect(calls).toHaveLength(4);
   });
 
   it("gates the receipt on the message deserving one", () => {
@@ -372,6 +376,7 @@ describe("every toast is mounted behind a rule", () => {
       "deservesActionReceipt(msg)",
       "refusalWasRefused && refusalReason",
       "isMyTurnRef.current && isUpgradeDeadEnd(laidHere.tile_id)", // #1390
+      "if (restrictedHere) {", // #1694: `restrictedHere` is null unless the acting viewer clicked a barred hex
     ];
     for (const guard of guards) {
       expect(APP).toContain(guard);

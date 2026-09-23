@@ -441,8 +441,16 @@ export class RoomSession {
       mapGrid: this.engine.snapshot.grid,
       /* #1683 (Stage 10.1): the providers' own geometry, era-bound on the board as it stands, so the ingress
          answer for a `LayTile` is judged on exactly what `RoomEngine.applyOnBoard` will judge it on. */
-      layRefused: (q, r, tileId, orientation) =>
-        this.options.providers.layRefused(this.engine.snapshot.grid, q, r, tileId, orientation, tileEraFor(this.state)),
+      layRefused: (q, r, tileId, orientation, network) =>
+        this.options.providers.layRefused(
+          this.engine.snapshot.grid,
+          q,
+          r,
+          tileId,
+          orientation,
+          tileEraFor(this.state),
+          network, // #1692 (Stage 10.6): rule 6, the join, when the authority hands the network
+        ),
     });
     if (refusal !== null) {
       /* A REFUSAL STILL REPORTS THE REPAIR. The board moved before the refusal, so a client told only "not

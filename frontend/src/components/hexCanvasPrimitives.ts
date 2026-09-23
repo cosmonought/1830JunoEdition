@@ -1806,6 +1806,93 @@ export function drawReservationBadgeAt(
   ctx.restore();
 }
 
+/* ==================================================================
+    DESIGN NOTE 1695 (Stage 10.6, S6-7): THE RESTRICTION MARK -- A FRAME, NOT A STAR, NOT A PADLOCK
+   ==================================================================
+   A player-owned private closes its printed hex to tile laying (#1694). That is a fact about seven privates'
+   ground, not the C&SL's or D&H's power, so it must not borrow the star (#714: "a special power acts here"). The
+   mark is the private's initials inside a thin rectangular FRAME -- a deed laid on the hex -- at the same type size
+   and halo as the star badge, so the two read as one family. When a live CSL / DH power acts on the same hex (a
+   player-owned C&SL or D&H), the star is drawn INSIDE the frame, before the initials: the frame says "closed while a
+   player owns it", the star says "and its owning corporation will have a power here". One mark per hex (#1695 in
+   `privateReservations.ts`), so the board stays quiet. Not a padlock: #714 retired that glyph, and a frame claims
+   less -- the hex is closed for now, by ownership, not locked for good. */
+export function drawPrivateRestrictionMarkerAt(
+  ctx: CanvasRenderingContext2D,
+  badgeCenter: { x: number; y: number },
+  size: number,
+  /** The private's initials, e.g. `"SV"`. No ampersand -- design note #364. */
+  initials: string,
+  /** A live CSL / DH power on this hex: the star goes inside the frame. */
+  withStar: boolean,
+): void {
+  const scale = Math.max(0.5, Math.min(1, size / 42));
+  const fontPx = Math.max(6, Math.round(7.5 * scale));
+  ctx.save();
+  ctx.font = `bold ${fontPx}px ${FONT_FAMILY_STACK}`;
+  ctx.textAlign = "left";
+  // #937: measure at the alphabetic baseline, draw at the middle one.
+  ctx.textBaseline = "alphabetic";
+  const capMetrics = ctx.measureText(initials);
+  ctx.textBaseline = "middle";
+  const capHeight =
+    typeof capMetrics.actualBoundingBoxAscent === "number" && capMetrics.actualBoundingBoxAscent > 0
+      ? capMetrics.actualBoundingBoxAscent
+      : fontPx * CAP_HEIGHT_RATIO;
+  const textW = capMetrics.width;
+  const markW = withStar ? starWidthForHeight(capHeight) : 0;
+  const gap = withStar ? fontPx * 0.28 : 0;
+  const padX = fontPx * 0.35;
+  const padY = fontPx * 0.3;
+  const innerW = markW + gap + textW;
+  const frameW = innerW + padX * 2;
+  const frameH = capHeight + padY * 2;
+  const left = badgeCenter.x - frameW / 2;
+  const top = badgeCenter.y - frameH / 2;
+
+  ctx.shadowColor = "rgba(0, 0, 0, 0.9)";
+  ctx.shadowBlur = Math.max(2, 3 * scale);
+  ctx.lineWidth = Math.max(0.75, 1 * scale);
+  ctx.strokeStyle = "#f7ead0";
+  ctx.strokeRect(left, top, frameW, frameH);
+
+  const startX = left + padX;
+  if (withStar) {
+    const cx = startX + markW / 2;
+    const cy = badgeCenter.y + fontPx * 0.05 + starCentreOffset(capHeight);
+    ctx.fillStyle = PRIVATE_POWER_STAR_FILL;
+    ctx.beginPath();
+    starVertices(cx, cy, starRadiusForHeight(capHeight)).forEach((point, index) => {
+      if (index === 0) ctx.moveTo(point.x, point.y);
+      else ctx.lineTo(point.x, point.y);
+    });
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.fillStyle = "#f7ead0";
+  ctx.fillText(initials, startX + markW + gap, badgeCenter.y + fontPx * 0.05);
+  ctx.restore();
+}
+
+/** #1695: the restriction mark at a slot, at the star badge's radius (0.62, #364) so the two share one ring. */
+export function drawPrivateRestrictionMarker(
+  ctx: CanvasRenderingContext2D,
+  center: { x: number; y: number },
+  size: number,
+  initials: string,
+  slot: number,
+  withStar: boolean,
+): void {
+  const direction = hexSlotDirection(slot);
+  drawPrivateRestrictionMarkerAt(
+    ctx,
+    { x: center.x + direction.x * size * 0.62, y: center.y + direction.y * size * 0.62 },
+    size,
+    initials,
+    withStar,
+  );
+}
+
 /** slot is REQUIRED and comes from the caller: these two badges have fixed homes chosen so neither can reach a neighbour, and a negotiated slot is what let the first version wander.
  *  See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #364 */
 export function drawReservationBadge(

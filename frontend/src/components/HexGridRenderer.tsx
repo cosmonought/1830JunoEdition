@@ -79,7 +79,12 @@ import {
 // resolves the path the same way every other logo surface does.
 import { logoSrcFor } from "./CorporateLogo";
 
-import { reservationsByHex } from "../gameEngine/privateReservations";
+import {
+  describePrivateHexStatus,
+  privateHexMarkers,
+  reservationsByHex,
+  type PrivateHexRestriction,
+} from "../gameEngine/privateReservations";
 // Design note #888: the camera pose that puts a set of hexes on screen, as a function that can be called.
 // Design note #1014: one locked value now, not a function of a mode that no longer exists.
 import { MAP_TOUCH_ACTION, isTapGesture } from "../utils/mapGesture";
@@ -148,6 +153,7 @@ import {
   drawPrintedTrack,
   drawRestrictionBadge,
   drawReservationBadge,
+  drawPrivateRestrictionMarker, // #1695
   drawRouteOverlays,
   drawRouteSignalBand,
   type BadgeHitVisual,
@@ -364,6 +370,11 @@ export interface HexGridRendererProps {
    * DEFAULTS TO EMPTY, which draws NO badges. A missing answer must not mean "advertise everything" -- that
    * is the failure being fixed, and a silent default reproducing it is how it would come back. */
   livePrivatePowerIds?: ReadonlySet<number>;
+  /** Design note #1695 (Stage 10.6, S6-7): the hexes player-owned privates govern -- the shell hands
+   *  `privateHexStatuses(state)`, the list the `LayTile` authority refuses on (its `barred` entries), so the frame is
+   *  drawn exactly where a lay is refused and the D&H's F16 (#1694a) is described, never framed. Empty on a legacy
+   *  board (#1696). Defaults to empty: no frame is ever drawn on a guess. */
+  privateStatuses?: readonly PrivateHexRestriction[];
   /** Fired synchronously on every genuine hex click, before the
    *  `GetLegalTilePlacements` query (if enabled) resolves -- lets the host
    *  app position a popup immediately instead of waiting on the network. */
@@ -622,6 +633,12 @@ const EMPTY_PRIVATE_COMPANIES: PrivateCompanyState[] = [];
 /* Design note #1176: a stable identity, so the memo below is not invalidated every render by a fresh empty
    Set -- the same reason `EMPTY_PRIVATE_COMPANIES` is hoisted. */
 const EMPTY_LIVE_POWER_IDS: ReadonlySet<number> = new Set<number>();
+/* #1695: hoisted for the same reason. */
+const EMPTY_PRIVATE_RESTRICTIONS: readonly PrivateHexRestriction[] = [];
+/** #1695: where a restriction-only frame prefers to sit -- the lower edge midpoints first (the star badges' own
+ *  homes, #3 / #1288), then the rest of the ring. Claimed through the render's slot ledger, so it steps round a
+ *  nameplate, a value badge or a laid tile's markers rather than landing on them. */
+const PRIVATE_RESTRICTION_SLOT_PREFERENCE: readonly number[] = [3, 4, 2, 5, 1, 6, 8, 9, 7, 10, 11, 12];
 
 /** 2000ms -> 1200ms. The delay stops a sweep trailing tooltips; 2000ms additionally cost the case the delay is FOR -- a player who stopped waited long enough to wonder if anything was coming.
  *  See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #383 */
@@ -642,13 +659,21 @@ export const HEX_TOOLTIP_DELAY_MS = 1200;
 export function withReservationNote(
   description: string,
   reservation: { initials: string; power?: string } | null,
+  /* Design note #1695 (Stage 10.6, S6-7): the PLAYER-OWNED status sentence (`describePrivateHexStatus`), when one
+     stands -- a separate clause from the power, because it is a separate fact (#714's star text stays a power). */
+  statusNote: string | null = null,
 ): string {
-  if (!reservation) return description;
-  const clause = reservation.power
-    ? `${reservation.initials}: ${reservation.power}`
-    : // No power on record is still not a claim of exclusivity -- name the private and stop.
-      `${reservation.initials} has a special power here`;
-  return `${description} — ${clause}`;
+  const clauses: string[] = [];
+  if (reservation) {
+    clauses.push(
+      reservation.power
+        ? `${reservation.initials}: ${reservation.power}`
+        : // No power on record is still not a claim of exclusivity -- name the private and stop.
+          `${reservation.initials} has a special power here`,
+    );
+  }
+  if (statusNote) clauses.push(statusNote);
+  return clauses.length === 0 ? description : `${description} — ${clauses.join(" · ")}`;
 }
 
 /** Release a pointer capture without caring whether there was one.
@@ -1194,6 +1219,7 @@ export function HexGridRenderer({
   layFocus,
   privateCompanies = EMPTY_PRIVATE_COMPANIES,
   livePrivatePowerIds = EMPTY_LIVE_POWER_IDS,
+  privateStatuses = EMPTY_PRIVATE_RESTRICTIONS,
 }: HexGridRendererProps) {
   /* Design note #318: derived once per roster change, not per frame. The
      draw loop runs on every pan and zoom tick, and re-scanning the private
@@ -1203,6 +1229,21 @@ export function HexGridRenderer({
     () => reservationsByHex(privateCompanies, livePrivatePowerIds),
     [privateCompanies, livePrivatePowerIds],
   );
+  /* Design note #1695 (Stage 10.6, S6-7): one mark per private hex -- a frame where a player-owned private closes
+     it, the star where a CSL / DH power acts, both where both hold (`privateHexMarkers`). */
+  const privateMarkers = useMemo(
+    () => privateHexMarkers(privateStatuses, Array.from(reservations.values())),
+    [privateStatuses, reservations],
+  );
+  /* #1695: the hover's status sentence, keyed by hex, for exactly the hexes that carry a mark -- from the shared
+     `describePrivateHexStatus`, so the tooltip and the click refusal cannot word the rule two ways. */
+  const privateStatusNoteByHex = useMemo(() => {
+    const map = new Map<string, string>();
+    privateMarkers.forEach((marker) => {
+      if (marker.status) map.set(`${marker.q},${marker.r}`, describePrivateHexStatus(marker.status));
+    });
+    return map;
+  }, [privateMarkers]);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -3217,9 +3258,34 @@ export function HexGridRenderer({
 
     // Private company reservations, drawn above the cardboard and below the pieces. NOT clipped to the hex: it is a marker sitting ON the board, and a pill wide enough for "C&SL" would be sliced at smaller zooms. forEach, not for...of -- ES5 target without downlevelIteration.
     // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #318
-    reservations.forEach((reservation) => {
-      const center = axialToPixel(reservation.q, reservation.r, hexSize);
-      drawReservationBadge(ctx, center, hexSize, reservation.initials, reservation.slot);
+    /* Design note #1695 (Stage 10.6, S6-7): the private marks, from `privateHexMarkers`. A power-only mark is the
+       #714 star badge exactly as before, at its fixed home (#3). A RESTRICTED hex draws the frame: at the power
+       badge's fixed home when it also carries a live power (the star goes inside the frame), otherwise at a slot
+       claimed through this render's ledger. */
+    privateMarkers.forEach((marker) => {
+      const center = axialToPixel(marker.q, marker.r, hexSize);
+      if (!marker.restricted) {
+        drawReservationBadge(ctx, center, hexSize, marker.initials, marker.slot ?? 3);
+        return;
+      }
+      let slot = marker.slot;
+      if (slot === null) {
+        const laidHere = mapGrid.tiles.find((tile) => tile.q === marker.q && tile.r === marker.r);
+        const blocked = laidHere
+          ? slotsBlockedByTileMarkers(laidHere.tile_id, laidHere.orientation)
+          : hexBlockedSlots(mapGrid, marker.q, marker.r);
+        const dead = slotsBlockedByEdges(deadEdgesAt(marker.q, marker.r), false);
+        slot = claimHexSlotPreferring(
+          claimedHexSlots,
+          marker.q,
+          marker.r,
+          undefined,
+          PRIVATE_RESTRICTION_SLOT_PREFERENCE,
+          blocked,
+          dead,
+        );
+      }
+      drawPrivateRestrictionMarker(ctx, center, hexSize, marker.initials, slot, marker.specialPower);
     });
 
     // Four fixed board crossings track may never be built over, drawn after every tile pass so the bar is never hidden, but before the preview ghost.
@@ -3464,6 +3530,8 @@ export function HexGridRenderer({
     // Design note #318: a private closing must repaint the board -- the
     // badge's whole job is to disappear when the reservation lifts.
     reservations,
+    // #1695: and so must a private changing hands -- the frame lifts when a corporation buys it.
+    privateMarkers,
     // Design note #137: a new route trace must repaint the canvas. Omitting
     // this from the dep list is the classic failure here -- the prop updates,
     // React re-renders, and the memoised draw callback never re-runs, so the
@@ -3650,6 +3718,7 @@ export function HexGridRenderer({
           label: withReservationNote(
             describeHexWithValue(hoverQ, hoverR, mapGrid, currentEra, publicCompanies),
             reservations.get(`${hoverQ},${hoverR}`) ?? null,
+            privateStatusNoteByHex.get(`${hoverQ},${hoverR}`) ?? null, // #1695
           ),
           clientX: event.clientX,
           clientY: event.clientY,
@@ -3690,6 +3759,8 @@ export function HexGridRenderer({
          closed -- the same class of staleness the two entries below record,
          on a line that is a rule rather than a number. */
       reservations,
+      // #1695: the private-status clause, for the same reason.
+      privateStatusNoteByHex,
       // Design note #374: the hit test reads both.
       routeOverlays,
       onHighlightRoute,

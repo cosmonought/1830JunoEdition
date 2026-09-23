@@ -24,6 +24,9 @@ import { boardHomeHexToAxial } from "../gameEngine/homeStationAuthority";
 import type { GameStateResponse } from "../gameEngine/gameState";
 import type { GameplayExecuteMsg } from "./sessionKey";
 import type { MapGridResponse } from "../components/hexContractTypes";
+import { privateHexFor } from "../gameEngine/privateReservations";
+import { layNetworkFor } from "../gameEngine/layConnectivity";
+import { CSL_PRIVATE_ID, DH_PRIVATE_ID } from "../gameEngine/dhPower";
 
 const PRR = 1;
 const P1 = "p-alice";
@@ -85,6 +88,21 @@ function prrHome(): [number, number] {
 }
 const lay = (extra: Record<string, unknown> = {}, at = F6) =>
   ({ LayTile: { game_id: 1, protocol_id: PRR, q: at.q, r: at.r, tile_id: 8, orientation: 0, ...extra } }) as unknown as GameplayExecuteMsg;
+/* Stage 10.6 (#1693): a power claim is validated against the board, so a special lay's timing is tested on a board
+   where PRR really OWNS the private and lays on its hex -- never on a forged claim. */
+function owning(state: GameStateResponse, privateId: number): GameStateResponse {
+  return {
+    ...state,
+    private_companies: state.private_companies.map((entry) =>
+      entry.private_id === privateId ? { ...entry, owner: null, owner_protocol_id: PRR, closed: false } : entry,
+    ),
+  };
+}
+const hexOf = (privateId: number) => {
+  const hex = withRules(LPF, () => privateHexFor(privateId));
+  if (!hex) throw new Error(`private ${privateId} has no hex`);
+  return { q: hex.q, r: hex.r };
+};
 const body = (msg: GameplayExecuteMsg) => (msg as { LayTile: Parameters<typeof layTileLegalityRefusal>[1] }).LayTile;
 
 /** Every atom, asked the way its caller asks: the verdict, the reducer, the grid. */
@@ -157,8 +175,9 @@ describe("4. every special lay is accepted at its legal timing -- which is Lay T
   });
 
   it("the C&SL's bonus lay at Track keeps the step on Track, and the ordinary lay may follow", () => {
-    const state = pinnedOperating("Track");
-    const bonus = lay({ bonus_lay: true, ability_key: CSL_ABILITY_KEY });
+    // PRR owns the C&SL and lays its bonus on B20 -- a real entitlement (#1693), not a flag.
+    const state = owning(pinnedOperating("Track"), CSL_PRIVATE_ID);
+    const bonus = lay({ bonus_lay: true, ability_key: CSL_ABILITY_KEY }, hexOf(CSL_PRIVATE_ID));
     const first = everyAtom(state, bonus);
     expect(first.verdict).toBeNull();
     expect(first.after).not.toBe(state);
@@ -169,8 +188,9 @@ describe("4. every special lay is accepted at its legal timing -- which is Lay T
   });
 
   it("the D&H's keyed lay at Track consumes the ordinary placement and opens the free-station window", () => {
-    const state = pinnedOperating("Track");
-    const { verdict, after } = everyAtom(state, lay({ ability_key: "dh-tile" }));
+    // PRR owns the D&H and lays on F16 (#1693).
+    const state = owning(pinnedOperating("Track"), DH_PRIVATE_ID);
+    const { verdict, after } = everyAtom(state, lay({ ability_key: "dh-tile" }, hexOf(DH_PRIVATE_ID)));
     expect(verdict).toBeNull();
     expect(after.operating_sub_phase).toBe("Tokens");
     expect(after.dh_station_pending).toBe(PRR);
@@ -206,14 +226,17 @@ describe("5. a power key is a claim about WHICH lay, never about WHEN", () => {
 describe("live ingress: the same sentence, before the log grows", () => {
   const providers = sandboxReplayProviders();
   /* A lay the board's own geometry accepts on the engine's opening grid, found rather than typed: a clear hex
-     and a yellow tile `boardLayRefused` admits. The room seeds the engine with `providers.initialGrid`. */
+     and a yellow tile `boardLayRefused` admits. The room seeds the engine with `providers.initialGrid`.
+     Stage 10.6 (#1692): and one that JOINS PRR's network -- connectivity is judged at ingress now, so the control
+     must be a lay a president could actually make; the network is the authority's own (`layNetworkFor`). */
   function legalLay(): GameplayExecuteMsg {
     return withRules(LPF, () => {
+      const network = layNetworkFor(pinnedOperating("Track"), providers.initialGrid, PRR) ?? undefined;
       for (const hex of STATIC_BOARD_HEXES) {
         if (terrainBuildFeeAt(hex.q, hex.r) > 0) continue;
         for (const tile of [7, 8, 9, 57, 58, 55, 56, 69]) {
           for (let orientation = 0; orientation < 6; orientation += 1) {
-            if (!boardLayRefused(providers.initialGrid, hex.q, hex.r, tile, orientation, "Yellow")) {
+            if (!boardLayRefused(providers.initialGrid, hex.q, hex.r, tile, orientation, "Yellow", network)) {
               return lay({ tile_id: tile, orientation }, { q: hex.q, r: hex.r });
             }
           }

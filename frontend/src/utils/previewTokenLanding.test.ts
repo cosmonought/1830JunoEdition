@@ -113,7 +113,8 @@ describe("which lay is extra (design note #885)", () => {
       .readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8")
       .replace(/\/\*[\s\S]*?\*\//g, "")
       .replace(/^\s*\/\/.*$/gm, "");
-    expect(APP).toContain("const bonusLay = errandLaysBonus(homeStationPlacement);");
+    // Stage 10.6 (#1693): still asked, not restated -- and now only for the lay on the errand's own hex.
+    expect(APP).toContain("const bonusLay = errandLaysBonus(homeStationPlacement) && errandClaimsLay(homeStationPlacement, q, r);");
     expect(APP).not.toContain('abilityKey === "csl-tile"');
   });
 });

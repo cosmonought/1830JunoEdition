@@ -41,7 +41,6 @@ import { assignRouteSet } from "./gameEngine/routeAutoTrace";
 import { evaluateRouteSet } from "./gameEngine/routeAuthority"; // #1554: the authority's own preview
 import {
   cityEnteredFrom,
-  layableHexes,
   reachableNetwork,
   stationTokensOf,
   type StationToken,
@@ -472,7 +471,14 @@ import {
   // Design note #746b: a rise is an arrival, stamped like every other landing (#646).
 } from "./gameEngine/sandboxState";
 import { availableCash, escrowedBids } from "./gameEngine/auctionEscrow";
-import { privateHexFor } from "./gameEngine/privateReservations";
+import {
+  describePrivateHexStatus,
+  privateHexFor,
+  privateHexRestrictionAt,
+  privateHexStatuses,
+} from "./gameEngine/privateReservations";
+// Design note #1692 (Stage 10.6, S6-5): the Lay Track reach, shared with the `LayTile` authority.
+import { layReachFor } from "./gameEngine/layConnectivity";
 import { GameOverModal, type GameEndReason } from "./components/GameOverModal";
 import { gameHistoryFrom, type GameHistory } from "./utils/gameHistory"; // #1411
 import { replaySnapshotAtRound, type ReplaySnapshot } from "./utils/roundReplay"; // #1425
@@ -3287,6 +3293,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
     return live;
   }, [dhPower, cslPower]);
 
+  /* Design note #1694 / #1695 (Stage 10.6, S6-7): the hexes player-owned privates govern, from the SAME derivation
+     the `LayTile` authority refuses on (`privateHexStatuses`: barred hexes, and the D&H's F16 exception #1694a), for
+     the board's markers and hover. Asked with the table's board in effect (#1300: `activateRules` put it there) and
+     the table's variants and pin on the state, so the JK's K9 / K11 appear under the Level Playing Field only and a
+     legacy (unpinned) board shows nothing the replay does not enforce (#1696). */
+  const privateStatuses = useMemo(() => privateHexStatuses(gameState), [gameState]);
+
   /* Design note #727: the hexes this corporation may build on by POWER rather than by reach. Both privates
      answer the same question, so one set covers them and a third power would need no renderer change. */
   /* Design note #845: ONE LIST, TWO ENTRY POINTS. The hexes the board rings and the chips the bar offers are
@@ -3507,21 +3520,30 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
     // while a player is merely browsing would tell them they may not build
     // on hexes that are simply not their concern this second.
     if (!tileLayStepActive) return undefined;
-    const corporation = gameState?.public_companies.find(
-      (entry) => entry.company_id === actingProtocolId,
-    );
-    const reach = layableHexes({
-      // Design note #729: a tokened-out city is a wall, so the walk stops at it.
-      blocksThrough: blocksThroughCity,
+    if (!gameState) return undefined;
+    /* ==================================================================
+        DESIGN NOTE 1692 (Stage 10.6, S6-5): THE WALK THE AUTHORITY WALKS
+       ==================================================================
+       This assembled `layableHexes` inline -- the corporation's tokens (#686), the tokened-out wall (#729,
+       `blocksThroughCity`) and Coal River (#1323) -- and was the ONLY place the network a lay must join was ever
+       computed, so the picker refused disconnected rotations and nothing behind it did (S6-5). `layReachFor`
+       (`gameEngine/layConnectivity.ts`) is that assembly, moved: the `LayTile` authority asks the same function
+       for the same corporation on the same grid, and hands the result to the same rule-6 join the picker uses
+       below. The glow's own extra (#716's `hasPlaceableTile`) stays here and changes only which extensions glow. */
+    const reach = layReachFor(
+      gameState,
       mapGrid,
-      // Design note #686: the recorded city slot travels with the token.
-      stationHexes: corporation ? stationTokensOf(corporation) : [],
+      actingProtocolId,
       /* Design note #716: the glow asks the TILE ENGINE, not just the ground. `evaluateHexForTileLaying`
          answers "may anything ever be built here"; this answers "is there a tile that fits, now, in this
          era, connecting to this network" -- which is what a white ring was already promising.
          THE SAME CALL THE PICKER MAKES, with the same era and the same network, so the ring and the panel it
          opens cannot disagree about whether there is anything to choose. */
-      hasPlaceableTile: (q, r, network, ports) =>
+      /* Design note #1694 (Stage 10.6, S6-7): and a hex a player-owned private closes glows for nobody -- the
+         authority refuses every lay there (`privateHexRefusal`), so offering it would be a ring that opens on a
+         refusal. The click on it says why (below, `privateRestrictionsRef`). */
+      (q, r, network, ports) =>
+        privateHexRestrictionAt(gameState, q, r) === null &&
         filterSandboxPlacements(ALL_TILE_PLACEMENTS, {
           mapGrid,
           q,
@@ -3530,7 +3552,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
           networkPorts: ports,
           era: eraForPhase(currentPhase, tableVariants),
         }).length > 0,
-    });
+    );
     if (reach.unconstrained) return undefined;
     /* The corporation's own network stays lit beside the legal placements; unioned here because this layer has both halves.
        See docs/ai_architecture/canvas_rendering.md - App.tsx #241 */
@@ -3583,7 +3605,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
     mapGrid,
     currentPhase,
     privatePowerHexes,
-    blocksThroughCity,
+    tableVariants,
   ]);
 
   /* ==================================================================
@@ -3730,6 +3752,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
            nothing looks like the board being broken; a click that says why is the game being played. The
            Tile Reference already knows the word (`isUpgradeDeadEnd`); the board marks such tiles (#1390 in
            `HexGridRenderer`) and the click says it. */
+        /* Design note #1694 (Stage 10.6, S6-7): a hex a player-owned private closes says so when clicked, in the
+           authority's own sentence -- the board marks it (#1695), the glow leaves it out, and the click explains. */
+        const restrictedHere = isMyTurnRef.current
+          ? privateHexRestrictionAt(gameStateRef.current, state.q, state.r)
+          : null;
+        if (restrictedHere) {
+          showActionToast(describePrivateHexStatus(restrictedHere));
+          setRadialSelector(null);
+          setPreviewTile(null);
+          return;
+        }
         const laidHere = mapGridRef.current.tiles.find((tile) => tile.q === state.q && tile.r === state.r);
         if (laidHere && isMyTurnRef.current && isUpgradeDeadEnd(laidHere.tile_id)) {
           showActionToast(`Tile #${laidHere.tile_id} has no upgrade in this game — ${state.hexLabel} stays as it is.`);
@@ -11502,8 +11535,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
     if (acting === null || gameState?.player_addresses[acting] !== viewerAddress) {
       return "Planning Mode: Tile lay disabled — not your corporation's turn.";
     }
+    /* Design note #1697 (Stage 10.6, S6-6): the step is held on Track only for the C&SL's bonus lay -- the ordinary
+       lay is spent, and the authority refuses a second one (`ordinaryLayTakenRefusal`). The C&SL's own errand is the
+       one lay left, so the picker stays open for it and for nothing else. */
+    if (
+      gameState?.ordinary_lay_taken === actingProtocolId &&
+      !errandLaysBonus(homeStationPlacement)
+    ) {
+      return "Planning Mode: Ordinary tile lay made — only the C&SL's bonus lay on B20 remains (use its Lay Track (B20) power), or advance.";
+    }
     return null;
-  }, [spectator, gameState, orSubPhase, viewerAddress]);
+  }, [spectator, gameState, orSubPhase, viewerAddress, actingProtocolId, homeStationPlacement]);
   const canLayTileNow = tileLayDisabledReason === null;
 
   /* canLayTileNow decides whether the carousel is narrowed to one corporation's reach - the same predicate the confirm button uses. Sandbox/offline path only; a chain answer is used verbatim.
@@ -12795,7 +12837,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
        THE D&H IS EXCLUDED ON PURPOSE (#548): `dh-tile` consumes the corporation's placement; only its token
        is free. The two privates are exact opposites and this is where they part. */
     // Design note #885: the rule lives beside the one that READS the flag, so both halves are in one place.
-    const bonusLay = errandLaysBonus(homeStationPlacement);
+    /* Design note #1693 (Stage 10.6, S6-6): AND ONLY ON THE ERRAND'S OWN HEX. The flag is a claim the authority now
+       validates (B20, this corporation's live C&SL); raising it for a lay elsewhere while the errand happened to
+       be armed would send a claim the board refuses. `errandClaimsLay` is the same test `spentAbility` asks
+       below, so the flag and the key always travel together. */
+    const bonusLay = errandLaysBonus(homeStationPlacement) && errandClaimsLay(homeStationPlacement, q, r);
     /* ==================================================================
        DESIGN NOTE 880: EVERY TOKEN'S DESTINATION, NOT JUST THE ACTOR'S
        ==================================================================
@@ -14504,6 +14550,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
                       /* Design note #1176: ...and this, which is what clears them when the POWER goes --
                          closing is only one of the three ways that happens. */
                       livePrivatePowerIds={livePrivatePowerIds}
+                      /* Design note #1695 (Stage 10.6, S6-7): the hexes a player-owned private closes -- the same
+                         derivation the `LayTile` authority refuses on. */
+                      privateStatuses={privateStatuses}
                       routeOverlays={manualRouteOverlay}
                       // Design note #374: the map both reads and drives the
                       // shared cursor.

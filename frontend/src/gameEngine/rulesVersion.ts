@@ -220,6 +220,31 @@ export const RULES_ENGINE_CHANGELOG: ReadonlyArray<{ version: number; note: stri
  *  revision the reducer branches on) because it is neither. */
 export const RULES_ENGINE_VERSION_FIELD = "rules_engine_version";
 
+/* ==================================================================
+    DESIGN NOTE 1696 (Stage 10.6): THE LEGACY / PINNED SEAM FOR THE STAGE-10.6 LAY AUTHORITY
+   ==================================================================
+   OWNER RULING (Stage 10.6, after the corpus stop): the three `LayTile` rules Stage 10.6 adds -- connectivity to the
+   network (S6-5, #1692), the validated private-power claim and the one-ordinary-lay entitlement (S6-6, #1693) and
+   the player-owned private's hex (S6-7, #1694) -- are asked ONLY on a PINNED board, one carrying a numeric
+   `rules_engine_version`. Every room a server has dealt since #1520 is pinned, so every live table is judged.
+
+   A LEGACY board -- no pin -- is a development record written before the rules engine was pinned, and it keeps the
+   interpretation it was played under. Measured, unconditionally imposed, the three rules change 20 stored lays in
+   six such histories (CV4 ×3, FCJ, Z6C ×2, Y8V -- the Stage-10.6 ledger in `RULES_HARDENING_BACKLOG.md` lists them).
+   They are EVIDENCE of the historical authority gaps, not new legacy replay expectations: no golden is repinned.
+   Exactly the #1684 (the Lay Track step) / #1551 (`RunManualRoute`) precedent.
+
+   ONE PREDICATE. The `LayTile` authority (`layTileAuthority.ts`), the player-owned-private status that the board
+   draws and the click answers (`privateReservations.ts`), and the cursor's entitlement bookkeeping
+   (`sandboxSession.ts`) all ask this function -- so the UI cannot mark a legacy hex the replay deliberately leaves
+   open. Every rule that existed BEFORE 10.6 (the holds, identity, timing on a pinned board, geometry, the Stage-9.2
+   immutable gray / red hexes, anchoring, the JK, the terrain fee) is untouched by it. */
+export function stage106LayAuthorityInForce(
+  state: { rules_engine_version?: number | null } | null | undefined,
+): boolean {
+  return typeof state?.rules_engine_version === "number";
+}
+
 export type ReplayCompatibility =
   /** The deal names a version this engine supports. */
   | { kind: "compatible"; version: number }

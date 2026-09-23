@@ -39,6 +39,7 @@
 // every exemption below is a case where a player would otherwise be locked out of a move the rules allow.
 
 import type { GameStateResponse, WaterfallStateResponse } from "./gameState";
+import type { LayNetwork } from "./layConnectivity";
 import { actingAddress } from "./gameState";
 /* #1220: the SAME predicate the shell dispatches by (#546), not a second list. A copy here would drift the
    moment an eleventh message joined the family, and drift in this direction locks players out of moves. */
@@ -134,7 +135,7 @@ export interface TurnAuthorityInput {
    *  as the reducer's `SandboxActionContext.layRefused` is (`RoomSession.submit` hands the providers' own). It is
    *  the shell's predicate (#273) and so arrives injected; `undefined` -- a test, a caller without one -- skips the
    *  geometry question, on #757's rule, and the lay's other four questions are still asked. */
-  layRefused?: (q: number, r: number, tileId: number, orientation: number) => boolean;
+  layRefused?: (q: number, r: number, tileId: number, orientation: number, network?: LayNetwork) => boolean;
 }
 
 /** Why this actor may not send this message now, or `null` if they may. */
@@ -422,6 +423,9 @@ export function turnRefusal(input: TurnAuthorityInput): string | null {
      grows by a lay no atom will apply. */
   if ("LayTile" in msg) {
     return withTableRules(state, () =>
+      /* #1692 (Stage 10.6): the geometry now also carries the network join, and `mapGrid` is the grid the lay is
+         judged against -- the engine's current grid, before it lands -- so ingress asks connectivity, the power
+         claim and the private hex exactly as the grid step and the reducer do. */
       layTileLegalityRefusal(state, msg.LayTile, { mapGrid: input.mapGrid, layRefused: input.layRefused }),
     );
   }

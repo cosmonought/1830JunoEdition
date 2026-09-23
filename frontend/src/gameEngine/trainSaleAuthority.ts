@@ -30,8 +30,8 @@
 // CONSENT. Legal as a direct message only when the actor presides over BOTH corporations (the shell's
 // same-president dispatch); otherwise only as the derived settlement of a `train_purchase_offer` with
 // `accepted: true` matching seller, buyer, model AND price. The offer's `seller_president` is narration; the
-// selling corporation's CURRENT president is re-derived at every moment. A `null` actor skips the consent
-// rule (#549b), as the private predicate does.
+// selling corporation's CURRENT president is re-derived at every moment. A `null` actor skipped the consent
+// rule (#549b) until Stage 10.2; it now meets the board's consent (#1686, below).
 
 import type { GameStateResponse, TrainPurchaseOffer } from "./gameState";
 import type { MapGridResponse } from "../components/hexContractTypes";
@@ -138,7 +138,20 @@ export function trainSaleRefusal(
 
   /* ---- 10. Consent, at settlement only ---------------------------------------------------------- */
   if (moment !== "settlement") return null;
-  if (actor === null || actor === undefined) return null; // #549b
+  /* ==================================================================
+      DESIGN NOTE 1686 (Stage 10.2, S10-20): AN AUTHOR-LESS SETTLEMENT GETS NO CONSENT EXEMPTION
+     ==================================================================
+     This line was `if (actor == null) return null` (#549b: rules about a player are not asked of nobody), and it
+     stood BEFORE the consent question -- so an unattributed `BuyTrainFromCorporation` needed no consent at all.
+     After one legitimate settlement retires the accepted offer, a second author-less copy found no offer, skipped
+     consent, and -- the seller still holding another train of that model -- sold it (Batch 7.4's "residual
+     #549b"). Unreachable through a room (every transport and derived entry carries its author) but reachable
+     wherever an actor is absent: solo play and fixtures.
+     CONSENT IS A FACT ABOUT THE BOARD, NOT ABOUT THE SENDER, so it can be asked without an author: a matching
+     accepted offer stands, or ONE president sits over both corporations (the shell's same-president direct buy,
+     which is the only direct sale #1592 admits). With an author, the author must additionally BE that president
+     (below, unchanged). Without one, the board's own answer stands in for him -- and a board with neither an
+     offer nor a common president has no consent to give, whoever sent the message. */
   const offer: TrainPurchaseOffer | null = state.train_purchase_offer ?? null;
   const consented =
     offer !== null &&
@@ -150,6 +163,11 @@ export function trainSaleRefusal(
       price,
     });
   if (consented) return null;
+  if (actor === null || actor === undefined) {
+    // #1686: no author -- the board's consent only: one president over both sides.
+    if (buyer.president !== null && buyer.president !== undefined && buyer.president === seller.president) return null;
+    return `${seller.ticker}'s president has not agreed to sell its ${intent.model}-train to ${buyer.ticker}, and no accepted offer covers this sale.`;
+  }
   const presidesBoth = actor === buyer.president && actor === seller.president && buyer.president !== null;
   if (presidesBoth) return null;
   return actor === buyer.president

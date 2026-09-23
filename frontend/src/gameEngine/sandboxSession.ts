@@ -238,6 +238,8 @@ import { numberedPrivate } from "./privateOrdinal";
 /* Design note #1600: `syncSeatToActingCorporation` (#411) moved to `operatingOrder.ts`, unchanged, beside the queue
    settle that also needs it; `settleOperatingQueue` is the one writer of the order after it is built. */
 import { buildOperatingOrder, settleOperatingQueue, syncSeatToActingCorporation } from "./operatingOrder";
+// Design note #1613 / #1681: the four authoritative holds (re-exported below, beside `applySandboxActionOnBoard`).
+import { authoritativeHoldRefusal } from "./authoritativeHolds";
 
 /** A nominal share price, applied so a `BuyStock`/`SellStock` visibly moves
  *  the cash column. NOT a computed price -- see design note 0. The real
@@ -2780,8 +2782,8 @@ function settleAuctionLifecycle(state: GameStateResponse, msg: GameplayExecuteMs
 
 /* Design note #1613: the four authoritative holds in their priority. The composition itself lives in
    `authoritativeHolds.ts` since Stage 10.1 (design note #1681) so the `LayTile` authority can ask it beneath
-   this file; re-exported here so every existing caller keeps its import. */
-import { authoritativeHoldRefusal } from "./authoritativeHolds";
+   this file; re-exported here so every existing caller keeps its import. (The import itself stands with the
+   others at the top of the file -- ESLint `import/first`, which a production build treats as an error.) */
 export { authoritativeHoldRefusal };
 
 function applySandboxActionOnBoard(

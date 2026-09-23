@@ -248,19 +248,19 @@ describe("§12 each derived settlement lands exactly once: room, repeated loop, 
     });
   }
 
-  it("residual #549b (reported, not changed): a duplicate TRAIN settlement with NO author skips consent and takes the seller's second train", () => {
-    /* Every server and replay entry carries its author, so this is unreachable on the server path; it is the
-       consent lock's documented blind spot for attribution-less dispatches (solo play, a fixture). Recorded so
-       it is a decision rather than a surprise: the private purchase is idempotent on the owner; the train sale
-       is not. */
+  it("residual #549b -- REPAIRED by Stage 10.2 (S10-20, #1686): a duplicate TRAIN settlement with NO author meets the board's consent and is refused", () => {
+    /* Pinned here as a decision in Batch 7.4 ("reported, not changed"): an author-less copy skipped consent and
+       took the seller's second 3-train. #1686 asks consent of the board when there is no author -- a matching
+       accepted offer, or one president over both -- so the duplicate finds neither and is declined. */
     const seed = withCorp(operatingBoard(), NYC, { owned_trains: ["3", "3", "2"] });
     const { accepted } = S.trainOfferStages(seed, NYC, "3", "150", P2);
     const once = apply(accepted, M.buyTrain(PRR, NYC, "3", "150"), P2);
     expect(same(apply(once, M.buyTrain(PRR, NYC, "3", "150"), P2), once)).toBe(true);
     const unattributed = apply(once, M.buyTrain(PRR, NYC, "3", "150"), null);
-    expect(trains(unattributed, PRR)).toEqual(["2", "3", "3"]);
-    expect(trains(unattributed, NYC)).toEqual(["2"]);
-    // The private purchase's second unattributed copy finds a corporation's card.
+    expect(same(unattributed, once)).toBe(true);
+    expect(trains(unattributed, PRR)).toEqual(trains(once, PRR));
+    expect(trains(unattributed, NYC)).toEqual(["3", "2"]);
+    // The private purchase's second unattributed copy finds a corporation's card (unchanged, as before).
     const privateOnce = apply(acceptedPrivate(), M.buyPrivate(PRR, DH, "100"), P2);
     expect(same(apply(privateOnce, M.buyPrivate(PRR, DH, "100"), null), privateOnce)).toBe(true);
   });
@@ -872,7 +872,11 @@ describe("§14 companion (#1598, O1 repaired): a derived settlement is recorded 
     expect(emittedOf(crashed.room).has("offer:train:1")).toBe(true);
     expect(emittedOf(crashed.room).has(turnKey)).toBe(false); // the settlement did NOT spend the turn key
     const repair = crashed.submit(P1, M.pass); // any submit runs the repair loop first
-    expect(crashed.kinds(repair)).toEqual(["PassTurn*"]); // the owed End Turn; the hand-sent one is then not PRR's to send
+    /* #1685 (Stage 10.2): the hand-sent End Turn is refused by ingress after the repair, and the refusal now
+       CARRIES the repair (it used to be a bare catch-up that dropped the sentence). */
+    expect(repair.kind).toBe("refused");
+    const carried = (repair as { catchUp?: { entries: ServerLogEntry[] } }).catchUp;
+    expect(crashed.kinds({ kind: "applied", entries: carried?.entries ?? [] } as never)).toEqual(["PassTurn*"]); // the owed End Turn; the hand-sent one is then not PRR's to send
     expect(stateDigest(crashed.room.state)).toBe(digest);
   });
 

@@ -123,6 +123,11 @@ export interface RefusedResponse {
   kind: "refused";
   /** `turnAuthority`'s sentence, or a reducer refusal. Shown to the player as-is. */
   reason: string;
+  /** #1685 (Stage 10.2): the entries this submit appended BEFORE it was refused -- the repair of a burst a crash
+   *  interrupted (#1209) -- which the submitter has not seen. Present only when there were any; applied by the
+   *  client exactly as a catch-up, before the refusal is shown. Never contains the refused move: that was not
+   *  appended. */
+  catchUp?: { entries: ReplayEntry[]; digest: string; fields?: Record<string, string> };
   build: BuildId;
 }
 

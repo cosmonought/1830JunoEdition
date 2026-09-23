@@ -169,7 +169,9 @@ describe("the drain is wired to it", () => {
     expect(APP).toContain("status: refusalWasRefused ?");
     /* #1230: passed as `gameplay` -- the one cast the shell takes now that `SetupGame` falls through
        un-narrowed (#1189). The receiver and the two states are the anchor; the argument's name is not. */
-    expect(APP).toContain("const refusalWasRefused = actionWasRefused(before, after, gameplay)");
+    /* #1685 (Stage 10.2, S10-1): the board the reducer was HANDED (the shell's fresh `{ ...before, chart,
+       auction }`) and the grid pair -- compared by content, since that hand-in is never `before`. */
+    expect(APP).toContain("const refusalWasRefused = actionWasRefused(handedToReducer ?? before, after, gameplay, receiptAtoms)");
   });
 
   it("leaves the CHAIN entry's success alone", () => {
@@ -183,7 +185,8 @@ describe("the drain is wired to it", () => {
   });
 
   it("compares the two states rather than trusting the message", () => {
-    expect(APP).toContain("actionWasRefused(before, after, gameplay)");
+    expect(APP).toContain("actionWasRefused(handedToReducer ?? before, after, gameplay, receiptAtoms)");
+    expect(APP).toContain("handedToReducer = after;");
   });
 
   it("changes the label as well as the status", () => {

@@ -80,6 +80,10 @@ import type { GameStateResponse } from "../gameEngine/gameState";
 /* #1662 (S9-1): the ingress seam #1520 opened, generalised -- the version pin, the turn's draw, and the
    playtest waiver a hosted room does not admit. `isSetupGameMsg` / `stampRulesEngineVersion` moved inside it. */
 import { normalizeForCommit } from "./serverIngress";
+/* #1685 (Stage 10.2, S10-1): the one definition of "the authority declined this" (`actionOutcome.ts`), and the
+   reducer's own sentence for it where one owns up (#784) -- the same function the shell's receipt asks. */
+import { unchangedMeansRefused } from "../gameEngine/actionOutcome";
+import { refusalReasonFor } from "./refusedAction";
 
 /** An entry as this server stores it: the shared shape plus the nonce that makes a retry safe. */
 export interface ServerLogEntry extends ReplayEntry {
@@ -437,9 +441,11 @@ export class RoomSession {
     });
     if (refusal !== null) {
       /* A REFUSAL STILL REPORTS THE REPAIR. The board moved before the refusal, so a client told only "not
-         your turn" would be left behind by entries it never saw. */
-      if (repaired.length > 0) return this.catchUp(input.baseIndex);
-      return { kind: "refused", reason: refusal, build: this.options.build };
+         your turn" would be left behind by entries it never saw.
+         #1685 (Stage 10.2): AND THE REPAIR STILL REPORTS THE REFUSAL. This answered a bare catch-up, which the
+         client reads as "the room moved on, try again" (#1218's `onStale`) -- the sentence was lost, and the
+         retry met it anyway. One `refused` frame now carries both, in the order they happened. */
+      return this.refusedFrame(refusal, repaired, input.baseIndex);
     }
 
     /* ---- 6. APPLY AND APPEND ----
@@ -457,6 +463,10 @@ export class RoomSession {
        the rest, including why the raw log rather than the effective one answers the undo question.
        BEFORE THE APPEND AND ONLY HERE. Replay reads what was committed; nothing re-normalizes a stored
        entry, because `restore` replays entries that were normalized when they were first accepted. */
+    /* #1685: the atoms as the authority is about to be handed them -- the repaired board -- for the refusal's
+       sentence below, which must be asked of the board the reducer judged. */
+    const boardBefore = this.state;
+    const gridBefore = this.engine.snapshot.grid;
     const recorded = normalizeForCommit(input.msg, {
       board: this.state,
       /* THE RAW LOG, INCLUDING WHAT A REVERT STRUCK OUT -- #1051's rule, which is the whole reason a player
@@ -499,11 +509,67 @@ export class RoomSession {
 
     const settled = this.engine.submit(entry, (msg) => this.appendDerived(msg, input.actor));
 
+    /* ==================================================================
+        DESIGN NOTE 1685 (Stage 10.2, S10-1): WHAT THE REDUCER DECLINED IS NOT APPENDED
+       ==================================================================
+       THE LAST SILENT REFUSALS. Ingress (`turnRefusal`, step 5) answers most refusals with their sentence before
+       anything is written. Every rule it does not mirror -- the depot purchase's own gate, the diesel exchange,
+       the Yellow Sign's window, the train-obligation hold on `PassTurn`, `BeginOperatingRound`, the chain-era
+       no-op arms -- reached the reducer, was declined BY IDENTITY, and was still answered `applied` and appended:
+       a permanent entry that did nothing, broadcast to every client, committed by `logHash`, counted as the
+       player's "last action" by `undoReachFor`, and -- for a declined `RunMultipleRoutes` -- carrying the seed
+       `normalizeForCommit` had just drawn, so `seedAlreadyRolled` would pin it for the turn.
+       THE BOUNDARY IS `RoomEngine.submit`'s `changed`: the engine's authoritative atoms (the state, with its
+       chart and auction, and the tile grid) compared by content before and after the entry (`actionOutcome.ts`
+       -- identity cannot answer it, because the chart step returns a fresh object for every charted action).
+       A submission cannot move the engine's other two atoms (`emitted` is written for derived entries only;
+       `unparseable` cannot be reached by a minted payload).
+       WHEN IT DID NOT CHANGE, and the message is not one for which that is the design (`CloseRoom`'s race,
+       #1685a), the move did not happen, and the session says so exactly as a store rejection does (#1250):
+         * the entry is taken back off the log -- it is still the LAST entry, because an unchanged board owes no
+           new derived action (the repair above drained everything the same board owed; `derived` is empty
+           and is checked, not assumed);
+         * the nonce is forgotten, so a retry of the same submission is JUDGED AGAIN, never answered as a move
+           already made (#1209's catch-up would tell the client its refused move had landed);
+         * the engine is not rebuilt: an unchanged board IS the board the shorter log describes;
+         * the answer is `refused` with the reducer's own sentence where `refusalReasonFor` owns up to one
+           (#784 -- the same function, on the same board, the shell's receipt asks), and a plain one otherwise.
+       Stored logs are untouched: a no-op already on disk still replays as the no-op it always was. */
+    /* #1687 (follow-up): asked of the board the message was judged on, so a consent answer that found nothing
+       to answer -- #662's harmless duplicate -- stays applied, and one that answered a standing offer does not. */
+    if (!settled.changed && settled.derived.length === 0 && unchangedMeansRefused(input.msg, boardBefore)) {
+      this.log.pop();
+      if (input.submissionId !== undefined) {
+        this.submissions.delete(this.submissionKey(input.actor, input.submissionId));
+      }
+      const kind = Object.keys(input.msg as Record<string, unknown>)[0] ?? "That move";
+      const reason =
+        refusalReasonFor(boardBefore, input.msg, { actor: input.actor, mapGrid: gridBefore }) ??
+        `${kind} was declined by the rules: the board did not change, and nothing was recorded.`;
+      return this.refusedFrame(reason, repaired, input.baseIndex);
+    }
+
     return {
       kind: "applied",
       entries: [...repaired, entry, ...settled.derived],
       digest: stateDigest(this.state),
       ...this.explain(),
+      build: this.options.build,
+    };
+  }
+
+  /** #1685: a refusal, carrying any repair this submit appended before it (see step 5). A bare `refused` when
+   *  nothing was repaired -- the frame every client already understands (#1218). */
+  private refusedFrame(reason: string, repaired: readonly ServerLogEntry[], baseIndex: number): ServerMessage {
+    if (repaired.length === 0) return { kind: "refused", reason, build: this.options.build };
+    return {
+      kind: "refused",
+      reason,
+      catchUp: {
+        entries: this.log.filter((entry) => entry.index > baseIndex),
+        digest: stateDigest(this.state),
+        ...this.explain(),
+      },
       build: this.options.build,
     };
   }

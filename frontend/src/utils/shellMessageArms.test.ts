@@ -178,7 +178,8 @@ describe("the room closure, #899", () => {
     expect(APP.slice(hook, hook + 400)).toContain("settleRoomPayout({");
     expect((APP.match(/settleRoomPayout\(\{/g) ?? []).length).toBe(1);
     // And the general path asks the rule before it writes the entry.
-    expect(APP).toContain("const quietDuplicate = silentWhenUnchanged(gameplay, before, after);");
+    // #1685 (Stage 10.2): asked of the board the reducer was HANDED and the grid pair, by content.
+    expect(APP).toContain("const quietDuplicate = silentWhenUnchanged(gameplay, handedToReducer ?? before, after, receiptAtoms);");
     expect(APP).toContain("if (!quietDuplicate)");
   });
 });

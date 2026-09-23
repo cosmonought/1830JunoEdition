@@ -415,6 +415,11 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
         return;
       }
       case "refused": {
+        /* #1685 (Stage 10.2): a refusal that followed a repair carries the repair. Applied first, as history
+           (the entries are the game's, appended before this move was judged), then the sentence. */
+        if (message.catchUp !== undefined) {
+          applyEntries(message.catchUp.entries, message.catchUp.digest ?? null, message.catchUp.fields ?? null, "catch-up");
+        }
         options.onRefused?.(message.reason);
         // No entry, so no nonce: FIFO is the only thing that can match this, which is why it is the mechanism.
         settleHead(null);

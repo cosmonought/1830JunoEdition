@@ -24,6 +24,7 @@
 // A REFUSAL IS AN IDENTITY, NOT A HEURISTIC. Every gate returns the SAME OBJECT it was given -- `return
 // state` -- so `after === before` is exact rather than a guess about intent. No deep comparison, no field
 // list to keep in step with the reducer.
+// [#1685, Stage 10.2: no longer true on a charted board -- the comparison is by content now; see below.]
 //
 // THE ALLOWLIST IS THE ONLY JUDGEMENT CALL, and it is small: a few messages legitimately change nothing.
 // `AcceptTrainOffer` and its siblings address an offer register the sandbox does not model (`sandboxSession`
@@ -37,6 +38,12 @@
 import type { GameplayExecuteMsg } from "./sessionKey";
 import type { GameStateResponse } from "../gameEngine/gameState";
 import type { MapGridResponse } from "../components/hexContractTypes";
+import {
+  UNCHANGED_IS_NOT_A_REFUSAL,
+  atomsUnchanged,
+  authorityDeclined,
+  unchangedMeansRefused,
+} from "../gameEngine/actionOutcome";
 import { sharePurchaseBlock, type PriceZone } from "../gameEngine/sharePurchase";
 import { shareSaleBlock } from "../gameEngine/shareSale";
 import { dividendRefusal } from "../gameEngine/dividendGate";
@@ -58,60 +65,67 @@ import {
   fundingPrivateRescindRefusal,
 } from "../gameEngine/emergencyFunding";
 
-/** Messages that legitimately leave sandbox state untouched, so an unchanged board is not a refusal.
- *  Kept as an explicit list for the reason in the note: an exemption should be a decision. */
-export const NO_OP_MESSAGE_KEYS: readonly string[] = [
-  // The offer register is its own query; an accepted offer settles via `BuyTrainFromCorporation`.
-  "AcceptTrainOffer",
-  "RejectTrainOffer",
-  "RescindTrainOffer",
-  "ProposeTrainOffer",
-  // An instruction about the log, already honoured by `effectiveActions` before the reducer sees it.
-  "RevertTo",
-  "UndoLastAction",
-  // Not moves.
-  "SetupGame",
-  "Chat",
-  // The contract's own round driver; the sandbox settles transitions itself.
-  "ExecuteOperatingRound",
-  /* #1248: every client's countdown and any player's button all send this, and the reducer lets the first
-     one win (#899). The second through fourth are the design working, not a rule declining anything. */
-  "CloseRoom",
-];
+/* ==================================================================
+    DESIGN NOTE 1685 (Stage 10.2, S10-1): THE IDENTITY BELOW WAS DEFEATED BY THE CHART, AND IS GONE
+   ==================================================================
+   #778's "a refusal is an identity" stopped being observable at #1197: the chart step returns a fresh object
+   for every charted action, and the shell hands the reducer a fresh `{ ...before, market_positions, waterfall }`
+   anyway, so `before === after` was false for every dispatch in room play and in every replay -- the REFUSED
+   receipt never fired, and #899's CloseRoom silence (#1248) never held. The comparison is now CONTENT, and it
+   is not this file's: `authorityDeclined` (`gameEngine/actionOutcome.ts`) is the one definition the server's
+   transport also asks, over the same atoms (the board, with its chart and auction, and the tile grid when the
+   caller has one). The allowlist is that module's too, and it is shorter than #778's -- see #1685a for why
+   `SetupGame`, `UndoLastAction`, `ExecuteOperatingRound` and the chain-era offer messages left it. */
 
-/** Whether this message is one that may do nothing without it meaning anything went wrong. */
-export function mayLegitimatelyDoNothing(msg: unknown): boolean {
-  if (typeof msg !== "object" || msg === null) return true;
-  return NO_OP_MESSAGE_KEYS.some((key) => key in msg);
+/** Messages that legitimately leave the board untouched, so an unchanged board is not a refusal (#1685a). */
+export const NO_OP_MESSAGE_KEYS: readonly string[] = UNCHANGED_IS_NOT_A_REFUSAL;
+
+/** Whether this message is one that may do nothing without it meaning anything went wrong. With `before` (the
+ *  board it was judged on), #1687's harmless duplicate answers are recognised too. */
+export function mayLegitimatelyDoNothing(msg: unknown, before?: GameStateResponse): boolean {
+  return !unchangedMeansRefused(msg, before);
+}
+
+/** The two tile grids around an action, when the caller holds them (the shell's `mapGridRef`). */
+export interface GridPair {
+  before: MapGridResponse | undefined;
+  after: MapGridResponse | undefined;
 }
 
 /** #1248: whether a message that changed nothing should print NOTHING -- not a success line, not a refusal.
  *
  *  Narrower than `mayLegitimatelyDoNothing` on purpose. That list says "an unchanged board is not a refusal";
- *  most of its members still earn their line (an undo, a chat). These are the ones #899 wanted silent: "a
- *  player whose timer lost the race has done nothing wrong, and logging it would put four identical scare
- *  lines in the Activity Log of a finished game." The shell's branch used to `return` before the log for
- *  them; with the branch gone (#1248) the quiet has to be a rule the general path can ask. */
+ *  most of its members still earn their line (an undo). These are the ones #899 wanted silent: "a player whose
+ *  timer lost the race has done nothing wrong, and logging it would put four identical scare lines in the
+ *  Activity Log of a finished game." #1685: "changed nothing" is `atomsUnchanged`, by content. */
 const SILENT_WHEN_UNCHANGED: readonly string[] = ["CloseRoom"];
-export function silentWhenUnchanged(msg: unknown, before: unknown, after: unknown): boolean {
+export function silentWhenUnchanged(msg: unknown, before: unknown, after: unknown, grids?: GridPair): boolean {
   if (typeof msg !== "object" || msg === null) return false;
-  if (before === null || before === undefined || before !== after) return false;
-  return SILENT_WHEN_UNCHANGED.some((key) => key in msg);
+  if (before === null || before === undefined || after === null || after === undefined) return false;
+  if (!SILENT_WHEN_UNCHANGED.some((key) => key in msg)) return false;
+  return atomsUnchanged(
+    { state: before as GameStateResponse, grid: grids?.before },
+    { state: after as GameStateResponse, grid: grids?.after },
+  );
 }
 
-/** Whether the reducer declined this action.
+/** Whether the authority declined this action.
  *
- *  `before === after` by REFERENCE, which is what every gate produces when it refuses. A reducer that
- *  legitimately computes an identical-but-new object would read as applied, and that is the safe direction
- *  to be wrong in: a false "refused" on a real action would be a lie in the other direction. */
+ *  #1685: BY CONTENT, through `authorityDeclined` -- the same function, over the same atoms, that decides
+ *  whether the server appends a submission. `before` is the board the reducer was HANDED (the shell passes the
+ *  object carrying its chart and auction mirrors), `after` the board it returned. */
 export function actionWasRefused(
   before: unknown,
   after: unknown,
   msg: GameplayExecuteMsg | Record<string, unknown>,
+  grids?: GridPair,
 ): boolean {
-  if (before === null || before === undefined) return false;
-  if (mayLegitimatelyDoNothing(msg)) return false;
-  return before === after;
+  if (before === null || before === undefined || after === null || after === undefined) return false;
+  return authorityDeclined(
+    msg,
+    { state: before as GameStateResponse, grid: grids?.before },
+    { state: after as GameStateResponse, grid: grids?.after },
+  );
 }
 
 /** The line the Activity Log shows in place of the success sentence.

@@ -6733,6 +6733,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
            THE SENTENCES SURVIVE, derived from the two states after the dispatch (`describeAuctionTransition`,
            #1340a) -- "the reducer settles, the shell narrates" (#704), with no flag crossing the boundary. */
         let after = before;
+        /* #1685 (Stage 10.2, S10-1): the board the reducer is actually HANDED -- `before` plus the chart and
+           auction mirrors -- kept so the receipt below compares the reducer's input with its output, over the
+           same atoms the server compares (`actionOutcome.ts`). `null` when no reducer ran. */
+        let handedToReducer: GameStateResponse | null = null;
 
         /* Design note #1054: the dividend's price move, held from the market atom until `label` is composed
            a few hundred lines below. `let` because it is written by the block that reads the atom's result
@@ -6890,6 +6894,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
             // #1340: the auction atom rides with the board.
             waterfall: sandboxWaterfallRef.current,
           };
+          handedToReducer = after;
           after = applySandboxAction(after, gameplay, {
             // Design note #549: the log's author, so a replayed purchase is
             // credited to the player who made it rather than to whoever this
@@ -8387,7 +8392,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
         /* Design note #784: computed ONCE, above the entry that reads it three times -- and once rather than
            three times is not only tidiness here: `refusalReasonFor` runs the real purchase and sale gates,
            and three identical calls per action is three times the work for one answer. */
-        const refusalWasRefused = actionWasRefused(before, after, gameplay);
+        /* #1685 (Stage 10.2, S10-1): BY CONTENT, over the board the reducer was handed and the tile grid around
+           the action -- `authorityDeclined`, the one definition the server's transport asks too. `before ===
+           after` could never hold here: the hand-in above is a fresh object for every dispatch. */
+        const receiptAtoms = { before: gridBeforeAction, after: mapGridRef.current };
+        const refusalWasRefused = actionWasRefused(handedToReducer ?? before, after, gameplay, receiptAtoms);
         const refusalReason = refusalWasRefused
           ? refusalReasonFor(before, gameplay, {
               actor: options?.actor ?? viewerAddressRef.current,
@@ -8447,7 +8456,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
         /* #1248: a CloseRoom that lost the race to another client's is nothing -- not a success and not a
            refusal -- and #899 asked for exactly that silence. The shell's branch used to `return` before this
            point; now the general path asks the rule. */
-        const quietDuplicate = silentWhenUnchanged(gameplay, before, after);
+        const quietDuplicate = silentWhenUnchanged(gameplay, handedToReducer ?? before, after, receiptAtoms);
         if ((!options?.silentInLog && !isSetupGameMsg(msg)) || refusalWasRefused) {
         if (!quietDuplicate)
         setActionLog((log) => [

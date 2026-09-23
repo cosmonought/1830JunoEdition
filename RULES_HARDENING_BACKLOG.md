@@ -2774,6 +2774,21 @@ step (#1197) returns a new object for every charted state, so the shell's REFUSE
 play (Batch 3 §7). `OPEN`. Detail: answer `refused` keyed on `stateDigest(before) === stateDigest(after)` and
 make the shell's receipt use the same comparison. Replay: appended no-ops are harmless; removing them changes
 nothing stored.
+**Stage 10.2 (2026-09-22, uncommitted): `RESOLVED`** (design notes **#1685 / #1685a**). One criterion,
+`gameEngine/actionOutcome.ts`: a message was declined when the authoritative atoms — the state (chart and auction on
+it) and the tile grid — are unchanged BY CONTENT (`canonicalJson` text equality, not identity, not the 64-bit digest),
+unless the message is one of the three for which nothing changing is the design (`CloseRoom`'s race, `RevertTo`,
+`Chat`) or — state-aware, asked of the board the message was judged on (#1687, `harmlessDuplicate.ts`, the same
+predicate ingress's `consentAnswerRefusal` now asks) — a consent answer (`AnswerPrivatePurchase`,
+`AnswerTrainPurchase`, `AnswerPrivateTrade`, `AnswerFundingPrivateOffer`) that finds NOTHING TO ANSWER: #662 / #701
+/ #1541's harmless duplicate, which stays applied, appended and free of a REFUSED receipt. The same answer while its
+offer stands is judged in full and refused when it changes nothing. `RoomEngine.submit` reports `changed`; `RoomSession.submit` pops the entry, forgets the nonce (a retry is
+judged again), and answers `refused` with `refusalReasonFor`'s sentence or a plain one — the durable log never holds
+it. A refusal that follows a crash repair now carries the repair (`refused.catchUp`; the ingress path too, which used
+to answer a bare catch-up). The shell's receipt (`actionWasRefused` / `silentWhenUnchanged`) asks the same function
+over the board it HANDED the reducer and the grid pair. `SetupGame`, `UndoLastAction`, `ExecuteOperatingRound` and
+the chain-era offer messages left #778's allowlist. `CloseRoom`'s loser and the harmless duplicate answers stay `applied` and appended. Derived
+entries are untouched (a derived no-op still appends — it carries the #1208 guard key). Corpus: see Part E.
 
 **S10-2. `BUILD_ID` / `SetupGame.build` (#1252) is `"dev"` everywhere,** so the deal-build pin is nominal; the
 rules-engine version (#1520) carries the replay boundary, but a per-deploy `BUILD_ID` would make the build pin
@@ -2899,6 +2914,12 @@ instance identity (S7-21) does not eliminate it (it is an arm-level consent gap,
 retained here rather than widened into 7.4. Candidate fix for this stage: refuse a `null`-actor settlement that
 matches no standing accepted offer, or require an author at ingress for every settlement message (S10-1's
 transport). Replay: refusal-added on hand-crafted entries only; no stored entry lacks an author.
+**Stage 10.2 (2026-09-22, uncommitted): `RESOLVED`** (design note **#1686**, `trainSaleAuthority.ts`). The
+`actor == null → return null` short-circuit ahead of consent is gone: without an author, consent is asked of the
+BOARD — a matching accepted offer, or one president over both corporations (solo's same-president direct buy). No
+author requirement was added to the reducer or to ingress. The Batch-7.4 "residual #549b" pin is flipped to the
+refusal; legitimate derived settlement (authored or not) and the same-president direct buy still settle. Corpus:
+0 stored entries changed interpretation.
 
 **S10-21. A completed engine-version-5 Yellow Sign game as a committed fixture — the epilogue coverage JUNO-Z6C used to supply.**
 Status `OPEN` (test substrate; filed by Batch 7.5, owner ruling 2026-09-16). `__fixtures__z6cLog.json` (JUNO-Z6C
@@ -3029,6 +3050,13 @@ applied (`replayLog.ts`, `const live = effectiveActions(ordered)`), so the reduc
 cell decides nothing. Filed because the asymmetry is real in the source and a future caller that asked the hold about a
 `RevertTo` directly would get the odd answer. Repair: add `RevertTo` to #1530's escape list. Replay: none (the message
 never reaches the predicate).
+**Stage 10.2 re-check (2026-09-22): `OBSOLETE — unreachable under the current architecture`; production NOT changed.**
+Verified behaviourally after the new refusal transport (`stage102RefusalTransport.test.ts` C14): on a room carrying
+an owed discard, `pendingDiscardBlock` still answers a `RevertTo` with the hold sentence, and a live host revert is
+still applied by REBUILD (`RoomSession.submit`'s `RevertTo` branch returns before `RoomEngine.submit` and before
+10.2's judgement) — the reducer is never called with a `RevertTo`; `replayLog` resolves it in `effectiveActions`
+before the loop; ingress exempts it (`turnAuthority.ts`); the shell resolves it before its dispatch. 10.2 opened no
+new path. Not added to the escape list merely for symmetry.
 
 ---
 
@@ -3648,6 +3676,7 @@ PMQ — the ruling applies the conditional form to both. Implementation: Slice 8
 
 | **7** | **9.4a–9.5 + closure** (`4704f6e`, `677ed0e`, `53f34b0`, `69f4275`, `67a3123`, + this pass) | **The bump, and the rules that earned it.** 9.4a Blood Price arrival stamping (S9-11); 9.4b the D&H free station judged by the D&H's own conditions at both locks, a refusal no longer consuming the power (S9-12); 9.4c the chart stepping once per PHYSICAL CERTIFICATE (S9-13); 9.4d the Yellow Sign's outcome DERIVED by the authoritative reducer and the turn's draw and turn key supplied by the SERVER at ingress, with the playtest waiver dropped there and refused by the reducer on any pinned board (S9-1); 9.5 the five-physical-certificate Bank Pool cap (S9-8), the C&SL as a bonus lay with no upgrade right (S9-6), the Mark nullifying only the vanished train's run (S9-3), and the corrected Carcosa lifecycle — exemption coextensive with the gilding, doom trigger on whichever of the gift and the first REAL Diesel lands second, gift model from the depot, synthetic provenance following a Blood Price while the gilding burns off (S9-2). **Closure:** `RULES_ENGINE_VERSION` **6 → 7**, `SUPPORTED_RULES_ENGINE_VERSIONS` derived `[7]`, changelog row 7, `stage9Closure.test.ts` (8 cases), and `stage85Closure`'s three literal-6 pins narrowed to prefix/derived pins so a Stage-8 case no longer owns the current version. | **The canonical 18/18 was measured at `dea5489`, NOT at the tip** — see the closure banner in the Stage 9 section for the table, the four divergence families and the four special items. **Stage 9.5 followed and was measured separately by targeted presence checks across all 18: S9-8 15 `SellStock` entries / zero divergent sites / the double never in a pool; S9-2 zero gifts, fogs, Blood Price transfers, ghost or carcosan observations, and no real Diesel anywhere.** Both absent, so 9.5 is corpus-neutral and the earlier reconciliation still applies. The one permanent gameplay divergence in the whole stage is **`export/JUNO-3XD` entry 115** (S9-12): refused on both sides because NNH is unfloated, but the baseline consumed `used_private_abilities: ["dh-token"]` while refusing and Stage 9 does not. **No golden repinned at closure**; `replayGolden` / `replayJunoCV4` / `replayJuno3XD` green. **All raw logs byte-unchanged.** |
 | 7 (owed: **8** at Stage-10 closure) | **10.1** (uncommitted, 2026-09-22) | **`LayTile` authority unification (S10-26, S10-25, LayTile half of S10-4; #1681–#1683).** One `LayTile` composition — the four holds, then identity ▸ geometry ▸ station anchoring ▸ JK ▸ terrain — asked by the reducer's gate block ahead of the arm and the cursor, by both tile grids on the lay's snapshot, and by the live ingress (`turnRefusal`, with the providers' geometry). An unaffordable or ineligible lay now returns the board by identity with the cursor, the power and the JK where they stood, and lands on no grid. No rule moved; where each is asked did. `RULES_ENGINE_VERSION` stays **7**; the owner's ruling records a **provisional closure bump 7 → 8** for Stage 10 because supported live authority changed. | **Canonical 18/18 measured, old (`server/dist` built from HEAD) vs new (a scratch build): 334 stored `LayTile` entries, 134 applied / 200 refused on BOTH sides, 0 decision differences, every final state digest, grid and cursor identical.** No golden, fixture or log touched. **10.1b (#1684):** `layTimingRefusal` — a `LayTile` off the Lay Track step is refused on a PINNED board; the 68 off-step lays the legacy corpus carries (CV4 106 …, Z6C 109 …, FCJ 94/172 — legal lays from the pre-#1440 `BuyPrivate`-opening turn) keep the arm they were played on, so the measurement stands unchanged: 334 / 134 / 200 / 0 on both sides. |
+| 7 (owed: **8** at Stage-10 closure) | **10.2** (uncommitted, 2026-09-22) | **Refusal transport and the author-less train settlement (S10-1, S10-20; S10-24 verified obsolete; #1685, #1685a, #1686).** A reducer-declined submission (atoms unchanged by content, `actionOutcome.ts`) is no longer appended or answered `applied`: `refused`, nonce not consumed, the reducer's sentence where `refusalReasonFor` has one; a repair before a refusal travels with it (`refused.catchUp`). `CloseRoom`'s race stays applied. `trainSaleRefusal` asks consent of the board when there is no author. **Follow-up (#1687):** a consent answer that finds nothing to answer (the board's question, not the message type's) stays a harmless applied duplicate; `sandboxSession.ts`'s mid-module `authoritativeHolds` import moved to the import block (ESLint `import/first`, the Vercel build failure at `f75811a`). **No stored entry's interpretation changes** — the transport only stops NEW logs recording no-ops; S10-20 is refusal-added on author-less entries, which the corpus does not contain. `RULES_ENGINE_VERSION` stays **7**; the Stage-10 closure bump **7 → 8** (from 10.1) remains owed; 10.2 adds none. | **Canonical 18/18, old (scratch build of `f75811a`) vs new (scratch build of the working tree): 4,105 stored / 3,103 applied / 1,002 dropped by `RevertTo`; 3,131 engine applications (3,103 stored + 28 adapter-supplied) compared entry by entry on the (state, grid) digest — 0 differences; every final state and grid digest identical.** Reducer no-ops among applied stored entries: **1,081** = 79 derived (10.2 still appends them) + 3 `CloseRoom` race losers + **4 harmless duplicate answers** (#1687: 2 `AnswerTrainPurchase`, 2 `AnswerPrivatePurchase`, all still appended) + **995 authority refusals** a 10.2 server would not have appended. Replaying each effective log WITHOUT them leaves every final state and grid identical, 18/18 — save for **45** legacy `PlaceHomeStation` no-ops that the development corpus's home-choice adapter (#1614, legacy logs only, never a pinned room) reads as remembered choices, which the simulation keeps. No golden, fixture or log touched. |
 
 Items above that carry "bump" must add a row here when they land. No golden or replay expectation is ever
 re-pinned silently: the re-pin, its index and its reason go in the batch write-up and in this table.

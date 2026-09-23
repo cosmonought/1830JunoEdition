@@ -83,6 +83,7 @@ import { auctionRefusal, isAuctionMessage } from "./auctionAuthority";
 /* Design notes #1590-#1595 (Batch 7.4): the ordinary offers' hold and their three authorities -- the same
    predicates the reducer's core asks, so the two locks cannot disagree; ingress answers with the sentence. */
 import { legacyOfferMessageRefusal, pendingOfferBlock } from "./pendingOfferHold";
+import { harmlessDuplicateAnswer } from "./harmlessDuplicate"; // #1687 (Stage 10.2 follow-up)
 /* Design note #1630 (Slice 8.4): the M&H exchange's request predicate -- the same function the reducer's arm
    asks, so the socket and the board cannot disagree about whether an exchange is legal. */
 import { mhExchangeRequestRefusal, type MhExchangeRequest } from "./mohawkExchange";
@@ -672,6 +673,10 @@ function consentAnswerRefusal(
   msg: GameplayExecuteMsg,
   mapGrid?: MapGridResponse,
 ): string | null | "not-a-consent-answer" {
+  /* #1687 (Stage 10.2 follow-up): the "nothing to answer" early returns below, asked through the one predicate
+     the refusal transport also asks (`harmlessDuplicateAnswer`), so ingress and `RoomSession` agree on which
+     unchanged answers are harmless duplicates rather than refusals. Same four conditions, same `null`. */
+  if (harmlessDuplicateAnswer(state, msg)) return null;
   if ("AnswerPrivatePurchase" in msg) {
     const offer = state.private_purchase_offer ?? null;
     /* #662: answering an offer that is no longer there is not an error -- the first answer settles it and

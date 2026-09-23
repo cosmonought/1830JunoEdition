@@ -85,6 +85,7 @@ import type { TileColorTier } from "../components/hexTileCatalog";
 import type { GameStateResponse, WaterfallStateResponse } from "./gameState";
 import type { GameplayExecuteMsg } from "../utils/sessionKey";
 import type { MapGridResponse } from "../components/hexContractTypes";
+import { atomsUnchanged, type AuthoritativeAtoms } from "./actionOutcome"; // #1685 (Stage 10.2)
 
 /** One entry as the log stores it. Structurally `SandboxAction`, restated so this module does not depend on
  *  the Firestore layer -- a log read from a file and a log read from a room must replay identically, and a
@@ -521,9 +522,21 @@ export class RoomEngine {
     entry: ReplayEntry,
     mint: (msg: GameplayExecuteMsg, reason: string) => ReplayEntry,
     options?: { mapGrid?: MapGridResponse; extraStationAvailable?: boolean },
-  ): { derived: ReplayEntry[]; state: GameStateResponse } {
+  ): { derived: ReplayEntry[]; state: GameStateResponse; changed: boolean } {
+    /* ==================================================================
+        DESIGN NOTE 1685 (Stage 10.2, S10-1): APPLY, THEN JUDGE, THEN SETTLE
+       ==================================================================
+       `changed` is the engine's own answer to "did this entry move an authoritative atom" -- the state (with the
+       chart and the auction on it) and the tile grid, compared by CONTENT (`atomsUnchanged`), because the chart
+       step hands back a fresh object for every charted action and identity would say "yes" to a refusal. The
+       transport decides what an unchanged answer means (`RoomSession.submit`: a refusal, unless the message is
+       one for which nothing changing is the design). The settle still runs either way, exactly as before, so
+       no caller of this method sees a different burst; on an unchanged board it owes what the same board owed
+       a moment ago, which a caller that has already drained it (the room) knows is nothing. */
+    const before: AuthoritativeAtoms = { state: this.state, grid: this.grid };
     this.apply(entry);
-    return { derived: this.settleOwed(mint, options), state: this.state };
+    const changed = !atomsUnchanged(before, { state: this.state, grid: this.grid });
+    return { derived: this.settleOwed(mint, options), state: this.state, changed };
   }
 
   /** Generate and apply everything the game owes RIGHT NOW, without a player action first.

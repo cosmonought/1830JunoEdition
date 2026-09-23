@@ -37,8 +37,8 @@ interpretation of, the 2018 rulebook (or a product ruling), recorded so it is ne
 | 6 | Route authority + revenue | implemented (Batch 6, #1550–#1554), awaiting full-suite validation and commit |
 | 7 | Transaction + cash authority / auction | done in five slices — 7.1 `08a59ec` (money ledger), 7.2 `a927e5f` (stock / par), 7.3 `d0a0792` (auction), 7.4 `6ecdfb1` (offers, consent, replay-safe settlement identity); **7.5** (`RULES_ENGINE_VERSION` 4 → 5, replay / golden / corpus reconciliation — `BATCH7.5_REPLAY_VERSION_CLOSURE_2026-09-16.md`, uncommitted, awaiting the owner's full-suite gate) |
 | 8 | Stock / OR edge cases + timing | Part B — design pass done 2026-09-16 (`STAGE8_AUTHORITY_DESIGN_2026-09-16.md`: five slices 8.1 → 8.5, one 5 → 6 bump at closure); **owner rulings R1–R4 recorded 2026-09-16** (design §0, D-29 … D-32), **S8-14 ruled 2026-09-17** (design §0, D-33); Opus is the default model for every Stage-8 slice; **Slice 8.1 implemented 2026-09-16 — S8-1 / S8-3 / S8-4 `RESOLVED` (**committed `05b5dfc`**; design §2.8)**; **Slice 8.2 implemented 2026-09-16 — S8-5 / S8-6 / S8-12 / S8-13 `RESOLVED`; S8-14 `RESOLVED` 2026-09-17 by the owner's ruling (the tiled OO home hex, #1617) (**committed `efe4098`**; design §5.9)**; **Slice 8.3 implemented 2026-09-17 — S8-2 `RESOLVED` (#1620, design §4.4): `presidentFor(company, seating)` with §5.4's clockwise tie-break from the former president's seat, one ordering rule for settlement and forced-sale projection alike, corpus-neutral (18 logs / 3,131 entries / 7 presidency changes / 0 ties / 0 disagreements); S10-18's presidency-tie gap closed; **S8-15 `RESOLVED` 2026-09-17 by the owner's ruling** (the Scenario-D presidency exchange, #1622: two ordinary 10 %s where the successor has them, otherwise the other-20 card one-for-one for the President's Certificate, percentages unmoved either way); **S9-14 `RESOLVED` 2026-09-17 — absorbed into 8.3 by owner ruling** (#1624: V-7.2's 10 % exchange certificate must already be in the Bank Pool before a half-sale of the other-20, and a president who must first receive that card during a presidency transfer is subject to the same requirement — a sale cannot supply its own prerequisite); **S9-13 filed and left OPEN by the same ruling** (the chart walks one row per 10 %, not per certificate — Stage 9) (**committed `02a9838`**); **Slice 8.4 implemented 2026-09-17 — S8-10 `RESOLVED`** (#1630–#1634, design §6.8): the M&H exchange is an authority of its own (`mohawkExchange.ts`), a free player-initiated interjection that consumes no Stock Round purchase, seat, pass streak or Priority Deal, queued as `pending_mh_exchange` when the request arrives off-turn and settled — fully revalidated — at the next legal between-turn boundary, ahead of every `buildOperatingOrder` so an SR→OR float is never locked out of the round it just qualified for; the owner's source choice is never switched for them (**committed `fc5a575`**); **Slice 8.5 implemented 2026-09-17 — the closure pass (UNCOMMITTED, awaiting the owner's review and full-suite gate; design §17)**: `RULES_ENGINE_VERSION` **5 → 6** with changelog row 6 and the derived supported list, **S8-8 `RESOLVED`** (#1640, the last share-price nominal out of the 6.6.3 projection), the corpus reconciliation measured from HEAD under v6 (18 files / 4,105 stored / 3,103 applied / 1,131 reducer no-ops / deterministic 18 of 18 / 0 boards ending with a queued M&H request), the five closure matrices and eight static source audits (`stage85Matrices.test.ts`), and **S10-23 / S10-24 filed** by that auditing |
-| 9 | Variants + map data + variant authority | Part B |
-| 10 | Replay / settlement / release hardening | Part B |
+| 9 | Variants + map data + variant authority | **CLOSED 2026-09-19, `RULES_ENGINE_VERSION` 7** — see the Stage 9 closure banner (Part B) |
+| 10 | Replay / settlement / release hardening | **CLOSED 2026-09-23, `RULES_ENGINE_VERSION` 8** (authority / replay / tooling slices 10.1–10.6 + the closure pass) — see the Stage 10 closure banner (Part B); deferred S10 items are assigned to later phases there. **Next phase: VARIANT CERTIFICATION** (Gentle Rust, Unpredictable Revenue, Delayed Auction) |
 
 UI/polish-only items are **not** forced into a numbered stage; they live in Part C (the UX backlog).
 
@@ -54,7 +54,7 @@ revised book does not contain. An owner variation from printed Scenario D is rec
 never by labelling the whole scenario owner-defined. Scenario-D facts: `STAGE8_AUTHORITY_DESIGN_2026-09-16.md` §5.1a.
 
 **Replay / version boundary.** `RULES_ENGINE_VERSION` (`frontend/src/gameEngine/rulesVersion.ts`, #1520) is
-**7** after the Stage-9 closure pass (2026-09-19, #1680; 6 was Stage 8.5's). *(Historical note, kept as written:
+**8** after the Stage-10 closure pass (2026-09-23, #1698; 7 was Stage 9's, #1680; 6 was Stage 8.5's). *(Historical note, kept as written:
 it was)* **5** after Batch 7.5 (1 = post-Batch-4 semantics, 2 = Batch 4.6, 3 = Batch 5, 4 = Batch 6, 5 = Batch 7 — the one
 bump deferred across 7.1–7.4 and landed in 7.5). Since
 Batch 6 the pin is also copied onto the state (`rules_engine_version`, #1551) so the reducer can tell a pinned
@@ -2804,6 +2804,80 @@ LEGALITY SYNC entry is owed whenever a lock gains a check that was not there bef
 there is no follow-up task attached.
 ### Stage 10 — Replay / settlement / release hardening
 
+> ## ✅ STAGE 10 IS CLOSED — 2026-09-23, `RULES_ENGINE_VERSION` **8**
+>
+> **All intended Stage-10 authority, replay and tooling slices are complete (10.1 / 10.1b, 10.2, 10.3 / 10.3b,
+> 10.4 / 10.4a, 10.5, 10.6), and no known live or crafted-input rules-authority blocker remains.** The items still
+> open below are intentionally assigned to later phases or to the owner; none is a Stage-10 blocker. This is NOT a
+> claim that the backlog is finished — by design it is not.
+>
+> | disposition | items |
+> |---|---|
+> | `RESOLVED` in Stage 10 | S10-1 (10.2), S10-4 (10.1 / 10.3 / 10.3b), S10-5 (10.4), S10-9 (10.5), S10-13 (10.4 / 10.4a), S10-20 (10.2), S10-22 (10.4), S10-23 (10.4 / 10.4a), S10-25 (10.1), S10-26 (10.1 / 10.1b); and, filed under Stages 6–7 but closed here, S6-5 / S6-6 / S6-7 (10.6), S6-8 (confirmed by 9.2's rule, proved in 10.6), S7-17 (superseded by 10.2 / 10.3b / 10.4) |
+> | **A** `DEFERRED` — a later deployment / settlement / retirement phase | S10-2 (per-deploy `BUILD_ID` — deployment), S10-6 (mine `src/tests.rs` — Rust retirement), S10-7 (engine tests / `shared/` packaging — refactor), S10-8 (vestigial on-chain gameplay path — Phase 4), S10-10 (settlement / money readiness, `MIGRATION_PLAN.md` 2.5b → 4 — including the session-key signing and attestation work), S10-11 (Firestore retirement), S10-14 (duplicated constants — refactor), S10-19 (August audits — Phase-4 pre-check) |
+> | **B** `OWNER` decision / housekeeping | S10-3 (no historical reducer bundle — recorded owner decision, D-9), S10-12 (owner-authored release items), S10-16 (host housekeeping: stale worktree / `index.lock`) |
+> | **C** observation / cross-reference | S10-15 (brittle string-pinning tests — note, no action), S10-17 (message-carried facts — each listed fact is now judged by the authority: S6-2, S6-6, S8-9, S8-6, S6-1; `revenue_seed` / `revenue_turn` are message-carried by recorded design and the seed is server-supplied at ingress since 9.4d), S10-18 (remaining dedicated machine-level tests: first-SR sale refusal, reducer auction escrow, terrain-fee-once on an upgrade of preprinted track — the rules themselves are implemented: S8-7 and S7-4 `RESOLVED` in 7.2 / 7.3, the terrain fee part of 10.1's LayTile authority) |
+> | **D** test-substrate capture | **S10-21** (a completed Yellow Sign game as a committed fixture) |
+> | **E** superseded / obsolete | S10-24 (unreachable under the current architecture — verified in 10.2) |
+> | **F** genuine Stage-10 blocker | **none** |
+>
+> **S10-21 is a test-substrate capture task, not a closure blocker.** It asks for a fixture (a completed
+> Unpredictable-Revenue game with a Mark, rust, a Bagholder and a Little Engine) so displaced accolade / timeline
+> assertions can be restored; no authority rule depends on it. It was not created in the closure pass.
+>
+> ### The bump, 7 → 8 (#1698)
+>
+> One deliberate bump for the stage — the 7.5 / 8.5 / Stage-9 precedent. `RULES_ENGINE_VERSION = 8`,
+> `SUPPORTED_RULES_ENGINE_VERSIONS` derived `[8]`, `RULES_ENGINE_CHANGELOG` row 8. The row separates **replay
+> semantics** (10.1 / 10.1b LayTile legality composed before mutation, with Lay Track timing on pinned boards; 10.2's
+> author-less train-settlement refusal; 10.3's server-side Blood Price through the one context builder; 10.3b's
+> chart / core transaction; 10.5's canonical private-offer price and the `"1e2"` refusal; 10.6's connectivity,
+> validated private-power claims with the C&SL either-order entitlement, and the player-owned private hexes with the
+> D&H's F16 exception and the LPF JK's K9 / K11 — on pinned boards) from **transport and tooling that is not a rules
+> change** (10.2's content-aware refusal transport, 10.4's smoke harness / discard adapter / id-less export ids,
+> 10.5's `SandboxLogMsg`). Deployed policy, unchanged in shape: a v8 server supports v8 rooms only; a pinned v7 room
+> is preserved on disk and held (`incompatible`), never migrated or interpreted under v8; an unpinned room is refused
+> by `SERVER_REPLAY_POLICY` and admitted only by the explicit `DEVELOPMENT_CORPUS_POLICY` (or a local server's
+> `--legacy-logs development-corpus`). **No stored `SetupGame` is rewritten and a missing pin is never read as 8.**
+> The #1696 seam asks for the PRESENCE of a numeric pin, not `>= 8`, and stays so: "pinned engine history" versus
+> "legacy unpinned history". Tests: `stage10Closure.test.ts` (the matrix, v8 carrying all of 10.6, the seam, the
+> corpus); `stage9Closure.test.ts`'s literal-7 pins narrowed to prefix / derived pins (the #1680 precedent) —
+> version-literal edits, not replay repins.
+>
+> ### The canonical 18/18, measured at closure
+>
+> Old = scratch build of the Stage-10.6 commit `1e90fa9` (v7), new = scratch build of the closure tree (v8), each of
+> the 18 files replayed under `DEVELOPMENT_CORPUS_POLICY` and every engine application compared on (state digest, grid
+> hash): **4,105 stored / 3,731 applied / 374 dropped by `RevertTo` / 3,763 engine applications / 0 unparseable —
+> 0 differences; every final state, grid and cursor identical; file bytes identical.** All 18 files are unpinned
+> (`legacy`), so the constant cannot reach them; none acquires a pin on replay. JUNO-Y8V: 668 rows, 17 `RevertTo`, 628
+> applied, 40 dropped, Operating Round 13, `b4fae877c35604fe`. The Stage-10.6 unconditional probe stands as recorded
+> under S6-5 (148 stored applied lays: 132 connected, 14 disconnected, 2 power exceptions, 0 without a network; 15
+> distinct lays in 4 rooms — 21 file-occurrences across 7 files — would change if the 10.6 rules were imposed on
+> unpinned history; all unpinned, **none repinned or rewritten**). **No golden, replay fixture, export, corpus file or
+> stored payload was changed at closure.**
+>
+> ### Final authority-pattern audit (read-only)
+>
+> Searched for the six classes Stage 10 existed to close: refusal decided by object identity (only the two
+> classified phase-tier comparisons, `App.tsx`'s cosmetic discard flourish and `actionLog`'s narration value
+> comparisons remain); shell-only legality the server lacks (`App.tsx` and `RoomEngine` both reduce through
+> `sandboxActionContext`; the grid steps both ask `layTileRefusal`); client flags trusted as authority (`bonus_lay` /
+> `ability_key` validated; `debug_force` dropped at ingress and refused on pinned boards; `distribute`, `accept`,
+> `keep_open` are genuine player choices, judged); grid mutation before the shared refusal (the two
+> `applySandboxLayTile` callers ask `layTileRefusal` first, the same composition the core gate block asks); a live
+> room message typed only as a chain message (only the derived-entry mints, by design); an authoritative no-op
+> appended as success (`RoomSession.submit` pops it through `unchangedMeansRefused`; derived no-ops still append by
+> design, #1685). **No new instance found.**
+>
+> ### What closure does NOT cover — and the next phase
+>
+> **NEXT PHASE: VARIANT CERTIFICATION** of **Gentle Rust**, **Unpredictable Revenue** and **Delayed Auction** (S9-7,
+> still owed). Stage 10 does not certify them, and the Yellow Sign hardening of Stages 9–10 does **not** on its own
+> certify Unpredictable Revenue as a whole. The Level Playing Field work hardened through Stages 8–10 remains
+> implemented. Deployment, escrow, settlement and attestation work (S10-2, S10-10 and the `MIGRATION_PLAN.md` track)
+> is a later phase, not part of this closure. Part-C UI items remain governed by the Playtest Readiness gate (Part F).
+
 **S10-1. Refusal transport.** A reducer refusal is an identity no-op that `RoomSession.submit` still answers
 `applied` and appends (replays as a no-op); the ingress holds (#1530 / #1540) and, since Batch 6, the route,
 dividend-amount and Run-Trains-skip refusals (#1550) — and, since Slice 8.2's S8-14 follow-up, a paid station placement's
@@ -3026,6 +3100,8 @@ family) will not catch a rule regression whose text is unchanged. `DEFERRED` —
 **S10-16. Host housekeeping the VM cannot do:** `_to_delete/` holds scratch probes and stale `index.lock`
 files; `.git/worktrees/prefix` is a stale scratch worktree (`git worktree prune` on the host);
 `frontend/testrun.txt` is a stale UTF-16 test-run capture (253 / 4030) proposed for deletion. `OPEN` (owner).
+**Stage-10 closure (2026-09-23): classified B — owner housekeeping, not a blocker.** (`_to_delete/` and `testrun.txt`
+were already gone at the Stage-10 orientation; the registered stale worktree remains the owner's to prune.)
 
 **S10-17. Message-carried facts the reducer could derive** (audit risk 4): `DeclareDividends.revenue_amount`
 (S6-2 — validated against the authority since Batch 6), `LayTile.bonus_lay` (S6-6 — validated against the board
@@ -3099,6 +3175,9 @@ table's game (31 stays refused; many later entries are refused on the corrected 
 Sign at 203 is reached again (C&O's Mark, +$90 — `moneyConservation`'s corpus list re-pinned to that entry, S9-1). The
 epilogue's default path (no adapter) stops at B&O's first OR turn (`[SR 1, OR 1.1, Final]`), pinned beside it. A
 completed Yellow Sign game is still owed.
+**Stage-10 closure (2026-09-23): still `OPEN`, classified D — test-substrate capture, NOT a closure blocker.** No rule
+depends on it; it restores displaced assertions. Not created in the closure pass. (Under the current engine the
+fixture would be dealt, and pinned, at version 8.)
 
 **S10-25. `legalRotations` and the authority now ask the station rule separately, and should ask it once.**
 Status `OPEN` (opened by Slice 9.2, 2026-09-18). S9-17 put revised 6.2.2 ❹ in the reducer
@@ -3861,6 +3940,7 @@ PMQ — the ruling applies the conditional form to both. Implementation: Slice 8
 | 7 (owed: **8** at Stage-10 closure) | **10.4** (uncommitted, 2026-09-23) | **Tooling only; no rule changed.** S10-5 smoke harness routed by frame kind (protocol unchanged); S10-22 legacy discard adapter's refusal test is `atomsUnchanged`; **S10-23 `entriesFromExport` gives an id-less export row a per-row identity** (`legacyExportId`); S10-13 two stale comments. `RULES_ENGINE_VERSION` stays **7**; closure bump **7 → 8** owed (its row should list S10-23 as development-export compatibility). | **17 files with ids: normalisation byte-identical, final state and grid identical, 3,437 stored / 3,103 applied.** **JUNO-Y8V (expected change): 0 → 628 applied** (668 rows, 17 reverts, 40 dropped), ends OR 13, digest `b4fae877c35604fe`, money conserved. 0 `legacyDiscards` corpus-wide. No golden, fixture, export or log touched or re-pinned. |
 | 7 (owed: **8** at Stage-10 closure) | **10.5** (uncommitted, 2026-09-23) | **S10-9: the logged-message type boundary and the private-offer price wire.** `SandboxLogMsg` = `GameplayExecuteMsg \| SandboxOnlyMsg` types every log-wide boundary; `GameplayExecuteMsg` / `GAMEPLAY_MESSAGE_KEYS` unwidened. New `ProposePrivatePurchase` prices are the canonical string; legacy numbers read and kept verbatim; `vgpAmount.ts` compares by value and refuses malformed spellings (`BuyPrivateCompany` `"1e2"` now refused). `RULES_ENGINE_VERSION` stays **7**; closure bump **7 → 8** owed. | **Canonical 18/18, old (scratch build of `4954d0e`) vs new: 4,105 stored / 3,731 applied / 3,763 engine applications — 0 (state, grid) differences; final state, grid, cursor identical; payload bytes untouched.** 2 stored numeric proposals (FCJ 205 / 273, refused both sides), 0 string. Y8V 628 applied, `b4fae877c35604fe`. No golden, fixture, export or log touched. |
 | 7 (owed: **8** at Stage-10 closure) | **10.6** (uncommitted, 2026-09-23) | **The last `LayTile` authority gaps, on PINNED boards (#1696).** S6-5 connectivity judged by the authority through the shell's own walk and join (#1692); S6-6 the private-power claim validated and the C&SL's bonus in either order with one ordinary lay (#1693, #1697, new turn-scoped `ordinary_lay_taken`); S6-7 player-owned private hexes barred, with the D&H's F16 exception and the JK's K9/K11 under LPF, and the board's marks on the same status (#1694, #1694a, #1695). One compatibility predicate, `stage106LayAuthorityInForce`: legacy unpinned logs keep their reading (#1684 precedent). S6-8 proved by 9.2; S7-17 superseded. `RULES_ENGINE_VERSION` stays **7**; closure bump **7 → 8** owed (its row should name 10.6's three rules and the pinned-only scope). | **Canonical 18/18, old (git archive of `638e2df`) vs new (scratch build of the working tree): 4,105 stored / 3,731 applied / 374 dropped / 3,763 engine applications — 0 (state digest, grid hash) differences, final state, grid and cursor identical; Y8V 628 applied / 40 dropped, OR 13, `b4fae877c35604fe`.** Unconditional probe (seam forced on, scratch only): 148 stored applied lays — 132 connected / 14 disconnected / 2 power exceptions / 0 no network; 21 file-occurrences (15 distinct lays, 4 rooms: CV4, FCJ, Z6C, Y8V) would change — itemised under S6-5; **recorded, not repinned**. No golden, fixture, export or log touched. |
+| **8** | **Stage-10 closure** (uncommitted, 2026-09-23) | **The bump.** `RULES_ENGINE_VERSION` **7 → 8**, `SUPPORTED_RULES_ENGINE_VERSIONS` derived `[8]`, changelog row 8 naming Stage 10's replay semantics — 10.1 / 10.1b LayTile legality composed before mutation (identity, pinned Lay Track timing, geometry, anchoring, JK, terrain), 10.2 the author-less train-settlement refusal, 10.3 the server-side Blood Price through `sandboxActionContext`, 10.3b the chart / core transaction, 10.5 the canonical private-offer price and the malformed-price refusal, 10.6 connectivity / validated claims with the C&SL either-order entitlement / player-owned private hexes (D&H F16 exception, LPF JK K9 / K11) on pinned boards — and, separately and explicitly NOT as rules, 10.2's refusal transport, 10.4's tooling and 10.5's `SandboxLogMsg`. A version-7 room is held (`incompatible`) under every policy, preserved and never migrated; an unpinned room is refused by the server's policy and admitted only by the development corpus's. The #1696 seam stays presence-based. `stage10Closure.test.ts` added; `stage9Closure.test.ts`'s literal-7 pins narrowed (version-literal only). | **Canonical 18/18, old (scratch build of `1e90fa9`, v7) vs new (scratch build of the closure tree, v8): 4,105 stored / 3,731 applied / 374 dropped / 3,763 engine applications — 0 (state digest, grid hash) differences; final state, grid and cursor identical; corpus file bytes identical; all 18 unpinned.** Y8V 628 applied / 40 dropped, OR 13, `b4fae877c35604fe`. **No golden, fixture, export or log touched or re-pinned.** |
 
 Items above that carry "bump" must add a row here when they land. No golden or replay expectation is ever
 re-pinned silently: the re-pin, its index and its reason go in the batch write-up and in this table.

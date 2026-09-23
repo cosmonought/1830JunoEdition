@@ -1698,7 +1698,8 @@ export function drawRestrictionBadgeAt(
    visual vocabulary of a button and set the oversized footprint.
    See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #364
 
-   Design note #714: A STAR, NOT A PADLOCK -- THE HEXES ARE NOT LOCKED.
+   Design note #714: A STAR, NOT A PADLOCK -- THE HEXES ARE NOT LOCKED. (Only partly true -- corrected by
+   Stage 10.6, #1694; see the correction at the end of this note.)
 
    REPORTED: "We placed locks on the DH (F16) and CSL (B20) hexes, but these hexes are actually not locked by
    the private companies: any corporation can build on those hexes following the usual rules, it's only that
@@ -1715,7 +1716,14 @@ export function drawRestrictionBadgeAt(
    owner should not miss, not a wall everyone else should avoid.
 
    THE STAR IS FIVE-POINTED AND FILLED, at the same weight the padlock was: this is a swap of meaning, not of
-   prominence, and the mark's size and slot were settled by #364 against a real overflow bug. */
+   prominence, and the mark's size and slot were settled by #364 against a real overflow bug.
+
+   CORRECTED BY STAGE 10.6 (#1694 / #1694a; noted at the Stage-10 closure, #1698). The star is still right for what
+   it marks -- a live CSL / DH power -- but "the hexes are not locked" and "there is no block to discover" were
+   right only for the D&H's F16 and for a private no player owns. While a PLAYER owns the SV, C&SL, M&H, C&A, B&O
+   or (Level Playing Field) the JK, its printed hex is barred to tile laying on a pinned board; F16 stays open to an
+   ordinary connected lay, which forfeits the D&H's power. That restriction is drawn by
+   `drawPrivateRestrictionMarkerAt` (#1695, below) -- a frame, not this star, and still not a padlock. */
 export function drawReservationBadgeAt(
   ctx: CanvasRenderingContext2D,
   badgeCenter: { x: number; y: number },

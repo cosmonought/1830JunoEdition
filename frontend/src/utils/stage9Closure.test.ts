@@ -84,9 +84,13 @@ const pinnedTo = (entries: readonly ServerLogEntry[], version: number | undefine
 /* ================================================================================================= */
 
 describe("RULES_ENGINE_VERSION 7 (Stage 9 closure)", () => {
-  it("is 7, and 7 is the one supported version", () => {
-    expect(RULES_ENGINE_VERSION).toBe(7);
-    expect(SUPPORTED_RULES_ENGINE_VERSIONS).toEqual([7]);
+  it("is at least 7, and the supported list is still the one derived version", () => {
+    /* #1698 (Stage-10 closure): THIS CASE NO LONGER OWNS THE CURRENT VERSION -- the #1680 precedent that narrowed
+       `stage85Closure`'s literal 6. It asserted `=== 7` and `[7]`, the right claim for the pass that MADE 7 and the
+       wrong one for every stage after it; the 7 -> 8 bump would fail a Stage-9 case that has nothing to say about
+       Stage 10. Row 7 is still asserted in full below; the current version belongs to `stage10Closure.test.ts`. */
+    expect(RULES_ENGINE_VERSION).toBeGreaterThanOrEqual(7);
+    expect(SUPPORTED_RULES_ENGINE_VERSIONS).toEqual([RULES_ENGINE_VERSION]);
     expect(Number.isInteger(RULES_ENGINE_VERSION)).toBe(true);
   });
 
@@ -94,7 +98,8 @@ describe("RULES_ENGINE_VERSION 7 (Stage 9 closure)", () => {
     /* THE NUMBER IS MEANINGLESS WITHOUT THE ROW -- `rulesVersion.ts` says so at the constant. Each phrase is
        one Stage-9 slice's rule, so a future edit that drops one from the row fails here rather than leaving
        a version nobody can account for. */
-    expect(RULES_ENGINE_CHANGELOG.map((row) => row.version)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    // #1698: a PREFIX pin, as `stage85Closure` / `batch75Closure` hold their own rows -- row 8 is Stage 10's.
+    expect(RULES_ENGINE_CHANGELOG.map((row) => row.version).slice(0, 7)).toEqual([1, 2, 3, 4, 5, 6, 7]);
     const note = RULES_ENGINE_CHANGELOG[6].note;
     for (const phrase of [
       /Stage 9/,
@@ -128,17 +133,19 @@ describe("RULES_ENGINE_VERSION 7 (Stage 9 closure)", () => {
 /* ================================================================================================= */
 
 describe("what the bump does to admission", () => {
-  it("1. a new game is pinned 7 by the SERVER, on the log and on the board", () => {
+  it("1. a new game is pinned to the current engine by the SERVER, on the log and on the board", () => {
     /* #1520's rule, unchanged by the bump: whatever the client wrote is replaced by the engine this process
        carries, so the pin is a fact about the server that dealt and never a claim the client made. */
+    // #1698: `RULES_ENGINE_VERSION`, not the literal 7 -- the stamping rule is Stage 9's claim, the number is not.
     const room = dealtRoom();
-    expect(setupPayloadOf(room.entries)[RULES_ENGINE_VERSION_FIELD]).toBe(7);
-    expect(room.rulesEngineVersion()).toBe(7);
-    expect(room.state.rules_engine_version).toBe(7);
+    expect(setupPayloadOf(room.entries)[RULES_ENGINE_VERSION_FIELD]).toBe(RULES_ENGINE_VERSION);
+    expect(room.rulesEngineVersion()).toBe(RULES_ENGINE_VERSION);
+    expect(room.state.rules_engine_version).toBe(RULES_ENGINE_VERSION);
   });
 
   it("2. a client that claims another version is overwritten, not believed", () => {
-    for (const claimed of [1, 6, 8, 99]) {
+    // #1698: 8 was "another version" at 7; at 8 the one-ahead version plays that part.
+    for (const claimed of [1, 6, RULES_ENGINE_VERSION + 1, 99]) {
       const room = new RoomSession({ providers: sandboxReplayProviders(), seed: seed(), build: "b", mintId: () => "d" });
       room.submit({
         actor: P1,
@@ -153,7 +160,7 @@ describe("what the bump does to admission", () => {
         } as never,
         baseIndex: -1,
       });
-      expect(setupPayloadOf(room.entries)[RULES_ENGINE_VERSION_FIELD]).toBe(7);
+      expect(setupPayloadOf(room.entries)[RULES_ENGINE_VERSION_FIELD]).toBe(RULES_ENGINE_VERSION);
     }
   });
 
@@ -165,12 +172,13 @@ describe("what the bump does to admission", () => {
        list changing; nothing about how that is treated moved with it. */
     const six = entriesFromExport(pinnedTo(dealtRoom().entries, 6));
     const verdict = replayCompatibility(six);
-    expect(verdict).toEqual({ kind: "incompatible", version: 6, supported: [7] });
+    // #1698: the refusal names whatever this engine supports; version 6 is refused either way.
+    expect(verdict).toEqual({ kind: "incompatible", version: 6, supported: [RULES_ENGINE_VERSION] });
     for (const policy of [SERVER_REPLAY_POLICY, DEVELOPMENT_CORPUS_POLICY]) {
       const refusal = replayRefusal(verdict, policy);
       expect(refusal).not.toBeNull();
       expect(refusal).toMatch(/version 6/);
-      expect(refusal).toMatch(/supports version 7/);
+      expect(refusal).toMatch(new RegExp(`supports version ${RULES_ENGINE_VERSION}\\b`));
     }
     expect(() => replayLog(six, sandboxReplayProviders(), seed(), undefined, DEVELOPMENT_CORPUS_POLICY)).toThrow(
       ReplayIncompatibleError,
@@ -187,12 +195,12 @@ describe("what the bump does to admission", () => {
     expect(() => replayLog(legacy, sandboxReplayProviders(), seed(), undefined, DEVELOPMENT_CORPUS_POLICY)).not.toThrow();
   });
 
-  it("5. a version-7 board replays deterministically, and twice to the same digest", () => {
+  it("5. a board pinned to the current engine replays deterministically, and twice to the same digest", () => {
     const entries = entriesFromExport(dealtRoom().entries);
     const once = replayLog(entries, sandboxReplayProviders(), seed(), undefined, SERVER_REPLAY_POLICY);
     const twice = replayLog(entries, sandboxReplayProviders(), seed(), undefined, SERVER_REPLAY_POLICY);
     expect(stateDigest(once.state)).toBe(stateDigest(twice.state));
-    expect(once.state.rules_engine_version).toBe(7);
+    expect(once.state.rules_engine_version).toBe(RULES_ENGINE_VERSION);
   });
 
   it("6. replay never re-runs live ingress: a stored seed is consumed, never redrawn", () => {

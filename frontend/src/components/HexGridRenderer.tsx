@@ -655,7 +655,13 @@ export const HEX_TOOLTIP_DELAY_MS = 1200;
    they may act on -- F16 is Scranton and there are turns where laying it is the right move for anybody.
    IT PRINTS THE POWER NOW, rather than paraphrasing it. `HexReservation.power` has carried the accurate
    sentence all along ("its owner may lay a tile AND place a station here at no cost") and no surface showed
-   it; the badge invented a shorter, wrong one instead. */
+   it; the badge invented a shorter, wrong one instead.
+
+   CORRECTED BY STAGE 10.6 (#1694 / #1694a; noted at the Stage-10 closure, #1698). "Nothing is reserved" holds for
+   the POWER this clause prints, and for a private a corporation owns, that has closed or that is unsold -- NOT for
+   a private a PLAYER owns: on a pinned board its printed hex is barred to tile laying (rulebook 6.2.1 (4)), except
+   the D&H's F16, where any railroad may still lay under the ordinary rules and thereby forfeits the D&H's power.
+   That fact is the separate `statusNote` clause (`describePrivateHexStatus`), never folded into the power text. */
 export function withReservationNote(
   description: string,
   reservation: { initials: string; power?: string } | null,

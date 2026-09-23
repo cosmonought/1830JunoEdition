@@ -62,7 +62,7 @@ import { effectiveActions } from "./logRevert";
 
 /** The rules engine this build carries. Bump it, and add a line below, when a deployment changes what a
  *  stored log replays to. Do NOT bump it for UI, protocol or narration changes. */
-export const RULES_ENGINE_VERSION = 7;
+export const RULES_ENGINE_VERSION = 8;
 
 /** Every version this engine can replay faithfully. One entry until somebody builds a versioned reducer;
  *  the point of the list is that "supported" is an explicit statement rather than "whatever is running". */
@@ -214,6 +214,40 @@ export const RULES_ENGINE_CHANGELOG: ReadonlyArray<{ version: number; note: stri
       "station placements judged only in the shell, Yellow Sign outcomes chosen by a client and market steps " +
       "walked per ten percent, so it is refused, never reinterpreted.",
   },
+  {
+    version: 8,
+    note:
+      "Stage 10 (10.1-10.6, 2026-09-22/23, #1681-#1697): a declined action leaves every authoritative atom where it " +
+      "stood, the tile lay is one atomic authority, and the server composes the reducer's context exactly as the " +
+      "browser does. REPLAY SEMANTICS. 10.1 / 10.1b (#1681-#1684): `LayTile` legality is composed BEFORE any " +
+      "mutation (`layTileLegalityRefusal`: identity, Lay Track timing, geometry, station anchoring, the JK, the " +
+      "terrain fee) and asked by the reducer's gate block, both grid steps and live ingress, so a refused lay no " +
+      "longer lands on the grid, spends a power or the JK, or advances the operating cursor; on a pinned board a lay " +
+      "off the Lay Track step is refused (unpinned history keeps its representation). 10.2 (#1686): an author-less " +
+      "duplicate corporation-train settlement is refused unless the board's own consent stands. 10.3 (#1690): " +
+      "`App.tsx` and `RoomEngine` build the reducer's context with one builder (`sandboxActionContext`), so the " +
+      "server's authority now receives the Carcosan-sale context and the SERVER charges the Blood Price on a legal " +
+      "Carcosan transfer (it never did), while no client charges it for a refused one. 10.3b (#1691): the chart step " +
+      "is a transaction with the core -- a speculative stock-market move is discarded when the core declines the " +
+      "action, closing the dividend-amount and author-less-sale chart leaks. 10.5 (S10-9): a new " +
+      "`ProposePrivatePurchase` writes the canonical whole-VGP string price; a stored numeric price stays " +
+      "replay-compatible and is kept verbatim; a malformed spelling such as \"1e2\" is no longer accepted as an " +
+      "equivalent whole-VGP private-purchase price. 10.6 (#1692-#1697), ON PINNED BOARDS (#1696, " +
+      "`stage106LayAuthorityInForce`): a lay must connect to the corporation's network; a C&SL, D&H or JK claim is " +
+      "validated from the board, so a forged bonus cannot manufacture an extra lay or keep Track open, and the " +
+      "C&SL's bonus and the ordinary lay may come in either order, each once; a player-owned private's hex is barred " +
+      "(SV G15, C&SL B20, M&H D18, C&A H18, B&O I13 / I15, and the JK's K9 / K11 under the Level Playing Field, " +
+      "separate from its Coal River power), except the D&H's F16, where an ordinary connected lay is allowed and " +
+      "forfeits the D&H's special effect. Gray and red bare lays were already refused by 9.2's immutable-hex rule. " +
+      "TRANSPORT AND TOOLING, NOT RULES, named so the row is not read as them: 10.2's refusal transport (#1685 -- a " +
+      "submission whose authoritative content is unchanged is answered `refused`, never appended as a game action, " +
+      "and its nonce may be retried; harmless duplicate answers stay applied), 10.4's smoke harness, " +
+      "discard-adapter and id-less-export repairs (S10-5, S10-22, S10-23: deterministic collision-safe ids, " +
+      "duplicate real ids rejected) and 10.5's one log-wide message type (`SandboxLogMsg`). The canonical " +
+      "development corpus is unpinned and replays unchanged. A version-7 log carries lays judged after they had " +
+      "moved the board, lays neither connected nor claim-checked, player-owned private hexes built on and a server " +
+      "that never charged the Blood Price, so it is refused, never reinterpreted.",
+  },
 ];
 
 /** The log's SetupGame field. Named apart from `build` (client identity) and `variants.rules` (a house-rules
@@ -229,10 +263,18 @@ export const RULES_ENGINE_VERSION_FIELD = "rules_engine_version";
    `rules_engine_version`. Every room a server has dealt since #1520 is pinned, so every live table is judged.
 
    A LEGACY board -- no pin -- is a development record written before the rules engine was pinned, and it keeps the
-   interpretation it was played under. Measured, unconditionally imposed, the three rules change 20 stored lays in
-   six such histories (CV4 ×3, FCJ, Z6C ×2, Y8V -- the Stage-10.6 ledger in `RULES_HARDENING_BACKLOG.md` lists them).
-   They are EVIDENCE of the historical authority gaps, not new legacy replay expectations: no golden is repinned.
-   Exactly the #1684 (the Lay Track step) / #1551 (`RunManualRoute`) precedent.
+   interpretation it was played under. Measured, unconditionally imposed, the three rules change 15 distinct stored
+   lays in four legacy rooms (CV4, FCJ, Z6C, Y8V), which the corpus carries as 21 file-occurrences across seven files
+   -- the Stage-10.6 ledger in `RULES_HARDENING_BACKLOG.md` (S6-5) itemises them. *(Stage-10 closure, #1698: an
+   earlier draft of this note said "20 stored lays in six histories", a miscount of the same probe.)* They are
+   EVIDENCE of the historical authority gaps, not new legacy replay expectations: no golden is repinned. Exactly the
+   #1684 (the Lay Track step) / #1551 (`RunManualRoute`) precedent.
+
+   PRESENCE, NOT A VERSION NUMBER (Stage-10 closure, #1698). The seam asks whether a pin EXISTS, never which one: the
+   question it answers is "pinned engine history" versus "legacy unpinned history", not "v8" versus "before v8". The
+   7 -> 8 bump therefore leaves it exactly as written -- a v8 board is judged because it is pinned, and a v7 board
+   never reaches it on a v8 server because `replayRefusal` holds the room before a single entry is applied. Do not
+   rewrite it as `version >= 8`.
 
    ONE PREDICATE. The `LayTile` authority (`layTileAuthority.ts`), the player-owned-private status that the board
    draws and the click answers (`privateReservations.ts`), and the cursor's entitlement bookkeeping

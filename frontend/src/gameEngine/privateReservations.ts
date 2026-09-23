@@ -100,7 +100,8 @@ export function privateLocationLabels(
 }
 
 /** One private's special power on one hex. Design note #714: a POWER, not a claim -- anybody may build
- *  here under the ordinary rules. */
+ *  here under the ordinary rules, ONCE no player owns the private (#1694, Stage 10.6: while a PLAYER owns it the
+ *  hex is barred on a pinned board, the D&H's F16 excepted -- `privateHexStatuses`, not this table). */
 interface ReservationRule {
   /** #1694: the power acts on this private's (single) printed location, read from `PRIVATE_LOCATION_RULES`;
    *  the initials are the catalog's acronym (#829 / #364: no ampersand). Neither is restated here. */

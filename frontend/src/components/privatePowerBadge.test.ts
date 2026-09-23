@@ -19,6 +19,14 @@
 // that rendered anything invented a shorter claim instead, and the shorter claim was false. That is the shape
 // worth testing: not "is the word gone" but "is the field that was always right the thing a player now sees".
 //
+// CORRECTED BY STAGE 10.6 (#1694 / #1694a; noted at the Stage-10 closure, #1698). The report above is right about
+// the POWER and about the D&H's F16, and wrong as a general rule: while a PLAYER owns a private, its printed hex is
+// barred to tile laying on a pinned board (rulebook 6.2.1 (4)) -- SV G15, C&SL B20, M&H D18, C&A H18, B&O I13 / I15,
+// and the JK's K9 / K11 under the Level Playing Field -- until a corporation buys it or it closes. F16 alone stays
+// open to an ordinary connected lay, which forfeits the D&H's power. This file still pins what it always pinned (no
+// padlock, the power sentence in the hover); the restriction mark and its sentence are
+// `stage106LayTileClosure.test.ts`'s (#1695).
+//
 // THE PADLOCK IS TESTED AS SOURCE, because it is a canvas path -- an arc and a rectangle in
 // `hexCanvasPrimitives`, with no DOM to query and no glyph to search for. A shackle drawn again would be
 // invisible to any assertion about rendered output, so the assertion is about the code that draws it.

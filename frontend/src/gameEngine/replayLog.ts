@@ -85,6 +85,7 @@ import { boardHomeHexToAxial, homeEstablished, homeStationOwed, isHomeCandidate,
 import type { TileColorTier } from "../components/hexTileCatalog";
 import type { GameStateResponse, WaterfallStateResponse } from "./gameState";
 import type { GameplayExecuteMsg } from "../utils/sessionKey";
+import type { SandboxLogMsg } from "./gameSetup";
 import type { MapGridResponse } from "../components/hexContractTypes";
 import { atomsUnchanged, type AuthoritativeAtoms } from "./actionOutcome"; // #1685 (Stage 10.2)
 
@@ -256,7 +257,7 @@ export interface ReplayProviders {
    *  declaring corporation's revenue on the state the declaration was made against (#908). */
   marketContext: (
     state: GameStateResponse,
-    msg: GameplayExecuteMsg,
+    msg: SandboxLogMsg,
     actor: string | null | undefined,
   ) => SandboxMarketContextInjection;
   /** The chart-derived half of the reducer's own context: prices, zones, marks and the rise projection.
@@ -358,7 +359,7 @@ export interface ReplayResult {
  *  judges. */
 export type ReplayObserver = (event: {
   entry: ReplayEntry;
-  msg: GameplayExecuteMsg;
+  msg: SandboxLogMsg;
   /** The state the reducer is about to be handed -- after the grid and chart moved, before the arm ran. */
   stateBefore: GameStateResponse;
   /** Batch 6: the grid the reducer is handed with it, so an observer can ask the route authority the same
@@ -414,9 +415,9 @@ export class RoomEngine {
 
   /** Apply one entry. Returns nothing: the board is the answer, and it is read from `snapshot`. */
   apply(entry: ReplayEntry, observe?: ReplayObserver): void {
-  let msg: GameplayExecuteMsg;
+  let msg: SandboxLogMsg;
   try {
-    msg = JSON.parse(entry.payload) as GameplayExecuteMsg;
+    msg = JSON.parse(entry.payload) as SandboxLogMsg;
   } catch {
     this.unparseable.push(entry.index);
     return;
@@ -428,7 +429,7 @@ export class RoomEngine {
   withRules(resolveVariants(variants), () => this.applyOnBoard(entry, msg, observe));
   }
 
-  private applyOnBoard(entry: ReplayEntry, msg: GameplayExecuteMsg, observe?: ReplayObserver): void {
+  private applyOnBoard(entry: ReplayEntry, msg: SandboxLogMsg, observe?: ReplayObserver): void {
   /* Design note #1301: THE DEAL OPENS THE GRID THIS BOARD PRINTS. The constructor cannot know the board -- the
      variants arrive with `SetupGame` -- so the printed tiles land here, on the deal, before any lay. On the
      standard board this is the same empty grid the providers seeded. */

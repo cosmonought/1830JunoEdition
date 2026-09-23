@@ -272,7 +272,8 @@ describe("both surfaces ask one function", () => {
     expect(sliceBetween(holds, "export function authoritativeHoldRefusal(", "}")).toContain(
       "homeStationHold(state, msg, ctx.homeHexToAxial)",
     );
-    expect(read("gameEngine/homeTokenGate.ts")).toContain("return homeStationHold(state, msg as GameplayExecuteMsg | undefined, homeHexToAxial, labelForAddress);");
+    // Stage 10.5 (S10-9): the gate's `msg` is typed `SandboxLogMsg` now, so the delegation carries no cast.
+    expect(read("gameEngine/homeTokenGate.ts")).toContain("return homeStationHold(state, msg, homeHexToAxial, labelForAddress);");
   });
 
   it("is what the Pass button says", () => {

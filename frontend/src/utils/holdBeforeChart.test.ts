@@ -228,7 +228,8 @@ describe("S8-13 on the grid: a lay under a hold lands on neither the grid nor th
     );
     const app = readStripped("App.tsx");
     const predicate = sliceBetween(app, "const layRefusedByAuthority = (): boolean =>", 'if ("LayTile" in msg) {');
-    expect(predicate).toContain("layTileRefusal(\n                stateBeforeAction,\n                msg as GameplayExecuteMsg,");
+    // Stage 10.5 (S10-9): `layTileRefusal` takes the log-wide `SandboxLogMsg`, so the shell hands `msg` uncast.
+    expect(predicate).toContain("layTileRefusal(\n                stateBeforeAction,\n                msg,");
     expect(predicate).toContain("layAuthorityContext(SHELL_PROVIDERS, stateBeforeAction, gridBeforeAction),");
     const builder = sliceBetween(readStripped("gameEngine/actionContext.ts"), "export function layAuthorityContext(", "\n}");
     expect(builder).toContain("mapGrid: gridBefore,");

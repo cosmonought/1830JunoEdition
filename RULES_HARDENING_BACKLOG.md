@@ -2879,6 +2879,56 @@ contract messages). `DEFERRED` — with Phase 4.
 train offer matches the contract's `Uint128` string convention, the private offer does not). `OPEN`
 (AUDIT_SETTLEMENT §7, TRIAGE_2026-09-06 §3.3 — migrated). Replay: a type change alone is not replay-semantic;
 changing the wire shape of `price` is a schema change (#1449) and must accept both spellings for stored logs.
+**Stage 10.5 (2026-09-23, uncommitted): `RESOLVED` — both halves.**
+*Logged-message boundary.* `SandboxLogMsg` (`gameSetup.ts`) is KEPT as the one log-wide union — no second union, no
+`LoggedMsg` alias — and is now built as `GameplayExecuteMsg | SandboxOnlyMsg`, where `SandboxOnlyMsg` is the single list
+`isSandboxOnlyMsg` narrows to (the predicate's hand-copied return type is gone). `chainGameplayMsg(msg)` is the one
+narrowing to a contract message. Typed with the log-wide union (they are handed every logged message): the reducer
+(`applySandboxAction` and every step of its pipeline, `applySandboxWaterfallAction`, `applySandboxMarketAction`,
+`sandboxChartStepReport`), the holds and gates it asks (`authoritativeHoldRefusal`, `pendingDiscardBlock`,
+`emergencyFundingBlock`, `homeStationHold`, `pendingOfferBlock`, `legacyOfferMessageRefusal`, `operatingIdentityRefusal`,
+`trainObligationRefusal`, `routeSkipRefusal`, `auctionRefusal`, `layTileRefusal`, `derivedEntryKey`), `RoomEngine.apply` /
+`ReplayObserver` / `ReplayProviders.marketContext`, `turnRefusal`, `sandboxActionContext`, `RoomSession.SubmitInput`,
+`serverProtocol.SubmitRequest` / `mintLogEntry`, `ServerLink.submit`, `gameServer`'s `SubmitFrame`, the shell's receipt
+(`refusalReasonFor` / `actionWasRefused`) and narration (`describeGameplayAction`, `sentenceStatesTreasury`,
+`trainPurchaseToastLine`, `describeAuctionTransition`). Gone: `App.tsx`'s three #1189 casts (the `link.submit` cast, the
+`SetupGame` `as unknown as` cast, the `const gameplay = msg as GameplayExecuteMsg` alias) and its `layTileRefusal` cast;
+`RoomSession`'s `SetupGame` `as unknown as` (now `isSetupGameMsg`); `homeTokenGate`'s and `refusedAction`'s casts;
+`derivedActions`' five literal casts; the body casts in `turnAuthority` / `actionLog` that compensated for the lie
+(including the `price: number` one). Kept, with reasons: `JSON.parse(...) as SandboxLogMsg` in `RoomEngine.apply` and
+`sandboxRoom.decodeAction` (the deserialisation boundary; the server validates with `messageSchema.ts` first);
+`layTileAuthority`'s `{ LayTile: lay } as unknown as GameplayExecuteMsg` (constructs a gameplay message from a looser
+body type); the derived-entry mint (`RoomEngine.submit` / `settleOwed`, `RoomSession.appendDerived`) stays
+`GameplayExecuteMsg` — a derived entry is always a contract message. **The chain stayed narrow:**
+`GameplayExecuteMsg`, `GAMEPLAY_MESSAGE_KEYS`, `ExecViaSessionKeyOptions.msg` and `execGameplay` are unchanged; the
+server's runtime schema already admitted exactly the log-wide family (now pinned key-for-key); no runtime protocol byte
+changed. Proof: `stage105TypeWire.test.ts` (compile-time `Equals` pins for every boundary, `@ts-expect-error` for a
+room-only message reaching the session key, the runtime allow-list / predicate / schema key sets, and the executor's
+own refusal).
+*Price.* The canonical NEW spelling of `ProposePrivatePurchase.price` is the whole-VGP decimal string (the `Uint128`
+convention `BuyPrivateCompany.price` and the train offer use); the shell writes it (`App.tsx`,
+`canonicalWholeVgp`). A stored numeric proposal stays readable, and the reducer writes the spelling the message carried
+VERBATIM (`OrdinaryPrivatePurchaseOffer.price: VgpWire`), so no historical digest moves. Every read goes through
+`gameEngine/vgpAmount.ts`: canonical = `^(0|[1-9][0-9]*)$`; legacy = a non-negative safe-integer number (not `-0`);
+anything else (`"1e2"`, `" 100"`, `"100.0"`, `"0100"`, `70.5`, …) is malformed, never coerced; equality is by value
+on canonical TEXT (`sameWholeVgp`, no `Number` round trip), a number only on request and only when safe
+(`wholeVgpNumber`). `privatePurchaseRefusal` (all three moments and the direct settlement) and
+`privateSettlementMatches` use it; the derived settlement writes `canonicalWholeVgp(offer.price)` — for a legacy
+offer exactly `String(price)`'s bytes. Schema: `ProposePrivatePurchase.price` `"finite"` → `"finite|string"` (shape
+only, as `BuyTrainFromCorporation.price: "string"`; the value is the authority's, §16 unchanged). Not migrated: the
+train offer (already a string; its matching still `Number`-compares — noted, unchanged), the player <-> player trade
+(`price: number`, `$0` legal, schema `int`), and the emergency-funding offer (`FundingPrivatePurchaseOffer.price:
+number`, `OfferPrivateForFunding.price` `int`; it settles by arithmetic in its own arm, never through
+`BuyPrivateCompany`). One authority tightening, live-reachable only by a crafted client: a `BuyPrivateCompany` whose
+price is a coercible-but-malformed string (`"1e2"`) is refused where `Number` read it as `$100`.
+*Corpus* (scratch builds of `4954d0e` vs the working tree, 18/18, every engine application compared on (state digest,
+grid hash)): 4,105 stored / 3,731 applied / 374 dropped / 3,763 engine applications — **0 differences**, every final
+state, grid and cursor identical, no payload rewritten. Private-offer messages stored: 2 `ProposePrivatePurchase`
+(both NUMERIC, JUNO-FCJ 205 / 273 — refused on both sides), 2 `AnswerPrivatePurchase`, 8 `BuyPrivateCompany` (all
+canonical strings); 0 string proposals; 0 funding offers. JUNO-Y8V: 668 rows / 17 `RevertTo` / 628 applied / 40
+dropped, `OperatingRound 13`, `b4fae877c35604fe` (10.4's result, unchanged). `RULES_ENGINE_VERSION` stays **7**;
+the Stage-10 closure bump **7 → 8** remains owed (its row should name the private-offer price wire and the
+malformed-price refusal).
 
 **S10-10. The settlement / money-readiness track — indexed here, specified in `MIGRATION_PLAN.md` (#1254 order, AUDIT_SETTLEMENT §9).**
 Status `DEFERRED` (blocks the first real deposit; not rules work). Done: 2.5a durable log (#1250), 2.5c
@@ -3768,6 +3818,7 @@ PMQ — the ruling applies the conditional form to both. Implementation: Slice 8
 | 7 (owed: **8** at Stage-10 closure) | **10.3** (uncommitted, 2026-09-22) | **Composition coupling (S10-4 remainder; #1690).** `gameEngine/actionContext.ts` — `sandboxActionContext` and `layAuthorityContext` — is the one builder of the reducer's context and of the `LayTile` grid step's, called by `RoomEngine.apply` and by `App.tsx` (over `SHELL_PROVIDERS = sandboxReplayProviders()`); the shell's inline transcription is gone. The shell's market sentence is `sandboxChartStepReport`, the reducer's own chart step. **One semantic correction, corpus-neutral:** the Blood Price (#1090) is asked by the reducer (`chartStepContext.isCarcosanSale`: the gilding AND `trainSaleRefusal` at settlement) — the server now charges it on a legal Carcosan transfer (it never did: the providers carried no `isCarcosanSale`), and no client charges it for a refused one. No stored entry's interpretation changes. `RULES_ENGINE_VERSION` stays **7**; the closure bump **7 → 8** remains owed and its changelog row should name the Blood Price. | **Canonical 18/18, old (scratch build of `f8ff424`) vs new (scratch build of the working tree): 4,105 stored / 3,103 applied / 3,131 engine applications compared entry by entry on (state digest, grid hash) — 0 differences; every final state digest, grid hash and cursor identical. 11 stored `BuyTrainFromCorporation`, 0 Carcosan transfers.** Composition parity (`stage103CompositionCoupling.test.ts` B): every engine application of the corpus reduced under the pre-10.3 shell context (transcribed oracle) and under `sandboxActionContext` — 0 differences. No golden, fixture or log touched. |
 | 7 (owed: **8** at Stage-10 closure) | **10.3b** (uncommitted, 2026-09-22) | **Chart/core atomicity (#1691).** `marketTransaction`: the chart step is committed only if the core accepts the action; a declined core (identity or content-unchanged) discards the move, and `sandboxChartStepReport` reads the same transaction. Closes two reproduced leaks the pre-chart list missed — a mismatched `DeclareDividends` amount and an author-less `SellStock` — and makes the Blood Price's atomicity structural. Accepted actions unchanged by construction. `RULES_ENGINE_VERSION` stays **7**; closure bump **7 → 8** owed (row should name the Blood Price and #1691). | **Canonical 18/18, old (scratch build of `f8ff424`) vs new: 4,105 stored / 3,103 applied / 3,131 engine applications, per-entry (state digest, grid hash) — 0 differences; final state, grid and cursor identical. 109 stored chart moves; 0 declined by the core.** No golden, fixture or log touched. |
 | 7 (owed: **8** at Stage-10 closure) | **10.4** (uncommitted, 2026-09-23) | **Tooling only; no rule changed.** S10-5 smoke harness routed by frame kind (protocol unchanged); S10-22 legacy discard adapter's refusal test is `atomsUnchanged`; **S10-23 `entriesFromExport` gives an id-less export row a per-row identity** (`legacyExportId`); S10-13 two stale comments. `RULES_ENGINE_VERSION` stays **7**; closure bump **7 → 8** owed (its row should list S10-23 as development-export compatibility). | **17 files with ids: normalisation byte-identical, final state and grid identical, 3,437 stored / 3,103 applied.** **JUNO-Y8V (expected change): 0 → 628 applied** (668 rows, 17 reverts, 40 dropped), ends OR 13, digest `b4fae877c35604fe`, money conserved. 0 `legacyDiscards` corpus-wide. No golden, fixture, export or log touched or re-pinned. |
+| 7 (owed: **8** at Stage-10 closure) | **10.5** (uncommitted, 2026-09-23) | **S10-9: the logged-message type boundary and the private-offer price wire.** `SandboxLogMsg` = `GameplayExecuteMsg \| SandboxOnlyMsg` types every log-wide boundary; `GameplayExecuteMsg` / `GAMEPLAY_MESSAGE_KEYS` unwidened. New `ProposePrivatePurchase` prices are the canonical string; legacy numbers read and kept verbatim; `vgpAmount.ts` compares by value and refuses malformed spellings (`BuyPrivateCompany` `"1e2"` now refused). `RULES_ENGINE_VERSION` stays **7**; closure bump **7 → 8** owed. | **Canonical 18/18, old (scratch build of `4954d0e`) vs new: 4,105 stored / 3,731 applied / 3,763 engine applications — 0 (state, grid) differences; final state, grid, cursor identical; payload bytes untouched.** 2 stored numeric proposals (FCJ 205 / 273, refused both sides), 0 string. Y8V 628 applied, `b4fae877c35604fe`. No golden, fixture, export or log touched. |
 
 Items above that carry "bump" must add a row here when they land. No golden or replay expectation is ever
 re-pinned silently: the re-pin, its index and its reason go in the batch write-up and in this table.

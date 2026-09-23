@@ -32,6 +32,8 @@ import {
   NO_OP_MESSAGE_KEYS,
 } from "./refusedAction";
 import type { GameStateResponse } from "../gameEngine/gameState";
+// Stage 10.5 (S10-9): the receipt takes the log-wide message type; the shapeless fixtures below say so by cast.
+import type { SandboxLogMsg } from "../gameEngine/gameSetup";
 
 const CO = 3;
 
@@ -115,7 +117,7 @@ describe("a real refusal is recognised", () => {
 
 describe("some messages may do nothing", () => {
   it.each(NO_OP_MESSAGE_KEYS)("exempts %s", (key) => {
-    const msg = { [key]: {} };
+    const msg = { [key]: {} } as unknown as SandboxLogMsg;
     expect(mayLegitimatelyDoNothing(msg)).toBe(true);
     expect(actionWasRefused(board(), board(), msg)).toBe(false);
   });
@@ -131,8 +133,8 @@ describe("some messages may do nothing", () => {
 
   it("treats a missing before-state as not a refusal", () => {
     // Nothing to compare against is not evidence of anything.
-    expect(actionWasRefused(null, null, { BuyStock: {} })).toBe(false);
-    expect(actionWasRefused(undefined, board(), { BuyStock: {} })).toBe(false);
+    expect(actionWasRefused(null, null, { BuyStock: {} } as unknown as SandboxLogMsg)).toBe(false);
+    expect(actionWasRefused(undefined, board(), { BuyStock: {} } as unknown as SandboxLogMsg)).toBe(false);
   });
 });
 

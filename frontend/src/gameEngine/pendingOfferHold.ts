@@ -33,7 +33,8 @@
 // cannot end. No turn-end or round-end clearing code exists, and none is added: it would be dead.
 
 import type { GameStateResponse, PrivatePurchaseOffer, PrivateTradeOffer, TrainPurchaseOffer } from "./gameState";
-import type { GameplayExecuteMsg } from "../utils/sessionKey";
+import type { SandboxLogMsg } from "./gameSetup";
+import { sameWholeVgp, type VgpWire } from "./vgpAmount";
 
 /** The three ordinary kinds. */
 export type OrdinaryOfferKind = "private-purchase" | "train-purchase" | "private-trade";
@@ -100,7 +101,7 @@ export function describeStandingOffer(standing: StandingOrdinaryOffer): string {
   }
 }
 
-function key(msg: GameplayExecuteMsg): string {
+function key(msg: SandboxLogMsg): string {
   return typeof msg === "object" && msg !== null ? (Object.keys(msg)[0] ?? "") : "";
 }
 
@@ -111,7 +112,7 @@ const ALWAYS_PASSES: readonly string[] = ["RevertTo", "CloseRoom"];
  *  rescission by the proposer (while it stands at all -- the frozen design lets the proposer withdraw an
  *  accepted offer whose settlement has not landed, which is also the one exit short of `RevertTo` should a
  *  settlement ever fail to be derived), or the one derived settlement an accepted offer owes. Nothing else. */
-export function passesOfferHold(standing: StandingOrdinaryOffer, msg: GameplayExecuteMsg): boolean {
+export function passesOfferHold(standing: StandingOrdinaryOffer, msg: SandboxLogMsg): boolean {
   const body = (msg as Record<string, Record<string, unknown>>)[key(msg)] ?? {};
   switch (standing.kind) {
     case "private-purchase": {
@@ -138,15 +139,18 @@ export function passesOfferHold(standing: StandingOrdinaryOffer, msg: GameplayEx
 }
 
 /** Whether this `BuyPrivateCompany` is the settlement of THIS offer: same private, same buyer, same price. The
- *  owner is not part of the message; the settlement predicate re-derives it from the board. */
+ *  owner is not part of the message; the settlement predicate re-derives it from the board.
+ *  Stage 10.5 (S10-9): THE PRICE IS COMPARED BY VALUE (`sameWholeVgp`): a legacy numeric offer (`100`) and its
+ *  string settlement (`"100"`) are one price; a malformed spelling on either side matches nothing -- never
+ *  `Number(...)` coercion, which read `"1e2"` as `100`. */
 export function privateSettlementMatches(
   offer: PrivatePurchaseOffer,
-  settlement: { protocol_id: number; private_id: number; price: string | number },
+  settlement: { protocol_id: number; private_id: number; price: VgpWire },
 ): boolean {
   return (
     offer.private_id === settlement.private_id &&
     offer.buyer_protocol_id === settlement.protocol_id &&
-    Number(offer.price) === Number(settlement.price)
+    sameWholeVgp(offer.price, settlement.price)
   );
 }
 
@@ -165,7 +169,7 @@ export function trainSettlementMatches(
 
 /** Why this message is held while an ordinary offer stands, or `null`. The one global hold across the three
  *  ordinary kinds (#1590). */
-export function pendingOfferBlock(state: GameStateResponse, msg: GameplayExecuteMsg): string | null {
+export function pendingOfferBlock(state: GameStateResponse, msg: SandboxLogMsg): string | null {
   if (ALWAYS_PASSES.includes(key(msg))) return null;
   const standing = standingOrdinaryOffer(state);
   if (standing === null) return null;
@@ -187,11 +191,11 @@ export function pendingOfferBlock(state: GameStateResponse, msg: GameplayExecute
  *  no-ops them, #0). On a board this engine dealt they are refused outright rather than silently accepted
  *  (S7-19, ruled Q11); a legacy board keeps the no-op arm it was played on (D-9). Their schema and types stay
  *  until Stage 10 (S10-8). */
-export function isLegacyOfferMessage(msg: GameplayExecuteMsg): boolean {
+export function isLegacyOfferMessage(msg: SandboxLogMsg): boolean {
   return "AcceptTrainOffer" in msg || "RejectTrainOffer" in msg || "RescindTrainOffer" in msg;
 }
 
-export function legacyOfferMessageRefusal(state: GameStateResponse, msg: GameplayExecuteMsg): string | null {
+export function legacyOfferMessageRefusal(state: GameStateResponse, msg: SandboxLogMsg): string | null {
   if (!isLegacyOfferMessage(msg)) return null;
   if (typeof state.rules_engine_version !== "number") return null;
   const name = key(msg);

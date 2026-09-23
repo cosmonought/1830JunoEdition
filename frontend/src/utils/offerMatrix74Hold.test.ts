@@ -247,7 +247,7 @@ describe("§9 R74-C (A): while an earlier mandatory hold stands, no ordinary off
     const held = withCorp(operatingBoard(), PRR, { home_hex_label: "H12", station_token_hexes: [], station_tokens: [] });
     expect(pendingHomeTokens(held, homeHexToAxial(held)).map((owed) => owed.ticker)).toEqual(["PRR"]);
     for (const [label, msg, actor] of PROPOSALS(held)) {
-      const sentence = homeTokenBlock({ state: held, homeHexToAxial: homeHexToAxial(held), msg });
+      const sentence = homeTokenBlock({ state: held, homeHexToAxial: homeHexToAxial(held), msg: msg as import("../gameEngine/gameSetup").SandboxLogMsg });
       expect([label, sentence]).toEqual([label, expect.stringContaining("PRR is starting its first operating turn and its home station is not on the board yet.")]);
       expect([label, ingress(held, actor, msg)]).toEqual([label, sentence]);
       const after = applyAsRoom(held, msg, actor);
@@ -257,7 +257,7 @@ describe("§9 R74-C (A): while an earlier mandatory hold stands, no ordinary off
     const stockRound = withCorp(stockRoundBoard(), NYC, { home_hex_label: "E19", station_token_hexes: [], station_tokens: [] });
     expect(pendingHomeTokens(stockRound, homeHexToAxial(stockRound))).toEqual([]);
     for (const [label, msg] of PROPOSALS(stockRound)) {
-      expect([label, homeTokenBlock({ state: stockRound, homeHexToAxial: homeHexToAxial(stockRound), msg })]).toEqual([label, null]);
+      expect([label, homeTokenBlock({ state: stockRound, homeHexToAxial: homeHexToAxial(stockRound), msg: msg as import("../gameEngine/gameSetup").SandboxLogMsg })]).toEqual([label, null]);
     }
   });
 

@@ -1,5 +1,5 @@
 import type { GameStateResponse } from "./gameState";
-import type { GameplayExecuteMsg } from "../utils/sessionKey";
+import type { SandboxLogMsg } from "./gameSetup";
 import { homeStationHold, owedHomeStation } from "./homeStationAuthority";
 
 /* ==================================================================
@@ -53,7 +53,7 @@ export interface HomeTokenGateInput {
   /** #7's injection rule: the board's label lookup lives in `components/`. */
   homeHexToAxial: (label: string) => readonly [number, number] | null;
   /** The message about to be applied, or `undefined` to ask only whether anything is owed. */
-  msg?: unknown;
+  msg?: SandboxLogMsg;
   /** How to render a wallet as a name. Identity by default. */
   labelForAddress?: (address: string) => string;
 }
@@ -67,7 +67,7 @@ export function homeTokenBlock(input: HomeTokenGateInput): string | null {
   const { state, homeHexToAxial, msg, labelForAddress } = input;
   /* #1612: the one hold, the one sentence -- "<ticker> is starting its first operating turn and its home
      station is not on the board yet. <who> must place it on <hexes> before <ticker> can operate." */
-  return homeStationHold(state, msg as GameplayExecuteMsg | undefined, homeHexToAxial, labelForAddress);
+  return homeStationHold(state, msg, homeHexToAxial, labelForAddress);
 }
 
 /** Whether anything is owed at all, for surfaces that only need the fact. */

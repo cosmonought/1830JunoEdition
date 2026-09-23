@@ -76,6 +76,7 @@ import {
   type ServerMessage,
 } from "./serverProtocol";
 import type { GameplayExecuteMsg } from "./sessionKey";
+import { isSetupGameMsg, type SandboxLogMsg } from "../gameEngine/gameSetup";
 import type { GameStateResponse } from "../gameEngine/gameState";
 /* #1662 (S9-1): the ingress seam #1520 opened, generalised -- the version pin, the turn's draw, and the
    playtest waiver a hosted room does not admit. `isSetupGameMsg` / `stampRulesEngineVersion` moved inside it. */
@@ -119,7 +120,9 @@ export interface SubmitInput {
   /** Established by the transport BEFORE this class is reached. Never taken from the request. */
   actor: string;
   build: BuildId;
-  msg: GameplayExecuteMsg;
+  /** Stage 10.5 (S10-9): any logged room message -- the deal, the room-only events and the contract's own
+   *  gameplay alike; `messageSchema.ts` admits exactly this family at the server's ingress. */
+  msg: SandboxLogMsg;
   baseIndex: number;
   submissionId?: string;
   /** #1249: the room's host from the room document, for the messages whose owner is the host. `null` when
@@ -381,9 +384,11 @@ export class RoomSession {
         build: this.options.build,
       };
     }
-    if ("SetupGame" in (input.msg as Record<string, unknown>)) {
-      // Through `unknown`: `SetupGame` is not a `GameplayExecuteMsg` (#1189's IOU), and the compiler is right.
-      const named = (input.msg as unknown as { SetupGame: { build?: unknown } }).SetupGame.build;
+    if (isSetupGameMsg(input.msg)) {
+      /* Stage 10.5 (S10-9): narrowed, not cast. `SubmitInput.msg` is the log-wide `SandboxLogMsg`, so the deal is
+         one of its members (#1189's IOU, paid). `build` is still read as untrusted: the frame was shape-checked
+         (`messageSchema.ts`: `build: "string?"`), and a non-string is simply not compared. */
+      const named: unknown = input.msg.SetupGame.build;
       if (typeof named === "string" && !buildsAgree(named, this.options.build)) {
         return {
           kind: "refused",
@@ -495,7 +500,7 @@ export class RoomSession {
 
     /* #1233: A REVERT IS NOT A MOVE TO APPLY. The entry is in the log now; the board is whatever the log,
        with that revert honoured, says it is. Rebuild, then finish any burst the rewound board owes. */
-    if ("RevertTo" in (input.msg as Record<string, unknown>)) {
+    if ("RevertTo" in input.msg) {
       this.rebuild();
       const owed = this.engine.settleOwed((msg) => this.appendDerived(msg, input.actor));
       return {

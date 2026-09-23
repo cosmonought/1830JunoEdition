@@ -35,7 +35,7 @@
 // #750 AND #768'S PRINCIPLE, applied to the log itself: report what the authority DID by comparing two
 // states, never what a message was asked to do.
 
-import type { GameplayExecuteMsg } from "./sessionKey";
+import type { SandboxLogMsg } from "../gameEngine/gameSetup";
 import type { GameStateResponse } from "../gameEngine/gameState";
 import type { MapGridResponse } from "../components/hexContractTypes";
 import {
@@ -117,7 +117,7 @@ export function silentWhenUnchanged(msg: unknown, before: unknown, after: unknow
 export function actionWasRefused(
   before: unknown,
   after: unknown,
-  msg: GameplayExecuteMsg | Record<string, unknown>,
+  msg: SandboxLogMsg,
   grids?: GridPair,
 ): boolean {
   if (before === null || before === undefined || after === null || after === undefined) return false;
@@ -175,7 +175,7 @@ export interface RefusalContext {
 
 export function refusalReasonFor(
   before: GameStateResponse | null | undefined,
-  msg: GameplayExecuteMsg | Record<string, unknown>,
+  msg: SandboxLogMsg,
   ctx?: RefusalContext,
 ): string | null {
   if (!before || typeof msg !== "object" || msg === null) return null;
@@ -183,7 +183,7 @@ export function refusalReasonFor(
   /* #1530: the same two questions the reducer's gate asked first, on the same `before` state: is a discard
      owed (then nothing else runs), and is THIS discard the right corporation's, its president's, of a train
      it holds. */
-  const held = pendingDiscardBlock(before, msg as GameplayExecuteMsg);
+  const held = pendingDiscardBlock(before, msg);
   if (held !== null) return held;
   if ("DiscardTrain" in msg) {
     const { protocol_id, model_type } = (msg as { DiscardTrain: { protocol_id: number; model_type: string } }).DiscardTrain;
@@ -191,7 +191,7 @@ export function refusalReasonFor(
   }
   /* #1540/#1541: the forced-purchase hold and its own actions, each with the reducer's reason. */
   {
-    const heldByFunding = emergencyFundingBlock(before, msg as GameplayExecuteMsg, ctx?.mapGrid);
+    const heldByFunding = emergencyFundingBlock(before, msg, ctx?.mapGrid);
     if (heldByFunding !== null) return heldByFunding;
     const funding = ctx?.mapGrid === undefined ? null : emergencyFundingFor(before, ctx.mapGrid);
     if (funding !== null && "SellStock" in msg && ctx?.actor) {

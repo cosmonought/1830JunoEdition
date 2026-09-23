@@ -20,7 +20,7 @@
 // reducer's boundary, and nothing here can move money.
 
 import type { GameStateResponse } from "../gameEngine/gameState";
-import type { GameplayExecuteMsg } from "./sessionKey";
+import type { SandboxLogMsg } from "../gameEngine/gameSetup";
 import { applyPrivateRevenue, type PrivatePayout } from "../gameEngine/sandboxSession";
 
 export interface AuctionTransition {
@@ -41,14 +41,14 @@ export interface AuctionTransition {
 
 const EMPTY: AuctionTransition = { won: [], markdown: null, allPassed: false, payouts: [] };
 
-function isWaterfallPass(msg: GameplayExecuteMsg): boolean {
+function isWaterfallPass(msg: SandboxLogMsg): boolean {
   return "WaterfallPass" in msg;
 }
 
 export function describeAuctionTransition(
   before: GameStateResponse | null,
   after: GameStateResponse | null,
-  msg: GameplayExecuteMsg,
+  msg: SandboxLogMsg,
 ): AuctionTransition {
   if (!before || !after) return EMPTY;
   const auctionBefore = before.waterfall;

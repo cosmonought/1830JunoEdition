@@ -58,7 +58,7 @@
 // barred without a Kanawha Licence (#1323); LPF warehouses are red areas a route may run through (#1320).
 
 import type { GameStateResponse } from "./gameState";
-import type { GameplayExecuteMsg } from "../utils/sessionKey";
+import type { SandboxLogMsg } from "./gameSetup";
 import type { MapGridResponse } from "../components/hexContractTypes";
 import { tokenCityIndex, type StationTokenCompany } from "../components/hexContractTypes";
 import type { TileColorTier } from "../components/hexTileCatalog";
@@ -570,7 +570,7 @@ export function dividendAmountRefusal(
  *  (#757). */
 export function routeSkipRefusal(
   state: GameStateResponse,
-  msg: GameplayExecuteMsg,
+  msg: SandboxLogMsg,
   mapGrid: MapGridResponse | undefined,
 ): string | null {
   if (!("AdvanceOperatingSubPhase" in msg) && !("PassTurn" in msg)) return null;

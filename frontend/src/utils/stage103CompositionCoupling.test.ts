@@ -24,6 +24,8 @@ import { existsSync, readdirSync, readFileSync } from "fs";
 import { join } from "path";
 import type { GameStateResponse } from "../gameEngine/gameState";
 import type { GameplayExecuteMsg } from "./sessionKey";
+// Stage 10.5 (S10-9): the corpus observer hands the log-wide message type.
+import type { SandboxLogMsg } from "../gameEngine/gameSetup";
 import type { MapGridResponse } from "../components/hexContractTypes";
 import type { SandboxActionContext, SandboxMarketContext } from "../gameEngine/sandboxSession";
 import {
@@ -187,7 +189,7 @@ describe("A. an all-pass private auction pays private income through the real en
  *  closures below read only its companies and variants, which the mirrors do not touch. */
 function legacyShellContext(
   handed: GameStateResponse,
-  msg: GameplayExecuteMsg,
+  msg: SandboxLogMsg,
   actor: string | null | undefined,
   grid: MapGridResponse,
   gridBefore: MapGridResponse,
@@ -247,7 +249,7 @@ function legacyShellContext(
 }
 
 /** The shell's pre-10.3 market SENTENCE: its own context, with `shareSaleBlock` and no holds (f8ff424). */
-function legacyShellReport(handed: GameStateResponse, msg: GameplayExecuteMsg, actor: string | null | undefined) {
+function legacyShellReport(handed: GameStateResponse, msg: SandboxLogMsg, actor: string | null | undefined) {
   const legacy = legacyShellContext(handed, msg, actor, EMPTY_GRID, EMPTY_GRID).marketContext as SandboxMarketContext;
   return applySandboxMarketAction(handed.market_positions ?? {}, msg, {
     ...legacy,

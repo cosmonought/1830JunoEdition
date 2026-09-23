@@ -12,7 +12,8 @@
 
 import type { GameStateResponse } from "../gameEngine/gameState";
 import type { MapGridResponse } from "../components/hexContractTypes";
-import type { GameplayExecuteMsg } from "./sessionKey";
+// Stage 10.5 (S10-9): fixtures hand the reducer / ingress / room ANY logged message, so the casts name the log-wide type.
+import type { SandboxLogMsg } from "../gameEngine/gameSetup";
 import { applySandboxAction } from "../gameEngine/sandboxSession";
 import { turnRefusal } from "../gameEngine/turnAuthority";
 import { fieldDigests, stateDigest } from "../gameEngine/stateDigest";
@@ -27,12 +28,12 @@ export const GRID = { game_id: 1, tiles: [] } as unknown as MapGridResponse;
 
 /** The reducer, as the fixture suites call it: an author, the empty grid, no room injections. */
 export const apply = (state: GameStateResponse, msg: unknown, actor: string | null = null, mapGrid: MapGridResponse = GRID) =>
-  applySandboxAction(state, msg as GameplayExecuteMsg, { actor, mapGrid });
+  applySandboxAction(state, msg as SandboxLogMsg, { actor, mapGrid });
 
 /** The reducer exactly as a room's engine calls it: the providers' chart injections (the home-token label table
  *  among them), the author and the grid. */
 export const applyAsRoom = (state: GameStateResponse, msg: unknown, actor: string, mapGrid: MapGridResponse = GRID) =>
-  applySandboxAction(state, msg as GameplayExecuteMsg, {
+  applySandboxAction(state, msg as SandboxLogMsg, {
     ...sandboxReplayProviders().chartInjections(state),
     actor,
     mapGrid,
@@ -40,7 +41,7 @@ export const applyAsRoom = (state: GameStateResponse, msg: unknown, actor: strin
 
 /** Ingress (`turnRefusal`), with a host and an empty log so the room-message owners are asked. */
 export const ingress = (state: GameStateResponse, actor: string, msg: unknown, mapGrid: MapGridResponse = GRID) =>
-  turnRefusal({ state, waterfall: null, actor, msg: msg as GameplayExecuteMsg, host: P1, log: [], mapGrid });
+  turnRefusal({ state, waterfall: null, actor, msg: msg as SandboxLogMsg, host: P1, log: [], mapGrid });
 
 export const same = (a: GameStateResponse, b: GameStateResponse) => stateDigest(a) === stateDigest(b);
 
@@ -205,7 +206,7 @@ export function roomFor(seed: GameStateResponse, mapGrid: MapGridResponse = GRID
     mintId: () => `m${(minted += 1)}`,
   });
   const submit = (actor: string, msg: unknown) =>
-    room.submit({ actor, build: "b", host: P1, msg: msg as GameplayExecuteMsg, baseIndex: room.nextIndex - 1 });
+    room.submit({ actor, build: "b", host: P1, msg: msg as SandboxLogMsg, baseIndex: room.nextIndex - 1 });
   const kinds = (response: ReturnType<RoomSession["submit"]>) =>
     ((response as { entries?: ServerLogEntry[] }).entries ?? []).map(
       (entry) => `${Object.keys(JSON.parse(entry.payload))[0]}${entry.derived ? "*" : ""}`,

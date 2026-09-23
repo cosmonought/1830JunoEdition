@@ -52,6 +52,8 @@
 
 import type { GameStateResponse } from "./gameState";
 import type { GameplayExecuteMsg } from "../utils/sessionKey";
+import type { SandboxLogMsg } from "./gameSetup";
+import { canonicalWholeVgp } from "./vgpAmount";
 import type { MapGridResponse } from "../components/hexContractTypes";
 import type { TileColorTier } from "../components/hexTileCatalog";
 import type { OperatingSubPhase } from "./operatingSubPhase";
@@ -194,9 +196,12 @@ export function nextDerivedAction(input: DerivedActionInput): DerivedAction | nu
             game_id: 0,
             protocol_id: privateOffer.buyer_protocol_id,
             private_id: privateOffer.private_id,
-            price: String(privateOffer.price),
+            /* Stage 10.5 (S10-9): the canonical `Uint128` string of the offer's price in either spelling -- for a
+               legacy numeric offer exactly the bytes `String(price)` always wrote; the fallback keeps a hand-built
+               fixture's malformed price as it was (the settlement authority refuses it). */
+            price: canonicalWholeVgp(privateOffer.price) ?? String(privateOffer.price),
           },
-        } as GameplayExecuteMsg,
+        },
         key,
         reason: "the owner accepted the offer",
         kind: "accepted-offer",
@@ -216,7 +221,7 @@ export function nextDerivedAction(input: DerivedActionInput): DerivedAction | nu
             model_type: trainOffer.model_type,
             price: trainOffer.price,
           },
-        } as GameplayExecuteMsg,
+        },
         key,
         reason: "the seller accepted the offer",
         kind: "accepted-offer",
@@ -286,7 +291,7 @@ export function nextDerivedAction(input: DerivedActionInput): DerivedAction | nu
           revenue_amount: "0",
           distribute: false,
         },
-      } as GameplayExecuteMsg,
+      },
       key,
       reason: noEarnableRevenue,
       kind: "forced-withhold",
@@ -311,7 +316,7 @@ export function nextDerivedAction(input: DerivedActionInput): DerivedAction | nu
   const exit = autoSkipExit(step, stepsFor(state));
   return exit === "end-turn"
     ? {
-        msg: { PassTurn: { game_id: 0 } } as GameplayExecuteMsg,
+        msg: { PassTurn: { game_id: 0 } },
         key,
         reason: skipReason,
         kind: "end-turn",
@@ -319,7 +324,7 @@ export function nextDerivedAction(input: DerivedActionInput): DerivedAction | nu
     : {
         msg: {
           AdvanceOperatingSubPhase: { game_id: 0, protocol_id: protocolId },
-        } as GameplayExecuteMsg,
+        },
         key,
         reason: skipReason,
         kind: "skip",
@@ -361,7 +366,7 @@ export function trainOfferKey(offer: TrainPurchaseOffer, state: GameStateRespons
    nothing: it was never a turn's action, and recording a turn key for it would suppress a skip the rebuilt
    board still owes. After the fix the loop re-asks the post-settlement board and derives what a depot
    purchase would have: equivalent boards, equivalent progression, no special case for "offer => End Turn". */
-export function derivedEntryKey(state: GameStateResponse, msg: GameplayExecuteMsg): string | null {
+export function derivedEntryKey(state: GameStateResponse, msg: SandboxLogMsg): string | null {
   if ("BuyPrivateCompany" in msg) {
     const offer = state.private_purchase_offer ?? null;
     return offer !== null && offer.funding !== true && offer.accepted === true && privateSettlementMatches(offer, msg.BuyPrivateCompany)

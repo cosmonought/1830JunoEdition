@@ -47,6 +47,7 @@
 
 import type { GameStateResponse } from "./gameState";
 import type { GameplayExecuteMsg } from "../utils/sessionKey";
+import type { SandboxLogMsg } from "./gameSetup";
 import { authoritativeHoldRefusal, type HoldContext } from "./authoritativeHolds";
 import { operatingIdentityRefusal } from "./operatingIdentity";
 import { stationAnchorRefusal, type StationAnchorLay } from "./stationAnchorAuthority";
@@ -170,7 +171,7 @@ export function layTileLegalityRefusal(
  *  message); ingress asks the holds first for every message and `layTileLegalityRefusal` after them. */
 export function layTileRefusal(
   state: GameStateResponse,
-  msg: GameplayExecuteMsg,
+  msg: SandboxLogMsg,
   ctx?: LayTileAuthorityContext,
 ): string | null {
   if (!("LayTile" in msg)) return null;

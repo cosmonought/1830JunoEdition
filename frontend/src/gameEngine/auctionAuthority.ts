@@ -60,7 +60,7 @@ import {
   bidRejectionReason,
   minimumBidFor,
 } from "./auctionEscrow";
-import type { GameplayExecuteMsg } from "../utils/sessionKey";
+import type { SandboxLogMsg } from "./gameSetup";
 
 /** The player the auction atom is waiting on -- the same derivation `applySandboxWaterfallAction` applies
  *  every action under, so the rule and the mutation judge one person (#1232/#544). */
@@ -281,7 +281,7 @@ export function legacyBidRefusal(state: GameStateResponse): string | null {
 export function auctionRefusal(
   state: GameStateResponse,
   waterfall: WaterfallStateResponse | null,
-  msg: GameplayExecuteMsg,
+  msg: SandboxLogMsg,
 ): string | null {
   if ("WaterfallBuyLowest" in msg) return waterfallBuyRefusal(state, waterfall);
   if ("WaterfallBidHigher" in msg) return waterfallBidRefusal(state, waterfall, msg.WaterfallBidHigher);
@@ -295,7 +295,7 @@ export function auctionRefusal(
 }
 
 /** Whether this message is one the auction owns -- used by the reducer to decide whether to ask at all. */
-export function isAuctionMessage(msg: GameplayExecuteMsg): boolean {
+export function isAuctionMessage(msg: SandboxLogMsg): boolean {
   return (
     "WaterfallBuyLowest" in msg ||
     "WaterfallBidHigher" in msg ||

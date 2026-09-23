@@ -14,7 +14,7 @@
 // its import. Nothing about which hold applies, or in what priority, moved with it.
 
 import type { GameStateResponse } from "./gameState";
-import type { GameplayExecuteMsg } from "../utils/sessionKey";
+import type { SandboxLogMsg } from "./gameSetup";
 import type { MapGridResponse } from "../components/hexContractTypes";
 import { pendingDiscardBlock } from "./trainDiscard";
 import { emergencyFundingBlock } from "./emergencyFunding";
@@ -35,7 +35,7 @@ export interface HoldContext {
  *  always has (#550): a caller that hands in none is judged on the other three. */
 export function authoritativeHoldRefusal(
   state: GameStateResponse,
-  msg: GameplayExecuteMsg,
+  msg: SandboxLogMsg,
   ctx?: HoldContext,
 ): string | null {
   return (

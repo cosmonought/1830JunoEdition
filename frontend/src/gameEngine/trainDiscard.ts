@@ -60,7 +60,7 @@
 // question of the entry's own `actor` (#549), so a hand-built message meets the answer twice.
 
 import type { GameStateResponse, PublicCompanyState } from "./gameState";
-import type { GameplayExecuteMsg } from "../utils/sessionKey";
+import type { SandboxLogMsg } from "./gameSetup";
 import { derivePhase } from "./gamePhase";
 import { countableTrainCount } from "./trainLimit";
 import { buildOperatingOrder } from "./operatingOrder";
@@ -179,7 +179,7 @@ export function discardTrainRefusal(
 
 /** #1530: what the pending obligation refuses -- every message but the discard itself and the room's close.
  *  `null` when nothing is pending or the message is the one the game is waiting for. */
-export function pendingDiscardBlock(state: GameStateResponse, msg: GameplayExecuteMsg): string | null {
+export function pendingDiscardBlock(state: GameStateResponse, msg: SandboxLogMsg): string | null {
   if ("DiscardTrain" in msg || "CloseRoom" in msg) return null;
   const pending = pendingTrainDiscards(state);
   if (pending === null) return null;

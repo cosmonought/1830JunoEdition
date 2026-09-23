@@ -18,6 +18,7 @@
 // see `docs/ai_architecture/sandbox_reducer.md`.
 
 import type { GameplayExecuteMsg } from "../utils/sessionKey";
+import type { LegacyVgpNumber, WholeVgpString } from "./vgpAmount";
 /* TYPE-ONLY, and deliberately: `gameState.ts` imports from here, so a value import would be a real cycle. A
    type import is erased at compile time, and it keeps the roster stripper exact about the shape it returns --
    a structural generic was the first attempt and it widened the corporation and private arrays to
@@ -390,10 +391,12 @@ export interface ProposePrivatePurchaseMsg {
     owner: string;
     buyer_protocol_id: number;
     buyer_ticker: string;
-    /** Whole VGP. A string would match the contract's convention, but this
-     *  message has no contract to match and an integer price is what every
-     *  reader wants. */
-    price: number;
+    /** Whole VGP. Stage 10.5 (S10-9): A NEW PROPOSAL WRITES THE CANONICAL STRING (`WholeVgpString`, the
+     *  `Uint128` convention its settlement -- `BuyPrivateCompany.price` -- and the train offer already use).
+     *  The legacy JSON number stays readable: stored logs carry it, their payload bytes are never rewritten,
+     *  and the reducer keeps the spelling the message carried so an old log replays to the board it always
+     *  did. Read only through `vgpAmount.ts` (`wholeVgpNumber`, `sameWholeVgp`). */
+    price: WholeVgpString | LegacyVgpNumber;
   };
 }
 
@@ -527,30 +530,48 @@ export function isRescindPrivateTradeMsg(msg: unknown): msg is RescindPrivateTra
   return typeof msg === "object" && msg !== null && "RescindPrivateTrade" in msg;
 }
 
-/** Everything the sandbox log can carry -- the contract's own message set,
- *  plus the sandbox-only round events. A PRECISE union rather than an
- *  index signature: a loose type here would let any object into the replay
- *  and the pipeline would discover it was not a message at runtime. */
-export type SandboxLogMsg =
-  | GameplayExecuteMsg
+/** The room events the chain has never heard of: everything the log carries that is NOT a contract message.
+ *  ONE LIST, named once -- `SandboxLogMsg` below is built from it and `isSandboxOnlyMsg` narrows to it, so a
+ *  new room-only event is added here and nowhere else (#546). None of these may reach `execGameplay` / the
+ *  session key (`GAMEPLAY_MESSAGE_KEYS` knows none of them). */
+export type SandboxOnlyMsg =
   | SetupGameMsg
   | OpenStockRoundMsg
+  // Design note #899: the room closure, which the chain has never heard of either.
   | CloseRoomMsg
   | SetBoParMsg
   | PlaceHomeStationMsg
   | ExchangePrivateMsg
+  // Design note #662: the private-purchase negotiation.
   | ProposePrivatePurchaseMsg
   | AnswerPrivatePurchaseMsg
+  // Design note #701: and the train negotiation, which is the same shape.
   | ProposeTrainPurchaseMsg
   | AnswerTrainPurchaseMsg
-  // Design note #1594: the two ordinary rescissions and the player <-> player trade.
+  // Design note #1594 (Batch 7.4): the ordinary rescissions and the player <-> player trade. Off-turn or
+  // seat-exempt by construction (a rescission is the proposer's, an answer the counterparty's, and the
+  // trade proposal is judged by its own party-and-seat rule at ingress), so they land here with the rest.
   | RescindPrivatePurchaseMsg
   | RescindTrainPurchaseMsg
   | ProposePrivateTradeMsg
   | AnswerPrivateTradeMsg
   | RescindPrivateTradeMsg
+  // Design note #1323: the licence purchase, which the chain has never heard of.
   | BuyKanawhaLicenseMsg
   | RevertToMsg;
+
+/** Everything the room log can carry -- the contract's own message set, plus the room-only events. A PRECISE
+ *  union rather than an index signature: a loose type here would let any object into the replay and the
+ *  pipeline would discover it was not a message at runtime.
+ *
+ *  Stage 10.5 (S10-9): THIS IS THE LOG-WIDE MESSAGE TYPE -- the "`LoggedMsg` union" #530 / #1189 / #1230 said
+ *  was owed. It keeps its existing name (no second union, no alias to drift from it). Every boundary that
+ *  carries ANY logged message is typed with it: the reducer (`applySandboxAction` and its steps), the holds
+ *  and authorities it asks, `RoomEngine.apply` and `ReplayObserver`, `turnRefusal`, `sandboxActionContext`,
+ *  `RoomSession.submit`, the server protocol's `SubmitRequest` / `mintLogEntry` and `ServerLink.submit`.
+ *  `GameplayExecuteMsg` stays what it is -- the contract / session-key message set -- and a logged message
+ *  reaches it only through `isSandboxOnlyMsg` (see `chainGameplayMsg`). */
+export type SandboxLogMsg = GameplayExecuteMsg | SandboxOnlyMsg;
 
 export function isBuyKanawhaLicenseMsg(msg: unknown): msg is BuyKanawhaLicenseMsg {
   return typeof msg === "object" && msg !== null && "BuyKanawhaLicense" in msg;
@@ -603,35 +624,7 @@ export function isRevertToMsg(msg: unknown): msg is RevertToMsg {
 /** Neither sandbox-only event may reach `execGameplay` -- the contract has
  *  no such message. One predicate so a third event cannot be added to the
  *  union and forgotten at the one call site that must refuse them. */
-export function isSandboxOnlyMsg(
-  msg: unknown,
-):
-  msg is
-    | SetupGameMsg
-    | OpenStockRoundMsg
-    // Design note #899: the room closure, which the chain has never heard of either.
-    | CloseRoomMsg
-    | SetBoParMsg
-    | PlaceHomeStationMsg
-    | ExchangePrivateMsg
-    // Design note #662: the private-purchase negotiation. Added HERE and
-    // nowhere else, which is the point of this predicate existing (#546).
-    | ProposePrivatePurchaseMsg
-    | AnswerPrivatePurchaseMsg
-    // Design note #701: and the train negotiation, which is the same shape.
-    | ProposeTrainPurchaseMsg
-    | AnswerTrainPurchaseMsg
-    // Design note #1594 (Batch 7.4): the ordinary rescissions and the player <-> player trade. Off-turn or
-    // seat-exempt by construction (a rescission is the proposer's, an answer the counterparty's, and the
-    // trade proposal is judged by its own party-and-seat rule at ingress), so they land here with the rest.
-    | RescindPrivatePurchaseMsg
-    | RescindTrainPurchaseMsg
-    | ProposePrivateTradeMsg
-    | AnswerPrivateTradeMsg
-    | RescindPrivateTradeMsg
-    // Design note #1323: the licence purchase, which the chain has never heard of.
-    | BuyKanawhaLicenseMsg
-    | RevertToMsg {
+export function isSandboxOnlyMsg(msg: unknown): msg is SandboxOnlyMsg {
   return (
     isBuyKanawhaLicenseMsg(msg) ||
     isRescindPrivatePurchaseMsg(msg) ||
@@ -651,6 +644,14 @@ export function isSandboxOnlyMsg(
     isAnswerTrainPurchaseMsg(msg) ||
     isRevertToMsg(msg)
   );
+}
+
+/** Stage 10.5 (S10-9): THE ONE NARROWING from a logged message to a contract message. `null` for every room-only
+ *  event; the message itself, typed as `GameplayExecuteMsg`, otherwise. The only path from the log-wide type to
+ *  the session-key / on-chain executor, so a room-only event cannot be handed to it without this answering
+ *  `null` first. */
+export function chainGameplayMsg(msg: SandboxLogMsg): GameplayExecuteMsg | null {
+  return isSandboxOnlyMsg(msg) ? null : msg;
 }
 
 /* Design note #538: A ROOM NEVER BOOTS THE FIXTURE'S ROSTER. Two passes tried to OVERWRITE the four mock

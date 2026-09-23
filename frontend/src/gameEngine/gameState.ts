@@ -20,6 +20,7 @@ import { certLimitForPlayers } from "./gameSetup";
 import { certificateCardsHeld } from "./doubleCertificate";
 import type { OperatingSubPhase } from "./operatingSubPhase";
 import type { GameVariants } from "./gameVariants";
+import type { VgpWire } from "./vgpAmount";
 
 /* ------------------------------------------------------------------ */
 /* Contract data mirror -- see design note #1                         */
@@ -324,10 +325,10 @@ export interface PrivateCompanyState {
   closed: boolean;
 }
 
-/** A corporation's standing offer for a private company -- design note #662. Snake_case to match everything
+/** The fields both corporation-buyer private offers share -- design note #662. Snake_case to match everything
  *  else on `GameStateResponse` even though no contract sends it: a reader scanning this object should not
  *  have to work out which fields came off the wire from their casing. */
-export interface PrivatePurchaseOffer {
+interface PrivatePurchaseOfferFields {
   private_id: number;
   /** Carried, not re-derived, so every client's prompt names what the buyer
    *  was looking at. */
@@ -336,7 +337,6 @@ export interface PrivatePurchaseOffer {
   owner: string;
   buyer_protocol_id: number;
   buyer_ticker: string;
-  price: number;
   /** Design note #1247: the owner said yes and the purchase is OWED. Set by the reducer's `AnswerPrivatePurchase`
    *  arm on an accept; cleared -- with the whole offer -- by the `BuyPrivateCompany` that settles it, which
    *  `nextDerivedAction` generates from this flag. Absent means "awaiting an answer", as it always did. */
@@ -346,12 +346,29 @@ export interface PrivatePurchaseOffer {
    *  fixture wrote by hand (`nextDerivedAction` keys such an offer on its transaction instead). */
   instance?: number;
   accepted?: true;
-  /** Design note #1541: a SELLER-initiated offer made to fund a forced train purchase (rulebook 6.6.3). The
-   *  direction is reversed -- the owner offered, and the BUYING corporation's president answers with
-   *  `AnswerFundingPrivateOffer`; acceptance settles the transfer in the same arm. Absent on every ordinary
-   *  (corporation-initiated) offer. */
-  funding?: true;
 }
+
+/** An ORDINARY (corporation-initiated) private offer, written by `ProposePrivatePurchase`. */
+export interface OrdinaryPrivatePurchaseOffer extends PrivatePurchaseOfferFields {
+  /** Stage 10.5 (S10-9): the spelling the proposal carried, VERBATIM -- the canonical string for every new
+   *  proposal, the legacy number for a stored one (never canonicalised in state: that would move a historical
+   *  log's digest). Compared by VALUE (`sameWholeVgp`), never by `===`. */
+  price: VgpWire;
+  funding?: undefined;
+}
+
+/** Design note #1541: a SELLER-initiated offer made to fund a forced train purchase (rulebook 6.6.3). The
+ *  direction is reversed -- the owner offered, and the BUYING corporation's president answers with
+ *  `AnswerFundingPrivateOffer`; acceptance settles the transfer in the same arm. Its price is
+ *  `OfferPrivateForFunding.price`, a whole-number field of the gameplay set, and it settles by arithmetic in that
+ *  arm, never through `BuyPrivateCompany` -- so it is NOT migrated by Stage 10.5 and stays a number. */
+export interface FundingPrivatePurchaseOffer extends PrivatePurchaseOfferFields {
+  price: number;
+  funding: true;
+}
+
+/** A corporation's standing offer for a private company: ordinary or funding, told apart by `funding`. */
+export type PrivatePurchaseOffer = OrdinaryPrivatePurchaseOffer | FundingPrivatePurchaseOffer;
 
 /** Design note #701: the train-trade offer awaiting the seller president's answer. The train equivalent of
  *  `PrivatePurchaseOffer`, and here for the same reason: a proposal is something the OTHER player has to see,

@@ -4,8 +4,11 @@
 //  DESIGN NOTE 1449: THE SHAPE OF A MESSAGE IS NOT THE LEGALITY OF A MOVE
 // ==================================================================
 //
-// WHAT THIS FILE IS. The structural contract of every gameplay message, checked at runtime, so that what
-// reaches `RoomSession.submit` is a `GameplayExecuteMsg` in fact and not merely by assertion.
+// WHAT THIS FILE IS. The structural contract of every logged room message, checked at runtime, so that what
+// reaches `RoomSession.submit` is a `SandboxLogMsg` in fact and not merely by assertion. (Stage 10.5, S10-9:
+// that is the log-wide family -- the contract's `GameplayExecuteMsg` plus the room-only `isSandboxOnlyMsg`
+// events, both of which this table has always admitted; the table's key set is pinned against the union by
+// `stage105TypeWire.test.ts`. The chain's own set is `GAMEPLAY_MESSAGE_KEYS` and is not this table.)
 //
 // WHAT IT WAS BEFORE. `gameServer.ts` read `JSON.parse(String(raw)) as ClientFrame` and handed `frame.msg`
 // straight to the session. A cast is a promise the compiler believes and the wire has never heard of.
@@ -70,6 +73,7 @@ type FieldKind =
   | "routes"
   | "ints"
   | "strings"
+  | "finite|string"
   | `enum:${string}`;
 
 type FieldSpec = FieldKind | `${FieldKind}?`;
@@ -113,6 +117,14 @@ function checkField(value: unknown, spec: FieldSpec): string | null {
       return Number.isInteger(value) ? null : "must be a whole number";
     case "finite":
       return typeof value === "number" && Number.isFinite(value) ? null : "must be a finite number";
+    /* Stage 10.5 (S10-9): a price that may arrive in either wire spelling -- the canonical string every new write
+       uses, or the JSON number a stored log carries. SHAPE ONLY, like `BuyTrainFromCorporation.price: "string"`:
+       whether the text or number is a well-formed whole amount, and a legal one, is the authority's
+       (`vgpAmount.ts` inside `privatePurchaseRefusal`), so ingress answers the authority's sentence (§16). */
+    case "finite|string":
+      return typeof value === "string" || (typeof value === "number" && Number.isFinite(value))
+        ? null
+        : "must be a number or a string";
     case "string":
       return typeof value === "string" ? null : "must be a string";
     case "bool":
@@ -325,7 +337,9 @@ export const GAMEPLAY_MESSAGE_SCHEMA: Readonly<Record<string, Readonly<Record<st
     owner: "string",
     buyer_protocol_id: "int",
     buyer_ticker: "string?",
-    price: "finite",
+    // Stage 10.5 (S10-9): was "finite" (strings refused). A new proposal writes the canonical whole-VGP string; a
+    // stored log's number is still admitted. Malformed / fractional / out-of-band values are the authority's refusal.
+    price: "finite|string",
   },
   AnswerPrivatePurchase: { game_id: "int?", private_id: "int", accept: "bool" },
   ProposeTrainPurchase: {

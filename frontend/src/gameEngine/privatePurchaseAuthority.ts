@@ -40,6 +40,7 @@ import { isSellableToCorporation } from "./baltimorePrivate";
 import { privatePriceBounds, privatePurchasePhaseOpen } from "./privatePriceBand";
 import { treasuryOf } from "./cashLedger";
 import { anyOfferStands, privateSettlementMatches } from "./pendingOfferHold";
+import { wholeVgpNumber, type VgpWire } from "./vgpAmount";
 
 /** The operating corporation, read without throwing on a fixture that carries no queue (#232: absent is "not
  *  said"; a board with no queue has nobody operating, and the refusal says so rather than the engine falling
@@ -52,8 +53,8 @@ function operatingNow(state: GameStateResponse): number | null {
 export interface PrivatePurchaseIntent {
   buyerId: number;
   privateId: number;
-  /** The declared price, as the message or the offer carries it. Judged as a whole number. */
-  price: number | string;
+  /** The declared price, as the message or the offer carries it (`VgpWire`). Judged as a whole number. */
+  price: VgpWire;
 }
 
 /** The moment the predicate is asked at, which decides how consent is read. */
@@ -128,10 +129,13 @@ export function privatePurchaseRefusal(
   }
 
   /* ---- 9. A whole price inside the printed band (3.1) ----------------------------------------- */
-  const price = Number(intent.price);
+  /* Stage 10.5 (S10-9): read through `wholeVgpNumber` -- the canonical string or a stored log's legacy number,
+     nothing coerced ("1e2", "100.0", " 100" are malformed, not $100). A malformed price is refused with the
+     same sentence as an out-of-band one. */
+  const price = wholeVgpNumber(intent.price);
   const face = Number(priv.cost) || 0;
   const { min, max } = privatePriceBounds(face);
-  if (!Number.isInteger(price) || price < min || price > max) {
+  if (price === null || price < min || price > max) {
     return `The price must be a whole number between $${min} and $${max} (half to twice ${priv.name}'s $${face} face value).`;
   }
 
@@ -173,7 +177,7 @@ export function privatePurchaseRefusal(
  *  (#1450); the payload's `owner` is narration. One offer at a time (ruled Q6), never beside a funding offer. */
 export function proposePrivatePurchaseRefusal(
   state: GameStateResponse,
-  proposal: { private_id: number; buyer_protocol_id: number; price: number | string },
+  proposal: { private_id: number; buyer_protocol_id: number; price: VgpWire },
   actor: string | null | undefined,
 ): string | null {
   if (anyOfferStands(state)) return "An offer is already standing; it must be answered or withdrawn before another is made.";

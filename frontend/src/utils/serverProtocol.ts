@@ -49,7 +49,7 @@
 // migration exists to stop people chasing.
 
 import type { ReplayEntry } from "../gameEngine/replayLog";
-import type { GameplayExecuteMsg } from "./sessionKey";
+import type { SandboxLogMsg } from "../gameEngine/gameSetup";
 import { canonicalJson } from "../gameEngine/stateDigest";
 
 /** Identifies the code both sides are running. Any string both halves agree on; a git sha in practice. */
@@ -63,8 +63,9 @@ export interface SubmitRequest {
   kind: "submit";
   room: string;
   build: BuildId;
-  /** The move. NOT who is making it -- see the header. */
-  msg: GameplayExecuteMsg;
+  /** The move. NOT who is making it -- see the header. Stage 10.5 (S10-9): any logged room message (the deal,
+   *  the room-only events, contract gameplay) -- the family `messageSchema.ts` validates at ingress. */
+  msg: SandboxLogMsg;
   /** The last index this client has applied.
    *
    *  OPTIMISTIC CONCURRENCY, AND THE REASON THE SERVER CAN ANSWER "you are behind" RATHER THAN GUESSING. A
@@ -194,7 +195,7 @@ export function mintLogEntry(input: {
   index: number;
   id: string;
   actor: string;
-  msg: GameplayExecuteMsg;
+  msg: SandboxLogMsg;
   derived?: boolean;
   at?: number;
 }): ReplayEntry {

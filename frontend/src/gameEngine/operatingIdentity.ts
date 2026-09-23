@@ -40,13 +40,13 @@
 // treasury, so a hand-built one is the same hole with an older name.
 
 import type { GameStateResponse } from "./gameState";
-import type { GameplayExecuteMsg } from "../utils/sessionKey";
+import type { SandboxLogMsg } from "./gameSetup";
 import { operatingCorporationId } from "./dividendGate";
 
 /** The corporation an operating-turn message claims to act for, or `null` for a message this gate does not
  *  cover. Kept as one function so the reducer and the tests name the same family. */
 export function operatingActionCorporation(
-  msg: GameplayExecuteMsg,
+  msg: SandboxLogMsg,
 ): { companyId: number; verb: string } | null {
   if ("LayTile" in msg) return { companyId: msg.LayTile.protocol_id, verb: "lays track" };
   if ("PlaceStationToken" in msg) {
@@ -64,7 +64,7 @@ export function operatingActionCorporation(
  *  A REASON RATHER THAN A BOOLEAN, for #748's reason: the shell logs the string, and a refusal a player cannot
  *  read is indistinguishable from a bug. `null` for a message outside the family -- this gate has no opinion
  *  about a share purchase. */
-export function operatingIdentityRefusal(state: GameStateResponse, msg: GameplayExecuteMsg): string | null {
+export function operatingIdentityRefusal(state: GameStateResponse, msg: SandboxLogMsg): string | null {
   const claim = operatingActionCorporation(msg);
   if (claim === null) return null;
 

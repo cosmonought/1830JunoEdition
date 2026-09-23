@@ -124,7 +124,7 @@
 // corporation.
 
 import type { GameStateResponse, PublicCompanyState } from "./gameState";
-import type { GameplayExecuteMsg } from "../utils/sessionKey";
+import type { SandboxLogMsg } from "./gameSetup";
 import type { MapGridResponse } from "../components/hexContractTypes";
 import { homeHexesFor } from "../components/hexContractTypes";
 import { STATIC_BOARD_HEXES, heraldHexFor } from "../components/hexBoardData";
@@ -344,7 +344,7 @@ export function isHomeCandidate(
 }
 
 /** Design note #1612: the messages that pass the home-station hold. */
-export function passesHomeStationHold(msg: GameplayExecuteMsg): boolean {
+export function passesHomeStationHold(msg: SandboxLogMsg): boolean {
   if (typeof msg !== "object" || msg === null) return false;
   if ("RevertTo" in msg || "CloseRoom" in msg || "UndoLastAction" in msg) return true;
   if ("PlaceHomeStation" in msg) {
@@ -357,7 +357,7 @@ export function passesHomeStationHold(msg: GameplayExecuteMsg): boolean {
  *  `null`. With no message, whether a hold stands at all (the Pass button's reason). */
 export function homeStationHold(
   state: GameStateResponse,
-  msg: GameplayExecuteMsg | undefined,
+  msg: SandboxLogMsg | undefined,
   homeHexToAxial: HomeHexToAxial,
   labelForAddress?: (address: string) => string,
 ): string | null {

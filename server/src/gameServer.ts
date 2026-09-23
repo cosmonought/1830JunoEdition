@@ -56,7 +56,7 @@ import {
   withEmptyRoster,
 } from "../../frontend/src/gameEngine";
 import type { ServerMessage } from "../../frontend/src/utils/serverProtocol";
-import type { GameplayExecuteMsg } from "../../frontend/src/utils/sessionKey";
+import type { SandboxLogMsg } from "../../frontend/src/gameEngine/gameSetup";
 import type {
   ChatSendRequest,
   PresenceSetRequest,
@@ -127,7 +127,7 @@ interface HelloFrame {
 interface SubmitFrame {
   kind: "submit";
   build: string;
-  msg: GameplayExecuteMsg;
+  msg: SandboxLogMsg;
   baseIndex: number;
   submissionId?: string;
 }

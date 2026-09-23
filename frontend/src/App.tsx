@@ -100,13 +100,14 @@ import {
   isOpenStockRoundMsg,
   isRevertToMsg,
   isSetBoParMsg,
-  isSandboxOnlyMsg,
+  chainGameplayMsg,
   isSetupGameMsg,
   shuffleForTurnOrder,
   waterfallForRoster,
   withEmptyRoster,
   type SandboxLogMsg,
 } from "./gameEngine/gameSetup";
+import { canonicalWholeVgp, wholeVgpNumber } from "./gameEngine/vgpAmount";
 // Design note #522: the Sandbox multiplayer bridge.
 import SandboxRoomBar from "./components/SandboxRoomBar";
 /* Design note #1141: the mini-camera and the dialog that frames it. */
@@ -3910,7 +3911,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
       ownerLabel: sandboxPlayerLabel(offer.owner) ?? truncateAddress(offer.owner),
       buyerProtocolId: offer.buyer_protocol_id,
       buyerTicker: offer.buyer_ticker,
-      price: offer.price,
+      // Stage 10.5 (S10-9): the prompt shows dollars; the offer may carry either wire spelling.
+      price: wholeVgpNumber(offer.price) ?? Number(offer.price),
     };
   }, [gameState?.private_purchase_offer]);
 
@@ -6141,7 +6143,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
       };
       /* This guard NARROWS instead of returning: returning here dropped every SetupGame before the sandbox branch below could deal the game. #546: isSandboxOnlyMsg covers both chain-unknown events.
          See docs/ai_architecture/firebase_middleware.md - App.tsx #539 */
-      const chainMsg: GameplayExecuteMsg | null = isSandboxOnlyMsg(msg) ? null : msg;
+      const chainMsg: GameplayExecuteMsg | null = chainGameplayMsg(msg);
 
       let label =
         (chainMsg ? describeGameplayAction(chainMsg, describeContext) : null) ?? fallbackLabel;
@@ -6308,14 +6310,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
           // #1218: cleared here so the callbacks below can claim it for THIS submission and no other.
           linkExplainedRef.current = false;
           const allocated = link
-            /* THE CAST IS #1189's FINDING ARRIVING AGAIN, and it is worth naming rather than hiding.
-               `SandboxLogMsg` is wider than `GameplayExecuteMsg`: the log carries `SetupGame`,
-               `OpenStockRound` and the rest of `isSandboxOnlyMsg` alongside gameplay (#530 -- "both are
-               single-key objects and both round-trip as JSON, so widening changes nothing about how an entry
-               is written"). The reducer casts here too. The honest fix is a `LoggedMsg` union spanning both,
-               which is a type change of its own and is recorded in the migration plan rather than smuggled
-               into a transport commit. */
-            ? await link.submit(msg as Parameters<typeof link.submit>[0])
+            /* Stage 10.5 (S10-9): no cast. `ServerLink.submit` takes the log-wide `SandboxLogMsg` -- the room wire
+               carries the deal and every room-only event beside gameplay (#530), and `messageSchema.ts` admits
+               exactly that family at the server. `GameplayExecuteMsg` stays the chain's. */
+            ? await link.submit(msg)
             : await appendSandboxAction(
                 roomCode,
                 appendAt,
@@ -6661,7 +6659,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
             () =>
               layTileRefusal(
                 stateBeforeAction,
-                msg as GameplayExecuteMsg,
+                msg,
                 layAuthorityContext(SHELL_PROVIDERS, stateBeforeAction, gridBeforeAction),
               ) !== null,
           );
@@ -6719,16 +6717,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
            game state. `applySandboxWaterfallAction` returns the cash it
            implies rather than reaching across into player wallets, so the
            charge is applied here through the ordinary path. */
-        /* ==================================================================
-            #1230 / #1189: THE ONE CAST, IN THE ONE PLACE THE ENGINE TAKES IT TOO
-           ==================================================================
-           `SetupGame` no longer returns above, so `msg` reaches this path un-narrowed: the union still holds
-           `SetupGameMsg`, and every gameplay function below is typed against `GameplayExecuteMsg`. The
-           engine's `apply` takes exactly this cast for exactly this reason (#1189: "both are single-key
-           objects that round-trip as JSON, so widening changes nothing about how an entry is written").
-           ONE ALIAS RATHER THAN EIGHT CASTS, so the debt has one address. The honest fix is the `LoggedMsg`
-           union recorded as an audit item; this is the same IOU the engine already carries, not a new one. */
-        const gameplay = msg as GameplayExecuteMsg;
+        /* #1230 / #1189 -> Stage 10.5 (S10-9): THE CAST THAT STOOD HERE IS GONE. `msg` is the log-wide `SandboxLogMsg`
+           (it still holds `SetupGameMsg` and the other room-only events), and the reducer, its chart step, the
+           auction narration and the ledger sentence below are typed against that same union, because they are
+           handed every logged message -- the engine's `RoomEngine.apply` passes the same type without a cast. */
+        const gameplay = msg;
 
         /* ==================================================================
             DESIGN NOTE 1340: THE SHELL DISPATCHES; THE REDUCER SETTLES THE AUCTION
@@ -10277,7 +10270,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
           owner: target.owner,
           buyer_protocol_id: actingProtocolId,
           buyer_ticker: buyerTicker,
-          price,
+          /* Stage 10.5 (S10-9): the canonical `Uint128` string, the spelling every new proposal writes. A price
+             the panel should never hand over (a fraction) goes out as its own text and is refused at the door
+             rather than thrown here. */
+          price: canonicalWholeVgp(price) ?? String(price),
         },
       });
       /* The Activity Log line is written by the DRAIN now, from the message
@@ -12561,17 +12557,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
       const link = serverLinkRef.current;
       linkExplainedRef.current = false; // #1218
       const allocated = link
-        ? /* THROUGH `unknown`, WHICH IS #1189's FINDING WEARING ITS LOUDEST CLOTHES. `SetupGame` lives in
-             `SandboxLogMsg` and not in `GameplayExecuteMsg`, and the two do not overlap enough for a direct
-             cast -- the compiler is right, and the honest fix is the `LoggedMsg` union already recorded as an
-             audit item. Widening here changes nothing about how the entry is written (#530: both are
-             single-key objects that round-trip as JSON); the server's `RoomEngine` applies setup entries by
-             the same path the replay harness does, which is what the smoke test's opening deal proves. */
+        ? /* Stage 10.5 (S10-9): NO CAST. `SetupGame` is a `SandboxLogMsg` and `ServerLink.submit` takes that union
+             -- the room wire carries the deal beside gameplay, and the server's `RoomEngine` applies setup entries
+             by the same path the replay harness does, which is what the smoke test's opening deal proves. */
           await link.submit({
             /* #1252: the deal names the reducer that made it, so the room is pinned to this build. The
                server has already matched this client's build to its own (#1206). */
             SetupGame: { players: seated, variants: { ...sandboxRoom.variants, rules: CURRENT_RULES_REVISION }, build: CLIENT_BUILD_ID }, // #1443
-          } as unknown as Parameters<typeof link.submit>[0])
+          })
         : /* ==================================================================
               DESIGN NOTE 910: THE VARIANTS TRAVEL WITH THE SETUP, OR THEY DO NOT EXIST
              ==================================================================

@@ -68,7 +68,7 @@
 // first close to the next open, `open` thereafter.
 
 import type { ReplayEntry } from "../gameEngine/replayLog";
-import type { GameplayExecuteMsg } from "./sessionKey";
+import type { SandboxLogMsg } from "../gameEngine/gameSetup";
 import type { BuildId, ServerMessage } from "./serverProtocol";
 import { SEAT_REFUSED_CODE, SEAT_SUPERSEDED_CODE, forgetSeat } from "./seatPin";
 
@@ -156,7 +156,7 @@ export interface ServerLink {
    *  `null` RATHER THAN A THROW, matching `appendSandboxAction`'s contract exactly. The shell already has a
    *  branch for "the append did not happen"; a rejection would need a new one in a file that should be
    *  gaining as little as possible. */
-  submit(msg: GameplayExecuteMsg): Promise<number | null>;
+  submit(msg: SandboxLogMsg): Promise<number | null>;
   /** The highest index this client has applied. What a catch-up is measured from. */
   readonly appliedIndex: number;
   close(): void;
@@ -168,7 +168,7 @@ interface Pending {
   /** #1253: the message, kept so a submission queued while the socket was down can be sent when it is up --
    *  with the `baseIndex` of THAT moment, not of the click, so the server does not answer it as stale
    *  against entries the hello's catch-up has since delivered. */
-  msg: GameplayExecuteMsg;
+  msg: SandboxLogMsg;
   /** #1253: whether this submission has been put on a socket. Unsent ones go after the next hello; sent ones
    *  are settled by the hello's catch-up, never re-sent. */
   sent: boolean;

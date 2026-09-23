@@ -30,7 +30,7 @@ import type { ReplayProviders } from "./replayLog";
 import type { SandboxActionContext } from "./sandboxSession";
 import type { LayTileAuthorityContext } from "./layTileAuthority";
 import type { GameStateResponse } from "./gameState";
-import type { GameplayExecuteMsg } from "../utils/sessionKey";
+import type { SandboxLogMsg } from "./gameSetup";
 import type { MapGridResponse } from "../components/hexContractTypes";
 import { tileEraFor } from "./gameConstants";
 import { resolveVariants } from "./gameVariants";
@@ -40,7 +40,7 @@ import { withRules } from "./boardSelection";
 export interface SandboxActionContextInput {
   /** The board the reducer is handed -- `market_positions` and `waterfall` on it (#1196, #1340). */
   state: GameStateResponse;
-  msg: GameplayExecuteMsg;
+  msg: SandboxLogMsg;
   /** The log's author (#549). `undefined` only where there is none (solo play, fixtures). */
   actor: string | null | undefined;
   /** The grid INCLUDING this entry's lay: what the reducer prices routes and judges tokens on (#1380). */
@@ -81,7 +81,7 @@ export function layAuthorityContext(
 
 /** #579 / #398: a `BuyStock`'s par comes from the MESSAGE's own `par_value`, never from an ambient ladder
  *  selection. `undefined` for every other message and for a missing or non-positive par. */
-export function parValueFromMessage(msg: GameplayExecuteMsg): number | undefined {
+export function parValueFromMessage(msg: SandboxLogMsg): number | undefined {
   if (!("BuyStock" in msg)) return undefined;
   const fromMsg = Number(msg.BuyStock.par_value ?? NaN);
   return Number.isFinite(fromMsg) && fromMsg > 0 ? fromMsg : undefined;

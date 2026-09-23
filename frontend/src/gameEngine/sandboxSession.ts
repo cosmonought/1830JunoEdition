@@ -6,7 +6,8 @@
 // It moves only what can move without knowing a rule -- turn pointers, the
 // pass streak, the OR cursor, and cash/shares by the amount the CALLER states.
 // Every function returns a NEW state object (React identity), and it is driven
-// by the real GameplayExecuteMsg union so a new variant cannot bypass it.
+// by the real log-wide `SandboxLogMsg` union (the contract's `GameplayExecuteMsg`
+// plus the room-only events -- Stage 10.5, S10-9) so a new variant cannot bypass it.
 //
 // Charter and full history: docs/ai_architecture/sandbox_reducer.md
 // -- sandboxSession.ts #0, #1, #2
@@ -48,7 +49,7 @@ import { closesPrivateCompanies } from "./depotSchedule";
 import { trimToTrainLimit } from "./trainLimit";
 // actingSeatIndex lives in gameState.ts, not here: it asks about CONTRACT state and the
 // live dashboard needs it too. See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #0
-import type { GameplayExecuteMsg } from "../utils/sessionKey";
+import type { SandboxLogMsg } from "./gameSetup";
 // Design note #1100: numerals name tiers, words count trains.
 import { namedTrains as sayTrains } from "./trainPhrasing";
 /* Design note #1189: the lifecycle messages the shell used to own. `gameSetup.ts` imports nothing from this
@@ -2016,7 +2017,7 @@ function nextMiniTurn(
 
 export function applySandboxWaterfallAction(
   waterfall: WaterfallStateResponse,
-  msg: GameplayExecuteMsg,
+  msg: SandboxLogMsg,
   players: readonly string[],
 ): SandboxWaterfallResult {
   const unchanged: SandboxWaterfallResult = {
@@ -2552,7 +2553,7 @@ function stockChartContext(
 
 export function applySandboxMarketAction(
   prices: SandboxMarketPrices,
-  msg: GameplayExecuteMsg,
+  msg: SandboxLogMsg,
   ctx?: SandboxMarketContext,
 ): SandboxMarketResult {
   const unchanged: SandboxMarketResult = { prices, tradePrice: null, moved: null };
@@ -2674,7 +2675,7 @@ export function applySandboxMarketAction(
    See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #642 */
 export function applySandboxAction(
   state: GameStateResponse,
-  msg: GameplayExecuteMsg,
+  msg: SandboxLogMsg,
   ctx?: SandboxActionContext,
 ): GameStateResponse {
   /* Design note #1300: THE BOARD COMES FROM THE STATE, and it is put in effect here -- the one entry every
@@ -2713,7 +2714,7 @@ export function applySandboxAction(
    the auction arm talks to this function -- but nothing outside reads its flags. Narration (the "Private
    Won" line, the markdown, the payout lines) is derived by the shell from the two states, the way every
    other line has been since #704: "the reducer settles, the shell narrates." */
-function applyAuctionStep(state: GameStateResponse, msg: GameplayExecuteMsg): GameStateResponse {
+function applyAuctionStep(state: GameStateResponse, msg: SandboxLogMsg): GameStateResponse {
   if (!state.waterfall) return state;
   const result = applySandboxWaterfallAction(state.waterfall, msg, state.player_addresses ?? []);
   let next: GameStateResponse = { ...state, waterfall: result.waterfall };
@@ -2769,7 +2770,7 @@ function applyAuctionStep(state: GameStateResponse, msg: GameplayExecuteMsg): Ga
 }
 
 /** #1340: the auction's lifecycle, after the board has moved -- close, re-seat, arm. */
-function settleAuctionLifecycle(state: GameStateResponse, msg: GameplayExecuteMsg): GameStateResponse {
+function settleAuctionLifecycle(state: GameStateResponse, msg: SandboxLogMsg): GameStateResponse {
   if (state.waterfall === undefined) return state;
   let waterfall = state.waterfall;
   if (waterfall && isOpenStockRoundMsg(msg) && waterfall.waterfall_auction_active) {
@@ -2804,7 +2805,7 @@ export { authoritativeHoldRefusal };
 
 function applySandboxActionOnBoard(
   state: GameStateResponse,
-  msg: GameplayExecuteMsg,
+  msg: SandboxLogMsg,
   ctx?: SandboxActionContext,
 ): GameStateResponse {
   /* ==================================================================
@@ -2860,7 +2861,7 @@ function applySandboxActionOnBoard(
  *  `stockSaleRefusal`, knew no holds, and counted no double certificates. */
 function chartStepContext(
   state: GameStateResponse,
-  msg: GameplayExecuteMsg,
+  msg: SandboxLogMsg,
   ctx?: SandboxActionContext,
 ): SandboxMarketContext {
   return {
@@ -2933,7 +2934,7 @@ function chartStepContext(
 function chartStep(
   state: GameStateResponse,
   positions: SandboxMarketPrices,
-  msg: GameplayExecuteMsg,
+  msg: SandboxLogMsg,
   ctx?: SandboxActionContext,
 ): SandboxMarketResult {
   return applySandboxMarketAction(positions, msg, chartStepContext(state, msg, ctx));
@@ -2944,7 +2945,7 @@ function chartStep(
  *  refuses at this layer, in the same order. */
 function boardGateRefusal(
   state: GameStateResponse,
-  msg: GameplayExecuteMsg,
+  msg: SandboxLogMsg,
   ctx?: SandboxActionContext,
 ): "held" | "auction" | null {
   if (authoritativeHoldRefusal(state, msg, ctx) !== null) return "held";
@@ -2969,7 +2970,7 @@ function boardGateRefusal(
    committed) and a move the core would decline is reported as `null`. */
 export function sandboxChartStepReport(
   state: GameStateResponse,
-  msg: GameplayExecuteMsg,
+  msg: SandboxLogMsg,
   ctx?: SandboxActionContext,
 ): SandboxMarketResult["moved"] {
   const variants = isSetupGameMsg(msg) ? msg.SetupGame.variants : state.variants;
@@ -2984,7 +2985,7 @@ export function sandboxChartStepReport(
 
 function applySandboxActionAfterAuction(
   state: GameStateResponse,
-  msg: GameplayExecuteMsg,
+  msg: SandboxLogMsg,
   ctx?: SandboxActionContext,
 ): GameStateResponse {
   /* ==================================================================
@@ -3041,7 +3042,7 @@ function applySandboxActionAfterAuction(
 
 function applySandboxActionInner(
   state: GameStateResponse,
-  msg: GameplayExecuteMsg,
+  msg: SandboxLogMsg,
   ctx?: SandboxActionContext,
   parCellFor?: (parPrice: number) => { x: number; y: number } | null,
 ): GameStateResponse {
@@ -3081,7 +3082,7 @@ interface MarketTransaction {
 function marketTransaction(
   state: GameStateResponse,
   positions: SandboxMarketPrices,
-  msg: GameplayExecuteMsg,
+  msg: SandboxLogMsg,
   ctx?: SandboxActionContext,
 ): MarketTransaction {
   const priced = chartStep(state, positions, msg, ctx);
@@ -3190,7 +3191,7 @@ function settleChartAfterCore(
 
    NOT for the funding offer: its settlement is its own answer arm (#1541) and its refusal leaves the offer
    standing for a rescind, by design. `standing` below reads only the ordinary offers. */
-function retireRefusedSettlement(state: GameStateResponse, msg: GameplayExecuteMsg): GameStateResponse {
+function retireRefusedSettlement(state: GameStateResponse, msg: SandboxLogMsg): GameStateResponse {
   if ("BuyPrivateCompany" in msg) {
     const offer = state.private_purchase_offer ?? null;
     if (offer !== null && offer.funding !== true && offer.accepted === true && privateSettlementMatches(offer, msg.BuyPrivateCompany)) {
@@ -3208,7 +3209,7 @@ function retireRefusedSettlement(state: GameStateResponse, msg: GameplayExecuteM
 
 function applySandboxActionCore(
   state: GameStateResponse,
-  msg: GameplayExecuteMsg,
+  msg: SandboxLogMsg,
   ctx?: SandboxActionContext,
 ): GameStateResponse {
   const judged = applySandboxActionCoreJudged(state, msg, ctx);
@@ -3218,7 +3219,7 @@ function applySandboxActionCore(
 
 function applySandboxActionCoreJudged(
   state: GameStateResponse,
-  msg: GameplayExecuteMsg,
+  msg: SandboxLogMsg,
   ctx?: SandboxActionContext,
 ): GameStateResponse {
   /* ==================================================================
@@ -3801,7 +3802,7 @@ function settleEra(state: GameStateResponse): GameStateResponse {
 function settleOperatingCursor(
   before: GameStateResponse,
   after: GameStateResponse,
-  msg: GameplayExecuteMsg,
+  msg: SandboxLogMsg,
 ): GameStateResponse {
   /* ==================================================================
      DESIGN NOTE 906a: THE REPRIEVE EXPIRES ON THE WAY OUT TOO
@@ -4120,7 +4121,7 @@ function settleOperatingCursor(
 function stepAfterMessage(
   state: GameStateResponse,
   current: OperatingSubPhase | undefined,
-  msg: GameplayExecuteMsg,
+  msg: SandboxLogMsg,
 ): OperatingSubPhase {
   /* A corporation lays one tile per turn, so the Track step is done.
      Design note #776: UNLESS THE LAY WAS EXTRA. This arm was unconditional, and it is the line that both
@@ -4377,7 +4378,7 @@ function settleRoundTransitions(
  *  consequences, and #817 is what getting that wrong looked like to a player. So the message carries an
  *  explicit `ability_key` and this reads it rather than inferring from coordinates -- an inference is exactly
  *  the heuristic that produced the report. */
-function abilitySpentBy(msg: GameplayExecuteMsg): string | null {
+function abilitySpentBy(msg: SandboxLogMsg): string | null {
   if (isPlaceHomeStationMsg(msg)) {
     return msg.PlaceHomeStation.kind === "dh" ? "dh-token" : null;
   }
@@ -4478,7 +4479,7 @@ function transferPrivateToCorporation(
 
 function applyOneAction(
   state: GameStateResponse,
-  msg: GameplayExecuteMsg,
+  msg: SandboxLogMsg,
   ctx?: SandboxActionContext,
 ): GameStateResponse {
   /* ==================================================================

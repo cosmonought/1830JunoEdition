@@ -14,7 +14,7 @@
 
 import { actingAddress, type GameStateResponse, type WaterfallStateResponse } from "../gameEngine/gameState";
 import { dividendSplit } from "../gameEngine/dividendSplit";
-import type { GameplayExecuteMsg } from "./sessionKey";
+import type { SandboxLogMsg } from "../gameEngine/gameSetup";
 import type { MapGridResponse } from "../components/hexContractTypes";
 /* #1630 (Slice 9.3, S9-21): THE SENTENCE NAMES THE TILE, so it must use the tile's NAME. `tile_id` is the
    storage key and is logged and replayed exactly as stored; `canonicalTileName` is what the rules call it.
@@ -269,7 +269,7 @@ function chargedSomething(context: ActionLogContext, companyId: number): boolean
  *
  *  `null` FOR ANYTHING ELSE, so the caller falls back to the full label rather than showing an empty toast. */
 export function trainPurchaseToastLine(
-  msg: GameplayExecuteMsg,
+  msg: SandboxLogMsg,
   context: ActionLogContext,
 ): string | null {
   if (!("BuyHardwareFromPool" in msg) && !("EmergencyBuyHardware" in msg)) return null;
@@ -366,7 +366,7 @@ export function trainPurchaseToastLine(
  *  THIS LIST MUST MATCH `treasurySuffix`'s CALLERS, which is #891's shape waiting to happen: two places
  *  deciding one thing. It is asserted rather than remembered -- `batch51.test.ts` counts the call sites in
  *  this file and compares them with the arms below, so adding a suffix without adding an arm goes red. */
-export function sentenceStatesTreasury(msg: GameplayExecuteMsg): boolean {
+export function sentenceStatesTreasury(msg: SandboxLogMsg): boolean {
   return (
     "LayTile" in msg ||
     "PlaceStationToken" in msg ||
@@ -423,7 +423,7 @@ function hexName(mapGrid: MapGridResponse, q: number, r: number): string {
 /** null rather than a generic fallback: the caller keeps its own label, and a sentence saying less than the variant name is a downgrade dressed as an improvement.
  *  See docs/ai_architecture/ui_shell_layout.md - actionLog.ts #0 */
 export function describeGameplayAction(
-  msg: GameplayExecuteMsg,
+  msg: SandboxLogMsg,
   context: ActionLogContext,
 ): string | null {
   const { gameState, mapGrid, era } = context;
@@ -461,13 +461,7 @@ export function describeGameplayAction(
        whole line (reported). The sentence lives here now, where every other message's does, so the local
        dispatch and the replayed entry read the same. `hex_label` travels in the message (#550); the board's
        own table is the fallback for an entry written without it. */
-    const { company_id, q, r, kind, hex_label } = msg.PlaceHomeStation as {
-      company_id: number;
-      q: number;
-      r: number;
-      kind?: string;
-      hex_label?: string;
-    };
+    const { company_id, q, r, kind, hex_label } = msg.PlaceHomeStation;
     const where = hex_label ?? hexName(mapGrid, q, r);
     if (kind === "dh") {
       return `${corp(gameState, company_id)} placed a free station token on ${where} using the Delaware & Hudson.`;
@@ -502,7 +496,7 @@ export function describeGameplayAction(
      property, and the reason this function exists. `SetupGame` is the exception and stays one (#1230): its
      sentence needs the roster the shell names. */
   if ("SetBoPar" in msg) {
-    const { player, par_value } = msg.SetBoPar as { player: string; par_value: string };
+    const { player, par_value } = msg.SetBoPar;
     return `${context.labelForAddress(player)} receives the B&O President's Certificate and pars it at $${par_value}.`;
   }
 
@@ -517,12 +511,7 @@ export function describeGameplayAction(
   }
 
   if ("ExchangePrivate" in msg) {
-    const { private_id, company_id, player, keep_open } = msg.ExchangePrivate as {
-      private_id: number;
-      company_id: number;
-      player: string;
-      keep_open?: boolean;
-    };
+    const { private_id, company_id, player, keep_open } = msg.ExchangePrivate;
     const who = context.labelForAddress(player);
     const priv = gameState?.private_companies.find((row) => row.private_id === private_id)?.name ?? "private company";
     const ticker = corp(gameState, company_id);
@@ -539,12 +528,7 @@ export function describeGameplayAction(
      the one that still holds it; the purchase an accepted answer owes is its own derived entry with its own
      sentence (`BuyPrivateCompany`, `BuyTrainFromCorporation` above), so the yes says only that it was said. */
   if ("ProposePrivatePurchase" in msg) {
-    const { buyer_ticker, price, private_name, owner } = msg.ProposePrivatePurchase as {
-      buyer_ticker: string;
-      price: number;
-      private_name: string;
-      owner: string;
-    };
+    const { buyer_ticker, price, private_name, owner } = msg.ProposePrivatePurchase;
     return `${buyer_ticker} offers $${price} for ${private_name}. ${context.labelForAddress(owner)} must answer.`;
   }
 
@@ -574,19 +558,13 @@ export function describeGameplayAction(
   if ("AnswerPrivatePurchase" in msg) {
     const offer = gameState?.private_purchase_offer ?? null;
     if (!offer) return null;
-    const { accept } = msg.AnswerPrivatePurchase as { accept: boolean };
+    const { accept } = msg.AnswerPrivatePurchase;
     return `${context.labelForAddress(offer.owner)} ${accept ? "accepted" : "declined"} $${offer.price} for ${offer.private_name}.`;
   }
 
   if ("ProposeTrainPurchase" in msg) {
     const { buyer_ticker, price, seller_ticker, model_type, seller_president } =
-      msg.ProposeTrainPurchase as {
-        buyer_ticker: string;
-        price: string;
-        seller_ticker: string;
-        model_type: string;
-        seller_president: string | null;
-      };
+      msg.ProposeTrainPurchase;
     return (
       `${buyer_ticker} offers $${price} for one of ${seller_ticker}'s ${model_type}-trains. ` +
       `${context.labelForAddress(seller_president ?? "")} must answer.`
@@ -596,7 +574,7 @@ export function describeGameplayAction(
   if ("AnswerTrainPurchase" in msg) {
     const offer = gameState?.train_purchase_offer ?? null;
     if (!offer) return null;
-    const { accept } = msg.AnswerTrainPurchase as { accept: boolean };
+    const { accept } = msg.AnswerTrainPurchase;
     return (
       `${context.labelForAddress(offer.seller_president ?? "")} ${accept ? "accepted" : "declined"} ` +
       `$${offer.price} for ${offer.seller_ticker}'s ${offer.model_type}-train.`

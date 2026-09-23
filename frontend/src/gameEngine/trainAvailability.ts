@@ -41,7 +41,7 @@
 
 import type { GameStateResponse } from "./gameState";
 import type { MapGridResponse } from "../components/hexContractTypes";
-import type { GameplayExecuteMsg } from "../utils/sessionKey";
+import type { SandboxLogMsg } from "./gameSetup";
 import { depotCostFor, openDepotTiers, pooledTrainsByTier, type TrainTier } from "./gamePhase";
 import { operatingCorporationId } from "./dividendGate";
 import { hasLegalRouteFor } from "./derivedActions";
@@ -143,7 +143,7 @@ export function trainObligationFor(
 /** Why this message may not end the operating corporation's turn, or `null` if it may. */
 export function trainObligationRefusal(
   state: GameStateResponse,
-  msg: GameplayExecuteMsg,
+  msg: SandboxLogMsg,
   mapGrid: MapGridResponse | undefined,
 ): string | null {
   if (!("PassTurn" in msg) && !("AdvanceOperatingSubPhase" in msg)) return null;

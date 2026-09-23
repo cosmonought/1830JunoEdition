@@ -125,7 +125,7 @@
 // pass. After `GameEnd` everything but `CloseRoom` is refused.
 
 import type { GameStateResponse, PublicCompanyState, PrivatePurchaseOffer } from "./gameState";
-import type { GameplayExecuteMsg } from "../utils/sessionKey";
+import type { SandboxLogMsg } from "./gameSetup";
 import type { MapGridResponse } from "../components/hexContractTypes";
 import { operatingCorporationId } from "./dividendGate";
 import { cheapestPurchasableTrain, trainObligationFor, type PurchasableTrain } from "./trainAvailability";
@@ -530,7 +530,7 @@ export function legalForcedSales(
 }
 
 /** The messages that may resolve the obligation; everything else is held. */
-export function resolvesEmergencyFunding(msg: GameplayExecuteMsg): boolean {
+export function resolvesEmergencyFunding(msg: SandboxLogMsg): boolean {
   return (
     "SellStock" in msg ||
     "EmergencyBuyHardware" in msg ||
@@ -550,7 +550,7 @@ export function resolvesEmergencyFunding(msg: GameplayExecuteMsg): boolean {
 }
 
 /** #1541: while a funding offer waits for its answer, only the answer, the withdrawal and the room's own pass. */
-function passesWhileOfferStands(msg: GameplayExecuteMsg): boolean {
+function passesWhileOfferStands(msg: SandboxLogMsg): boolean {
   return (
     "AnswerFundingPrivateOffer" in msg ||
     "RescindFundingPrivateOffer" in msg ||
@@ -562,7 +562,7 @@ function passesWhileOfferStands(msg: GameplayExecuteMsg): boolean {
 /** Why this message is held while the obligation stands (or after the game has ended), or `null`. */
 export function emergencyFundingBlock(
   state: GameStateResponse,
-  msg: GameplayExecuteMsg,
+  msg: SandboxLogMsg,
   mapGrid: MapGridResponse | undefined,
 ): string | null {
   if (state.current_round_type === "GameEnd" && !("CloseRoom" in msg) && !("RevertTo" in msg)) {

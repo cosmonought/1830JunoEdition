@@ -1773,6 +1773,7 @@ without the power. No corpus effect (wording only). `RULES_ENGINE_VERSION` uncha
 Status **`DEFERRED — PRE-LAUNCH VARIANT CERTIFICATION REQUIRED`**, explicitly OUT of Stage-9 closure scope
 (owner ruling, 2026-09-19). *(Was `DEFERRED` (audit "UNCLEAR").)* Notes: `gentleRust*`, `variantRules.test.ts`,
 #905 (delayed auction, `boIsLocked`), #1034 (reprieved trains exempt from limits — respected by #1530).
+**Variant Certification 1A (2026-09-23): Gentle Rust — owner spec review complete; audit classification B (spec complete / implementation gaps found); OD-GR-1 (no sale/transfer) and OD-GR-2 (no Diesel trade-in) ruled; OD-GR-3 routed to Unpredictable Revenue certification; implementation slices GR-1…GR-5 not started; NOT certified.** See `VARIANT_CERT_GENTLE_RUST_AUDIT_2026-09-23.md`.
 
 **Owner ruling, recorded verbatim in substance.** Gentle Rust, Unpredictable Revenue and Delayed Auction have
 **not** received complete specification audits as independent optional variants. They must **not** be labelled

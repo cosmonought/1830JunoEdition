@@ -210,12 +210,30 @@ export interface PublicCompanyState {
   last_run_revenue_seed?: number;
   /** Design note #906: trains under Gentle Rust that are living on borrowed time.
    *
-   *  NOT IN `owned_trains`, and that is the whole mechanism: every surface that counts a corporation's trains
-   *  counts that array, so moving a doomed train here is what implements the ruling that a pending-rust train
-   *  occupies no train-limit slot -- without a single one of those surfaces learning a new rule.
-   *  They still RUN. `settleRoundTransitions` clears them at the end of that corporation's next Operating
-   *  Round turn (#906a), which is after its revenue has been recorded. */
+   *  (#906's original text said these trains were NOT in `owned_trains` and died at the end of the
+   *  corporation's next turn; both are superseded -- #979 made this a MARK over `owned_trains`, #1034 exempts
+   *  the marked copies from the train-limit count only, and #1102 / #1699 set the death.)
+   *
+   *  A MARK, BY MODEL, ONE PER DOOMED TRAIN: a sub-multiset of `owned_trains` (#1032). The marked train is still
+   *  owned, still routeable and still makes the corporation not trainless; it does not occupy a train-limit
+   *  slot (`countableTrainCount`). `settleOperatingCursor` destroys it at the end of Run Routes of its
+   *  corporation's qualifying grace turn -- the first Operating Turn that BEGINS after the doom -- with a
+   *  turn-end fallback for that turn only (#1699, `gentleRustGrace.ts`). */
   pending_rust_trains?: readonly string[];
+  /** ==================================================================
+   *   DESIGN NOTE 1699 (GR-1): THE MARKS THIS TURN DOES NOT OWE
+   *  ==================================================================
+   *
+   * The sub-multiset of `pending_rust_trains` written by a phase change DURING THIS CORPORATION'S OWN
+   * OPERATING TURN (a self-trigger in its Buy Trains step). The turn in progress began before those trains
+   * were doomed, so it is not their grace turn: neither the Run Routes expiry nor the turn-end fallback may
+   * spend them. Dropped when that turn ends -- a turn change or leaving the Operating Round -- after which the
+   * marks are ordinary and owed the corporation's next turn.
+   *
+   * TURN-SCOPED and REDUCER-OWNED, like `routes_run_this_turn`: written by `applyPhaseChange` from the board's
+   * own cursor, cleared by `settleOperatingCursor`, never written by the shell. Absent outside that window
+   * (#232), so a standard game never carries it. See `gentleRustGrace.ts`. */
+  pending_rust_doomed_this_turn?: readonly string[];
   /** ==================================================================
    *   DESIGN NOTE 1046: THE CORPORATION THE SIGN MARKED
    *  ==================================================================

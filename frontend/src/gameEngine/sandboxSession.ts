@@ -245,6 +245,8 @@ import { numberedPrivate } from "./privateOrdinal";
 import { buildOperatingOrder, settleOperatingQueue, syncSeatToActingCorporation } from "./operatingOrder";
 // Design note #1613 / #1681: the four authoritative holds (re-exported below, beside `applySandboxActionOnBoard`).
 import { authoritativeHoldRefusal } from "./authoritativeHolds";
+// Design note #1699 (GR-1): which Operating Turn a Gentle Rust reprieve is owed.
+import { corporationInItsTurn, graceTurnReprieves, reprievesDoomedThisTurn } from "./gentleRustGrace";
 
 /** A nominal share price, applied so a `BuyStock`/`SellStock` visibly moves
  *  the cash column. NOT a computed price -- see design note 0. The real
@@ -1173,9 +1175,16 @@ export function applyPhaseChange(
    *
    * THE DEATH IS NOT HERE. This function only marks; `settleRoundTransitions` clears the marks at the end of
    * that corporation's turn -- see #906a -- because "the end of its next turn" is a fact about the cursor and
-   * this function does not know where the cursor is. */
+   * this function does not know where the cursor is.
+   * [Superseded in part: #979 keeps the train in `owned_trains` (a mark, not a move); #1034 exempts it from the
+   * limit count only; the death is `settleOperatingCursor`'s, at the end of Run Routes of the corporation's
+   * qualifying grace turn (#1102, #1699). #1699 ALSO GIVES THIS FUNCTION ONE CURSOR FACT: whether the
+   * corporation it marks is the one whose turn is in progress -- see `doomedInOwnTurn` below.] */
   const variants = resolveVariants(state.variants);
   const gentle = variants.gentleRust;
+  /* Design note #1699 (GR-1): the corporation whose Operating Turn is in progress, if any. A train it holds that
+     is doomed now was doomed AFTER its current turn began, so this turn is not that train's grace turn. */
+  const inItsTurn = gentle ? corporationInItsTurn(state) : null;
 
   let changed = false;
   const companies = (state.public_companies ?? []).map((company) => {
@@ -1239,6 +1248,14 @@ export function applyPhaseChange(
     const reprievedAfterRust = gentle && rustedNow.length > 0
       ? [...(company.pending_rust_trains ?? []), ...rustedNow]
       : (company.pending_rust_trains ?? []);
+    /* ==================================================================
+        DESIGN NOTE 1699 (GR-1): A SELF-TRIGGER IS NOT OWED THIS TURN
+       ==================================================================
+       The marks just written for the corporation whose own turn is in progress -- the buyer, in its Buy Trains
+       step -- are also recorded as `pending_rust_doomed_this_turn`, so neither the Run Routes expiry nor the
+       turn-end fallback spends them in the turn that doomed them. Only `rustedNow` is appended: a re-applied
+       tier marks nothing (#1032) and so records nothing. Absent unless something is recorded (#232). */
+    const doomedInOwnTurn = gentle && rustedNow.length > 0 && company.company_id === inItsTurn;
 
     /* ==================================================================
         DESIGN NOTE 1530: THE LIMIT IS NOT ENFORCED HERE ANY MORE -- IT IS OWED
@@ -1285,6 +1302,9 @@ export function applyPhaseChange(
       // `PublicCompanyState.owned_trains` is mutable; `trimToTrainLimit` returns a readonly view.
       owned_trains: [...fleet],
       ...(reprieveChanged ? { pending_rust_trains: reprieved } : {}),
+      ...(doomedInOwnTurn
+        ? { pending_rust_doomed_this_turn: [...reprievesDoomedThisTurn(company), ...rustedNow] }
+        : {}),
     };
   });
 
@@ -1464,7 +1484,25 @@ export function expiredReprieves(
   const marked = was?.pending_rust_trains;
   // #232: absent is "the chain did not say", and a build that never reports the field expires nothing.
   if (marked == null || marked.length === 0) return [];
-  if ((now.pending_rust_trains?.length ?? 0) !== 0) return [];
+  /* Design note #1699 (GR-1): AN EXPIRY MAY LEAVE STANDING EXACTLY THE MARKS THE TURN DID NOT OWE. Until #1699
+     an expiry always emptied the list, so "marks still standing" meant "not an expiry" -- which is what keeps
+     this silent at the phase change that does the marking. Now the Run Routes expiry and the fallback spend
+     only `graceTurnReprieves`, so the marks a self-trigger wrote in that same turn may remain. Those -- and
+     only those, by multiset -- may still stand; any other standing mark means this dispatch was not an expiry,
+     exactly as before. (Through today's messages the case cannot arise: a purchase is refused outside Buy
+     Trains, which comes after Run Routes' end. The narrator is kept consistent with the reducer regardless.) */
+  const standing = [...(now.pending_rust_trains ?? [])];
+  const notOwed = [...reprievesDoomedThisTurn(was ?? {})];
+  for (const model of standing) {
+    const at = notOwed.indexOf(model);
+    if (at < 0) return [];
+    notOwed.splice(at, 1);
+  }
+  const unmarked = [...marked];
+  for (const model of standing) {
+    const at = unmarked.indexOf(model);
+    if (at >= 0) unmarked.splice(at, 1);
+  }
   const had = was?.owned_trains;
   const has = now.owned_trains;
   if (had == null || has == null) return [];
@@ -1480,7 +1518,7 @@ export function expiredReprieves(
   }
   /* ONLY THE MARKED MODELS. A dispatch that expired a reprieve AND lost a train to something else would
      otherwise report the second as rust; intersecting with the marks keeps this about the one event. */
-  const marks = [...marked];
+  const marks = [...unmarked];
   const destroyed: string[] = [];
   for (const model of gone) {
     const at = marks.indexOf(model);
@@ -3824,7 +3862,12 @@ function settleOperatingCursor(
      a round, passed the whole time and hid it.
      THE OUTGOING CORPORATION IS `before`'S, in both paths, for the same reason: it is the one that was acting
      when this transition began, and by the time the round type has changed `after` no longer says who that
-     was. */
+     was.
+     DESIGN NOTE 1699 (GR-1): AND ONLY THE MARKS THIS TURN OWED. The way-out expiry is the FALLBACK for a
+     qualifying grace turn that ended without reaching Run Routes' end; it must not take a train the outgoing
+     corporation doomed itself in this same turn's Buy Trains step (IG-A) -- that train's grace turn has not
+     begun. So `expireReprieveFor` spends `graceTurnReprieves` only, and `releaseDoomedThisTurn` then hands the
+     self-doomed marks on to the corporation's next turn, across a Stock Round if the set is over. */
   const outgoingCorporation =
     before.current_round_type === "OperatingRound"
       ? (before.active_operating_order ?? [])[before.active_corporation_index] ?? null
@@ -3834,9 +3877,9 @@ function settleOperatingCursor(
     corporation: number | null,
   ): GameStateResponse => {
     if (corporation === null) return state;
+    // #1699: only the marks this turn is the qualifying grace turn for -- never one doomed in this same turn.
     const done = (company: (typeof state.public_companies)[number]) =>
-      company.company_id === corporation &&
-      (company.pending_rust_trains?.length ?? 0) > 0;
+      company.company_id === corporation && graceTurnReprieves(company).length > 0;
     if (!(state.public_companies ?? []).some(done)) return state;
     return {
       ...state,
@@ -3873,16 +3916,52 @@ function settleOperatingCursor(
            list.
            NOTHING IS CHANGED IN THIS FUNCTION. Recorded because "I checked and it was already correct" is a
            finding, and the next reader chasing this report deserves to be told where not to look. */
+        /* Design note #1699 (GR-1): THE MARKS THIS TURN OWES, NOT EVERY MARK. `graceTurnReprieves` is the marks
+           minus those written during this corporation's own turn in progress (a Buy Trains self-trigger); the
+           latter stay marked, and stay owned, for its next turn. With nothing doomed this turn -- every board
+           before #1699, and every corporation but a self-triggering buyer -- this is every mark and the
+           remainder is `[]`, exactly as before. */
+        const owed = graceTurnReprieves(company);
         const survivors = [...(company.owned_trains ?? [])];
-        for (const model of company.pending_rust_trains ?? []) {
+        for (const model of owed) {
           const at = survivors.indexOf(model);
           if (at >= 0) survivors.splice(at, 1);
+        }
+        const stillMarked = [...(company.pending_rust_trains ?? [])];
+        for (const model of owed) {
+          const at = stillMarked.indexOf(model);
+          if (at >= 0) stillMarked.splice(at, 1);
         }
         return {
           ...company,
           ...(company.owned_trains == null ? {} : { owned_trains: survivors }),
-          pending_rust_trains: [],
+          pending_rust_trains: stillMarked,
         };
+      }),
+    };
+  };
+  /* ==================================================================
+      DESIGN NOTE 1699 (GR-1): THE TURN THAT DOOMED THEM IS OVER
+     ==================================================================
+     Called beside the two turn-end fallbacks, AFTER them: once the outgoing corporation's turn has ended, the
+     marks it wrote during that turn are no longer "this turn's" -- they are ordinary marks, owed the next
+     Operating Turn it begins. Dropping the list is all that takes (the marks themselves stay where they are),
+     and it is dropped rather than emptied because the field is absent whenever there is nothing to say (#232).
+     Only the outgoing corporation can hold the list: nobody else's turn was in progress. */
+  const releaseDoomedThisTurn = (
+    state: GameStateResponse,
+    corporation: number | null,
+  ): GameStateResponse => {
+    if (corporation === null) return state;
+    const held = (company: (typeof state.public_companies)[number]) =>
+      company.company_id === corporation && company.pending_rust_doomed_this_turn !== undefined;
+    if (!(state.public_companies ?? []).some(held)) return state;
+    return {
+      ...state,
+      public_companies: state.public_companies.map((company) => {
+        if (!held(company)) return company;
+        const { pending_rust_doomed_this_turn: _released, ...rest } = company;
+        return rest;
       }),
     };
   };
@@ -3890,7 +3969,8 @@ function settleOperatingCursor(
   /* Outside an OR the cursor is CLEARED, not frozen -- a stale Hardware would be handed to the next round's first corporation.
      See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #656 */
   if (after.current_round_type !== "OperatingRound") {
-    const expired = expireReprieveFor(after, outgoingCorporation);
+    // #1699: the fallback spends only what this turn owed, then the turn's own dooms pass to the next turn.
+    const expired = releaseDoomedThisTurn(expireReprieveFor(after, outgoingCorporation), outgoingCorporation);
     /* ==================================================================
         DESIGN NOTE 1046: THE GHOST STOPS BEING ONE WHEN THE ROUND ENDS
        ==================================================================
@@ -3982,7 +4062,14 @@ function settleOperatingCursor(
        outgoing corporation is `before`'s cursor -- the one that was acting when this transition began. */
     /* Design note #906a: the reprieve expires through the SAME helper the non-Operating path uses, so a
        corporation whose turn ends mid-set and one whose turn ends the set are answered identically. */
-    const withReprieveExpired = expireReprieveFor(after, outgoingCorporation);
+    /* Design note #1699 (GR-1): SUPERSEDES "THE REPRIEVE ENDS HERE, WITH THE TURN" ABOVE. The normal death is at
+       the end of Run Routes (#1102); this is the FALLBACK, and only for marks whose qualifying grace turn is the
+       one ending. A train the outgoing corporation doomed in this turn's own Buy Trains step survives it, and
+       `releaseDoomedThisTurn` makes it owed that corporation's next turn. */
+    const withReprieveExpired = releaseDoomedThisTurn(
+      expireReprieveFor(after, outgoingCorporation),
+      outgoingCorporation,
+    );
     /* Design note #941: AND THE PRINTED SUM GOES WITH THEM. It is the third turn-scoped figure on a
        corporation, and the one whose survival would be least visible: a stale `printed_route_revenue` does
        not show anywhere on screen, it simply makes the NEXT turn's single roll apply to last turn's routes as
@@ -4106,7 +4193,9 @@ function settleOperatingCursor(
    * Round set ending, or any path that skips the step entirely -- and a reprieve that survived that would
    * hand the train a second run, which is #906a's own bug in reverse. Two triggers for one event is normally
    * the fault this codebase keeps finding; here they are the same expression called on the same helper, and
-   * the second is idempotent because the first leaves nothing to expire. */
+   * the second is idempotent because the first leaves nothing to expire.
+   * #1699 (GR-1): BOTH EXPIRIES SPEND ONLY THE MARKS THE CURRENT TURN OWES (`graceTurnReprieves`). A mark written
+   * in this turn's own Buy Trains step is owed the NEXT turn, so neither this step nor the backstop takes it. */
   /* ==================================================================
       DESIGN NOTE 1102: THE REPRIEVE ENDS WHEN THE RUN DOES, NOT TWO STEPS LATER
      ==================================================================

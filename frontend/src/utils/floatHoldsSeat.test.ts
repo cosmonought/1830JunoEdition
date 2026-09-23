@@ -169,7 +169,12 @@ describe("the float no longer holds the seat (#769 retired by #1610)", () => {
        a second caller. */
     const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
     const app = readStripped("App.tsx");
-    expect(app).toMatch(/\n\s*homeHexToAxial,\n\s*layRefused,/);
+    /* Stage 10.3 (#1690): the lookup now reaches the reducer through the shared composition -- `App.tsx` calls
+       `sandboxActionContext`, which spreads the providers' chart injections, which carry the board's label table.
+       The server's engine calls the same builder, so the shell cannot omit it while the server supplies it. */
+    expect(app).toContain("sandboxActionContext(SHELL_PROVIDERS, {");
+    expect(readStripped("gameEngine/actionContext.ts")).toContain("...providers.chartInjections(state),");
+    expect(readStripped("gameEngine/replayProviders.ts")).toContain("homeHexToAxial: (label: string) => {");
     expect(app).not.toContain("placeHomeStationToken(");
     expect(app).not.toContain("isPlaceHomeStationMsg(msg)");
   });

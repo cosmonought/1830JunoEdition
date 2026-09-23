@@ -195,6 +195,7 @@ import {
   offboardValueForEra,
 } from "../components/hexBoardData";
 import { withRules } from "./boardSelection";
+import { canonicalJson } from "./stateDigest"; // #1691 (Stage 10.3b): the chart/core transaction's declined test
 import { stopEnteredFrom } from "./trackReach";
 /* Design note #1570 (Batch 7.2): the one authority for stock transaction legality and pricing. Asked by the
    core (identity), by the market step's `saleRefused` closure (#748a) and at ingress (`turnAuthority`). */
@@ -799,8 +800,15 @@ export interface SandboxActionContext {
      the chart atom ran outside the reducer and had to be TOLD what the board would refuse; in here the
      reducer already holds the state those predicates read, so it asks for itself. A caller that could still
      supply them could still supply the wrong ones, which is exactly how #1194 rearranged an operating order
-     and cost half a day finding it. */
-  marketContext?: Omit<SandboxMarketContext, "dividendRefused" | "saleRefused">;
+     and cost half a day finding it.
+     Design note #1690 (Stage 10.3, S10-4): AND `isCarcosanSale` / `certificatesSold` JOIN THEM. Both are the
+     reducer's own questions of the state it holds -- the Blood Price's legality and the certificates a sale
+     moves -- and an injected `isCarcosanSale` was the ONE market predicate the shell handed in and the replay
+     providers did not: the server's engine never asked it, so it never charged the Blood Price, while every
+     browser did (and a browser charged it for a sale the core then refused). Asked here, it cannot be
+     omitted by one consumer and supplied by another. `SandboxMarketContextInjection` below is the name every
+     consumer types its geometry against. */
+  marketContext?: SandboxMarketContextInjection;
   /** #1193/#415: the par box resolver, so a corporation parred BY this action has its token before the next
    *  queue is built. Geometry, like the projections beside it. */
   parCellFor?: (parPrice: number) => { x: number; y: number } | null;
@@ -2506,6 +2514,14 @@ export interface SandboxMarketContext {
   isCarcosanSale?: (sellerId: number, modelType: string) => boolean;
 }
 
+/** Design note #1690 (Stage 10.3): what a CALLER may hand the chart step -- its geometry, and nothing else. The
+ *  four predicates the reducer asks of the state it holds (`saleRefused`, `dividendRefused`, `certificatesSold`,
+ *  `isCarcosanSale`) are absent by construction; `chartStepContext` supplies them. */
+export type SandboxMarketContextInjection = Omit<
+  SandboxMarketContext,
+  "dividendRefused" | "saleRefused" | "certificatesSold" | "isCarcosanSale"
+>;
+
 /** The chart facts Batch 7.2's stock authority reads, assembled from what this reducer was handed.
  *
  *  THE ZONE COMES FROM THE INJECTION AND FROM NOWHERE ELSE, and that is deliberate rather than lazy. #712's
@@ -2829,15 +2845,141 @@ function applySandboxActionOnBoard(
      is refused "by any gate in the core", and a hold was one of those gates -- so a hold's refusal of that
      settlement still retires the offer, and nothing else moves. Ordinary legality (the forced sale's rules,
      the discard's owner, the offers' predicates, the home placement's circle) stays in the core. */
-  if (authoritativeHoldRefusal(state, msg, ctx) !== null) {
-    return retireRefusedSettlement(state, msg);
-  }
-  if (isAuctionMessage(msg) && auctionRefusal(state, state.waterfall ?? null, msg) !== null) {
-    return state;
-  }
+  const gate = boardGateRefusal(state, msg, ctx);
+  if (gate === "held") return retireRefusedSettlement(state, msg);
+  if (gate === "auction") return state;
   // #1340: the auction first, as `App.tsx` always ran it -- its charges land before the board is judged.
   const afterAuction = applyAuctionStep(state, msg);
   return settleAuctionLifecycle(applySandboxActionAfterAuction(afterAuction, msg, ctx), msg);
+}
+
+/** Design note #1690 (Stage 10.3, S10-4): the chart step's WHOLE context -- the caller's geometry
+ *  (`ctx.marketContext`) plus every predicate the reducer asks of the state it holds. Built in one place so the
+ *  reducer's chart step and the shell's narration of it (`sandboxChartStepReport`) cannot be handed two
+ *  different rules: before 10.3 the shell's narration asked `shareSaleBlock` where the reducer asks
+ *  `stockSaleRefusal`, knew no holds, and counted no double certificates. */
+function chartStepContext(
+  state: GameStateResponse,
+  msg: GameplayExecuteMsg,
+  ctx?: SandboxActionContext,
+): SandboxMarketContext {
+  return {
+    ...ctx?.marketContext,
+    dividendRefused: (companyId: number) => dividendRefused(state, companyId),
+    certificatesSold: (companyId: number, percentage: number) => {
+      const seller = ctx?.actor ?? null;
+      const company = state.public_companies.find((entry) => entry.company_id === companyId);
+      if (!seller || !company) {
+        return Math.max(1, Math.round(percentage / SANDBOX_SHARE_PERCENTAGE));
+      }
+      return certificatesSoldInMarketMove(company, seller, percentage);
+    },
+    /* ==================================================================
+        DESIGN NOTE 1570: THE CHART ASKS THE SAME PREDICATE THE CORE WILL (Batch 7.2)
+       ==================================================================
+       #748a's rule, and the one part of Batch 7.2 that needed care. The chart atom advances BEFORE the
+       board (#272/#273), so a sale the core is about to refuse must be refused HERE by the SAME function,
+       or the token drops one row per certificate for a sale that never happened -- and "a price drop with
+       no matching change in anybody's holdings ... reads as a market bug rather than as a refused action".
+       It was `shareSaleBlock` plus the Batch-5 forced-sale rules; it is now `stockSaleRefusal`, which
+       contains both of those unchanged and adds the round gate, the first-Stock-Round ban, the unparred
+       corporation and the whole-certificate bundle. One predicate, three askers, no drift. */
+    saleRefused: (companyId: number, percentage: number) => {
+      const seller = ctx?.actor ?? null;
+      if (!seller) return false;
+      return (
+        stockSaleRefusal({
+          state,
+          sell: { companyId, percentage },
+          actor: seller,
+          mapGrid: ctx?.mapGrid,
+          ctx: stockChartContext(state, ctx),
+        }) !== null
+      );
+    },
+    /* ==================================================================
+        DESIGN NOTE 1690 (Stage 10.3, S10-4): THE BLOOD PRICE IS THE REDUCER'S QUESTION TOO
+       ==================================================================
+       #1090 injected this beside `projectBloodPrice` because the chart atom ran outside the reducer. It no longer
+       does (#1197), and the injection had become a composition drift: `App.tsx` supplied it
+       (`isCarcosanTransfer` on the board before the sale) and `sandboxReplayProviders` never did, so the
+       server's engine charged no Blood Price for a Carcosan transfer every browser charged. And the shell's
+       version asked only the MARK -- not the sale -- so a Carcosan sale the core then refused (no consent, not
+       the buyer's Purchase Trains step, an empty treasury) still walked the seller's token Left 1, Down 1:
+       #748a's "a price drop with no matching change in anybody's holdings", for the train.
+       NOW ONE PREDICATE, ASKED HERE: the message's own sale, the seller's gilding (`isCarcosanTransfer`), and
+       the core's own settlement rule (`trainSaleRefusal`, #1592) -- the same function, moment and inputs the
+       core gate asks below, so the chart moves only for a sale the core will settle. Corpus: no stored
+       `BuyTrainFromCorporation` in the 18 files transfers a Carcosan train (S9-11; re-measured by 10.3). */
+    isCarcosanSale: (sellerId: number, modelType: string) => {
+      if (!("BuyTrainFromCorporation" in msg)) return false;
+      const sale = msg.BuyTrainFromCorporation;
+      if (sale.seller_protocol_id !== sellerId || sale.model_type !== modelType) return false;
+      if (!isCarcosanTransfer(state, sellerId, modelType)) return false;
+      return (
+        trainSaleRefusal(
+          state,
+          { buyerId: sale.buyer_protocol_id, sellerId, model: modelType, price: sale.price },
+          ctx?.actor,
+          ctx?.mapGrid,
+          "settlement",
+        ) === null
+      );
+    },
+  };
+}
+
+/** The reducer's chart step, on the board after the auction step (#272/#273, #1197). */
+function chartStep(
+  state: GameStateResponse,
+  positions: SandboxMarketPrices,
+  msg: GameplayExecuteMsg,
+  ctx?: SandboxActionContext,
+): SandboxMarketResult {
+  return applySandboxMarketAction(positions, msg, chartStepContext(state, msg, ctx));
+}
+
+/** The board-level gates every message passes before EITHER atom moves (#1580, #1613): `"held"`, `"auction"`,
+ *  or `null`. Shared by the reducer and by `sandboxChartStepReport`, so the narration refuses what the reducer
+ *  refuses at this layer, in the same order. */
+function boardGateRefusal(
+  state: GameStateResponse,
+  msg: GameplayExecuteMsg,
+  ctx?: SandboxActionContext,
+): "held" | "auction" | null {
+  if (authoritativeHoldRefusal(state, msg, ctx) !== null) return "held";
+  if (isAuctionMessage(msg) && auctionRefusal(state, state.waterfall ?? null, msg) !== null) return "auction";
+  return null;
+}
+
+/* ==================================================================
+    DESIGN NOTE 1690 (Stage 10.3, S10-4): THE SHELL'S MARKET SENTENCE ASKS THE REDUCER'S CHART STEP
+   ==================================================================
+   The shell keeps a report of the chart move -- which mover it was, and the two prices -- because a position
+   diff cannot say WHY a token moved (#1211). It used to compute that report with its OWN market context:
+   `shareSaleBlock` for the sale (the reducer asks `stockSaleRefusal`, which adds the round gate, the
+   first-Stock-Round ban, the unparred corporation and the whole-certificate bundle), no authoritative holds
+   (#1613), no double-certificate count (S9-13), and a Blood Price asked of the mark alone. Each difference
+   was a sentence about a move the reducer did not make, or a destination it did not reach.
+   So the report IS the reducer's chart step: the same board gates, the same auction step, the same context
+   builder, on the board and context the reducer is handed. Pure; the reducer is not run. `null` when nothing
+   would move (including every refusal at the board layer, and a board with no chart). Scoped to the board in
+   effect exactly as `applySandboxAction` scopes itself (#1300).
+   #1691 (Stage 10.3b): it asks the chart/core TRANSACTION, so the core is judged too (still pure, nothing is
+   committed) and a move the core would decline is reported as `null`. */
+export function sandboxChartStepReport(
+  state: GameStateResponse,
+  msg: GameplayExecuteMsg,
+  ctx?: SandboxActionContext,
+): SandboxMarketResult["moved"] {
+  const variants = isSetupGameMsg(msg) ? msg.SetupGame.variants : state.variants;
+  return withRules(resolveVariants(variants), () => {
+    if (boardGateRefusal(state, msg, ctx) !== null) return null;
+    const afterAuction = applyAuctionStep(state, msg);
+    if (!afterAuction.market_positions) return null;
+    // #1691: the same transaction the reducer commits -- a move the core then declines is reported as none.
+    return marketTransaction(afterAuction, afterAuction.market_positions, msg, ctx).priced.moved;
+  });
 }
 
 function applySandboxActionAfterAuction(
@@ -2866,48 +3008,13 @@ function applySandboxActionAfterAuction(
      `tradePrice` IS USED DIRECTLY rather than travelling back through `ctx.sharePrice`, so the wallet and
      the chart cannot be handed two different figures for one trade (#273's whole point). */
   if (state.market_positions) {
-    const priced = applySandboxMarketAction(state.market_positions, msg, {
-      ...ctx?.marketContext,
-      dividendRefused: (companyId: number) => dividendRefused(state, companyId),
-      certificatesSold: (companyId: number, percentage: number) => {
-        const seller = ctx?.actor ?? null;
-        const company = state.public_companies.find((entry) => entry.company_id === companyId);
-        if (!seller || !company) {
-          return Math.max(1, Math.round(percentage / SANDBOX_SHARE_PERCENTAGE));
-        }
-        return certificatesSoldInMarketMove(company, seller, percentage);
-      },
-      /* ==================================================================
-          DESIGN NOTE 1570: THE CHART ASKS THE SAME PREDICATE THE CORE WILL (Batch 7.2)
-         ==================================================================
-         #748a's rule, and the one part of Batch 7.2 that needed care. The chart atom advances BEFORE the
-         board (#272/#273), so a sale the core is about to refuse must be refused HERE by the SAME function,
-         or the token drops one row per certificate for a sale that never happened -- and "a price drop with
-         no matching change in anybody's holdings ... reads as a market bug rather than as a refused action".
-         It was `shareSaleBlock` plus the Batch-5 forced-sale rules; it is now `stockSaleRefusal`, which
-         contains both of those unchanged and adds the round gate, the first-Stock-Round ban, the unparred
-         corporation and the whole-certificate bundle. One predicate, three askers, no drift. */
-      saleRefused: (companyId: number, percentage: number) => {
-        const seller = ctx?.actor ?? null;
-        if (!seller) return false;
-        return (
-          stockSaleRefusal({
-            state,
-            sell: { companyId, percentage },
-            actor: seller,
-            mapGrid: ctx?.mapGrid,
-            ctx: stockChartContext(state, ctx),
-          }) !== null
-        );
-      },
-    });
-    const settled: GameStateResponse = { ...state, market_positions: priced.prices };
-    const applied = applySandboxActionInner(
-      settled,
-      msg,
-      priced.tradePrice === null
-        ? ctx
-        : { ...ctx, sharePrice: priced.tradePrice },
+    /* #1691 (Stage 10.3b): the chart step and the core are ONE transaction -- `marketTransaction` discards the
+       chart's move when the core then declines the action. */
+    const transaction = marketTransaction(state, state.market_positions, msg, ctx);
+    const applied = settleChartAfterCore(
+      transaction.before,
+      transaction.core,
+      ctx,
       /* #1193: a par set BY this action lands a token the NEXT queue must see, so the reconcile runs after
          the board settles -- the same order `App.tsx` runs it in. */
       ctx?.parCellFor,
@@ -2938,7 +3045,74 @@ function applySandboxActionInner(
   ctx?: SandboxActionContext,
   parCellFor?: (parPrice: number) => { x: number; y: number } | null,
 ): GameStateResponse {
-  const settledBoard = applySandboxActionCore(state, msg, ctx);
+  return settleChartAfterCore(state, applySandboxActionCore(state, msg, ctx), ctx, parCellFor);
+}
+
+/* ==================================================================
+    DESIGN NOTE 1691 (Stage 10.3b, S10-4): THE CHART STEP IS PROVISIONAL UNTIL THE CORE ACCEPTS
+   ==================================================================
+   #272/#273 put the chart step FIRST, because the core needs the price it produced (a sale's proceeds). #748a,
+   #774, #1570, #1613 and #1690 then asked, one at a time, the refusals the chart must honour BEFORE it moves --
+   `saleRefused`, `dividendRefused`, the holds, the Blood Price's `trainSaleRefusal`. That is a hand-kept list,
+   and it was short: the core refuses AFTER the chart step for reasons none of those predicates ask --
+   `dividendAmountRefusal` (a declaration whose stated amount is not what the trains ran), every ledger refusal
+   inside an arm (a treasury or Bank that cannot pay the transfer), an arm's own precondition. Each left the
+   token where the chart step put it for an action that never happened: #748a's "price drop with no matching
+   change in anybody's holdings", and -- through `settleOperatingQueue` reading the moved positions -- a
+   re-sorted operating order.
+   SO THE CHART'S MOVE IS COMMITTED WITH THE ACTION OR NOT AT ALL. The core is judged exactly as before, on the
+   board the chart step produced (so every ACCEPTED action is bit-for-bit what it was); if it DECLINES -- returns
+   the board it was handed, by identity (a gate) or by content (an arm's own refusal) -- the move is discarded
+   and the refusal is the core's refusal of the UNMOVED board: #1596's retirement of a refused accepted
+   settlement where the gate refused, otherwise nothing. The pre-chart predicates stay (they are what the chart
+   step itself asks, and they keep the price `tradePrice` honest); this is the boundary that makes their
+   completeness no longer load-bearing. Content comparison is paid only when the chart actually moved.
+   `sandboxChartStepReport` reads the same transaction, so the shell's sentence is `null` for every declined
+   action. Measured on the 18-file corpus before the change: 109 stored chart moves, 0 declined by the core. */
+interface MarketTransaction {
+  /** The chart step's result -- `moved: null` and the original positions when the core declined. */
+  priced: SandboxMarketResult;
+  /** The board the core was judged on (the chart step applied), or the unmoved board when it declined. */
+  before: GameStateResponse;
+  /** The core's result, #1596's refusal semantics included. */
+  core: GameStateResponse;
+}
+
+function marketTransaction(
+  state: GameStateResponse,
+  positions: SandboxMarketPrices,
+  msg: GameplayExecuteMsg,
+  ctx?: SandboxActionContext,
+): MarketTransaction {
+  const priced = chartStep(state, positions, msg, ctx);
+  const settled: GameStateResponse = { ...state, market_positions: priced.prices };
+  const judged = applySandboxActionCoreJudged(
+    settled,
+    msg,
+    priced.tradePrice === null ? ctx : { ...ctx, sharePrice: priced.tradePrice },
+  );
+  const chartMoved = priced.prices !== positions;
+  // Nothing moved on the chart: exactly `applySandboxActionCore` (#1596 on an identity refusal).
+  if (!chartMoved) {
+    return { priced, before: settled, core: judged === settled ? retireRefusedSettlement(settled, msg) : judged };
+  }
+  const declined = judged === settled || canonicalJson(judged) === canonicalJson(settled);
+  if (!declined) return { priced, before: settled, core: judged };
+  const unmoved: GameStateResponse = { ...state, market_positions: positions };
+  return {
+    priced: { prices: positions, tradePrice: null, moved: null },
+    before: unmoved,
+    core: judged === settled ? retireRefusedSettlement(unmoved, msg) : unmoved,
+  };
+}
+
+/** After the core: the sold-out rises committed and the par marks reconciled (#746b, #1193, #1601). */
+function settleChartAfterCore(
+  state: GameStateResponse,
+  settledBoard: GameStateResponse,
+  ctx?: SandboxActionContext,
+  parCellFor?: (parPrice: number) => { x: number; y: number } | null,
+): GameStateResponse {
   if (!settledBoard.market_positions) return settledBoard;
 
   /* ==================================================================

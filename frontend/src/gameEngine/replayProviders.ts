@@ -62,7 +62,11 @@ import type { TileColorTier } from "../components/hexTileCatalog";
 /** The providers a room replays with.
  *
  *  TRANSCRIBED FROM `App.tsx`'s CALL SITE, never derived from the types. Where this file and the shell
- *  differ, this file is wrong until proven otherwise -- #1194 is what that rule is made of. */
+ *  differ, this file is wrong until proven otherwise -- #1194 is what that rule is made of.
+ *  Design note #1690 (Stage 10.3, S10-4): there is no longer a shell call site to differ from. `App.tsx` builds
+ *  its reducer context from THIS provider set, through the same `sandboxActionContext` (`actionContext.ts`) the
+ *  engine calls -- the rule above is kept as the record of why that was necessary. The one difference the
+ *  transcription had missed (`isCarcosanSale`) is now asked by the reducer itself. */
 /** Design note #1683 (Stage 10.1): THE BOARD GEOMETRY, AS ONE FUNCTION. This is `ReplayProviders.layRefused` --
  *  `filterSandboxPlacements` asked of one placement -- exported on its own so `App.tsx`'s grid step hands the
  *  `LayTile` authority the same geometry the engine's providers hand it, rather than a second closure over the
@@ -109,6 +113,16 @@ export function sandboxReplayProviders(): ReplayProviders {
               )
             : undefined;
         const payout = Number(declaring?.last_route_revenue ?? 0) || 0;
+        /* ==================================================================
+            DESIGN NOTE 988: THE CHOICE GOES IN, AND IT USED NOT TO
+           ==================================================================
+           THIS PASSED THE PAY-DERIVED COUNT TO WHICHEVER CHOICE ARRIVED, so a withhold under Dynamic
+           Stock Market moved by the multiple the PAYOUT would have earned -- none for a small run, two
+           for a large one. The readout twenty screens down already hard-coded one cell for a withhold
+           and said so in a comment, which is #891's exact failure: the bar promising a move the board
+           does not perform.
+           ONE ARGUMENT FIXES BOTH SIDES because `dividendStepsFor` is now the only place that knows.
+           (#1690: moved here from `App.tsx`, whose copy of this projection is gone -- this is the one.) */
         const steps = dividendStepsFor(
           payout,
           state.market_positions?.[declaring?.company_id ?? -1]?.price ?? null,
@@ -118,7 +132,7 @@ export function sandboxReplayProviders(): ReplayProviders {
         return projectDividendCellMove(from, choice, steps);
       },
       /* #1197: `dividendRefused` and `saleRefused` are absent BY CONSTRUCTION -- `SandboxActionContext` no
-         longer accepts them. The reducer holds the state those predicates read and asks them itself, which
+         longer accepts them (#1690: nor `isCarcosanSale` / `certificatesSold`, which this set never supplied). The reducer holds the state those predicates read and asks them itself, which
          is the gap #1194 opened by omission, closed by making omission impossible. */
     }),
 

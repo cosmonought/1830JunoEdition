@@ -210,13 +210,18 @@ describe("the surfaces share one answer", () => {
     /* THE STRUCTURAL HALF. Two predicates spelled separately for the grid and the state is the #748a failure
        exactly -- one atom accepting what the other refused, permanently out of step. */
     const app = read("App.tsx");
-    expect(app).toContain("const layRefused = (q: number, r: number, tileId: number, orientation: number)");
-    /* Stage 10.1 (#1683): the grid takes the AUTHORITY's verdict, built once from that same `layRefused`
-       geometry; the reducer takes the geometry and asks the same authority in its gate block. One predicate,
-       one layer up -- `holdBeforeChart.test.ts` and `oneLayPerTurn.test.ts` pin the composition. */
+    /* Stage 10.1 (#1683): the grid takes the AUTHORITY's verdict; the reducer takes the geometry and asks the
+       same authority in its gate block. Stage 10.3 (#1690): the geometry is no longer built in the shell at
+       all -- `layAuthorityContext` (the grid step) and `sandboxActionContext` (the reducer) both take it from
+       `layGeometryFor`, over the same pre-lay snapshot, and `RoomEngine` calls the same two builders. */
+    expect(app).not.toContain("const layRefused = (q: number, r: number, tileId: number, orientation: number)");
     expect(app).toContain("lay.orientation,\n            layRefusedByAuthority,");
-    expect(app).toContain("layRefused,\n          });");
     expect(app).toContain("const layRefusedByAuthority = (): boolean =>");
+    expect(app).toContain("layAuthorityContext(SHELL_PROVIDERS, stateBeforeAction, gridBeforeAction)");
+    expect(app).toContain("gridBefore: gridBeforeAction,");
+    const builder = read("gameEngine/actionContext.ts");
+    // Both builders -- the grid step's and the reducer's -- ask the one geometry function on the one snapshot.
+    expect(builder.split("layRefused: layGeometryFor(providers, gridBefore, state),").length - 1).toBe(2);
   });
 
   it("reads the grid through the ref, ONCE", () => {
@@ -231,7 +236,10 @@ describe("the surfaces share one answer", () => {
        pins the snapshot; `oneLayPerTurn.test.ts` covers the consequence. */
     const app = read("App.tsx");
     expect(app).toContain("const gridBeforeAction = mapGridRef.current;");
-    expect(app).toContain("mapGrid: gridBeforeAction,");
+    // Stage 10.3 (#1690): the snapshot is handed to the shared builders, which bind the lay geometry to it.
+    expect(app).toContain("layAuthorityContext(SHELL_PROVIDERS, stateBeforeAction, gridBeforeAction)");
+    expect(app).toContain("gridBefore: gridBeforeAction,");
+    expect(read("gameEngine/actionContext.ts")).toContain("mapGrid: gridBefore,");
   });
 
   it("gates before anything settles", () => {

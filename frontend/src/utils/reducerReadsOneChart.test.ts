@@ -35,18 +35,27 @@ const APP = readStripped("App.tsx");
 /* #1230: the message reaches the general path un-narrowed now that `SetupGame` falls through, and is passed
    as `gameplay` -- the one cast the engine also takes (#1189). The anchor is on the CALL and the receiver, which
    is what these cases are about; the argument's name is not. */
-const REDUCER_CTX = sliceBetween(APP, "after = applySandboxAction(after, gameplay, {", "homeHexToAxial,");
+/* Stage 10.3 (#1690): the context is no longer an object literal at the call -- it is `sandboxActionContext`
+   over the board the reducer is handed. The surface is therefore that board and that call: the chart travels
+   ON the board (`market_positions`, from the ref) and every resolver reads it there (`replayProviders.ts`). */
+const REDUCER_CTX = sliceBetween(APP, "const handedBoard: GameStateResponse | null = before", "const marketResult = {");
+const PROVIDERS = readStripped("gameEngine/replayProviders.ts");
 
 describe("the reducer is given one chart, from the synchronous source", () => {
   it("builds the price table from the ref rather than the memo", () => {
-    expect(REDUCER_CTX).toContain("marketPricesByCompany: marketPricesFromRef()");
+    expect(REDUCER_CTX).toContain("market_positions: sandboxMarketRef.current,");
     expect(REDUCER_CTX).not.toContain("marketGrid");
+    const injections = sliceBetween(PROVIDERS, "chartInjections: (state) => {", "projectRise:");
+    expect(injections).toContain("const positions = state.market_positions ?? {};");
+    expect(injections).toContain("marketPricesByCompany: Object.fromEntries(\n          Object.entries(positions)");
   });
 
   it("reads the same ref the trade price already came from", () => {
     /* `marketPriceFor` and `marketZoneFor` were always on the ref. The bug was the third field disagreeing
        with its two neighbours inside one object literal -- #891 at its smallest possible scale. */
-    expect(REDUCER_CTX).toContain("marketPriceFor: marketPriceForCompany");
+    const injections = sliceBetween(PROVIDERS, "chartInjections: (state) => {", "projectRise:");
+    expect(injections).toContain("marketPriceFor: priceFor,");
+    expect(injections).toContain("marketZoneFor: (companyId: number) => marketZoneForPrice(priceFor(companyId)),");
     expect(APP).toContain("sandboxMarketPositions(sandboxMarketRef.current)");
   });
 
@@ -74,7 +83,11 @@ describe("no other reducer input is read from committed state", () => {
        from the message itself can be stale for a whole drain, and staleness that varies by client is exactly
        the shape that produced the report. `mapGrid` and `currentPhase` are named exemptions below. */
     // #1380: `sandboxStateRef.current` is a ref read, which is the point; the bare state name is the fault.
-    const withoutRefs = REDUCER_CTX.replace(/sandboxStateRef\.current/g, "").replace(/mapGridRef\.current/g, "");
+    // #1690: the chart and auction mirrors are ref reads too -- the board is handed its atoms from the refs.
+    const withoutRefs = REDUCER_CTX.replace(/sandboxStateRef\.current/g, "")
+      .replace(/mapGridRef\.current/g, "")
+      .replace(/sandboxMarketRef\.current/g, "")
+      .replace(/sandboxWaterfallRef\.current/g, "");
     for (const stateBacked of ["sandboxMarket", "marketGrid", "settledPrivatePrices", "sandboxState", "mapGrid,", "currentPhase", "tableVariants"]) {
       expect([stateBacked, withoutRefs.includes(stateBacked)]).toEqual([stateBacked, false]);
     }
@@ -87,8 +100,9 @@ describe("no other reducer input is read from committed state", () => {
        log priced every route on the pre-burst grid in the pre-burst era, and refused a token on a tile laid
        earlier in the same burst. Both now come from the refs -- the grid the lay narration just wrote, the
        era of the state about to be reduced -- which is what the server engine reads. */
-    expect(REDUCER_CTX).toContain("mapGrid: mapGridRef.current,");
-    expect(REDUCER_CTX).toContain("era: tileEraFor(sandboxStateRef.current),");
+    expect(REDUCER_CTX).toContain("grid: mapGridRef.current,");
+    expect(APP).toContain("const before = sandboxStateRef.current;");
+    expect(readStripped("gameEngine/actionContext.ts")).toContain("era: tileEraFor(state),");
     expect(APP).toContain("mapGridRef");
   });
 });

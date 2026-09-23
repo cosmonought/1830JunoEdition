@@ -259,8 +259,14 @@ describe("both surfaces ask one function", () => {
        each half of that chain on the file that now actually states it, rather than re-widening into "these
        words exist somewhere in the repository". */
     const board = readStripped("gameEngine/sandboxSession.ts");
+    /* Stage 10.3 (#1690): the board-level gates became one function, `boardGateRefusal`, so the shell's market
+       narration (`sandboxChartStepReport`) asks the same holds in the same order. Pinned as a chain: the OnBoard
+       entry asks the gate before the auction step, and the gate asks the holds first. */
     expect(sliceBetween(board, "function applySandboxActionOnBoard(", "applyAuctionStep(")).toContain(
-      "authoritativeHoldRefusal(state, msg, ctx)",
+      "boardGateRefusal(state, msg, ctx)",
+    );
+    expect(sliceBetween(board, "function boardGateRefusal(", "\n}")).toContain(
+      'if (authoritativeHoldRefusal(state, msg, ctx) !== null) return "held";',
     );
     const holds = readStripped("gameEngine/authoritativeHolds.ts");
     expect(sliceBetween(holds, "export function authoritativeHoldRefusal(", "}")).toContain(

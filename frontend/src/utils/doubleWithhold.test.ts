@@ -297,6 +297,15 @@ describe("only the client on turn dispatches the derived actions", () => {
   });
 
   it("asks the reducer for the same refusal the chart asks", () => {
-    expect(APP).toContain("dividendRefused: (companyId) =>");
+    /* Stage 10.3 (#1690): the shell no longer hands the chart a `dividendRefused` of its own -- its market
+       sentence is `sandboxChartStepReport`, the reducer's own chart step, whose context asks `dividendRefused` of
+       the state the reducer holds. Stronger than the old pin: there is no second predicate to keep in step. */
+    expect(APP).toContain("sandboxChartStepReport(handedBoard, gameplay, reducerContext)");
+    expect(APP).not.toContain("dividendRefused: (companyId) =>");
+    const { readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
+    const REDUCER = readStripped("gameEngine/sandboxSession.ts");
+    expect(sliceBetween(REDUCER, "function chartStepContext(", "function chartStep(")).toContain(
+      "dividendRefused: (companyId: number) => dividendRefused(state, companyId),",
+    );
   });
 });

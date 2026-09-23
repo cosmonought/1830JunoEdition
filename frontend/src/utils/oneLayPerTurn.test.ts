@@ -185,7 +185,9 @@ describe("the shell captures the board once per dispatch", () => {
     /* THE FIX, AND THE ONLY TEST THAT WOULD HAVE CAUGHT THIS. A snapshot rather than a reorder: reordering
        the two calls works today and leaves the next reader one edit away from reintroducing it. */
     expect(APP).toContain("const gridBeforeAction = mapGridRef.current;");
-    expect(APP).toContain("mapGrid: gridBeforeAction,");
+    // Stage 10.3 (#1690): the snapshot goes to the shared builders -- the grid step's and the reducer's.
+    expect(APP).toContain("layAuthorityContext(SHELL_PROVIDERS, stateBeforeAction, gridBeforeAction)");
+    expect(APP).toContain("gridBefore: gridBeforeAction,");
   });
 
   it("no longer reads the ref inside the predicate", () => {
@@ -202,10 +204,11 @@ describe("the shell captures the board once per dispatch", () => {
        Stage 10.1 (#1683): the grid now takes the AUTHORITY's verdict (`layRefusedByAuthority`, which asks
        `layTileRefusal` with the geometry `layRefused`), and the reducer takes that same geometry `layRefused`
        and asks the same authority in its gate block -- so the two atoms still read one answer. */
+    /* Stage 10.3 (#1690): the geometry both atoms ask is built by `layGeometryFor`, once for the grid step
+       (`layAuthorityContext`) and once for the reducer (`sandboxActionContext`), on the same `gridBeforeAction`. */
     expect(APP).toContain("lay.orientation,\n            layRefusedByAuthority,");
-    expect(APP).toContain("layRefused,\n          });");
+    expect(APP).toContain("after = applySandboxAction(after, gameplay, reducerContext);");
     const verdict = APP.slice(APP.indexOf("const layRefusedByAuthority = (): boolean =>"), APP.indexOf('if ("LayTile" in msg) {'));
-    expect(verdict).toContain("layTileRefusal(stateBeforeAction, msg as GameplayExecuteMsg, {");
-    expect(verdict).toContain("layRefused,");
+    expect(verdict).toContain("layAuthorityContext(SHELL_PROVIDERS, stateBeforeAction, gridBeforeAction),");
   });
 });

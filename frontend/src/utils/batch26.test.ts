@@ -181,9 +181,14 @@ describe("a withhold always costs at least one cell (design notes #988 -> #994)"
        that actually receives a withhold -- silently answering for a pay.
        ASSERTED AS THE SHELL PASSING ITS OWN `choice` THROUGH, not as a literal: that call site is generic
        over both, and pinning `"pay"` there would be pinning the bug. */
-    const project = sliceBetween(APP, "projectDividend: (from, choice) => {", "},");
-    expect(project).toContain("resolveVariants(before?.variants),\n              choice,");
+    /* Stage 10.3 (#1690): the shell's copy of this projection is gone -- `App.tsx` builds its reducer context from
+       `sandboxReplayProviders()` -- so the ONE `projectDividend` is the providers', and it must pass `choice`
+       through exactly as the shell's did. The shell must not grow a second one back. */
+    const PROVIDERS = readStripped("gameEngine/replayProviders.ts");
+    const project = sliceBetween(PROVIDERS, "projectDividend: (from, choice) => {", "},");
+    expect(project).toContain("resolveVariants(state.variants),\n          choice,");
     expect(project).toContain("projectDividendCellMove(from, choice, steps)");
+    expect(APP).not.toContain("projectDividend: (from, choice) =>");
   });
 
   it("no longer keeps the withhold rule in a comment at the readout", () => {

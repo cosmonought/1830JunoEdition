@@ -220,11 +220,18 @@ describe("S8-13 on the grid: a lay under a hold lands on neither the grid nor th
       "authoritativeHoldRefusal(state, msg, ctx)",
     );
     const engine = readStripped("gameEngine/replayLog.ts");
-    expect(sliceBetween(engine, 'if ("LayTile" in msg) {', "this.grid = applySandboxLayTile(")).toContain("layTileRefusal(stateBefore, msg, {");
+    /* Stage 10.3 (#1690): both grid steps build the authority's injections with ONE function,
+       `layAuthorityContext`, on the lay's snapshot -- so the two can no longer be handed two label tables or two
+       grids. */
+    expect(sliceBetween(engine, 'if ("LayTile" in msg) {', "this.grid = applySandboxLayTile(")).toContain(
+      "layTileRefusal(stateBefore, msg, layAuthorityContext(this.providers, stateBefore, gridBefore))",
+    );
     const app = readStripped("App.tsx");
     const predicate = sliceBetween(app, "const layRefusedByAuthority = (): boolean =>", 'if ("LayTile" in msg) {');
-    expect(predicate).toContain("layTileRefusal(stateBeforeAction, msg as GameplayExecuteMsg, {");
-    expect(predicate).toContain("mapGrid: gridBeforeAction,");
-    expect(predicate).toContain("homeHexToAxial,");
+    expect(predicate).toContain("layTileRefusal(\n                stateBeforeAction,\n                msg as GameplayExecuteMsg,");
+    expect(predicate).toContain("layAuthorityContext(SHELL_PROVIDERS, stateBeforeAction, gridBeforeAction),");
+    const builder = sliceBetween(readStripped("gameEngine/actionContext.ts"), "export function layAuthorityContext(", "\n}");
+    expect(builder).toContain("mapGrid: gridBefore,");
+    expect(builder).toContain("homeHexToAxial: providers.chartInjections(state).homeHexToAxial,");
   });
 });

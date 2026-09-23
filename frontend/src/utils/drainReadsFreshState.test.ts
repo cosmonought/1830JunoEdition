@@ -95,14 +95,23 @@ describe("the reducer's context reads the refs, not the render (design note #138
      $100 + $90, and refused a token on F16 the server accepted -- because the dispatch handed the reducer the
      React `mapGrid` and an era derived from the committed phase, both a whole burst behind during a rebuild. */
   it("hands the reducer the live grid and the era of the state it is about to reduce", () => {
-    const call = sliceBetween(APP, "after = applySandboxAction(after, gameplay, {", "era: tileEraFor(sandboxStateRef.current),");
-    expect(call).toContain("mapGrid: mapGridRef.current,");
-    expect(call).not.toContain("\n            mapGrid,\n");
-    expect(call).not.toContain("era: eraForPhase(currentPhase, tableVariants)");
+    /* Stage 10.3 (#1690): the context is built by `sandboxActionContext` from the board the reducer is handed
+       (`before`, read off `sandboxStateRef`, plus the mirrors) and `mapGridRef` -- the era is `tileEraFor` of
+       that board inside the builder. */
+    const call = sliceBetween(APP, "const reducerContext =", "const marketResult = {");
+    expect(call).toContain("sandboxActionContext(SHELL_PROVIDERS, {");
+    expect(call).toContain("state: handedBoard,");
+    expect(call).toContain("grid: mapGridRef.current,");
+    expect(call).not.toContain("\n                grid: mapGrid,\n");
+    expect(call).not.toContain("eraForPhase(currentPhase, tableVariants)");
+    expect(APP).toContain("const before = sandboxStateRef.current;");
+    expect(APP).toContain("after = applySandboxAction(after, gameplay, reducerContext);");
   });
 
   it("which is the same era rule the server's engine applies", () => {
-    const ENGINE = readStripped("gameEngine/replayLog.ts");
-    expect(ENGINE).toContain("return tileEraFor(state);");
+    /* Stage 10.3 (#1690): not merely the same rule -- the same line. Both callers go through the builder. */
+    const BUILDER = readStripped("gameEngine/actionContext.ts");
+    expect(BUILDER).toContain("era: tileEraFor(state),");
+    expect(readStripped("gameEngine/replayLog.ts")).toContain("sandboxActionContext(this.providers, {");
   });
 });

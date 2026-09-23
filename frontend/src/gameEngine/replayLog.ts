@@ -55,8 +55,9 @@ import {
   applySandboxLayTile,
   applySandboxMarketAction,
   type SandboxActionContext,
-  type SandboxMarketContext,
+  type SandboxMarketContextInjection,
 } from "./sandboxSession";
+import { layAuthorityContext, sandboxActionContext } from "./actionContext"; // #1690 (Stage 10.3)
 // Design note #1683 (Stage 10.1): the grid lays a tile only when the one `LayTile` authority accepts it.
 import { layTileRefusal } from "./layTileAuthority";
 import type { SandboxMarketPrices } from "./sandboxState";
@@ -80,7 +81,6 @@ import { depotCostFor, derivePhase, type TrainTier } from "./gamePhase";
 import { pendingTrainDiscards } from "./trainDiscard";
 // Design note #1614 (Slice 8.2): the development corpus's home-choice adapter asks the home authority, never a copy.
 import { boardHomeHexToAxial, homeEstablished, homeStationOwed, isHomeCandidate, owedHomeStation } from "./homeStationAuthority";
-import { tileEraFor } from "./gameConstants";
 import type { TileColorTier } from "../components/hexTileCatalog";
 import type { GameStateResponse, WaterfallStateResponse } from "./gameState";
 import type { GameplayExecuteMsg } from "../utils/sessionKey";
@@ -189,8 +189,8 @@ export interface ReplayProviders {
   marketContext: (
     state: GameStateResponse,
     msg: GameplayExecuteMsg,
-    actor: string,
-  ) => Omit<SandboxMarketContext, "dividendRefused" | "saleRefused">;
+    actor: string | null | undefined,
+  ) => SandboxMarketContextInjection;
   /** The chart-derived half of the reducer's own context: prices, zones, marks and the rise projection.
    *  #411, #646, #712, #746a, #1177. */
   /** What is LEFT of the chart injections once the positions live on the state: the board's label table,
@@ -221,9 +221,8 @@ export interface ReplayProviders {
 
 type TileEra = TileColorTier;
 
-function eraFor(state: GameStateResponse | null): TileEra {
-  return tileEraFor(state); // #1312: Gray in a tile-set game's Diesel era
-}
+/* #1312's `eraFor` (Gray in a tile-set game's Diesel era) moved with the context it served: `actionContext.ts`
+   derives the era from the board via `tileEraFor`, for this engine and for the shell alike (#1690). */
 
 export interface ReplaySeed {
   state: GameStateResponse;
@@ -379,15 +378,16 @@ export class RoomEngine {
 
   /* SNAPSHOTTED TOGETHER, per #766's "a snapshot, not a reorder": both halves of the legality predicate
      must judge the same instant. `App.tsx` learned this the hard way -- it gave the GRID a ref and left
-     the PHASE reading this.state, so one rule was asked of one of its two inputs. */
+     the PHASE reading this.state, so one rule was asked of one of its two inputs. (#1690: the era half is
+     derived from `this.state` inside `actionContext.ts`, and `this.state` does not move until the reducer
+     runs -- so the grid step and the reducer's `layRefused` still judge one instant.) */
   const gridBefore = this.grid;
-  const eraBefore = eraFor(this.state);
 
   if ("LayTile" in msg) {
     const lay = msg.LayTile;
     /* Design note #1510: the grid refuses what the reducer refuses for identity -- a lay naming a
        corporation that is not operating lands on neither atom. Judged on the same snapshot as the tile
-       rule, for #766's reason. `App.tsx` folds the same check into its own predicate. */
+       rule, for #766's reason. `App.tsx` asks the same composition (#1683, #1690). */
     const stateBefore = this.state;
     /* Design note #1613 (Slice 8.2, S8-13): AND THE GRID REFUSES A HELD LAY. The four authoritative holds refuse a
        held message before the auction, the chart and the core see it -- but a lay touches a third atom, and this
@@ -399,13 +399,9 @@ export class RoomEngine {
        anchoring, the JK, the terrain fee), so a lay the core refused still landed here. `layTileRefusal` is the
        ONE composition both atoms and the ingress ask, on the same snapshot, with the same injections the reducer
        is about to be handed; the grid moves only when it answers `null`. */
-    const refused =
-      layTileRefusal(stateBefore, msg, {
-        mapGrid: gridBefore,
-        homeHexToAxial: this.providers.chartInjections(stateBefore).homeHexToAxial,
-        layRefused: (q: number, r: number, tileId: number, orientation: number) =>
-          this.providers.layRefused(gridBefore, q, r, tileId, orientation, eraBefore),
-      }) !== null;
+    /* #1690 (Stage 10.3): the injections come from `layAuthorityContext`, the builder `App.tsx`'s grid step
+       calls too. */
+    const refused = layTileRefusal(stateBefore, msg, layAuthorityContext(this.providers, stateBefore, gridBefore)) !== null;
     this.grid = applySandboxLayTile(gridBefore, lay.q, lay.r, lay.tile_id, lay.orientation, () => refused);
   }
 
@@ -461,27 +457,25 @@ export class RoomEngine {
      never saw. */
   observe?.({ entry, msg, stateBefore: this.state, grid: this.grid });
 
-  this.state = applySandboxAction(this.state, msg, {
-    ...this.providers.chartInjections(this.state),
-    // #549: the log's author. The one injection that was ALREADY log-derived.
-    actor: entry.actor,
-    mapGrid: this.grid,
-    era: eraFor(this.state),
-    /* #1197: the ladder's shape, handed in once. `sharePrice` is gone from here -- the reducer prices the
-       trade itself now, so the wallet and the chart cannot be handed two different figures. */
-    marketContext: this.providers.marketContext(this.state, msg, entry.actor),
-    parCellFor: this.providers.parCellFor,
-    /* #579/#398: the par comes from the MESSAGE's own `protocol_id` and `par_value`, never from an ambient
-       ladder selection -- there is no ambient anything in a replay, which is the point. */
-    parValue: (() => {
-      if (!("BuyStock" in msg)) return undefined;
-      const fromMsg = Number(msg.BuyStock.par_value ?? NaN);
-      return Number.isFinite(fromMsg) && fromMsg > 0 ? fromMsg : undefined;
-    })(),
-    // #757: the same refusal the this.grid applied, judged on the same snapshot.
-    layRefused: (q: number, r: number, tileId: number, orientation: number) =>
-      this.providers.layRefused(gridBefore, q, r, tileId, orientation, eraBefore),
-  });
+  /* ==================================================================
+      DESIGN NOTE 1690 (Stage 10.3, S10-4): THE CONTEXT IS THE SHARED COMPOSITION'S
+     ==================================================================
+     This call used to assemble the reducer's context inline -- the chart injections, the author, the grid and
+     era, the ladder's shape (#1197), the par box (#1193) and the message's own par (#579/#398), the lay
+     geometry on the pre-entry snapshot (#757/#766) -- while `App.tsx` assembled the same context from its own
+     closures. `sandboxActionContext` (`actionContext.ts`) is now the one builder both call; what this engine
+     supplies is only which board, which two grids, and the log's author. */
+  this.state = applySandboxAction(
+    this.state,
+    msg,
+    sandboxActionContext(this.providers, {
+      state: this.state,
+      msg,
+      actor: entry.actor, // #549: the log's author
+      grid: this.grid,
+      gridBefore, // #757: the same snapshot the grid step judged
+    }),
+  );
 
   /* #1227's re-seat of the auction from the DEALT roster -- and #905's dealt-but-inactive delayed auction --
      are the reducer's on `SetupGame` now (#1340, `settleAuctionLifecycle`). */

@@ -158,7 +158,6 @@ import StockMarketRenderer, {
   type MarketGridResponse,
   /* Design note #1090: the fifth market movement, composed from the withhold step and the sale step so the
      Blood Price inherits every edge case those two already handle. */
-  projectBloodPriceMove,
 } from "./components/StockMarketRenderer";
 import { describeSoldOutRise, soldOutRises } from "./gameEngine/soldOutRise";
 // Design note #750: the instrument for the phantom $1500 -- a diff, not an annotation.
@@ -567,10 +566,11 @@ import {
   noticeDismissKey,
   type FleetLossNotice,
 } from "./utils/fleetLossNotice";
-import { dividendRefused, operatingCorporationId } from "./gameEngine/dividendGate";
+import { operatingCorporationId } from "./gameEngine/dividendGate";
 // Design note #1683 (Stage 10.1): the one `LayTile` authority the grid asks, and the one board geometry it is handed.
 import { layTileRefusal } from "./gameEngine/layTileAuthority";
-import { boardLayRefused } from "./gameEngine/replayProviders";
+import { sandboxReplayProviders } from "./gameEngine/replayProviders";
+import { layAuthorityContext, sandboxActionContext } from "./gameEngine/actionContext"; // #1690 (Stage 10.3)
 import { cheapestPurchasableTrain } from "./gameEngine/trainAvailability";
 import { pendingTrainDiscards } from "./gameEngine/trainDiscard"; // #1530
 import { emergencyFundingFor } from "./gameEngine/emergencyFunding"; // #1540
@@ -591,7 +591,7 @@ import type { GameplayExecuteMsg } from "./utils/sessionKey";
 import {
   stockTurnStage, // #1443
   applySandboxAction,
-  applySandboxMarketAction,
+  sandboxChartStepReport,
   applyPrivateRevenue,
   /* Design note #642: `beginOperatingRound` is no longer imported here. The
      shell used to call it when it saw `stock_round_just_ended`; the reducer
@@ -615,7 +615,6 @@ import {
   // towns pay but cannot end a route -- so the two are not interchangeable.
   sandboxRouteBreakdown,
   // Design note #1090: asked BEFORE the settle clears the seller's mark.
-  isCarcosanTransfer,
   SANDBOX_NOMINAL_TOKEN_COST,
   returnedTrainRefusal, // #1314
 } from "./gameEngine/sandboxSession";
@@ -787,6 +786,13 @@ import { isUpgradeDeadEnd } from "./utils/tileUpgrades"; // #1390
 /* Built once. `layTrackFocus` re-runs this filter for every candidate hex on the board, and rebuilding a
    276-entry list inside that loop would be the only expensive thing in the pass. */
 const ALL_TILE_PLACEMENTS = localCatalogPlacements();
+
+/** Design note #1690 (Stage 10.3, S10-4): THE PROVIDER SET THE SERVER'S ENGINE USES, built once. The dispatch
+ *  builds its reducer context from this through `sandboxActionContext` and its `LayTile` grid step through
+ *  `layAuthorityContext` -- the same builders `RoomEngine` calls -- so the shell holds no transcription of the
+ *  chart geometry, the par box, the label table or the lay geometry of its own. Pure lookups over static
+ *  board data; the scenario's opening chart (`initialMarket`) is computed and unused here. */
+const SHELL_PROVIDERS = sandboxReplayProviders();
 
 /** Design note #1145: how long a sent-but-unarrived placement may go on being drawn. An upper bound on a
  *  Firestore round trip, not a typical one -- past it, a refused or lost action must stop being pictured as
@@ -6604,7 +6610,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
            must judge the same instant, or the pair disagrees the way #766's two calls did.
            READ FROM `sandboxStateRef`, which the reducer writes SYNCHRONOUSLY -- the only thing in this file
            that is current inside an awaited dispatch, and the reason that ref exists (#537a). */
-        const phaseBeforeAction = derivePhase(sandboxStateRef.current);
+        /* #1690 (Stage 10.3): the phase this note fixed is still read from `sandboxStateRef` -- now as
+           `tileEraFor(stateBeforeAction)` inside `actionContext.ts`, on the state captured just below. */
         /* ==================================================================
             DESIGN NOTE 1279: THE LEGALITY CHECK READS THE BOARD IN EFFECT, AND ON A REBUILD THAT IS THE WRONG ONE
            ==================================================================
@@ -6641,20 +6648,22 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
            board and tray in effect (#1279) -- and the GEOMETRY is the only part still injected, because
            `filterSandboxPlacements` is the shell's (#273): `boardLayRefused` is the same function the server's
            providers hand the engine, so the two grids cannot be handed two geometries either. */
-        const layRefused = (q: number, r: number, tileId: number, orientation: number) =>
-          withRules(rulesBeforeAction, () =>
-            boardLayRefused(gridBeforeAction, q, r, tileId, orientation, eraForPhase(phaseBeforeAction, rulesBeforeAction)),
-          );
+        /* Design note #1690 (Stage 10.3, S10-4): and the injections themselves are no longer this file's. The
+           geometry closure that stood here (`boardLayRefused` over `gridBeforeAction` and
+           `eraForPhase(phaseBeforeAction, rulesBeforeAction)`) and the label table are built by
+           `layAuthorityContext` from `SHELL_PROVIDERS` -- the builder and the provider set the server's engine
+           uses -- on the same snapshot: `tileEraFor(stateBeforeAction)` IS `eraForPhase` of that state's phase and
+           variants. The reducer below receives the same `layRefused` through `sandboxActionContext`. */
         const layRefusedByAuthority = (): boolean =>
           stateBeforeAction !== null &&
           withRules(
             rulesBeforeAction,
             () =>
-              layTileRefusal(stateBeforeAction, msg as GameplayExecuteMsg, {
-                mapGrid: gridBeforeAction,
-                homeHexToAxial,
-                layRefused,
-              }) !== null,
+              layTileRefusal(
+                stateBeforeAction,
+                msg as GameplayExecuteMsg,
+                layAuthorityContext(SHELL_PROVIDERS, stateBeforeAction, gridBeforeAction),
+              ) !== null,
           );
 
         if ("LayTile" in msg) {
@@ -6751,60 +6760,73 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
            state because the game state needs the price it reports. Same
            contract as the waterfall's: this returns the figure rather than
            reaching into wallets, so one number is charged and logged. */
-        const marketResult = applySandboxMarketAction(sandboxMarketRef.current, gameplay, {
-          projectSale: (from, blocks) => projectShareSaleMove(from, blocks),
-          /* Design note #1090: the Blood Price's geometry and its legality, injected as a pair for the same
-             reason the sale's are -- `utils/` may not import `components/` (#273), and the chart must not
-             move for a train sale the mark does not cover (#748a/#774, twice learned). `before` is the state
-             the trade was proposed against, which still carries the seller's flag; the reducer clears it. */
-          projectBloodPrice: (from) => projectBloodPriceMove(from),
-          isCarcosanSale: (sellerId, modelType) =>
-            before ? isCarcosanTransfer(before, sellerId, modelType) : false,
-          /* Design note #291: the dividend decision moves the marker too.
-             Design note #908: BY AS MANY CELLS AS THE PAYOUT EARNED. The step count is computed from the
-             corporation's own revenue and its CURRENT price, read off `before` -- the board the payout was
-             declared against. Reading the price after the move would be measuring the multiple against the
-             cell the multiple just chose. */
-          projectDividend: (from, choice) => {
-            const declaring =
-              "DeclareDividends" in msg
-                ? before?.public_companies.find(
-                    (entry) => entry.company_id === msg.DeclareDividends.protocol_id,
-                  )
-                : undefined;
-            const payout = Number(declaring?.last_route_revenue ?? 0) || 0;
-            /* ==================================================================
-                DESIGN NOTE 988: THE CHOICE GOES IN, AND IT USED NOT TO
-               ==================================================================
-               THIS PASSED THE PAY-DERIVED COUNT TO WHICHEVER CHOICE ARRIVED, so a withhold under Dynamic
-               Stock Market moved by the multiple the PAYOUT would have earned -- none for a small run, two
-               for a large one. The readout twenty screens down already hard-coded one cell for a withhold
-               and said so in a comment, which is #891's exact failure: the bar promising a move the board
-               does not perform.
-               ONE ARGUMENT FIXES BOTH SIDES because `dividendStepsFor` is now the only place that knows. */
-            const steps = dividendStepsFor(
-              payout,
-              marketPriceForCompany(declaring?.company_id ?? -1),
-              resolveVariants(before?.variants),
-              choice,
-            );
-            return projectDividendCellMove(from, choice, steps);
-          },
-          /* Design note #748a: the SAME rule the reducer applies below, asked here because this atom runs
-             first. Without it a refused sale still walked the token down and the chart and the board parted
-             company for the rest of the game. `before` is the board the reducer will judge it against. */
-          /* Design note #774: the SAME refusal the reducer applies below, asked here because this atom runs
-             first. Without it the second copy of a forced withhold still stepped the token left, and two
-             browsers meant two steps -- the reported "two cells rather than one". */
-          dividendRefused: (companyId) => (before ? dividendRefused(before, companyId) : false),
-          saleRefused: (companyId, percentage) => {
-            const seller = options?.actor ?? viewerAddressRef.current;
-            if (!before || !seller) return false;
-            return (
-              shareSaleBlock({ state: before, seller, companyId, percentage }) !== null
-            );
-          },
-        });
+        /* ==================================================================
+            DESIGN NOTE 1690 (Stage 10.3, S10-4): ONE CONTEXT, BUILT BY THE SHARED COMPOSITION, FOR BOTH CALLS
+           ==================================================================
+           THE BOARD THE REDUCER IS HANDED -- `before` plus the chart and auction mirrors (#1211, #1340) -- and
+           the context it is handed, built ONCE by `sandboxActionContext` from `SHELL_PROVIDERS`: the builder and
+           the provider set `RoomEngine` uses for every server entry and every replay. What this file supplies is
+           only what differs: which board, which grids (`mapGridRef` after the lay step, #1380; the pre-lay
+           snapshot for the lay geometry, #766), and the author (#549). The ~80 lines of inline closures that
+           stood below (the ladder's projections, the dividend's step count, the par box, the message's par, the
+           chart resolvers off the refs) were a second transcription of `replayProviders.ts` -- the #1194 shape.
+
+           THE MARKET SENTENCE ASKS THE REDUCER'S OWN CHART STEP. The report call that stood here had its own
+           context: `shareSaleBlock` where the reducer asks `stockSaleRefusal`, no authoritative hold (#1613), no
+           double-certificate count (S9-13), and a Blood Price asked of the mark alone -- so it could narrate a
+           move the reducer then refused, or quote a destination the token did not reach.
+           `sandboxChartStepReport` is the reducer's chart step itself (same gates, same auction step, same
+           context builder), run on the same board and the same context the reducer receives just below. The
+           report is still pure and still read only for its sentence (#1211); the mirrors are still written
+           from the reducer's output. */
+        const handedBoard: GameStateResponse | null = before
+          ? {
+              ...before,
+              market_positions: sandboxMarketRef.current,
+              // #1340: the auction atom rides with the board.
+              waterfall: sandboxWaterfallRef.current,
+            }
+          : null;
+        const reducerContext =
+          handedBoard === null
+            ? undefined
+            : sandboxActionContext(SHELL_PROVIDERS, {
+                state: handedBoard,
+                msg: gameplay,
+                // Design note #549: the log's author, so a replayed purchase is credited to the player who made
+                // it rather than to whoever this browser's cursor happens to point at.
+                actor: options?.actor,
+                /* ==================================================================
+                    DESIGN NOTE 1380: THE REDUCER PRICES THE BOARD IT IS ABOUT TO ACT ON
+                   ==================================================================
+                   REPORTED: "used private power on F16 and their station token disappeared", and the same
+                   tab's divergence banner -- "the server and this tab have not agreed on the board at any point
+                   this session (first checked at action 193) ... fields: public_companies". Replayed against
+                   JUNO-Z6C's log: at 193 the client had priced NNH's two routes at $40 + $40 where the server
+                   had $100 + $90; at 304 the server held NNH's token on F16 (treasury $125 -> $25) and the client
+                   had refused the placement. One cause for both.
+                   THIS PASSED `mapGrid` -- THE REACT STATE -- AND AN ERA DERIVED FROM THE COMMITTED PHASE. Both
+                   are one commit behind, and during a synchronous burst -- a rebuild on reload, the replay after
+                   an Undo, a settle-point burst arriving in one frame -- they are the WHOLE burst behind: every
+                   route in the burst was priced on the grid as it stood before the burst, in the era the game was
+                   in before it, and a token placed on a tile laid earlier in the same burst found no tile there.
+                   #1231 named this shape for the turn gate ("a ref reset is half a reset"); the lay gate three
+                   screens up already reads `gridBeforeAction` and `phaseBeforeAction` from the refs for the
+                   same reason. The reducer's own context did not, and it is the context that prices routes and
+                   judges tokens.
+                   SO THE REFS. `mapGridRef` is written synchronously by the lay narration above, so the grid the
+                   reducer sees is the grid including every tile laid before this message; the era is derived
+                   from the state this message is about to be applied to, which is what the server's engine
+                   does (`eraFor(this.state)`, `tileEraFor`).
+                   #1690 (Stage 10.3): both are now supplied through `sandboxActionContext` -- `grid` below, and the
+                   era as `tileEraFor` of the handed board, which is `sandboxStateRef.current` plus the mirrors. */
+                grid: mapGridRef.current,
+                gridBefore: gridBeforeAction, // #757/#766: the lay geometry's snapshot
+              });
+        const marketResult = {
+          moved:
+            handedBoard === null ? null : sandboxChartStepReport(handedBoard, gameplay, reducerContext),
+        };
         /* ==================================================================
             DESIGN NOTE 1211: THE CHART'S POSITIONS ARE THE REDUCER'S NOW
            ==================================================================
@@ -6888,104 +6910,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
           /* #1211: the chart goes in WITH the board. From here the reducer performs the whole two-atom
              sequence itself (#1197) -- advance the chart, price the trade, settle, reconcile par marks,
              commit any sold-out rise -- and every one of those was a step this file had to remember. */
-          after = {
-            ...after,
-            market_positions: sandboxMarketRef.current,
-            // #1340: the auction atom rides with the board.
-            waterfall: sandboxWaterfallRef.current,
-          };
+          /* #1211: the chart goes in WITH the board (#1340: and the auction atom) -- `handedBoard`, above. From
+             here the reducer performs the whole two-atom sequence itself (#1197). */
+          after = handedBoard ?? after;
           handedToReducer = after;
-          after = applySandboxAction(after, gameplay, {
-            // Design note #549: the log's author, so a replayed purchase is
-            // credited to the player who made it rather than to whoever this
-            // browser's cursor happens to point at.
-            actor: options?.actor,
-            /* #1197: the ladder's SHAPE, handed in once. The reducer holds the positions; this is geometry,
-               static and identical in every browser -- and `dividendRefused`/`saleRefused` are no longer
-               accepted here at all, because the reducer asks them of the state itself. */
-            marketContext: {
-              projectSale: (from, blocks) => projectShareSaleMove(from, blocks),
-              projectBloodPrice: (from) => projectBloodPriceMove(from),
-              projectDividend: (from, choice) => {
-                const declaring =
-                  "DeclareDividends" in msg
-                    ? before?.public_companies.find(
-                        (entry) => entry.company_id === msg.DeclareDividends.protocol_id,
-                      )
-                    : undefined;
-                const payout = Number(declaring?.last_route_revenue ?? 0) || 0;
-                const steps = dividendStepsFor(
-                  payout,
-                  marketPriceForCompany(declaring?.company_id ?? -1),
-                  resolveVariants(before?.variants),
-                  choice,
-                );
-                return projectDividendCellMove(from, choice, steps);
-              },
-              isCarcosanSale: (sellerId, modelType) =>
-                before ? isCarcosanTransfer(before, sellerId, modelType) : false,
-            },
-            // #1193/#415: so a corporation parred BY this action has its token before the next queue is built.
-            parCellFor: parBoxCellFor,
-            /* ==================================================================
-                DESIGN NOTE 1380: THE REDUCER PRICES THE BOARD IT IS ABOUT TO ACT ON
-               ==================================================================
-               REPORTED: "used private power on F16 and their station token disappeared", and the same
-               tab's divergence banner -- "the server and this tab have not agreed on the board at any point
-               this session (first checked at action 193) ... fields: public_companies". Replayed against
-               JUNO-Z6C's log: at 193 the client had priced NNH's two routes at $40 + $40 where the server
-               had $100 + $90; at 304 the server held NNH's token on F16 (treasury $125 -> $25) and the client
-               had refused the placement. One cause for both.
-               THIS PASSED `mapGrid` -- THE REACT STATE -- AND AN ERA DERIVED FROM THE COMMITTED PHASE. Both
-               are one commit behind, and during a synchronous burst -- a rebuild on reload, the replay after
-               an Undo, a settle-point burst arriving in one frame -- they are the WHOLE burst behind: every
-               route in the burst was priced on the grid as it stood before the burst, in the era the game was
-               in before it, and a token placed on a tile laid earlier in the same burst found no tile there.
-               #1231 named this shape for the turn gate ("a ref reset is half a reset"); the lay gate three
-               screens up already reads `gridBeforeAction` and `phaseBeforeAction` from the refs for the
-               same reason. The reducer's own context did not, and it is the context that prices routes and
-               judges tokens.
-               SO THE REFS. `mapGridRef` is written synchronously by the lay narration above, so the grid the
-               reducer sees is the grid including every tile laid before this message; the era is derived
-               from the state this message is about to be applied to, which is what the server's engine
-               does (`eraFor(this.state)`, `tileEraFor`). */
-            mapGrid: mapGridRef.current,
-            era: tileEraFor(sandboxStateRef.current),
-            /* #1197: `sharePrice` is GONE. The reducer prices the trade itself now, so the wallet and the
-               chart cannot be handed two different figures for one trade -- which was #273's whole point,
-               previously guaranteed by this file passing the same number to both. */
-            /* Read the market ref the block above has just refreshed, so the queue reflects a move this dispatch caused.
-               See docs/ai_architecture/stock_market.md - App.tsx #411 */
-            marketPriceFor: marketPriceForCompany,
-            /* Design note #712: the zone rules travel with the price, so the reducer refuses an illegal
-               purchase on every client rather than trusting the one that drew the button. */
-            marketZoneFor: (companyId: number) =>
-              marketZoneForPrice(marketPriceForCompany(companyId)),
-            /* Design note #1177: the REF, like `marketPriceFor` above it. This read `marketGrid`, a memo over
-               committed state, so within one drain the reducer priced a trade from a fresh chart and judged
-               the certificate limit against a stale one -- and the staleness varied by client. */
-            marketPricesByCompany: marketPricesFromRef(),
-            zoneForPrice: marketZoneForPrice,
-            // Design note #647: the token's position -- column and arrival.
-            marketMarkFor: marketMarkForCompany,
-            /* Design note #746a: the chart's own UP step, so the reducer can raise a sold-out corporation
-               before it sorts the operating queue on the prices that raise produced. */
-            projectRise: (from) => projectRiseMove(from),
-            /* The par comes from the MESSAGE's own protocol_id and par_value, not from any ambient ladder selection (#579).
-               See docs/ai_architecture/stock_market.md - App.tsx #398 */
-            parValue: (() => {
-              if (!("BuyStock" in msg)) return undefined;
-              const fromMsg = Number(msg.BuyStock.par_value ?? NaN);
-              return Number.isFinite(fromMsg) && fromMsg > 0 ? fromMsg : undefined;
-            })(),
-            /* Design note #363: the board's own label -> (q, r) table, so a
-               corporation that floats gets its home token on the hex the
-               map actually draws rather than on a coordinate this reducer
-               guessed. */
-            homeHexToAxial,
-            // Design note #757: the same refusal the tile grid applies, so the fee and the cursor agree.
-            layRefused,
-          });
+          /* #1690: the context built above by the shared composition -- the same object the market sentence
+             was asked with. #1380's note (above, at `grid:`) explains why its grid and era are the refs'. */
+          after = applySandboxAction(after, gameplay, reducerContext);
 
           /* ==================================================================
               DESIGN NOTE 1211: THE MIRROR, WRITTEN FROM THE BOARD

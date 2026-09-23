@@ -364,14 +364,18 @@ describe("a replayed tile lay is judged against the reducer's phase", () => {
        legitimate upgrades" -- gave the GRID a ref, and left the PHASE on state. One rule, one of its two
        inputs, in the function whose own note names the fault.
        SNAPSHOTTED BESIDE THE GRID per #766 ("a snapshot, not a reorder"), so both halves judge one instant. */
-    expect(APP).toContain("const phaseBeforeAction = derivePhase(sandboxStateRef.current);");
+    /* Stage 10.3 (#1690): the phase is no longer derived in the shell. The lay geometry's era is
+       `tileEraFor(state)` inside `layGeometryFor` (`actionContext.ts`) -- `eraForPhase` of that state's own phase
+       and variants -- and the state it is asked of is the SNAPSHOT, read off the ref. */
+    expect(APP).toContain("const stateBeforeAction = sandboxStateRef.current;");
+    expect(readStripped("gameEngine/actionContext.ts")).toContain("const era = tileEraFor(state);");
     // #1312: through `eraForPhase` (the table's variants beside the phase), still off the snapshot.
     // Design note #1279: the variants are read ONCE into `rulesBeforeAction`, which also scopes the board and
     // tray for the check (`withRules`) -- same snapshot, one read, both consumers.
     expect(APP).toContain("const rulesBeforeAction = resolveVariants(sandboxStateRef.current?.variants);");
-    // Stage 10.1 (#1683): the era rides into `boardLayRefused` as its last argument, inside the same `withRules`.
-    expect(APP).toContain("boardLayRefused(gridBeforeAction, q, r, tileId, orientation, eraForPhase(phaseBeforeAction, rulesBeforeAction))");
-    expect(APP).toContain("withRules(rulesBeforeAction, () =>\n            boardLayRefused(");
+    // Stage 10.3 (#1690): the shared builder, on the snapshot, inside the same `withRules`.
+    expect(APP).toContain("layAuthorityContext(SHELL_PROVIDERS, stateBeforeAction, gridBeforeAction)");
+    expect(APP).toContain("withRules(\n            rulesBeforeAction,\n            () =>\n              layTileRefusal(");
   });
 
   it("no longer asks render state for it", () => {
@@ -381,7 +385,7 @@ describe("a replayed tile lay is judged against the reducer's phase", () => {
     // Stage 10.1 (#1683): the predicate is one `boardLayRefused` call; the region ends at the authority verdict.
     const predicate = sliceBetween(APP, "const gridBeforeAction = mapGridRef.current;", "const layRefusedByAuthority");
     expect(predicate).not.toContain("currentPhase");
-    expect(predicate).toContain("phaseBeforeAction");
+    expect(predicate).toContain("sandboxStateRef.current"); // #1690: the snapshot the builder derives the era from
   });
 
   it("is a real difference, not a theoretical one", () => {

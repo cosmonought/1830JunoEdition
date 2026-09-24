@@ -1,6 +1,8 @@
 // frontend/src/gameEngine/gentleRustGrace.ts
 //
-// Which Operating Turn a Gentle Rust reprieve is owed, and which reprieves the current turn may spend.
+// Which Operating Turn a Gentle Rust reprieve is owed, and which reprieves the current turn may spend (GR-1,
+// DN 1699); and which owned copies no reprieve covers, the only ones a sale or a Diesel trade-in may move (GR-2,
+// DN 1700, at the end of this file).
 //
 // ==================================================================
 //  DESIGN NOTE 1699 (GR-1): THE GRACE TURN BEGINS AFTER THE DOOM
@@ -109,4 +111,94 @@ export function graceTurnReprieves(company: Reprieved): string[] {
     if (at >= 0) owed.splice(at, 1);
   }
   return owed;
+}
+
+// ==================================================================
+//  DESIGN NOTE 1700 (GR-2): A REPRIEVED TRAIN STAYS WHERE THE RUST FOUND IT
+// ==================================================================
+//
+// AUTHORITY: `VARIANT_CERT_GENTLE_RUST_AUDIT_2026-09-23.md` rev 2, owner rulings SR-7 (a)-(c) -- OD-GR-1 and
+// OD-GR-2 -- clauses GR-S3, GR-S12, GR-S13, GR-S24.
+//   OD-GR-1: a pending-rust / reprieved train MAY NOT BE SOLD OR OTHERWISE TRANSFERRED to another corporation.
+//            Its reprieve belongs to the corporation that owned it at the rust event; it stays there through its
+//            qualifying grace turn and is then removed. The mark never follows a train to a buyer.
+//   OD-GR-2: a reprieved train MAY NOT BE A DIESEL TRADE-IN -- neither at the $800 exchange nor at the Level
+//            Playing Field's $750. It gives no credit and never reaches the Bank Pool through an exchange.
+// Both are the one principle of SR-7 (c): a reprieved train may not escape or monetize its destruction by
+// changing hands. Before GR-2 both transactions were open (probes P6, P9): the buyer received an unmarked,
+// permanent train, the seller kept an orphan mark, and a traded-in doomed 4 entered the pool and was bought
+// back in phase D -- the variant's delay turned into an exemption.
+//
+// THE PROHIBITION IS TRANSACTION-SPECIFIC, NOT A CHANGE OF STATUS. A reprieved train is still owned, still in
+// `owned_trains`, still routeable on its grace turn and still keeps its corporation from being trainless
+// (DN 1699 above). GR-2 does not make it inactive, hide it, or take it out of any other reader; it answers one
+// narrow question for the two authorities that move a train OUT of a corporation by a player's choice --
+// `trainSaleRefusal` (#1592: proposal, answer and settlement, and through it the Blood Price's `isCarcosanSale`)
+// and `dieselExchangeRefusal` / `exchangeableTrains` (#1303: the reducer's gate and arm, the REFUSED line, the
+// panel). Those two ask it here, so the sale and the exchange cannot disagree about which copy is free.
+//
+// IDENTICAL MODELS ARE A MULTISET, NOT A MODEL-LEVEL FREEZE. The marks are models, not train identities (#1032),
+// and a corporation can own several copies of one model. "It has a reprieved 4" does not mean "no 4 may move":
+//     owned ["4","4"], marks ["4"]  -> one reprieved 4, one ordinary 4 -> exactly ONE 4 may leave;
+//     owned ["4","4","4"], marks ["4","4"] -> exactly one;   owned ["4"], marks ["4"] -> none.
+// So the question is a count -- owned copies of the model MINUS marked copies of it -- never
+// `pending_rust_trains.includes(model)`, which would freeze every ordinary copy beside a reprieved one.
+//
+// THE TRANSACTION TAKES AN ORDINARY COPY AND LEAVES EVERY MARK AT HOME. Neither arm needs changing: each takes
+// one copy of the model out of `owned_trains` and touches no mark, and with no identity that is exactly "an
+// ordinary copy left". Owned 2 / marked 1 becomes owned 1 / marked 1 -- the copy that stayed is the reprieved
+// one, still at its corporation, still owed its grace turn; the buyer (or the Bank Pool) receives an unmarked
+// train because an unmarked train is what left. The guard is what keeps that true: a transaction is admitted
+// only while owned > marked, so after it owned >= marked still holds and the sub-multiset invariant
+//     pending_rust_doomed_this_turn <= pending_rust_trains <= owned_trains
+// survives every accepted sale and exchange, and a refused one returns the board unchanged.
+//
+// WHY `pending_rust_doomed_this_turn` IS NOT SUBTRACTED. It is a SUBSET of `pending_rust_trains` (DN 1699): the
+// marks written in the corporation's own turn, recorded a second time only so the grace clock knows which turn
+// they are owed. A reprieved train is reprieved whichever turn it is owed. Subtracting both lists would count a
+// self-doomed copy twice and freeze an ordinary copy beside it (owned ["4","4"], marks ["4"], doomed-this-turn
+// ["4"] has ONE free 4, not none).
+//
+// WHY THE FIRST-D ORDINARY TRADE-IN STAYS LEGAL. Legality is judged on the board BEFORE the purchase. A 4 traded
+// in for the very first Diesel is an ordinary, unmarked train on that board: the rust it would suffer has not
+// happened, because the Diesel that causes it has not yet been bought. The exchange arm takes it out before the
+// phase turns (#1303) and the rust sweep that follows marks only the 4s still owned. Nothing here looks ahead to
+// the phase change; a question asked of marks can only see rusts that have already occurred.
+//
+// NOT HERE: the excess discard (a reprieved train occupies no slot and is never a choice -- `countableTrainsOf`,
+// SR-8, unchanged), and the Yellow Sign's cheapest-train removal (OD-GR-3, deferred to Unpredictable Revenue
+// certification). This is not a general "may this train move" rule, and neither of those is decided by it.
+
+/** A fleet and its marks, as `PublicCompanyState` carries them (either may be absent, #232). */
+type Fleet = { owned_trains?: readonly string[] | null; pending_rust_trains?: readonly string[] | null };
+
+const copiesIn = (list: readonly string[] | null | undefined, model: string): number =>
+  (list ?? []).reduce((count, entry) => (entry === model ? count + 1 : count), 0);
+
+/** How many copies of `model` the corporation owns that NO Gentle Rust mark covers: owned copies minus marked
+ *  copies, by multiplicity, never below zero (a surplus mark cannot manufacture a free train). These are the
+ *  copies a sale (OD-GR-1) or a Diesel trade-in (OD-GR-2) may move. `pending_rust_doomed_this_turn` is already
+ *  inside the marks and is not subtracted again (DN 1700). */
+export function unreprievedCopiesOf(company: Fleet, model: string): number {
+  return Math.max(0, copiesIn(company.owned_trains, model) - copiesIn(company.pending_rust_trains, model));
+}
+
+/** Whether the corporation owns `model` ONLY as reprieved copies: at least one copy, none of them free. The
+ *  case a transaction authority refuses with the Gentle Rust sentence rather than "does not own". */
+export function ownsOnlyReprievedCopiesOf(company: Fleet, model: string): boolean {
+  return copiesIn(company.owned_trains, model) > 0 && unreprievedCopiesOf(company, model) === 0;
+}
+
+/** The fleet with every reprieved copy taken out: roster order, one entry per train. Each mark spends one
+ *  matching train, earliest first -- the order the chips assign "Final Run" in (`TrainBadges`, #1004) -- so the
+ *  copies left are the ones the chips show as ordinary. `owned ["4","4","5"]`, marks `["4"]` -> `["4","5"]`. */
+export function unreprievedTrains(company: Fleet): string[] {
+  const marks = [...(company.pending_rust_trains ?? [])];
+  const free: string[] = [];
+  for (const model of company.owned_trains ?? []) {
+    const at = marks.indexOf(model);
+    if (at >= 0) marks.splice(at, 1);
+    else free.push(model);
+  }
+  return free;
 }

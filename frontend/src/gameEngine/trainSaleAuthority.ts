@@ -41,6 +41,9 @@ import { TRAIN_PURCHASE_SUB_PHASE } from "./trainPurchaseGate";
 import { emergencyFundingFor, fundedTradeRefusal } from "./emergencyFunding";
 import { treasuryOf } from "./cashLedger";
 import { anyOfferStands, trainSettlementMatches } from "./pendingOfferHold";
+import { ownsOnlyReprievedCopiesOf } from "./gentleRustGrace";
+
+const copiesOwned = (fleet: readonly string[], model: string) => fleet.filter((entry) => entry === model).length;
 
 /** The operating corporation, read without throwing on a fixture that carries no queue (#232: absent is "not
  *  said"; a board with no queue has nobody operating, and the refusal says so rather than the engine falling
@@ -112,6 +115,18 @@ export function trainSaleRefusal(
   if (!seller.is_floated) return `${seller.ticker} has not floated and has no train to sell.`;
   if (seller.owned_trains == null || !seller.owned_trains.includes(intent.model)) {
     return `${seller.ticker} does not own a ${intent.model}-train to sell.`;
+  }
+  /* DESIGN NOTE 1700 (GR-2, OD-GR-1): A REPRIEVED TRAIN IS NOT FOR SALE. The seller must hold a copy of the model
+     that no Gentle Rust mark covers -- owned copies minus marked copies, by multiplicity (`gentleRustGrace.ts`),
+     so an ordinary 4 beside a reprieved 4 is still saleable and the sale takes the ordinary one, leaving the mark
+     and its train at home. Asked here, beside "owns the train", so all three moments (proposal, answer,
+     settlement) and the Blood Price's `isCarcosanSale` see it, and a refused sale moves nothing. Before the
+     settlement arm touches money, fleets or the chart, and without looking ahead: only a rust that has already
+     happened has written a mark. */
+  if (ownsOnlyReprievedCopiesOf(seller, intent.model)) {
+    return copiesOwned(seller.owned_trains, intent.model) > 1
+      ? `Every ${intent.model}-train ${seller.ticker} holds is on its Gentle Rust final run — none can be sold to another corporation.`
+      : `${seller.ticker}'s ${intent.model}-train is on its Gentle Rust final run — it cannot be sold to another corporation.`;
   }
 
   /* ---- 7. A whole price of at least $1 (6.6) -------------------------------------------------- */

@@ -22,6 +22,13 @@ closed the certification (evidence: certification doc §P). OD-GR-1 and OD-GR-2 
 Part D (D-34, D-35); OD-GR-3 is DEFERRED to Unpredictable Revenue certification (D-36), so **combined Gentle Rust +
 Unpredictable Revenue is NOT certified.** Backlog Part C U-41 (a standard-game statistics gap) remains open and outside
 this certification. The status lines of rev 3–5 below are kept as written.
+*(rev 7, 2026-09-24 — documentation only)* **OD-GR-3 is DECIDED** by the owner in the Unpredictable Revenue spec
+review (backlog **D-36**; `VARIANT_CERT_UNPREDICTABLE_REVENUE_AUDIT_2026-09-24.md` §7.3): the Mark judges the
+corporation's fleet after the Run → Dividends settlement, where a Final Run train has already been destroyed, so a
+reprieved / Final Run train is **never** a Mark candidate; OD-GR-3b / 3c are moot; no exception lets the Mark take,
+monetize or replace a Gentle Rust destruction. **GR-S26 is closed as an owner-decided interaction**, implemented and
+certified with Unpredictable Revenue (UR-3, UR-7). Gentle Rust semantics and the standalone certification are
+unchanged; **combined Gentle Rust + Unpredictable Revenue is still NOT certified.**
 
 **Revision history.**
 
@@ -33,6 +40,7 @@ this certification. The status lines of rev 3–5 below are kept as written.
 | 4 | 2026-09-24 | **status only (GR-4).** GR-3 owner gate passed, committed `4f4844ad87e3586367f114edbfe4978deb6c181e`. GR-4 (certification matrix, invariants A–H, P1–P9 as durable tests, constructed legal game through the first 4 / 6 / D, corpus reconciliation, U-9 disposition — #1703) complete pending owner gate; evidence moved to `VARIANT_CERT_GENTLE_RUST_CERTIFICATION_2026-09-24.md`. IG-A…IG-F marked RESOLVED / CERTIFIED EVIDENCE (history preserved). GR-5 pending. No specification clause changed. **Gentle Rust is still NOT certified (GR-5 owns the 8 → 9 boundary and closure).** |
 | 5 | 2026-09-24 | **owner ruling U-9 (statistics only).** GR-4's first classification of U-9 as B (mark-time counting, documented) is **withdrawn**: it was not supported by the statistics authority (`gameHistory.ts` #1414, #1422). **Owner ruled destruction-time accounting** — a Gentle Rust train counts as rusted / lost (fleet ledger, Rust Belt, Gravedigger) only when its Final Run actually removes it; a train still owned at game end is kept. Implemented in derived history only (#1704; certification doc §L, r2). No gameplay clause changed; no version change. GR-4 again ready for the owner gate after the correction. |
 | 6 | 2026-09-24 | **GR-5 — certification closure.** GR-4 owner-gated and committed (`c202621`). `RULES_ENGINE_VERSION` **8 → 9** (#1705), changelog row 9 naming exactly the four replay semantics of §9 (GR-1 self-trigger grace turn; GR-2 sale refusal; GR-2 Diesel trade-in refusal; DT-1 auto-skip) with GR-3, GR-4 and the U-9 statistics correction kept outside the rules semantics; OD-GR-1 / OD-GR-2 recorded as backlog Part D decisions D-34 / D-35 and OD-GR-3 as D-36 (deferred to UR) — §11 gate item 1; §11 gate items 1–7 met, item 8 (full Jest at the certification commit) is the owner's gate. No specification clause changed. **Standalone Gentle Rust CERTIFIED at v9; Gentle Rust + Unpredictable Revenue NOT certified (OD-GR-3).** |
+| 7 | 2026-09-24 | **documentation only — OD-GR-3 decided** (owner, in the Unpredictable Revenue spec review; backlog D-36): 3a = A2, "never" — the Mark judges the post-settlement fleet, so a Final Run train is never a candidate; 3b / 3c moot. GR-S26 closed as an owner-decided interaction (certified with UR). No clause of standalone Gentle Rust changed; no code, test or version change. |
 
 ---
 
@@ -187,7 +195,7 @@ These are separate predicates, and this document never says a reprieved train "d
 | **GR-S24 Multiset** | n copies of a doomed model → n marks; a repeated application of the same tier never re-marks a marked copy; expiry removes exactly one train per mark; an unmarked same-model train is never removed. Invariant: `pending_rust_trains` ⊆ `owned_trains` (multiset), after every train-moving arm. | CONFIRMED (#1032) + DERIVED | CORRECT for marking/expiry (P8); invariant broken today only by the sale and trade-in holes *(rev 4: RESOLVED — GR-2; invariant CERTIFIED on every board → certification doc §H)* |
 | **GR-S25 Coexisting trigger groups** | Several rust-trigger groups (e.g. 2s by a 4, then 3s by a 6) coexist until the corporation's qualifying grace turn and are destroyed together at its destruction point. | DERIVED | CORRECT (P8) |
 | **F. Cross-variant, narration, presentation, determinism** | | | |
-| **GR-S26 Yellow Sign** | What happens when the Yellow Sign's cheapest-train removal selects a reprieved train. Standalone Gentle Rust does not need the answer; **combined Gentle Rust + Unpredictable Revenue is not fully certified until it is settled.** | **DEFERRED — OD-GR-3 → UR certification** | not probed |
+| **GR-S26 Yellow Sign** | What happens when the Yellow Sign's cheapest-train removal selects a reprieved train. Standalone Gentle Rust does not need the answer; **combined Gentle Rust + Unpredictable Revenue is not fully certified until it is settled.** | **DEFERRED — OD-GR-3 → UR certification** *(rev 7: **OWNER-DECIDED** 2026-09-24 — never; D-36; SR-9)* | not probed |
 | **GR-S27 Narration** | Rust modal / flourish at destruction, not marking; Activity Log records the marking; no special Gentle Rust modal line; an expiry is never narrated as a limit discard. | CONFIRMED (#1002, #1003, #896, #1099) | CORRECT for purchases and expiry; **WRONG** for a Diesel trade-in under Gentle Rust (narrated "discarded to meet the new limit", limit notice — P9n) *(rev 4: RESOLVED — GR-3 U-6; CERTIFIED EVIDENCE → certification doc §C)* |
 | **GR-S28 Presentation** | "Final Run: [type]-trains" badge; chip keeps warning and final-run animation; "(Gently Rusting: N-trains)" beside the limit; countdown labels without pulse; copy distinguishes limit exemption from ownership. | CONFIRMED (#1004, #1033, #1034, animations ruling, SR-1) | labels CORRECT; timing detail/tooltip copy WRONG (U-1…U-3) *(rev 4: RESOLVED — GR-3; certification doc §K)* |
 | **GR-S29 Determinism** | Reprieve timing is a function of logged messages and the reducer cursor; no randomness, no client state. | CONFIRMED (#902) / DERIVED | CORRECT |
@@ -313,6 +321,13 @@ obligation is computed on countable trains only. The corporation owns the train 
 Current authority refuses a `DiscardTrain` of a reprieved train (P7) — **conforming**.
 
 ### SR-9 · OD-GR-3 — DEFERRED to Unpredictable Revenue certification
+
+**Rev 7 (2026-09-24): DECIDED by the owner in the Unpredictable Revenue spec review — 3a = A2, "never".** The Mark
+judges the corporation's fleet after the Run → Dividends settlement; Gentle Rust's Final Run destruction happens at
+that settlement, before the Mark chooses, so a reprieved / Final Run train is never a Mark candidate. OD-GR-3b and
+OD-GR-3c are moot, not deferred; no exception lets the Mark monetize, take or replace a Gentle Rust destruction; the
+UR audit's UR-F5 / UR-F6 are bugs against this rule (fixed in UR-3), not evidence for changing Gentle Rust. Backlog
+D-36; `VARIANT_CERT_UNPREDICTABLE_REVENUE_AUDIT_2026-09-24.md` §7.3. The text below is the deferral as recorded.
 
 **Question.** What happens when the Yellow Sign's cheapest-train removal (`yellowSign.ts:141`, "the cheapest the
 corporation holds, by depot price", with a `markPayout`) selects a train already under Gentle Rust reprieve?

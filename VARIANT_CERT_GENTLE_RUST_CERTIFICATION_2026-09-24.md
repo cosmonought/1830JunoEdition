@@ -22,6 +22,13 @@ recorded the closure — §P. OD-GR-1 / OD-GR-2 DECIDED (backlog D-34 / D-35); O
 certification (D-36), so **combined Gentle Rust + Unpredictable Revenue remains NOT certified.** Sections A–O below are the
 GR-4 record and are kept as written (the "NOT yet certified" statements in them are GR-4's, superseded by §P).
 
+**r4 (2026-09-24, documentation only):** OD-GR-3 is **DECIDED** by the owner (backlog D-36;
+`VARIANT_CERT_UNPREDICTABLE_REVENUE_AUDIT_2026-09-24.md` §7.3): the Mark judges the post-settlement fleet, so a Final
+Run train is never a Mark candidate; 3b / 3c moot. GR-S26 is closed as an owner-decided interaction whose evidence
+belongs to Unpredictable Revenue certification (UR-3, UR-7), not to this document; the standalone certification and its
+count (29 CERTIFIED, GR-S26 outside) are unchanged. Combined Gentle Rust + Unpredictable Revenue remains **NOT
+certified.**
+
 **GR-4 verdict (r2): READY FOR OWNER GATE / READY FOR GR-5.** Every standalone normative clause except GR-S26 is
 CERTIFIED by behavioural evidence; GR-S26 is DEFERRED BY SPEC. **Gentle Rust is NOT yet certified**: GR-5 owns the
 deliberate `RULES_ENGINE_VERSION` 8 → 9 boundary and final closure. Combined Gentle Rust + Unpredictable Revenue stays
@@ -84,7 +91,7 @@ authority helper, **S** source scan (secondary only). "Game" = `utils/gentleRust
 | **GR-S23** | ordinary forced purchase afterwards | CONFIRMED SR-3 | GR-1 T7; Cert B (End Turn refused with the ordinary sentence; `EmergencyBuyHardware` executes with the president's money; then End Turn accepted); Game (no route ⇒ ordinary prerequisite fails ⇒ not owed) | no Gentle Rust purchase rule | **Cert B control: standard-rust trainlessness gives the identical obligation, sentence and emergency train** | CERTIFIED |
 | **GR-S24** | multiset; doomed ⊆ marks ⊆ owned after every arm | CONFIRMED #1032 | Game G5 (all 91 boards + final); GR-2 (every accepted movement); Cert multiset / discard / arms; GR-1 T9 | §H | — | CERTIFIED |
 | **GR-S25** | coexisting trigger groups | DERIVED | GR-1 T10; **Game G3 (in play: PRR's self-doomed 2 from the first 4 + a rival-doomed 3 from the first 6, one turn, destroyed together)** | §8 below | — | CERTIFIED |
-| **GR-S26** | Yellow Sign × reprieve | **DEFERRED — OD-GR-3** | — | → Unpredictable Revenue certification | — | **DEFERRED BY SPEC** |
+| **GR-S26** | Yellow Sign × reprieve | **DEFERRED — OD-GR-3** | — | → Unpredictable Revenue certification | — | **DEFERRED BY SPEC** *(r4: owner-decided 2026-09-24 — D-36; certified with UR)* |
 | **GR-S27** | narration at destruction; log at marking; no limit mislabel | CONFIRMED #1002/#1003/#896/#1099 | GR-1 T1/T3/T10 (`describeReprieveExpiries`: rusted, never discarded); GR-3 UI14–UI17 (U-6: trade-in no longer a limit discard); `gentleRustLimit.test.ts` "still says a rust happened"; `batch28`/`batch37` (S: modal queues) | narrator authorities behaviourally; modal wiring S (UI clause) | GR-3 UI14 (standard) | CERTIFIED |
 | **GR-S28** | presentation | CONFIRMED #1004/#1033/#1034 | GR-3 UI1–UI3 (timing from the board), U-5, U-11 (sale/exchange greying from the authorities), R: `components/gentleRustPresentation.test.tsx` | rendered / shared-authority | GR-3 "answers nothing for a standard game" | CERTIFIED |
 | **GR-S29** | determinism | CONFIRMED #902 | GR-1 T12; **Game G7** (log replayed twice: every intermediate digest equal; an independent room writes the identical log); GR-2 S7 replay | §G.4 | — | CERTIFIED |
@@ -108,6 +115,10 @@ Game G7); GR-S30 for the first 6 and first D (→ Game G6).
 arms (`applyYellowSignOutcome` fog / Mark / gift, `sandboxSession.ts:6472–6620`) are category C in §H. Standalone Gentle
 Rust certification proceeds with this explicit deferment; **Gentle Rust + Unpredictable Revenue remains uncertified**
 until UR certification closes OD-GR-3.
+
+*(r4, 2026-09-24)* **OWNER-DECIDED** — OD-GR-3 = A2, "never" (backlog D-36): the Mark judges the fleet after the
+Run → Dividends settlement, so a Final Run train is never a Mark candidate. The interaction's evidence is Unpredictable
+Revenue certification's (UR-3 fixes UR-F5 / UR-F6; UR-7's constructed game G1, milestone M3), not this document's.
 
 ## E. Invariants A–H (§11)
 

@@ -13,7 +13,8 @@
 //
 // PROVENANCE OF THE STARTING BOARD (every nontrivial fact, and why it is reachable by legal play):
 //   * Rules: `variants` = `resolveVariants({ gentleRust: true })` (standard 1830 otherwise); pinned to the engine's
-//     `RULES_ENGINE_VERSION` (8), so it replays under `SERVER_REPLAY_POLICY` -- no legacy adapter is involved.
+//     `RULES_ENGINE_VERSION` (8 when GR-4 wrote this; 9 since the GR-5 closure, #1705 -- the version standalone Gentle
+//     Rust is certified at), so it replays under `SERVER_REPLAY_POLICY` -- no legacy adapter is involved.
 //   * Cursor: Operating Round 3.1 of a two-round set (phase 3 sets are two rounds), NYC -- first in the order -- at
 //     the START of its turn (Lay Track). The round's opening -- operating order and private income -- has happened.
 //   * Phase 3, limit 4: all six 2-trains and all five 3-trains are owned, none in the Bank Pool, so the depot's head

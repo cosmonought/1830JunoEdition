@@ -38,7 +38,7 @@ interpretation of, the 2018 rulebook (or a product ruling), recorded so it is ne
 | 7 | Transaction + cash authority / auction | done in five slices — 7.1 `08a59ec` (money ledger), 7.2 `a927e5f` (stock / par), 7.3 `d0a0792` (auction), 7.4 `6ecdfb1` (offers, consent, replay-safe settlement identity); **7.5** (`RULES_ENGINE_VERSION` 4 → 5, replay / golden / corpus reconciliation — `BATCH7.5_REPLAY_VERSION_CLOSURE_2026-09-16.md`, uncommitted, awaiting the owner's full-suite gate) |
 | 8 | Stock / OR edge cases + timing | Part B — design pass done 2026-09-16 (`STAGE8_AUTHORITY_DESIGN_2026-09-16.md`: five slices 8.1 → 8.5, one 5 → 6 bump at closure); **owner rulings R1–R4 recorded 2026-09-16** (design §0, D-29 … D-32), **S8-14 ruled 2026-09-17** (design §0, D-33); Opus is the default model for every Stage-8 slice; **Slice 8.1 implemented 2026-09-16 — S8-1 / S8-3 / S8-4 `RESOLVED` (**committed `05b5dfc`**; design §2.8)**; **Slice 8.2 implemented 2026-09-16 — S8-5 / S8-6 / S8-12 / S8-13 `RESOLVED`; S8-14 `RESOLVED` 2026-09-17 by the owner's ruling (the tiled OO home hex, #1617) (**committed `efe4098`**; design §5.9)**; **Slice 8.3 implemented 2026-09-17 — S8-2 `RESOLVED` (#1620, design §4.4): `presidentFor(company, seating)` with §5.4's clockwise tie-break from the former president's seat, one ordering rule for settlement and forced-sale projection alike, corpus-neutral (18 logs / 3,131 entries / 7 presidency changes / 0 ties / 0 disagreements); S10-18's presidency-tie gap closed; **S8-15 `RESOLVED` 2026-09-17 by the owner's ruling** (the Scenario-D presidency exchange, #1622: two ordinary 10 %s where the successor has them, otherwise the other-20 card one-for-one for the President's Certificate, percentages unmoved either way); **S9-14 `RESOLVED` 2026-09-17 — absorbed into 8.3 by owner ruling** (#1624: V-7.2's 10 % exchange certificate must already be in the Bank Pool before a half-sale of the other-20, and a president who must first receive that card during a presidency transfer is subject to the same requirement — a sale cannot supply its own prerequisite); **S9-13 filed and left OPEN by the same ruling** (the chart walks one row per 10 %, not per certificate — Stage 9) (**committed `02a9838`**); **Slice 8.4 implemented 2026-09-17 — S8-10 `RESOLVED`** (#1630–#1634, design §6.8): the M&H exchange is an authority of its own (`mohawkExchange.ts`), a free player-initiated interjection that consumes no Stock Round purchase, seat, pass streak or Priority Deal, queued as `pending_mh_exchange` when the request arrives off-turn and settled — fully revalidated — at the next legal between-turn boundary, ahead of every `buildOperatingOrder` so an SR→OR float is never locked out of the round it just qualified for; the owner's source choice is never switched for them (**committed `fc5a575`**); **Slice 8.5 implemented 2026-09-17 — the closure pass (UNCOMMITTED, awaiting the owner's review and full-suite gate; design §17)**: `RULES_ENGINE_VERSION` **5 → 6** with changelog row 6 and the derived supported list, **S8-8 `RESOLVED`** (#1640, the last share-price nominal out of the 6.6.3 projection), the corpus reconciliation measured from HEAD under v6 (18 files / 4,105 stored / 3,103 applied / 1,131 reducer no-ops / deterministic 18 of 18 / 0 boards ending with a queued M&H request), the five closure matrices and eight static source audits (`stage85Matrices.test.ts`), and **S10-23 / S10-24 filed** by that auditing |
 | 9 | Variants + map data + variant authority | **CLOSED 2026-09-19, `RULES_ENGINE_VERSION` 7** — see the Stage 9 closure banner (Part B) |
-| 10 | Replay / settlement / release hardening | **CLOSED 2026-09-23, `RULES_ENGINE_VERSION` 8** (authority / replay / tooling slices 10.1–10.6 + the closure pass) — see the Stage 10 closure banner (Part B); deferred S10 items are assigned to later phases there. **Next phase: VARIANT CERTIFICATION** (Gentle Rust, Unpredictable Revenue, Delayed Auction) |
+| 10 | Replay / settlement / release hardening | **CLOSED 2026-09-23, `RULES_ENGINE_VERSION` 8** (authority / replay / tooling slices 10.1–10.6 + the closure pass) — see the Stage 10 closure banner (Part B); deferred S10 items are assigned to later phases there. **Next phase: VARIANT CERTIFICATION** (Gentle Rust, Unpredictable Revenue, Delayed Auction) — *(2026-09-24)* **standalone Gentle Rust CERTIFIED, `RULES_ENGINE_VERSION` 9** (Variant Certification 1A, GR-1 … GR-5, #1699–#1705; S9-7); Unpredictable Revenue and Delayed Auction still owed |
 
 UI/polish-only items are **not** forced into a numbered stage; they live in Part C (the UX backlog).
 
@@ -54,7 +54,7 @@ revised book does not contain. An owner variation from printed Scenario D is rec
 never by labelling the whole scenario owner-defined. Scenario-D facts: `STAGE8_AUTHORITY_DESIGN_2026-09-16.md` §5.1a.
 
 **Replay / version boundary.** `RULES_ENGINE_VERSION` (`frontend/src/gameEngine/rulesVersion.ts`, #1520) is
-**8** after the Stage-10 closure pass (2026-09-23, #1698; 7 was Stage 9's, #1680; 6 was Stage 8.5's). *(Historical note, kept as written:
+**9** after the Gentle Rust certification closure (GR-5, 2026-09-24, #1705; 8 was the Stage-10 closure pass's, 2026-09-23, #1698; 7 was Stage 9's, #1680; 6 was Stage 8.5's). *(Historical note, kept as written:
 it was)* **5** after Batch 7.5 (1 = post-Batch-4 semantics, 2 = Batch 4.6, 3 = Batch 5, 4 = Batch 6, 5 = Batch 7 — the one
 bump deferred across 7.1–7.4 and landed in 7.5). Since
 Batch 6 the pin is also copied onto the state (`rules_engine_version`, #1551) so the reducer can tell a pinned
@@ -1770,16 +1770,42 @@ whoever laid; and the authoritative predicate refusing a second yellow on a yell
 without the power. No corpus effect (wording only). `RULES_ENGINE_VERSION` unchanged.
 
 **S9-7. Gentle Rust / Unpredictable Revenue / Delayed Auction — optional variants, full certification deferred.**
-Status **`DEFERRED — PRE-LAUNCH VARIANT CERTIFICATION REQUIRED`**, explicitly OUT of Stage-9 closure scope
-(owner ruling, 2026-09-19). *(Was `DEFERRED` (audit "UNCLEAR").)* Notes: `gentleRust*`, `variantRules.test.ts`,
+Status, per variant (GR-5, 2026-09-24): **Gentle Rust (standalone) — `CERTIFIED — CLOSED 2026-09-24 at
+RULES_ENGINE_VERSION 9`** · **Unpredictable Revenue — `DEFERRED — PRE-LAUNCH VARIANT CERTIFICATION REQUIRED`** ·
+**Delayed Auction — `DEFERRED — PRE-LAUNCH VARIANT CERTIFICATION REQUIRED`** · **the Gentle Rust + Unpredictable Revenue
+interaction — `DEFERRED` until Unpredictable Revenue certification settles OD-GR-3 (D-36); NOT certified.** *(Was
+`DEFERRED — PRE-LAUNCH VARIANT CERTIFICATION REQUIRED` for all three, explicitly OUT of Stage-9 closure scope (owner
+ruling, 2026-09-19); before that `DEFERRED` (audit "UNCLEAR").)* Notes: `gentleRust*`, `variantRules.test.ts`,
 #905 (delayed auction, `boIsLocked`), #1034 (reprieved trains exempt from limits — respected by #1530).
-**Variant Certification 1A (2026-09-23): Gentle Rust — owner spec review complete; audit classification B (spec complete / implementation gaps found); OD-GR-1 (no sale/transfer) and OD-GR-2 (no Diesel trade-in) ruled; OD-GR-3 routed to Unpredictable Revenue certification; GR-1, GR-2, DT-1 and GR-3 complete and committed (GR-3 `4f4844a`), GR-4 (certification evidence) complete pending owner gate, GR-5 (8 → 9 boundary + closure) pending; NOT certified.** See `VARIANT_CERT_GENTLE_RUST_AUDIT_2026-09-23.md` (rev 4) and `VARIANT_CERT_GENTLE_RUST_CERTIFICATION_2026-09-24.md`.
+**Variant Certification 1A (2026-09-23): Gentle Rust — owner spec review complete; audit classification B (spec complete / implementation gaps found); OD-GR-1 (no sale/transfer) and OD-GR-2 (no Diesel trade-in) ruled; OD-GR-3 routed to Unpredictable Revenue certification; GR-1, GR-2, DT-1 and GR-3 complete and committed (GR-3 `4f4844a`), GR-4 (certification evidence) complete pending owner gate, GR-5 (8 → 9 boundary + closure) pending; NOT certified.** *(Status line as written at GR-4; superseded by the GR-5 closure below, kept as history.)* See `VARIANT_CERT_GENTLE_RUST_AUDIT_2026-09-23.md` (rev 4) and `VARIANT_CERT_GENTLE_RUST_CERTIFICATION_2026-09-24.md`.
+
+**Variant Certification 1A — CLOSED (GR-5, 2026-09-24, #1705): STANDALONE GENTLE RUST IS CERTIFIED at
+`RULES_ENGINE_VERSION` 9.** Slices, each owner-gated: **GR-1** grace-turn timing (`0ca01be`, #1699) · **GR-2** reprieved-train
+transaction locks (`b755a7b`, #1700) · **DT-1** the base-game Diesel-exchange auto-skip correction (`936bacc`, #1701) ·
+**GR-3** UI / Rules Reference / narration, replay-neutral (`4f4844a`, #1702) · **GR-4** certification evidence — clause
+matrix, invariants A–H, probes P1–P9 as durable tests, the constructed legal certification game (`c202621`, #1703; U-9
+statistics, #1704) · **GR-5** the one deliberate `RULES_ENGINE_VERSION` **8 → 9** boundary and this closure (#1705;
+awaiting the owner's full-suite gate and commit). Clauses: **29 of 30 CERTIFIED**; **GR-S26 DEFERRED BY SPEC** (OD-GR-3).
+Owner decisions: **OD-GR-1 — DECIDED** (no sale / transfer; **D-34**); **OD-GR-2 — DECIDED** (no Diesel trade-in, $800 or
+LPF $750; **D-35**); **OD-GR-3 — DEFERRED to Unpredictable Revenue certification** (**D-36**; not decided here). The v9
+changelog row names exactly four replay semantics — GR-1's self-trigger grace turn, GR-2's sale refusal, GR-2's trade-in
+refusal, DT-1's auto-skip correction — and keeps GR-3, GR-4 and the U-9 statistics correction out of the rules semantics
+(Part E, row 9). **Audit item U-9** (the variant audit's own U-9, not Part C's U-9) is **owner-ruled and RESOLVED in GR-4**:
+a Gentle Rust train is counted lost / rusted in post-game statistics when it is actually destroyed, not when it is marked
+for its Final Run (derived history only, no version effect). **Part C U-41** (post-game statistics do not record a
+train-limit discard — pre-existing since #1530, standard games too) **stays OPEN / deferred** to a dedicated statistics /
+residual pass; it is not part of, and does not block, this certification. **What this closure does NOT certify:**
+Unpredictable Revenue, Delayed Auction, and the Gentle Rust + Unpredictable Revenue combination. Evidence:
+`VARIANT_CERT_GENTLE_RUST_CERTIFICATION_2026-09-24.md` §P; specification: `VARIANT_CERT_GENTLE_RUST_AUDIT_2026-09-23.md`
+(rev 6).
 
 **Owner ruling, recorded verbatim in substance.** Gentle Rust, Unpredictable Revenue and Delayed Auction have
 **not** received complete specification audits as independent optional variants. They must **not** be labelled
 audited or resolved. These are optional variants; full independent variant-spec certification is **deferred**;
 that certification is **outside this Stage-9 closure scope**; and **PRE-LAUNCH VARIANT CERTIFICATION remains
-required** before any of them is represented as fully-authoritative supported rules.
+required** before any of them is represented as fully-authoritative supported rules. *(GR-5, 2026-09-24: satisfied for
+**standalone Gentle Rust only**, above. It still binds Unpredictable Revenue, Delayed Auction and the Gentle Rust +
+Unpredictable Revenue combination.)*
 
 **What this deferral does not weaken.** The Yellow Sign rulings recorded at S9-3 are authoritative Project rules
 for the mechanics already implemented, and the Stage-9 authority work on those mechanics (S9-1, S9-3, S9-11) is
@@ -4061,6 +4087,32 @@ conditional form for the Erie; its variant V-7.3 (p. 32) omits the tile conditio
 PMQ — the ruling applies the conditional form to both. Implementation: Slice 8.2, #1617 (`closedOoHomeAt`), S8-14.
 `OWNER DECISION` (rules reading).
 
+**D-34. Gentle Rust: a reprieved (Final Run) train may not be sold or otherwise transferred to another corporation
+(OD-GR-1 — DECIDED, owner spec review 2026-09-23, SR-7 (a)).** The reprieve belongs to the corporation that owned the
+train when it rusted; the doom does not follow the train; the train stays with that corporation until its Final Run
+expires. Refused at proposal, answer and settlement (and so for the Blood Price's `isCarcosanSale`), atomically — no
+money, train or mark moves. Identical models are a multiset: an ordinary copy beside a reprieved copy of the same model
+may still be sold, and the sale takes the ordinary copy. Implementation GR-2, #1700 (`trainSaleRefusal` →
+`ownsOnlyReprievedCopiesOf`); certified as GR-S12 (GR-4); replay-semantic, carried by `RULES_ENGINE_VERSION` 9 (GR-5,
+#1705, changelog row 9 (B)). `OWNER DECISION` (variant specification). Source: `VARIANT_CERT_GENTLE_RUST_AUDIT_2026-09-23.md`
+§4 SR-7 (a).
+
+**D-35. Gentle Rust: a reprieved (Final Run) train may not be used as a Diesel trade-in (OD-GR-2 — DECIDED, owner spec
+review 2026-09-23, SR-7 (b)).** Neither at the $800 exchange nor at the Level Playing Field's $750: it gives no credit and
+never reaches the Bank Pool through an exchange. Multiset-aware: an ordinary 4 / 5 / 6 beside a reprieved copy still
+trades. The same principle as D-34 (SR-7 (c)): a reprieved train may not escape or monetize its destruction by changing
+hands. Implementation GR-2, #1700 (`exchangeableTrains` / `dieselExchangeRefusal`); certified as GR-S13 (GR-4);
+replay-semantic, `RULES_ENGINE_VERSION` 9 (changelog row 9 (C)). `OWNER DECISION` (variant specification). Source: audit
+§4 SR-7 (b).
+
+**D-36. Gentle Rust × the Yellow Sign's cheapest-train removal — NOT DECIDED; deferred to Unpredictable Revenue
+certification (OD-GR-3, owner routing 2026-09-23, SR-9).** What happens when the Yellow Sign's cheapest-train removal
+selects a reprieved (Final Run) train is deliberately left open. Standalone Gentle Rust does not need the answer (GR-S26
+is DEFERRED BY SPEC; the Yellow Sign arms are category C of the GR-4 arm inventory), so standalone certification closed
+without it (GR-5); **combined Gentle Rust + Unpredictable Revenue is NOT certified until Unpredictable Revenue
+certification rules on it.** Recorded here so it is neither mistaken for a decision nor lost. Status `DEFERRED — OWNER
+DECISION PENDING (Unpredictable Revenue certification)`. Source: audit §4 SR-9.
+
 ---
 
 ## Part E — Replay / version ledger (what a rebuilt room can differ by)
@@ -4099,6 +4151,7 @@ PMQ — the ruling applies the conditional form to both. Implementation: Slice 8
 | 7 (owed: **8** at Stage-10 closure) | **10.5** (uncommitted, 2026-09-23) | **S10-9: the logged-message type boundary and the private-offer price wire.** `SandboxLogMsg` = `GameplayExecuteMsg \| SandboxOnlyMsg` types every log-wide boundary; `GameplayExecuteMsg` / `GAMEPLAY_MESSAGE_KEYS` unwidened. New `ProposePrivatePurchase` prices are the canonical string; legacy numbers read and kept verbatim; `vgpAmount.ts` compares by value and refuses malformed spellings (`BuyPrivateCompany` `"1e2"` now refused). `RULES_ENGINE_VERSION` stays **7**; closure bump **7 → 8** owed. | **Canonical 18/18, old (scratch build of `4954d0e`) vs new: 4,105 stored / 3,731 applied / 3,763 engine applications — 0 (state, grid) differences; final state, grid, cursor identical; payload bytes untouched.** 2 stored numeric proposals (FCJ 205 / 273, refused both sides), 0 string. Y8V 628 applied, `b4fae877c35604fe`. No golden, fixture, export or log touched. |
 | 7 (owed: **8** at Stage-10 closure) | **10.6** (uncommitted, 2026-09-23) | **The last `LayTile` authority gaps, on PINNED boards (#1696).** S6-5 connectivity judged by the authority through the shell's own walk and join (#1692); S6-6 the private-power claim validated and the C&SL's bonus in either order with one ordinary lay (#1693, #1697, new turn-scoped `ordinary_lay_taken`); S6-7 player-owned private hexes barred, with the D&H's F16 exception and the JK's K9/K11 under LPF, and the board's marks on the same status (#1694, #1694a, #1695). One compatibility predicate, `stage106LayAuthorityInForce`: legacy unpinned logs keep their reading (#1684 precedent). S6-8 proved by 9.2; S7-17 superseded. `RULES_ENGINE_VERSION` stays **7**; closure bump **7 → 8** owed (its row should name 10.6's three rules and the pinned-only scope). | **Canonical 18/18, old (git archive of `638e2df`) vs new (scratch build of the working tree): 4,105 stored / 3,731 applied / 374 dropped / 3,763 engine applications — 0 (state digest, grid hash) differences, final state, grid and cursor identical; Y8V 628 applied / 40 dropped, OR 13, `b4fae877c35604fe`.** Unconditional probe (seam forced on, scratch only): 148 stored applied lays — 132 connected / 14 disconnected / 2 power exceptions / 0 no network; 21 file-occurrences (15 distinct lays, 4 rooms: CV4, FCJ, Z6C, Y8V) would change — itemised under S6-5; **recorded, not repinned**. No golden, fixture, export or log touched. |
 | **8** | **Stage-10 closure** (uncommitted, 2026-09-23) | **The bump.** `RULES_ENGINE_VERSION` **7 → 8**, `SUPPORTED_RULES_ENGINE_VERSIONS` derived `[8]`, changelog row 8 naming Stage 10's replay semantics — 10.1 / 10.1b LayTile legality composed before mutation (identity, pinned Lay Track timing, geometry, anchoring, JK, terrain), 10.2 the author-less train-settlement refusal, 10.3 the server-side Blood Price through `sandboxActionContext`, 10.3b the chart / core transaction, 10.5 the canonical private-offer price and the malformed-price refusal, 10.6 connectivity / validated claims with the C&SL either-order entitlement / player-owned private hexes (D&H F16 exception, LPF JK K9 / K11) on pinned boards — and, separately and explicitly NOT as rules, 10.2's refusal transport, 10.4's tooling and 10.5's `SandboxLogMsg`. A version-7 room is held (`incompatible`) under every policy, preserved and never migrated; an unpinned room is refused by the server's policy and admitted only by the development corpus's. The #1696 seam stays presence-based. `stage10Closure.test.ts` added; `stage9Closure.test.ts`'s literal-7 pins narrowed (version-literal only). | **Canonical 18/18, old (scratch build of `1e90fa9`, v7) vs new (scratch build of the closure tree, v8): 4,105 stored / 3,731 applied / 374 dropped / 3,763 engine applications — 0 (state digest, grid hash) differences; final state, grid and cursor identical; corpus file bytes identical; all 18 unpinned.** Y8V 628 applied / 40 dropped, OR 13, `b4fae877c35604fe`. **No golden, fixture, export or log touched or re-pinned.** |
+| **9** | **GR-5 — Gentle Rust certification closure** (uncommitted, 2026-09-24, #1705) | **The bump.** `RULES_ENGINE_VERSION` **8 → 9**, `SUPPORTED_RULES_ENGINE_VERSIONS` derived `[9]`, changelog row 9 naming exactly four replay semantics — (A) GR-1 (#1699): a self-triggered Gentle Rust doom survives into the corporation's NEXT FUTURE Operating Turn instead of expiring at the end of the Buy Trains turn that caused it; (B) GR-2 (#1700, OD-GR-1 / D-34): a reprieved / Final Run train may not be sold or transferred; (C) GR-2 (#1700, OD-GR-2 / D-35): it may not be a Diesel trade-in ($800, LPF $750); (D) DT-1 (#1701, base game, every table): the train limit no longer auto-ends Buy Trains while a legal one-for-one Diesel exchange remains — and, separately and explicitly NOT as rules, GR-3's UI / Rules Reference / narration (#1702), GR-4's certification tests / documents / constructed game (#1703) and the U-9 post-game statistics correction (#1704); OD-GR-3 named as NOT decided (D-36). None of the four asks the pin's value. A version-8 room is held (`incompatible`) under every policy before the reducer sees an entry, preserved and never migrated; an unpinned room is refused by the server's policy and admitted only by the development corpus's. The #1696 seam stays presence-based. `gentleRustClosure.test.ts` added (owns the literal 9); `stage10Closure.test.ts`'s literal-8 pins and `gentleRustCertificationGame.test.ts`'s literal 8 narrowed (version-literal only). | **Canonical 18/18, old (scratch build of `c202621`, v8) vs new (scratch build of the GR-5 tree, v9), each built with `server/tsconfig.json` plus the certification-game support module; the two dist trees differ only in `rulesVersion.js` and one comment in `gentleRustCertificationGame.js`: 4,105 stored / 3,731 applied / 374 dropped / 3,763 engine applications — 0 state-digest, 0 grid, 0 cursor and 0 derived-action differences on the 3,763 pre-entry boards; 18/18 final boards (state, grid, cursor, derived answer) equal; all 18 unpinned; 0 boards carrying a Gentle Rust mark.** Y8V 668 / 628 / 40, OR 13, `b4fae877c35604fe`; 3XD (Gentle Rust) 322 / 320 / 2, 323 applications, SR 12, `74db6e4bad736fec`. Corpus file bytes (md5) identical. The GR-4 constructed certification game (not corpus): identical step by step and log for log; final digest `bc622db0c160eb09` at v8 → `56cf7b237ebe5bce` at v9, the pin field its only difference (both `b197df651f89c88a` with the pin removed). **No golden, fixture, export or log touched or re-pinned.** |
 
 Items above that carry "bump" must add a row here when they land. No golden or replay expectation is ever
 re-pinned silently: the re-pin, its index and its reason go in the batch write-up and in this table.

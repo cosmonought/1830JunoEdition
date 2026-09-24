@@ -16,6 +16,12 @@ GR-S26 DEFERRED BY SPEC). GR-5 is pending. The implementation gaps below are his
 RESOLVED. **Gentle Rust is still NOT certified.**
 *(rev 5)* U-9 is **owner-ruled: destruction-time accounting** for the obsolescence statistics (GR-4's earlier "B" withdrawn);
 implemented in derived history only (`gameHistory.ts`, #1704) — no gameplay or version change.
+*(rev 6, GR-5)* **STANDALONE GENTLE RUST IS CERTIFIED at `RULES_ENGINE_VERSION` 9.** GR-4 passed the owner gate and is
+committed (`c202621`); GR-5 (#1705) took the one deliberate 8 → 9 boundary for GR-1, GR-2 and DT-1's replay semantics and
+closed the certification (evidence: certification doc §P). OD-GR-1 and OD-GR-2 are DECIDED and recorded in the backlog's
+Part D (D-34, D-35); OD-GR-3 is DEFERRED to Unpredictable Revenue certification (D-36), so **combined Gentle Rust +
+Unpredictable Revenue is NOT certified.** Backlog Part C U-41 (a standard-game statistics gap) remains open and outside
+this certification. The status lines of rev 3–5 below are kept as written.
 
 **Revision history.**
 
@@ -26,6 +32,7 @@ implemented in derived history only (`gameHistory.ts`, #1704) — no gameplay or
 | 3 | 2026-09-24 | **slice status only** (§7, §9, §10, Appendix B): GR-1, GR-2 and DT-1 complete, owner-gated, committed; GR-3 (UI / Rules Reference / narration, #1702) complete pending owner gate; GR-4 and GR-5 pending. U-6 completed in GR-3; U-9 routed to GR-4 / final certification. No specification clause changed. **Gentle Rust is still NOT certified.** |
 | 4 | 2026-09-24 | **status only (GR-4).** GR-3 owner gate passed, committed `4f4844ad87e3586367f114edbfe4978deb6c181e`. GR-4 (certification matrix, invariants A–H, P1–P9 as durable tests, constructed legal game through the first 4 / 6 / D, corpus reconciliation, U-9 disposition — #1703) complete pending owner gate; evidence moved to `VARIANT_CERT_GENTLE_RUST_CERTIFICATION_2026-09-24.md`. IG-A…IG-F marked RESOLVED / CERTIFIED EVIDENCE (history preserved). GR-5 pending. No specification clause changed. **Gentle Rust is still NOT certified (GR-5 owns the 8 → 9 boundary and closure).** |
 | 5 | 2026-09-24 | **owner ruling U-9 (statistics only).** GR-4's first classification of U-9 as B (mark-time counting, documented) is **withdrawn**: it was not supported by the statistics authority (`gameHistory.ts` #1414, #1422). **Owner ruled destruction-time accounting** — a Gentle Rust train counts as rusted / lost (fleet ledger, Rust Belt, Gravedigger) only when its Final Run actually removes it; a train still owned at game end is kept. Implemented in derived history only (#1704; certification doc §L, r2). No gameplay clause changed; no version change. GR-4 again ready for the owner gate after the correction. |
+| 6 | 2026-09-24 | **GR-5 — certification closure.** GR-4 owner-gated and committed (`c202621`). `RULES_ENGINE_VERSION` **8 → 9** (#1705), changelog row 9 naming exactly the four replay semantics of §9 (GR-1 self-trigger grace turn; GR-2 sale refusal; GR-2 Diesel trade-in refusal; DT-1 auto-skip) with GR-3, GR-4 and the U-9 statistics correction kept outside the rules semantics; OD-GR-1 / OD-GR-2 recorded as backlog Part D decisions D-34 / D-35 and OD-GR-3 as D-36 (deferred to UR) — §11 gate item 1; §11 gate items 1–7 met, item 8 (full Jest at the certification commit) is the owner's gate. No specification clause changed. **Standalone Gentle Rust CERTIFIED at v9; Gentle Rust + Unpredictable Revenue NOT certified (OD-GR-3).** |
 
 ---
 
@@ -487,7 +494,7 @@ Characterization only; the live game is not evidence that current behaviour is r
   false) → every dispatch runs under `withRules(resolveVariants(state.variants))` → replay reads the same deal.
   `RoomSession.submit` stamps `rules_engine_version`. No client state, no randomness (GR-S29); `false` reproduces
   standard rust (GR-S30).
-* **`RULES_ENGINE_VERSION` stays 8** in this pass. *(rev 4: GR-4 confirms the 8 → 9 set exactly — GR-1 timing, GR-2 sale refusal, GR-2 trade-in refusal, DT-1 auto-skip; GR-3 and GR-4 replay-neutral; certification doc §N.)*
+* **`RULES_ENGINE_VERSION` stays 8** in this pass. *(rev 4: GR-4 confirms the 8 → 9 set exactly — GR-1 timing, GR-2 sale refusal, GR-2 trade-in refusal, DT-1 auto-skip; GR-3 and GR-4 replay-neutral; certification doc §N.)* *(rev 6: **bumped 8 → 9 by GR-5**, #1705 — changelog row 9 carries exactly those four, with GR-3, GR-4 and the U-9 statistics correction named after a NOT RULES marker; a v8-pinned room is held `incompatible`, never migrated; the unpinned corpus replays unchanged, 18/18 — certification doc §P.)*
 * **Likely replay-semantic changes requiring a later deliberate 8 → 9 closure boundary:** self-trigger grace timing
   (IG-A); reprieved-train sale refusal (IG-B); reprieved-train Diesel trade-in refusal (IG-C); a forced-purchase fix
   **only if** the implementation audit finds the current engine actually wrong (today: no conflation found, IG-D).
@@ -505,6 +512,8 @@ Characterization only; the live game is not evidence that current behaviour is r
 ---
 
 ## 10. Implementation slices (rev 2; status at rev 3)
+
+**Status (rev 6, 2026-09-24):** **GR-1, GR-2, DT-1, GR-3 and GR-4 COMPLETE** — owner-gated and committed (`0ca01be`, `b755a7b`, `936bacc`, `4f4844a`, `c202621`). **GR-5 COMPLETE** (the 8 → 9 boundary and closure, #1705; awaiting the owner's full-suite gate and commit). **Standalone Gentle Rust is CERTIFIED at `RULES_ENGINE_VERSION` 9.** OD-GR-3 → Unpredictable Revenue certification; Gentle Rust + Unpredictable Revenue is not certified.
 
 **Status (rev 5, 2026-09-24):** GR-3 owner-gated and committed (`4f4844a`). **GR-4 COMPLETE pending owner gate** — tests and documents (#1703) plus the owner-ruled U-9 statistics correction in derived history (#1704); evidence → `VARIANT_CERT_GENTLE_RUST_CERTIFICATION_2026-09-24.md` (r2). **GR-5 pending.** Gentle Rust is NOT certified.
 
@@ -559,6 +568,13 @@ OD-GR-3 is carried into Unpredictable Revenue certification, not these slices.
 Plus the clause coverage of §6 (every gap closed), with a standard-mode negative control for each semantic case.
 
 ### Certification gate
+
+*(rev 6, GR-5 — status per item; lettered sections are the certification doc's: 1 MET (backlog Part D D-34, D-35, D-36); 2 MET (29 clauses CERTIFIED behaviourally,
+GR-S26 DEFERRED BY SPEC — certification doc §C); 3 MET (§E, §F); 4 MET (§H); 5 MET (§G, game G5); 6 MET (§K; Appendix B
+corrected or kept as history per its rev-3 status, item 15 routed to UR with OD-GR-3); 7 MET (18-file sweep 0 differences at v8 and again across the 8 → 9 boundary; the constructed game replays
+deterministically; `RULES_ENGINE_VERSION` bumped exactly once, 8 → 9, #1705 — certification doc §G.4, §M, §P); 8 — the
+owner's full Jest run and build at the certification commit (GR-5 ran the focused set, both typechecks and the production
+build, §P).)*
 
 1. OD-GR-1 and OD-GR-2 recorded as rulings in the backlog's Part D; OD-GR-3 recorded as deferred to UR.
 2. Every §3 clause (except GR-S26) CORRECT BY SPEC, each proved by a behavioural test; source scans only as secondary

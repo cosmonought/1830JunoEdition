@@ -169,7 +169,10 @@ describe("G0. the starting board is a legal phase-3 board", () => {
 
   it("pinned to this engine, Gentle Rust the only variant, NYC at the start of its turn, operating in price order", () => {
     expect(s0.rules_engine_version).toBe(RULES_ENGINE_VERSION);
-    expect(RULES_ENGINE_VERSION).toBe(8);
+    /* #1705 (GR-5): was `toBe(8)` -- the engine GR-4 dealt this game under. Standalone Gentle Rust is certified at 9
+       (GR-1, GR-2 and DT-1's semantics), so the game must deal at 9 or later; the current number belongs to
+       `gentleRustClosure.test.ts`, not to this suite. Version-literal only. */
+    expect(RULES_ENGINE_VERSION).toBeGreaterThanOrEqual(9);
     expect(s0.variants).toEqual(resolveVariants({ gentleRust: true }));
     expect([s0.current_round_type, s0.macro_round_number, s0.sub_round_index, s0.operating_round_sequence_length]).toEqual([
       "OperatingRound",

@@ -15,6 +15,13 @@ This document is **evidence, not specification**. The specification is
 `VARIANT_CERT_GENTLE_RUST_AUDIT_2026-09-23.md` (§3 GR-S1…GR-S30, §4 SR-1…SR-9, §11 invariants A–H). Where the two
 ever disagree, the audit (and the owner rulings it records) wins.
 
+**r3 — GR-5 CLOSURE (2026-09-24, #1705): STANDALONE GENTLE RUST IS CERTIFIED at `RULES_ENGINE_VERSION` 9.** GR-4 passed
+the owner gate and is committed (`c202621`); GR-5 took the one deliberate 8 → 9 boundary (exactly four replay semantics:
+GR-1's self-trigger grace turn, GR-2's sale refusal, GR-2's Diesel trade-in refusal, DT-1's auto-skip correction) and
+recorded the closure — §P. OD-GR-1 / OD-GR-2 DECIDED (backlog D-34 / D-35); OD-GR-3 DEFERRED to Unpredictable Revenue
+certification (D-36), so **combined Gentle Rust + Unpredictable Revenue remains NOT certified.** Sections A–O below are the
+GR-4 record and are kept as written (the "NOT yet certified" statements in them are GR-4's, superseded by §P).
+
 **GR-4 verdict (r2): READY FOR OWNER GATE / READY FOR GR-5.** Every standalone normative clause except GR-S26 is
 CERTIFIED by behavioural evidence; GR-S26 is DEFERRED BY SPEC. **Gentle Rust is NOT yet certified**: GR-5 owns the
 deliberate `RULES_ENGINE_VERSION` 8 → 9 boundary and final closure. Combined Gentle Rust + Unpredictable Revenue stays
@@ -167,7 +174,8 @@ historical game and not a golden: never exported, not in the development corpus.
 ### G.1 Starting-state provenance (every nontrivial fact)
 
 * **Rules:** `resolveVariants({ gentleRust: true })`; pinned `rules_engine_version: 8` (log "undealt", replayed under
-  `SERVER_REPLAY_POLICY` — no legacy adapter).
+  `SERVER_REPLAY_POLICY` — no legacy adapter). *(r3: the start is pinned to the engine's `RULES_ENGINE_VERSION`, so since
+  GR-5 the game deals at **9**; it plays identically across the boundary — §P.6.)*
 * **Cursor:** Operating Round 3.1 of a two-round set, NYC (first in price order) at the start of its turn (Lay Track); the
   round's opening (order, private income) already happened.
 * **Phase 3, limit 4.** All six 2s and all five 3s owned; Bank Pool empty (phase 2 → 3 does not drop the limit, so no
@@ -431,3 +439,137 @@ reported for an owner decision, not changed — backlog Part C U-41. **Gentle Ru
 * r2 history comparison: compiled `gameHistory` of `4f4844a` vs the working tree over the 18 corpus logs — accolades,
   autopsy and round samples identical 18/18 (§L).
 * 18-file corpus: §M. Constructed game: §G.4. `git diff --check`: clean.
+
+---
+
+## P. GR-5 — the `RULES_ENGINE_VERSION` 8 → 9 boundary and certification closure (r3, 2026-09-24)
+
+**Verdict: STANDALONE GENTLE RUST CERTIFIED at `RULES_ENGINE_VERSION` 9** — subject to the owner's full-suite gate and
+commit (audit §11 gate item 8). **Not certified by this closure:** Unpredictable Revenue, Delayed Auction, and combined
+Gentle Rust + Unpredictable Revenue (OD-GR-3). GR-5 added **no gameplay semantics**: version boundary, policy tests,
+closure guards and durable record only. Design note **#1705**.
+
+### P.1 Baseline and architecture
+
+| item | value |
+|---|---|
+| branch | `main` |
+| HEAD | `c20262150c5054f0cb035c5fa981fc1b81524141` ("Certify Gentle Rust behavior", GR-4) |
+| `origin/main` | `c20262150c5054f0cb035c5fa981fc1b81524141` (fetched; `git ls-remote` agrees) — 0 ahead / 0 behind |
+| tracked tree at start | clean (only untracked `.claude/`); the first read-only `git status` left the known stale zero-byte `.git/index.lock` (S10-16), which was removed — the one pre-authorized deletion — and every later git call ran with `GIT_OPTIONAL_LOCKS=0` |
+| `RULES_ENGINE_VERSION` at start | `8` |
+
+The version architecture is #1520's, unchanged since the Stage-10 closure (`a14355a`, #1698), which is the precedent
+followed: a hand-bumped `RULES_ENGINE_VERSION`; `SUPPORTED_RULES_ENGINE_VERSIONS` derived as `[RULES_ENGINE_VERSION]`;
+`RULES_ENGINE_CHANGELOG`, one row per version; the server stamps the deal (`stampRulesEngineVersion`, over any client
+claim); `replayCompatibility` / `replayRefusal` with `SERVER_REPLAY_POLICY` (refuses unpinned) and
+`DEVELOPMENT_CORPUS_POLICY` (admits unpinned only); every other numeric pin incompatible under every policy; no
+migration path. GR-5 changed none of this machinery.
+
+### P.2 The bump
+
+`frontend/src/gameEngine/rulesVersion.ts:65` — `RULES_ENGINE_VERSION = 9`; supported list derived `[9]`; changelog **row 9**:
+
+* **REPLAY SEMANTICS, exactly four.**
+  **(A) GR-1 (#1699)** — a Gentle Rust self-trigger (the corporation buys the phase-changing train in its own Buy Trains
+  step) no longer expires the trains it dooms at the end of that same turn; they survive the turn's end (and the Stock
+  Round when the set ends) into the corporation's NEXT FUTURE Operating Turn (`pending_rust_doomed_this_turn`).
+  **(B) GR-2 (#1700, OD-GR-1)** — a reprieved / Final Run train may no longer be sold or transferred (proposal, answer,
+  settlement; multiset).
+  **(C) GR-2 (#1700, OD-GR-2)** — a reprieved / Final Run train may no longer be a Diesel trade-in ($800; LPF $750;
+  multiset).
+  **(D) DT-1 (#1701, base game, every table)** — being at the train limit no longer auto-ends Buy Trains while a legal
+  one-for-one Diesel exchange remains available.
+  None of the four asks the pin's value.
+* **NOT RULES** (named after an explicit marker so the row is not read as them): GR-3's UI / copy / Rules Reference /
+  narration (#1702); GR-4's certification tests, documents and constructed game (#1703); GR-4's owner-ruled U-9 post-game
+  statistics correction (#1704).
+* **NOT DECIDED HERE:** OD-GR-3 — Unpredictable Revenue certification.
+* U-41 is not in the row: it is an open backlog item with no implementation.
+
+### P.3 Version policy now pinned — `frontend/src/utils/gentleRustClosure.test.ts` (new, 19 tests)
+
+The bump (`=== 9`, `[9]`); row 9's four lettered entries and no fifth; GR-3 / GR-4 / U-9 only after the NOT RULES
+marker; OD-GR-3 named only as not decided and no U-41. The v9-only matrix: a new deal is stamped 9 whatever the client
+claims (none, 1, 7, 8, 10, 999); a v9 room is compatible, restored, rebuilt to the live digest and playable, and replays
+headless under `SERVER_REPLAY_POLICY`; a **v8** room is `incompatible` and held **before the reducer sees an entry**
+(no `RoomEngine.apply`, no provider call) under both policies, and `replayLog` throws under both; a v8-pinned **Gentle
+Rust** deal is held the same way while the same deal pinned 9 is admitted; 0 / 1 / 6 / 7 / 10 / 999 incompatible; a missing
+pin is `legacy` — refused by the server, admitted only by the development-corpus policy and never given a pin; no path
+rewrites a stored 8 (or a missing pin); a held v8 room appends nothing (move, new deal, `RevertTo`); its catch-up exposes
+no history; build compatibility stays separate. Section 3: no authority behind (A)–(D) (`gentleRustGrace`,
+`trainSaleAuthority`, `dieselExchange`, `derivedActions`, `sandboxSession`) compares or names the version (source scan,
+secondary); the constructed certification game's start is pinned 9. Section 4: all 18 corpus files unpinned, none acquires a
+pin, totals 4,105 / 3,731 / 374.
+
+**Narrowed, version-literal only** (#1698's precedent for `stage9Closure`): `stage10Closure.test.ts` — the literal-8 cases
+now read the derived current version (current `>= 8`, row-prefix pin, "current engine" matrix with the one-ahead version as
+"another version"); its 10.6 fixture stays a board pinned **8** (the seam is presence, so it is still judged), with no
+claim changed; `gentleRustCertificationGame.test.ts` — `RULES_ENGINE_VERSION toBe(8)` → `toBeGreaterThanOrEqual(9)`;
+`gentleRustCertificationGame.ts` — one comment. Historical "pinned v8" wording in the GR-1 … GR-4 harness comments and
+titles is left as written (those boards deal at `RULES_ENGINE_VERSION`, so they now run at 9).
+
+### P.4 Corpus reconciliation across the boundary (18 files)
+
+Scratch builds outside the repository: `git archive c202621` (v8) and the GR-5 tree (v9), each compiled with
+`server/tsconfig.json` plus the certification-game support module; the dist trees differ **only** in `rulesVersion.js`
+and one comment in `gentleRustCertificationGame.js`. Every file replayed under `DEVELOPMENT_CORPUS_POLICY`, recording for
+each engine application the pre-entry state digest, grid hash, cursor and derived-action answer (`nextDerivedAction`),
+then the finals.
+
+| measure | result |
+|---|---|
+| files | **18** |
+| stored / applied / dropped | **4,105 / 3,731 / 374** |
+| engine applications | **3,763** (444 with a non-null derived answer) |
+| state / grid / cursor differences (v8 vs v9) | **0 / 0 / 0** |
+| derived-action differences | **0** of 3,763 pre-entry boards |
+| final boards equal (state, grid, cursor, derived answer) | **18 / 18** |
+| pinned files / boards acquiring a pin | 0 / 0 (all 18 `legacy`) |
+| boards carrying a Gentle Rust mark | 0 |
+| legacy discards supplied / unparseable | 0 / 0 |
+| JUNO-Y8V | 668 / 628 / 40, 632 applications, `OperatingRound 13`, **`b4fae877c35604fe`** |
+| JUNO-3XD | Gentle Rust ON; 322 / 320 / 2, 323 applications, `StockRound 12`, **`74db6e4bad736fec`** |
+
+Every per-file final digest equals §M's. Corpus file bytes (md5) identical before and after; **no stored log, fixture,
+golden, export or corpus file was edited, migrated, repinned or regenerated.**
+
+### P.5 Durable dispositions
+
+* **S9-7:** standalone Gentle Rust `CERTIFIED — CLOSED 2026-09-24 at RULES_ENGINE_VERSION 9`; Unpredictable Revenue and
+  Delayed Auction still `DEFERRED — PRE-LAUNCH VARIANT CERTIFICATION REQUIRED`; the Gentle Rust + Unpredictable Revenue
+  interaction `DEFERRED` until OD-GR-3.
+* **OD-GR-1 — DECIDED** → backlog Part D **D-34** (no sale / transfer). **OD-GR-2 — DECIDED** → **D-35** (no Diesel trade-in,
+  $800 / LPF $750). **OD-GR-3 — DEFERRED** to Unpredictable Revenue certification → **D-36** (recorded as not decided).
+* **U-9** (the audit's U-9, §K / §L — not backlog Part C's U-9) — **owner-ruled and RESOLVED in GR-4**: destruction-time
+  accounting, implemented in derived statistics (#1704); not a rules-engine version entry.
+* **Backlog Part C U-41** — the pre-existing standard-game train-limit-discard statistics gap — **OPEN / deferred**,
+  unimplemented, not part of this certification.
+* Backlog Part E row **9** added; the version-boundary paragraph and the roadmap's Stage-10 row note v9; audit rev 6.
+
+### P.6 The constructed certification game across the boundary
+
+The same game (§G) run through the v8 and v9 builds: 91 log entries (53 derived), 40 submissions of which 2 are refused,
+identical step by step (each answer, its entries and the board digest with the pin field removed) and entry for entry
+(index, actor, payload, derived). Final digest **`bc622db0c160eb09` at v8** (as recorded in §G.4) and
+**`56cf7b237ebe5bce` at v9** — the pin field is the only difference (`b197df651f89c88a` for both with it removed); a replay
+of the log under `SERVER_REPLAY_POLICY` reaches the same digest on each side. Final fleets NYC [6,6], PRR [], CPR [],
+B&O [D], C&O [5,5], no marks.
+
+### P.7 Validation (GR-5; the owner runs the full suite)
+
+* **Focused Jest: 93 suites / 2,029 tests, all passing** — the version / closure / replay / corpus suites (`gentleRustClosure`
+  19, `stage10Closure` 27, `stage9Closure`, `stage85Closure`, `batch75Closure`, `rulesVersion`, `replayGolden`,
+  `replayJuno3XD`, `replayJunoCV4`, `stage104HarnessHardening` with the corpus present, `mohawkExchangeCorpus`,
+  `presidencyCorpus`, `roomSession`, …), every Gentle Rust suite (GR-1 `gentleRustGraceTurn` 24, GR-2
+  `gentleRustTransactionLocks` 26, DT-1 `dieselExchangeAutoSkip` 19, GR-3 `gentleRustPresentation` 28 + 23, GR-4
+  `gentleRustCertificationGame` 34 / `gentleRustCertification` 13 / `gentleRustCertificationStats` 9, `gentleRustExchangeStats`,
+  `gentleRustLimit`, `gentleRustExemption`), and every other suite that reads the version, the room or the replay (Diesel,
+  train limit / discard, emergency funding, routes, offers, Yellow Sign, history / accolades, variants).
+* `frontend tsc --noEmit`: exit 0. `server tsc --noEmit` (`server/tsconfig.json`): exit 0.
+* Production build: **exit 0, "Compiled with warnings", 49 warning lines** (the count recorded at HEAD by GR-4 and Stage 10;
+  none in a GR-5 file). Built with the repository's own `config-overrides.js` in a scratch copy of `frontend/` outside the
+  repository (so `frontend/build/` was not touched) with `GENERATE_SOURCEMAP=false`: the default build with source maps does
+  not finish inside the device tool's 180-second call limit. The owner's gate build is the authoritative one.
+* 18-file corpus: §P.4. Constructed game: §P.6. `git diff --check`: clean.
+* **Full Jest NOT run** (the owner's gate). **Nothing committed or pushed.**

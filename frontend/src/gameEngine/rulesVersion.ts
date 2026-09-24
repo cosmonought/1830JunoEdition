@@ -62,7 +62,7 @@ import { effectiveActions } from "./logRevert";
 
 /** The rules engine this build carries. Bump it, and add a line below, when a deployment changes what a
  *  stored log replays to. Do NOT bump it for UI, protocol or narration changes. */
-export const RULES_ENGINE_VERSION = 8;
+export const RULES_ENGINE_VERSION = 9;
 
 /** Every version this engine can replay faithfully. One entry until somebody builds a versioned reducer;
  *  the point of the list is that "supported" is an explicit statement rather than "whatever is running". */
@@ -247,6 +247,31 @@ export const RULES_ENGINE_CHANGELOG: ReadonlyArray<{ version: number; note: stri
       "development corpus is unpinned and replays unchanged. A version-7 log carries lays judged after they had " +
       "moved the board, lays neither connected nor claim-checked, player-owned private hexes built on and a server " +
       "that never charged the Blood Price, so it is refused, never reinterpreted.",
+  },
+  {
+    version: 9,
+    note:
+      "Gentle Rust certification closure (GR-5, 2026-09-24, #1705): the standalone Gentle Rust variant is certified, " +
+      "and the replay semantics of GR-1, GR-2 and DT-1 (#1699-#1701) take this one bump. REPLAY SEMANTICS, exactly " +
+      "four. (A) GR-1 (#1699): a SELF-TRIGGER -- a corporation buying the phase-changing train in its own Buy Trains " +
+      "step -- no longer expires the trains it dooms at the end of that same turn; they survive the turn's end (and " +
+      "the Stock Round, when the set ends) into the corporation's NEXT FUTURE Operating Turn, which is their grace " +
+      "turn (`pending_rust_doomed_this_turn`: the Run Routes expiry and both turn-end fallbacks spend only the " +
+      "qualifying turn's marks). (B) GR-2 (#1700, OD-GR-1): a reprieved / Final Run train may no longer be sold or " +
+      "transferred to another corporation -- refused at proposal, answer and settlement, by multiset, so an ordinary " +
+      "copy of the same model still sells. (C) GR-2 (#1700, OD-GR-2): a reprieved / Final Run train may no longer be " +
+      "used as a Diesel trade-in, at the $800 exchange or the Level Playing Field's $750, by multiset. (D) DT-1 " +
+      "(#1701, a base-game correction on every table): being at the train limit no longer auto-ends Buy Trains while " +
+      "a legal one-for-one Diesel exchange remains available. None of the four asks the pin's value. NOT RULES, named " +
+      "so the row is not read as them: GR-3's UI, copy, Rules Reference and narration (#1702); GR-4's certification " +
+      "tests, documents and constructed legal certification game (#1703); and GR-4's owner-ruled U-9 post-game " +
+      "statistics correction (#1704: a Gentle Rust train is booked as lost when it is destroyed, not when it is " +
+      "marked -- derived history only). None of them moves a board, a message or a digest. NOT DECIDED HERE: " +
+      "OD-GR-3 (the Yellow Sign's cheapest-train removal against a reprieved train) belongs to Unpredictable Revenue " +
+      "certification, so combined Gentle Rust + Unpredictable Revenue is not certified by this row. The canonical " +
+      "development corpus is unpinned and replays unchanged. A version-8 log can carry self-doomed trains destroyed " +
+      "at the end of the turn that doomed them, reprieved trains sold or traded in for a Diesel, and Buy Trains " +
+      "steps auto-ended at the limit with a legal exchange still open, so it is refused, never reinterpreted.",
   },
 ];
 

@@ -82,7 +82,11 @@ describe("a reprieved train occupies no limit slot", () => {
 /* The trim                                                           */
 /* ------------------------------------------------------------------ */
 
-describe("the trim neither counts nor takes a reprieved train", () => {
+describe("DEAD HELPER, not live authority -- the trim neither counts nor takes a reprieved train", () => {
+  /* GR-4 (design note #1703): `trimToTrainLimit` HAS NO PRODUCTION CALLER SINCE #1530 -- the president discards by
+     choice (`pendingTrainDiscards` / `DiscardTrain`). These cases pin the dead helper's arithmetic only and are NOT
+     evidence of the live rule; the live Gentle Rust discard rule is certified by `gentleRustCertification.test.ts`
+     ("discard"), `gentleRustTransactionLocks.test.ts` (X) and `gentleRustCertificationGame.test.ts` (G2). */
   it("leaves a fleet whose LIVE trains are within the limit", () => {
     const result = trimToTrainLimit({ owned: ["2", "2", "5"], reprieved: ["2", "2"], limit: 2, cost });
     expect(result.discarded).toEqual([]);

@@ -15,6 +15,10 @@
 // filed as "rusted" (the U-6 defect, in the ledger) and is "traded". Under Gentle Rust the old diff already filed it
 // as "traded", and that is unchanged.
 //
+// OWNER RULING U-9 (2026-09-24, #1704) SUPERSEDES THE GENTLE RUST HALF OF THIS FILE'S ORIGINAL EXPECTATION: under Gentle
+// Rust a marked (Final Run) train is not a loss until its Final Run removes it, so the Gentle Rust case below now books
+// no loss and no "rusted" fate for the 4s the first Diesel doomed -- they are "kept". The standard case is unchanged.
+//
 // A GAME THAT REACHES THE FIRST DIESEL CANNOT BE BUILT FROM A LOG IN A TEST, so the replay engine is replaced by a
 // script: the history is handed the real reducer's boards, before and after one real `ExchangeTrainForDiesel`, and
 // runs its own tallies over them exactly as it does over a replay. Nothing else in `gameHistory.ts` is stubbed.
@@ -94,17 +98,19 @@ describe("U-6 statistics: a Diesel trade-in taken out of the fleet-loss diff", (
     expect(ledger(history, BO, "4")).toMatchObject({ rusted: 1, traded: 0 });
   });
 
-  it("Gentle Rust: the tallies and the ledger are exactly what they were -- the reprieve is the rust, the trade-in 'traded'", () => {
-    const { before, after, history } = historyOfFirstDieselTradeIn(true);
+  it("Gentle Rust (owner ruling U-9, #1704): the trade-in is 'traded'; the 4s the Diesel doomed are still owned -- KEPT, not yet rusted -- and nobody has lost or sent a train", () => {
+    const { after, history } = historyOfFirstDieselTradeIn(true);
     expect([fleetOf(after, PRR), after.public_companies.find((c) => c.company_id === PRR)?.pending_rust_trains]).toEqual([
       ["4", "D"],
       ["4"],
     ]);
-    const four = depotCostFor(before, "4");
-    expect([accolade(history, "rust-belt").value, accolade(history, "rust-belt").runnerUp]).toEqual([four, four]);
-    expect([accolade(history, "gravedigger").holder, accolade(history, "gravedigger").value]).toEqual([P1, 2 * four]);
-    expect(ledger(history, PRR, "4")).toMatchObject({ rusted: 1, traded: 1, discarded: 0 });
-    expect(ledger(history, BO, "4")).toMatchObject({ rusted: 1, traded: 0 });
+    /* Superseded expectation (GR-3): "the reprieve is the rust" -- the marks were booked as losses at the phase change.
+       The owner ruled destruction-time accounting: a Final Run train is lost only when its Final Run removes it, so a
+       history that ends here books no loss, and the destruction case is `gentleRustCertificationStats.test.ts`. */
+    expect([accolade(history, "rust-belt").holder, accolade(history, "rust-belt").value]).toEqual([null, 0]);
+    expect([accolade(history, "gravedigger").holder, accolade(history, "gravedigger").value]).toEqual([null, 0]);
+    expect(ledger(history, PRR, "4")).toMatchObject({ rusted: 0, traded: 1, discarded: 0, kept: 1 });
+    expect(ledger(history, BO, "4")).toMatchObject({ rusted: 0, traded: 0, kept: 1 });
   });
 
   it("a refused trade-in records no fate", () => {

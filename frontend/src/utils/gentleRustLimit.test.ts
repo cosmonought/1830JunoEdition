@@ -37,7 +37,11 @@ import { readStripped, sliceBetween } from "./sourceScan";
 const COST: Readonly<Record<string, number>> = { "2": 80, "3": 180, "4": 300, "5": 450, "6": 630 };
 const cost = (model: string) => COST[model] ?? 0;
 
-describe("the trim leaves the reprieved trains alone (design note #1034, superseding #979)", () => {
+describe("DEAD HELPER, not live authority -- the trim leaves the reprieved trains alone (design note #1034, superseding #979)", () => {
+  /* GR-4 (design note #1703): `trimToTrainLimit` HAS NO PRODUCTION CALLER SINCE #1530 -- the president discards by
+     choice (`pendingTrainDiscards` / `DiscardTrain`). These cases pin the dead helper's arithmetic only and are NOT
+     evidence of the live rule; the live Gentle Rust discard rule is certified by `gentleRustCertification.test.ts`
+     ("discard"), `gentleRustTransactionLocks.test.ts` (X) and `gentleRustCertificationGame.test.ts` (G2). */
   /* ==================================================================
       THIS DESCRIBE IS THE THIRD RULE THIS FEATURE HAS HAD, AND SAYS SO
      ==================================================================

@@ -1773,7 +1773,7 @@ without the power. No corpus effect (wording only). `RULES_ENGINE_VERSION` uncha
 Status **`DEFERRED — PRE-LAUNCH VARIANT CERTIFICATION REQUIRED`**, explicitly OUT of Stage-9 closure scope
 (owner ruling, 2026-09-19). *(Was `DEFERRED` (audit "UNCLEAR").)* Notes: `gentleRust*`, `variantRules.test.ts`,
 #905 (delayed auction, `boIsLocked`), #1034 (reprieved trains exempt from limits — respected by #1530).
-**Variant Certification 1A (2026-09-23): Gentle Rust — owner spec review complete; audit classification B (spec complete / implementation gaps found); OD-GR-1 (no sale/transfer) and OD-GR-2 (no Diesel trade-in) ruled; OD-GR-3 routed to Unpredictable Revenue certification; GR-1, GR-2 and DT-1 complete and committed, GR-3 (UI / Rules Reference / narration) complete pending owner gate, GR-4 and GR-5 pending; NOT certified.** See `VARIANT_CERT_GENTLE_RUST_AUDIT_2026-09-23.md` (rev 3).
+**Variant Certification 1A (2026-09-23): Gentle Rust — owner spec review complete; audit classification B (spec complete / implementation gaps found); OD-GR-1 (no sale/transfer) and OD-GR-2 (no Diesel trade-in) ruled; OD-GR-3 routed to Unpredictable Revenue certification; GR-1, GR-2, DT-1 and GR-3 complete and committed (GR-3 `4f4844a`), GR-4 (certification evidence) complete pending owner gate, GR-5 (8 → 9 boundary + closure) pending; NOT certified.** See `VARIANT_CERT_GENTLE_RUST_AUDIT_2026-09-23.md` (rev 4) and `VARIANT_CERT_GENTLE_RUST_CERTIFICATION_2026-09-24.md`.
 
 **Owner ruling, recorded verbatim in substance.** Gentle Rust, Unpredictable Revenue and Delayed Auction have
 **not** received complete specification audits as independent optional variants. They must **not** be labelled
@@ -3889,6 +3889,21 @@ The readiness pass checks:
 
 Deliberately NOT a Stage-9 rules item: S9-4's rules-authority question is closed (the implemented board is
 correct as Project 18XX+). **No reducer change, no replay effect, no golden.**
+
+**U-41.** (filed 2026-09-24 by the GR-4 U-9 review; **pre-existing since #1530, NOT Gentle-Rust-specific**) **Post-game
+statistics do not record a train-limit discard — DERIVED STATISTICS, standard games too.** When a president discards a
+train to meet the train limit (`DiscardTrain`, #1530), `utils/gameHistory.ts` records **no fleet-ledger fate** and **no
+Rust Belt or Gravedigger amount** for that train: `describeFleetLosses` splices the president's discard out of the
+fleet-loss diff (the action narrates itself) and nothing else books it. Observed in GR-4's constructed certification game
+(`utils/gentleRustCertificationGame.ts`): CPR's discarded 4 and B&O's discarded 5 show every fate at 0; the same path
+runs on standard (non-Gentle-Rust) tables. The history's own notes appear to intend otherwise — #1431 lists "discarded to
+the limit" among the ledger's fates, and #1422 counts "the train limit" in both obsolescence awards.
+*Candidate resolution — pending its own review, NOT ratified here:* book the `DiscardTrain` message's model as fate
+`discarded`; charge its value to the discarding corporation's president (Rust Belt); credit the player whose
+phase-changing purchase lowered the limit (Gravedigger). It would change standard-game post-game statistics, so it needs
+its own owner review and tests. **Not a GR-4 / Gentle Rust certification blocker** (no gameplay clause depends on it).
+**Deferred to a dedicated statistics / residual pass** (alongside the UI / readiness + residual sweep, Part F). **No
+reducer change, no replay effect, no golden.** Source: `VARIANT_CERT_GENTLE_RUST_CERTIFICATION_2026-09-24.md` §L.
 
 ## Part D — Deliberate rules deviations and owner decisions (never to be "fixed" as bugs)
 

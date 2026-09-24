@@ -10,6 +10,13 @@ cross-variant question deliberately routed to Unpredictable Revenue certificatio
 Gentle Rust specification incomplete. Certification still requires the semantic implementation, behavioural tests,
 UI/copy reconciliation, corpus characterization, the replay/version decision and the final gate (§11).
 
+*(rev 4, 2026-09-24)* GR-1, GR-2, DT-1 and GR-3 are owner-gated and committed (GR-3 = `4f4844a`). **GR-4 is complete
+pending the owner gate**; its evidence is `VARIANT_CERT_GENTLE_RUST_CERTIFICATION_2026-09-24.md` (29 clauses CERTIFIED,
+GR-S26 DEFERRED BY SPEC). GR-5 is pending. The implementation gaps below are historical findings, each now marked
+RESOLVED. **Gentle Rust is still NOT certified.**
+*(rev 5)* U-9 is **owner-ruled: destruction-time accounting** for the obsolescence statistics (GR-4's earlier "B" withdrawn);
+implemented in derived history only (`gameHistory.ts`, #1704) — no gameplay or version change.
+
 **Revision history.**
 
 | rev | date | change |
@@ -17,6 +24,8 @@ UI/copy reconciliation, corpus characterization, the replay/version decision and
 | 1 | 2026-09-23 | initial audit — verdict C (three owner decisions) |
 | 2 | 2026-09-23 | **owner spec review recorded** (§4): reprieved-train definition, capacity ≠ ownership, forced-purchase sequence, grace-turn timing accepted, OD-GR-1 and OD-GR-2 ruled, OD-GR-3 routed to UR. §3 restructured into GR-S1…GR-S30; forced-purchase predicates audited (§5); implementation gaps consolidated (§3.4); slices, test invariants and criteria updated. Four line references corrected (`gameVariants.ts:690`, `purchaseWarnings.ts:339`, `sS:1668–1670`/`:1673`, test fixture notes) |
 | 3 | 2026-09-24 | **slice status only** (§7, §9, §10, Appendix B): GR-1, GR-2 and DT-1 complete, owner-gated, committed; GR-3 (UI / Rules Reference / narration, #1702) complete pending owner gate; GR-4 and GR-5 pending. U-6 completed in GR-3; U-9 routed to GR-4 / final certification. No specification clause changed. **Gentle Rust is still NOT certified.** |
+| 4 | 2026-09-24 | **status only (GR-4).** GR-3 owner gate passed, committed `4f4844ad87e3586367f114edbfe4978deb6c181e`. GR-4 (certification matrix, invariants A–H, P1–P9 as durable tests, constructed legal game through the first 4 / 6 / D, corpus reconciliation, U-9 disposition — #1703) complete pending owner gate; evidence moved to `VARIANT_CERT_GENTLE_RUST_CERTIFICATION_2026-09-24.md`. IG-A…IG-F marked RESOLVED / CERTIFIED EVIDENCE (history preserved). GR-5 pending. No specification clause changed. **Gentle Rust is still NOT certified (GR-5 owns the 8 → 9 boundary and closure).** |
+| 5 | 2026-09-24 | **owner ruling U-9 (statistics only).** GR-4's first classification of U-9 as B (mark-time counting, documented) is **withdrawn**: it was not supported by the statistics authority (`gameHistory.ts` #1414, #1422). **Owner ruled destruction-time accounting** — a Gentle Rust train counts as rusted / lost (fleet ledger, Rust Belt, Gravedigger) only when its Final Run actually removes it; a train still owned at game end is kept. Implemented in derived history only (#1704; certification doc §L, r2). No gameplay clause changed; no version change. GR-4 again ready for the owner gate after the correction. |
 
 ---
 
@@ -143,37 +152,37 @@ These are separate predicates, and this document never says a reprieved train "d
 | **A. Scope and trigger** | | | |
 | **GR-S1 Flag** | `variants.gentleRust: boolean`, carried on `SetupGame`, resolved field-by-field; absent → `false`. | CONFIRMED (#902) | CORRECT |
 | **GR-S2 Which models are doomed** | The ordinary rust triggers decide: 2s at the first 4, 3s at the first 6, 4s at the first D (all tables, incl. LPF / 18XX+). | INHERITED (phase table) | CORRECT (`RUSTED_BY` / `RUSTS_ON`) |
-| **GR-S3 Delay, not exemption** | Gentle Rust delays destruction; it never changes which models rust, and a doomed train must never become permanent. | CONFIRMED (#906 "trains that would normally rust") + DERIVED | **WRONG** via the sale and trade-in holes (GR-S12, GR-S13; P6, P9) |
+| **GR-S3 Delay, not exemption** | Gentle Rust delays destruction; it never changes which models rust, and a doomed train must never become permanent. | CONFIRMED (#906 "trains that would normally rust") + DERIVED | **WRONG** via the sale and trade-in holes (GR-S12, GR-S13; P6, P9) *(rev 4: RESOLVED — GR-2; CERTIFIED EVIDENCE → certification doc §C)* |
 | **GR-S4 Trigger moment** | The purchase that brings the first train of the triggering tier into play (depot, emergency, or Diesel exchange) changes the phase the moment it resolves (§2.0). In a first-D exchange the traded-in (non-reprieved) train leaves before the phase turns and is exchanged, not rusted. | INHERITED; exchange detail CONFIRMED (#1303/#1314) | CORRECT (P1, P9; `dieselExchange.test.ts:119`) |
 | **GR-S5 Who is doomed** | Every copy of the doomed model held by **every** corporation at that moment is marked — including the purchaser's own. | DERIVED (#906 + standard "all") | CORRECT (P1) |
 | **GR-S6 Bank Pool / depot** | Doomed-model trains in the Bank Pool are destroyed at the phase change, no reprieve. Unsold depot stock of a doomed tier cannot exist (queue rule). | DERIVED (#1314 + #906) / INHERITED | CORRECT at the phase change (P5, P9) |
 | **B. Status during reprieve** | | | |
 | **GR-S7 Remains owned** | The train stays in `owned_trains`, visible on every train surface. | CONFIRMED (#979 mechanism, #1034 chips, SR-1) | CORRECT |
-| **GR-S8 Remains operable** | The train may be assigned a route and run during its grace period under its ordinary capacity and rules. | CONFIRMED (#906 request, SR-1) | CORRECT by construction (roster and route authority read `owned_trains`); **UNTESTED behaviourally** |
-| **GR-S9 Prevents trainlessness** | A corporation whose only trains are reprieved **owns trains**: it is not trainless, owes no §6.6.2 purchase and is not put into emergency funding because of the reprieve. This is part of the variant's purpose — delayed obsolescence buffers a corporation from being forced straight into an emergency purchase when its trains rust. | CONFIRMED (SR-1, SR-3) | CORRECT BUT UNDERTESTED / MUST PIN (§5 predicate audit: every trainlessness reader uses raw `owned_trains`) |
+| **GR-S8 Remains operable** | The train may be assigned a route and run during its grace period under its ordinary capacity and rules. | CONFIRMED (#906 request, SR-1) | CORRECT by construction (roster and route authority read `owned_trains`); **UNTESTED behaviourally** *(rev 4: CERTIFIED EVIDENCE → GR-1 route test; certification doc §C)* |
+| **GR-S9 Prevents trainlessness** | A corporation whose only trains are reprieved **owns trains**: it is not trainless, owes no §6.6.2 purchase and is not put into emergency funding because of the reprieve. This is part of the variant's purpose — delayed obsolescence buffers a corporation from being forced straight into an emergency purchase when its trains rust. | CONFIRMED (SR-1, SR-3) | CORRECT BUT UNDERTESTED / MUST PIN (§5 predicate audit: every trainlessness reader uses raw `owned_trains`) *(rev 4: CERTIFIED EVIDENCE, mutation-verified → certification doc §C, §E)* |
 | **GR-S10 Limit capacity** | The train does **not** count against the phase's **maximum train limit** — purchase gates, the Buy-Trains auto-skip at the limit, capacity displays, the excess obligation. | CONFIRMED (#1034, SR-1) | CORRECT (`countableTrainCount`, used only for capacity) |
 | **GR-S11 Not an excess-discard candidate** | The §6.6.1 obligation is `countable − limit`, and the president chooses among countable trains only. A reprieved train is not a candidate because it occupies no slot — **not** because it is unowned. A discard never changes marks. | DERIVED (#1034 + §6.6.1), confirmed as conforming (SR-8) | CORRECT (P7: not offered; direct `DiscardTrain` refused) |
-| **GR-S12 No sale / transfer** | A reprieved train **may not be sold or otherwise transferred** to another corporation — refused at proposal, answer and settlement. Its reprieve belongs to the corporation that owned it at the rust event; it stays there through its grace turn and is then removed. It may not escape rust by changing ownership. The mark does **not** follow a train anywhere. | **CONFIRMED (OD-GR-1)** | **WRONG** — sale accepted; buyer gets an unmarked, permanent train; seller keeps an orphan mark (P6) |
-| **GR-S13 No Diesel trade-in** | A reprieved train **may not be used as a Diesel trade-in** (today: a reprieved 4 toward the $800 / LPF $750 Diesel). It gives no credit, never enters the Bank Pool through an exchange, never becomes purchasable after its tier is obsolete. Non-reprieved 4-, 5- and 6-trains keep their ordinary trade-in rights. | **CONFIRMED (OD-GR-2)** | **WRONG** — exchange accepted; mark orphaned; obsolete 4 enters the pool and was bought in phase D (P9) |
-| **GR-S14 Route / revenue** | A reprieved train is priced, contributes to pay/withhold and (under Unpredictable Revenue) rolls its die exactly like any train, unless a separately certified variant says otherwise. Its destruction on entering Dividends cannot change the payout (`DeclareDividends` prices from the run, #752/#1102). | DERIVED (no rule modifies it) | CORRECT by construction; **UNTESTED behaviourally** |
+| **GR-S12 No sale / transfer** | A reprieved train **may not be sold or otherwise transferred** to another corporation — refused at proposal, answer and settlement. Its reprieve belongs to the corporation that owned it at the rust event; it stays there through its grace turn and is then removed. It may not escape rust by changing ownership. The mark does **not** follow a train anywhere. | **CONFIRMED (OD-GR-1)** | **WRONG** — sale accepted; buyer gets an unmarked, permanent train; seller keeps an orphan mark (P6) *(rev 4: RESOLVED — GR-2 `b755a7b`; CERTIFIED EVIDENCE → certification doc §C)* |
+| **GR-S13 No Diesel trade-in** | A reprieved train **may not be used as a Diesel trade-in** (today: a reprieved 4 toward the $800 / LPF $750 Diesel). It gives no credit, never enters the Bank Pool through an exchange, never becomes purchasable after its tier is obsolete. Non-reprieved 4-, 5- and 6-trains keep their ordinary trade-in rights. | **CONFIRMED (OD-GR-2)** | **WRONG** — exchange accepted; mark orphaned; obsolete 4 enters the pool and was bought in phase D (P9) *(rev 4: RESOLVED — GR-2 `b755a7b`; CERTIFIED EVIDENCE → certification doc §C)* |
+| **GR-S14 Route / revenue** | A reprieved train is priced, contributes to pay/withhold and (under Unpredictable Revenue) rolls its die exactly like any train, unless a separately certified variant says otherwise. Its destruction on entering Dividends cannot change the payout (`DeclareDividends` prices from the run, #752/#1102). | DERIVED (no rule modifies it) | CORRECT by construction; **UNTESTED behaviourally** *(rev 4: CERTIFIED EVIDENCE → GR-1 route test; certification doc §C)* |
 | **C. Timing** | | | |
 | **GR-S15 The qualifying grace turn** | The grace entitlement is **one Operating Turn that BEGINS AFTER the train became doomed**. (A) another corporation triggers before the affected corporation has operated in this OR → its later turn in the **same** OR; (B) triggered after it already operated → its next turn in a **later** OR (across a Stock Round if the set ends); (D) last corporation of a set / end-of-set trigger → every doomed train survives the Stock Round to its corporation's next actual turn; (E) one-corporation OR → same rules. | **CONFIRMED** (#906 + #1102; accepted SR-5) | (A) CORRECT (P1/NYC); (B) CORRECT (P3); (D) CORRECT for other corporations (P4); (E) CORRECT for pre-existing marks (P5b) |
-| **GR-S16 Self-trigger** | (C) A corporation that dooms its own trains in its own Buy Trains step cannot use the current turn — it began before the doom event. Its old trains survive the turn end (and a Stock Round, if the set ends) into its **next future Operating Turn**, remaining owned, non-counting for the limit, and sufficient to prevent trainlessness until actually destroyed. | **CONFIRMED** (SR-5: "a confirmed implementation defect, not an unresolved owner question") | **WRONG** — destroyed at the end of the current turn (P1, P1b, P4-self, P5) |
+| **GR-S16 Self-trigger** | (C) A corporation that dooms its own trains in its own Buy Trains step cannot use the current turn — it began before the doom event. Its old trains survive the turn end (and a Stock Round, if the set ends) into its **next future Operating Turn**, remaining owned, non-counting for the limit, and sufficient to prevent trainlessness until actually destroyed. | **CONFIRMED** (SR-5: "a confirmed implementation defect, not an unresolved owner question") | **WRONG** — destroyed at the end of the current turn (P1, P1b, P4-self, P5) *(rev 4: RESOLVED — GR-1 `0ca01be`; CERTIFIED EVIDENCE → certification doc §C, §E H)* |
 | **GR-S17 Turn, not run** | The entitlement is the qualifying turn, not a successful run. No legal route, no route assigned, or no revenue earned — the train still expires at that turn's expiry point. It is never "kept until it completes a route". Whether a president may decline to run is ordinary route authority (pinned boards: a skip at Run Trains is refused while a paying route exists, #1550). | **CONFIRMED** (#906, #982; accepted SR-4) + INHERITED (§6.4) | CORRECT (P3, P5b) |
 | **GR-S18 Normal destruction point** | The end of **Run Routes** in the qualifying grace turn (the cursor entering Dividends). | CONFIRMED (#1102; accepted SR-6) | CORRECT (`sS:4127–4130`) |
-| **GR-S19 Fallback cleanup** | If the qualifying turn ends without reaching the normal destruction point, end-of-turn cleanup destroys the train. The fallback applies **only to a train whose qualifying grace turn this is**; it must never destroy a train newly doomed later in that same turn (a Buy Trains self-trigger, GR-S16). **Implementation requirement:** the engine must know whether the current turn is the train's qualifying grace turn (state or derivation — not designed here). | CONFIRMED (SR-6) | **WRONG** — the fallbacks (`sS:3893`, `sS:3985`) expire every mark of the outgoing corporation, including marks created in that turn |
+| **GR-S19 Fallback cleanup** | If the qualifying turn ends without reaching the normal destruction point, end-of-turn cleanup destroys the train. The fallback applies **only to a train whose qualifying grace turn this is**; it must never destroy a train newly doomed later in that same turn (a Buy Trains self-trigger, GR-S16). **Implementation requirement:** the engine must know whether the current turn is the train's qualifying grace turn (state or derivation — not designed here). | CONFIRMED (SR-6) | **WRONG** — the fallbacks (`sS:3893`, `sS:3985`) expire every mark of the outgoing corporation, including marks created in that turn *(rev 4: RESOLVED — GR-1 `0ca01be`; CERTIFIED EVIDENCE → certification doc §C)* |
 | **D. Destruction and aftermath** | | | |
 | **GR-S20 Destruction** | Removes the train from `owned_trains` and its pending-rust mark, one mark per train. | DERIVED (#1032 "permanently and completely removed") | CORRECT (`expireReprieveFor`) |
-| **GR-S21 Not pooled / not revived** | A destroyed reprieved train does not enter the Bank Pool, cannot be bought again, cannot be re-marked, and is recorded as exactly one loss. | DERIVED | CORRECT for expiry; the pool is reachable only through the trade-in hole (GR-S13). Statistics record the loss at marking (U-9) |
-| **GR-S22 Trainless only after destruction** | Only when its reprieved trains are actually destroyed can a corporation become trainless because of them. If it still owns any non-reprieved train, expiry does not make it trainless and no forced purchase arises from the expiry. | CONFIRMED (SR-3) | CORRECT BUT UNDERTESTED / MUST PIN |
-| **GR-S23 Ordinary forced purchase afterwards** | After destruction, the ordinary no-train / forced-purchase authority applies normally at that turn's Buy Trains step; if its prerequisites hold (§6.6.2: no train, a legal route, a train for sale), the normal emergency-purchase path may engage. Sequence in §3.3. | CONFIRMED (SR-3) + INHERITED | CORRECT BUT UNDERTESTED / MUST PIN (`trainObligationFor` reads `owned_trains`; expiry precedes Hardware) |
+| **GR-S21 Not pooled / not revived** | A destroyed reprieved train does not enter the Bank Pool, cannot be bought again, cannot be re-marked, and is recorded as exactly one loss. | DERIVED | CORRECT for expiry; the pool is reachable only through the trade-in hole (GR-S13). Statistics record the loss at marking (U-9) *(rev 5: owner ruling U-9 — statistics now book the loss at the destruction, once; certification doc §L)* |
+| **GR-S22 Trainless only after destruction** | Only when its reprieved trains are actually destroyed can a corporation become trainless because of them. If it still owns any non-reprieved train, expiry does not make it trainless and no forced purchase arises from the expiry. | CONFIRMED (SR-3) | CORRECT BUT UNDERTESTED / MUST PIN *(rev 4: CERTIFIED EVIDENCE → certification doc §C)* |
+| **GR-S23 Ordinary forced purchase afterwards** | After destruction, the ordinary no-train / forced-purchase authority applies normally at that turn's Buy Trains step; if its prerequisites hold (§6.6.2: no train, a legal route, a train for sale), the normal emergency-purchase path may engage. Sequence in §3.3. | CONFIRMED (SR-3) + INHERITED | CORRECT BUT UNDERTESTED / MUST PIN (`trainObligationFor` reads `owned_trains`; expiry precedes Hardware) *(rev 4: CERTIFIED EVIDENCE → certification doc §C, §E B)* |
 | **E. Multiplicity** | | | |
-| **GR-S24 Multiset** | n copies of a doomed model → n marks; a repeated application of the same tier never re-marks a marked copy; expiry removes exactly one train per mark; an unmarked same-model train is never removed. Invariant: `pending_rust_trains` ⊆ `owned_trains` (multiset), after every train-moving arm. | CONFIRMED (#1032) + DERIVED | CORRECT for marking/expiry (P8); invariant broken today only by the sale and trade-in holes |
+| **GR-S24 Multiset** | n copies of a doomed model → n marks; a repeated application of the same tier never re-marks a marked copy; expiry removes exactly one train per mark; an unmarked same-model train is never removed. Invariant: `pending_rust_trains` ⊆ `owned_trains` (multiset), after every train-moving arm. | CONFIRMED (#1032) + DERIVED | CORRECT for marking/expiry (P8); invariant broken today only by the sale and trade-in holes *(rev 4: RESOLVED — GR-2; invariant CERTIFIED on every board → certification doc §H)* |
 | **GR-S25 Coexisting trigger groups** | Several rust-trigger groups (e.g. 2s by a 4, then 3s by a 6) coexist until the corporation's qualifying grace turn and are destroyed together at its destruction point. | DERIVED | CORRECT (P8) |
 | **F. Cross-variant, narration, presentation, determinism** | | | |
 | **GR-S26 Yellow Sign** | What happens when the Yellow Sign's cheapest-train removal selects a reprieved train. Standalone Gentle Rust does not need the answer; **combined Gentle Rust + Unpredictable Revenue is not fully certified until it is settled.** | **DEFERRED — OD-GR-3 → UR certification** | not probed |
-| **GR-S27 Narration** | Rust modal / flourish at destruction, not marking; Activity Log records the marking; no special Gentle Rust modal line; an expiry is never narrated as a limit discard. | CONFIRMED (#1002, #1003, #896, #1099) | CORRECT for purchases and expiry; **WRONG** for a Diesel trade-in under Gentle Rust (narrated "discarded to meet the new limit", limit notice — P9n) |
-| **GR-S28 Presentation** | "Final Run: [type]-trains" badge; chip keeps warning and final-run animation; "(Gently Rusting: N-trains)" beside the limit; countdown labels without pulse; copy distinguishes limit exemption from ownership. | CONFIRMED (#1004, #1033, #1034, animations ruling, SR-1) | labels CORRECT; timing detail/tooltip copy WRONG (U-1…U-3) |
+| **GR-S27 Narration** | Rust modal / flourish at destruction, not marking; Activity Log records the marking; no special Gentle Rust modal line; an expiry is never narrated as a limit discard. | CONFIRMED (#1002, #1003, #896, #1099) | CORRECT for purchases and expiry; **WRONG** for a Diesel trade-in under Gentle Rust (narrated "discarded to meet the new limit", limit notice — P9n) *(rev 4: RESOLVED — GR-3 U-6; CERTIFIED EVIDENCE → certification doc §C)* |
+| **GR-S28 Presentation** | "Final Run: [type]-trains" badge; chip keeps warning and final-run animation; "(Gently Rusting: N-trains)" beside the limit; countdown labels without pulse; copy distinguishes limit exemption from ownership. | CONFIRMED (#1004, #1033, #1034, animations ruling, SR-1) | labels CORRECT; timing detail/tooltip copy WRONG (U-1…U-3) *(rev 4: RESOLVED — GR-3; certification doc §K)* |
 | **GR-S29 Determinism** | Reprieve timing is a function of logged messages and the reducer cursor; no randomness, no client state. | CONFIRMED (#902) / DERIVED | CORRECT |
 | **GR-S30 Standard control** | With the flag off, rust destroys at the phase change and nothing is marked. | INHERITED | CORRECT (P1c) |
 
@@ -214,12 +223,12 @@ authority, not to this variant.
 
 | id | gap | clause | evidence | class |
 |---|---|---|---|---|
-| **IG-A** | **Self-trigger timing.** A corporation that dooms its own trains in its Buy Trains step loses them at the end of that same turn (mid-OR, end of set, one-corporation OR). | GR-S16, GR-S19 | P1, P1b, P4-self, P5 | **DEFECT** |
-| **IG-B** | **Sale / transfer hole.** A reprieved train can be sold; it becomes an ordinary permanent train at the buyer; the seller's mark is orphaned. | GR-S12, GR-S3, GR-S24 | P6 | **DEFECT** (OD-GR-1) |
-| **IG-C** | **Diesel trade-in hole.** A reprieved 4 can be exchanged; the mark is orphaned; the 4 enters the Bank Pool and is buyable in phase D. | GR-S13, GR-S3, GR-S6, GR-S24 | P9 | **DEFECT** (OD-GR-2) |
-| **IG-D** | **Ownership vs capacity invariant.** No path conflates them today: every trainlessness reader uses raw `owned_trains`, and `countableTrainCount` appears only in capacity contexts (§5). Nothing pins that separation. | GR-S9, GR-S22, GR-S23 | §5 predicate audit; `trainLifecycle.test.ts:192–197` (one unit case) | **CORRECT BUT UNDERTESTED / MUST PIN** |
-| **IG-E** | **Route behaviour.** Correct by construction; no behavioural test uses an actually reprieved train (`routeAuthority.test.ts:314` is titled for one but has none). | GR-S8, GR-S14 | §6 | **CORRECT BUT UNDERTESTED** |
-| **IG-F** | **Player-facing copy / UI.** Chip tooltip "Rusts on NEXT depot purchase!" after rust; Final Run / countdown timing wrong for self-trigger; Diesel trade-in narrated as a limit discard; Rules Reference one sentence; discard UI silent on the reprieved exclusion; nothing says a reprieved train keeps the corporation from being trainless. | GR-S27, GR-S28 | U-1…U-7, U-10 (§7) | **DEFECT (copy/UI)** |
+| **IG-A** | **Self-trigger timing.** A corporation that dooms its own trains in its Buy Trains step loses them at the end of that same turn (mid-OR, end of set, one-corporation OR). | GR-S16, GR-S19 | P1, P1b, P4-self, P5 | **DEFECT** → *(rev 4)* **RESOLVED** (GR-1 `0ca01be`) / CERTIFIED EVIDENCE → certification doc §C GR-S16/S19, §E H |
+| **IG-B** | **Sale / transfer hole.** A reprieved train can be sold; it becomes an ordinary permanent train at the buyer; the seller's mark is orphaned. | GR-S12, GR-S3, GR-S24 | P6 | **DEFECT** (OD-GR-1) → *(rev 4)* **RESOLVED** (GR-2 `b755a7b`) / CERTIFIED EVIDENCE → certification doc §C GR-S12, §E F |
+| **IG-C** | **Diesel trade-in hole.** A reprieved 4 can be exchanged; the mark is orphaned; the 4 enters the Bank Pool and is buyable in phase D. | GR-S13, GR-S3, GR-S6, GR-S24 | P9 | **DEFECT** (OD-GR-2) → *(rev 4)* **RESOLVED** (GR-2 `b755a7b`) / CERTIFIED EVIDENCE → certification doc §C GR-S13, §E G, §G |
+| **IG-D** | **Ownership vs capacity invariant.** No path conflates them today: every trainlessness reader uses raw `owned_trains`, and `countableTrainCount` appears only in capacity contexts (§5). Nothing pins that separation. | GR-S9, GR-S22, GR-S23 | §5 predicate audit; `trainLifecycle.test.ts:192–197` (one unit case) | **CORRECT BUT UNDERTESTED / MUST PIN** → *(rev 4)* **PINNED** / CERTIFIED EVIDENCE (mutation-verified) → certification doc §E A/B/E |
+| **IG-E** | **Route behaviour.** Correct by construction; no behavioural test uses an actually reprieved train (`routeAuthority.test.ts:314` is titled for one but has none). | GR-S8, GR-S14 | §6 | **CORRECT BUT UNDERTESTED** → *(rev 4)* CERTIFIED EVIDENCE (GR-1 real reprieved route) → certification doc §C |
+| **IG-F** | **Player-facing copy / UI.** Chip tooltip "Rusts on NEXT depot purchase!" after rust; Final Run / countdown timing wrong for self-trigger; Diesel trade-in narrated as a limit discard; Rules Reference one sentence; discard UI silent on the reprieved exclusion; nothing says a reprieved train keeps the corporation from being trainless. | GR-S27, GR-S28 | U-1…U-7, U-10 (§7) | **DEFECT (copy/UI)** → *(rev 4)* **RESOLVED** (GR-3 `4f4844a`) / certification doc §K |
 
 ---
 
@@ -313,6 +322,8 @@ principle are inputs to that decision, not answers to it.
 
 `sS` = `frontend/src/gameEngine/sandboxSession.ts`. Line numbers at `c4d3b5d`.
 
+*(rev 4: this map is the audit-time snapshot. Its WRONG marks were resolved by GR-1 / GR-2 / GR-3; the current train-moving-arm inventory, with line numbers at `4f4844a`, is certification doc §H.)*
+
 | concern | owner (file:line) | mark |
 |---|---|---|
 | variant resolution | `gameVariants.ts:690–722` `resolveVariants`; `:658` default; `:672` badge | CORRECT BY SPEC |
@@ -338,7 +349,7 @@ principle are inputs to that decision, not answers to it.
 | narration: marking | `sS:1624–1678` gentle branch of `describeFleetLosses` | CORRECT for purchases; **WRONG** for Diesel trade-in (`sS:1668–1670`) |
 | narration: expiry | `sS:1460` `expiredReprieves`, `sS:1495` `describeReprieveExpiries` | CORRECT BY SPEC |
 | modal / flourish | `App.tsx:7770–7960` (`:7843` rust notice deferred under Gentle Rust; expiry block `:7898`) | CORRECT; comments `:2401–2402`, `:7836–7838`, `:7889` STALE |
-| awards / statistics | `gameHistory.ts:511–545` | CORRECT (one loss per train, recorded at marking) — U-9 |
+| awards / statistics | `gameHistory.ts:511–545` | CORRECT (one loss per train, recorded at marking) — U-9 *(rev 5: superseded by the owner's U-9 ruling — destruction-time accounting, #1704)* |
 | Rules Reference | `RulesReference.tsx:663` | PARTIAL (one sentence) — U-4 |
 | Lobby / Waiting Room / host card | `gameVariants.ts:260–263`; `Lobby.tsx:1410–1417`; `SandboxWaitingRoom.tsx:84–88`; `HostSetupCard.tsx:72, 486`; `LobbyRoomList.tsx:48` | CORRECT BY SPEC (#982) |
 | final-run badge / limit line | `ContextualActionBar.tsx:2303–2330`, `:3090–3130`, `:3262–3295` | labels CORRECT; detail text WRONG after a self-trigger (U-2) |
@@ -348,6 +359,8 @@ principle are inputs to that decision, not answers to it.
 ---
 
 ## 6. Test-coverage matrix
+
+*(rev 4: every gap in this matrix is closed by behavioural evidence — certification doc §C; the dead-helper trim rows are relabelled and retargeted, §N.)*
 
 Focused suites run read-only at `c4d3b5d` in rev 1: 23 suites / 530 tests, all green. Green includes the tests that pin
 the self-trigger behaviour. Kind: **B** behavioural through the reducer · **U** unit on a helper · **S** source scan.
@@ -416,7 +429,11 @@ Required polish / fixes (not designed here):
   that item; not handled in GR-3.)*
 * **U-9** statistics record the loss at marking; a game ending before an expiry counts a loss never suffered.
   Cosmetic; state it or accept. *(rev 3: unchanged by GR-3; carried to GR-4 / final certification for explicit
-  disposition.)*
+  disposition.)* *(rev 4: GR-4 classified **B — cosmetically imprecise but acceptable, with a documented definition**:
+  counted once, at the rust event; certification doc §L.)* *(rev 5: that classification is **withdrawn** — #1414 / #1422
+  define a lost train as one that actually left the roster. **OWNER RULING: destruction-time accounting**; implemented in
+  `gameHistory.ts` (#1704): loss at the destruction, charged to the president then, credited to the purchaser who brought in
+  the rusting tier; a Final Run train still owned at game end is kept. **RESOLVED.**)*
 * **U-10** *(rev 2)* say where a player looks for it that Final Run trains keep the corporation from being trainless
   (limit tooltip / Rules Reference), so "exempt" is never read as "gone".
 * **U-11** *(rev 2)* sale and Diesel-exchange surfaces must grey reprieved copies with the reason once GR-2 refuses them
@@ -470,7 +487,7 @@ Characterization only; the live game is not evidence that current behaviour is r
   false) → every dispatch runs under `withRules(resolveVariants(state.variants))` → replay reads the same deal.
   `RoomSession.submit` stamps `rules_engine_version`. No client state, no randomness (GR-S29); `false` reproduces
   standard rust (GR-S30).
-* **`RULES_ENGINE_VERSION` stays 8** in this pass.
+* **`RULES_ENGINE_VERSION` stays 8** in this pass. *(rev 4: GR-4 confirms the 8 → 9 set exactly — GR-1 timing, GR-2 sale refusal, GR-2 trade-in refusal, DT-1 auto-skip; GR-3 and GR-4 replay-neutral; certification doc §N.)*
 * **Likely replay-semantic changes requiring a later deliberate 8 → 9 closure boundary:** self-trigger grace timing
   (IG-A); reprieved-train sale refusal (IG-B); reprieved-train Diesel trade-in refusal (IG-C); a forced-purchase fix
   **only if** the implementation audit finds the current engine actually wrong (today: no conflation found, IG-D).
@@ -488,6 +505,10 @@ Characterization only; the live game is not evidence that current behaviour is r
 ---
 
 ## 10. Implementation slices (rev 2; status at rev 3)
+
+**Status (rev 5, 2026-09-24):** GR-3 owner-gated and committed (`4f4844a`). **GR-4 COMPLETE pending owner gate** — tests and documents (#1703) plus the owner-ruled U-9 statistics correction in derived history (#1704); evidence → `VARIANT_CERT_GENTLE_RUST_CERTIFICATION_2026-09-24.md` (r2). **GR-5 pending.** Gentle Rust is NOT certified.
+
+**Status (rev 4, 2026-09-24):** GR-3 owner-gated and committed (`4f4844a`). **GR-4 COMPLETE pending owner gate** (tests and documents only, #1703; evidence → `VARIANT_CERT_GENTLE_RUST_CERTIFICATION_2026-09-24.md`). **GR-5 pending.** Gentle Rust is NOT certified.
 
 **Status (rev 3, 2026-09-24):** **GR-1 COMPLETE** — owner-gated, committed (`0ca01be`). **GR-2 COMPLETE** — owner-gated,
 committed (`b755a7b`). **DT-1** (adjacent base-game auto-skip fix, #1701) **COMPLETE** — owner-gated, committed
@@ -510,6 +531,8 @@ OD-GR-3 is carried into Unpredictable Revenue certification, not these slices.
 ## 11. Certification criteria and required test invariants
 
 ### Required test invariants (to be written in GR-4; driven through real messages on pinned boards)
+
+*(rev 4: written and green — certification doc §E.)*
 
 * **A — Only reprieved trains.** Corporation owns only reprieved trains → "has a train" is true; the train-limit count
   excludes them; no forced / emergency purchase merely because all trains are reprieved; the trains are routeable
@@ -551,6 +574,8 @@ Plus the clause coverage of §6 (every gap closed), with a standard-mode negativ
 ---
 
 ## Appendix A — probe evidence (rev 1, unchanged)
+
+*(rev 4: every probe below is reproduced by a durable repository test with the specification's current outcome — certification doc §F. The scratch harness is no longer the evidence for any clause.)*
 
 Scratch harness outside the repository (`$HOME/grscratch`): the engine compiled with `server/tsconfig.json` to a scratch
 `outDir`, boards built as in `rustCashNeutrality.test.ts` plus `rules_engine_version: 8` (pinned), messages dispatched

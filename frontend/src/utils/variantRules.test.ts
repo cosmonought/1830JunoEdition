@@ -37,7 +37,7 @@ import {
   projectDividendFrom,
 } from "../components/StockMarketRenderer";
 import { fleetLossNotices, noticeBody } from "./fleetLossNotice";
-import { isTrainLocked } from "../gameEngine/trainLimit";
+import { countableTrainCount, isTrainLocked } from "../gameEngine/trainLimit";
 import { pendingTrainDiscards } from "../gameEngine/trainDiscard";
 import type { GameStateResponse } from "../gameEngine/gameState";
 
@@ -377,7 +377,12 @@ describe("gentle rust reprieves a train for one turn (design note #906)", () => 
     expect(pr.pending_rust_trains).toEqual(["2", "2"]);
   });
 
-  it("counts the reprieved trains against the train limit", () => {
+  it("SUPERSEDED BY #1034 (relabelled in GR-4) -- the reprieved trains stay in the roster, but only the ordinary train counts toward the limit", () => {
+    /* GR-4 (design note #1703): this case was written for #979 and asserted that the three-train roster is LOCKED at
+       phase 4's limit of 3. #1034 reversed that and the owner's spec review confirmed it (SR-1 / SR-2, GR-S10): a
+       Final Run train occupies no limit slot. The raw-roster lock below is kept as what it always measured -- the
+       corporation still OWNS all three trains -- and the train-limit count the live gates use is asserted beside it,
+       so the title no longer claims the superseded rule. Live evidence: `gentleRustCertification.test.ts` (D). */
     /* THE RULING, AS ARITHMETIC. Phase 4's limit is 3 and this corporation holds three trains, two of them
        reprieved -- so nothing is discarded, and the fleet that survives is the WHOLE fleet. Under #906 this
        corporation counted as holding one train and had room to buy two more.
@@ -388,6 +393,8 @@ describe("gentle rust reprieves a train for one turn (design note #906)", () => 
     const pr = after.public_companies[0];
     expect(pr.owned_trains).toHaveLength(3);
     expect(isTrainLocked(pr.owned_trains?.length ?? 0, 3)).toBe(true);
+    expect(countableTrainCount(pr.owned_trains, pr.pending_rust_trains, pr.carcosan_trains)).toBe(1);
+    expect(isTrainLocked(countableTrainCount(pr.owned_trains, pr.pending_rust_trains, pr.carcosan_trains), 3)).toBe(false);
   });
 
   it("forces no discard when only the exempt trains put it over", () => {

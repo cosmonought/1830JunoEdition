@@ -48,14 +48,14 @@ import {
 } from "../gameEngine/sandboxState";
 import { waterfallForRoster, withEmptyRoster } from "../gameEngine/gameSetup";
 import { effectiveActions } from "../gameEngine/logRevert";
-import { depotCostFor, derivePhase, trainTier } from "../gameEngine/gamePhase";
+import { depotCostFor, depotInventory, derivePhase, trainTier } from "../gameEngine/gamePhase";
 import { citySlotCount } from "../gameEngine/stationTokens";
 import { boardFor, withRules } from "../gameEngine/boardSelection";
 import { flavorBucketFor, resolveVariants, revenueFlavourClause, rollTurnRevenue } from "../gameEngine/gameVariants";
 import { yellowSignStageApplied } from "../gameEngine/yellowSign";
 import { variantCueFor } from "./variantSfx";
 import { tileStock } from "./tileSupply";
-import { describeFleetLosses } from "../gameEngine/sandboxSession";
+import { describeFleetLosses, describeReprieveExpiries } from "../gameEngine/sandboxSession";
 import { ACCOLADE_SPEC_BY_KEY, selectCeremony, unearned, type Accolade, type AccoladeKey } from "./accolades";
 import type { GameStateResponse, PublicCompanyState } from "../gameEngine/gameState";
 import type { SandboxAction } from "./sandboxRoom";
@@ -312,6 +312,10 @@ export function gameHistoryFrom(log: readonly SandboxAction[], policy: ReplayPol
   const trainsLostCount: Tally = new Map();
   const trainsSentValue: Tally = new Map();
   const trainsSentCount: Tally = new Map();
+  /* #1704 (owner ruling U-9): who brought each train tier into play -- the actor of the entry under which the phase
+     first reached it. The cause of every rust that tier wrought, remembered because under Gentle Rust the loss is
+     booked at a later destruction whose own entry names somebody else (or nobody). Keyed by the ARRIVING tier. */
+  const rustCauseByTier = new Map<string, string | null>();
   const dumps: Tally = new Map();
   const walls: Tally = new Map();
   let bestRun: { holder: string | null; ticker: string; model: string; revenue: number; round: string } | null = null;
@@ -511,7 +515,8 @@ export function gameHistoryFrom(log: readonly SandboxAction[], policy: ReplayPol
 
     /* GRAVEDIGGER and THE RUST BELT (#1422): trains rusted or discarded to the limit, read by the same diff
        the fleet-loss notices use -- which already leaves out a sold train (#1245) and one the Yellow Sign took
-       (#1264), and under Gentle Rust reports the reprieve as the rust event (#979). A trade-in's returned
+       (#1264), and under Gentle Rust reports the reprieve as the rust event (#979) -- which, since #1704, these
+       tallies do NOT book: see the note below. A trade-in's returned
        model is taken out here: it left the roster, but nobody scrapped it. The loser is the corporation's
        president; the cause is whoever dispatched the purchase that turned the phase.
        #1702 (GR-3, U-6): THE DIESEL TRADE-IN NO LONGER REACHES THIS DIFF -- the narrator splices it out, as it
@@ -520,18 +525,54 @@ export function gameHistoryFrom(log: readonly SandboxAction[], policy: ReplayPol
        4 that really rusted beside it), and its ledger fate is read off the message below. The scrap tallies are
        unchanged; the one fate that moves is a first-Diesel trade-in on a standard table, which the old diff
        filed as "rusted" and is "traded". */
+    /* ==================================================================
+        DESIGN NOTE 1704: UNDER GENTLE RUST A TRAIN IS LOST WHEN IT IS DESTROYED (owner ruling U-9, 2026-09-24)
+       ==================================================================
+       RULED: "U-9 uses DESTRUCTION-TIME accounting. A Gentle Rust train counts as RUSTED / LOST for the fleet
+       ledger, Rust Belt and Gravedigger only when the train is actually permanently removed at the end of its
+       qualifying Final Run. Merely entering `pending_rust_trains` / Final Run does NOT yet count as the train
+       having been lost from the corporation. If the game ends while the Final Run train still exists in
+       `owned_trains`, that train is KEPT, not both RUSTED and KEPT."
+       THE RULING RESTORES #1414 AND #1422, which this block had drifted from under Gentle Rust: a rusted train
+       is "one that actually left the roster" (#1414), the Gravedigger SENDS trains to the scrapheap and the Rust
+       Belt LOST them (#1422). #979's "the reprieve is the rust event" is a NARRATION rule -- the Activity Log still
+       says "rusted" at the phase change (GR-S27) -- and it was never a ruling about these tallies.
+       SO, ON A GENTLE RUST TABLE: the fleet-loss diff's `rusted` (the newly MARKED models) books nothing here; the
+       destruction does, read off `describeReprieveExpiries` -- the same shared answer the Rust modal fires on
+       (#1099), which reports only marked copies that left the roster, by multiset, at the Run Routes expiry or
+       either turn-end fallback. At that entry: the fate is "rusted"; the LOSS is charged to the corporation's
+       president AT DESTRUCTION (the one who actually loses it); the CAUSE is the player whose purchase brought in
+       the tier that rusts this model (`rustCauseByTier`) -- never the destruction entry's own actor, who may be
+       the victim, a derived step, or nobody.
+       WHY THE TIER IDENTIFIES THE CAUSE WITHOUT TRAIN IDENTITY: each model rusts at exactly one event -- the first
+       4 (2s), the first 6 (3s), the first D (4s) -- and every copy held then is marked by it (GR-S5); no copy of a
+       doomed model can be acquired afterwards (queue rule, pool scrap, OD-GR-1). So "the purchase that turned the
+       phase to the rusting tier" is the one purchase that doomed every destroyed copy of that model, whichever
+       corporation and however many copies. Reconstructed from the log as it replays: no reducer state, no train
+       identity, multiplicity preserved by counting each destroyed copy.
+       STANDARD TABLES ARE UNTOUCHED: marking and destruction coincide there, and the branch below is the old code.
+       A trade-in, a sale, the president's excess discard and the Yellow Sign's takings keep their own fates and
+       never reach either list. Derived statistics only: no board, message or digest changes. */
+    const gentleTable = resolveVariants(after.variants).gentleRust;
+    {
+      const tierBefore = derivePhase(before)?.tier ?? null;
+      const tierAfter = derivePhase(after)?.tier ?? null;
+      if (tierBefore !== null && tierAfter !== null && tierAfter !== tierBefore) rustCauseByTier.set(tierAfter, actor);
+    }
     if (kind !== "YellowSignEvent") {
       const returned =
         kind === "BuyHardwareFromPool" && typeof body.returned_model_type === "string" ? body.returned_model_type
         : null;
       for (const loss of describeFleetLosses(before, after, msg ?? undefined)) {
+        // #1704: under Gentle Rust these are the MARKS -- rusted, still owned; booked at their destruction below.
+        const rusted = gentleTable ? [] : loss.rusted;
         // #1431: the ledger's fates, before the trade-in is taken out of the scrap count below.
-        for (const model of loss.rusted) fate(loss.companyId, model, "rusted");
+        for (const model of rusted) fate(loss.companyId, model, "rusted");
         for (const model of loss.discarded) {
           if (returned && Number(body.protocol_id) === loss.companyId && model === returned) fate(loss.companyId, model, "traded");
           else fate(loss.companyId, model, "discarded");
         }
-        const scrapped = [...loss.rusted, ...loss.discarded];
+        const scrapped = [...rusted, ...loss.discarded];
         if (returned && Number(body.protocol_id) === loss.companyId) {
           const at = scrapped.indexOf(returned);
           if (at >= 0) scrapped.splice(at, 1);
@@ -547,6 +588,27 @@ export function gameHistoryFrom(log: readonly SandboxAction[], policy: ReplayPol
           if (actor) {
             bump(trainsSentCount, actor, 1);
             bump(trainsSentValue, actor, value);
+          }
+        }
+      }
+      // #1704: the Gentle Rust destruction -- the train actually leaves the roster here.
+      if (gentleTable) {
+        for (const expiry of describeReprieveExpiries(before, after)) {
+          const president = companyById(before, expiry.companyId)?.president ?? null;
+          for (const model of expiry.rusted) {
+            fate(expiry.companyId, model, "rusted");
+            const tier = trainTier(model);
+            const value = tier ? depotCostFor(before, tier) : 0;
+            const rustedBy = tier ? (depotInventory(before).find((row) => row.tier === tier)?.rustedBy ?? null) : null;
+            const cause = rustedBy === null ? null : (rustCauseByTier.get(rustedBy) ?? null);
+            if (president) {
+              bump(trainsLostCount, president, 1);
+              bump(trainsLostValue, president, value);
+            }
+            if (cause) {
+              bump(trainsSentCount, cause, 1);
+              bump(trainsSentValue, cause, value);
+            }
           }
         }
       }

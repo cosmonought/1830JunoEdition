@@ -49,7 +49,11 @@ const fleet = (s: any) => s.public_companies[0];
 /* The rule that was NOT changed                                      */
 /* ------------------------------------------------------------------ */
 
-describe("a reprieved train occupies no limit slot (design note #1034, superseding #979)", () => {
+describe("DEAD HELPER, not live authority -- a reprieved train occupies no limit slot in the trim (design note #1034, superseding #979)", () => {
+  /* GR-4 (design note #1703): `trimToTrainLimit` HAS NO PRODUCTION CALLER SINCE #1530 -- the president discards by
+     choice (`pendingTrainDiscards` / `DiscardTrain`). These cases pin the dead helper's arithmetic only and are NOT
+     evidence of the live rule; the live Gentle Rust discard rule is certified by `gentleRustCertification.test.ts`
+     ("discard"), `gentleRustTransactionLocks.test.ts` (X) and `gentleRustCertificationGame.test.ts` (G2). */
   /* ==================================================================
       THESE TWO CASES ASSERTED THE OPPOSITE, AND THE REVERSAL WAS DELIBERATE
      ==================================================================

@@ -72,6 +72,8 @@ import {
 } from "../gameEngine/gameState";
 import { usePlayerNetWorths } from "../utils/gameStatePolling";
 import { numberedPrivate } from "../gameEngine/privateOrdinal";
+// Design note #1702 (GR-3): which Final Run chips go after this turn's Run Routes, read from the board.
+import { finalRunScheduleFor } from "../utils/finalRunTiming";
 
 export interface FinancialLedgerProps {
   gameState: GameStateResponse | null;
@@ -872,6 +874,7 @@ function CorporationAssetsSection({
                         compact
                         outlook={outlook}
                         reprieved={company.pending_rust_trains}
+                        reprievedThisTurn={finalRunScheduleFor(gameState, company.company_id).thisTurn} // #1702 (GR-3)
                         // Design note #1088: the Carcosa gift, so its chip shows the sign rather than a locomotive.
                         ghosts={company.carcosan_trains}
                       />

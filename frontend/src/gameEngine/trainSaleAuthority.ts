@@ -124,9 +124,8 @@ export function trainSaleRefusal(
      settlement arm touches money, fleets or the chart, and without looking ahead: only a rust that has already
      happened has written a mark. */
   if (ownsOnlyReprievedCopiesOf(seller, intent.model)) {
-    return copiesOwned(seller.owned_trains, intent.model) > 1
-      ? `Every ${intent.model}-train ${seller.ticker} holds is on its Gentle Rust final run — none can be sold to another corporation.`
-      : `${seller.ticker}'s ${intent.model}-train is on its Gentle Rust final run — it cannot be sold to another corporation.`;
+    // #1702 (GR-3): the sentence lives in `reprievedSaleReason` below, so the offer roster greys with these words.
+    return reprievedSaleReason(seller, intent.model) as string;
   }
 
   /* ---- 7. A whole price of at least $1 (6.6) -------------------------------------------------- */
@@ -256,4 +255,34 @@ export function rescindTrainPurchaseRefusal(
   const president = state.public_companies.find((entry) => entry.company_id === offer.buyer_protocol_id)?.president ?? null;
   if (actor != null && actor !== president) return `Only ${offer.buyer_ticker}'s president can withdraw its offer.`;
   return null;
+}
+
+/** ==================================================================
+ *   DESIGN NOTE 1702 (GR-3, U-11): THE ROSTER GREYS WHAT THIS AUTHORITY REFUSES, IN ITS WORDS
+ *  ==================================================================
+ *  GR-2 (#1700) made `trainSaleRefusal` refuse a Final Run train at proposal, answer and settlement, and the
+ *  offer roster went on offering it -- the refusal arrived as a surprise after the click. The roster now greys the
+ *  copies a mark covers (`finalRunPositions`, the chips' order) and shows this sentence. Extracted rather than
+ *  restated: when every copy of the model is reprieved it IS the refusal's sentence, byte for byte, and
+ *  `trainSaleRefusal` returns it from here.
+ *  MULTISET, NEVER A MODEL-LEVEL FREEZE (#1700): beside an ordinary copy of the same model the reprieved one is
+ *  explained, and the ordinary one stays saleable -- the refusal answers `null` for that model, and so does the
+ *  roster's button for that copy. `null` here when no copy of `model` is reprieved. */
+export function reprievedSaleReason(
+  seller: { ticker?: string | null; owned_trains?: readonly string[] | null; pending_rust_trains?: readonly string[] | null },
+  model: string,
+): string | null {
+  const owned = copiesOwned(seller.owned_trains ?? [], model);
+  const marked = copiesOwned(seller.pending_rust_trains ?? [], model);
+  if (owned === 0 || marked === 0) return null;
+  const ticker = seller.ticker ?? "This corporation";
+  if (ownsOnlyReprievedCopiesOf(seller, model)) {
+    return owned > 1
+      ? `Every ${model}-train ${ticker} holds is on its Gentle Rust final run — none can be sold to another corporation.`
+      : `${ticker}'s ${model}-train is on its Gentle Rust final run — it cannot be sold to another corporation.`;
+  }
+  const free = owned - marked;
+  return marked === 1
+    ? `One of ${ticker}'s ${model}-trains is on its Gentle Rust final run and cannot be sold to another corporation; ${free === 1 ? "the other" : "the others"} can.`
+    : `${marked} of ${ticker}'s ${model}-trains are on their Gentle Rust final run and cannot be sold to another corporation; ${free === 1 ? "one" : free} can.`;
 }

@@ -513,11 +513,16 @@ export function gameHistoryFrom(log: readonly SandboxAction[], policy: ReplayPol
        the fleet-loss notices use -- which already leaves out a sold train (#1245) and one the Yellow Sign took
        (#1264), and under Gentle Rust reports the reprieve as the rust event (#979). A trade-in's returned
        model is taken out here: it left the roster, but nobody scrapped it. The loser is the corporation's
-       president; the cause is whoever dispatched the purchase that turned the phase. */
+       president; the cause is whoever dispatched the purchase that turned the phase.
+       #1702 (GR-3, U-6): THE DIESEL TRADE-IN NO LONGER REACHES THIS DIFF -- the narrator splices it out, as it
+       does a sale and the Sign's Mark, because it was being told as a rust (standard, first Diesel) or a limit
+       discard (Gentle Rust). So it is not "returned" here any more (taking it out a second time would take out a
+       4 that really rusted beside it), and its ledger fate is read off the message below. The scrap tallies are
+       unchanged; the one fate that moves is a first-Diesel trade-in on a standard table, which the old diff
+       filed as "rusted" and is "traded". */
     if (kind !== "YellowSignEvent") {
       const returned =
-        kind === "ExchangeTrainForDiesel" ? String(body.model_type ?? "")
-        : kind === "BuyHardwareFromPool" && typeof body.returned_model_type === "string" ? body.returned_model_type
+        kind === "BuyHardwareFromPool" && typeof body.returned_model_type === "string" ? body.returned_model_type
         : null;
       for (const loss of describeFleetLosses(before, after, msg ?? undefined)) {
         // #1431: the ledger's fates, before the trade-in is taken out of the scrap count below.
@@ -604,6 +609,14 @@ export function gameHistoryFrom(log: readonly SandboxAction[], policy: ReplayPol
     }
     if (kind === "ExchangeTrainForDiesel" || (kind === "BuyHardwareFromPool" && typeof body.returned_model_type === "string" && body.returned_model_type)) {
       bump(tradeIns, String(body.protocol_id), 1);
+    }
+    /* #1431 / #1702 (GR-3, U-6): the traded-in train's fate, from the message -- the fleet-loss diff above no
+       longer carries it. Only when the exchange actually took that model off the roster. */
+    if (kind === "ExchangeTrainForDiesel") {
+      const companyId = Number(body.protocol_id);
+      const model = String(body.model_type ?? "");
+      const removed = trainsRemoved(companyById(before, companyId)?.owned_trains ?? [], companyById(after, companyId)?.owned_trains ?? []);
+      if (model && removed.includes(model)) fate(companyId, model, "traded");
     }
 
     /* #1429: TRAIN SPEND, for the White Elephant and the Little Engine -- what the buying corporation's treasury

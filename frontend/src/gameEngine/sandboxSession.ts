@@ -1281,7 +1281,9 @@ export function applyPhaseChange(
        BUT AN EMPTY LIST IS A REAL ANSWER ONCE MARKS HAVE EXISTED. A corporation whose reprieved trains were
        all taken by the trim in this very call genuinely holds none, and this reducer is the only writer of
        the field -- so `[]` there is a fact rather than an invention. The distinction is whether THIS call
-       created a mark, which is exactly `gentle && rustedNow.length > 0`. */
+       created a mark, which is exactly `gentle && rustedNow.length > 0`.
+       (#1702, GR-3: historical. No trim runs here since #1530, and #1034 exempts reprieved trains from the limit;
+       the rule this note derives -- write the field only when this call marks -- is unchanged.) */
     const markedThisPhase = gentle && rustedNow.length > 0;
     const reprieved =
       company.pending_rust_trains === undefined && !markedThisPhase
@@ -1611,6 +1613,21 @@ export function describeFleetLosses(
     typeof msg === "object" && msg !== null && "YellowSignEvent" in msg
       ? (msg as { YellowSignEvent: { protocol_id: number; model?: string | null } }).YellowSignEvent
       : null;
+  /* ==================================================================
+      DESIGN NOTE 1702 (GR-3, U-6): A TRAIN TRADED IN FOR A DIESEL WAS NEITHER RUSTED NOR DISCARDED
+     ==================================================================
+     #1245's and #1264's shape a third time. `ExchangeTrainForDiesel` takes one train off the fleet by the
+     president's choice (#1303), and this diff then classified the departure: under Gentle Rust as "discarded to
+     meet the new limit" -- with a Train Limit modal, since the limit notice is not tutorial-gated -- and on a
+     standard table, for the first Diesel, as "rusted", because a 4 left in the phase change that rusts 4s (probe
+     P9n). Both are false: the train was exchanged, and the exchange narrates itself as the action it is. So the
+     traded model comes out of `lost` BEFORE the remaining departures are read, by multiset -- one copy, the one the
+     message names -- and every other train the arriving Diesel rusts (or marks, under Gentle Rust) is narrated
+     exactly as before. Description only: the reducer, the board and every mark are untouched. */
+  const exchanged =
+    typeof msg === "object" && msg !== null && "ExchangeTrainForDiesel" in msg
+      ? (msg as { ExchangeTrainForDiesel: { protocol_id: number; model_type: string } }).ExchangeTrainForDiesel
+      : null;
 
   /* Design note #897: THE THIRD FUNCTION IN THE SAME BLOCK, GUARDED FOR THE SAME REASON. `App.tsx` runs
      `describeFleetLosses`, `describeFleetLoss` and `describePrivateClosures` back to back on the state
@@ -1658,6 +1675,11 @@ export function describeFleetLosses(
       const at = lost.indexOf(discardedByChoice.model_type);
       if (at >= 0) lost.splice(at, 1);
     }
+    // #1702 (GR-3, U-6): and the train traded in for a Diesel.
+    if (exchanged !== null && exchanged.protocol_id === company.company_id) {
+      const at = lost.indexOf(exchanged.model_type);
+      if (at >= 0) lost.splice(at, 1);
+    }
     /* ==================================================================
         DESIGN NOTE 979: UNDER GENTLE RUST, RUST TAKES NOTHING -- SO THE DIFF CANNOT SEE IT
        ==================================================================
@@ -1670,7 +1692,11 @@ export function describeFleetLosses(
        AND UNDER THIS VARIANT EVERY DEPARTURE IS THE LIMIT'S. Rust only marks, so a doomed train that left the
        fleet in the same phase change left because the trim took it -- which is the more useful thing to tell
        the player, since their question is why it did not get the grace run it was just promised. The
-       tier-based split below is the STANDARD rule and stays exactly as it was. */
+       tier-based split below is the STANDARD rule and stays exactly as it was.
+       #1702 (GR-3): HISTORICAL -- the premise of that paragraph is gone. #1530 retired the trim (the president
+       now discards by choice, spliced out above), #1099 splices the expiry, and #1245 / #1264 / #1702 the sale,
+       the Sign's Mark and the Diesel trade-in. What is left in `lost` under this variant is whatever no narrated
+       action explains; the classification below is kept as it was. */
     const gentle = resolveVariants(after.variants).gentleRust;
     const newlyReprieved: string[] = [];
     if (gentle) {
@@ -4168,7 +4194,9 @@ function settleOperatingCursor(
    * trains that just rusted."
    *
    * AND THIS IS #979's CORRECTION COLLIDING WITH #906a's TIMING. #979 made a reprieved train count against
-   * the limit -- correctly, and that is what lets it run. #906a had already put its death at the end of the
+   * the limit -- correctly, and that is what lets it run. [#1702, GR-3: superseded -- #1034 reversed #979's limit
+   * rule: a reprieved train stays in `owned_trains` (that is what lets it run) but occupies no train-limit slot,
+   * so the collision below cannot recur; the death point is #1102's and #1699's.] #906a had already put its death at the end of the
    * corporation's turn, which was the right reading of "dies immediately after it generates its final
    * revenue" while the train occupied no slot. Put together, the two produce a corporation that is at its
    * limit for the whole of Buy Trains and then loses a train once buying is over: it is charged for the slot

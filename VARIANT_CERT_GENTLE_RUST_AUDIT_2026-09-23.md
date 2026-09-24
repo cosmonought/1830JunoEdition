@@ -16,6 +16,7 @@ UI/copy reconciliation, corpus characterization, the replay/version decision and
 |---|---|---|
 | 1 | 2026-09-23 | initial audit — verdict C (three owner decisions) |
 | 2 | 2026-09-23 | **owner spec review recorded** (§4): reprieved-train definition, capacity ≠ ownership, forced-purchase sequence, grace-turn timing accepted, OD-GR-1 and OD-GR-2 ruled, OD-GR-3 routed to UR. §3 restructured into GR-S1…GR-S30; forced-purchase predicates audited (§5); implementation gaps consolidated (§3.4); slices, test invariants and criteria updated. Four line references corrected (`gameVariants.ts:690`, `purchaseWarnings.ts:339`, `sS:1668–1670`/`:1673`, test fixture notes) |
+| 3 | 2026-09-24 | **slice status only** (§7, §9, §10, Appendix B): GR-1, GR-2 and DT-1 complete, owner-gated, committed; GR-3 (UI / Rules Reference / narration, #1702) complete pending owner gate; GR-4 and GR-5 pending. U-6 completed in GR-3; U-9 routed to GR-4 / final certification. No specification clause changed. **Gentle Rust is still NOT certified.** |
 
 ---
 
@@ -408,15 +409,23 @@ Required polish / fixes (not designed here):
   rust.
 * **U-5** discard prompt — Final Run trains occupy no slot and are not choices.
 * **U-6** Diesel trade-in under Gentle Rust narrated "discarded to meet the new limit" + limit notice (`sS:1668–1670`;
-  standard tables mislabel the same event "rusted", `sS:1673` — out of Gentle Rust scope, same root).
+  standard tables mislabel the same event "rusted", `sS:1673` — out of Gentle Rust scope, same root). *(rev 3: routed
+  out of GR-2 and **completed in GR-3** — the narrator splices the traded model out of the diff; both halves fixed.)*
 * **U-7** `purchaseWarnings.ts:339` — "Anything held above N is discarded" → add "(Final Run trains excepted)".
-* **U-8** VISUAL_FLOURISH K-1 (final-run badge takes the rust mark) — existing owner item; unchanged.
+* **U-8** VISUAL_FLOURISH K-1 (final-run badge takes the rust mark) — existing owner item; unchanged. *(rev 3: still
+  that item; not handled in GR-3.)*
 * **U-9** statistics record the loss at marking; a game ending before an expiry counts a loss never suffered.
-  Cosmetic; state it or accept.
+  Cosmetic; state it or accept. *(rev 3: unchanged by GR-3; carried to GR-4 / final certification for explicit
+  disposition.)*
 * **U-10** *(rev 2)* say where a player looks for it that Final Run trains keep the corporation from being trainless
   (limit tooltip / Rules Reference), so "exempt" is never read as "gone".
 * **U-11** *(rev 2)* sale and Diesel-exchange surfaces must grey reprieved copies with the reason once GR-2 refuses them
   (the train-offer UI and the exchange panel ask the same authorities).
+
+*(rev 3)* **U-1 … U-5, U-7, U-10, U-11 completed in GR-3** (#1702), together with the two DT-1 UI follow-ups (the
+"Pay $X and End Turn" promise withheld where a legal trade-in may follow; the Diesel exchange row priced from
+`dieselExchangeCostFor`, so $750 under the Level Playing Field). U-3's "next Run Routes" wording was re-audited against
+real purchases and **kept** (true after GR-1); only its subject was narrowed ("a corporation owns", Bank Pool named).
 
 **OBS-1 (out of scope — route / forced-purchase authority):** without a grid, `PassTurn` at `Track` ends the turn (P5b);
 `routeSkipRefusal` guards the Routes step only and `trainObligationRefusal` the Hardware step only. Whether a room
@@ -469,18 +478,27 @@ Characterization only; the live game is not evidence that current behaviour is r
   no longer ends a corporation's turn at the train limit while a legal one-for-one Diesel exchange remains available
   (corpus-neutral: no stored board reaches it).
 * **Replay-neutral:** UI / copy / narration (IG-F), stale comments (Appendix B), new tests and the constructed fixture.
+  *(rev 3: GR-3 — the UI / copy / narration slice — is **not** part of the semantic 8 → 9 list; its 18-file corpus
+  check is state / grid / cursor-identical. The v9 candidates remain GR-1's timing, GR-2's sale and trade-in
+  restrictions, and DT-1's auto-skip correction.)*
 * **Not prejudged:** corpus divergence is measured during implementation / certification (the one Gentle Rust log
   never reaches phase 4 under today's engine, so a digest move is not expected — but it is measured, not assumed).
   Pinned v8 Gentle Rust games outside the repository: unknown.
 
 ---
 
-## 10. Implementation slices (rev 2 — not started)
+## 10. Implementation slices (rev 2; status at rev 3)
+
+**Status (rev 3, 2026-09-24):** **GR-1 COMPLETE** — owner-gated, committed (`0ca01be`). **GR-2 COMPLETE** — owner-gated,
+committed (`b755a7b`). **DT-1** (adjacent base-game auto-skip fix, #1701) **COMPLETE** — owner-gated, committed
+(`936bacc`). **GR-3 COMPLETE pending owner gate** (#1702, uncommitted at this revision). **GR-4 pending. GR-5 pending.**
+OD-GR-3 still routed to Unpredictable Revenue. Routing changes: U-6 moved from GR-2 to GR-3 and is done there; U-9 goes
+to GR-4 / final certification; U-8 stays VISUAL_FLOURISH K-1. **Gentle Rust is NOT certified.**
 
 | slice | scope | model | time | replay risk |
 |---|---|---|---|---|
 | **GR-1 — grace timing + ownership / trainlessness authority** | fix self-trigger timing (IG-A); represent or derive whether a reprieve's qualifying grace turn has begun, so the Dividends-entry expiry and both fallbacks act only in that turn; keep reprieved trains owned and operable; keep the capacity exemption; protect forced-purchase / trainlessness semantics explicitly (IG-D: one named ownership predicate, never the capacity count); atomic expiry; correct the #906/#906a/#1001 comments and `gameState` doc | Opus 5.5 Extra preferred | ~2–3 h | **HIGH — replay-semantic** |
-| **GR-2 — transaction locks** | refuse sale / transfer of reprieved trains at proposal, answer and settlement (IG-B); refuse Diesel trade-in of reprieved trains (IG-C), multiset-aware so live copies stay tradeable; prove no transaction clears, moves, duplicates or launders a mark (sub-multiset invariant after every train-moving arm); prove excess-discard behaviour unchanged; U-6 narration splice for `ExchangeTrainForDiesel` | Opus 5.5 High or Extra | ~1.5–2.5 h | **HIGH — replay-semantic** |
+| **GR-2 — transaction locks** | refuse sale / transfer of reprieved trains at proposal, answer and settlement (IG-B); refuse Diesel trade-in of reprieved trains (IG-C), multiset-aware so live copies stay tradeable; prove no transaction clears, moves, duplicates or launders a mark (sub-multiset invariant after every train-moving arm); prove excess-discard behaviour unchanged; U-6 narration splice for `ExchangeTrainForDiesel` *(rev 3: moved to GR-3)* | Opus 5.5 High or Extra | ~1.5–2.5 h | **HIGH — replay-semantic** |
 | **GR-3 — UI / Rules Reference / narration** | Final Run / tooltip timing (U-1…U-3); train-limit explanation (U-7); forced-purchase distinction (U-10); complete Rules Reference (U-4); discard exclusion (U-5); sale / exchange greying (U-11); rust modal / badge parity; stale comments and copy (Appendix B) | Opus 5.5 High | ~1–2 h | none expected |
 | **GR-4 — certification test matrix + constructed legal game** | every §3 clause behaviourally; cases A–E and self-trigger; only-reprieved forced-purchase protection; ordinary + reprieved negative control; multiset; coexisting groups; sale refusal; trade-in refusal; excess discard; route / revenue with actual reprieved trains; LPF / 18XX+ where relevant; retire or retarget the dead-helper trim tests; corpus reconciliation; a constructed legal progression reaching rust triggers in phases 4, 6 and D with stated provenance | Opus 5.5 Extra preferred | ~2–3 h | measurement / certification |
 | **GR-5 — deliberate rules-engine version bump** | only after GR-1…GR-4 prove the final semantics and corpus reconciliation confirms the exact boundary; expected `RULES_ENGINE_VERSION` 8 → 9 (self-trigger timing, sale rule, trade-in rule) | Opus 5.5 High | ~30–60 min | the bump itself |
@@ -599,6 +617,12 @@ reader found (§5 ownership row) reads raw `owned_trains`. No conflation exists 
 ---
 
 ## Appendix B — stale comments / copy (to fix in GR-1 / GR-3; none edited here)
+
+*(rev 3 status — GR-1 / GR-2 / GR-3 disposition.)* Corrected or supplemented with a superseding note: 1 (GR-3,
+rewritten field doc), 2 (GR-1), 3 (GR-2), 4 (GR-1 marker), 5 (GR-1 marker), 6 (GR-3), 8 (GR-3 supplement), 9 (GR-3
+supplement), 10 (GR-3 supplement), 11 (GR-3 supplement), 12 (GR-3), and the three player-facing U-1 / U-2 / U-3 strings
+(GR-3). Left as history, deliberately: 13 and 14 (test-file comments recording what #979 once said), and 7 (a project
+doc outside the repository). 15 is Yellow Sign (#1672) and goes with Unpredictable Revenue certification.
 
 Superseded **#906 mechanism** ("leaves `owned_trains`") or **turn-end timing** stated as current:
 

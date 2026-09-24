@@ -234,8 +234,11 @@ describe("the Pay button warns that this buy ends the turn", () => {
     /* RULED: "when corporations are buying up to their train limit, the Pay button needs to say 'Pay $x and
        End Turn' so they know why they finished."
        BOTH CONDITIONS, because either alone lies: a buy that fills the limit on a step that is not last ends
-       nothing, and a last step reached without filling the limit is not this. */
-    expect(PANEL).toContain('fillsTrainLimit && endsTurnAtLimit ? " and End Turn" : ""');
+       nothing, and a last step reached without filling the limit is not this.
+       #1702 (GR-3): AND A THIRD, since DT-1 (#1701) keeps the step open at the limit while a legal Diesel
+       trade-in remains: the clause is withheld wherever the Diesel module's screen says a trade-in could follow
+       the purchase. Pinned behaviourally in `components/gentleRustPresentation.test.tsx` (UI18 / UI21). */
+    expect(PANEL).toContain('fillsTrainLimit && endsTurnAtLimit && !exchangeMayFollow ? " and End Turn" : ""');
     /* Design note #1104: ANCHORED ON THE NAMED LABEL, not on the expression's shape. My first draft pinned
        the multi-line ternary including its indentation -- the same mistake that broke `quantityOptions` and
        `stepJumpButton` when this third arm was added, made a third time in the file written to cover the

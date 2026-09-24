@@ -43,6 +43,8 @@ import {
 } from "../gameEngine/gamePhase";
 // Design note #1034: the one place that says a reprieved train occupies no limit slot.
 import { countableTrainCount } from "../gameEngine/trainLimit";
+// Design note #1702 (GR-3): the Final Run chip's wording, shared with the bar's badge.
+import { finalRunChipTooltip } from "../utils/finalRunTiming";
 /* Design note (VF-7): the rust flourish's schedule, crack geometry and stylesheet. This component owns
    the staging and the timers; that module owns everything testable without a DOM. */
 import {
@@ -124,6 +126,13 @@ export interface TrainChipsProps extends TrainBadgeCommonProps {
    *  call sites have no reprieve to report, and absent means "none marked" rather than "unknown", which is
    *  the safe direction -- a missing mark under-warns, an invented one pulses a train that is fine. */
   reprieved?: readonly string[] | null;
+  /** Design note #1702 (GR-3, U-1): the reprieves whose Final Run is the corporation's Operating Turn NOW IN
+   *  PROGRESS -- `finalRunScheduleFor(state, id).thisTurn`, a sub-multiset of `reprieved`. A Final Run chip
+   *  matching one says it goes after this turn's Run Routes; any other Final Run chip says its corporation's
+   *  NEXT Operating Turn. Absent means the surface cannot say (it has no board to ask), and the tooltip then
+   *  names the rule instead of a turn -- never a guess in either direction. Wording only: the fade is
+   *  `reprieved`'s, unchanged. */
+  reprievedThisTurn?: readonly string[] | null;
   /** ==================================================================
    *   DESIGN NOTE 1088: THE GHOSTS, FOR THE SAME REASON THE REPRIEVES TRAVEL
    *  ==================================================================
@@ -409,6 +418,7 @@ export function TrainChips({
   compact,
   outlook,
   reprieved = null,
+  reprievedThisTurn = null,
   ghosts = null,
   companyId = null,
   rust = null,
@@ -504,6 +514,9 @@ export function TrainChips({
      pulsing chip and one still one; a `.includes` would pulse both, which is the same off-by-one
      `trimToTrainLimit` records for the trim. */
   const reprievedPool = [...(reprieved ?? [])];
+  /* Design note #1702 (GR-3): which Final Run chips are owed THIS turn, consumed the same way. `null` when the
+     surface cannot say. */
+  const thisTurnPool = reprievedThisTurn == null ? null : [...reprievedThisTurn];
   /* Design note #1088: A MULTISET, CONSUMED AS IT MATCHES, for exactly #1004's reason one line up. A
      corporation that already owned a 5-train and is then gifted one by Carcosa holds two identical models
      and must show one sign and one locomotive; `.includes` would mark both, which is the off-by-one
@@ -597,9 +610,29 @@ export function TrainChips({
         /* Design note #1088: the ghost's tooltip REPLACES the rust one rather than joining it. A ghost is
            never in a rust window (see the glyph note below), so there is nothing to lose -- and "Yellow Sign
            ghost train" is the fact a player hovering an unfamiliar icon is actually asking about. */
+        /* ==================================================================
+            DESIGN NOTE 1702 (GR-3, U-1): A FINAL RUN CHIP HAS ALREADY RUSTED
+           ==================================================================
+           A reprieved chip took the `doomed` window above, and with it "CRITICAL: Rusts on NEXT depot
+           purchase!" -- false twice over: the rust already happened, and no purchase destroys it. It goes after
+           Run Routes in its one qualifying Operating Turn. So a Final Run chip says that, from the board: this
+           turn if its mark is owed the turn in progress, the corporation's next Operating Turn otherwise, and
+           the rule itself where the surface has no board to ask. The rust window's wording for a chip that is
+           merely one purchase away is untouched (standard and Gentle Rust alike). */
+        const finalRunWhen: "this-turn" | "next-turn" | null =
+          !isFinalRun || thisTurnPool === null
+            ? null
+            : (() => {
+                const at = thisTurnPool.indexOf(model);
+                if (at < 0) return "next-turn";
+                thisTurnPool.splice(at, 1);
+                return "this-turn";
+              })();
         const warning = isGhost
           ? "Yellow Sign ghost train — gifted by Carcosa. Occupies no train-limit slot until this Operating Round ends."
-          : rustTooltip(tier, phase, outlook, inDangerWindow);
+          : isFinalRun
+            ? finalRunChipTooltip(finalRunWhen)
+            : rustTooltip(tier, phase, outlook, inDangerWindow);
         /* Design note #375: highlighted, faded, or neither. The muted state
            matters as much as the primary one -- with three chips in a row,
            "this one" is only legible if the others step back. */
@@ -971,8 +1004,10 @@ export function CapacityPill({
           ? `Phase ${phase.tier} allows ${phase.trainLimit} train${phase.trainLimit === 1 ? "" : "s"} per corporation.` +
             /* Design note #1034: the exemption is stated where the number is, because a pill reading "2 / 2"
                beside three chips is otherwise a corporation that appears to be miscounting its own fleet. */
+            /* #1702 (GR-3, U-10): and it names WHAT it is not counted toward, and that the train is still owned --
+               "not counted" alone reads as "gone", which is the opposite of SR-1 (audit §3.1). */
             (reprieved && reprieved.length > 0
-              ? ` ${reprieved.length} on a final run under Gentle Rust and not counted.`
+              ? ` ${reprieved.length} on a Final Run under Gentle Rust: not counted against the train limit, but still the corporation's trains until removed.`
               : "")
           : undefined
       }

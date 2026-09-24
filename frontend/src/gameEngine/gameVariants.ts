@@ -487,10 +487,13 @@ export interface GameVariants {
      `return state` should say why it refused -- a gate with a bug should produce a visible complaint rather
      than a certificate that quietly evaporates. */
   delayedAuction: boolean;
-  /** IMPLEMENTED -- #906. A rusting train is moved to `pending_rust_trains` rather than destroyed: it runs
-   *  once more and is scrapped at the end of that corporation's turn. Because it leaves `owned_trains`, every
-   *  surface that counts trains stops counting it, which is how "no train-limit slot" is implemented without
-   *  any of those surfaces learning a rule. */
+  /** IMPLEMENTED -- #906, as amended by #979, #1034, #1102, #1699 and #1700 (corrected in #1702, GR-3: this said
+   *  the train "leaves `owned_trains`" and is "scrapped at the end of that corporation's turn", #906's first
+   *  mechanism and timing). A rusting train is MARKED in `pending_rust_trains` rather than destroyed. It stays in
+   *  `owned_trains` -- still owned, still run, still keeping its corporation from being trainless -- and is removed
+   *  after Run Routes in its corporation's first Operating Turn that begins after the rust. It occupies no
+   *  train-limit slot (`countableTrainCount`, #1034), and it may not be sold or traded in for a Diesel (#1700).
+   *  See `gentleRustGrace.ts`. */
   gentleRust: boolean;
   /** Every running train rolls a d6 against its printed revenue -- design note #903. */
   unpredictableRevenue: boolean;

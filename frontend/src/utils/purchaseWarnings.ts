@@ -288,10 +288,27 @@ export function purchaseWarnings(
         : buys <= 1
           ? `Rusts in 1 Buy: ${phase.rustingTier}-train`
           : `Rusts in ${buys} Buys: ${phase.rustingTier}-train`,
+      /* ==================================================================
+          DESIGN NOTE 1702 (GR-3, U-3): RE-AUDITED AFTER GR-1 -- THE TIMING IS KEPT, THE SUBJECT IS NARROWED
+         ==================================================================
+         The audit (rev 2, U-3) flagged "destroyed at the end of their corporation's next Run Routes step" as
+         false for the BUYER's own trains, which the pre-GR-1 engine destroyed at the end of the buying turn.
+         Since GR-1 (#1699) the qualifying turn is the first Operating Turn that BEGINS after the rust, and the
+         phase-changing purchase happens in the buyer's Buy Trains step -- after its own Run Routes. So "their
+         corporation's next Run Routes step" is now true for every corporation it touches: a rival that has not
+         operated yet (its later turn this round), a rival that has (a later round), the buyer itself (its next
+         turn), and across a Stock Round. Kept verbatim; pinned by `gentleRustPresentation.test.ts` against
+         real purchases.
+         WHAT WAS STILL FALSE is "every N-Train IN PLAY": a train already in the Bank Pool gets no Final Run --
+         it is removed at the phase change (GR-S6). So the subject is the trains corporations own, and the pool
+         is named. The standard strings are untouched.
+         OWNER REVIEW (GR-3): "they run once more" promised a route run the variant does not guarantee -- the
+         entitlement is one Operating Turn, not a successful run (GR-S17). It now reads "remain available for one
+         final Operating Turn"; the timing clause after it is unchanged. */
       detail: gentleRust
         ? buys <= 1
-          ? `The next train purchase starts the final run for every ${phase.rustingTier}-Train in play. Under Gentle Rust they run once more and are destroyed at the end of their corporation's next Run Routes step.`
-          : `${buys} more train purchases and every ${phase.rustingTier}-Train in play begins its final run. Under Gentle Rust they are not destroyed until the end of their corporation's next Run Routes step.`
+          ? `The next train purchase starts the final run for every ${phase.rustingTier}-Train a corporation owns (any in the Bank Pool are removed at once). Under Gentle Rust they remain available for one final Operating Turn and are destroyed at the end of their corporation's next Run Routes step.`
+          : `${buys} more train purchases and every ${phase.rustingTier}-Train a corporation owns begins its final run (any in the Bank Pool are removed at once). Under Gentle Rust they are not destroyed until the end of their corporation's next Run Routes step.`
         : buys <= 1
           ? `The next train purchase destroys every ${phase.rustingTier}-Train in play, in every corporation.`
           : `${buys} more train purchases and every ${phase.rustingTier}-Train in play is destroyed, in every corporation.`,
@@ -334,15 +351,28 @@ export function purchaseWarnings(
         buys !== null && buys > 1
           ? `Train Limit Drops in ${buys} Buys`
           : "Train Limit Drops in 1 Buy",
+      /* Design note #1702 (GR-3, U-7): "Anything held above N is discarded when the phase turns" described
+         #284's automatic trim. Since #1530 (rulebook 6.6.1) nothing is discarded automatically: the president of
+         each corporation over the new limit chooses which train goes to the Bank Pool. And under Gentle Rust
+         the count is of the trains that occupy a limit slot -- a Final Run train occupies none (#1034) and is
+         never a choice (SR-8) -- so the variant says that, rather than leave "held above N" to be read as
+         every train on the chip row. */
       detail:
         `The next phase lowers the train limit from ${phase.trainLimit} to ${after} for every corporation. ` +
-        `Anything held above ${after} is discarded when the phase turns.`,
+        `A corporation left holding more than ${after} must discard down to ${after}; its president chooses which trains go to the Bank Pool.` +
+        (gentleRust
+          ? " Only trains that count toward the limit are considered; Final Run trains are excluded."
+          : ""),
       imminent,
       /* Design note #1033: UNCHANGED BY THE VARIANT, deliberately. Gentle Rust postpones the destruction of
-         rusted trains and postpones nothing about the limit -- the trim still fires the instant the phase
-         turns, and a gently-rusted train is the first thing it takes (#979). So this warning keeps its pulse
-         while the rust badge beside it loses one, which is the whole point: the two events stopped happening
-         at the same moment, and the row should stop implying they still do. */
+         rusted trains and postpones nothing about the limit, so this warning keeps its pulse while the rust
+         badge beside it loses one: the two events stopped happening at the same moment, and the row should stop
+         implying they still do.
+         #1702 (GR-3): SUPERSEDED REASONING, kept for the chronology. This note continued "the trim still fires
+         the instant the phase turns, and a gently-rusted train is the first thing it takes (#979)". Both halves
+         are gone: #1034 exempted Final Run trains from the limit, and #1530 replaced the trim with the
+         president's discard. The pulse decision stands on the first sentence alone -- the obligation still
+         arises the instant the phase turns. */
       pulses: imminent,
       /* The two figures this branch was entered on, unformatted. `after < phase.trainLimit` is the guard
          directly above, so a populated `capacity` here is always a genuine reduction -- the badge cannot

@@ -202,3 +202,19 @@ export function unreprievedTrains(company: Fleet): string[] {
   }
   return free;
 }
+
+/** Design note #1702 (GR-3, U-11): for each position of `owned_trains`, whether a Gentle Rust mark covers it --
+ *  the same walk as `unreprievedTrains` (each mark spends the earliest matching copy, the chips' Final Run order),
+ *  kept by position so a surface drawing one control per train greys exactly the copies the chips fade and leaves
+ *  the others live. A presentation of this module's multiset answer, not a train identity: the messages still
+ *  name a model, and the arms still take an ordinary copy. `owned ["4","5","4"]`, marks `["4"]` ->
+ *  `[true, false, false]`. */
+export function finalRunPositions(company: Fleet): boolean[] {
+  const marks = [...(company.pending_rust_trains ?? [])];
+  return (company.owned_trains ?? []).map((model) => {
+    const at = marks.indexOf(model);
+    if (at < 0) return false;
+    marks.splice(at, 1);
+    return true;
+  });
+}

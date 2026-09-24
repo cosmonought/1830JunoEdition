@@ -30,6 +30,8 @@ import { depotInventory, derivePhase, rustOutlook } from "../gameEngine/gamePhas
 // Design note #1035: how close the privates are to closing, for the pills that show them.
 import { privateClosureAlert } from "../utils/purchaseWarnings";
 import { CapacityPill, LastRoutePayout, lastRunFigure, TrainChips } from "./TrainBadges";
+// Design note #1702 (GR-3): which Final Run chips go after this turn's Run Routes, read from the board.
+import { finalRunScheduleFor } from "../utils/finalRunTiming";
 import type { RustFlourishEvent } from "./trainRustFlourish"; // VF-7
 import type { TrainDiscardEvent } from "./trainDiscardFlourish"; // VF-8
 import { stationTickerColor } from "./hexContractTypes";
@@ -428,6 +430,7 @@ function OperatingRoundCorporationPanel({
                     surface="dark"
                     outlook={outlook}
                     reprieved={company.pending_rust_trains}
+                    reprievedThisTurn={finalRunScheduleFor(gameState, company.company_id).thisTurn}
                     // Design note #1088: the Carcosa gift, so its chip shows the sign rather than a locomotive.
                     ghosts={company.carcosan_trains}
                     /* Design note (VF-7): THIS is the surface a multi-corporation rust is watched on -- the

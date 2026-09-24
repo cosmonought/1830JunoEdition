@@ -61,10 +61,8 @@ import { activateRules, boardFor, withRules } from "./gameEngine/boardSelection"
 import { useUiScale } from "./utils/useUiScale";
 import { initialGridFor } from "./gameEngine/initialGrid";
 import {
-  dieselAvailable,
-  dieselExchangeEnabled,
-  dieselExchangeRefusal,
-  exchangeableTrains,
+  dieselExchangeMayFollowPurchase,
+  dieselExchangeOfferFor,
 } from "./gameEngine/dieselExchange";
 import {
   bestContrastTextColor,
@@ -274,6 +272,8 @@ import {
 import { countableTrainCount, isTrainLocked } from "./gameEngine/trainLimit";
 // Design note #1035: how close the privates are to closing, threaded to every surface that draws one.
 import { privateClosureAlert } from "./utils/purchaseWarnings";
+// Design note #1702 (GR-3): when each Final Run train goes, read from the board for the bar.
+import { finalRunScheduleFor } from "./utils/finalRunTiming";
 // Design note #705: the Pay column's before-and-after, alongside the Withhold column's.
 import { projectDividendPayouts } from "./utils/dividendProjection";
 // Design note #712: the market-zone purchase rules.
@@ -1623,6 +1623,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
          cannot derive this -- the depot outlook has already moved past the tier that doomed them -- so it is
          the one fact about the fleet that has to travel rather than be recomputed. */
       reprievedTrains: company.pending_rust_trains ?? [],
+      /* Design note #1702 (GR-3, U-1/U-2): and WHEN they go -- this turn's Run Routes or the next Operating Turn's
+         -- read off the board (`pending_rust_doomed_this_turn` via `gentleRustGrace`), never inferred here. */
+      finalRunSchedule: finalRunScheduleFor(gameState, company.company_id),
       /* #1672 (S9-2): exempt for the train's whole Carcosa lifetime, not until the Operating Round ends.
          The view model keeps the field name; what feeds it is the gilding. */
       ghostTrains: company.carcosan_trains ?? [],
@@ -2400,6 +2403,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
      own next turn (#896), minutes later, and the hold has long since lapsed. The one that lands in the
      same instant as the flourish is the Gentle Rust expiry (#1002), which fires for the ACTING
      corporation as its cursor enters Buy Trains -- the president watching those very chips.
+     (#1702, GR-3: since #1102 the expiry fires as the cursor enters Dividends -- the end of Run Routes in the
+     train's qualifying turn, #1699 -- not Buy Trains; the acting president is still the one watching.)
      `settled`, NOT `fractured`: a dialog is a top layer covering the whole row, so it waits for the row
      to finish rather than for the event to become legible. Half a second in full motion, a quarter under
      reduced motion, resolved from whichever schedule the chips are actually playing. */
@@ -3970,6 +3975,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
     const { required } = pending;
     return {
       ...required,
+      // #1702 (GR-3, U-5): the Final Run trains the prompt explains the absence of -- the board's own marks.
+      finalRun:
+        gameState?.public_companies.find((company) => company.company_id === required.companyId)
+          ?.pending_rust_trains ?? [],
       presidentLabel: required.president
         ? (sandboxPlayerLabel(required.president) ?? truncateAddress(required.president))
         : required.ticker,
@@ -7837,6 +7846,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
                    postponed by this variant -- so its notice is still due immediately, and suppressing both
                    would lose that one entirely. #896's split by cause is what makes the distinction
                    expressible at all.
+                   (#1702, GR-3: historical. #1530 retired the trim -- the president discards by choice, narrated
+                   from the action (VF-8) -- and #1702 took the Diesel trade-in out of the diff, so under Gentle
+                   Rust nothing narrated today reaches a "limit" notice here. The rust half still waits.)
                    THE ACTIVITY LOG IS UNTOUCHED: `describeFleetLoss` above still writes the line at the phase
                    change for every corporation, which is #896's standing rule -- silencing or deferring a
                    modal changes WHEN a player finds out, never whether the game told them. */
@@ -7887,7 +7899,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
                ==================================================================
                THE OTHER END OF THE DEFERRAL ABOVE. `describeReprieveExpiries` reports the corporations whose
                marks emptied in THIS dispatch -- which after #1001 is the moment the cursor enters Buy Trains,
-               with the trains actually gone from the fleet.
+               with the trains actually gone from the fleet. (#1702, GR-3: since #1102, the cursor entering
+               Dividends in the train's qualifying turn -- #1699 -- or that turn's end as the fallback.)
                ONE CORPORATION AT A TIME, BY CONSTRUCTION, which is the whole point: the expiry is the acting
                corporation's own, so the president who is about to buy a replacement is the one stopped, at
                the moment the slot they need has just opened.
@@ -10252,14 +10265,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
   /* Design note #1303: what the panel shows for the exchange. `null` -- no controls at all -- unless the table
      plays Project 18XX+ AND the Diesel is for sale; after that the gate's own sentence explains a dead button,
      and the chips are the corporation's tradeable trains. Asked of the same function the reducer asks. */
-  const dieselExchangeOffer = useMemo(() => {
-    if (!gameState || !dieselExchangeEnabled(gameState) || !dieselAvailable(gameState)) return null;
-    const buyer = gameState.public_companies.find((entry) => entry.company_id === actingProtocolId);
-    return {
-      models: exchangeableTrains(buyer),
-      problem: dieselExchangeRefusal(gameState, actingProtocolId),
-    };
-  }, [gameState, actingProtocolId]);
+  /* Design note #1702 (GR-3): built by `dieselExchangeOfferFor` now -- the same conditions and the same two answers
+     as before, plus the table's price ($750 under the Level Playing Field, where the row showed and projected the
+     $800 constant) and the Final Run copies the row greys (U-11). */
+  const dieselExchangeOffer = useMemo(
+    () => dieselExchangeOfferFor(gameState, actingProtocolId),
+    [gameState, actingProtocolId],
+  );
 
   // Proposing dispatches nothing (#166). A president selling their own private into their own corporation settles immediately - one party means no prompt.
   // See docs/ai_architecture/contract_economy.md - App.tsx #206
@@ -14046,6 +14058,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
                 emergencyAvailable: emergencyPurchasePlan !== null,
                 dieselExchange: dieselExchangeOffer, // #1303
                 onExchangeForDiesel: handleExchangeForDiesel,
+                /* Design note #1702 (GR-3): whether a Diesel trade-in could still be open after buying `tier` --
+                   the Diesel module's screen, asked on this board, so "and End Turn" is never promised where
+                   DT-1's auto-skip (#1701) keeps the turn open. */
+                exchangeMayFollowPurchase: (tier: string, price: number) =>
+                  dieselExchangeMayFollowPurchase(gameState, actingProtocolId, tier, price),
                 returnedTrains: returnedTrainsForSale, // #1314
                 /* Design note (VF-8): the Bank Pool's end of a live discard. `null` for all but half
                    a second of the game, and for every viewer whose panel is shut. */

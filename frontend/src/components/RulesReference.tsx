@@ -659,9 +659,8 @@ const OPERATING_STEPS: readonly OperatingStep[] = [
     short: "Buy Trains",
     subPhase: "Hardware",
     lead: "At the end of the Operating Turn, buy trains if desired — or when forced.",
-    notes: [
-      { scope: "gentleRust", text: "This table plays gentle rust: a rusting train gets one last Operating Round turn before it goes." },
-    ],
+    /* #1702 (GR-3, U-4): the one-sentence Gentle Rust note that stood here is replaced by the complete rule,
+       `GENTLE_RUST_RULES` below, rendered as this section's tagged variant block. */
     quick: [
       "Trains may be purchased from the Bank, the Bank Pool, or another corporation.",
       "Buy trains one at a time, because a purchase can immediately trigger a phase change.",
@@ -772,6 +771,61 @@ const OPERATING_STEPS: readonly OperatingStep[] = [
         p: "Ownership of certain Private Companies can permit special activities otherwise unavailable to the corporation; those specific abilities are listed on the Auction page.",
       },
     ],
+  },
+];
+
+/** ==================================================================
+ *   DESIGN NOTE 1702 (GR-3, U-4): GENTLE RUST, THE WHOLE RULE, WHERE TRAINS ARE BOUGHT
+ *  ==================================================================
+ *  The page carried one sentence -- "a rusting train gets one last Operating Round turn before it goes" -- which
+ *  left a player to guess which turn, whether the train still counts, whether it can be sold, and what happens
+ *  when it goes. This is the complete player-facing rule, from the owner's spec review (audit rev 2, SR-1 ...
+ *  SR-8) and GR-1 / GR-2, in the app's words: Final Run, rust, train limit, Buy Trains.
+ *  A TAGGED BLOCK IN THE BUY TRAINS SECTION, not a page, a modal or a card: it is where a purchase rusts
+ *  trains, where the limit is looked up and where a forced purchase is explained. Every node carries the
+ *  scope, so a standard game renders none of it even if a future caller hands it to `RuleDocument` directly.
+ *  The two predicates are never collapsed (audit §3.1): "does not count against the train limit" is always
+ *  said with "still owned", so exempt is never read as gone. */
+const GENTLE_RUST_RULES: readonly RuleNode[] = [
+  {
+    scope: "gentleRust",
+    p: "Gentle Rust delays when rusted trains are removed. It never changes which trains rust: 2-trains still rust when the first 4-train is bought, 3-trains when the first 6-train is bought, and 4-trains when the first Diesel is bought.",
+  },
+  { scope: "gentleRust", h: "Final Run" },
+  {
+    scope: "gentleRust",
+    p: "A corporation's rusted train is not removed at once. It gets one Final Run: the corporation's first Operating Turn that begins after the train rusted.",
+  },
+  {
+    scope: "gentleRust",
+    ul: [
+      "Rusted by another corporation's purchase before this corporation has operated this round: its turn later in the same round is the Final Run.",
+      "Rusted by this corporation's own purchase in its Buy Trains step: the current turn does not count, and the Final Run is its next Operating Turn.",
+      "During the Final Run the train is still owned and usable, and may run and earn revenue normally. The Final Run is one Operating Turn, not a guaranteed run.",
+      "The train is removed after Run Routes in its Final Run turn.",
+    ],
+  },
+  { scope: "gentleRust", h: "Train limit and trainlessness" },
+  {
+    scope: "gentleRust",
+    ul: [
+      "A Final Run train does not count against the train limit. It takes no limit slot, so it is never a choice when a corporation must discard down to the limit.",
+      "It does still count as a train the corporation owns. A corporation whose only trains are on a Final Run is not trainless, and owes no forced purchase because of them.",
+      "Only after the train is removed can the corporation become trainless. If it then has no train, the ordinary forced train purchase applies at Buy Trains as usual.",
+    ],
+  },
+  { scope: "gentleRust", h: "Not for sale or trade-in" },
+  {
+    scope: "gentleRust",
+    ul: [
+      "A Final Run train may not be sold to another corporation.",
+      "It may not be traded in for a Diesel.",
+      "Other copies of the same train are unaffected: with two 4-trains, one on a Final Run, the other may still be sold or traded in.",
+    ],
+  },
+  {
+    scope: "gentleRust",
+    p: "Trains in the Bank Pool get no Final Run: a rusted train there is removed at once, as in the standard game.",
   },
 ];
 
@@ -3986,10 +4040,24 @@ function OpProse({ nodes }: { nodes: readonly RuleNode[] }) {
 }
 
 /** A named sub-block inside a section: one line of small caps, then the rules. */
-function OpBlock({ title, children }: { title: string; children: React.ReactNode }) {
+function OpBlock({
+  title,
+  scope,
+  testId,
+  children,
+}: {
+  title: string;
+  /** #1702 (GR-3): a variant's block wears the variant's tag beside its title, as a note's callout does. */
+  scope?: RuleScope;
+  testId?: string;
+  children: React.ReactNode;
+}) {
   return (
-    <div style={{ ...styles.opBlock, ...styles.opMeasure }}>
-      <h4 style={styles.opSubTitle}>{title}</h4>
+    <div style={{ ...styles.opBlock, ...styles.opMeasure }} data-testid={testId}>
+      <h4 style={styles.opSubTitle}>
+        {title}
+        {scope && <VariantTag scope={scope} />}
+      </h4>
       {children}
     </div>
   );
@@ -4300,6 +4368,13 @@ function OperatingRoundPage({
             <span style={styles.calloutText}>{note.text}</span>
           </div>
         ))}
+        {/* #1702 (GR-3, U-4): Gentle Rust's complete rule, as one tagged block of this section -- headings,
+            short lists, the page's own type. Absent from every game that does not play it. */}
+        {applies({ scope: "gentleRust" }) && (
+          <OpBlock title="Gentle Rust" scope="gentleRust" testId="rules-operating-gentle-rust">
+            <RuleDocument nodes={GENTLE_RUST_RULES} columns={false} />
+          </OpBlock>
+        )}
         {/* THE EXCEPTION, MARKED AS ONE. A rule that can cost a player the game gets the warning ink and a
             rule down its left edge -- not a panel, and not the same weight as "you may buy a train". */}
         <div style={styles.opWarn} data-testid="rules-operating-forced-purchase">

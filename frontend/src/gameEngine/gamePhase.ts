@@ -63,7 +63,9 @@ const LPF_OPEN_SHELF: readonly TrainTier[] = ["6", "7", "D"];
    other out, and the first Diesel rusts the 4s as before (the phase is still the highest tier owned). */
 const STANDARD_OPEN_SHELF: readonly TrainTier[] = ["6", "D"];
 
-function onOpenShelf(state: GameStateResponse | null, tier: TrainTier): boolean {
+/** Whether `tier` sits on this table's open shelf (#1326 / #1439). Exported for #1702 (GR-3): the purchase
+ *  button asks whether the train it sells is the one that opens the Diesel shelf. */
+export function onOpenShelf(state: GameStateResponse | null, tier: TrainTier): boolean {
   const shelf = resolveVariants(state?.variants).levelPlayingField ? LPF_OPEN_SHELF : STANDARD_OPEN_SHELF;
   return shelf.includes(tier);
 }

@@ -30,6 +30,7 @@ import { AutoRouteButton, RunRoutesButton } from "../components/RoutePlannerPane
 // Design note #715: the private-purchase panel, embedded rather than modal.
 import { ProposePrivatePurchase } from "../components/PrivateTradePanel";
 import TrainPurchasePanel, {
+  type DieselExchangeOffer,
   type TrainPurchaseCompany,
   type TrainTradeProposal,
 } from "../components/TrainPurchasePanel";
@@ -99,6 +100,8 @@ import { rustedFleetFor, type RustFlourishEvent } from "../components/trainRustF
 import { discardFor, type TrainDiscardEvent } from "../components/trainDiscardFlourish"; // VF-8
 // Design note #1034: the one place that says a reprieved train occupies no limit slot.
 import { countableTrainCount } from "../gameEngine/trainLimit";
+// Design note #1702 (GR-3): when a Final Run train goes, worded once for the badge and the chips.
+import { finalRunBadgeDetail, finalRunChipTooltip, type FinalRunSchedule } from "../utils/finalRunTiming";
 import { dividendDeclaration, marketMoveDirection } from "../utils/dividendStep";
 // Design note #494: the per-train route ink, so the collapsed chips match
 // the lines on the map.
@@ -980,6 +983,10 @@ export default function ContextualActionBar({
     trains: readonly string[];
     /** Design note #1004: the models on their final run under Gentle Rust. Empty in every standard game. */
     reprievedTrains: readonly string[];
+    /** Design note #1702 (GR-3, U-2): WHEN those trains go, read from the board by the shell
+     *  (`finalRunScheduleFor`): the ones owed the turn in progress, and the ones owed the corporation's next
+     *  Operating Turn (a self-trigger's). Empty lists in every standard game. */
+    finalRunSchedule: FinalRunSchedule;
     /** THE TRAIN-LIMIT EXEMPTION, and since #1672 (S9-2) it is fed from `carcosan_trains`, not from
      *  `ghost_trains` -- the gilded train is exempt for its whole Carcosa lifetime rather than until the
      *  Operating Round ends. The FIELD NAME is #1046's and is left alone deliberately: renaming it would
@@ -1227,9 +1234,12 @@ export default function ContextualActionBar({
      *  Passed straight through -- the bar is a conduit, not a decider. */
     onEmergencyPurchase?: () => void;
     emergencyAvailable?: boolean;
-    /** Design note #1303: the D-train exchange, resolved by the shell; the bar forwards it. */
-    dieselExchange?: { models: readonly string[]; problem: string | null } | null;
+    /** Design note #1303: the D-train exchange, resolved by the shell; the bar forwards it. #1702: the panel's
+     *  own type, which now carries the table's price and the Final Run copies. */
+    dieselExchange?: DieselExchangeOffer | null;
     onExchangeForDiesel?: (modelType: string) => void;
+    /** Design note #1702 (GR-3): the shell's "could a trade-in follow this purchase" screen; forwarded. */
+    exchangeMayFollowPurchase?: (tier: string, price: number) => boolean;
     /** Design note #1314: the returned trains, resolved by the shell; the bar forwards them. */
     returnedTrains?: ReadonlyArray<{ model: string; cost: number; problem: string | null }>;
     onBuyReturnedTrain?: (modelType: string) => void;
@@ -2315,6 +2325,15 @@ export default function ContextualActionBar({
       .join(", ");
   }, [activeCorporation]);
 
+  /* ==================================================================
+      DESIGN NOTE 1702 (GR-3, U-2): "THIS TURN'S RUN ROUTES" WAS TRUE OF ONE CASE IN TWO
+     ==================================================================
+     The detail said every Final Run train "is destroyed at the end of this turn's Run Routes step". True when
+     the turn in progress IS the train's grace turn. False for the corporation that rusted its own trains in its
+     Buy Trains step: that turn began before the rust, so after GR-1 (#1699) the trains survive into its NEXT
+     Operating Turn and go after that turn's Run Routes. The shell reads which is which off the board
+     (`finalRunScheduleFor`: `graceTurnReprieves` vs `pending_rust_doomed_this_turn`) and the sentence says so --
+     no countdown, no event history, no guess from the phase. The LABEL is #1033's, unchanged. */
   const reprieveWarning = React.useMemo(() => {
     const marks = activeCorporation?.reprievedTrains ?? [];
     if (marks.length === 0) return null;
@@ -2322,9 +2341,8 @@ export default function ContextualActionBar({
     return {
       label: `Final Run: ${tiers.map((tier) => `${tier}-trains`).join(", ")}`,
       detail:
-        tiers.length === 1
-          ? `This corporation's ${tiers[0]}-train has already rusted. Gentle Rust lets it run once more; it is destroyed at the end of this turn's Run Routes step.`
-          : `These trains have already rusted. Gentle Rust lets them run once more; they are destroyed at the end of this turn's Run Routes step.`,
+        (activeCorporation ? finalRunBadgeDetail(activeCorporation.finalRunSchedule) : null) ??
+        finalRunChipTooltip(null),
     };
   }, [activeCorporation]);
 
@@ -3045,6 +3063,7 @@ export default function ContextualActionBar({
                     <TrainChips
                       trains={activeCorporation.trains}
                       reprieved={activeCorporation.reprievedTrains}
+                      reprievedThisTurn={activeCorporation.finalRunSchedule.thisTurn} // #1702 (GR-3, U-1)
                       // Design note #1088: already on the bar's corporation since #1046 -- it gates the limit.
                       ghosts={activeCorporation.carcosanTrains}
                       // Design note (VF-7): the acting corporation's own share of the global rust event.
@@ -3096,12 +3115,17 @@ export default function ContextualActionBar({
                           countableTrains >= phase.trainLimit ? "#e0c97a" : corporationBarInk.ink,
                       }}
                       title={
+                        /* #1702 (GR-3): two sentences corrected. (1) DT-1 (#1701): at the limit the Buy Trains
+                           step is no longer skipped while a legal Diesel trade-in remains -- one train out, one
+                           in -- so "skipped automatically" is qualified rather than promised. (2) U-10: a Final
+                           Run train is exempt from the LIMIT and still the corporation's train; "does not count"
+                           alone reads as "gone". */
                         (countableTrains >= phase.trainLimit
-                          ? `At the limit — ${phase.tier}-phase corporations may hold ${phase.trainLimit}. The Buy Trains step is skipped automatically.`
+                          ? `At the limit — ${phase.tier}-phase corporations may hold ${phase.trainLimit}. The Buy Trains step is skipped automatically unless a Diesel trade-in is available.`
                           : `${phase.tier}-phase corporations may hold ${phase.trainLimit} trains.`) +
                         (reprievedNames === null
                           ? ""
-                          : ` Its ${reprievedNames} are on a final run and do not count toward the limit.`)
+                          : ` Its ${reprievedNames} are on a Final Run: they do not count against the train limit, but they are still its trains until removed, so it is not trainless.`)
                       }
                     >
                       {/* A bare "2 / 4" beside a row of train chips reads as
@@ -4458,6 +4482,7 @@ export default function ContextualActionBar({
           emergencyAvailable={trainPurchase.emergencyAvailable}
           dieselExchange={trainPurchase.dieselExchange}
           onExchangeForDiesel={trainPurchase.onExchangeForDiesel}
+          exchangeMayFollowPurchase={trainPurchase.exchangeMayFollowPurchase}
           returnedTrains={trainPurchase.returnedTrains}
           discardReceipt={trainPurchase.discardReceipt}
           onBuyReturnedTrain={trainPurchase.onBuyReturnedTrain}

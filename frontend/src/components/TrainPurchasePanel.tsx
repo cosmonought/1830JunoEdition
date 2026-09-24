@@ -44,7 +44,14 @@ import type { DepotTier, PhaseTint } from "../gameEngine/gamePhase";
 // there be exactly one answer, not that any particular answer is correct.
 import { tierTint, trainTierName, trainTierNamePlural } from "../gameEngine/gamePhase";
 import { stationTickerColor } from "./hexContractTypes";
-import { DIESEL_EXCHANGE_COST } from "../gameEngine/dieselExchange";
+/* Design note #1702 (GR-3, U-11): which copies a Gentle Rust mark covers, and the sale authority's own sentence
+   for them -- asked, never restated, so the roster greys exactly what `trainSaleRefusal` refuses. */
+import { finalRunPositions } from "../gameEngine/gentleRustGrace";
+import { reprievedSaleReason } from "../gameEngine/trainSaleAuthority";
+/* Design note #1702 (GR-3): the trade-in row's inputs -- the table's price and the Final Run copies included --
+   as `dieselExchangeOfferFor` builds them. Re-exported for the bar, which forwards it. */
+import type { DieselExchangeOffer } from "../gameEngine/dieselExchange";
+export type { DieselExchangeOffer };
 
 /** The subset of a corporation both sections need. */
 export interface TrainPurchaseCompany {
@@ -147,8 +154,14 @@ export interface TrainPurchasePanelProps {
    *  Diesel is not yet for sale -- the controls do not render at all then, because a control for a rule that
    *  is not in force is a question the player cannot answer. Present, `models` lists the buyer's tradeable
    *  trains (one entry per train, roster order) and `problem` is the gate's sentence for a dead button. */
-  dieselExchange?: { models: readonly string[]; problem: string | null } | null;
+  dieselExchange?: DieselExchangeOffer | null;
   onExchangeForDiesel?: (modelType: string) => void;
+  /** Design note #1702 (GR-3, DT-1 follow-up): whether a Diesel trade-in COULD still be open after buying one
+   *  `tier` for `price` -- the shell's `dieselExchangeMayFollowPurchase`, a conservative screen, never a
+   *  legality verdict. While it answers `true` the Pay button does not promise "and End Turn", because since
+   *  DT-1 (#1701) filling the limit does not end the turn while a legal trade-in remains. Absent: no screen,
+   *  which is every caller written before it. */
+  exchangeMayFollowPurchase?: (tier: string, price: number) => boolean;
   /** Design note #1314: TRAINS TRADED IN FOR A DIESEL AND BACK IN THE DEPOT, one line each with its own
    *  "Pay $X". `problem` is the gate's sentence for a dead button, per train. Empty means no line. */
   returnedTrains?: ReadonlyArray<{ model: string; cost: number; problem: string | null }>;
@@ -218,6 +231,7 @@ export function TrainPurchasePanel({
   emergencyAvailable,
   dieselExchange = null,
   onExchangeForDiesel,
+  exchangeMayFollowPurchase,
   returnedTrains = [],
   onBuyReturnedTrain,
   discardReceipt = null,
@@ -235,6 +249,10 @@ export function TrainPurchasePanel({
   const exchangeModels = dieselExchange?.models ?? [];
   const exchangeChosenIndex = Math.min(exchangeIndex, Math.max(0, exchangeModels.length - 1));
   const exchangeChoice = exchangeModels[exchangeChosenIndex] ?? null;
+  /* #1702 (GR-3, U-11): the Final Run copies the row shows greyed, and the distinct sentences explaining them. */
+  const exchangeFinalRun = dieselExchange?.finalRun ?? [];
+  const exchangeFinalRunReasons = Array.from(new Set(exchangeFinalRun.map((entry) => entry.reason)));
+  const exchangeCost = dieselExchange?.cost ?? 0;
 
   /* ---- Corporate section state ---- */
   const [corporateOpen, setCorporateOpen] = useState(defaultCorporateOpen);
@@ -482,10 +500,21 @@ export function TrainPurchasePanel({
    * alarm, and it would keep passing if somebody changed an arm while preserving the shape, which is a missed
    * one. A NAMED CONST gives both suites one stable anchor and gives the reader a name for what the button
    * says. */
+  /* ==================================================================
+      DESIGN NOTE 1702 (GR-3): "AND END TURN" ONLY WHERE THE ENGINE WILL END IT
+     ==================================================================
+     DT-1 (#1701) stopped the Buy Trains step ending at the limit while a legal Diesel trade-in remains, and this
+     label kept promising the end (probed: phase 6, a 4 held, the last 6 bought for $630 -> at the limit, trade-in
+     legal, turn open). The panel does not decide legality and runs no reducer: the shell's screen answers whether
+     a trade-in COULD follow this purchase, and where it could the phrase is dropped -- the button then says only
+     the price, which is true either way. Where it cannot (no candidate, no Diesel on sale, or not the money), the
+     turn really does end and #1101's phrase stays. */
+  const exchangeMayFollow =
+    nextTier !== null && (exchangeMayFollowPurchase?.(nextTier.tier, bankTotal || nextTier.cost) ?? false);
   const payButtonLabel = atTrainLimit
     ? "Train Limit Reached"
     : `Pay $${bankTotal || (nextTier?.cost ?? 0)}${
-        fillsTrainLimit && endsTurnAtLimit ? " and End Turn" : ""
+        fillsTrainLimit && endsTurnAtLimit && !exchangeMayFollow ? " and End Turn" : ""
       }`;
   const bankProblem: string | null =
     nextTier === null
@@ -942,7 +971,9 @@ export function TrainPurchasePanel({
                corporation's own trains, one per train, so a fleet of two 4-trains offers two chips -- pressing
                either trades one 4-train, and the roster shows which is left.
                DEAD WITH ITS REASON (#619): the gate's sentence is the button's title and the line under it. */}
-            {dieselExchange && onExchangeForDiesel && exchangeModels.length > 0 && (
+            {/* #1702 (GR-3, U-11): the row also appears for a corporation whose only 4/5/6 is on its Final Run --
+                greyed, with the refusal's sentence -- rather than vanishing and leaving the player to guess. */}
+            {dieselExchange && onExchangeForDiesel && (exchangeModels.length > 0 || exchangeFinalRun.length > 0) && (
               <div style={styles.exchangeRow}>
                 <span style={styles.exchangeLead}>Trade in</span>
                 <div style={styles.exchangeChips} role="radiogroup" aria-label="Train to trade in for a D-train">
@@ -962,6 +993,25 @@ export function TrainPurchasePanel({
                       </button>
                     );
                   })}
+                  {/* #1702 (GR-3, U-11): a Final Run copy, shown and not selectable. Struck through as well as
+                      dimmed so the state does not rest on colour; the reason is the title, the accessible name,
+                      and the visible line under the row. */}
+                  {exchangeFinalRun.map((entry, index) => (
+                    <button
+                      key={`final-run-${entry.model}-${index}`}
+                      type="button"
+                      role="radio"
+                      aria-checked={false}
+                      aria-disabled={true}
+                      disabled
+                      style={{ ...styles.exchangeChip, ...styles.exchangeChipFinalRun }}
+                      title={entry.reason}
+                      aria-label={`${entry.model}-train on its Final Run: ${entry.reason}`}
+                      data-testid="exchange-final-run-chip"
+                    >
+                      {entry.model}
+                    </button>
+                  ))}
                 </div>
                 <button
                   type="button"
@@ -978,18 +1028,28 @@ export function TrainPurchasePanel({
                   }}
                   title={
                     dieselExchange.problem ??
-                    `Trade one ${exchangeChoice}-train in and pay $${DIESEL_EXCHANGE_COST} for a D-train.`
+                    `Trade one ${exchangeChoice}-train in and pay $${exchangeCost} for a D-train.`
                   }
-                  aria-label={`Exchange one ${exchangeChoice ?? ""}-train and pay $${DIESEL_EXCHANGE_COST} for a D-train.`}
+                  aria-label={`Exchange one ${exchangeChoice ?? ""}-train and pay $${exchangeCost} for a D-train.`}
                 >
-                  Exchange and Pay ${DIESEL_EXCHANGE_COST}
+                  {/* #1702 (GR-3): the table's price, from `dieselExchangeCostFor` -- $750 under the Level Playing
+                      Field, where this read the $800 constant and projected $50 too much. */}
+                  Exchange and Pay ${exchangeCost}
                 </button>
                 {dieselExchange.problem === null && (
                   <span style={styles.treasuryProjection}>
-                    Treasury: ${treasury} &gt; ${treasury - DIESEL_EXCHANGE_COST}
+                    Treasury: ${treasury} &gt; ${treasury - exchangeCost}
                   </span>
                 )}
                 {dieselExchange.problem && <p style={styles.problem}>{dieselExchange.problem}</p>}
+                {/* With an ordinary candidate beside them the gate's sentence (if any) is about something else, so
+                    the Final Run copies explain themselves; with none, the gate's sentence above already does. */}
+                {exchangeModels.length > 0 &&
+                  exchangeFinalRunReasons.map((reason) => (
+                    <p key={reason} style={styles.note} data-testid="exchange-final-run-note">
+                      {reason}
+                    </p>
+                  ))}
               </div>
             )}
             {/* ==================================================================
@@ -1175,6 +1235,18 @@ export function TrainPurchasePanel({
               )}
               {sellers.map((company) => {
                 const trains = company.owned_trains;
+                /* #1702 (GR-3, U-11): which badges are Final Run copies (the chips' order, `finalRunPositions`) and
+                   the sale authority's sentence for each such model. One badge per train is kept (#282): an
+                   ordinary copy beside a reprieved one stays live, because the authority sells it. */
+                const finalRunAt = finalRunPositions(company);
+                const finalRunReasons = Array.from(
+                  new Set(
+                    (trains ?? [])
+                      .filter((_, at) => finalRunAt[at])
+                      .map((model) => reprievedSaleReason(company, model))
+                      .filter((reason): reason is string => reason !== null),
+                  ),
+                );
                 return (
                   <div key={company.company_id} style={styles.rosterRow}>
                     <span style={styles.rosterName}>
@@ -1232,11 +1304,19 @@ export function TrainPurchasePanel({
                             selection?.sellerId === company.company_id &&
                             selection?.model === model &&
                             selection?.position === position;
+                          const isFinalRun = finalRunAt[position] === true;
+                          const finalRunReason = isFinalRun ? reprievedSaleReason(company, model) : null;
                           return (
                             <button
                               key={`${model}-${position}`}
                               type="button"
-                              disabled={!canTrade}
+                              disabled={!canTrade || isFinalRun}
+                              aria-label={
+                                isFinalRun
+                                  ? `${model}-train on its Final Run: ${finalRunReason ?? "it cannot be sold to another corporation."}`
+                                  : undefined
+                              }
+                              data-final-run={isFinalRun ? "true" : undefined}
                               onClick={() => {
                                 setSelection({
                                   sellerId: company.company_id,
@@ -1248,13 +1328,15 @@ export function TrainPurchasePanel({
                               style={{
                                 ...styles.badge,
                                 ...(isSelected ? styles.badgeSelected : {}),
-                                ...(!canTrade ? styles.badgeDisabled : {}),
+                                ...(!canTrade || isFinalRun ? styles.badgeDisabled : {}),
+                                ...(isFinalRun ? styles.badgeFinalRun : {}),
                               }}
                               title={
-                                canTrade
+                                finalRunReason ??
+                                (canTrade
                                   ? `Offer for this ${model}-train of ${company.ticker}'s.`
                                   : (tradeBlockedReason ??
-                                    `${company.ticker} holds this ${model}-train.`)
+                                    `${company.ticker} holds this ${model}-train.`))
                               }
                             >
                               {model}
@@ -1263,6 +1345,13 @@ export function TrainPurchasePanel({
                         })
                       )}
                     </span>
+                    {/* #1702 (GR-3, U-11): the reason, readable without hovering -- a disabled button's title is
+                        not reliably shown, and the rule must not be hover-only. Full width, under the badges. */}
+                    {finalRunReasons.map((reason) => (
+                      <p key={reason} style={{ ...styles.note, flexBasis: "100%" }} data-testid="sale-final-run-note">
+                        {reason}
+                      </p>
+                    ))}
                   </div>
                 );
               })}
@@ -1529,6 +1618,10 @@ export interface TrainDiscardPromptProps {
     excess: number;
     choices: readonly string[];
     presidentLabel: string;
+    /** Design note #1702 (GR-3, U-5): the corporation's Final Run trains (`pending_rust_trains`), which occupy
+     *  no limit slot and so are not among `choices`. Only read to explain their absence; empty or absent in
+     *  every game where there is nothing to explain. */
+    finalRun?: readonly string[];
   } | null;
   /** Whether the viewer is the president who must decide. */
   viewerIsPresident: boolean;
@@ -1550,6 +1643,18 @@ export function TrainDiscardPrompt({ due, viewerIsPresident, onDiscard }: TrainD
         limit of <strong>{due.limit}</strong>. A discarded train goes to the Bank Pool, unpaid, where any corporation
         may buy it at face value.
       </p>
+      {/* ==================================================================
+           DESIGN NOTE 1702 (GR-3, U-5): WHY THE FINAL RUN TRAIN IS NOT A CHOICE
+          ==================================================================
+          The reducer has always left Final Run trains out of `choices` (#1034, SR-8): they occupy no limit slot,
+          so discarding one would spend a train and leave the obligation standing. The prompt never said so, and a
+          president looking at a faded 2-train with no button beside it had to guess. Said only when there is
+          such a train -- an ordinary discard reads exactly as it did. Legality is untouched. */}
+      {(due.finalRun ?? []).length > 0 && (
+        <p style={styles.promptBody} data-testid="discard-final-run-note">
+          Final Run trains do not count against the train limit and are not eligible for this discard.
+        </p>
+      )}
       <p style={styles.promptWho}>
         {viewerIsPresident
           ? `This is ${due.presidentLabel}'s decision. Choose the train to discard.`
@@ -2133,6 +2238,8 @@ const styles: Record<string, React.CSSProperties> = {
   // Inline styles cannot express `:disabled` (Lobby.tsx design note #3), so
   // the disabled look is computed.
   badgeDisabled: { opacity: 0.5, cursor: "not-allowed" },
+  /* #1702 (GR-3, U-11): a Final Run train in the seller roster -- struck through as well as dimmed. */
+  badgeFinalRun: { textDecoration: "line-through" },
   badgeCount: { fontSize: FONT_SIZE.micro, color: "#a8a6a0", fontWeight: 400 },
   badgeNone: { fontSize: FONT_SIZE.small, color: "#6e6c68", fontStyle: "italic" },
 
@@ -2229,7 +2336,8 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 8,
   },
   exchangeLead: { fontSize: FONT_SIZE.small, color: "#c9c4b8" },
-  exchangeChips: { display: "flex", gap: 4 },
+  // #1702 (GR-3): wraps, so a fleet with greyed Final Run copies beside its live chips never widens the row.
+  exchangeChips: { display: "flex", flexWrap: "wrap", gap: 4 },
   exchangeChip: {
     minWidth: 30,
     padding: "4px 8px",
@@ -2247,6 +2355,8 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: "#1f3a2a",
     color: "#ffffff",
   },
+  /* #1702 (GR-3, U-11): a Final Run copy -- dimmed AND struck through, so the state is not colour alone. */
+  exchangeChipFinalRun: { opacity: 0.5, textDecoration: "line-through", cursor: "not-allowed" },
   problem: { margin: 0, fontSize: FONT_SIZE.small, color: "#fb7185", lineHeight: 1.45 },
   note: { margin: 0, fontSize: FONT_SIZE.small, lineHeight: 1.5, color: "#8a8a86" },
   empty: { margin: 0, fontSize: FONT_SIZE.small, color: "#c9b98a", lineHeight: 1.5 },

@@ -70,7 +70,9 @@ export function exchangeableTrains(
 }
 
 /** Why `companyId` may not trade `modelType` in for a Diesel right now, or `null` when it may.
- *  `modelType` may be omitted to ask whether ANY exchange is open (the panel's question). */
+ *  `modelType` may be omitted to ask whether ANY exchange is open -- the panel's question, and (#1701, DT-1) the
+ *  Buy Trains auto-skip's: `buyTrainsAutoSkipReason` keeps a corporation at its train limit on the step while this
+ *  answers `null`, so whatever this refuses also lets the train-limit end of turn fire. */
 export function dieselExchangeRefusal(
   state: GameStateResponse,
   companyId: number,

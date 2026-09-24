@@ -66,6 +66,8 @@ import { operatingCorporationId } from "./dividendGate";
 import { stepsFor } from "./operatingCursor";
 import { turnGuardKey } from "./turnGuardKey";
 import { countableTrainCount, isTrainLocked } from "./trainLimit";
+// Design note #1701 (DT-1): the one-for-one exchange the train limit does not bar. No cycle: its closure never reaches here.
+import { dieselExchangeRefusal } from "./dieselExchange";
 import { citySlotCount, stationPlacementBlockReason } from "./stationTokens";
 import { stationTokensOf } from "./trackReach";
 import { reachForDrafting } from "./trainReach";
@@ -398,7 +400,7 @@ function autoSkipReasonFor(input: {
   protocolId: number;
   extraStationAvailable: boolean;
 }): string | null {
-  const { step, noEarnableRevenue, state, company, mapGrid, extraStationAvailable } = input;
+  const { step, noEarnableRevenue, state, company, mapGrid, protocolId, extraStationAvailable } = input;
 
   /* #414: was `ownsAnyTrain ? null : ...`. A corporation with a train and no reachable revenue was held on a
      step whose only control drafts a route that cannot exist. */
@@ -417,22 +419,52 @@ function autoSkipReasonFor(input: {
 
   if (step === "Dividends" && noEarnableRevenue !== null) return null;
 
-  if (step === "Hardware") {
-    /* #703/#1034: through the shared rule and on the COUNTABLE fleet, so this gate and
-       `trainPurchaseRefusal` answer with one number. They disagreed once, and the corporation the skip let
-       through was refused by the panel it was sent to. */
-    const owned = company.owned_trains?.length;
-    // An unknown fleet is never treated as full: skipping on a guess takes the player's turn away.
-    if (owned === undefined) return null;
-    const locked = isTrainLocked(
-      // #1672 (S9-2): the exemption is the CARCOSA lifetime, not the OR-long ghost grace.
-      countableTrainCount(company.owned_trains, company.pending_rust_trains, company.carcosan_trains),
-      depotInventory(state).find((tier) => tier.isCurrent)?.trainLimit ?? null,
-    );
-    return locked ? "it is already at its train limit" : null;
-  }
+  // Design note #1701 (DT-1): the verdict is shared with the shell's `autoSkipReason`, so there is one of it.
+  if (step === "Hardware") return buyTrainsAutoSkipReason(state, protocolId);
 
   return null;
+}
+
+/** Why the Buy Trains step owes an automatic exit (the turn ends: it is the last step, #876). */
+export const TRAIN_LIMIT_SKIP_REASON = "it is already at its train limit";
+
+/** Why the game should end `companyId`'s Buy Trains step on its behalf, or `null` when it still has something to do
+ *  there. Asked by `nextDerivedAction` (the server, the Firestore settle, the replay's live loop) and by the shell's
+ *  `autoSkipReason` alike -- one verdict, so a room and a browser cannot disagree about whose turn is over.
+ *
+ *  ==================================================================
+ *   DESIGN NOTE 1701 (DT-1): AT THE TRAIN LIMIT IS NOT "NOTHING LEGAL TO DO"
+ *  ==================================================================
+ *  #876 asked for the skip: "When a corporation is at the train limit ... auto-skip to end their turn". That was
+ *  complete while every Buy Trains action ADDED a train. The Diesel exchange (#1303) adds none -- one 4-, 5- or
+ *  6-train out, one D in, and `dieselExchangeRefusal` asks `trainPurchaseRefusal` with `trainLimit: null` on
+ *  purpose -- so a corporation at its limit can still have a legal action here, and the skip took it away (GR-2
+ *  finding 2: in a room the server derived the PassTurn; in the browser the shell did).
+ *  SO: the train-limit lock ends Buy Trains only when no legal one-for-one Diesel exchange remains. "Legal" is the
+ *  canonical authority's answer on THIS board -- Diesels for sale, an ordinary (GR-2: never a reprieved) eligible
+ *  copy, the $800 / LPF $750 price in the treasury (no emergency money: the exchange is an ordinary purchase), the
+ *  operating corporation at its own step -- and none of it is restated here. The derived loop asks again after every
+ *  exchange, so a corporation left at its limit with a second legal trade-in keeps the step, and the ordinary end of
+ *  turn returns the moment the last one is spent or unaffordable.
+ *  The limit itself is untouched: every purchase that ADDS a train is still refused by `trainPurchaseRefusal` /
+ *  the sale authority. This is a question about the automatic exit, not about fleet size. */
+export function buyTrainsAutoSkipReason(state: GameStateResponse, companyId: number): string | null {
+  const company = state.public_companies.find((entry) => entry.company_id === companyId);
+  /* #703/#1034: through the shared rule and on the COUNTABLE fleet, so this gate and
+     `trainPurchaseRefusal` answer with one number. They disagreed once, and the corporation the skip let
+     through was refused by the panel it was sent to. */
+  const owned = company?.owned_trains?.length;
+  // An unknown fleet is never treated as full: skipping on a guess takes the player's turn away.
+  if (!company || owned === undefined) return null;
+  const locked = isTrainLocked(
+    // #1672 (S9-2): the exemption is the CARCOSA lifetime, not the OR-long ghost grace.
+    countableTrainCount(company.owned_trains, company.pending_rust_trains, company.carcosan_trains),
+    depotInventory(state).find((tier) => tier.isCurrent)?.trainLimit ?? null,
+  );
+  if (!locked) return null;
+  // #1701: a trade-in the corporation may make right now is a choice, and a choice is not skipped.
+  if (dieselExchangeRefusal(state, companyId) === null) return null;
+  return TRAIN_LIMIT_SKIP_REASON;
 }
 
 /** The best revenue this corporation could run, or `null` for "could not tell".

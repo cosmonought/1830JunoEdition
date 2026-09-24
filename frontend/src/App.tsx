@@ -723,7 +723,7 @@ import { buildSandboxLogExport } from "./utils/logExport";
 import { watcherTrainDrafts } from "./utils/watcherRouteChips";
 import { autoSkipExit } from "./gameEngine/autoSkipExit";
 // Design note #1247: the accepted offer's purchase, owed by the board and sent here only where no server can.
-import { nextDerivedAction } from "./gameEngine/derivedActions";
+import { buyTrainsAutoSkipReason, nextDerivedAction } from "./gameEngine/derivedActions";
 import { overrunsReach, reachForDrafting } from "./gameEngine/trainReach";
 import { editRouteDraft } from "./utils/routeDraftEdit";
 import { isRouteBuilderArmed, selectActingPresenceEntry } from "./utils/routeOverlaySource";
@@ -11207,10 +11207,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
        See docs/ai_architecture/state_machine.md - App.tsx #292 */
     if (orSubPhase === "Dividends" && noEarnableRevenue !== null) return null;
     if (orSubPhase === "Hardware" && atTrainLimitNow) {
-      return "it is already at its train limit";
+      /* Design note #1701 (DT-1): at the limit is not "nothing to do" -- a legal one-for-one Diesel exchange keeps
+         the step open. The verdict is the engine's, the one the server derives from; the shell adds no rule. */
+      return gameState ? buyTrainsAutoSkipReason(gameState, actingProtocolId) : null;
     }
     return null;
-  }, [gameState, spectator, orSubPhase, noEarnableRevenue, stationPlacementBlock, atTrainLimitNow]);
+  }, [gameState, spectator, orSubPhase, noEarnableRevenue, stationPlacementBlock, atTrainLimitNow, actingProtocolId]);
 
   /* Same once-per-(corporation, step) guard as the auto-skip: online the cursor is poll-driven, so an unguarded effect would re-broadcast every render.
      See docs/ai_architecture/state_machine.md - App.tsx #292 */

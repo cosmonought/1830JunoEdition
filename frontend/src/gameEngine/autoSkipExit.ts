@@ -9,6 +9,11 @@
 // ASKED: "When a corporation is at the train limit, I think the game should auto-skip to end their turn
 // instead of making them click it."
 //
+// AMENDED BY #1701 (DT-1): at the limit was "nothing left to do" only while every Buy Trains action ADDED a
+// train. The Diesel exchange is one out, one in, so the train-limit lock ends Buy Trains only when no legal
+// one-for-one exchange remains -- `buyTrainsAutoSkipReason` (`derivedActions.ts`) is that verdict, for the server
+// and the shell alike. What this file decides -- skipping the last step ends the turn -- is unchanged.
+//
 // THE RULE WAS ALREADY WRITTEN AND DID NOTHING. `autoSkipReason` has named this exact case since #249 --
 // `orSubPhase === "Hardware" && atTrainLimitNow` returns "it is already at its train limit" -- and the effect
 // that reads it dispatches `AdvanceOperatingSubPhase`. But Buy Trains is the LAST step, and `nextSubPhase`

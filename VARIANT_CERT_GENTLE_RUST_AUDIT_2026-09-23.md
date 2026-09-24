@@ -465,6 +465,9 @@ Characterization only; the live game is not evidence that current behaviour is r
 * **Likely replay-semantic changes requiring a later deliberate 8 → 9 closure boundary:** self-trigger grace timing
   (IG-A); reprieved-train sale refusal (IG-B); reprieved-train Diesel trade-in refusal (IG-C); a forced-purchase fix
   **only if** the implementation audit finds the current engine actually wrong (today: no conflation found, IG-D).
+  **Plus one adjacent base-game correction for the same boundary (DT-1, #1701, not Gentle Rust):** Hardware auto-skip
+  no longer ends a corporation's turn at the train limit while a legal one-for-one Diesel exchange remains available
+  (corpus-neutral: no stored board reaches it).
 * **Replay-neutral:** UI / copy / narration (IG-F), stale comments (Appendix B), new tests and the constructed fixture.
 * **Not prejudged:** corpus divergence is measured during implementation / certification (the one Gentle Rust log
   never reaches phase 4 under today's engine, so a digest move is not expected — but it is measured, not assumed).

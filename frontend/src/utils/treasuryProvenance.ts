@@ -1,4 +1,6 @@
 import type { GameStateResponse } from "../gameEngine/gameState";
+// UR-3: the run that carried a Yellow Sign Mark explains the award it minted (`last_run_yellow_sign`).
+import { runYellowSignWritten } from "../gameEngine/yellowSign";
 
 /* ==================================================================
  *  DESIGN NOTE 750: WHERE DID THE MONEY COME FROM
@@ -85,12 +87,18 @@ export function describeTreasuryMoves(
     if (from === undefined) continue;
     const to = Number(company.treasury) || 0;
     if (from === to) continue;
+    /* UR-3 (OD-UR-1): ON A PINNED UNPREDICTABLE REVENUE TABLE THE MARK LANDS IN THE RUN'S OWN ENTRY, and it mints its
+       award there -- a treasury movement no run made before. It is explained for exactly the corporation whose run
+       recorded a Mark, and exactly by that award; any other treasury a run moves is still the surprise #750 exists to
+       flag. */
+    const sign = key === "RunMultipleRoutes" ? runYellowSignWritten(before, after, company.company_id) : null;
+    const explainedBySign = sign !== null && sign.stage === "mark" && to - from === (Number(sign.award) || 0);
     moves.push({
       companyId: company.company_id,
       ticker: company.ticker,
       from,
       to,
-      unexplained: !expected,
+      unexplained: !expected && !explainedBySign,
     });
   }
   return moves;

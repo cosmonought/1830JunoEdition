@@ -14,12 +14,9 @@
 
 export {};
 
-const { RoomSession } = require("./roomSession") as typeof import("./roomSession");
 const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
 const { normalizeForCommit } =
   require("./serverIngress") as typeof import("./serverIngress");
-const { sandboxReplayProviders } =
-  require("../gameEngine/replayProviders") as typeof import("../gameEngine/replayProviders");
 const { applySandboxAction } =
   require("../gameEngine/sandboxSession") as typeof import("../gameEngine/sandboxSession");
 const { turnSeedKey } = require("./turnSeed") as typeof import("./turnSeed");
@@ -105,29 +102,26 @@ describe("S9-1 / #1662: the turn's draw is the server's, at ingress", () => {
     expect(SOURCE).toContain("rawLog: this.log,");
     expect(SOURCE).toContain("mintSeed: this.options.mintSeed,");
     expect(SOURCE).toContain("msg: recorded,");
-    /* AND IT RUNS. A `YellowSignEvent` needs no route to be admitted, so it is the cheap end-to-end proof
-       that the rewrite happens between the gate and the append rather than only in a unit test: what the
-       client sent carried the waiver, and what the room committed does not. */
-    let minted = 0;
-    const room = new RoomSession({
-      providers: sandboxReplayProviders(),
-      seed: { state: board(), waterfall: null },
-      build: "b",
-      mintId: () => `m${(minted += 1)}`,
-      now: () => 1000,
-      mintSeed: () => SERVER_SEED,
-    });
-    const answer = room.submit({
-      actor: P1,
-      build: "b",
-      host: P1,
-      msg: { YellowSignEvent: { game_id: 0, protocol_id: BO, debug_force: true } } as never,
-      baseIndex: room.nextIndex - 1,
-    });
-    if (answer.kind !== "applied") throw new Error(`refused: ${(answer as { reason?: string }).reason}`);
-    const logged = room.entries.filter((e) => "YellowSignEvent" in JSON.parse(e.payload));
+    /* AND IT RUNS -- the rewrite happens between the gate and the append, not only in a unit test.
+       [UR-3 (OD-UR-1 = 1-A, D-37): this proof used to be a `YellowSignEvent` carrying the waiver, because it needed
+       no route to be admitted. A pinned table now refuses that request at ingress, before anything is normalised, so
+       the proof is the message whose draw the normalizer actually replaces: a run, on UR-3's constructed board with
+       a real route. What the client sent carried a seed it chose; what the room committed carries the server's.] */
+    const H = require("./yellowSignRunBoundSupport") as typeof import("./yellowSignRunBoundSupport");
+    const room = H.hostedRoom(
+      H.urBoard({ corps: [{ id: H.CO, president: H.P1, trains: ["2", "3"], treasury: 300 }, { id: H.BO, president: H.P2, trains: ["3"] }] }),
+      H.GULF,
+      [SERVER_SEED],
+    );
+    const answer = H.submitTo(room, H.P1, H.runMsg(H.CO, [H.TWO_ROUTE, H.THREE_ROUTE], [0, 1], ["2", "3"], CHOSEN_SEED));
+    if (answer.kind !== "applied") throw new Error(`refused: ${answer.reason}`);
+    const logged = room.entries.filter((e) => "RunMultipleRoutes" in JSON.parse(e.payload));
     expect(logged).toHaveLength(1);
-    expect(JSON.parse(logged[0].payload).YellowSignEvent).toEqual({ game_id: 0, protocol_id: BO });
+    expect(JSON.parse(logged[0].payload).RunMultipleRoutes.revenue_seed).toBe(SERVER_SEED);
+    // And the waiver's old carrier is refused before the normalizer is ever reached: nothing more is appended.
+    const request = H.submitTo(room, H.P1, { YellowSignEvent: { game_id: 0, protocol_id: H.CO, debug_force: true } } as never);
+    expect(request.kind).toBe("refused");
+    expect(room.entries).toHaveLength(1);
   });
 
   it("3. replay consumes the stored seed unchanged, and an undo does not re-roll it", () => {

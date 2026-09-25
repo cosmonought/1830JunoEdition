@@ -19,7 +19,7 @@ const { filterSandboxPlacements } =
   require("../components/sandboxTileLegality") as typeof import("../components/sandboxTileLegality");
 const { applySandboxAction } =
   require("../gameEngine/sandboxSession") as typeof import("../gameEngine/sandboxSession");
-const { runWithoutTrain, lowestValueTrain, markPayout, resolveYellowSign } =
+const { runWithoutTrain, lowestValueTrain, markPayout } =
   require("../gameEngine/yellowSign") as typeof import("../gameEngine/yellowSign");
 const { STANDARD_VARIANTS, rollTurnRevenue } =
   require("../gameEngine/gameVariants") as typeof import("../gameEngine/gameVariants");
@@ -96,16 +96,26 @@ describe("S9-6: the C&SL special is a bonus lay, not an upgrade right", () => {
 
 const BO = 6;
 const SHORT = [{ hex: "F2" }, { hex: "A9" }];
-/** A seed whose natural draw IS the Mark, found against the real selector rather than asserted (#1661). */
+/** A seed whose natural draw IS the Mark, found against the real selector rather than asserted (#1661).
+ *  UR-3 (OD-UR-1 = 1-A): on this pinned board the run's own entry applies the stage, so the finder reads what the run
+ *  applied (`last_run_yellow_sign`) -- asking `resolveYellowSign` of the post-run board would find the sign already
+ *  out and no Mark left to draw. */
 function markSeed(seedBoard: GameStateResponse, trains: string[]): number {
   for (let s = 1; s < 400000; s += 1) {
     const ran = applySandboxAction(seedBoard, {
       RunMultipleRoutes: { protocol_id: BO, routes: trains.map(() => SHORT), trains, train_indices: trains.map((_t, i) => i), revenue_seed: s },
     } as never);
-    if (resolveYellowSign(ran, BO, "4").outcome?.stage === "mark") return s;
+    if (corp(ran).last_run_yellow_sign?.stage === "mark") return s;
   }
   throw new Error("no mark seed");
 }
+
+/** The same board with no pin: the run is priced exactly as on the pinned one, and no stage rides it (the legacy
+ *  request path) -- so it is the run AS IT RAN, before the Sign. */
+const unpinned = (state: GameStateResponse): GameStateResponse => {
+  const { rules_engine_version: _pin, ...rest } = state as GameStateResponse & { rules_engine_version?: number };
+  return rest as GameStateResponse;
+};
 
 const markBoard = (): GameStateResponse =>
   ({
@@ -138,9 +148,12 @@ describe("S9-3: the Mark nullifies the vanished train's run and nothing else", (
        resting on a neighbouring entry's. */
     const SEED = markSeed(markBoard(), ["3", "4"]);
     const PARTS = { macroRound: 3, subRound: 1, companyId: BO, turnSeed: SEED };
-    const ran = applySandboxAction(markBoard(), {
+    const RUN = {
       RunMultipleRoutes: { protocol_id: BO, routes: [SHORT, SHORT], trains: ["3", "4"], train_indices: [0, 1], revenue_seed: SEED },
-    } as never);
+    };
+    /* UR-3 (OD-UR-1 = 1-A): the Mark rides the run's own entry on this pinned board, so the run AS IT RAN -- before
+       the Sign -- is read off the same run on the unpinned twin, which prices it identically and draws no stage. */
+    const ran = applySandboxAction(unpinned(markBoard()), RUN as never);
     const before = corp(ran);
     const taken = lowestValueTrain(before.owned_trains)!;
     expect(taken).toBe("3");
@@ -149,8 +162,9 @@ describe("S9-3: the Mark nullifies the vanished train's run and nothing else", (
     expect(takenPrinted).toBeGreaterThan(0);
     expect(printedBefore).toBeGreaterThan(takenPrinted); // the other train earned something
 
-    const marked = applySandboxAction(ran, { YellowSignEvent: { game_id: 0, protocol_id: BO } } as never);
+    const marked = applySandboxAction(markBoard(), RUN as never);
     const after = corp(marked);
+    expect(after.last_run_yellow_sign?.stage).toBe("mark");
 
     // ONLY the taken train's route is gone.
     expect(after.owned_trains).toEqual(["4"]);
@@ -175,11 +189,12 @@ describe("S9-3: the Mark nullifies the vanished train's run and nothing else", (
       return b;
     };
     const SOLO_SEED = markSeed(solo(), ["3"]);
-    const ran = applySandboxAction(solo(), {
+    // UR-3: the run's own entry applies the Mark on this pinned board -- no request follows it.
+    const marked = applySandboxAction(solo(), {
       RunMultipleRoutes: { protocol_id: BO, routes: [SHORT], trains: ["3"], train_indices: [0], revenue_seed: SOLO_SEED },
     } as never);
-    const marked = applySandboxAction(ran, { YellowSignEvent: { game_id: 0, protocol_id: BO } } as never);
     const after = corp(marked);
+    expect(after.last_run_yellow_sign?.stage).toBe("mark");
     expect(after.owned_trains).toEqual([]);
     expect(Number(after.printed_route_revenue)).toBe(0);
     expect(Number(after.treasury)).toBe(340 + markPayout("3"));

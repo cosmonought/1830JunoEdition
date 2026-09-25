@@ -38,7 +38,7 @@ interpretation of, the 2018 rulebook (or a product ruling), recorded so it is ne
 | 7 | Transaction + cash authority / auction | done in five slices — 7.1 `08a59ec` (money ledger), 7.2 `a927e5f` (stock / par), 7.3 `d0a0792` (auction), 7.4 `6ecdfb1` (offers, consent, replay-safe settlement identity); **7.5** (`RULES_ENGINE_VERSION` 4 → 5, replay / golden / corpus reconciliation — `BATCH7.5_REPLAY_VERSION_CLOSURE_2026-09-16.md`, uncommitted, awaiting the owner's full-suite gate) |
 | 8 | Stock / OR edge cases + timing | Part B — design pass done 2026-09-16 (`STAGE8_AUTHORITY_DESIGN_2026-09-16.md`: five slices 8.1 → 8.5, one 5 → 6 bump at closure); **owner rulings R1–R4 recorded 2026-09-16** (design §0, D-29 … D-32), **S8-14 ruled 2026-09-17** (design §0, D-33); Opus is the default model for every Stage-8 slice; **Slice 8.1 implemented 2026-09-16 — S8-1 / S8-3 / S8-4 `RESOLVED` (**committed `05b5dfc`**; design §2.8)**; **Slice 8.2 implemented 2026-09-16 — S8-5 / S8-6 / S8-12 / S8-13 `RESOLVED`; S8-14 `RESOLVED` 2026-09-17 by the owner's ruling (the tiled OO home hex, #1617) (**committed `efe4098`**; design §5.9)**; **Slice 8.3 implemented 2026-09-17 — S8-2 `RESOLVED` (#1620, design §4.4): `presidentFor(company, seating)` with §5.4's clockwise tie-break from the former president's seat, one ordering rule for settlement and forced-sale projection alike, corpus-neutral (18 logs / 3,131 entries / 7 presidency changes / 0 ties / 0 disagreements); S10-18's presidency-tie gap closed; **S8-15 `RESOLVED` 2026-09-17 by the owner's ruling** (the Scenario-D presidency exchange, #1622: two ordinary 10 %s where the successor has them, otherwise the other-20 card one-for-one for the President's Certificate, percentages unmoved either way); **S9-14 `RESOLVED` 2026-09-17 — absorbed into 8.3 by owner ruling** (#1624: V-7.2's 10 % exchange certificate must already be in the Bank Pool before a half-sale of the other-20, and a president who must first receive that card during a presidency transfer is subject to the same requirement — a sale cannot supply its own prerequisite); **S9-13 filed and left OPEN by the same ruling** (the chart walks one row per 10 %, not per certificate — Stage 9) (**committed `02a9838`**); **Slice 8.4 implemented 2026-09-17 — S8-10 `RESOLVED`** (#1630–#1634, design §6.8): the M&H exchange is an authority of its own (`mohawkExchange.ts`), a free player-initiated interjection that consumes no Stock Round purchase, seat, pass streak or Priority Deal, queued as `pending_mh_exchange` when the request arrives off-turn and settled — fully revalidated — at the next legal between-turn boundary, ahead of every `buildOperatingOrder` so an SR→OR float is never locked out of the round it just qualified for; the owner's source choice is never switched for them (**committed `fc5a575`**); **Slice 8.5 implemented 2026-09-17 — the closure pass (UNCOMMITTED, awaiting the owner's review and full-suite gate; design §17)**: `RULES_ENGINE_VERSION` **5 → 6** with changelog row 6 and the derived supported list, **S8-8 `RESOLVED`** (#1640, the last share-price nominal out of the 6.6.3 projection), the corpus reconciliation measured from HEAD under v6 (18 files / 4,105 stored / 3,103 applied / 1,131 reducer no-ops / deterministic 18 of 18 / 0 boards ending with a queued M&H request), the five closure matrices and eight static source audits (`stage85Matrices.test.ts`), and **S10-23 / S10-24 filed** by that auditing |
 | 9 | Variants + map data + variant authority | **CLOSED 2026-09-19, `RULES_ENGINE_VERSION` 7** — see the Stage 9 closure banner (Part B) |
-| 10 | Replay / settlement / release hardening | **CLOSED 2026-09-23, `RULES_ENGINE_VERSION` 8** (authority / replay / tooling slices 10.1–10.6 + the closure pass) — see the Stage 10 closure banner (Part B); deferred S10 items are assigned to later phases there. **Next phase: VARIANT CERTIFICATION** (Gentle Rust, Unpredictable Revenue, Delayed Auction) — *(2026-09-24)* **standalone Gentle Rust CERTIFIED, `RULES_ENGINE_VERSION` 9** (Variant Certification 1A, GR-1 … GR-5, #1699–#1705; S9-7); Unpredictable Revenue: **UR-1 audit / design done 2026-09-24** (verdict C, NOT certified — S9-7, `VARIANT_CERT_UNPREDICTABLE_REVENUE_AUDIT_2026-09-24.md`); **owner rulings recorded 2026-09-24 (UR-2 part 1: 10 of 13 decided — D-36 closed, D-37 … D-45; OD-UR-5 / -6 / -10 open) — UR-3 unblocked**; Delayed Auction still owed |
+| 10 | Replay / settlement / release hardening | **CLOSED 2026-09-23, `RULES_ENGINE_VERSION` 8** (authority / replay / tooling slices 10.1–10.6 + the closure pass) — see the Stage 10 closure banner (Part B); deferred S10 items are assigned to later phases there. **Next phase: VARIANT CERTIFICATION** (Gentle Rust, Unpredictable Revenue, Delayed Auction) — *(2026-09-24)* **standalone Gentle Rust CERTIFIED, `RULES_ENGINE_VERSION` 9** (Variant Certification 1A, GR-1 … GR-5, #1699–#1705; S9-7); Unpredictable Revenue: **UR-1 audit / design done 2026-09-24** (verdict C, NOT certified — S9-7, `VARIANT_CERT_UNPREDICTABLE_REVENUE_AUDIT_2026-09-24.md`); **owner rulings recorded 2026-09-24 (UR-2 part 1: 10 of 13 decided — D-36 closed, D-37 … D-45; OD-UR-5 / -6 / -10 open) — UR-3 unblocked**; **UR-3 implemented 2026-09-24 (uncommitted, awaiting the owner's gate): run-bound Yellow Sign, fog at the end of N+1, UR-F4 / UR-F17, and UR-F19 under OD-UR-13 (decided during UR-3 — D-46: the Mark's train leaves the game; phase progression monotonic) — v9, NOT certified** (S9-7, audit rev 3); Delayed Auction still owed |
 
 UI/polish-only items are **not** forced into a numbered stage; they live in Part C (the UX backlog).
 
@@ -1688,7 +1688,8 @@ first REAL Diesel purchase lands second"). None of them was touched by S9-3 itse
 the verbatim rule and the implementation disagree; the owner has ruled on several clauses. **MARK:** the train is
 chosen from the fleet after the Run → Dividends settlement, so a Gentle Rust Final Run train is never taken (OD-GR-3,
 D-36); the gold is found money, minted outside the Bank (OD-UR-4, D-40); every stage is an automatic consequence of
-the run, never a client request (OD-UR-1, D-37). **CARCOSA AWAITS:** the gift never advances the phase (OD-UR-3, D-39);
+the run, never a client request (OD-UR-1, D-37); *(UR-3)* the taken train is permanently removed from the game — not the
+depot, not the Bank Pool — and the phase never falls back across it (OD-UR-13, D-46). **CARCOSA AWAITS:** the gift never advances the phase (OD-UR-3, D-39);
 a gilded train may not be a Diesel trade-in (OD-UR-7, D-41). **GHOST EXPIRY, first sentence — superseded:** the train
 survives through the full set after the trigger set (N + 1, #1089's lifespan) and disappears automatically at the END
 of set N + 1, at the boundary (OD-UR-2, D-38) — neither that sentence nor #1092's run collection verbatim. **GHOST
@@ -1796,7 +1797,7 @@ without the power. No corpus effect (wording only). `RULES_ENGINE_VERSION` uncha
 
 **S9-7. Gentle Rust / Unpredictable Revenue / Delayed Auction — optional variants, full certification deferred.**
 Status, per variant (GR-5, 2026-09-24): **Gentle Rust (standalone) — `CERTIFIED — CLOSED 2026-09-24 at
-RULES_ENGINE_VERSION 9`** · **Unpredictable Revenue — `DEFERRED — PRE-LAUNCH VARIANT CERTIFICATION REQUIRED`** *(in progress: UR-1 audit / design complete 2026-09-24, verdict C; owner rulings recorded 2026-09-24 — 10 of 13 decided, OD-UR-5 / -6 / -10 open; NOT certified; see Variant Certification 1B below)* ·
+RULES_ENGINE_VERSION 9`** · **Unpredictable Revenue — `DEFERRED — PRE-LAUNCH VARIANT CERTIFICATION REQUIRED`** *(in progress: UR-1 audit / design complete 2026-09-24, verdict C; owner rulings recorded 2026-09-24 — 10 of 13 decided, OD-UR-5 / -6 / -10 open; **UR-3 implemented 2026-09-24, uncommitted** — OD-UR-13, raised by UR-3, decided during it and implemented (D-46); NOT certified; see Variant Certification 1B below)* ·
 **Delayed Auction — `DEFERRED — PRE-LAUNCH VARIANT CERTIFICATION REQUIRED`** · **the Gentle Rust + Unpredictable Revenue
 interaction — NOT certified.** *(OD-GR-3 owner-DECIDED 2026-09-24 — D-36: the Mark judges the fleet after the
 Run → Dividends settlement, so a Gentle Rust Final Run train is never a candidate; the interaction is implemented and
@@ -1829,7 +1830,7 @@ Unpredictable Revenue, Delayed Auction, and the Gentle Rust + Unpredictable Reve
 (rev 6).
 
 **Variant Certification 1B — Unpredictable Revenue: UR-1 audit / design (2026-09-24) — NOT certified.** Evidence and
-design: `VARIANT_CERT_UNPREDICTABLE_REVENUE_AUDIT_2026-09-24.md` (rev 2). Verdict **C — specification incomplete (owner
+design: `VARIANT_CERT_UNPREDICTABLE_REVENUE_AUDIT_2026-09-24.md` (rev 3 — rev 3 records UR-3's implementation). Verdict **C — specification incomplete (owner
 decisions required) / implementation defects found.** 62 normative clauses (UR-N1 … UR-N62); matrix (clauses, rev 2): 30 with
 evidence already at the bar, 12 correct but needing a live test, 16 defects, 4 owner decisions (rev 1: 31 / 12 / 10 / 9)
 — the variant as a whole is not certified. `RULES_ENGINE_VERSION` stays **9**; nothing implemented; no log, golden or fixture touched. **Owner
@@ -1840,20 +1841,21 @@ at the END of set N+1 by an OR-set-boundary transition (**D-38**); OD-UR-3 synth
 (**D-39**); OD-UR-4 the Mark's award is minted (**D-40**); OD-UR-7 no gilded Diesel trade-in (**D-41**); OD-UR-8 the Rules
 Reference keeps the Easter egg (**D-42**); OD-UR-9 cryptographic hosted seeds, implementation routed to AWS / live
 multiplayer (**D-43**); OD-UR-11 the face an undo reveals is accepted (**D-44**); OD-UR-12 "Unpredictable Revenue"
-(**D-45**). **OPEN — later owner review:** OD-UR-5 (the Blood Price: the buyer's train, whose share price moves,
+(**D-45**). *(During UR-3, 2026-09-24:)* OD-UR-13 the Mark's taken train is permanently removed from the game — never the
+depot or the Bank Pool — and phase progression is monotonic for every removal path (**D-46**). **OPEN — later owner review:** OD-UR-5 (the Blood Price: the buyer's train, whose share price moves,
 identical-model copies), OD-UR-6 (the statistics' basis), OD-UR-10 (rounding ties). **UR-3 is unblocked** — it has every
 ruling it needs for UR-F1, UR-F2, UR-F3, the Mark × Gentle Rust timing and the fog's authority and removal location.
 **Findings — `OPEN` unless marked, each owned by the named slice:**
 
 | id | severity | finding | slice |
 |---|---|---|---|
-| UR-F1 | HIGH | the Yellow Sign never reaches the board in a room: its request is dispatched from inside the log drain and refused by #1407's catch-up guard (static trace — reproduce first) | UR-3 — OD-UR-1 decided |
-| UR-F2 | HIGH | the sign's request is not bound to its run (omission; delay past a phase change or Buy Trains; another corporation; any step; the window judged at application) — `messageSchema.ts` #1451's "recorded as deferred" was never tracked here | UR-3 — OD-UR-1 decided |
-| UR-F3 | HIGH | no variant gate: a table without the variant applies the Mark through hosted ingress | UR-3 |
-| UR-F4 | HIGH | a Carcosa gift above the phase moves the derived phase without a phase change; the first real 6 / D then rusts nothing and a ghost D never gets a doom clock | UR-4 — OD-UR-3 decided (3-A) |
-| UR-F5 | MEDIUM | the Mark's route attribution after a Gentle Rust Final Run destruction | UR-3 — OD-GR-3 decided (post-settlement fleet) |
-| UR-F6 | MEDIUM | the narration judges the Mark on the pre-run fleet | UR-3 — OD-GR-3 decided |
-| UR-F7 | MEDIUM | a run without `train_indices` leaves the Mark nothing to nullify | UR-3 |
+| UR-F1 | HIGH | the Yellow Sign never reaches the board in a room: its request is dispatched from inside the log drain and refused by #1407's catch-up guard (static trace — reproduce first) | **`RESOLVED` on pinned tables — UR-3 (uncommitted)**: the stage is the run's own entry; nothing dispatched; Firestore (unpinned) residual → S10-11 |
+| UR-F2 | HIGH | the sign's request is not bound to its run (omission; delay past a phase change or Buy Trains; another corporation; any step; the window judged at application) — `messageSchema.ts` #1451's "recorded as deferred" was never tracked here | **`RESOLVED` on pinned tables — UR-3**: every client request refused (ingress, reducer gate, arm); Firestore residual → S10-11 |
+| UR-F3 | HIGH | no variant gate: a table without the variant applies the Mark through hosted ingress | **`RESOLVED` on pinned tables — UR-3** |
+| UR-F4 | HIGH | a Carcosa gift above the phase moves the derived phase without a phase change; the first real 6 / D then rusts nothing and a ghost D never gets a doom clock | **`RESOLVED` — carried in UR-3 by the owner's brief** (`derivePhase` skips ghosts; every table) |
+| UR-F5 | MEDIUM | the Mark's route attribution after a Gentle Rust Final Run destruction | **`RESOLVED` — UR-3** (run path; `runWithoutTrain` aligned to the fleet as it ran) |
+| UR-F6 | MEDIUM | the narration judges the Mark on the pre-run fleet | **`RESOLVED` — UR-3** (narration, fleet-loss notices and statistics read `last_run_yellow_sign`) |
+| UR-F7 | MEDIUM | a run without `train_indices` leaves the Mark nothing to nullify | **`RESOLVED` on pinned Unpredictable Revenue tables — UR-3** (the authority's pairing) |
 | UR-F8 | MEDIUM | statistics: printed basis, nullified runs booked as earned, synthetic gifts counted as purchases / the first Diesel | UR-5 — OD-UR-6 OPEN |
 | UR-F9 | LOW | The Cowboy reads the natural flavour line, not the printed one | UR-5 |
 | UR-F10 | **CLOSED — intended** | the Mark's award is minted (`MINTS_BY_DESIGN`) — OD-UR-4 / D-40: variant law, not a defect; only a stale test comment remains | UR-5 (the comment) |
@@ -1861,21 +1863,47 @@ ruling it needs for UR-F1, UR-F2, UR-F3, the Mark × Gentle Rust timing and the 
 | UR-F12 | LOW | the gilded chip's tooltip is stale ("until this Operating Round ends") | UR-6 (text per OD-UR-2's lifetime) |
 | UR-F13 | LOW | the Rules Reference carries one sentence on the variant | UR-6 — OD-UR-8 decided (8-B); the Blood Price text after OD-UR-5 |
 | UR-F14 | LOW | "Unpredictable revenue" vs "Unpredictable Routes" | UR-6 — OD-UR-12 decided ("Unpredictable Revenue") |
-| UR-F15 | INFO | a pinned seedless run would use the legacy hash (unreachable through the server) | UR-3 (optional) |
+| UR-F15 | INFO | a pinned seedless run would use the legacy hash (unreachable through the server) | UR-3 (optional) — **not taken; stays `OPEN` (INFO)** |
 | UR-F16 | INFO | the hosted seed source is `Math.random` | OD-UR-9 decided (cryptographic) — routed to AWS / live multiplayer (D-43), not UR |
-| UR-F17 | MEDIUM | a gilded 5 / 6 can be traded in for a Diesel, leaving the gilding, provenance, curse and doom clock behind and a synthetic train in the Bank Pool | UR-4 — OD-UR-7 decided (refused; an ordinary copy of the model stays tradable) |
-| UR-F18 | MEDIUM | *(rev 2)* the fog is collected as a run stage (the Carcosan corporation's first run after set N+1, through the sign request) where OD-UR-2 rules an automatic removal at the END of set N+1, at the OR-set boundary — do **not** restore `N+1 + on-run` | UR-3 — OD-UR-2 decided |
+| UR-F17 | MEDIUM | a gilded 5 / 6 can be traded in for a Diesel, leaving the gilding, provenance, curse and doom clock behind and a synthetic train in the Bank Pool | **`RESOLVED` — carried in UR-3 by the owner's brief** (multiset: an ordinary copy stays tradable; $800 and LPF $750; atomic refusal) |
+| UR-F18 | MEDIUM | *(rev 2)* the fog is collected as a run stage (the Carcosan corporation's first run after set N+1, through the sign request) where OD-UR-2 rules an automatic removal at the END of set N+1, at the OR-set boundary — do **not** restore `N+1 + on-run` | **`RESOLVED` — UR-3** (`fogAtSetEnd` in the round machine; every exit of the set; pinned and unpinned) |
+| **UR-F19** | MEDIUM | *(new, UR-3)* the Mark removes the taken train and puts it nowhere: the derived depot takes it back as phantom stock when it is of the phase's tier, and when it was the only train of that tier in play the phase falls back a tier (probe: phase 3 → 2, the depot offers 2-trains again) — pre-existing since #1046, reachable now that the Mark lands | **`RESOLVED` on pinned Unpredictable Revenue tables — UR-3, under OD-UR-13 (D-46)**: the run-bound Mark records the train on `removed_trains` (never the Bank Pool); `derivePhase` counts it toward the phase and `depotInventory` off the depot, so the phase never falls back and the copy never returns to sale; replay re-derives it; statistics still `taken` (`yellowSignMarkRemoval`, `yellowSignRunBoundStats`). Other removal paths checked — no broader regression (audit, "UR-3 implementation (rev 3)"). Unpinned residual → S10-11 |
 
-Roadmap: **UR-2** owner spec review (**part 1 done** 2026-09-24; part 2 = OD-UR-5, -6, -10) → **UR-3** Yellow Sign
-authority, including the fog's boundary removal (**unblocked**) → **UR-4** Carcosa lifecycle (its Blood Price part needs
-OD-UR-5) → **UR-5** money and statistics (needs OD-UR-6) → **UR-6** UI / copy / Rules Reference → **UR-7** certification
+Roadmap: **UR-2** owner spec review (**part 1 done** 2026-09-24; part 2 = OD-UR-5, -6, -10 — OD-UR-13, raised by UR-3, was
+decided during it, D-46) → **UR-3** Yellow Sign authority, including the fog's boundary removal (**implemented 2026-09-24,
+uncommitted** — with UR-4's UR-F4 and UR-F17 by the owner's brief, and UR-F19 under OD-UR-13) → **UR-4** Carcosa lifecycle,
+now only the Blood Price (needs OD-UR-5) → **UR-5** money and statistics (needs OD-UR-6) → **UR-6** UI / copy / Rules Reference → **UR-7** certification
 evidence (the constructed legal game, S10-21; the rounding table needs OD-UR-10) → **UR-8** the one 9 → 10 boundary and
 closure. **Unpredictable Revenue, and Gentle Rust + Unpredictable Revenue, remain
 NOT certified.** Evidence-quality note for UR-7 (audit Appendix C): `yellowSignIngress.test.ts` case 2 is evidence for
 the ingress normalizer's placement only — its bare request is `applied` because the constructed board is unsettled, not
-because the sign acted. Recorded outside the variant (audit Appendix C, not investigated): `server/src/gameServer.ts:268`
+because the sign acted. *(UR-3: resolved — case 2 now proves the rewrite on a run with a real route, whose seed the
+normalizer replaces, and a pinned table refuses the request before normalizing.)* Recorded outside the variant (audit Appendix C, not investigated): `server/src/gameServer.ts:268`
 mints seat tokens with `Date.now()` and `Math.random()` — routed to **AWS / live multiplayer** (Stage-10 forward
 roadmap, item 4). OD-UR-9's cryptographic revenue seeds are routed to the same place (D-43).
+
+**UR-3 — the Yellow Sign's authority (2026-09-24, UNCOMMITTED; awaiting the owner's full-suite gate).** On a pinned
+Unpredictable Revenue table the stage is the last step of the accepted run's own transition (`settleRunYellowSign`,
+after the Run → Dividends settlement, before bankruptcy), read from the run's committed seed and recorded on the
+corporation as `last_run_yellow_sign`; the client `YellowSignEvent` is refused there (ingress, reducer gate, arm, shell
+refusal line) and the shell dispatches none; the Mark reads the post-settlement fleet and nullifies the taken train's own
+route; the run's breakdown is the authority's pairing; the fog is `fogAtSetEnd`, an OR-set-boundary transition at the end
+of set N+1; `derivePhase` ignores synthetic trains (UR-F4); `exchangeableTrains` excludes gilded copies by multiset
+(UR-F17); and — OD-UR-13 decided during the slice (D-46) — the Mark's taken train is recorded as removed from the game
+(`removed_trains`, never the Bank Pool), which `derivePhase` counts toward the phase and `depotInventory` off the depot, so
+the phase never falls back across the Mark and the copy never returns to sale (UR-F19). Unpinned boards keep the legacy
+request path byte for byte (the corpus's stored entries). `RULES_ENGINE_VERSION` stays **9**; the replay semantics are owed
+to the 9 → 10 boundary (UR-8, Part E). Evidence: seven new suites (`yellowSignRunBound`, `yellowSignRunBoundStats`,
+`carcosaFogBoundary`, `carcosaSyntheticPhase`, `carcosaGildedExchange`, `unpredictableRevenueStandardControls`,
+`yellowSignMarkRemoval` — 92 tests; 67 of them fail on the untouched baseline) and seven updated where their contract
+changed (`yellowSignAuthority`, `yellowSignIngress`, `stage95Rulings`, `stage95GhostLimit`, `batch48`, `batch60`, `batch61`,
+each with a UR-3 note). OD-UR-13's monotonic-phase invariant was checked against every other train-removal path (rust,
+Gentle Rust destruction, discard, trade-in, sale / Blood Price, fog / doom, bankruptcy) and measured on the 18-file corpus
+(0 phase decreases): no broader regression found. Deferred and recorded: the Firestore residual (S10-11 — now including
+the legacy Mark's missing removal record), a greyed gilded chip in the Diesel-exchange row, the fog's formal notice and a
+player-facing line that the Mark's train is gone for good (UR-6), and the forced-withhold derivation for a trainless
+corporation whose run still earned (S10-27). **Unpredictable Revenue, and
+Gentle Rust + Unpredictable Revenue, remain NOT certified.** Audit: rev 3.
 
 **Owner ruling, recorded verbatim in substance.** Gentle Rust, Unpredictable Revenue and Delayed Auction have
 **not** received complete specification audits as independent optional variants. They must **not** be labelled
@@ -3283,6 +3311,17 @@ retire `frontend/sandbox-log-*.json` / `dump-sandbox-log.mjs` if the CLI export 
 multiplayer playtest confirms it; (3) retire Firestore as the authoritative gameplay-room path; (4) chat may stay on
 Firestore temporarily, but it must never serve as dispute evidence for a money game. Before real-value production
 play relies on the server. Nothing deleted here.
+**Unpredictable Revenue residual (UR-3, 2026-09-24).** A Firestore room deals unpinned, so it keeps the Yellow Sign's
+legacy request path (the development corpus's stored entries need it byte for byte): the shell still narrates the Sign
+from the drain and dispatches the request (refused there by #1407's catch-up guard — UR-F1), a crafted client could still
+send, delay, aim or omit one (UR-F2), a standard-table request meets no variant gate (UR-F3), and the legacy Mark's
+narration judges the pre-settlement fleet (UR-F5 / UR-F6). The fog (OD-UR-2), the phase (OD-UR-3) and the gilded
+trade-in (OD-UR-7) fixes apply there too. *(OD-UR-13, D-46:)* the legacy Mark writes no removal record — the taken train
+simply leaves the fleet, as it always did — so on an unpinned board UR-F19's phantom stock and phase regression remain
+possible, reachable only through a crafted request or a stored legacy Mark (the normal client's request is still refused
+by the drain's catch-up guard; the corpus shows none: 0 phase decreases in 18 files); writing the record there would
+change what a stored unpinned Mark replays to. Retiring the path closes the rest; no shared automatic resolution was built, because it would
+need a discriminator the stored corpus does not carry.
 
 **S10-12. Owner-authored release items** (DECISIONS C2–C4, AUDIT_SETTLEMENT §10): a Terms page (bonded challenge,
 forfeit, operator-resolved dispute) readable in the lobby before the deposit; a rules line on one person in two
@@ -3572,6 +3611,21 @@ before the loop; ingress exempts it (`turnAuthority.ts`); the shell resolves it 
 new path. Not added to the escape list merely for symmetry.
 **Routing (post-Stage-10, 2026-09-23):** stays **OBSOLETE — no action**; no future phase. The asymmetry is unreachable under the current
 architecture, as verified behaviourally in 10.2.
+
+**S10-27. The room derives a forced $0 withhold for a corporation left trainless at Dividends whose run still earned.**
+Status `OPEN` (found by UR-3, 2026-09-24; not fixed — outside UR-3's scope). `nextDerivedAction` (`derivedActions.ts`,
+#292 / #1275) treats "no earnable revenue" at Dividends as `skipReasonFor(earnableRevenueVerdict(..))`, which answers from
+the fleet: a corporation with no trains gets `DeclareDividends { revenue_amount: "0", distribute: false }` even when its
+run this turn has already priced a non-zero `last_route_revenue`. The reducer refuses that declaration (C1,
+`dividendAmountRefusal`: "$0 does not match the run"), and — derived no-ops still append by design (#1685 / 10.2) — the
+room commits a no-op derived entry and spends the turn's guard key; the president then declares the real figure as usual,
+so no board or money is wrong. **Reproducible with Gentle Rust alone** (a corporation whose only train is on its Final Run
+runs, the train is retired at Run → Dividends, the corporation reaches Dividends trainless with its run's revenue) and
+newly reachable with Unpredictable Revenue (a Mark that takes the corporation's last train). Repair (a later Stage-10 /
+derived-action pass): at Dividends, force the withhold only when nothing ran (`routes_run_this_turn === 0` and a zero
+run), i.e. drop the fleet-based answer once the run is behind the corporation. Replay: none for stored logs (the entry
+is a no-op either way); new logs would stop recording the no-op. Evidence: `yellowSignRunBound.test.ts` ("hosted: the
+run's own entry applies the same Mark") pins that anything after the run is the room's own derived step.
 
 ---
 
@@ -4201,7 +4255,9 @@ train. **OD-GR-3b and OD-GR-3c are moot, not deferred.** No exception lets the M
 Rust destruction. Reducer authority, route attribution and narration must all follow the post-settlement fleet —
 **UR-F5 / UR-F6 are bugs to fix (UR-3), not evidence for changing Gentle Rust semantics.** **GR-S26 is closed as an
 owner-decided interaction**; Gentle Rust's own semantics are unchanged. Combined Gentle Rust + Unpredictable Revenue is
-still **NOT certified** — it is implemented and certified with Unpredictable Revenue (UR-3 … UR-8). `OWNER DECISION`
+still **NOT certified** — it is implemented and certified with Unpredictable Revenue (UR-3 … UR-8). *(Implemented in
+UR-3, 2026-09-24, uncommitted: `settleRunYellowSign` resolves the Mark after `settleOperatingCursor`, on the unreprieved
+copies, and `runWithoutTrain` attributes the nullified route on the fleet as it ran.)* `OWNER DECISION`
 (cross-variant specification). Source: `VARIANT_CERT_UNPREDICTABLE_REVENUE_AUDIT_2026-09-24.md` §7.3 (rev 2), with the
 decision brief in §7.1–§7.2. *History:* recorded 2026-09-23 as `DEFERRED — OWNER DECISION PENDING (Unpredictable
 Revenue certification)` (Gentle Rust audit §4 SR-9) — standalone Gentle Rust did not need the answer (GR-S26 DEFERRED BY
@@ -4212,8 +4268,9 @@ SPEC; the Yellow Sign arms were category C of the GR-4 arm inventory), so standa
 action (OD-UR-1 — DECIDED 2026-09-24).** No player or client may omit, delay, redirect or manufacture a stage; on pinned
 (authoritative) tables the game authority resolves it from the run and its committed seed and result. The client-sent
 `YellowSignEvent` is to be **removed as a source of authority**, not merely repaired — this supersedes the request model
-of S9-1 / #1661 for pinned tables and closes the architectural cause of UR-F1 and UR-F2. Not implemented: UR-3;
-replay-semantic (the Unpredictable Revenue 9 → 10 boundary). `OWNER DECISION` (variant specification). Source:
+of S9-1 / #1661 for pinned tables and closes the architectural cause of UR-F1 and UR-F2. **Implemented in UR-3
+(2026-09-24, uncommitted)** — `settleRunYellowSign`, `yellowSignRequestRefusal`, the record `last_run_yellow_sign`;
+unpinned boards keep the request path; replay-semantic (the Unpredictable Revenue 9 → 10 boundary). `OWNER DECISION` (variant specification). Source:
 `VARIANT_CERT_UNPREDICTABLE_REVENUE_AUDIT_2026-09-24.md`, "Owner rulings (rev 2)".
 
 **D-38. Unpredictable Revenue: the gilded train disappears automatically at the END of Operating-Round set N+1 —
@@ -4222,8 +4279,8 @@ whole next set, N+1; at the end of N+1 an authoritative OR-set-boundary transiti
 not a Yellow Sign request: no extra post-deadline run, no indefinite survival when the corporation stops operating, no
 post-deadline window to sell it. Combines #1089's "next full set" lifespan with S9-3's removal at a set boundary;
 **#1092's run-triggered collection is superseded — do not restore `N+1 + on-run`**, the form implemented today
-(UR-F18). A boundary notice may carry the narration later (UR-6). Not implemented: UR-3 (the fog's authority and removal
-location); replay-semantic. `OWNER DECISION` (variant specification). Source: UR audit "Owner rulings (rev 2)"; S9-2 and
+(UR-F18). A boundary notice may carry the narration later (UR-6). **Implemented in UR-3 (2026-09-24, uncommitted)** —
+`fogAtSetEnd` in `settleRoundTransitions`' end-of-set branch (every exit), a minimal Activity Log line; replay-semantic. `OWNER DECISION` (variant specification). Source: UR audit "Owner rulings (rev 2)"; S9-2 and
 S9-3 annotated.
 
 **D-39. Unpredictable Revenue: synthetic (Carcosa-gifted) trains never advance the game phase (OD-UR-3 — DECIDED
@@ -4231,8 +4288,8 @@ S9-3 annotated.
 itself it does not change the phase, rust trains, mark trains for Gentle Rust, open the next depot shelf, advance the
 18XX+ era, receive Phase Rusher treatment or trigger any ordinary phase-change consequence; when the first REAL train of
 that tier is bought, the normal phase change happens then. Keeps #1672's gift rule and #1046's expectation that the gift
-changes nothing beyond the recipient's own fleet; a synthetic D is still not a real D purchase. Not implemented: UR-4
-(UR-F4); replay-semantic. `OWNER DECISION` (variant specification). Source: UR audit "Owner rulings (rev 2)".
+changes nothing beyond the recipient's own fleet; a synthetic D is still not a real D purchase. **Implemented in UR-3
+(2026-09-24, uncommitted, by the owner's brief)** — `derivePhase` skips ghost-accounted copies; replay-semantic. `OWNER DECISION` (variant specification). Source: UR audit "Owner rulings (rev 2)".
 
 **D-40. Unpredictable Revenue: the Mark's award is minted — found money, not paid by the Bank (OD-UR-4 — DECIDED
 2026-09-24).** Half the taken train's face value enters the treasury from outside the Bank. The money-conservation
@@ -4246,7 +4303,8 @@ remains (UR audit Appendix B item 11). No version effect. `OWNER DECISION` (vari
 2026-09-24).** Buying a Diesel normally stays legal, and so does trading in an ordinary, non-gilded eligible train — the
 analogue of D-35. If the corporation also owns an ordinary copy of the gilded train's model, that copy stays tradable:
 the implementation must preserve the distinction rather than forbid every copy of the model (copy selection is UR-4's
-design, not decided here). Not implemented: UR-4 (UR-F17 — today the exchange accepts the gilded train); replay-semantic.
+design, not decided here). **Implemented in UR-3 (2026-09-24, uncommitted, by the owner's brief)** —
+`exchangeableTrains` subtracts the gilding multiset, `gildedExchangeReason` says why; replay-semantic.
 `OWNER DECISION` (variant specification). Source: UR audit "Owner rulings (rev 2)".
 
 **D-42. Unpredictable Revenue: the Rules Reference keeps the Yellow Sign as an Easter egg (OD-UR-8 — DECIDED
@@ -4271,6 +4329,22 @@ Source: UR audit "Owner rulings (rev 2)" (§5.4).
 **D-45. The variant's canonical player-facing name is "Unpredictable Revenue" (OD-UR-12 — DECIDED 2026-09-24).**
 "Unpredictable Routes" copy (host setup, room list) is normalized to it. Copy only; UR-6 (UR-F14). `OWNER DECISION`
 (presentation). Source: UR audit "Owner rulings (rev 2)".
+
+**D-46. Unpredictable Revenue: the Mark's taken train is permanently removed from the game, and phase progression is
+monotonic (OD-UR-13 — DECIDED 2026-09-24, during UR-3).** Ruled: "A train taken by the Yellow Sign Mark is PERMANENTLY
+REMOVED FROM THE GAME. It does NOT: return to the depot; enter the Bank Pool; become purchasable again; increase available
+depot stock. The corporation still receives the already-decided Mark award under OD-UR-4." And the invariant: "PHASE
+PROGRESSION IS MONOTONIC. Once a phase has been reached by the qualifying REAL train purchase, later removal of trains
+cannot lower the phase, reopen an earlier train tier, undo rust, undo Gentle Rust effects, close a depot shelf, or reverse
+an 18XX+ era transition" — regardless of the removal mechanism (the Yellow Sign Mark, ordinary rust, Gentle Rust
+destruction, fog, discard, any other). For UR-3 the Mark is fixed narrowly: a durable authoritative removed-from-game
+representation sufficient for replay and depot accounting, no silent reappearance as depot stock, the phase kept,
+replay reproducing the removal, statistics still classifying the train `taken`; no Bank Pool destination invented; a
+broader pre-existing phase-regression defect outside the Mark path to be reported, not fixed in UR-3. **Implemented in
+UR-3 (2026-09-24, uncommitted)** — `removed_trains` written by the run-bound Mark (pinned Unpredictable Revenue tables);
+`derivePhase` / `depotInventory` read it; the other removal paths were checked and none regresses the phase (UR audit,
+"UR-3 implementation (rev 3)"). Resolves UR-F19. Replay-semantic for the 9 → 10 boundary (UR-8, Part E). `OWNER DECISION`
+(variant specification). Source: the owner's ruling during UR-3 (UR audit, "Owner rulings" — OD-UR-13 row).
 
 ---
 
@@ -4311,6 +4385,7 @@ Source: UR audit "Owner rulings (rev 2)" (§5.4).
 | 7 (owed: **8** at Stage-10 closure) | **10.6** (uncommitted, 2026-09-23) | **The last `LayTile` authority gaps, on PINNED boards (#1696).** S6-5 connectivity judged by the authority through the shell's own walk and join (#1692); S6-6 the private-power claim validated and the C&SL's bonus in either order with one ordinary lay (#1693, #1697, new turn-scoped `ordinary_lay_taken`); S6-7 player-owned private hexes barred, with the D&H's F16 exception and the JK's K9/K11 under LPF, and the board's marks on the same status (#1694, #1694a, #1695). One compatibility predicate, `stage106LayAuthorityInForce`: legacy unpinned logs keep their reading (#1684 precedent). S6-8 proved by 9.2; S7-17 superseded. `RULES_ENGINE_VERSION` stays **7**; closure bump **7 → 8** owed (its row should name 10.6's three rules and the pinned-only scope). | **Canonical 18/18, old (git archive of `638e2df`) vs new (scratch build of the working tree): 4,105 stored / 3,731 applied / 374 dropped / 3,763 engine applications — 0 (state digest, grid hash) differences, final state, grid and cursor identical; Y8V 628 applied / 40 dropped, OR 13, `b4fae877c35604fe`.** Unconditional probe (seam forced on, scratch only): 148 stored applied lays — 132 connected / 14 disconnected / 2 power exceptions / 0 no network; 21 file-occurrences (15 distinct lays, 4 rooms: CV4, FCJ, Z6C, Y8V) would change — itemised under S6-5; **recorded, not repinned**. No golden, fixture, export or log touched. |
 | **8** | **Stage-10 closure** (uncommitted, 2026-09-23) | **The bump.** `RULES_ENGINE_VERSION` **7 → 8**, `SUPPORTED_RULES_ENGINE_VERSIONS` derived `[8]`, changelog row 8 naming Stage 10's replay semantics — 10.1 / 10.1b LayTile legality composed before mutation (identity, pinned Lay Track timing, geometry, anchoring, JK, terrain), 10.2 the author-less train-settlement refusal, 10.3 the server-side Blood Price through `sandboxActionContext`, 10.3b the chart / core transaction, 10.5 the canonical private-offer price and the malformed-price refusal, 10.6 connectivity / validated claims with the C&SL either-order entitlement / player-owned private hexes (D&H F16 exception, LPF JK K9 / K11) on pinned boards — and, separately and explicitly NOT as rules, 10.2's refusal transport, 10.4's tooling and 10.5's `SandboxLogMsg`. A version-7 room is held (`incompatible`) under every policy, preserved and never migrated; an unpinned room is refused by the server's policy and admitted only by the development corpus's. The #1696 seam stays presence-based. `stage10Closure.test.ts` added; `stage9Closure.test.ts`'s literal-7 pins narrowed (version-literal only). | **Canonical 18/18, old (scratch build of `1e90fa9`, v7) vs new (scratch build of the closure tree, v8): 4,105 stored / 3,731 applied / 374 dropped / 3,763 engine applications — 0 (state digest, grid hash) differences; final state, grid and cursor identical; corpus file bytes identical; all 18 unpinned.** Y8V 628 applied / 40 dropped, OR 13, `b4fae877c35604fe`. **No golden, fixture, export or log touched or re-pinned.** |
 | **9** | **GR-5 — Gentle Rust certification closure** (uncommitted, 2026-09-24, #1705) | **The bump.** `RULES_ENGINE_VERSION` **8 → 9**, `SUPPORTED_RULES_ENGINE_VERSIONS` derived `[9]`, changelog row 9 naming exactly four replay semantics — (A) GR-1 (#1699): a self-triggered Gentle Rust doom survives into the corporation's NEXT FUTURE Operating Turn instead of expiring at the end of the Buy Trains turn that caused it; (B) GR-2 (#1700, OD-GR-1 / D-34): a reprieved / Final Run train may not be sold or transferred; (C) GR-2 (#1700, OD-GR-2 / D-35): it may not be a Diesel trade-in ($800, LPF $750); (D) DT-1 (#1701, base game, every table): the train limit no longer auto-ends Buy Trains while a legal one-for-one Diesel exchange remains — and, separately and explicitly NOT as rules, GR-3's UI / Rules Reference / narration (#1702), GR-4's certification tests / documents / constructed game (#1703) and the U-9 post-game statistics correction (#1704); OD-GR-3 named as NOT decided (D-36). None of the four asks the pin's value. A version-8 room is held (`incompatible`) under every policy before the reducer sees an entry, preserved and never migrated; an unpinned room is refused by the server's policy and admitted only by the development corpus's. The #1696 seam stays presence-based. `gentleRustClosure.test.ts` added (owns the literal 9); `stage10Closure.test.ts`'s literal-8 pins and `gentleRustCertificationGame.test.ts`'s literal 8 narrowed (version-literal only). | **Canonical 18/18, old (scratch build of `c202621`, v8) vs new (scratch build of the GR-5 tree, v9), each built with `server/tsconfig.json` plus the certification-game support module; the two dist trees differ only in `rulesVersion.js` and one comment in `gentleRustCertificationGame.js`: 4,105 stored / 3,731 applied / 374 dropped / 3,763 engine applications — 0 state-digest, 0 grid, 0 cursor and 0 derived-action differences on the 3,763 pre-entry boards; 18/18 final boards (state, grid, cursor, derived answer) equal; all 18 unpinned; 0 boards carrying a Gentle Rust mark.** Y8V 668 / 628 / 40, OR 13, `b4fae877c35604fe`; 3XD (Gentle Rust) 322 / 320 / 2, 323 applications, SR 12, `74db6e4bad736fec`. Corpus file bytes (md5) identical. The GR-4 constructed certification game (not corpus): identical step by step and log for log; final digest `bc622db0c160eb09` at v8 → `56cf7b237ebe5bce` at v9, the pin field its only difference (both `b197df651f89c88a` with the pin removed). **No golden, fixture, export or log touched or re-pinned.** |
+| 9 (owed: **10** at Unpredictable Revenue closure, UR-8) | **UR-3** (uncommitted, 2026-09-24) | **The Yellow Sign's authority and the Carcosa rules it made reachable (OD-UR-1, OD-GR-3, OD-UR-2, OD-UR-3, OD-UR-7, OD-UR-13).** On a pinned Unpredictable Revenue table: (1) the stage is resolved and applied inside the accepted run's own entry (`settleRunYellowSign`, after the Run → Dividends settlement), recorded as `last_run_yellow_sign`, and a client `YellowSignEvent` is refused; (2) the Mark judges the post-settlement fleet — never a Final Run train — and nullifies the taken train's own route; (3) the run's breakdown is the authority's pairing; (7) the Mark's taken train is recorded as removed from the game (`removed_trains`, never the Bank Pool), counted toward the phase and off the depot — the phase never falls back across it and the copy never returns to sale (D-46). On every Unpredictable Revenue table: (4) the gilded train leaves at the END of set N+1 (`fogAtSetEnd`), never on a run; on every table: (5) synthetic trains never advance the phase (`derivePhase`); (6) a gilded train is never a Diesel trade-in (`exchangeableTrains`). Unpinned boards keep the legacy request path byte for byte (no removal record there — S10-11). `RULES_ENGINE_VERSION` stays **9**. | **18-file corpus measured old (baseline scratch build) vs new (UR-3 scratch build): 4,105 stored / 3,731 applied / 374 dropped / 3,763 engine applications — 0 state / grid / cursor / derived-action / known-phase differences at every engine application; 18/18 final boards identical; the known phase never decreases in any file on either tree** (figures: UR audit §16, rev 3). Y8V 668 / 628 / 40, OR 13, `b4fae877c35604fe`; 3XD 322 / 320 / 2, 323 applications, SR 12, `74db6e4bad736fec`. The corpus carries no gilded train, no ghost and no pinned file (so no `removed_trains`), and its stored `YellowSignEvent` entries (JUNO-Z6C 203, 567) are unpinned — the branch they always took. Corpus file bytes (md5) identical. No golden, fixture, log or export touched. |
 
 Items above that carry "bump" must add a row here when they land. No golden or replay expectation is ever
 re-pinned silently: the re-pin, its index and its reason go in the batch write-up and in this table.

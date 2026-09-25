@@ -19,7 +19,7 @@ const { countableTrainsOf, excessTrainCount } =
   require("../gameEngine/trainDiscard") as typeof import("../gameEngine/trainDiscard");
 const { realDieselPurchased, openDepotTiers, depotInventory, derivePhase } =
   require("../gameEngine/gamePhase") as typeof import("../gameEngine/gamePhase");
-const { carcosaGiftModel, escalationTier, fogIsDue } =
+const { carcosaGiftModel, escalationTier, fogIsDue, fogAtSetEnd } =
   require("../gameEngine/yellowSign") as typeof import("../gameEngine/yellowSign");
 const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
 import type { GameStateResponse, PublicCompanyState } from "../gameEngine/gameState";
@@ -92,10 +92,13 @@ describe("B/C. the doom trigger is whichever condition lands second", () => {
   it("a synthetic Diesel is not a real Diesel purchase", () => {
     /* OWNER RULING: "if the synthetic gift is a D, that synthetic gift itself is NOT a real D purchase and
        does not satisfy/start the real-D condition." The phase cannot answer this -- it counts the ghost
-       toward `highest` by design (#1046) -- so `realDieselPurchased` subtracts the synthetic marker. */
+       toward `highest` by design (#1046) -- so `realDieselPurchased` subtracts the synthetic marker.
+       [UR-3, OD-UR-3 = 3-A (backlog D-39): the parenthesis is superseded -- "synthetic (gifted) Carcosa trains do not
+       advance the game phase; the phase follows REAL trains". The phase now subtracts the same marker, so it says 4
+       here: the gift is neither the phase nor a real Diesel purchase (UR-F4). `realDieselPurchased` is unchanged.] */
     const gifted = board([co({ owned_trains: ["4", "D"], ghost_trains: ["D"], carcosan_trains: ["D"] })]);
     expect(realDieselPurchased(gifted)).toBe(false);
-    expect(derivePhase(gifted)?.tier).toBe("D"); // the phase says D; the depot has not sold one
+    expect(derivePhase(gifted)?.tier).toBe("4"); // UR-3: the phase is the real 4's; the depot has not sold a D
   });
 
   it("a bought Diesel is, wherever it sits", () => {
@@ -172,13 +175,28 @@ describe("D. trigger set N, the whole of N+1, then the fog", () => {
     expect(excessTrainCount(doomed, 1)).toBe(0);
   });
 
-  it("is still removed on a narrated run, not by a silent boundary deletion (#1092 preserved)", () => {
+  it("is removed at the END of set N+1 by the round machine -- not on a run, not by a request (OD-UR-2; #1092 superseded)", () => {
+    /* UR-3, OWNER RULING OD-UR-2 ("N+1 + boundary", backlog D-38): the gilded train "disappears automatically at the
+       END of N+1 -- an authoritative OR-set-boundary transition, not a run stage and not a Yellow Sign client
+       request"; #1092's collection on the corporation's first run after N+1 "is superseded and must not be restored".
+       This case used to pin #1092 ("is still removed on a narrated run, not by a silent boundary deletion") and now
+       pins the ruling that replaced it. The boundary is not silent: the Activity Log says it there
+       (`describeFogAtSetEnd`). The legacy `stage === "fog"` arm stays, for an UNPINNED board's stored entries only
+       (#1661), and `fogIsDue` with it. */
     const SESSION = readStripped("gameEngine/sandboxSession.ts");
     expect(SESSION).not.toContain("expireCarcosanTrains");
-    expect(SESSION).toContain('if (stage === "fog") {');
+    expect(SESSION).toContain("if (fogDueAtSetEnd(state)) return settleRoundTransitions(fogAtSetEnd(state), ctx);");
+    expect(SESSION).toContain('if (run && stage === "fog") return state;'); // never a stage of the run
+    expect(SESSION).toContain('if (stage === "fog") {'); // the legacy arm, unpinned stored entries only
     const YELLOW = readStripped("gameEngine/yellowSign.ts");
+    expect(YELLOW).toContain("fogDue: run ? false : fogIsDue(company, macroRound),");
     expect(YELLOW).toContain("export function fogIsDue(");
     expect(YELLOW).toContain("return doom !== undefined && macroRound > doom;");
+    // The same deadline, at the boundary: nothing at the end of set N (3) ... gone at the end of set N + 1 (4).
+    const onTable = (macro: number) => ({ ...board([doomed], macro), variants: { unpredictableRevenue: true } }) as GameStateResponse;
+    expect(fogAtSetEnd(onTable(3)).public_companies[0].carcosan_trains).toEqual(["D"]);
+    expect(fogAtSetEnd(onTable(4)).public_companies[0].carcosan_trains).toEqual([]);
+    expect(fogAtSetEnd(onTable(4)).public_companies[0].owned_trains).toEqual(["4"]);
   });
 
   it("owes nothing to a corporation that no longer holds the train", () => {
@@ -281,9 +299,13 @@ describe("E. the Blood Price burns the gilding off (#1090, authoritative and unc
        that starts the doom clock for every other gilded train in play (#1672). Synthetic is forever. */
     const after = sold();
     expect(realDieselPurchased(after)).toBe(false);
-    // The buyer owns a D for every gameplay purpose, and the phase says so; provenance still says otherwise.
+    // The buyer owns a D for every gameplay purpose; provenance still says it is synthetic.
     expect(of(after, BUYER).owned_trains).toEqual(["3", "D"]);
-    expect(derivePhase(after)?.tier).toBe("D");
+    /* UR-3, OD-UR-3 = 3-A (D-39): AND THE PHASE NO LONGER SAYS D. Provenance travels with the train (#1673), so the
+       synthetic D is not the phase whoever holds it: the phase is the highest REAL tier, the seller's 4. What a Blood
+       Price does to the gilding and to the buyer (OD-UR-5) is open and not decided by this; were it ever ruled to
+       make the train real, that ruling would drop the provenance marker and the phase would follow it. */
+    expect(derivePhase(after)?.tier).toBe("4");
   });
 
   it("moves exactly ONE marker when two trains share a model", () => {
@@ -341,7 +363,8 @@ describe("E. the Blood Price burns the gilding off (#1090, authoritative and unc
 /* G. THE FIELD SPLIT, GUARDED (#1674 / #1675)                         */
 /* ------------------------------------------------------------------ */
 
-/** A board `applySandboxAction` can actually run on: the reducer reads the seat cursor on every action. */
+/** A board `applySandboxAction` can actually run on: the reducer reads the seat cursor on every action.
+ *  UR-3: Unpredictable Revenue is on (the fog is that variant's), so the boundary transition below acts on it. */
 const fogBoard = (company: Partial<PublicCompanyState>, macroRound = 6): GameStateResponse =>
   ({
     current_round_type: "OperatingRound",
@@ -356,11 +379,28 @@ const fogBoard = (company: Partial<PublicCompanyState>, macroRound = 6): GameSta
     consecutive_passes: 0,
     private_companies: [],
     rules_engine_version: 7,
+    variants: { unpredictableRevenue: true },
     public_companies: [co({ company_id: 1, ticker: "B&O", president: "p1", treasury: "300", ...company })],
   }) as unknown as GameStateResponse;
 
-const fog = (state: GameStateResponse, model: string) =>
-  applySandboxAction(state, { YellowSignEvent: { game_id: 0, protocol_id: 1, stage: "fog", model } } as never);
+/* ==================================================================
+    UR-3 (OD-UR-2 = "N+1 + boundary", D-38): THE FOG IS THE SET BOUNDARY'S NOW -- BOTH REMOVALS ARE ASKED
+   ==================================================================
+   Before UR-3 these cases sent a `YellowSignEvent` to this pinned board and the arm derived the fog. A pinned table
+   now takes no request (OD-UR-1): the fog falls in `fogAtSetEnd`, on the transition that ends set N + 1, and the
+   request arm still takes it only for an UNPINNED board's stored entry (#1661, byte for byte). The invariants in
+   this block are the REMOVAL's, so `fog` performs both -- the boundary's on the pinned board, the legacy arm's on
+   its unpinned twin -- requires them to agree to the field, and hands back the boundary's. */
+const fog = (state: GameStateResponse, model: string): GameStateResponse => {
+  const atBoundary = fogAtSetEnd(state);
+  const { rules_engine_version: _pinned, ...unpinned } = state as GameStateResponse & { rules_engine_version?: number };
+  const legacy = applySandboxAction(
+    unpinned as GameStateResponse,
+    { YellowSignEvent: { game_id: 0, protocol_id: 1, stage: "fog", model } } as never,
+  );
+  expect(atBoundary.public_companies[0]).toEqual(legacy.public_companies[0]);
+  return atBoundary;
+};
 
 describe("G. the two markers cannot be reconflated", () => {
   /* THIS SPLIT HAS NOW PRODUCED THREE MISSED PROPAGATION SITES -- the Blood Price buyer (#1673), two capacity

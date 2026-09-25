@@ -208,6 +208,25 @@ export interface PublicCompanyState {
    * turn's draw. Absent on every board dealt before this field, which #232 reads as "the log does not say"
    * and `resolveYellowSign` answers with `legacyTurnSeed`, the same fallback the run arm and the shell use. */
   last_run_revenue_seed?: number;
+  /** ==================================================================
+   *   UR-3 (OD-UR-1, OD-GR-3): WHAT THE SIGN DID AT THIS TURN'S RUN, AS THE AUTHORITY APPLIED IT
+   *  ==================================================================
+   *
+   * On a pinned Unpredictable Revenue table the Mark and Carcosa are the last step of the run's own transition
+   * (`settleRunYellowSign`), so no separate message records them any more -- and a diff of the fleet cannot say which
+   * train the Mark took when the same transition's Run -> Dividends settlement also destroyed a Gentle Rust Final Run
+   * train. So the authority says: the stage, the train it took (Mark) or gave (Carcosa), the minted award as the
+   * treasury's string ("0" for Carcosa), and the breakdown entry whose route the Mark nullified (`null` when none
+   * was). The narration, the fleet-loss notices and the statistics read this rather than re-deriving it.
+   *
+   * TURN-SCOPED, cleared with `last_route_revenue` and its siblings by #777's turn-change rule; ABSENT whenever no
+   * stage fired and on every unpinned board (#232), so a standard game and the development corpus never carry it. */
+  last_run_yellow_sign?: {
+    stage: "mark" | "carcosa";
+    model: string;
+    award: string;
+    nullified: { train_index: number; model: string; printed_revenue: string } | null;
+  };
   /** Design note #906: trains under Gentle Rust that are living on borrowed time.
    *
    *  (#906's original text said these trains were NOT in `owned_trains` and died at the end of the
@@ -593,6 +612,26 @@ export interface GameStateResponse {
    *  have on a corporation. Absent on every log written before the rule (#232), and the standard game never
    *  writes it. */
   returned_trains?: readonly string[];
+  /** ==================================================================
+   *   UR-3 (OD-UR-13 -- DECIDED 2026-09-24): TRAINS THE YELLOW SIGN'S MARK TOOK -- OUT OF THE GAME FOR GOOD
+   *  ==================================================================
+   *
+   * OWNER RULING: "A train taken by the Yellow Sign Mark is PERMANENTLY REMOVED FROM THE GAME. It does NOT: return to
+   * the depot; enter the Bank Pool; become purchasable again; increase available depot stock." And: "PHASE
+   * PROGRESSION IS MONOTONIC."
+   *
+   * ONE ENTRY PER TAKEN COPY, by model, in the order taken -- the durable record the depot and the phase need. The
+   * depot is DERIVED (`TOTAL - owned - pooled` for the current tier, #2 / #1512) and the phase is "the highest tier
+   * owned or pooled" (#1 / #1530), so a train that simply vanished from `owned_trains` came back as depot stock and,
+   * when it was the only one of the phase's tier in play, took the phase down with it (UR-F19). A train on this list
+   * was BOUGHT: it counts toward the phase and off the depot exactly as a pooled train does (`derivePhase`,
+   * `depotInventory`), and it is in no fleet, no pool and no purchasable list -- not the Bank Pool (`returned_trains`
+   * is that, and stays untouched).
+   *
+   * WRITTEN ONLY BY THE RUN-BOUND MARK of a pinned Unpredictable Revenue table (`applyYellowSignOutcome` on the run
+   * path). Absent everywhere else (#232): the standard game, every table without the variant, and every unpinned
+   * board -- the development corpus's stored Mark (JUNO-Z6C 203) replays exactly as it was played. */
+  removed_trains?: readonly string[];
   /** ==================================================================
    *   DESIGN NOTE 1172: THE COUNT RULE 4 WAS ALWAYS WAITING FOR
    *  ==================================================================

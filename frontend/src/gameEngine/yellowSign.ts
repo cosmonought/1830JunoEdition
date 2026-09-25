@@ -43,14 +43,17 @@ import { UNPREDICTABLE_REVENUE_FLAVOR } from "../constants/flavorText";
 import {
   flavorBucketFor,
   legacyTurnSeed,
+  resolveVariants,
   revenueFlavourClause,
   rollTurnRevenue,
   type FlavorBucket,
   type RevenueRoll,
   type RevenueSeedParts,
 } from "./gameVariants";
-import { DEPOT_COST, TIER_ORDER, openDepotTiers, trainTier, type TrainTier } from "./gamePhase";
+import { DEPOT_COST, TIER_ORDER, derivePhase, openDepotTiers, trainTier, type TrainTier } from "./gamePhase";
 import type { GameStateResponse, PublicCompanyState } from "./gameState";
+// UR-3 (OD-GR-3): the Mark chooses among the copies no Gentle Rust mark covers -- the same multiset GR-2 asks.
+import { unreprievedTrains } from "./gentleRustGrace";
 
 /** The Stage 1 line, verbatim from `criticalMalus`. */
 export const YELLOW_SIGN_MALUS_LINE =
@@ -190,17 +193,66 @@ export function runWithoutTrain(
   company: Pick<PublicCompanyState, "owned_trains" | "printed_route_revenue" | "last_route_revenue" | "last_run_breakdown" | "routes_run_this_turn">,
   model: string,
   parts: RevenueSeedParts | null,
-): { printed: number; adjusted: number; roll: RevenueRoll | null; routes: number; breakdown: PublicCompanyState["last_run_breakdown"] } {
+  /** UR-3 (OD-GR-3, UR-F5): the fleet AS IT RAN -- the one whose slots `last_run_breakdown` indexes -- when it differs
+   *  from `company.owned_trains` because the Run -> Dividends settlement has since destroyed a Gentle Rust Final Run
+   *  train. Absent: the breakdown indexes the current fleet (every caller before UR-3, and the legacy request path). */
+  fleetAsRun?: readonly string[] | null,
+): {
+  printed: number;
+  adjusted: number;
+  roll: RevenueRoll | null;
+  routes: number;
+  breakdown: PublicCompanyState["last_run_breakdown"];
+  /** UR-3: the breakdown entry whose route was nullified -- the taken train's own -- or `null` when none was. */
+  nullified: NonNullable<PublicCompanyState["last_run_breakdown"]>[number] | null;
+} {
   const printedBefore = Math.max(0, Number(company.printed_route_revenue ?? 0) || 0);
   const adjustedBefore = Math.max(0, Number(company.last_route_revenue ?? 0) || 0);
   const breakdown = company.last_run_breakdown ?? [];
-  const slot = (company.owned_trains ?? []).indexOf(model);
+  const current = company.owned_trains ?? [];
+  /* ==================================================================
+      UR-3 (OD-GR-3 = A2, UR-F5): THE SLOT IS THE TAKEN TRAIN'S SLOT IN THE FLEET THE BREAKDOWN DESCRIBES
+     ==================================================================
+     `last_run_breakdown` is written by the run and indexes the fleet AS IT RAN. The Mark now chooses AFTER the
+     Run -> Dividends settlement, which may already have destroyed a Final Run train -- so "the taken copy's index in
+     `owned_trains`" is an index into a DIFFERENT, shorter fleet, and P-C showed it landing on the destroyed train's
+     route: the Mark nullified the Final Run 2's $50 and kept the taken 3's $60.
+     SO THE SETTLED FLEET IS ALIGNED BACK ONTO THE FLEET AS IT RAN. The settlement only removes, and removes each
+     spent model's EARLIEST copies (`expireReprieveFor`'s `indexOf`), so taking out the first k copies of every model
+     it removed k times leaves the surviving slots in their original order: `surviving[i]` is where the settled
+     fleet's i-th train stood when it ran. The taken copy is the settled fleet's first of its model (#1046's tie
+     rule), so its slot is `surviving[current.indexOf(model)]`. The model fallback below (#1375: a slot that ran no
+     route) is kept, and confined to SURVIVING slots so a destroyed train's route can never be taken for the
+     Mark's. Without `fleetAsRun` both lists are the same fleet and this is exactly the old arithmetic. */
+  const asRun = fleetAsRun ?? current;
+  const removed = [...asRun];
+  for (const survivor of current) {
+    const at = removed.indexOf(survivor);
+    if (at >= 0) removed.splice(at, 1);
+  }
+  const surviving: number[] = [];
+  const spent = [...removed];
+  asRun.forEach((entry, slot) => {
+    const at = spent.indexOf(entry);
+    if (at >= 0) spent.splice(at, 1);
+    else surviving.push(slot);
+  });
+  const takenCopy = current.indexOf(model);
+  const slot = takenCopy >= 0 ? (surviving[takenCopy] ?? -1) : -1;
   const takenAt = (() => {
     const bySlot = slot >= 0 ? breakdown.findIndex((entry) => entry.train_index === slot) : -1;
-    return bySlot >= 0 ? bySlot : breakdown.findIndex((entry) => entry.model === model);
+    if (bySlot >= 0) return bySlot;
+    return breakdown.findIndex((entry) => entry.model === model && (fleetAsRun == null || surviving.includes(entry.train_index)));
   })();
   if (takenAt < 0) {
-    return { printed: printedBefore, adjusted: adjustedBefore, roll: null, routes: breakdown.length || (company.routes_run_this_turn ?? 0), breakdown: company.last_run_breakdown };
+    return {
+      printed: printedBefore,
+      adjusted: adjustedBefore,
+      roll: null,
+      routes: breakdown.length || (company.routes_run_this_turn ?? 0),
+      breakdown: company.last_run_breakdown,
+      nullified: null,
+    };
   }
   const takenPrinted = Math.max(0, Number(breakdown[takenAt].printed_revenue) || 0);
   const printed = Math.max(0, printedBefore - takenPrinted);
@@ -212,6 +264,7 @@ export function runWithoutTrain(
     roll,
     routes: remaining.length,
     breakdown: remaining,
+    nullified: breakdown[takenAt],
   };
 }
 
@@ -700,10 +753,15 @@ export function resolveYellowSign(
   board: GameStateResponse,
   protocolId: number,
   phaseTier: string,
-  options?: { force?: boolean },
+  /** `run` (UR-3): the resolution the authoritative RUN owes -- asked by the reducer on the board after the Run ->
+   *  Dividends settlement, and by the narration on the same board. The fog is not a run stage there (OD-UR-2), no
+   *  waiver exists (a pinned table has no playtests), and the Mark chooses among the copies no Gentle Rust mark
+   *  covers (OD-GR-3). Absent: the legacy request's resolution, unchanged. */
+  options?: { force?: boolean; run?: boolean },
 ): YellowSignResolution {
   const company = board.public_companies.find((entry) => entry.company_id === protocolId);
   if (!company) return NO_RESOLUTION;
+  const run = options?.run === true;
 
   const macroRound = board.macro_round_number ?? 0;
   const subRound = board.sub_round_index ?? 0;
@@ -723,7 +781,12 @@ export function resolveYellowSign(
   const signState = yellowSignStateFromCompanies(board.public_companies);
   /* #1404's sequence, computed from the board. At most one stage is available at a time, so this IS the armed
      stage rather than a menu the caller chooses from. */
-  const forced = options?.force === true ? (forcedSignStagesAvailable(signState, phaseTier)[0] ?? null) : null;
+  const forced = !run && options?.force === true ? (forcedSignStagesAvailable(signState, phaseTier)[0] ?? null) : null;
+  /* UR-3 (OD-GR-3 = A2): on the run's own resolution the candidates are the settled fleet's UNREPRIEVED copies. The
+     settlement has already destroyed every Final Run train the turn owed, so this subtracts nothing in any board the
+     game can reach -- it is the ruling written where the Mark chooses, so no copy a Gentle Rust mark covers can ever
+     be taken, monetized or replaced by the Sign. */
+  const candidates = run ? unreprievedTrains(company) : company.owned_trains;
 
   const printedTotal = Math.max(0, Number(company.printed_route_revenue ?? 0) || 0);
   const roll = rollTurnRevenue(printedTotal, parts);
@@ -734,15 +797,16 @@ export function resolveYellowSign(
     parts,
     state: signState,
     phaseTier,
-    owned: company.owned_trains,
-    fogDue: fogIsDue(company, macroRound),
+    owned: candidates,
+    // UR-3 (OD-UR-2): the fog is an OR-set-boundary transition, never a stage of a run.
+    fogDue: run ? false : fogIsDue(company, macroRound),
     forced,
   });
 
   const model = ((): string | null => {
     switch (resolution.stage) {
       case "mark":
-        return lowestValueTrain(company.owned_trains);
+        return lowestValueTrain(candidates);
       case "carcosa":
         // #1672 (S9-2): the depot's lowest-value train, not the phase's tier.
         return carcosaGiftModel(board, phaseTier);
@@ -808,4 +872,245 @@ function missingFrom(from: readonly string[], to: readonly string[]): string | n
     else return model;
   }
   return null;
+}
+
+/* ==================================================================
+    UR-3 (OD-UR-1 = 1-A, backlog D-37): THE STAGE IS THE RUN'S, AND THE RUN IS THE AUTHORITY'S
+   ==================================================================
+   OWNER RULING (2026-09-24): "A Yellow Sign stage is an automatic, derived consequence of the authoritative run,
+   not a discretionary second player action. A player or client may not omit, delay, redirect or manufacture it. On
+   pinned (authoritative) tables the game authority resolves the stage from the run and its committed seed and
+   result. The client-sent request is removed as a source of authority -- it is not merely repaired."
+   S9-1 (#1661 / #1662) had already made the OUTCOME the board's: the stage, the train, the award and the gift are
+   derived from the committed board and the run's committed draw. What it left to the client was WHETHER, WHEN and
+   FOR WHOM a request was sent (UR-F2) -- and the only client that sent it did so from inside its log drain, where
+   #1407's catch-up guard refused every one, so on no hosted board did the Sign ever land (UR-F1).
+   SO THE REQUEST IS NOT REPAIRED; IT IS RETIRED. The reducer resolves the stage as the last step of the run's own
+   transition (`sandboxSession.ts`, `settleRunYellowSign`), on the board AFTER the Run -> Dividends settlement
+   (OD-GR-3), with `resolveYellowSign(.., { run: true })` -- no new message, no new draw, nothing a client can omit,
+   delay or aim elsewhere, and a replay reaches it from the committed run alone. On a pinned table the old request is
+   refused at ingress and by the reducer; an UNPINNED board (the development corpus, a Firestore room) keeps the
+   legacy request path byte for byte, because its stored entries must replay to the boards they were played on.
+   AND THE FOG IS NOT A RUN STAGE ANY MORE (OD-UR-2): `fogAtSetEnd` below is an OR-set-boundary transition. */
+
+/** Whether this board resolves the Sign from its runs (UR-3): a pinned table playing Unpredictable Revenue. */
+export function automaticYellowSignInForce(state: Pick<GameStateResponse, "rules_engine_version" | "variants">): boolean {
+  return typeof state.rules_engine_version === "number" && resolveVariants(state.variants).unpredictableRevenue;
+}
+
+/** Why a client's `YellowSignEvent` may not be applied to this board, or `null` on the unpinned legacy path.
+ *  Asked by ingress (`turnRefusal`), the reducer's gate and the shell's refusal line, so the three agree. */
+export function yellowSignRequestRefusal(state: Pick<GameStateResponse, "rules_engine_version" | "variants">): string | null {
+  if (typeof state.rules_engine_version !== "number") return null;
+  if (!resolveVariants(state.variants).unpredictableRevenue) {
+    return "This table does not play Unpredictable Revenue, so there is no Yellow Sign to resolve.";
+  }
+  return "The Yellow Sign is resolved by the game itself, as part of the run that draws it; no player sends it.";
+}
+
+/** What the authority applied at this turn's run, as it wrote it on the corporation (`last_run_yellow_sign`). */
+export type RunYellowSignRecord = NonNullable<PublicCompanyState["last_run_yellow_sign"]>;
+
+/** The Sign's report for the Activity Log, read off the board the run produced -- UR-3 (UR-F6).
+ *
+ *  THE NARRATION DESCRIBES WHAT THE BOARD APPLIED, NEVER A SECOND DERIVATION OF IT. Before UR-3 the shell resolved the
+ *  Sign itself on the fleet AS IT RAN while the reducer (had a request ever landed) judged the fleet after the
+ *  settlement -- P-C: the narration named the Final Run 2 and $40, the board took the 3 and $90. Now:
+ *    * a stage the authority applied is read off `last_run_yellow_sign` -- the train, the award, whether a route was
+ *      nullified -- and the kept run off the corporation's own figures (the roll re-derived from the committed seed,
+ *      the same function the reducer used, on the same kept total);
+ *    * no stage applied: the run's own resolution (`resolveYellowSign(.., { run: true })`), asked of `after`, which IS
+ *      the board the reducer resolved on (nothing after the settlement touches a field the Sign reads), so the flavour
+ *      line -- including the skip that keeps the Mark's line in the pool when no train can be taken -- is the one the
+ *      authority drew. The phase is `before`'s: a run never turns it. */
+export interface RunYellowSignReport {
+  resolution: FlavourResolution;
+  /** The Mark's train, or `null`. */
+  taken: string | null;
+  /** The Mark's minted award (0 when no Mark). */
+  award: number;
+  /** The Mark's kept run: what the corporation ran without the vanished train. `roll` is `null` when no route was
+   *  nullified (the taken train did not run), exactly as `runWithoutTrain` reports it. */
+  kept: { routes: number; adjusted: number; roll: RevenueRoll | null } | null;
+  /** Carcosa's gift, or `null`. */
+  gifted: string | null;
+}
+
+export function narrateRunYellowSign(
+  before: GameStateResponse,
+  after: GameStateResponse,
+  companyId: number,
+  parts: RevenueSeedParts,
+): RunYellowSignReport {
+  const was = before.public_companies.find((entry) => entry.company_id === companyId);
+  const now = after.public_companies.find((entry) => entry.company_id === companyId);
+  const record = now?.last_run_yellow_sign;
+  const applied = record !== undefined && record !== was?.last_run_yellow_sign ? record : null;
+  if (applied?.stage === "mark" && now) {
+    const keptPrinted = Math.max(0, Number(now.printed_route_revenue ?? 0) || 0);
+    return {
+      resolution: { line: YELLOW_SIGN_MALUS_LINE, stage: "mark" },
+      taken: applied.model,
+      award: Math.max(0, Number(applied.award) || 0),
+      kept: {
+        routes: now.routes_run_this_turn ?? 0,
+        adjusted: Math.max(0, Number(now.last_route_revenue ?? 0) || 0),
+        roll: applied.nullified ? rollTurnRevenue(keptPrinted, parts) : null,
+      },
+      gifted: null,
+    };
+  }
+  if (applied?.stage === "carcosa") {
+    return {
+      resolution: { line: YELLOW_SIGN_BONUS_LINE, stage: "carcosa" },
+      taken: null,
+      award: 0,
+      kept: null,
+      gifted: applied.model,
+    };
+  }
+  const phaseTier = derivePhase(before)?.tier ?? "2";
+  const { resolution } = resolveYellowSign(after, companyId, phaseTier, { run: true });
+  if (resolution.stage === null) return { resolution, taken: null, award: 0, kept: null, gifted: null };
+  /* A stage the resolution names but the board did not apply cannot be narrated as having happened. By construction
+     the two agree (the reducer applies exactly this resolution's outcome, and a stage with no train does not fire);
+     this keeps the sentence honest if a gate ever declines it: the line is drawn as if every stage were spent, which
+     is #1044's skip -- never the Sign's own line. */
+  const roll = rollTurnRevenue(Math.max(0, Number(now?.printed_route_revenue ?? 0) || 0), parts);
+  const spent = resolveFlavourLine({
+    naturalLine: revenueFlavourClause(roll, parts),
+    bucket: flavorBucketFor(roll),
+    ticker: now?.ticker ?? "",
+    parts,
+    state: { markedTicker: "\u0000", carcosaSeen: true },
+    phaseTier,
+    owned: [],
+    fogDue: false,
+    forced: null,
+  });
+  return { resolution: { line: spent.line, stage: null }, taken: null, award: 0, kept: null, gifted: null };
+}
+
+/** The record `after`'s run wrote for `companyId` in THIS entry -- `null` when the run applied no stage (or the entry
+ *  was not a run). Compared with `before`'s so a record left standing from earlier in the turn is not read twice. */
+export function runYellowSignWritten(
+  before: Pick<GameStateResponse, "public_companies"> | null | undefined,
+  after: Pick<GameStateResponse, "public_companies"> | null | undefined,
+  companyId: number,
+): RunYellowSignRecord | null {
+  const now = after?.public_companies?.find((entry) => entry.company_id === companyId)?.last_run_yellow_sign;
+  if (now === undefined) return null;
+  const was = before?.public_companies?.find((entry) => entry.company_id === companyId)?.last_run_yellow_sign;
+  return was !== undefined && JSON.stringify(was) === JSON.stringify(now) ? null : now;
+}
+
+/** UR-3: the run AS IT WAS PRICED before the Sign's Mark nullified a route -- the full printed total and breakdown --
+ *  for a corporation whose run just wrote `record`. With no Mark, or a Mark whose train ran no route, these are the
+ *  corporation's own figures. The statistics read their run figures here (OD-UR-6 is open, so they keep the basis
+ *  they have always had: the run's entry, priced in full), and the narration its roll.
+ *  `routeOrder` is the run message's `train_indices` when it named them: the nullified entry goes back where it ran;
+ *  without it, the entry is appended. */
+export function runBeforeSign(
+  company: Pick<PublicCompanyState, "printed_route_revenue" | "last_run_breakdown"> | null | undefined,
+  record: RunYellowSignRecord | null,
+  routeOrder?: readonly number[] | null,
+): { printed: number; breakdown: NonNullable<PublicCompanyState["last_run_breakdown"]> } {
+  const printed = Math.max(0, Number(company?.printed_route_revenue ?? 0) || 0);
+  const breakdown = [...(company?.last_run_breakdown ?? [])];
+  const nullified = record?.stage === "mark" ? record.nullified : null;
+  if (!nullified) return { printed, breakdown };
+  const at = routeOrder ? routeOrder.indexOf(nullified.train_index) : -1;
+  if (at >= 0 && at <= breakdown.length) breakdown.splice(at, 0, nullified);
+  else breakdown.push(nullified);
+  return { printed: printed + Math.max(0, Number(nullified.printed_revenue) || 0), breakdown };
+}
+
+/* ==================================================================
+    UR-3 (OD-UR-2 "N+1 + boundary", backlog D-38, UR-F18): THE FOG AT THE END OF SET N+1
+   ==================================================================
+   OWNER RULING (2026-09-24): a doom trigger in Operating-Round set N lets the gilded train survive through the whole
+   next set, N+1; it disappears automatically at the END of N+1 -- "an authoritative OR-set-boundary transition, not a
+   run stage and not a Yellow Sign client request". No extra post-deadline run, no indefinite survival because the
+   corporation never operates again, no post-deadline window to sell it. #1092's collection on the corporation's
+   first run after N+1 is superseded and must not be restored.
+   THE DEADLINE ARITHMETIC IS #1089's, UNCHANGED: `carcosan_doom_after_macro_round` is N + 1. What moves is WHERE the
+   debt is collected: `settleRoundTransitions` calls this on the transition that ends an Operating-Round set, while
+   `macro_round_number` still names the set that just ended -- so a deadline of N + 1 is met exactly at the end of
+   N + 1, and never earlier. `<=` rather than `===` so a board that somehow carried an overdue train (built before
+   this rule) is settled at its next boundary instead of keeping the train forever.
+   WHAT IT TAKES is #1675's removal, unchanged: each gilded copy once from `owned_trains` and once from `ghost_trains`
+   (multiset -- a bought 6 beside the gilded 6 stays), the gilding emptied, the clock cleared; `is_carcosan` stays
+   (#1089: the curse outlives the train). It is NOT a rust: nothing here is a phase change, and the narrators leave
+   it out of their rust and limit sentences. It acts on the gilding that EXISTS: a train that already left by a Blood
+   Price carries no gilding at the seller, and whatever the sale left gilded is what is due -- OD-UR-5 is not decided
+   here. Pure; `null`-safe on a board that reports no fleets (#232). */
+/** Whether `company`'s gilded train is due at the end of the set `setEnding` names (OD-UR-2). */
+function gildingDue(company: PublicCompanyState, setEnding: number): boolean {
+  const doom = company.carcosan_doom_after_macro_round;
+  return (company.carcosan_trains ?? []).length > 0 && doom !== undefined && doom <= setEnding;
+}
+
+/** Whether the transition ending the current Operating-Round set owes the fog anything (OD-UR-2) -- asked by value, so
+ *  the round machine never decides by object identity (S7-17). */
+export function fogDueAtSetEnd(state: GameStateResponse): boolean {
+  if (!resolveVariants(state.variants).unpredictableRevenue) return false;
+  const setEnding = state.macro_round_number ?? 0;
+  return (state.public_companies ?? []).some((company) => gildingDue(company, setEnding));
+}
+
+export function fogAtSetEnd(state: GameStateResponse): GameStateResponse {
+  if (!fogDueAtSetEnd(state)) return state;
+  const setEnding = state.macro_round_number ?? 0;
+  const companies = (state.public_companies ?? []).map((company) => {
+    if (!gildingDue(company, setEnding)) return company;
+    const gilded = company.carcosan_trains ?? [];
+    const survivors = company.owned_trains == null ? null : [...company.owned_trains];
+    const ghosts = company.ghost_trains == null ? null : [...company.ghost_trains];
+    for (const model of gilded) {
+      const owned = survivors === null ? -1 : survivors.indexOf(model);
+      if (owned >= 0) survivors!.splice(owned, 1);
+      const ghost = ghosts === null ? -1 : ghosts.indexOf(model);
+      if (ghost >= 0) ghosts!.splice(ghost, 1);
+    }
+    return {
+      ...company,
+      ...(survivors === null ? {} : { owned_trains: survivors }),
+      ...(ghosts === null ? {} : { ghost_trains: ghosts }),
+      carcosan_trains: [],
+      carcosan_doom_after_macro_round: undefined,
+    };
+  });
+  return { ...state, public_companies: companies };
+}
+
+/** UR-3 (OD-UR-2): the gilded models the set-boundary fog took from one corporation between two of its snapshots --
+ *  the gilding gone WITH its doom clock, which is what `fogAtSetEnd` (and only a fog) does -- or `[]`. Read by the
+ *  fleet-loss narrator, which must not call the departure a rust or a discard, and by the statistics. */
+export function fogCollected(
+  was: Pick<PublicCompanyState, "carcosan_trains" | "carcosan_doom_after_macro_round"> | null | undefined,
+  now: Pick<PublicCompanyState, "carcosan_trains" | "carcosan_doom_after_macro_round"> | null | undefined,
+): string[] {
+  const gildingWas = was?.carcosan_trains ?? [];
+  if (gildingWas.length === 0 || !now) return [];
+  if ((now.carcosan_trains ?? []).length !== 0) return [];
+  if (was?.carcosan_doom_after_macro_round === undefined || now.carcosan_doom_after_macro_round !== undefined) return [];
+  return [...gildingWas];
+}
+
+/** UR-3 (OD-UR-2): what the fog took at the end of an Operating-Round set, per corporation -- the entry that left the
+ *  Operating Round, and only the gilded copies `fogCollected` names. The legacy request's fog (an unpinned board's
+ *  `YellowSignEvent`) lands mid-round and narrates itself, so it is never reported here. */
+export function describeFogAtSetEnd(
+  before: GameStateResponse | null | undefined,
+  after: GameStateResponse | null | undefined,
+): Array<{ companyId: number; ticker: string; models: string[] }> {
+  if (!before || !after) return [];
+  if (before.current_round_type !== "OperatingRound" || after.current_round_type === "OperatingRound") return [];
+  const out: Array<{ companyId: number; ticker: string; models: string[] }> = [];
+  for (const company of after.public_companies ?? []) {
+    const was = (before.public_companies ?? []).find((entry) => entry.company_id === company.company_id);
+    const models = fogCollected(was, company);
+    if (models.length > 0) out.push({ companyId: company.company_id, ticker: company.ticker, models });
+  }
+  return out;
 }

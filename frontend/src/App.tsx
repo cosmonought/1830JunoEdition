@@ -450,6 +450,11 @@ import {
   yellowSignStateOf,
   forcedSignStagesAvailable,
   nextForcedSign,
+  // UR-3 (OD-UR-1, OD-UR-2): a pinned table's Sign is read off the run it rode; its fog off the set boundary.
+  CARCOSA_FOG_LINE,
+  describeFogAtSetEnd,
+  narrateRunYellowSign,
+  runYellowSignWritten,
 } from "./gameEngine/yellowSign";
 import YellowSignOverlay from "./components/YellowSignOverlay";
 import type { HauntingComposite } from "./components/YellowSignOverlay";
@@ -7046,7 +7051,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
              every UNEXPLAINED movement, which is the case this block was built for -- still gets one. See
              `sentenceStatesTreasury` for why the predicate lives beside the sentences rather than here. */
           if (after) {
-            const statedInLine = sentenceStatesTreasury(gameplay);
+            /* UR-3 (OD-UR-1): on a pinned table the run's own entry carries the Mark, and the Mark's sign line states
+               the treasury (#1375: "Treasury $A → $B") -- so a run is a stated-treasury sentence exactly when it
+               recorded a Mark. */
+            const markInRun =
+              "RunMultipleRoutes" in gameplay &&
+              runYellowSignWritten(before, after, gameplay.RunMultipleRoutes.protocol_id)?.stage === "mark";
+            const statedInLine = sentenceStatesTreasury(gameplay) || markInRun;
             for (const move of describeTreasuryMoves(msg, before, after)) {
               if (!move.unexplained && statedInLine) continue;
               logInfo(
@@ -7146,7 +7157,20 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
             const companyId = msg.RunMultipleRoutes.protocol_id;
             const ran = before.public_companies.find((entry) => entry.company_id === companyId);
             const banked = after.public_companies.find((entry) => entry.company_id === companyId);
-            const printedTurnTotal = Math.max(0, Number(banked?.printed_route_revenue ?? 0) || 0);
+            /* ==================================================================
+                UR-3 (OD-UR-1 = 1-A, UR-F6): ON A PINNED TABLE THIS BLOCK NARRATES WHAT THE RUN'S OWN ENTRY APPLIED
+               ==================================================================
+               The Sign is no longer a second action this client sends: the reducer resolved it inside the run
+               (`settleRunYellowSign`) and wrote what it applied onto the corporation (`last_run_yellow_sign`). So a
+               pinned board is narrated from `narrateRunYellowSign` -- the record, the kept run and the award as the
+               board holds them -- and nothing is dispatched; an unpinned board (the corpus, a Firestore room) keeps
+               the legacy request path below, byte for byte. `banked` is the board AFTER the Mark on a pinned table,
+               so the turn's roll is priced on the run as it was run -- the kept total plus the nullified route. */
+            const signPinned = typeof before.rules_engine_version === "number";
+            const signRecord = signPinned ? runYellowSignWritten(before, after, companyId) : null;
+            const nullifiedPrinted =
+              signRecord?.stage === "mark" ? Math.max(0, Number(signRecord.nullified?.printed_revenue ?? 0) || 0) : 0;
+            const printedTurnTotal = Math.max(0, Number(banked?.printed_route_revenue ?? 0) || 0) + nullifiedPrinted;
             if (printedTurnTotal > 0) {
               /* THE SEED IS READ OFF `before`, not off render state. #963 read `gameState` because the handler
                  had it; a replaying client has no render state that matches the action it is replaying, and a
@@ -7249,7 +7273,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
                  run (#1375) asks the same closure with a different roll rather than calling again. */
               const sentenceFor = (which: typeof roll) => turnRevenueSentence(ticker, which, seed);
               const naturalSentence = sentenceFor(roll);
-              const resolved = resolveFlavourLine({
+              // UR-3: a pinned table's resolution is the one its run applied (never re-derived on the fleet as it ran).
+              const signReport = signPinned ? narrateRunYellowSign(before, after, companyId, seed) : null;
+              const resolved = signReport ? signReport.resolution : resolveFlavourLine({
                 naturalLine: revenueFlavourClause(roll, seed),
                 bucket,
                 ticker,
@@ -7336,9 +7362,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
                  own verdict, no flavour -- and the flavour moves whole to the second line, where the sign
                  belongs. The mechanical dispatch below is silent in the log (#1375 in `runGameplayAction`'s
                  caller) and states the treasury itself, so the provenance diagnostic has nothing to add. */
-              const markTaken = resolved.stage === "mark" ? lowestValueTrain(ran?.owned_trains) : null;
-              const markRun = markTaken && banked ? runWithoutTrain(banked, markTaken, seed) : null;
-              const markAward = markTaken ? markPayout(markTaken) : 0;
+              /* UR-3 (UR-F5/UR-F6): on a pinned table the train, the kept run and the award are the ones the board
+                 applied -- judged after the Run -> Dividends settlement -- read off the report, not re-derived here. */
+              const markTaken = signReport
+                ? signReport.taken
+                : resolved.stage === "mark" ? lowestValueTrain(ran?.owned_trains) : null;
+              const markRun: { routes: number; adjusted: number; roll: ReturnType<typeof rollTurnRevenue> | null } | null =
+                signReport ? signReport.kept : markTaken && banked ? runWithoutTrain(banked, markTaken, seed) : null;
+              const markAward = signReport ? signReport.award : markTaken ? markPayout(markTaken) : 0;
               const markRunLine = (() => {
                 if (!markRun) return null;
                 const routesWord = markRun.routes === 1 ? "route" : "routes";
@@ -7377,7 +7408,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
                   /* #1375: the sign's line -- the flavour, the ruled appendix, and what became of the gold.
                      The treasury figures are the banked run's, before and after the award the dispatch
                      below makes; the president is whoever holds the seat as the run was made. */
-                  const treasuryBefore = Math.max(0, Number(banked?.treasury ?? ran?.treasury ?? 0) || 0);
+                  /* UR-3: on a pinned table `banked` already holds the award (the Mark landed in the run's entry). */
+                  const treasuryBanked = Math.max(0, Number(banked?.treasury ?? ran?.treasury ?? 0) || 0);
+                  const treasuryBefore = signReport ? treasuryBanked - award : treasuryBanked;
                   const presidentName = banked?.president
                     ? (sandboxPlayerLabel(banked.president) ?? truncateAddress(banked.president))
                     : "The president";
@@ -7397,17 +7430,21 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
                      THE NARRATION ABOVE IS UNAFFECTED AND STILL AGREES WITH THE BOARD. It is composed from
                      `banked` -- the reducer's own post-run state -- under the same seed the reducer records,
                      which is the pair of inputs the derivation reads. Two readers, one answer (#1375). */
-                  void runGameplayAction(
-                    "YellowSignEvent",
-                    {
-                      YellowSignEvent: {
-                        game_id: gameId,
-                        protocol_id: companyId,
-                        ...signForce,
+                  /* UR-3 (OD-UR-1 = 1-A): the legacy request, on an unpinned board only. A pinned table's Mark has
+                     already landed inside the run's own entry, and the table refuses the request outright. */
+                  if (!signPinned) {
+                    void runGameplayAction(
+                      "YellowSignEvent",
+                      {
+                        YellowSignEvent: {
+                          game_id: gameId,
+                          protocol_id: companyId,
+                          ...signForce,
+                        },
                       },
-                    },
-                    { silentInLog: true },
-                  );
+                      { silentInLog: true },
+                    );
+                  }
                 }
               } else if (resolved.stage === "fog") {
                 /* ==================================================================
@@ -7421,7 +7458,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
                    replays to here the fleet has moved on, and re-deriving "the marked train" against a later
                    roster could take a different one than the game took. */
                 const taken = (ran?.carcosan_trains ?? [])[0] ?? null;
-                if (taken) {
+                // UR-3 (OD-UR-2): unreachable on a pinned table -- the run's resolution has no fog stage there.
+                if (taken && !signPinned) {
                   // #1661: the request only -- the reducer derives the marked train it takes.
                   void runGameplayAction(
                     "YellowSignEvent",
@@ -7438,21 +7476,25 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
               } else if (resolved.stage === "carcosa") {
                 /* #1672 (S9-2): the DEPOT's lowest-value train, asked of the same function the reducer
                    derives with, so the Activity Log cannot name a tier the board did not hand over. */
-                const gifted = carcosaGiftModel(before, derivePhase(before)?.tier ?? "2");
+                // UR-3: a pinned table names the train its run's entry actually gifted.
+                const gifted = signReport ? signReport.gifted : carcosaGiftModel(before, derivePhase(before)?.tier ?? "2");
                 if (gifted) {
                   logInfo(`${ticker} received a ${gifted}-train.`, "", yellowSignStamp);
                   // #1661: the request only -- the reducer derives the gifted tier from the phase in force.
-                  void runGameplayAction(
-                    "YellowSignEvent",
-                    {
-                      YellowSignEvent: {
-                        game_id: gameId,
-                        protocol_id: companyId,
-                        ...signForce,
+                  // UR-3 (OD-UR-1 = 1-A): an unpinned board only; a pinned table's gift landed with the run.
+                  if (!signPinned) {
+                    void runGameplayAction(
+                      "YellowSignEvent",
+                      {
+                        YellowSignEvent: {
+                          game_id: gameId,
+                          protocol_id: companyId,
+                          ...signForce,
+                        },
                       },
-                    },
-                    { silentInLog: true }, // #1375: the line above is the line
-                  );
+                      { silentInLog: true }, // #1375: the line above is the line
+                    );
+                  }
                 }
               }
               /* ==================================================================
@@ -7481,7 +7523,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
 
                  WHAT IS DELIBERATELY NOT GUARDED is the `YellowSignEvent` dispatch above. It moves the board,
                  the reducer refuses a duplicate on its own (#1092), and skipping it on a replay would rebuild
-                 a game in which the fog never took the train. */
+                 a game in which the fog never took the train.
+                 [UR-3: on a pinned table there is no dispatch to guard -- the stage is part of the run's entry and
+                 every replay of that entry re-applies it; the paragraph above is the unpinned legacy path's.] */
               const ephemeral = !replayingHistory;
               /* Design note #1081: `null` is the unchanged bucket's default -- "nothing happened" has nothing
                  to sound like. Guarded HERE rather than inside `playVariantCue`, because that function's
@@ -7888,6 +7932,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
                   queuedNotices.some((entry) => noticeDismissKey(entry) === key);
                 if (!already) queuedNotices.push(notice);
               }
+            }
+            /* UR-3 (OD-UR-2, D-38): THE FOG AT THE END OF AN OPERATING-ROUND SET. The fleet-loss diff above leaves
+               it out (it is neither a rust nor a discard), so it is told here, once per corporation, in the Sign's own
+               words and tint. A minimal line only: the fog's formal notice -- its modal, sound and film at the
+               boundary -- is later work (UR-6), and the legacy run-borne fog on an unpinned board narrates itself
+               through its run's clause, which `describeFogAtSetEnd` never reports. */
+            for (const fog of describeFogAtSetEnd(settledBefore, settledAfter)) {
+              const trains = fog.models.map((model) => `${model}-train`).join(" and ");
+              logInfo(`${CARCOSA_FOG_LINE} ${fog.ticker} lost its gold-trimmed ${trains}.`, "", null, "sign");
             }
             if (queuedNotices.length !== pendingFleetNoticesRef.current.length) {
               pendingFleetNoticesRef.current = queuedNotices;

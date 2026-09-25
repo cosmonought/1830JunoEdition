@@ -52,7 +52,7 @@ import { depotCostFor, depotInventory, derivePhase, trainTier } from "../gameEng
 import { citySlotCount } from "../gameEngine/stationTokens";
 import { boardFor, withRules } from "../gameEngine/boardSelection";
 import { flavorBucketFor, resolveVariants, revenueFlavourClause, rollTurnRevenue } from "../gameEngine/gameVariants";
-import { yellowSignStageApplied } from "../gameEngine/yellowSign";
+import { describeFogAtSetEnd, runBeforeSign, runYellowSignWritten, yellowSignStageApplied } from "../gameEngine/yellowSign";
 import { variantCueFor } from "./variantSfx";
 import { tileStock } from "./tileSupply";
 import { describeFleetLosses, describeReprieveExpiries } from "../gameEngine/sandboxSession";
@@ -433,7 +433,15 @@ export function gameHistoryFrom(log: readonly SandboxAction[], policy: ReplayPol
       const companyId = Number(body.protocol_id);
       const company = companyById(after, companyId);
       if (company) {
-        const printed = num(company.printed_route_revenue);
+        /* UR-3: ON A PINNED TABLE THE MARK LANDS IN THIS ENTRY, so `after` holds the KEPT run. These tallies keep the
+           basis they have always had -- the run as it was priced, in full, at its own entry -- because what a Mark
+           should do to the statistics is OD-UR-6, which is open (`runBeforeSign` puts the nullified route back). */
+        const runBasis = runBeforeSign(
+          company,
+          runYellowSignWritten(before, after, companyId),
+          Array.isArray(body.train_indices) ? (body.train_indices as number[]) : null,
+        );
+        const printed = runBasis.printed;
         bump(lifetimeRevenue, String(companyId), printed);
         /* #1429: JUGGERNAUT (the biggest single run), the rounds a corporation operated (the divisor for the
            Dividend Machine, the Little Engine and the White Elephant), and THE FARMHAND -- the Unpredictable
@@ -444,7 +452,7 @@ export function gameHistoryFrom(log: readonly SandboxAction[], policy: ReplayPol
           peakRun.set(String(companyId), printed);
           peakRunRound.set(String(companyId), roundLabelOf(before));
         }
-        for (const run of company.last_run_breakdown ?? []) {
+        for (const run of runBasis.breakdown) {
           bump(ledgerEarned, `${companyId}:${run.model}`, num(run.printed_revenue));
           bump(ledgerRounds, `${companyId}:${run.model}`, 1);
         }
@@ -468,7 +476,7 @@ export function gameHistoryFrom(log: readonly SandboxAction[], policy: ReplayPol
         const current = rounds[rounds.length - 1];
         const entry = current?.corporations.find((c) => c.companyId === companyId);
         if (entry) entry.revenue = printed;
-        for (const run of company.last_run_breakdown ?? []) {
+        for (const run of runBasis.breakdown) {
           const revenue = num(run.printed_revenue);
           if (bestRun === null || revenue > bestRun.revenue) {
             bestRun = { holder: company.president ?? null, ticker: company.ticker, model: run.model, revenue, round: roundLabelOf(before) };
@@ -738,6 +746,31 @@ export function gameHistoryFrom(log: readonly SandboxAction[], policy: ReplayPol
       if (bearer && tookEffect && ["mark", "carcosa", "fog"].includes(stage)) {
         bump(signStages, bearer, 1);
         signStageNames.set(bearer, [...(signStageNames.get(bearer) ?? []), stage]);
+      }
+    }
+    /* UR-3 (OD-UR-1, OD-UR-2): ON A PINNED TABLE NO `YellowSignEvent` REACHES THE LOG. The Mark and the gift ride the
+       run's entry (read off the record it wrote, never off a fleet diff a Final Run expiry shares), and the fog falls
+       at the end of an Operating-Round set (`describeFogAtSetEnd`). Booked exactly as the request's entry above books
+       them -- the same fate, the same stage on the same bearer -- so what the accolades count is unchanged (OD-UR-6 is
+       open); only where the event is found has moved. */
+    if (kind === "RunMultipleRoutes") {
+      const companyId = Number(body.protocol_id);
+      const record = runYellowSignWritten(before, after, companyId);
+      if (record) {
+        if (record.stage === "mark") fate(companyId, record.model, "taken");
+        const bearer = companyById(before, companyId)?.president ?? null;
+        if (bearer) {
+          bump(signStages, bearer, 1);
+          signStageNames.set(bearer, [...(signStageNames.get(bearer) ?? []), record.stage]);
+        }
+      }
+    }
+    for (const fog of describeFogAtSetEnd(before, after)) {
+      for (const model of fog.models) fate(fog.companyId, model, "taken");
+      const bearer = companyById(before, fog.companyId)?.president ?? null;
+      if (bearer) {
+        bump(signStages, bearer, 1);
+        signStageNames.set(bearer, [...(signStageNames.get(bearer) ?? []), "fog"]);
       }
     }
     if (kind === "BuyTrainFromCorporation") {

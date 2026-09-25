@@ -199,7 +199,9 @@ describe("the variant cue does not happen twice", () => {
      halves, because the case that matters is about the LINE between them. A slice starting at the flag would
      have contained only the guarded half, which is how the first draft of the durable-half case below came to
      assert about a dispatch that was not inside it. */
-  const block = sliceBetween(APP, "const resolved = resolveFlavourLine({", "if (after && \"DeclareDividends\"");
+  /* UR-3: the flavour is resolved from the run's own report on a pinned table (`narrateRunYellowSign`) and by
+     `resolveFlavourLine` on the legacy path, in one expression -- the block still starts where the flavour is resolved. */
+  const block = sliceBetween(APP, "const resolved = signReport ? signReport.resolution : resolveFlavourLine({", "if (after && \"DeclareDividends\"");
 
   it("gates all three ephemeral effects on one flag", () => {
     /* THE SOUND, THE VIDEO AND THE FLASH. Three separate `if`s reading one derived boolean rather than three

@@ -63,10 +63,64 @@ export function dieselExchangeEnabled(state: GameStateResponse | null): boolean 
  *  `["4","5"]` -- one ordinary 4, never both and never none. `pending_rust_doomed_this_turn` is already among
  *  the marks and is not subtracted again. */
 export function exchangeableTrains(
-  company: { owned_trains?: readonly string[] | null; pending_rust_trains?: readonly string[] | null } | null | undefined,
+  company:
+    | {
+        owned_trains?: readonly string[] | null;
+        pending_rust_trains?: readonly string[] | null;
+        /** UR-3 (OD-UR-7): the Carcosa gilding, subtracted like the Gentle Rust marks. */
+        carcosan_trains?: readonly string[] | null;
+      }
+    | null
+    | undefined,
 ): string[] {
   if (!company) return [];
-  return unreprievedTrains(company).filter((model) => DIESEL_EXCHANGE_TIERS.includes(model));
+  /* ==================================================================
+      UR-3 (OD-UR-7 = 7-A, backlog D-41, UR-F17): NOR IS A GILDED COPY A TRADE-IN
+     ==================================================================
+     OWNER RULING (2026-09-24): a gilded / Carcosan train may not be used as a Diesel trade-in; buying a Diesel
+     normally stays legal, and so does trading in an ordinary, non-gilded eligible train. Probe P-I: the arm took the
+     gilded 6, moved it into the Bank Pool as ordinary physical stock and left the gilding, the provenance marker and
+     the doom clock behind at the seller -- the fog escaped, and a synthetic train became one the Bank could sell.
+     THE SAME MULTISET QUESTION AS #1700's, ABOUT A DIFFERENT MARK: `carcosan_trains` names how many copies of a model
+     are gilded, never which slot, so one copy per gilding comes off -- owned `["6","6"]` with one gilded 6 still trades
+     exactly one 6, and the copy that stays carries the gilding. Gilded models outside the eligible tiers (a gilded D
+     or 7) subtract nothing a trade-in could have used. */
+  const gilded = [...(company.carcosan_trains ?? [])];
+  return unreprievedTrains(company).filter((model) => {
+    const at = gilded.indexOf(model);
+    if (at >= 0) {
+      gilded.splice(at, 1);
+      return false;
+    }
+    return DIESEL_EXCHANGE_TIERS.includes(model);
+  });
+}
+
+/** UR-3 (OD-UR-7, UR-F17): why no copy of `model` that `company` holds may be traded in because the ones no Gentle Rust
+ *  mark covers are gold-trimmed by Carcosa -- or `null` when an ordinary copy remains, the model is not an eligible
+ *  tier, or no copy is gilded. Counted by multiset, like `reprievedExchangeReason`. */
+export function gildedExchangeReason(
+  company: {
+    ticker?: string | null;
+    owned_trains?: readonly string[] | null;
+    pending_rust_trains?: readonly string[] | null;
+    carcosan_trains?: readonly string[] | null;
+  },
+  model: string,
+): string | null {
+  const count = (list: readonly string[] | null | undefined) => (list ?? []).filter((entry) => entry === model).length;
+  const owned = count(company.owned_trains);
+  const gilded = Math.min(owned, count(company.carcosan_trains));
+  if (owned === 0 || gilded === 0 || !DIESEL_EXCHANGE_TIERS.includes(model)) return null;
+  const reprieved = Math.min(owned, count(company.pending_rust_trains));
+  if (owned - Math.min(owned, gilded + reprieved) > 0) return null;
+  const ticker = company.ticker ?? "This corporation";
+  if (reprieved > 0) {
+    return `None of ${ticker}'s ${model}-trains can be traded in for a Diesel — each is on its Gentle Rust final run or gold-trimmed by Carcosa.`;
+  }
+  return owned > 1
+    ? `Every ${model}-train ${ticker} holds is gold-trimmed by Carcosa — a gilded train cannot be traded in for a Diesel.`
+    : `${ticker}'s ${model}-train is gold-trimmed by Carcosa — a gilded train cannot be traded in for a Diesel.`;
 }
 
 /** Why `companyId` may not trade `modelType` in for a Diesel right now, or `null` when it may.
@@ -98,8 +152,32 @@ export function dieselExchangeRefusal(
     // #1702 (GR-3): the sentence lives in `reprievedExchangeReason` below, so the panel greys with these words.
     return reprievedExchangeReason(company, modelType) as string;
   }
+  // UR-3 (OD-UR-7): every copy of the named model that no Gentle Rust mark covers is gold-trimmed.
+  if (modelType !== undefined && !candidates.includes(modelType)) {
+    const gilded = gildedExchangeReason(company, modelType);
+    if (gilded !== null) return gilded;
+  }
   if (candidates.length === 0) {
-    const reprieved = (company.owned_trains ?? []).filter((model) => DIESEL_EXCHANGE_TIERS.includes(model));
+    /* UR-3 (OD-UR-7): with a gilding on the board, the eligible copies left are Final Run or gold-trimmed ones; say
+       which. With none -- every table before UR-3 and every table without Carcosa -- the sentences below are #1700's
+       and #1702's, byte for byte. */
+    const gildedLeft = [...(company.carcosan_trains ?? [])];
+    const eligible = (company.owned_trains ?? []).filter((model) => DIESEL_EXCHANGE_TIERS.includes(model));
+    const gildedEligible = eligible.filter((model) => {
+      const at = gildedLeft.indexOf(model);
+      if (at < 0) return false;
+      gildedLeft.splice(at, 1);
+      return true;
+    });
+    if (gildedEligible.length > 0) {
+      if (gildedEligible.length < eligible.length) {
+        return `None of ${ticker}'s 4-, 5- or 6-trains can be traded in for a Diesel — each is on its Gentle Rust final run or gold-trimmed by Carcosa.`;
+      }
+      return eligible.length === 1
+        ? `${ticker}'s only 4-, 5- or 6-train is gold-trimmed by Carcosa — a gilded train cannot be traded in for a Diesel.`
+        : `Every 4-, 5- or 6-train ${ticker} holds is gold-trimmed by Carcosa — none can be traded in for a Diesel.`;
+    }
+    const reprieved = eligible;
     if (reprieved.length === 1) {
       return `${ticker}'s only 4-, 5- or 6-train is on its Gentle Rust final run — it cannot be traded in for a Diesel.`;
     }

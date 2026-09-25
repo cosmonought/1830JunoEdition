@@ -53,6 +53,8 @@ import { depotInventory } from "../gameEngine/gamePhase";
 import { boPresidencyRefusal, returnedTrainRefusal } from "../gameEngine/sandboxSession";
 import { BO_TICKER } from "../gameEngine/gameConstants";
 import { dieselExchangeRefusal } from "../gameEngine/dieselExchange";
+// UR-3 (OD-UR-1 = 1-A, D-37): the pinned table's refusal of a client-sent Yellow Sign, shared with ingress and the gate.
+import { yellowSignRequestRefusal } from "../gameEngine/yellowSign";
 import { discardTrainRefusal, pendingDiscardBlock } from "../gameEngine/trainDiscard";
 import {
   declareBankruptcyRefusal,
@@ -215,6 +217,13 @@ export function refusalReasonFor(
       return fundingPrivateRescindRefusal(before, (msg as { RescindFundingPrivateOffer: { private_id: number } }).RescindFundingPrivateOffer, ctx?.actor ?? null);
     }
     if ("DeclareBankruptcy" in msg) return declareBankruptcyRefusal(funding, ctx?.actor ?? null);
+  }
+
+  /* UR-3 (OD-UR-1): a `YellowSignEvent` on a pinned table, after the holds -- ingress's order (`turnRefusal`) and its
+     sentence. */
+  if ("YellowSignEvent" in msg) {
+    const sign = yellowSignRequestRefusal(before);
+    if (sign !== null) return sign;
   }
 
   if ("BuyStock" in msg && ctx?.actor && ctx.marketZoneFor) {

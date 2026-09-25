@@ -220,7 +220,18 @@ import {
 } from "./doubleCertificate";
 // Design note #1320: the Level Playing Field's entities, applied by the `SetupGame` arm.
 import { JK_PRIVATE_ID, withLevelPlayingFieldEntities } from "./levelPlayingField";
-import { resolveYellowSign, runWithoutTrain, type YellowSignOutcome } from "./yellowSign";
+import {
+  automaticYellowSignInForce,
+  fogAtSetEnd,
+  fogCollected,
+  fogDueAtSetEnd,
+  resolveYellowSign,
+  runWithoutTrain,
+  runYellowSignWritten,
+  yellowSignRequestRefusal,
+  type RunYellowSignRecord,
+  type YellowSignOutcome,
+} from "./yellowSign";
 // Design note #1323: the Kanawha Licence -- its purchase, its grant and the hex it unlocks.
 import {
   JK_TILE_ABILITY_KEY,
@@ -1670,6 +1681,22 @@ export function describeFleetLosses(
       } else {
         lost.length = 0;
       }
+    }
+    /* UR-3 (UR-F6): ON A PINNED TABLE THE MARK LANDS IN THE RUN'S OWN ENTRY, so there is no `YellowSignEvent` to
+       name it. The run records what it applied (`last_run_yellow_sign`), and the one train it names comes out of
+       `lost` -- by multiset, so a Final Run train the same entry retired is still read by #1099's splice below. */
+    const signRecord = runYellowSignWritten(before, after, company.company_id);
+    if (signRecord !== null && signRecord.stage === "mark") {
+      const at = lost.indexOf(signRecord.model);
+      if (at >= 0) lost.splice(at, 1);
+    }
+    /* UR-3 (OD-UR-2, D-38): AND THE FOG THAT FALLS AT THE END OF AN OPERATING-ROUND SET (`fogAtSetEnd`) is neither a
+       rust nor a discard: the gilded copies it collected -- the gilding gone with its doom clock (`fogCollected`) --
+       come out of `lost` by multiset, so a bought train of the same model that left for another reason is still
+       reported. */
+    for (const model of fogCollected(was, company)) {
+      const at = lost.indexOf(model);
+      if (at >= 0) lost.splice(at, 1);
     }
     if (discardedByChoice !== null && discardedByChoice.protocol_id === company.company_id) {
       const at = lost.indexOf(discardedByChoice.model_type);
@@ -3356,6 +3383,16 @@ function applySandboxActionCoreJudged(
     if (discardTrainRefusal(state, { protocol_id, model_type }, ctx?.actor) !== null) return state;
   }
   /* ==================================================================
+      UR-3 (OD-UR-1 = 1-A, D-37; #902 / UR-N3): A PINNED TABLE TAKES NO YELLOW SIGN FROM A CLIENT
+     ==================================================================
+     The stage is the run's own consequence (`settleRunYellowSign`, below), so a `YellowSignEvent` on a pinned board
+     has nothing to ask for: a bare request, one that names another corporation, one delayed past a phase change or a
+     purchase, a duplicate, a forged outcome and one on a table without the variant are refused alike, BY IDENTITY and
+     before any arm or settle stage runs, for #1019's reason (a refusal inside the arm would still let the settle chain
+     run). The same sentence is ingress's (`turnRefusal`) and the shell's refusal line's. An UNPINNED board keeps the
+     legacy request path in the arm -- the development corpus's stored outcomes replay exactly as they were played. */
+  if ("YellowSignEvent" in msg && yellowSignRequestRefusal(state) !== null) return state;
+  /* ==================================================================
       DESIGN NOTE 1540: WHILE THE TRAIN MUST BE FUNDED, NOTHING ELSE HAPPENS -- AND AFTER THE END, NOTHING
      ==================================================================
      Rulebook 6.6.2/6.6.3/6.7 (`emergencyFunding.ts`). Asked here, ahead of every arm: a held message is
@@ -3769,28 +3806,81 @@ function applySandboxActionCoreJudged(
   }
 
   return settleBankruptcy(
-    settleOperatingCursor(
+    /* UR-3 (OD-UR-1 = 1-A, OD-GR-3 = A2): THE YELLOW SIGN IS THE RUN'S LAST STEP, on the board the Run -> Dividends
+       settlement produced -- so it is resolved AFTER `settleOperatingCursor` has destroyed any Gentle Rust Final Run
+       train the turn owed, and BEFORE the bankruptcy question, which must see the fleet the Sign left. See
+       `settleRunYellowSign` below. */
+    settleRunYellowSign(
       state,
-      /* Design note #660: the B&O private closes the moment the B&O
-         corporation owns a train. Settled here beside the era for the same
-         reason (#657) -- it is a function of the board, so no message can
-         change the fleet and forget it. */
-      /* Design note #1633 (Slice 8.4, S8-10): AND THE SEAT-DRIVEN BOUNDARY IS SETTLED BEFORE THE ROUND
-         TRANSITION, which is the other half of #1632's ordering. `settleRoundTransitions` is what OPENS the
-         Operating Round when a Stock Round ends, and opening it freezes its membership -- so a queued M&H
-         exchange that floats NYC at the SR -> OR boundary must settle on THIS side of that call, or NYC sits
-         out a round it qualified for before the round existed. Wrapped around `applyOneAction` rather than
-         placed inside it so the boundary is judged from the pair of boards, which is the only way to tell a
-         turn that ENDED from one that merely acted. */
-      settleBaoPrivate(
-        settleEra(
-          settleRoundTransitions(seatBoundaryExchange(state, applyOneAction(state, msg, ctx), ctx), ctx),
+      settleOperatingCursor(
+        state,
+        /* Design note #660: the B&O private closes the moment the B&O
+           corporation owns a train. Settled here beside the era for the same
+           reason (#657) -- it is a function of the board, so no message can
+           change the fleet and forget it. */
+        /* Design note #1633 (Slice 8.4, S8-10): AND THE SEAT-DRIVEN BOUNDARY IS SETTLED BEFORE THE ROUND
+           TRANSITION, which is the other half of #1632's ordering. `settleRoundTransitions` is what OPENS the
+           Operating Round when a Stock Round ends, and opening it freezes its membership -- so a queued M&H
+           exchange that floats NYC at the SR -> OR boundary must settle on THIS side of that call, or NYC sits
+           out a round it qualified for before the round existed. Wrapped around `applyOneAction` rather than
+           placed inside it so the boundary is judged from the pair of boards, which is the only way to tell a
+           turn that ENDED from one that merely acted. */
+        settleBaoPrivate(
+          settleEra(
+            settleRoundTransitions(seatBoundaryExchange(state, applyOneAction(state, msg, ctx), ctx), ctx),
+          ),
         ),
+        msg,
       ),
       msg,
     ),
     ctx,
   );
+}
+
+/* ==================================================================
+    UR-3 (OD-UR-1 = 1-A, backlog D-37): THE SIGN IS A CONSEQUENCE OF THE RUN, SETTLED IN THE RUN'S OWN TRANSITION
+   ==================================================================
+   OWNER RULING (2026-09-24): "A Yellow Sign stage is an automatic, derived consequence of the authoritative run, not
+   a discretionary second player action. A player or client may not omit, delay, redirect or manufacture it."
+   SO IT IS NOT A MESSAGE. It is settled here, inside the accepted `RunMultipleRoutes` entry, exactly as the era and
+   the cursor are settled inside every entry: a function of the board and of the message the log already holds. The
+   draw is the run's own committed `revenue_seed` (#1051: minted by the room at commit, written onto the corporation
+   by the run arm as `last_run_revenue_seed`); the reducer reads it and never draws. A replay reaches the same stage
+   from the same committed run with nothing else in the log, and there is no second entry for a client to omit,
+   delay, aim at another corporation, or send when no stage was drawn.
+   ON THE SETTLED BOARD (OD-GR-3 = A2, backlog D-36): `after` has been through the Run -> Dividends settlement, so a
+   Gentle Rust Final Run train the turn owed is already gone, and `resolveYellowSign(.., { run: true })` chooses the
+   Mark's train among the unreprieved copies that remain. The route the Mark nullifies is found in the fleet AS IT
+   RAN (`before`'s), which is the fleet `last_run_breakdown` indexes (UR-F5); the narration reads what was applied
+   off `last_run_yellow_sign` (UR-F6), never a second derivation. If the settlement left nothing to take, no Mark
+   fires and its line stays in the pool (#1046, `lowestValueTrain`): the one reading the ruling allows, since the
+   Final Run train may never be a candidate.
+   ONLY A PINNED UNPREDICTABLE REVENUE TABLE (`automaticYellowSignInForce`). An unpinned board -- the development
+   corpus, a Firestore room -- keeps the legacy request path byte for byte (#1661 / #1662), because its stored
+   `YellowSignEvent` entries must replay to the boards they were played on; the residual that leaves on a live
+   Firestore room is recorded in the audit (UR-F1/F2/F3/F6 there), not fixed by reinterpreting its log.
+   ONLY WHEN THE RUN WAS ACCEPTED, judged by value (S7-17: no authority decision by object identity): the run arm
+   raises `routes_run_this_turn`, a refusal anywhere leaves it where it was, and a run the authority accepted always
+   declares at least one route (`evaluateRouteSet`). */
+function settleRunYellowSign(
+  before: GameStateResponse,
+  after: GameStateResponse,
+  msg: SandboxLogMsg,
+): GameStateResponse {
+  if (!("RunMultipleRoutes" in msg)) return after;
+  if (!automaticYellowSignInForce(after)) return after;
+  const companyId = msg.RunMultipleRoutes.protocol_id;
+  const ranBefore = before.public_companies.find((entry) => entry.company_id === companyId);
+  const ran = after.public_companies.find((entry) => entry.company_id === companyId);
+  if (!ranBefore || !ran || (ran.routes_run_this_turn ?? 0) <= (ranBefore.routes_run_this_turn ?? 0)) return after;
+  const { outcome } = resolveYellowSign(after, companyId, derivePhase(after)?.tier ?? "2", { run: true });
+  if (outcome === null) return after;
+  const applied = applyYellowSignOutcome(after, companyId, outcome, { fleetAsRun: ranBefore.owned_trains ?? null });
+  /* The era and the B&O private are functions of the board (#657, #660), settled again because the Sign may have just
+     moved a fleet -- exactly what the legacy request's own entry got from the chain it ran through. Both hand back
+     the board they were given when it is already settled. */
+  return settleBaoPrivate(settleEra(applied));
 }
 
 /* ==================================================================
@@ -4025,7 +4115,11 @@ function settleOperatingCursor(
        and can ring. `fogIsDue` reads the deadline; the `stage === "fog"` arm takes the train.
        WHAT #898 ESTABLISHED IS STILL TRUE AND STILL USED: the opening of a Stock Round is exactly the moment
        an OR set has finished, and `macro_round_number` has not been incremented yet at this point, so it
-       still names the set that just ended -- which is what makes `macroRound > doom` the honest test. */
+       still names the set that just ended -- which is what makes `macroRound > doom` the honest test.
+       [UR-3, OD-UR-2 (D-38): the removal is no longer a run's. It is `fogAtSetEnd`, called by
+       `settleRoundTransitions` on the transition that ends the set -- one layer before this function, where #898's
+       observation holds (the set just ended is still `macro_round_number`) -- so the train due at the end of N + 1
+       leaves at exactly that boundary, with no run, message or client involved.] */
     /* Design note #1660 (S9-12): the D&H's window is exactly as turn-scoped as the sub-phase it rides
        beside, and closes at the same boundary -- leaving the Operating Round entirely ends any turn that was
        in progress. */
@@ -4110,11 +4204,16 @@ function settleOperatingCursor(
        NEXT turn's Yellow Sign against the LAST turn's roll -- #941's bug in the one field whose staleness
        would change which stage fires rather than how much it paid. Listed in the predicate as well as cleared
        below for #1031's reason: a turn can end with every other figure at zero and this one set. */
+    /* UR-3 (UR-F6): AND THE SIGN'S RECORD IS THE SIXTH -- what the run applied describes THIS turn's run, and a record
+       left standing would be read as the next turn's Mark or gift. Listed in the predicate for #1031's reason: a Mark
+       that took the only train leaves every other figure at zero. Only ever written on a pinned Unpredictable Revenue
+       table, so on every other board this clause is inert. */
     const staleRun = (company: (typeof after.public_companies)[number]) =>
       (company.last_route_revenue ?? "0") !== "0" ||
       (company.printed_route_revenue ?? "0") !== "0" ||
       (company.last_run_breakdown?.length ?? 0) !== 0 ||
       company.last_run_revenue_seed !== undefined ||
+      company.last_run_yellow_sign !== undefined ||
       (company.routes_run_this_turn ?? 0) !== 0;
     /* ==================================================================
        DESIGN NOTE 1028: REMEMBER IT ON THE WAY OUT
@@ -4165,6 +4264,8 @@ function settleOperatingCursor(
                 routes_run_this_turn: 0,
                 // #1661: absent again, so the next turn's sign falls back to the hash rather than to a stale draw.
                 last_run_revenue_seed: undefined,
+                // UR-3: absent again -- the turn whose run the Sign acted on is over.
+                ...(company.last_run_yellow_sign !== undefined ? { last_run_yellow_sign: undefined } : {}),
               }
             : company,
         )
@@ -4425,6 +4526,17 @@ function settleRoundTransitions(
      * cannot take the turn it is in. `App.tsx` keeps that arm.
      *
      * See docs/ai_architecture/state_machine.md, sandboxSession.ts #898. */
+    /* ==================================================================
+        UR-3 (OD-UR-2 "N+1 + boundary", D-38, UR-F18): THE FOG FALLS AS THE SET ENDS, WHEREVER THE TABLE GOES NEXT
+       ==================================================================
+       The gilded train due at the end of this set (`carcosan_doom_after_macro_round` <= the set just ended, which
+       `macro_round_number` still names here -- #898's observation) disappears in THIS transition, before any of its
+       three exits: the Stock Round, the delayed auction, or the end of the game the bank broke. Settled first and
+       re-entered, the #1448 shape: once the fog has fallen nothing is due (`fogDueAtSetEnd`, asked by value), so the
+       second pass takes the ordinary branch below with the fog already applied. No run, no message and no client is
+       involved -- the owner ruled it "an authoritative OR-set-boundary transition, not a run stage and not a Yellow
+       Sign client request". */
+    if (fogDueAtSetEnd(state)) return settleRoundTransitions(fogAtSetEnd(state), ctx);
     if (bankIsBroken(state)) {
       return {
         ...state,
@@ -6155,11 +6267,20 @@ function applyOneAction(
        claim about a transport and this is a claim about the rules -- and the rule is the one that has to hold
        on every client that replays the entry. A local sandbox room keeps the tool, which is where it was
        asked for and the only place it was ever meant to work. */
+    /* ==================================================================
+        UR-3 (OD-UR-1 = 1-A, D-37): SUPERSEDES "A PINNED BOARD DERIVES WHATEVER IT IS SENT" ABOVE
+       ==================================================================
+       #1661 made the pinned OUTCOME the board's and left the request itself -- whether, when and for whom it was
+       sent -- to the client, which is exactly what the owner ruled out. A pinned board now resolves the stage inside
+       the run's own entry (`settleRunYellowSign`), so it takes no `YellowSignEvent` at all: refused by identity at
+       the gate in `applySandboxActionCoreJudged` and at ingress (`turnRefusal`), and here as the second lock, in case
+       the arm is ever reached by another road. The unpinned branches below are #1661's and #1662's, byte for byte. */
     const pinned = typeof state.rules_engine_version === "number";
+    if (pinned) return state;
     const stored = stage !== undefined;
-    if (!stored || pinned) {
+    if (!stored) {
       const derived = resolveYellowSign(state, protocol_id, derivePhase(state)?.tier ?? "2", {
-        force: !pinned && debug_force === true,
+        force: debug_force === true,
       }).outcome;
       if (derived === null) return state;
       return applyYellowSignOutcome(state, protocol_id, derived);
@@ -6256,15 +6377,32 @@ function applyOneAction(
        turn and the money must not be discarded. A SECOND run's breakdown, though, describes the same fleet
        slots as the first -- appending would put two entries on one chip, and the later one is the current
        truth about that train. Money accumulates; the account of which train is where does not. */
+    /* ==================================================================
+        UR-3 (UR-F7, pinned Unpredictable Revenue tables only): THE PAIRING IS THE AUTHORITY'S, NOT THE MESSAGE'S
+       ==================================================================
+       #1031 wrote the breakdown only when the message named its slots, and on a pinned Unpredictable Revenue table
+       that let a client choose what the Sign could see: the Mark nullifies the taken train's route by reading this
+       breakdown (#1375), and a run sent WITHOUT `train_indices` left none -- so the Mark took the train and the whole
+       run stood. Now that the stage is resolved inside the run's own entry, an undo and a resend without indices
+       was the whole recipe. So on those tables the breakdown is the pairing the authority itself judged
+       (`evaluateRouteSet`'s runs: the slot each route was run by, the model it holds, the figure it earned), which is
+       exactly what #1031's entries already are whenever the message names the slots -- the normal client always
+       does -- and is there whether or not it did. Every other board keeps #1031's rule unchanged. */
     const breakdown =
-      train_indices && train_indices.length === routes.length
-        ? routes.map((_path, at) => ({
-            train_index: train_indices[at],
-            // #1550: the model the fleet slot holds, when the authority read it; the message's word otherwise.
-            model: verdict?.runs[at]?.model ?? trains?.[at] ?? "",
-            printed_revenue: String(priced[at]),
+      verdict && verdict.kind === "legal" && automaticYellowSignInForce(state)
+        ? verdict.runs.map((run) => ({
+            train_index: run.trainIndex,
+            model: run.model,
+            printed_revenue: String(run.revenue),
           }))
-        : null;
+        : train_indices && train_indices.length === routes.length
+          ? routes.map((_path, at) => ({
+              train_index: train_indices[at],
+              // #1550: the model the fleet slot holds, when the authority read it; the message's word otherwise.
+              model: verdict?.runs[at]?.model ?? trains?.[at] ?? "",
+              printed_revenue: String(priced[at]),
+            }))
+          : null;
     const company = state.public_companies.find((entry) => entry.company_id === protocol_id);
     const previousPrinted = Math.max(0, Number(company?.printed_route_revenue ?? 0) || 0);
     const printedTotal = previousPrinted + printedThisMessage;
@@ -6473,10 +6611,17 @@ function applyYellowSignOutcome(
   state: GameStateResponse,
   protocolId: number,
   outcome: AppliedYellowSign,
+  /** UR-3: present when the RUN applies its own stage (`settleRunYellowSign`). `fleetAsRun` is the fleet the run's
+   *  breakdown indexes (before the Run -> Dividends settlement), and the stage applied is recorded on the corporation
+   *  as `last_run_yellow_sign` for the narration, the fleet-loss notices and the statistics. Absent: the legacy
+   *  request path, byte for byte. */
+  run?: { fleetAsRun: readonly string[] | null },
 ): GameStateResponse {
   const { stage, model, cash, parts } = outcome;
   const company = state.public_companies.find((entry) => entry.company_id === protocolId);
   if (!company) return state;
+  // UR-3 (OD-UR-2): the fog is a set-boundary transition on the run path (`fogAtSetEnd`), never one of its stages.
+  if (run && stage === "fog") return state;
 
   /* ==================================================================
       DESIGN NOTE 1092: THE FOG COLLECTS, AND THE CURSE STAYS
@@ -6569,9 +6714,39 @@ function applyYellowSignOutcome(
        run and rolls the remainder under the seed the run itself used. `null` parts is a stored entry
        written under the old ruling (#1661: an unpinned board, no `revenue_seed`) and keeps the zeroing it
        was played with, so no stored log replays to a different board. */
-    const kept = parts === null ? null : runWithoutTrain(company, model, parts);
+    /* UR-3 (UR-F5): on the run path the breakdown indexes the fleet AS IT RAN, which the Run -> Dividends
+       settlement may have shortened; `runWithoutTrain` aligns the two (`yellowSign.ts`). */
+    const kept = parts === null ? null : runWithoutTrain(company, model, parts, run ? run.fleetAsRun : undefined);
+    /* UR-3 (UR-F6): WHAT WAS APPLIED, WRITTEN WHERE EVERY READER CAN FIND IT. The Mark lands in the same entry as
+       the run and, under Gentle Rust, as the Final Run expiry -- so a fleet diff can no longer say which departure
+       was the Sign's. The record says: the train, the minted award, and the route it nullified (if the taken train
+       ran one). Turn-scoped like the run's other figures (#777), and written only by the run path. */
+    const record: RunYellowSignRecord | undefined = run
+      ? {
+          stage: "mark",
+          model,
+          award: String(award),
+          nullified: kept?.nullified
+            ? {
+                train_index: kept.nullified.train_index,
+                model: kept.nullified.model,
+                printed_revenue: kept.nullified.printed_revenue,
+              }
+            : null,
+        }
+      : undefined;
     return {
       ...state,
+      /* ==================================================================
+          UR-3 (OD-UR-13 -- DECIDED 2026-09-24): THE TAKEN TRAIN LEAVES THE GAME, AND THE BOARD REMEMBERS IT DID
+         ==================================================================
+         OWNER RULING: "A train taken by the Yellow Sign Mark is PERMANENTLY REMOVED FROM THE GAME. It does NOT: return
+         to the depot; enter the Bank Pool; become purchasable again; increase available depot stock." It is written
+         here, in the entry that took it, onto `removed_trains` -- not `returned_trains` (the Bank Pool) -- so the
+         derived depot never takes it back and the phase its purchase began stays begun (`derivePhase`: PHASE
+         PROGRESSION IS MONOTONIC). A replay of the run re-writes it. The legacy request path (an unpinned board's
+         stored Mark) does not write it: that entry replays to the board it was played on (#1661). */
+      ...(run ? { removed_trains: [...(state.removed_trains ?? []), model] } : {}),
       public_companies: state.public_companies.map((entry) =>
         entry.company_id === protocolId
           ? {
@@ -6583,6 +6758,7 @@ function applyYellowSignOutcome(
               printed_route_revenue: String(kept ? kept.printed : 0),
               ...(kept && kept.breakdown ? { last_run_breakdown: kept.breakdown } : {}),
               ...(kept ? { routes_run_this_turn: kept.routes } : {}),
+              ...(record ? { last_run_yellow_sign: record } : {}),
             }
           : entry,
       ),
@@ -6646,6 +6822,8 @@ function applyYellowSignOutcome(
               ? { carcosan_doom_after_macro_round: (state.macro_round_number ?? 0) + 1 }
               : {}),
             has_yellow_sign: false,
+            // UR-3 (UR-F6): the run path records the gift it applied, as it records a Mark.
+            ...(run ? { last_run_yellow_sign: { stage: "carcosa" as const, model, award: "0", nullified: null } } : {}),
           }
         : entry,
     ),

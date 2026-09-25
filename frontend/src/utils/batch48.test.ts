@@ -170,10 +170,17 @@ describe("the reducer applies what the shell decided", () => {
        on an unpinned board is applied as written -- the development corpus, and nothing else. */
     expect(REDUCER).toContain('const pinned = typeof state.rules_engine_version === "number";');
     expect(REDUCER).toContain("const stored = stage !== undefined;");
-    expect(REDUCER).toContain("if (!stored || pinned) {");
+    /* UR-3 (OD-UR-1 = 1-A, D-37): A PINNED BOARD NO LONGER DERIVES A REQUEST -- IT TAKES NONE. The stage is the run's
+       own consequence (`settleRunYellowSign`, inside the accepted run's entry), so the arm refuses a pinned request by
+       identity (the gate in `applySandboxActionCoreJudged` and ingress refuse it first). The two unpinned branches
+       are #1661's and #1662's byte for byte: a request derives, a stored outcome replays. The waiver was already the
+       unpinned board's alone and still is -- it simply no longer needs the pin in its condition. */
+    expect(REDUCER).toContain("if (pinned) return state;");
+    expect(REDUCER).toContain("if (!stored) {");
     expect(REDUCER).toContain("return applyYellowSignOutcome(state, protocol_id, derived);");
-    // #1662: and the playtest waiver is the pin's alone.
-    expect(REDUCER).toContain("force: !pinned && debug_force === true,");
+    // #1662: and the playtest waiver is the unpinned board's alone.
+    expect(REDUCER).toContain("force: debug_force === true,");
+    expect(REDUCER).not.toContain("if (!stored || pinned) {");
   });
 
   it("takes the taken train's route out of BOTH revenue fields, and zeroes both on a seedless message", () => {
@@ -182,7 +189,9 @@ describe("the reducer applies what the shell decided", () => {
        dispatch accumulates onto (#941), so both fields are rewritten together, as before. A message without
        the seed is one written under #1046 and keeps the zeroing it was played with. */
     // #1661: the absence is `parts === null` now -- an unpinned entry with no recorded seed -- not the field.
-    expect(REDUCER).toContain("const kept = parts === null ? null : runWithoutTrain(company, model, parts);");
+    /* UR-3 (UR-F5): the run path hands `runWithoutTrain` the fleet AS IT RAN (the breakdown's fleet, before the Run ->
+       Dividends settlement); the legacy request path hands it nothing and keeps the old arithmetic. */
+    expect(REDUCER).toContain("const kept = parts === null ? null : runWithoutTrain(company, model, parts, run ? run.fleetAsRun : undefined);");
     expect(REDUCER).toContain("revenue_seed === undefined");
     expect(REDUCER).toContain("last_route_revenue: String(kept ? kept.adjusted : 0),");
     expect(REDUCER).toContain("printed_route_revenue: String(kept ? kept.printed : 0),");
@@ -223,11 +232,18 @@ describe("a ghost train was never in the depot", () => {
     expect(derivePhase(board(["2", "2"], []))?.depotRemaining).toBe(4);
   });
 
-  it("still counts toward the phase", () => {
+  it("no longer counts toward the phase (UR-3, OD-UR-3 supersedes the paragraph below)", () => {
     /* THE HALF THAT MUST NOT BE HIDDEN. The phase is "the highest tier anybody owns" (#1), and a gifted train
        is a real train the corporation owns. Subtracting it from the phase as well would be #906's mistake --
-       enforcing a rule by withholding a value from every reader. */
-    expect(derivePhase(board(["2", "5"], ["5"]))?.tier).toBe("5");
+       enforcing a rule by withholding a value from every reader.
+       [UR-3, OWNER RULING OD-UR-3 = 3-A (backlog D-39): "Synthetic (gifted) Carcosa trains do not advance the game
+       phase; the phase follows REAL trains." The paragraph above was written when the gift was always the phase's own
+       tier; #1672 made it the depot's lowest, which is above the phase once a tier sells out, and the ghost then
+       turned the phase with no purchase (UR-F4). The ghost is now skipped before the phase is read -- nothing is
+       withheld from any other reader: it is still owned, run, counted for the limit rules and shown.] */
+    expect(derivePhase(board(["2", "5"], ["5"]))?.tier).toBe("2");
+    // A bought copy of the same model beside the ghost still counts, by the same multiset walk.
+    expect(derivePhase(board(["2", "5", "5"], ["5"]))?.tier).toBe("5");
   });
 
   it("subtracts one ghost per gift, not every train of that tier", () => {

@@ -424,6 +424,8 @@ export function depotInventory(state: GameStateResponse | null): DepotTier[] {
   const order = tierOrderFor(state);
   const currentIndex = phase ? order.indexOf(phase.tier) : 0;
   const pooled = pooledTrainsByTier(state);
+  // UR-3 (OD-UR-13): a train the Mark removed from the game is never stock (see `derivePhase`).
+  const removed = removedTrainsByTier(state);
 
   return order.map((tier, index) => {
     const total = DEPOT_TOTALS[tier];
@@ -432,7 +434,11 @@ export function depotInventory(state: GameStateResponse | null): DepotTier[] {
       remaining = null; // Diesel: no ceiling.
     } else if (onOpenShelf(state, tier) && phase && onOpenShelf(state, phase.tier)) {
       // #1326: on the open shelf nothing sells a lower tier out; each counts its own. #1512: less the pool.
-      remaining = Math.max(0, total - (phase.ownedByTier[tier] ?? 0) - (pooled.get(tier) ?? 0));
+      // UR-3 (OD-UR-13): and less what the Mark removed from the game.
+      remaining = Math.max(
+        0,
+        total - (phase.ownedByTier[tier] ?? 0) - (pooled.get(tier) ?? 0) - (removed.get(tier) ?? 0),
+      );
     } else if (index < currentIndex) {
       remaining = 0; // Design note #4: the queue rule.
     } else if (index === currentIndex) {
@@ -580,6 +586,19 @@ export function pooledTrainsByTier(state: GameStateResponse | null): Map<TrainTi
   return out;
 }
 
+/** UR-3 (OD-UR-13): how many trains of each tier have been removed from the game by the Yellow Sign's Mark
+ *  (`removed_trains`). Bought trains that exist nowhere any more: never stock, never purchasable -- but the phase
+ *  their purchase began has begun. Empty on every board that carries no such removal (#232). */
+export function removedTrainsByTier(state: GameStateResponse | null): Map<TrainTier, number> {
+  const out = new Map<TrainTier, number>();
+  for (const model of state?.removed_trains ?? []) {
+    const tier = trainTier(model);
+    if (!tier) continue;
+    out.set(tier, (out.get(tier) ?? 0) + 1);
+  }
+  return out;
+}
+
 /** ==================================================================
  *   DESIGN NOTE 1672 (S9-2): A REAL DIESEL, WHICH A SYNTHETIC ONE IS NOT
  *  ==================================================================
@@ -593,6 +612,9 @@ export function pooledTrainsByTier(state: GameStateResponse | null): Map<TrainTi
  * still counts toward `highest`, because it is a real train the corporation owns"). A gifted Diesel therefore
  * turns the phase to D while the depot has not sold one — and asking the phase would start the doom clock on
  * the gift's own arrival, which is exactly the inference the ruling forbids.
+ * [UR-3, OD-UR-3 (D-39): `derivePhase` no longer counts a ghost at all -- the phase follows REAL trains -- so the
+ * two now agree about a gifted Diesel. This function stays the doom trigger's own question, and pooled Diesels
+ * still count here as they always did.]
  *
  * THE SUBTRACTION IS ALREADY WRITTEN, one field over. `ghost_trains` is the synthetic marker — "a ghost train
  * was never in the depot" — and `depotInventory` has always used it to keep the gift off the shelf. This walks
@@ -653,16 +675,35 @@ export function derivePhase(gameState: GameStateResponse | null): GamePhase | nu
        rule by withholding a value.
        A MULTISET WALK, matching `pending_rust_trains` everywhere else: one ghost 6 and one bought 6 is one
        train off the shelf, not two and not none. */
+    /* ==================================================================
+        UR-3 (OD-UR-3 = 3-A, backlog D-39): AND A GHOST IS NOT THE PHASE EITHER -- SUPERSEDES "STILL COUNTS"
+       ==================================================================
+       OWNER RULING (2026-09-24): "Synthetic (gifted) Carcosa trains do not advance the game phase; the phase follows
+       REAL trains. A gift above the current phase may exist and operate early, but by itself it does not change the
+       phase, rust trains, mark trains for Gentle Rust, open the next depot shelf, advance the 18XX+ era, receive
+       Phase Rusher treatment or trigger any ordinary phase-change consequence."
+       THE PARAGRAPH ABOVE KEPT THE GHOST IN `highest` because "a phase-6 gift in a phase-6 game changes nothing" --
+       true while the gift was the phase's own tier (#1046). #1672 made it the depot's lowest, which is ABOVE the
+       phase exactly when the phase's tier has sold out (5s gone -> a 6; 6s gone -> a D; under the LPF also a 7), and
+       then this line turned the phase with no purchase: `buyDepotTrain` / the exchange arm saw no change on the first
+       REAL train of that tier, so the 3s (a gifted 6) or the 4s (a gifted D) never rusted, the shelf and the era
+       opened early, a gifted D never met the real-D doom trigger, and the statistics credited the gift's recipient
+       with the phase (UR-F4, probes P-B / P-F).
+       SO THE GHOST IS SKIPPED BEFORE `highest` IS RAISED, by the same multiset walk -- a ghost-accounted copy counts
+       for nothing here, a bought copy of the same model beside it counts as it always did, and the first REAL train
+       of the tier is therefore the phase change (rust, marks, shelf, era, doom clock, limit) that it is in the printed
+       game. `ghost_trains` travels with the train (#1673), so a synthetic train is never the phase whoever holds it;
+       what a Blood Price does to its GILDING (OD-UR-5, open) is not decided here. */
     const ghosts = [...(company.ghost_trains ?? [])];
     for (const model of trains) {
       const tier = trainTier(model);
       if (!tier) continue;
-      highest = Math.max(highest, order.indexOf(tier));
       const ghostAt = ghosts.indexOf(model);
       if (ghostAt >= 0) {
         ghosts.splice(ghostAt, 1);
         continue;
       }
+      highest = Math.max(highest, order.indexOf(tier));
       ownedByTier.set(tier, (ownedByTier.get(tier) ?? 0) + 1);
     }
   }
@@ -677,17 +718,38 @@ export function derivePhase(gameState: GameStateResponse | null): GamePhase | nu
     const pooledTier = trainTier(model);
     if (pooledTier) highest = Math.max(highest, order.indexOf(pooledTier));
   }
+  /* ==================================================================
+      UR-3 (OD-UR-13 -- DECIDED 2026-09-24): AND A TRAIN THE MARK TOOK WAS BOUGHT TOO -- THE PHASE NEVER FALLS BACK
+     ==================================================================
+     OWNER RULING: the Mark's train is "PERMANENTLY REMOVED FROM THE GAME", and "PHASE PROGRESSION IS MONOTONIC. Once
+     a phase has been reached by the qualifying REAL train purchase, later removal of trains cannot lower the phase,
+     reopen an earlier train tier, undo rust, undo Gentle Rust effects, close a depot shelf, or reverse an 18XX+ era
+     transition."
+     #1530's argument, one list over: the phase is the highest tier owned OR POOLED because a pooled train was bought
+     and the phase it began has begun. A removed train was bought just the same, so it counts toward `highest` here
+     and off the depot below -- it is NOT pooled (never purchasable, never in `returned_trains`). Before this, a Mark
+     that took the only train of the phase's tier in play dropped the phase a tier and the depot sold the earlier tier
+     again (UR-F19: phase 3 -> 2, 2-trains back on sale). Only the run-bound Mark writes `removed_trains`, so every
+     board without one reads exactly as before. */
+  const removedByTier = removedTrainsByTier(gameState);
+  removedByTier.forEach((_count, removedTier) => {
+    highest = Math.max(highest, order.indexOf(removedTier));
+  });
   const tier = order[highest] ?? order[0];
   const total = DEPOT_TOTALS[tier];
   /* Design note #1512: THE POOL IS NOT THE DEPOT. A train traded in or discarded sits in `returned_trains`
      (the Bank Pool) and has left a fleet, so `TOTAL - owned` would count it as printed stock again -- one
      train for sale twice, and on the open shelf a phantom 6. Subtracted here and in `depotInventory`, the
-     two readers of this figure, so a train is in exactly one place. */
+     two readers of this figure, so a train is in exactly one place. [UR-3, OD-UR-13: and a train the Mark removed
+     from the game is subtracted beside it -- it is in no place at all, and least of all back on the shelf.] */
   const pooledByTier = pooledTrainsByTier(gameState);
   const depotRemaining =
     total === null
       ? null
-      : Math.max(0, total - (ownedByTier.get(tier) ?? 0) - (pooledByTier.get(tier) ?? 0));
+      : Math.max(
+          0,
+          total - (ownedByTier.get(tier) ?? 0) - (pooledByTier.get(tier) ?? 0) - (removedByTier.get(tier) ?? 0),
+        );
   const presentation = TIER_PRESENTATION[tier];
   /* #1326: on the open shelf a Diesel may be bought at any moment, so there is no countdown to warn of. */
   const shelf = onOpenShelf(gameState, tier);

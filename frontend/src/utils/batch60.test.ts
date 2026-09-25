@@ -717,16 +717,25 @@ describe("the end of the game names the president and says the line", () => {
   });
 });
 
-describe("the fog has no log line of its own", () => {
-  it("says the ruled sentence as a flavour CLAUSE, not as a receipt", () => {
+describe("the fog has ONE log line: the run's clause on the legacy path, the set boundary's under UR-3", () => {
+  it("says the ruled sentence once per event", () => {
     /* #1089 PRINTED THIS AS ITS OWN LINE at the round boundary and it was right at the time. #1092 made it
        the third step of the revenue sequence, so the sentence now arrives the way the other two stages'
        sentences do -- inside the run that caused it. TWO SENTENCES FOR ONE EVENT is the flood #718 removed,
-       and the boundary copy would have printed a round before the clause saying the same thing. */
+       and the boundary copy would have printed a round before the clause saying the same thing.
+       [UR-3, OWNER RULING OD-UR-2 ("N+1 + boundary", backlog D-38): the fog is no longer a stage of a run -- it falls
+       on the transition that ends set N + 1, where there is no run and no clause. So the boundary line returns as the
+       event's ONLY sentence (`describeFogAtSetEnd`, which reports the set-end entry alone), and the rule this case
+       protects -- one sentence per event -- still holds: the legacy run-borne fog of an unpinned board narrates
+       itself through its run's clause and is never reported at a boundary. A minimal line; the fog's formal notice
+       (modal, sound, film at the boundary) is later work.] */
     expect(CARCOSA_FOG_LINE).toBe("The gold-trimmed train disappeared back into the fog.");
     expect(CARCOSA_FOG_LINE).toBe(FOG_LINE);
-    expect(APP).not.toContain("CARCOSA_FOG_LINE");
-    /* The diff-derived receipt is gone with it -- both halves, so a survivor cannot resurrect the line. */
+    // Exactly one use: the boundary line (plus its import).
+    expect(APP.split("CARCOSA_FOG_LINE").length - 1).toBe(2);
+    expect(APP).toContain("for (const fog of describeFogAtSetEnd(settledBefore, settledAfter)) {");
+    expect(APP).toContain("logInfo(`${CARCOSA_FOG_LINE} ${fog.ticker} lost its gold-trimmed ${trains}.`, \"\", null, \"sign\");");
+    /* The old diff-derived receipt stays gone -- both halves, so a survivor cannot resurrect a second line. */
     expect(APP).not.toContain("if ((stale.carcosan_trains?.length ?? 0) === 0) continue;");
     expect(APP).not.toContain("if ((now?.carcosan_trains?.length ?? 0) !== 0) continue;");
   });

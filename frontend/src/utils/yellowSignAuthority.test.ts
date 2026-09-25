@@ -13,10 +13,17 @@
 // against the SAME pinned board and varies only what the client claimed: a forged field must make no
 // difference at all. The last two cases are the other half -- that the legitimate event still moves the
 // board, and that the corpus's unpinned entries still replay from what they stored.
+//
+// UR-3 (OD-UR-1 = 1-A, backlog D-37) STRENGTHENS THE FIRST PROPERTY AND MOVES THE SECOND. On a pinned table the
+// stage is now the run's own consequence, applied inside the accepted `RunMultipleRoutes` entry
+// (`settleRunYellowSign`), and a client's `YellowSignEvent` -- honest, forged, delayed or aimed elsewhere -- is
+// refused by identity. So "a forged field makes no difference" is now "no request makes any difference", and "the
+// legitimate event still moves the board" is asked of the run. The unpinned corpus case (7) is unchanged.
 
 import { applySandboxAction } from "../gameEngine/sandboxSession";
-import { resolveYellowSign, markPayout, lowestValueTrain } from "../gameEngine/yellowSign";
+import { fogAtSetEnd, markPayout, lowestValueTrain, narrateRunYellowSign } from "../gameEngine/yellowSign";
 import { STANDARD_VARIANTS, legacyTurnSeed } from "../gameEngine/gameVariants";
+import { stateDigest } from "../gameEngine/stateDigest";
 import { RULES_ENGINE_VERSION } from "../gameEngine/rulesVersion";
 import type { GameStateResponse } from "../gameEngine/gameState";
 
@@ -67,89 +74,86 @@ const ran = (state: GameStateResponse, seed: number) =>
 const request = (extra: Record<string, unknown> = {}) =>
   ({ YellowSignEvent: { game_id: 0, protocol_id: BO, ...extra } }) as never;
 
-/** A seed whose natural draw is the Mark, found once against the real selector rather than asserted. */
+/** A seed whose natural draw is the stage, found once against the real reducer rather than asserted.
+ *  UR-3: read off what the run applied (`last_run_yellow_sign`), since the run is where the stage now lands. */
 function seedForStage(stage: "mark" | "carcosa", base: GameStateResponse): number {
   for (let seed = 1; seed < 400000; seed += 1) {
-    const after = ran(base, seed);
-    if (resolveYellowSign(after, BO, stage === "mark" ? "4" : "6").outcome?.stage === stage) return seed;
+    if (corp(ran(base, seed)).last_run_yellow_sign?.stage === stage) return seed;
   }
   throw new Error(`no seed reaches ${stage}`);
 }
 
 const MARK_SEED = seedForStage("mark", board());
+const partsFor = (seed: number) => ({ macroRound: 3, subRound: 1, companyId: BO, turnSeed: seed });
+/** UR-3: every request after the run -- honest or forged -- leaves the board exactly as the run left it. */
+const refused = (state: GameStateResponse, msg: never) => stateDigest(applySandboxAction(state, msg)) === stateDigest(state);
+/** The same board with no pin: the run is priced identically and draws no stage -- the run AS IT RAN. */
+const unpinned = (state: GameStateResponse): GameStateResponse => ({ ...state, rules_engine_version: undefined }) as GameStateResponse;
 
 describe("S9-1: the Yellow Sign outcome is derived from the committed board", () => {
   it("1. the same pre-state and the same committed draw produce the same outcome, every time", () => {
-    const after = ran(board(), MARK_SEED);
-    const once = applySandboxAction(after, request());
-    const twice = applySandboxAction(ran(board(), MARK_SEED), request());
-    expect(corp(once).owned_trains).toEqual(corp(twice).owned_trains);
-    expect(corp(once).treasury).toBe(corp(twice).treasury);
-    expect(corp(once).last_route_revenue).toBe(corp(twice).last_route_revenue);
+    // UR-3: the run's own entry resolves the stage -- no request follows it.
+    const once = ran(board(), MARK_SEED);
+    const twice = ran(board(), MARK_SEED);
+    expect(stateDigest(once)).toBe(stateDigest(twice));
     expect(corp(once).has_yellow_sign).toBe(true);
     /* AND THE SHELL'S READER AGREES WITH THE BOARD'S, which is the property that lets the Activity Log stop
-       carrying the answer: one function, two callers (#1375's rule, applied to the whole event). */
-    const narrated = resolveYellowSign(after, BO, "4").outcome!;
-    expect(narrated.model).toBe(lowestValueTrain(["3", "4"]));
-    expect(Number(corp(once).treasury)).toBe(340 + narrated.cash);
+       carrying the answer: the narration reads what the run applied (UR-3, `narrateRunYellowSign`). */
+    const narrated = narrateRunYellowSign(board(), once, BO, partsFor(MARK_SEED));
+    expect(narrated.taken).toBe(lowestValueTrain(["3", "4"]));
+    expect(Number(corp(once).treasury)).toBe(340 + narrated.award);
   });
 
   it("2. a forged stage changes nothing -- the board decides which stage fires", () => {
     const after = ran(board(), MARK_SEED);
-    const honest = applySandboxAction(after, request());
+    expect(refused(after, request())).toBe(true); // UR-3: not even the honest request moves a pinned board
     for (const stage of ["carcosa", "fog"] as const) {
-      const forged = applySandboxAction(after, request({ stage, model: "D", cash: "9999" }));
-      expect(corp(forged)).toEqual(corp(honest));
+      expect(refused(after, request({ stage, model: "D", cash: "9999" }))).toBe(true);
     }
-    // And the stage that did fire is the Mark, not either forgery.
-    expect(corp(honest).is_carcosan).toBeUndefined();
-    expect(corp(honest).ghost_trains).toBeUndefined();
+    // And the stage that did fire -- at the run -- is the Mark, not either forgery.
+    expect(corp(after).last_run_yellow_sign?.stage).toBe("mark");
+    expect(corp(after).is_carcosan).toBeUndefined();
+    expect(corp(after).ghost_trains).toBeUndefined();
   });
 
   it("3. a forged corporation and a forged train change nothing", () => {
     const after = ran(board(), MARK_SEED);
-    const honest = applySandboxAction(after, request());
     /* THE EXPENSIVE TRAIN, NAMED. Before #1661 the arm spliced whatever `model` said, so a president could
        have kept the 3 and lost the 4 -- or the reverse, whichever suited. */
-    const forged = applySandboxAction(after, request({ stage: "mark", model: "4", cash: "90" }));
-    expect(corp(forged).owned_trains).toEqual(corp(honest).owned_trains);
-    expect(corp(honest).owned_trains).toEqual(["4"]);
+    expect(refused(after, request({ stage: "mark", model: "4", cash: "90" }))).toBe(true);
+    expect(corp(after).owned_trains).toEqual(["4"]);
     // The corporation is the one that ran; naming another does not move it.
-    expect(corp(after, CO)).toEqual(corp(honest, CO));
+    expect(refused(after, { YellowSignEvent: { game_id: 0, protocol_id: CO } } as never)).toBe(true);
+    expect(corp(after, CO)).toEqual(corp(board(), CO));
   });
 
   it("4. a forged cash award cannot inflate the treasury", () => {
     const after = ran(board(), MARK_SEED);
-    const honest = applySandboxAction(after, request());
-    const forged = applySandboxAction(after, request({ stage: "mark", model: "3", cash: "999999" }));
-    expect(corp(forged).treasury).toBe(corp(honest).treasury);
-    expect(Number(corp(honest).treasury)).toBe(340 + markPayout("3"));
+    expect(refused(after, request({ stage: "mark", model: "3", cash: "999999" }))).toBe(true);
+    expect(Number(corp(after).treasury)).toBe(340 + markPayout("3"));
   });
 
   it("5. the gift/Carcosa branch cannot be forged onto a board the sign has not reached", () => {
     /* NOBODY IS MARKED HERE, so no escalation is legal however the message is written. Before #1661 this
        message gifted a D-train, armed the doom clock and made the corporation permanently Carcosan. */
     const after = ran(board(), MARK_SEED);
-    const forged = applySandboxAction(after, request({ stage: "carcosa", model: "D" }));
-    expect(corp(forged).is_carcosan).toBeUndefined();
-    expect(corp(forged).ghost_trains).toBeUndefined();
-    expect(corp(forged).carcosan_trains).toBeUndefined();
-    expect(corp(forged).carcosan_doom_after_macro_round).toBeUndefined();
-    /* AND THE FOG CANNOT BE FORGED EITHER. There is no gold-trimmed train here, so the board's own answer --
-       the Mark this turn's draw reached -- is what applies; the forged stage names a train ("4") that the
-       Mark does not take, and it stays. Before #1661 this message deleted it. */
-    const fogged = applySandboxAction(after, request({ stage: "fog", model: "4" }));
-    expect(corp(fogged)).toEqual(corp(applySandboxAction(after, request())));
-    expect(corp(fogged).owned_trains).toEqual(["4"]);
-    expect(corp(fogged).carcosan_trains).toBeUndefined();
+    expect(refused(after, request({ stage: "carcosa", model: "D" }))).toBe(true);
+    expect(corp(after).is_carcosan).toBeUndefined();
+    expect(corp(after).ghost_trains).toBeUndefined();
+    expect(corp(after).carcosan_trains).toBeUndefined();
+    expect(corp(after).carcosan_doom_after_macro_round).toBeUndefined();
+    /* AND THE FOG CANNOT BE FORGED EITHER. There is no gold-trimmed train here; the forged stage names a train
+       ("4") that the Mark did not take, and it stays. Before #1661 this message deleted it. */
+    expect(refused(after, request({ stage: "fog", model: "4" }))).toBe(true);
+    expect(corp(after).owned_trains).toEqual(["4"]);
   });
 
   it("6. the legitimate authoritative event still applies the intended mutation", () => {
-    const after = ran(board(), MARK_SEED);
-    const before = corp(after);
+    // UR-3: the run AS IT RAN is the unpinned twin's (priced identically, no stage); the Mark is the pinned run's own.
+    const before = corp(ran(unpinned(board()), MARK_SEED));
     const takenPrinted = Number(before.last_run_breakdown!.find((entry) => entry.model === "3")!.printed_revenue);
     const printedBefore = Number(before.printed_route_revenue);
-    const marked = applySandboxAction(after, request());
+    const marked = ran(board(), MARK_SEED);
     const c = corp(marked);
     expect(c.owned_trains).toEqual(["4"]);
     expect(c.has_yellow_sign).toBe(true);
@@ -164,16 +168,18 @@ describe("S9-1: the Yellow Sign outcome is derived from the committed board", ()
     /* THE ESCALATION. Phase 6, B&O already marked, and a draw whose bucket is the critical bonus -- the
        gates #1046 set. The gift's TIER is derived from the phase, so a client cannot ask for a D in phase 6. */
     const marked = board({}, { has_yellow_sign: true, owned_trains: ["6"] });
+    const markedRun = (state: GameStateResponse, s: number) =>
+      applySandboxAction(state, {
+        RunMultipleRoutes: { protocol_id: BO, routes: [SHORT], trains: ["6"], train_indices: [0], revenue_seed: s },
+      } as never);
     let seed: number | null = null;
     for (let s = 1; s < 400000 && seed === null; s += 1) {
-      if (resolveYellowSign(ran(marked, s), BO, "6").outcome?.stage === "carcosa") seed = s;
+      if (corp(markedRun(marked, s)).last_run_yellow_sign?.stage === "carcosa") seed = s;
     }
     expect(seed).not.toBeNull();
-    const escalated = applySandboxAction(
-      ran(marked, seed!),
-      // The forged D is ignored; phase 6 gifts a 6.
-      request({ stage: "carcosa", model: "D" }),
-    );
+    // UR-3: the run itself gifts; a forged request for a D afterwards is refused (phase 6 gifts a 6).
+    const escalated = markedRun(marked, seed!);
+    expect(refused(escalated, request({ stage: "carcosa", model: "D" }))).toBe(true);
     expect(corp(escalated).is_carcosan).toBe(true);
     expect(corp(escalated).carcosan_trains).toEqual(["6"]);
     expect(corp(escalated).ghost_trains).toEqual(["6"]);
@@ -181,12 +187,18 @@ describe("S9-1: the Yellow Sign outcome is derived from the committed board", ()
     // A gifted 6 starts no clock -- only a Diesel does (#1089).
     expect(corp(escalated).carcosan_doom_after_macro_round).toBeUndefined();
 
-    /* THE FOG, whose debt is the doom clock rather than a draw: the marked train is derived, not named. */
+    /* THE FOG, whose debt is the doom clock rather than a draw: the marked train is derived, not named.
+       UR-3 (OD-UR-2, D-38): no longer a stage of the run -- it falls on the transition that ends set N + 1
+       (`fogAtSetEnd`). A run on an overdue board collects nothing, a request (forged or not) is refused, and the
+       boundary takes exactly the gilded train. */
     const doomed = board(
       { macro_round_number: 5 },
       { is_carcosan: true, owned_trains: ["4", "D"], carcosan_trains: ["D"], carcosan_doom_after_macro_round: 4 },
     );
-    const fogged = applySandboxAction(ran(doomed, MARK_SEED), request({ stage: "mark", model: "4", cash: "9999" }));
+    const ranDoomed = ran(doomed, MARK_SEED);
+    expect(corp(ranDoomed).carcosan_trains).toEqual(["D"]);
+    expect(refused(ranDoomed, request({ stage: "mark", model: "4", cash: "9999" }))).toBe(true);
+    const fogged = fogAtSetEnd(ranDoomed);
     expect(corp(fogged).owned_trains).toEqual(["4"]);
     expect(corp(fogged).carcosan_trains).toEqual([]);
     expect(corp(fogged).is_carcosan).toBe(true); // the curse outlives the train (#1092)
@@ -218,16 +230,15 @@ describe("S9-1: the Yellow Sign outcome is derived from the committed board", ()
        room, which deals unpinned -- is pinned by `yellowSignIngress` case 5. */
     let quiet: number | null = null;
     for (let s = 1; s < 400000 && quiet === null; s += 1) {
-      if (resolveYellowSign(ran(board(), s), BO, "4").outcome === null) quiet = s;
+      if (corp(ran(board(), s)).last_run_yellow_sign === undefined) quiet = s;
     }
     expect(quiet).not.toBeNull();
     const after = ran(board(), quiet!);
-    const honest = applySandboxAction(after, request());
-    expect(corp(honest).has_yellow_sign).toBeUndefined();
-    const forced = applySandboxAction(after, request({ debug_force: true }));
-    expect(corp(forced)).toEqual(corp(honest));
-    expect(corp(forced).has_yellow_sign).toBeUndefined();
-    expect(corp(forced).owned_trains).toEqual(["3", "4"]);
+    expect(corp(after).has_yellow_sign).toBeUndefined();
+    // UR-3: both the honest request and the forced one are refused on a pinned board.
+    expect(refused(after, request())).toBe(true);
+    expect(refused(after, request({ debug_force: true }))).toBe(true);
+    expect(corp(after).owned_trains).toEqual(["3", "4"]);
   });
 
   it("9. the turn's committed draw is recorded on the board and cleared with the turn", () => {
@@ -241,5 +252,8 @@ describe("S9-1: the Yellow Sign outcome is derived from the committed board", ()
     ) as string;
     expect(src).toContain("last_run_revenue_seed: undefined,");
     expect(src).toContain("company.last_run_revenue_seed !== undefined ||");
+    // UR-3: and what the run's Sign applied (`last_run_yellow_sign`) is turn-scoped the same way.
+    expect(src).toContain("company.last_run_yellow_sign !== undefined ||");
+    expect(src).toContain("...(company.last_run_yellow_sign !== undefined ? { last_run_yellow_sign: undefined } : {}),");
   });
 });

@@ -112,6 +112,8 @@ import {
   homeStationHold,
   type HomePlacement,
 } from "./homeStationAuthority";
+// UR-3 (OD-UR-1 = 1-A, D-37): a pinned table resolves the Yellow Sign inside the run; it takes no request for one.
+import { yellowSignRequestRefusal } from "./yellowSign";
 
 export interface TurnAuthorityInput {
   state: GameStateResponse;
@@ -229,6 +231,19 @@ export function turnRefusal(input: TurnAuthorityInput): string | null {
   {
     const held = withTableRules(state, () => homeStationHold(state, msg, boardHomeHexToAxial));
     if (held !== null) return held;
+  }
+
+  /* ---- UR-3 (OD-UR-1 = 1-A, D-37): NOBODY SENDS THE YELLOW SIGN ON A PINNED TABLE ----
+     Not a question about whose turn it is: the stage is the run's own consequence, settled by the reducer inside the
+     accepted run (`settleRunYellowSign`), so on a pinned board there is no seat, no host and no counterparty for whom
+     a `YellowSignEvent` is the right message. Asked AFTER the four holds, so a board under a hold answers with the
+     hold's sentence as it does for every held message (#1590's pass list), and BEFORE every seat and consent
+     question. Refused with the sentence the reducer's gate and the shell's refusal line share
+     (`yellowSignRequestRefusal`); an unpinned board answers `null` and keeps the legacy path. The two exemptions
+     above (a derived action, a solo actor) never carry one -- and the reducer's own gate refuses it regardless. */
+  if ("YellowSignEvent" in msg) {
+    const refusal = yellowSignRequestRefusal(state);
+    if (refusal !== null) return refusal;
   }
 
   /* ---- EXEMPTION 3: consent answers on a two-party trade (#701) ----

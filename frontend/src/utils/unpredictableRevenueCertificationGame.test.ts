@@ -302,9 +302,12 @@ describe("the draws: the server drew once per turn, only where the script armed 
     }
   });
 
-  it("the deal is pinned to the engine's version, which is still 9 -- the v10 boundary is UR-8's", () => {
-    expect(RULES_ENGINE_VERSION).toBe(9);
-    for (const run of [A, B, Z]) expect(run.room.state.rules_engine_version).toBe(9);
+  it("the deal is pinned to the engine's version -- 10 or later, the version Unpredictable Revenue is certified at (UR-8)", () => {
+    /* UR-8: was `toBe(9)` for both ("still 9 -- the v10 boundary is UR-8's"). The game is dealt at the current engine, so
+       it now plays -- and replays under SERVER_REPLAY_POLICY -- at 10; the current number belongs to
+       `unpredictableRevenueClosure.test.ts`. Version-literal only: no stage, board or digest of this game moved. */
+    expect(RULES_ENGINE_VERSION).toBeGreaterThanOrEqual(10);
+    for (const run of [A, B, Z]) expect(run.room.state.rules_engine_version).toBe(RULES_ENGINE_VERSION);
   });
 });
 

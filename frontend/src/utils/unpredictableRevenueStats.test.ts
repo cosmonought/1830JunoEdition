@@ -985,7 +985,10 @@ describe("a real Unpredictable Revenue log (JUNO-Z6C through 494, unpinned) and 
     expect(trains).not.toBe(corporations);
   });
 
-  it("RULES_ENGINE_VERSION is still 9: UR-5 is derived history, not a rule", () => {
-    expect(RULES_ENGINE_VERSION).toBe(9);
+  it("UR-5 is derived history, not a rule: it moved no version (the 9 -> 10 boundary is UR-8's, for other slices' rules)", () => {
+    /* UR-8: was `toBe(9)` ("still 9"). UR-5 itself bumped nothing; UR-8 took the 9 -> 10 boundary for UR-3, UR-4 and UR-7's
+       replay semantics, and row 10 names the statistics basis as NOT a rule (`unpredictableRevenueClosure.test.ts`, which
+       owns the current number). Version-literal only. */
+    expect(RULES_ENGINE_VERSION).toBeGreaterThanOrEqual(9);
   });
 });

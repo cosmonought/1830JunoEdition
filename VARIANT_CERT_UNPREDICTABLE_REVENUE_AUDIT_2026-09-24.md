@@ -184,6 +184,28 @@ No owner decision is new or re-opened. **The verdict letter stays B** (every imp
 now fixed; the scheme has no letter for "evidenced, not yet closed"); the UR-7 evidence is **ready for the owner's gate**,
 and Unpredictable Revenue is NOT certified until UR-8. See "UR-7 implementation (rev 11)".
 
+**Rev 12 (2026-09-25) — UR-8: UNPREDICTABLE REVENUE IS CERTIFIED at `RULES_ENGINE_VERSION` 10** — standalone and with
+Gentle Rust (OD-GR-3) — subject to the owner's full-suite gate and commit. **UR-7 is COMPLETE**: owner-gated and committed
+and pushed as `ff7a04b` ("Certify Unpredictable Revenue behavior"; UR-6's `cd889cb` is pushed with it — local `main` =
+`origin/main`). **UR-8** took the one deliberate **9 → 10** boundary: `RULES_ENGINE_VERSION` 10, supported `[10]`, and
+changelog **row 10** naming exactly the eight replay semantics of §15's "version boundary" — (1) the run-bound Sign and
+its refusal of client requests, (2) the Mark on the post-settlement fleet, (3) the fog at the end of N+1, (4) synthetic
+trains never the phase, (5) no gilded trade-in, (6) the Blood Price's copy, the buyer's move and the cure's provenance-only
+supply tracking, (7) 10-C, (8) the Mark's train removed from the game — with the award, the statistics basis, the UI /
+copy / Rules Reference, the certification evidence, the undo rule and the seed source behind a NOT RULES marker. A
+v9-pinned room is held `incompatible` under every policy, never reinterpreted; new rooms deal at 10; the unpinned corpus
+replays unchanged (0 differences in 3,763 engine applications; Y8V `b4fae877c35604fe`, 3XD `74db6e4bad736fec`); the
+constructed certification game is identical across the boundary but for the pin. **S10-21 / X14 CLOSED — SUPERSEDED** by
+the constructed certification game (its non-UR remainder — completed-game Bagholder / Little Engine formats and the long
+timeline — recorded on the backlog item as generic epilogue coverage). Every owner decision re-verified; none re-opened;
+no new one. Counts: clauses **59 / 3 / 0 / 0 / 0**; interactions and invariants **25 / 2 / 0 / 0 / 0**, X14 closed as
+superseded. **What this does not certify:** Delayed Auction, or any unrelated backlog item — S10-11, S10-27, U-41, U-43,
+OD-UR-9's seed source (UR-F16), UR-F15 and the four "needs a harness" rows stay open where they are routed. See
+**"UR-8 closure (rev 12)"** and the certification document §Q.
+
+**Verdict (rev 12, UR-8): CERTIFIED at `RULES_ENGINE_VERSION` 10** — Unpredictable Revenue, standalone and with Gentle
+Rust; subject to the owner's full-suite gate and commit. *(The letter below is kept as the record of rev 7 – rev 11.)*
+
 **Verdict: B — SPECIFICATION COMPLETE (every owner decision made, rev 7) / IMPLEMENTATION DEFECTS FOUND.** *(Rev 1 – rev 6:
 C — specification incomplete, owner decisions required.)* *(Rev 11: every implementation defect found below is now fixed
 — UR-3 … UR-7 — and the certification evidence is ready for the owner's gate; the letter is kept until UR-8's closure,
@@ -223,6 +245,7 @@ the fog's run-triggered collection, which OD-UR-2 makes a defect.)*
 | 9 | 2026-09-25 | **UR-4 recorded COMPLETE (owner-gated; committed and pushed as `a6183b5`). UR-5 implemented (uncommitted, awaiting the owner's gate).** OD-UR-6 in `utils/gameHistory.ts` (derived history only): runs booked as they settled — corporation / turn statistics on the paid revenue, train / route statistics on the printed completed routes (no allocation), a Mark-nullified route nothing (pinned: the run's own entry; unpinned: the legacy request amends the turn's accepted booking, never the paid figure once the Dividends step paid it); the Carcosa gift (the copy that arrives gilded) not a purchase — Fleet Admiral, Early Adopter, the ledger's paid — while the ledger still holds it (#1431); the Blood Price a genuine purchase by the buyer (a Diesel's Early Adopter included), a cured copy bought from the Bank Pool an ordinary one — **UR-F8 FIXED**; The Cowboy reads the printed line — **UR-F9 FIXED**; `MINTS_BY_DESIGN`'s stale comment corrected (Appendix B item 11). Carcosan Railways' logic confirmed under OD-UR-5(b); its blurb → UR-6 (Appendix B item 13). New `unpredictableRevenueStats` (46 tests; 22 fail / 24 pass on the baseline); `yellowSignRunBoundStats` two pins moved; focused Jest 157 suites / 3,199 tests green; tsc (frontend, server) 0; build 49 warnings, identical to the baseline; 18-file corpus 0 differences, its derived statistics identical on every standard file. Backlog U-43 (pre-existing statistics residuals) recorded. `RULES_ENGINE_VERSION` 9. Verdict stays B; NOT certified. |
 | 10 | 2026-09-25 | **UR-5 recorded COMPLETE (owner-gated; committed and pushed as `0d8157e`). UR-6 implemented (uncommitted, awaiting the owner's gate) — replay-neutral UI / copy / parity.** UR-F13 fixed (the Rules Reference: two tagged blocks, consequences only — OD-UR-8's Easter egg kept; no tie direction, UR-F20 is UR-7's); UR-F12 fixed (the gold-trimmed chip's lifetime); UR-F14 fixed ("Unpredictable Revenue" on the host setup and the room list); the independent UR-4 review's D1 fixed (`utils/saleCopyDisclosure.ts` — the prompt and the pending-offer view ask `isCarcosanTransfer`) and D5 (a stale test comment); U-42's copy (the Activity Log names the copy; the Blood Price the buyer's); Carcosan Railways' blurb (logic unchanged); Appendix B items 1 – 14 resolved; UR-3's deferrals — the greyed gold-trimmed trade-in chip, the fog's ruled cue at the set boundary, the Mark's train "gone for good". Engine diffs comment-only (verified); two new suites (40 tests; 25 fail / 15 pass on the baseline); focused Jest 335 suites / 6,290 tests (the 7 corpus suites on the owner's checkout); tsc (frontend, server) 0; build 49 warnings, identical to the baseline. `RULES_ENGINE_VERSION` 9. Verdict stays B; NOT certified. |
 | 11 | 2026-09-25 | **UR-6 recorded COMPLETE (owner-gated; committed locally as `cd889cb`, not pushed — local `main` one commit ahead of `origin/main`, as the owner confirmed). UR-7 implemented (uncommitted, awaiting the owner's gate).** **UR-F20 FIXED** — 10-C in `rollTurnRevenue` (`roundRevenueTowardPrinted`: an exact tie of the product goes toward printed; everything else unchanged; only the +10% face at printed ≡ $50 mod $100 moves, $10 lower); the Rules Reference's tie sentence; **UR-N62** — the host's debug chip drawn, cycled and bound to Ctrl+Shift+Y only on an unpinned Unpredictable Revenue board (`forcedSignToolInForce`; it could never act on a pinned table, but its tooltips disclosed the Sign's windows there); the constructed certification game G1 (two tails) + G0 through `RoomSession.submit`, covering the tie, the Mark × Gentle Rust, the gift above the phase, the fog at N+1, the Blood Price, the cured train's life, statistics and awards, and the standard control; the matrix recomputed in the certification document — **59 / 3 / 0 / 0 / 0** and **25 / 2 / 0 / 0 / 1** (X14, S10-21, not built — routed). Three new suites (93 tests; 33 fail / 60 pass on the baseline), two updated; focused Jest 290 suites / 5,742 tests green (cloud clone, corpus present) and 58 suites / 1,260 tests on the owner's checkout; tsc (frontend, server) 0; build 49 warnings, identical to the baseline; 18-file corpus 0 differences, 0 exact ties. Observations recorded, not fixed: S10-27 reproduced live; the server's `forced-sign` room op accepted from any member (S10-11). `RULES_ENGINE_VERSION` 9. Verdict letter stays B (no open defect); NOT certified — UR-8 remains. |
+| 12 | 2026-09-25 | **UR-7 recorded COMPLETE (owner-gated; committed and pushed as `ff7a04b`). UR-8 — the v10 closure (uncommitted, awaiting the owner's full-suite gate).** `RULES_ENGINE_VERSION` **9 → 10**, supported `[10]`, changelog row 10 naming exactly §15's eight replay semantics (OD-UR-1, OD-GR-3, OD-UR-2, OD-UR-3, OD-UR-7, OD-UR-5, OD-UR-10, OD-UR-13) with OD-UR-4 / -6 / -8 / -9 / -11 / -12 and the evidence behind a NOT RULES marker; new closure suite `unpredictableRevenueClosure` (19 tests; owns the current literal) and five suites narrowed, version-literal only (`gentleRustClosure`, the certification game, `carcosaBloodPrice` J1, `revenueTieRounding`, `unpredictableRevenueStats`); a v9 room held, never reinterpreted; the constructed game and the 18-file corpus identical across the boundary but for the pin; **S10-21 / X14 CLOSED — SUPERSEDED**; every owner decision re-verified with durable evidence (certification document §Q.5). Counts 59 / 3 / 0 / 0 / 0 and 25 / 2 / 0 / 0 / 0 (X14 superseded). **Verdict: CERTIFIED at v10** (the variant; not every backlog item — S10-11, S10-27, U-41, U-43, OD-UR-9 stay routed). |
 
 ## Owner rulings (rev 2)
 
@@ -940,7 +963,7 @@ needed and none was run; nothing was repinned.
 * **The Mark's narration** is owner-ruled flavour and names no train; the "gone for good" statement lives in the Rules
   Reference.
 
-## UR-7 implementation (rev 11, 2026-09-25 — uncommitted, awaiting the owner's full repository Jest gate)
+## UR-7 implementation (rev 11, 2026-09-25 — COMPLETE: owner-gated, committed and pushed as `ff7a04b` *(rev 12; at rev 11 uncommitted, awaiting the owner's full repository Jest gate)*)
 
 **Scope, as the owner's UR-7 brief set it:** implement OD-UR-10 = 10-C (UR-F20) in canonical authority; the Rules
 Reference's tie sentence (the hidden Yellow Sign trigger and odds untouched); a deterministic constructed legal
@@ -1113,6 +1136,114 @@ files unpinned; md5 unchanged on the owner's checkout. Nothing repinned.
 * **Needs a harness, not a rule:** UR-N11 (previews), UR-N24 (ephemeral cues), R12 (a distribution test on the seed
   source), X7 (Dynamic Stock Market × the die) — CORRECT BUT NEEDS LIVE TEST.
 * **UR-8** — the 9 → 10 boundary and the closure record (§15). Until then Unpredictable Revenue is not certified.
+  *(Rev 12: done — "UR-8 closure (rev 12)" below.)*
+
+---
+
+## UR-8 closure (rev 12, 2026-09-25 — uncommitted, awaiting the owner's full-suite gate)
+
+**Scope, as the owner's UR-8 brief set it:** the deliberate `RULES_ENGINE_VERSION` 9 → 10 boundary; the replay-semantic
+record; final certification closure; S10-21's disposition; a check that no Unpredictable Revenue blocker remains. Not a
+gameplay pass: no certified mechanic was re-opened, and no production code changed except the version constant and its
+changelog row. **The evidence is the certification document's §Q**; this section is its summary here.
+
+**Starting point.** `main`; local HEAD = `origin/main` = `ff7a04b6aaea17597cf9c5ea0bd61bcc8b0632e8` (UR-7; UR-6 `cd889cb`
+pushed with it) — 0 ahead / 0 behind; the tracked tree clean (only the untracked `.claude/`); no `.git/index.lock`. Worked
+in a cloud clone of `origin/main` with the 13 git-ignored corpus files copied from the owner's checkout (md5 verified);
+only the changed files were written back.
+
+### The durable obligations found (before editing)
+
+1. **§15, the UR-8 row** — the one 9 → 10 boundary; changelog row 10 naming exactly the UR replay semantics; closure
+   tests (supported `[10]`, a v9 log refused); the corpus and G1 / G0 across the boundary; backlog S9-7 / Part D / Part E;
+   the owner's full-suite gate.
+2. **§15, "The version boundary"** — the eight items (1) – (8) and the list named NOT rules (OD-UR-4, OD-UR-6, OD-UR-8,
+   OD-UR-12, OD-UR-11, the evidence, OD-UR-9).
+3. **UR-7's routing** — S10-21 / X14 "UR-8 or a named follow-up — the planner's call"; §6.4 "re-verified across the
+   closure boundary in UR-8".
+4. **The certification document §P** — the same list, plus "the S10-21 decision".
+5. **The GR-5 precedent** (`gentleRustClosure.test.ts`, the Gentle Rust certification document §P) — a closure suite owns
+   the current literal; the previous owner is narrowed, version-literal only; Part E gains the row.
+6. **The version-literal pins UR-4, UR-5 and UR-7 left** ("still 9 — owed to the 9 → 10 boundary"): `carcosaBloodPrice`
+   J1, `unpredictableRevenueStats`, `revenueTieRounding`, the certification game — each written to change at this bump.
+
+None conflicted with the brief. One reading recorded: the brief lists "statistics corrections" among the accumulated
+changes "as applicable"; by #1520's policy and the GR-5 / U-9 precedent they are derived history, so row 10 names them
+behind the NOT RULES marker rather than as a replay semantic (§15 says the same).
+
+### What changed
+
+* `frontend/src/gameEngine/rulesVersion.ts` — `RULES_ENGINE_VERSION = 10`; changelog row 10. Nothing else: the
+  compatibility machinery, the policies and the presence-only seams are untouched.
+* `frontend/src/utils/unpredictableRevenueClosure.test.ts` (**new**, 19 tests) — the bump; row 10's eight numbered
+  semantics and its NOT RULES marker (U-41, U-43, S10-21, S10-27 and Delayed Auction absent); the v10-only matrix with 9
+  as the prior version, including a v9 Unpredictable Revenue + Gentle Rust room held before the reducer sees an entry;
+  no authority behind (1) – (8) compares or names the version; the constructed game dealt at 10; the 18 corpus files
+  unpinned with totals 4,105 / 3,731 / 374.
+* Narrowed, version-literal only: `gentleRustClosure` (current `>= 9`, a row prefix, the matrix on the current version —
+  row 9 and the v8 cases unchanged), `unpredictableRevenueCertificationGame` (`>= 10`, the pin = the engine's),
+  `carcosaBloodPrice` J1 and `revenueTieRounding` (`>= 10`, "carried"), `unpredictableRevenueStats` (`>= 9`, "UR-5 moved
+  no version").
+
+### Replay / version policy — the closure question answered
+
+**Is v10 the correct version for all new authoritative games while historical v9 material remains handled by the
+established policy? Yes.** The server stamps 10 over any claim; a v10 room restores, rebuilds and replays under
+`SERVER_REPLAY_POLICY`; a v9-pinned room — the only historical v9 material there can be, since the development corpus is
+unpinned — is `incompatible` and held before a single entry is applied, under the server's policy and the corpus's alike,
+and nothing rewrites its pin: it is refused, never reinterpreted, exactly as a v8 room was at GR-5. No version-value
+branch exists or was needed (UR-3's seam asks for the pin's presence). No migration, fixture repin or historical-log
+rewrite was required. **No blocker.**
+
+### S10-21 — CLOSED — SUPERSEDED
+
+S10-21 (Batch 7.5, category D — test substrate, "not a closure blocker; no rule depends on it") asked for a completed
+Unpredictable Revenue game restoring assertions displaced from JUNO-Z6C. The UR-7 constructed certification game is the
+stronger evidence for every Unpredictable Revenue assertion it carried — played through the server's own path, pinned,
+deterministic, with a standard control, and asserting exactly (Carcosan Railways, The Redeemer, the Gravedigger $1,380
+and the Rust Belt $940, the Mark, the gift, the fog, the Blood Price) what S10-21 could only have asserted as non-null.
+Its non-UR remainder — the Bagholder / Little Engine detail formats on a completed game and the more-than-ten-OR
+timeline — is generic epilogue coverage, recorded on S10-21's closure entry in the backlog and cross-referenced from U-43
+(the open statistics / residual pass it belongs to). *(Correction:
+UR-7's text says the game restores "a Bagholder detail"; it does not assert one.)* Certification document §Q.4.
+
+### Finding status (rev 12)
+
+| id | status | evidence |
+|---|---|---|
+| the 9 → 10 boundary (§15, UR-8) | **DONE** — row 10, `[10]` | `utils/unpredictableRevenueClosure.test.ts` |
+| X14 / S10-21 | **CLOSED — SUPERSEDED** | certification document §Q.4 |
+| UR-F15 (INFO) | open, optional hardening (unchanged) | — |
+| UR-F16 (OD-UR-9) | open, routed to AWS / live multiplayer (unchanged) | — |
+
+No DEFECT and no OWNER DECISION row. Every owner decision (OD-UR-1 … OD-UR-13, OD-GR-3) re-verified with durable
+evidence — certification document §Q.5; none re-opened.
+
+### Across the boundary
+
+* **Constructed game:** G1 tails A (322 entries, 188 submissions, 20 draws) and B (330, 192, 20) and G0 (65, 45, 4)
+  identical on the v9 and v10 trees step by step and entry for entry; final digests differ only by the pin
+  (without it: `cb0c2a961d71a467`, `0e7fd01bdc151b92`, `67cda49c2c184313` on both sides); each replays to its final
+  board under `SERVER_REPLAY_POLICY`.
+* **Corpus (18 files):** 4,105 stored / 3,731 applied / 374 dropped; 3,763 engine applications; state / grid / cursor /
+  derived-action / known-phase differences **0 / 0 / 0 / 0 / 0**; final boards equal **18 / 18**; no phase decrease; all
+  unpinned; Y8V 668 / 628 / 40, 632 applications, OR 13, **`b4fae877c35604fe`**; 3XD 322 / 320 / 2, 323 applications,
+  SR 12, **`74db6e4bad736fec`**; md5 unchanged.
+
+### Validation
+
+Focused Jest in the cloud clone (corpus present): **151 suites / 3,215 tests, all pass**; the closure suite and the three
+`>= 10` cases fail against the v9 constant (they measure the boundary). On the owner's checkout after the write-back (blob
+hashes verified): 25 suites / 485 tests in five batches — the closure, version, certification-game, Blood Price,
+rounding, statistics, Yellow Sign, Carcosa and corpus suites — all pass. `tsc` frontend 0, server 0. Production build (cloud clone): exit 0, 49 warning lines,
+identical to the UR-7 tree. `git diff --check` clean. Full Jest NOT run (the owner's gate). Nothing committed or pushed.
+
+### Deferred and recorded (not closed here, routing unchanged)
+
+S10-11 (the unpinned legacy path; AWS / live multiplayer) · S10-27 (the derived $0 withhold; a later derived-action pass)
+· U-41 and U-43 (statistics residuals; the dedicated statistics / residual pass) · OD-UR-9 / UR-F16 (hosted seed source;
+AWS / live multiplayer) · UR-F15 (INFO) · UR-N9 / X7, UR-N11, UR-N24, R12 (need a harness, not a rule) · S10-21's non-UR
+remainder (above) · Delayed Auction (uncertified). None is an Unpredictable Revenue certification blocker.
 
 ---
 
@@ -1623,6 +1754,8 @@ built today would pin the request-based authority UR-3 is expected to change *(r
 and would be dealt at version 9. S10-21 should therefore be produced **after** UR-3 / UR-4, as part of the
 certification-evidence slice UR-7 (§15) — either a live hosted game with an injected `mintSeed` or a constructed legal
 game run to the bank's end (§14.4) — and re-verified across the closure boundary in UR-8.
+*(Rev 12: **CLOSED — SUPERSEDED** by the UR-7 constructed certification game; its non-UR remainder recorded on the backlog
+item — "UR-8 closure (rev 12)".)*
 
 ---
 
@@ -2286,7 +2419,7 @@ invariants)**, and "Counts (rev 11)" below gives its totals. [C] evidence now ex
 | X11 | statistics under the variant | #1421 ff.; OD-UR-6 (rev 5) | none live | **DEFECT UR-F8, UR-F9** *(rev 5: was OWNER DECISION OD-UR-6 / DEFECT — OD-UR-6 decided: 6.1 in principle, 6.2, 6.3; the per-train allocation isolated; rev 7: decided — OD-UR-6 fully decided)* *(rev 9: both fixed — UR-5, [R] [S] [RP])* | G |
 | X12 | money conservation, the Mark's award minted by rule | Batch 7.1; OD-UR-4 (rev 2) | [RP] MC; [P] P-E | CORRECT BUT NEEDS LIVE TEST *(rev 2: was OWNER DECISION OD-UR-4 — decided "minted"; pin the mint on a pinned board)* | RP + R |
 | X13 | the unpinned corpus replays unchanged | D-9 policy | [RP] MC 18-file sweep, `replayJuno3XD`, `stage10Closure` — green this pass | CERTIFIED NOW (re-measure every slice) | RP |
-| X14 | a completed Yellow Sign game (S10-21) | S10-21 | none | DEFERRED → UR-7 *(rev 11: **not built in UR-7** — still DEFERRED, routed to UR-8 or a named follow-up; the constructed game restores part of the displaced evidence, not the completed game)* | G |
+| X14 | a completed Yellow Sign game (S10-21) | S10-21 | none | DEFERRED → UR-7 *(rev 11: **not built in UR-7** — still DEFERRED, routed to UR-8 or a named follow-up; the constructed game restores part of the displaced evidence, not the completed game)* *(rev 12: **CLOSED — SUPERSEDED** by the constructed certification game — UR-8)* | G |
 | X15 | the Rules Reference | S9-4; OD-UR-8 (rev 2) | [U] | **DEFECT UR-F13** *(rev 2: was OWNER DECISION OD-UR-8 — decided 8-B)* | U |
 | R1 | server seed and key on every accepted run | #1662 | [S] YSI 1, 2 | CERTIFIED NOW | G |
 | R2 | undo reuses the draw, end to end | #1051 | [H] B50; [S] YSI 3 (normalizer only) | CORRECT BUT NEEDS LIVE TEST | S + G |
@@ -2341,6 +2474,9 @@ invariants (28): CERTIFIED **25** · CORRECT BUT NEEDS LIVE TEST **2** (X7 — D
 distribution test on the seed source) · DEFECT **0** · OWNER DECISION **0** · DEFERRED **1** (X14 — S10-21's completed
 game, routed). Every DEFECT row of rev 7 is fixed (UR-3 … UR-7) and re-asserted with live-authority evidence; UR-N6
 moved DEFECT → CERTIFIED with UR-F20. "CERTIFIED" rows do not make the variant certified: the closure is UR-8's.
+*(Rev 12, UR-8: clauses unchanged; interactions and invariants CERTIFIED **25** · CORRECT BUT NEEDS LIVE TEST **2** ·
+DEFECT **0** · OWNER DECISION **0** · DEFERRED **0** — X14 CLOSED — SUPERSEDED. The variant is CERTIFIED at
+`RULES_ENGINE_VERSION` 10.)*
 
 ---
 
@@ -2353,7 +2489,8 @@ the route network, treasuries and share prices of the starting board are SET, no
 (§14.1's last bullet); the gift is ABOVE the phase (a 6 in phase 5 — X4) rather than §14.2 M6's gift within the phase,
 which the reducer suites already cover (UR-N39's `stage95GhostLimit` F, `yellowSignAuthority` 6b); M4's trainless Mark falls on the grace-turn corporation
 (M3 and M4 in one turn — OD-GR-3 and the obligation together). **§14.4, S10-21's completed game, is NOT built** —
-routed to UR-8 or a named follow-up.)*
+routed to UR-8 or a named follow-up.)* *(Rev 12: UR-8 closed S10-21 as SUPERSEDED by G1 / G0; G1 / G0 re-run across the
+9 → 10 boundary — identical but for the pin.)*
 
 ### 14.1 Principles (Gentle Rust's GR-4 method, extended for randomness)
 
@@ -2405,6 +2542,8 @@ or a live hosted game with an injected `mintSeed`. Either way it must contain a 
 Engine, be committed beside the golden logs with its provenance stated, and restore the assertions S10-21 lists
 (Carcosan Railways / "Marked by an Outer God", Gravedigger and Rust Belt in dollars, The Cowboy, the Bagholder and Little
 Engine detail formats, a phase-5+ timeline of more than ten Operating Rounds).
+*(Rev 12: not built — **CLOSED — SUPERSEDED** by G1 / G0 for every Unpredictable Revenue assertion; the Bagholder /
+Little Engine formats and the long timeline are generic epilogue coverage, recorded on the backlog item — UR-8.)*
 
 ### 14.5 Focused constructed states (not reasonable inside one legal game)
 
@@ -2446,7 +2585,7 @@ train (hence two tails); the standard control and the LPF shelf need different d
 | **UR-5** | **(rev 9: IMPLEMENTED — ~~uncommitted, awaiting the owner's gate~~ *rev 10: COMPLETE — owner-gated, committed and pushed as `0d8157e`*: UR-F8 and UR-F9 fixed, UR-F10's comment corrected, Carcosan Railways confirmed — "UR-5 implementation (rev 9)")** money and statistics: the award stays **minted** (OD-UR-4 decided — no gameplay change; correct `MINTS_BY_DESIGN`'s stale comment, Appendix B item 11); the statistics' basis (OD-UR-6 — **OPEN**; UR-F8) *(rev 5: decided — 6.1 paid, in principle; 6.2; 6.3)* *(rev 7: per train, the printed completed route — OD-UR-6 fully decided)*; The Cowboy (UR-F9) | `MC` (comment), `utils/gameHistory.ts`, `utils/accolades.ts` | history cases; the constructed game's statistics | **OD-UR-6 OPEN** *(rev 5: decided; 6.1's per-train allocation to be answered before the per-train statistics)* *(rev 7: answered — **none outstanding**)* | 9 | **no** — the award's source does not change; statistics are derived history (as U-9) | medium |
 | **UR-6** | **(rev 10: IMPLEMENTED — ~~uncommitted, awaiting the owner's gate~~ *rev 11: COMPLETE — owner-gated, committed locally as `cd889cb`, not pushed*: UR-F12, UR-F13, UR-F14 fixed; D1 and U-42's copy; Appendix B 1 – 14; the greyed trade-in chip, the fog's cue at the boundary, the Mark's train "gone for good" — "UR-6 implementation (rev 10)"; the tie sentence waits for UR-7)** UI / copy / Rules Reference: disclosure per 8-B (UR-F13; the Blood Price text once OD-UR-5 is decided); **"Unpredictable Revenue"** everywhere (UR-F14); the chip tooltip on OD-UR-2's lifetime (UR-F12); the fog's boundary notice (OD-UR-2); Appendix B's stale comments | `components/RulesReference.tsx`, `components/TrainBadges.tsx`, `components/HostSetupCard.tsx`, `components/LobbyRoomList.tsx`, `GV` copy and field docs, comments in `sS` / `YS` / `gameState.ts` / `trainDiscard.ts` / `trainLimit.ts` / `App.tsx` | copy / render tests | OD-UR-8, OD-UR-12 decided; OD-UR-5 for the Blood Price text *(rev 5: (a) and (c) decided; (b) pending)* *(rev 7: OD-UR-5 fully decided — none outstanding; the Blood Price copy names the buyer's move, UR-F22)* | 9 | no (replay-neutral) | low |
 | **UR-7** | **(rev 11: IMPLEMENTED — uncommitted, awaiting the owner's gate: UR-F20 fixed (10-C in `rollTurnRevenue`), the Rules Reference's tie sentence, UR-N62's chip gated, G1 (two tails) + G0 built, the matrix recomputed (59 / 3 / 0 / 0 / 0 and 25 / 2 / 0 / 0 / 1), the corpus reconciled (0 differences, 0 ties); S10-21's completed game NOT built — routed; `VARIANT_CERT_UNPREDICTABLE_REVENUE_CERTIFICATION_2026-09-25.md`, "UR-7 implementation (rev 11)")** certification evidence: the matrix as durable tests (every clause, R1 – R13), G1 (two tails) + G0, S10-21's completed game, the 18-file corpus reconciliation; OD-UR-11 needs no change (accepted); OD-UR-10's tie rule applied or confirmed *(rev 4: applied — 10-C, ties toward printed, UR-F20; the die's rounding step and the rounding table)*; OD-UR-9 is not UR's (routed to AWS / live multiplayer) | a UR certification document; `utils/unpredictableRevenueCertification*.test.ts`; a constructed-game helper (test support only); the S10-21 fixture; *(rev 4)* `GV` (the die's rounding step) | as named | ~~**OD-UR-10 OPEN**~~ *(rev 4: OD-UR-10 decided — 10-C)*; G1 also needs OD-UR-5 (a)(b) and OD-UR-6 *(rev 5: only OD-UR-5(b), and 6.1's per-train allocation for the per-train statistics)* *(rev 7: none — OD-UR-5 and OD-UR-6 fully decided; OD-UR-10 decided since rev 4)* | 9 | no (evidence) *(rev 4: **yes** for the tie rule, UR-F20 — replay-semantic; the rest is evidence)* | medium |
-| **UR-8** | closure: the one deliberate **9 → 10** boundary; changelog row 10 naming exactly the UR replay semantics; closure tests (supported `[10]`, a v9 log refused); backlog S9-7 / Part D / Part E; the owner's full-suite gate | `rulesVersion.ts`, closure test, documents | closure suite; corpus across the boundary; G1 / G0 across the boundary | every OPEN decision settled by then *(rev 7: all settled)* | **9 → 10** | is the bump | medium |
+| **UR-8** | **(rev 12: DONE — uncommitted, awaiting the owner's full-suite gate: `RULES_ENGINE_VERSION` 10, row 10's eight semantics, `unpredictableRevenueClosure`, the corpus and G1 / G0 across the boundary, S10-21 closed as superseded, S9-7 / Part D / Part E — "UR-8 closure (rev 12)")** closure: the one deliberate **9 → 10** boundary; changelog row 10 naming exactly the UR replay semantics; closure tests (supported `[10]`, a v9 log refused); backlog S9-7 / Part D / Part E; the owner's full-suite gate | `rulesVersion.ts`, closure test, documents | closure suite; corpus across the boundary; G1 / G0 across the boundary | every OPEN decision settled by then *(rev 7: all settled)* | **9 → 10** | is the bump | medium |
 
 *(Rev 3: **UR-3 is implemented** (rev 5: **complete — owner-gated, committed and pushed as `9d0cf3a`**), and by the owner's brief it also carried UR-4's
 UR-F4 and UR-F17 and — OD-UR-13 decided during the slice — the Mark's taken train (UR-F19). **UR-4 now holds** only the
@@ -2463,7 +2602,10 @@ awaiting the owner's full repository Jest gate); it is replay-neutral presentati
 — the UI / copy / Rules Reference work is named below as NOT a rule. Next: UR-7, then UR-8.)* *(Rev 11: **UR-6 is
 COMPLETE** — owner-gated, committed locally as `cd889cb` (not pushed). **UR-7 is implemented** (uncommitted, awaiting the
 owner's full repository Jest gate): item (7) below is implemented at v9 and owed to row 10; the rest of UR-7 is evidence.
-S10-21's completed game was not built — UR-8 or a named follow-up. Next: UR-8.)*
+S10-21's completed game was not built — UR-8 or a named follow-up. Next: UR-8.)* *(Rev 12: **UR-7 is COMPLETE** —
+owner-gated, committed and pushed as `ff7a04b`. **UR-8 is done** (uncommitted, awaiting the owner's full-suite gate): the
+9 → 10 boundary, items (1) – (8) below carried by row 10. **UR-1 … UR-8 are complete; Unpredictable Revenue is CERTIFIED
+at `RULES_ENGINE_VERSION` 10**, subject to the owner's full-suite gate and commit.)*
 
 *(Rev 2: the table reflects the rulings. The only change of ownership is the fog: its authority and removal location
 move from UR-4 into UR-3, so UR-3 never builds a run-bound fog that OD-UR-2 has ruled out. The doom-clock arithmetic
@@ -2473,7 +2615,7 @@ itself — deadline N+1 — is unchanged; UR-4 keeps the trigger fix for a gifte
 consequence of the run, with its variant gate — no client request is authoritative (UR-3; OD-UR-1); (2) the Mark on
 the post-settlement fleet, never a Final Run train, with its route attribution (UR-3; OD-GR-3); (3) the fog as an
 OR-set-boundary removal at the end of set N+1 (UR-3; OD-UR-2); (4) synthetic trains never advance the phase (UR-4;
-OD-UR-3); (5) no gilded Diesel trade-in (UR-4; OD-UR-7); (6) the Blood Price's consequences, if OD-UR-5 changes them
+OD-UR-3 — *rev 3: implemented by UR-3*); (5) no gilded Diesel trade-in (UR-4; OD-UR-7 — *rev 3: implemented by UR-3*); (6) the Blood Price's consequences, if OD-UR-5 changes them
 (UR-4) — *(rev 5: (a) does not, it is today's behaviour; (c) does — the copy-level sale, UR-F21; (b) OPEN)* *(rev 7: (b)
 does — the buyer's marker moves instead of the seller's, UR-F22)* *(rev 8: implemented at v9 in UR-4 — the copy-level
 sale, an unnamed ambiguous sale refused (UR-F21), the buyer's move (UR-F22), and the Bank Pool's provenance of an
@@ -2481,7 +2623,8 @@ additional copy (`returned_ghost_trains`) so a cured train traded in stays addit
 UR-F20; not implemented)* *(rev 11: implemented at v9 in UR-7 — `rollTurnRevenue` / `roundRevenueTowardPrinted`, every
 table; the corpus unchanged, 0 ties)*; *(rev 3)* (8) the Mark's taken train removed from the game —
 `removed_trains`, counted toward the phase and off the depot, never purchasable — so the phase never falls back across it
-(UR-3; OD-UR-13). Named as NOT rules: the award's source (OD-UR-4 keeps the mint — no
+(UR-3; OD-UR-13). *(Rev 12: all eight are **carried by `RULES_ENGINE_VERSION` 10**, changelog row 10 (1) – (8), UR-8.)*
+Named as NOT rules: the award's source (OD-UR-4 keeps the mint — no
 change), the statistics basis (OD-UR-6), the UI / copy / Rules Reference work (OD-UR-8, OD-UR-12), the undo rule
 (OD-UR-11 — unchanged), the certification evidence, and the RNG source (OD-UR-9 — ingress only, routed to AWS / live
 multiplayer; recorded seeds replay identically). *(Rev 1's list, kept for the record: the sign's binding and gate; the

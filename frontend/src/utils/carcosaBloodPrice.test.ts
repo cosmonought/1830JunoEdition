@@ -919,11 +919,13 @@ describe("I. the hosted room: copy selection reaches the authority, and the log 
 /* J. VERSION / REPLAY POLICY                                          */
 /* ================================================================== */
 
-describe("J. the replay boundary: v9 stays, every table plays the ruled Blood Price, old messages read as they did", () => {
+describe("J. the replay boundary: carried by v10 (UR-8), every table plays the ruled Blood Price, old messages read as they did", () => {
   const { RULES_ENGINE_VERSION } = require("../gameEngine/rulesVersion") as typeof import("../gameEngine/rulesVersion");
 
-  it("J1. RULES_ENGINE_VERSION is still 9 -- UR-F21 / UR-F22 are owed to the deliberate 9 -> 10 boundary (UR-8)", () => {
-    expect(RULES_ENGINE_VERSION).toBe(9);
+  it("J1. RULES_ENGINE_VERSION is at least 10 -- UR-F21 / UR-F22 are carried by the deliberate 9 -> 10 boundary (UR-8)", () => {
+    /* UR-8: was `toBe(9)` ("owed to the 9 -> 10 boundary") -- the right claim while UR-4 stayed on 9. The boundary is taken
+       (changelog row 10 (6)); the current number belongs to `unpredictableRevenueClosure.test.ts`. Version-literal only. */
+    expect(RULES_ENGINE_VERSION).toBeGreaterThanOrEqual(10);
   });
 
   it("J2. an UNPINNED board (the Firestore / development-corpus population) plays the same rule -- no legacy branch", () => {

@@ -369,7 +369,9 @@ describe("hosted: the committed draw replays, restores and survives an undo to t
     expect(stateDigest(session.state)).toBe(first);
   });
 
-  it("the version this ships under is still 9 -- the tie rule is owed to the deliberate 9 -> 10 boundary (UR-8)", () => {
-    expect(RULES_ENGINE_VERSION).toBe(9);
+  it("the version this ships under is at least 10 -- the tie rule is carried by the deliberate 9 -> 10 boundary (UR-8)", () => {
+    /* UR-8: was `toBe(9)` ("owed to the 9 -> 10 boundary"). The boundary is taken (changelog row 10 (7)); the current number
+       belongs to `unpredictableRevenueClosure.test.ts`. Version-literal only. */
+    expect(RULES_ENGINE_VERSION).toBeGreaterThanOrEqual(10);
   });
 });

@@ -62,7 +62,7 @@ import { effectiveActions } from "./logRevert";
 
 /** The rules engine this build carries. Bump it, and add a line below, when a deployment changes what a
  *  stored log replays to. Do NOT bump it for UI, protocol or narration changes. */
-export const RULES_ENGINE_VERSION = 9;
+export const RULES_ENGINE_VERSION = 10;
 
 /** Every version this engine can replay faithfully. One entry until somebody builds a versioned reducer;
  *  the point of the list is that "supported" is an explicit statement rather than "whatever is running". */
@@ -272,6 +272,42 @@ export const RULES_ENGINE_CHANGELOG: ReadonlyArray<{ version: number; note: stri
       "development corpus is unpinned and replays unchanged. A version-8 log can carry self-doomed trains destroyed " +
       "at the end of the turn that doomed them, reprieved trains sold or traded in for a Diesel, and Buy Trains " +
       "steps auto-ended at the limit with a legal exchange still open, so it is refused, never reinterpreted.",
+  },
+  {
+    version: 10,
+    note:
+      "Unpredictable Revenue certification closure (UR-8, 2026-09-25): the Unpredictable Revenue variant -- standalone and " +
+      "with Gentle Rust (OD-GR-3) -- is certified, and the replay semantics of UR-3, UR-4 and UR-7 (`9d0cf3a`, `a6183b5`, " +
+      "`ff7a04b`) take this one bump. REPLAY SEMANTICS, exactly eight. (1) UR-3 (OD-UR-1): on a pinned Unpredictable " +
+      "Revenue table the Yellow Sign is an AUTOMATIC consequence of the accepted run, resolved and applied inside the run's " +
+      "own entry (`settleRunYellowSign`, recorded as `last_run_yellow_sign`); on every pinned table, with the variant or " +
+      "without it, a client `YellowSignEvent` is refused at ingress and in the reducer. (2) UR-3 (OD-GR-3): the Mark judges " +
+      "the POST-SETTLEMENT fleet -- a Gentle Rust Final Run train is retired first and is never a candidate -- and nullifies " +
+      "only the taken train's own route, the run's breakdown being the authority's pairing. (3) UR-3 (OD-UR-2): the " +
+      "gold-trimmed train leaves at the END of Operating Round set N+1, at the set boundary (`fogAtSetEnd`), never on a " +
+      "run. (4) UR-3 (OD-UR-3), every table: a synthetic Carcosa train never advances the phase (`derivePhase`); the first " +
+      "REAL train of its tier does. (5) UR-3 (OD-UR-7), every table: a gilded train is never a Diesel trade-in, at the $800 " +
+      "exchange or the Level Playing Field's $750; an ordinary copy of the same model still trades. (6) UR-4 (OD-UR-5), " +
+      "every table: the Blood Price names the COPY -- an optional `gilded` on `BuyTrainFromCorporation` / " +
+      "`ProposeTrainPurchase`, an unnamed sale of a model the seller holds both gilded and ordinary refused, only the gilded " +
+      "copy's sale the Blood Price; the BUYER's marker moves Left 1 / Down 1 and the seller's never; the cured train is an " +
+      "ordinary additional train whose synthetic origin is supply provenance only, kept through the Bank Pool " +
+      "(`returned_ghost_trains`) so the Depot tally, the phase and the real-D check never count it as printed stock. (7) " +
+      "UR-7 (OD-UR-10 = 10-C), every table: an exact $5 tie of the modified revenue rounds toward the printed total " +
+      "(`roundRevenueTowardPrinted`); every other amount rounds to the nearest $10 as before. (8) UR-3 (OD-UR-13): the " +
+      "Mark's taken train is permanently removed from the game (`removed_trains`, never the Bank Pool) -- counted toward the " +
+      "phase and off the depot, never purchasable -- so phase progression is monotonic. None of the eight asks the pin's " +
+      "value. NOT RULES, named so the row is not read as them: the Mark's award stays minted (OD-UR-4, unchanged); UR-5's " +
+      "statistics basis (OD-UR-6: paid corporation revenue, printed completed routes per train, a Mark-nullified route " +
+      "nothing, the gift no purchase, the Blood Price the buyer's -- derived history only); UR-6's UI, copy, Rules " +
+      "Reference and naming (OD-UR-8, OD-UR-12); UR-7's Rules Reference tie sentence, the debug chip's visibility " +
+      "(UR-N62), the certification tests, documents and constructed certification game; the undo rule (OD-UR-11, " +
+      "unchanged); and the seed source (OD-UR-9, deferred to AWS / live multiplayer -- recorded draws replay identically). " +
+      "None of them moves a board, a message or a digest. Unpinned (Firestore-era) boards keep the legacy Yellow Sign " +
+      "request path (S10-11). The canonical development corpus is unpinned and replays unchanged. A version-9 log can carry " +
+      "client-sent, omitted or redirected Yellow Sign requests, a Mark that took a Final Run train or returned its train to " +
+      "the depot, a gold-trimmed train removed on a run, a gift that turned the phase, a gilded trade-in, a model-level " +
+      "Blood Price that moved the seller and a +10% tie paid half up, so it is refused, never reinterpreted.",
   },
 ];
 

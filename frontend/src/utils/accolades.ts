@@ -138,9 +138,14 @@ export const ACCOLADE_SPECS: readonly AccoladeSpec[] = [
   { key: "paper-millionaire", title: "The Paper Millionaire", scope: "player", core: false, floor: 70, direction: "highest", expected: 0.5,
     blurb: "Finished with almost everything they owned tied up in stock." },
   /* #1421: the Yellow Sign's two. A president who lived through any of the sequence -- the Mark, the gift, the
-     fog -- without paying the Blood Price; and the one who paid it, buying the Carcosan train off them. */
+     fog -- without paying the Blood Price; and the one who paid it, buying the Carcosan train off them.
+     UR-6 (Appendix B item 13; OD-UR-5(b), D-50): THE WORDS, NOT THE AWARD. The blurb read "never paid the Blood Price
+     to be rid of it", as if the Carcosan president could pay to be rid of the train. The Blood Price is the BUYER's
+     -- the buyer pays it and is The Redeemer -- so a seller released by another corporation's Blood Price still saw
+     the Sign and never paid it, and keeps this award (UR-5 pinned the logic, `unpredictableRevenueStats`). The
+     qualification is unchanged; the sentence now says what it measures. The Redeemer's already named the buyer. */
   { key: "carcosan-railways", title: "Carcosan Railways", scope: "player", core: false, floor: 1, direction: "highest", expected: 0.1,
-    blurb: "Saw the Yellow Sign and never paid the Blood Price to be rid of it." },
+    blurb: "Saw the Yellow Sign touch their railroad, and never paid a Blood Price to buy a gold-trimmed train." },
   { key: "redeemer", title: "The Redeemer", scope: "player", core: false, floor: 1, direction: "highest", expected: 0.05,
     blurb: "Paid the Blood Price and took the Carcosan train off another corporation." },
   /* ==================================================================

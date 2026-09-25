@@ -506,6 +506,10 @@ export function RevenueChart({
   return (
     <div style={styles.page}>
       <h3 style={styles.pageTitle}>Operating revenue by round</h3>
+      {/* UR-6 (Appendix B item 14): "ran for" is the Activity Log's own word for the revenue a turn PAID -- the turn
+          sentence "B&O ran for $X." states the figure after the Unpredictable Revenue die -- and that is the figure this
+          chart draws since UR-5 (OD-UR-6.1: corporation / turn revenue is the paid revenue). The hint already says it,
+          on every table; checked, not changed. */}
       <p style={styles.pageHint}>What each corporation's trains ran for in every Operating Round. Click a corporation to single it out.</p>
       <BarChart rounds={rounds} series={series} selected={selected} onSelect={setSelected} ariaLabel="Operating revenue by round" animate={animate} />
     </div>
@@ -746,9 +750,13 @@ export function AutopsyTable({
                       <div style={{ ...styles.ledgerRow, ...styles.headRow }} role="row">
                         <span style={styles.ledgerModel}>Trains</span>
                         <span style={styles.cellNum}>Paid</span>
-                        <span style={styles.cellNum}>Earned</span>
+                        {/* UR-6 (Appendix B item 14; OD-UR-6.1 / 6.2): the ledger is per TRAIN, so it counts each train's
+                            COMPLETED routes at their printed value (UR-5) -- a route the Yellow Sign nullified earned
+                            nothing and was no run, and under Unpredictable Revenue the die adjusts the corporation's
+                            turn, not a train's route. True of every game: without the die, printed is what was paid. */}
+                        <span style={styles.cellNum} title="The printed value of its completed routes">Earned</span>
                         <span style={styles.cellNum} title="Revenue earned minus price paid">ROI</span>
-                        <span style={styles.cellNum} title="Runs, counting each train separately">Runs</span>
+                        <span style={styles.cellNum} title="Completed runs, counting each train separately">Runs</span>
                         <span style={styles.ledgerFates}>Fate</span>
                       </div>
                       {corp.fleetLedger.map((row) => {

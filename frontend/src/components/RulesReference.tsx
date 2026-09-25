@@ -608,12 +608,8 @@ const OPERATING_STEPS: readonly OperatingStep[] = [
     short: "Dividends",
     subPhase: "Dividends",
     lead: "Add train revenue, then choose Dividend or Withhold.",
-    notes: [
-      {
-        scope: "unpredictableRevenue",
-        text: "This table plays unpredictable revenue: runs can produce up to ±20% of their standard revenue, rounded to the nearest $10.",
-      },
-    ],
+    /* UR-6 (UR-F13, OD-UR-8): the one-sentence Unpredictable Revenue note that stood here is replaced by the rule a
+       player needs, `UNPREDICTABLE_REVENUE_RULES` below, rendered as this section's tagged variant block. */
     quick: [
       "Train revenue = total value of the cities on the trains' routes.",
       "Dividend: pays shareholders and increases share value.",
@@ -826,6 +822,111 @@ const GENTLE_RUST_RULES: readonly RuleNode[] = [
   {
     scope: "gentleRust",
     p: "Trains in the Bank Pool get no Final Run: a rusted train there is removed at once, as in the standard game.",
+  },
+];
+
+/** ==================================================================
+ *   UR-6 (UR-F13; OD-UR-8 = 8-B, backlog D-42): UNPREDICTABLE REVENUE, WHAT A PLAYER NEEDS TO ACT ON
+ *  ==================================================================
+ *  The page carried one sentence -- "runs can produce up to ±20% of their standard revenue, rounded to the nearest
+ *  $10" -- and nothing about the die's faces, the one roll per turn, what the Yellow Sign does once it has struck, the
+ *  gold-trimmed train's limit treatment and disappearance, or the Blood Price. OD-UR-8 rules the disclosure: what a
+ *  player needs for informed decisions, and NOT the Yellow Sign's trigger conditions or odds -- the Easter egg stays.
+ *  So these blocks state CONSEQUENCES only: nothing here names a phase window, a die face, a chance, or which
+ *  corporation the Sign can visit next. Everything else is the implemented rule as of UR-6 (OD-UR-1 ... OD-UR-13; the
+ *  Blood Price as OD-UR-5 rules it and UR-4 implemented it), in the app's words.
+ *  TWO TAGGED BLOCKS, where the rules act: the die and the Sign's taking in Dividends (where revenue is paid), the
+ *  gold-trimmed train and the Blood Price in Buy Trains (where limits, trade-ins and purchases are looked up) -- the
+ *  GR-3 shape (#1702). Every node carries the scope, so a standard game renders none of it.
+ *  THE ROUNDING IS "TO THE NEAREST $10" AND NO MORE. OD-UR-10 = 10-C (an exact $5 tie rounds toward the printed
+ *  revenue) is decided but NOT implemented -- UR-F20 is UR-7's -- so the page names no tie direction: the engine's is
+ *  still half-up. UR-7 owes the tie sentence here when it lands 10-C; until then no example below lands on a tie. */
+const UNPREDICTABLE_REVENUE_RULES: readonly RuleNode[] = [
+  {
+    scope: "unpredictableRevenue",
+    p: "Each time a corporation runs its trains, one die is rolled for the whole turn and applied to the total revenue of all its routes. Its revenue for the turn is that total at the percentage below, rounded to the nearest $10.",
+  },
+  {
+    scope: "unpredictableRevenue",
+    table: {
+      columns: ["Die", "Revenue paid"],
+      rows: [
+        ["1", "80%"],
+        ["2", "90%"],
+        ["3 or 4", "100%"],
+        ["5", "110%"],
+        ["6", "120%"],
+      ],
+      numeric: [1],
+    },
+  },
+  {
+    scope: "unpredictableRevenue",
+    ul: [
+      "The rounding can widen the swing on a small run: an $80 run at 80% is $64, which rounds to $60. A run worth anything still pays at least $10.",
+      "Routes are chosen, compared and held to the highest revenue rule at their printed values. The route planner shows printed values; the die applies only when the run is made.",
+      "The revenue after the die is the corporation's revenue for the turn: what it pays out or withholds, and what moves its share price.",
+      "Private Company income is never rolled.",
+      "Undoing a run does not roll again: running the same turn again uses the same roll.",
+    ],
+  },
+  { scope: "unpredictableRevenue", h: "The Yellow Sign" },
+  {
+    scope: "unpredictableRevenue",
+    p: "Now and then a run meets the Yellow Sign. What calls it is not revealed. When it touches a corporation, the Activity Log says what happened; this is what follows.",
+  },
+  {
+    scope: "unpredictableRevenue",
+    ul: [
+      "If the Yellow Sign takes a train, the corporation loses its lowest-value train. That train's route earns nothing this turn; the rest of the run is paid at the same roll.",
+      "The taken train is removed from the game for good. It does not return to the Bank or the Bank Pool, and the phase never goes back because of it.",
+      "The corporation receives half the taken train's face value into its treasury.",
+      "If that leaves the corporation with no train, the ordinary rules for a trainless corporation apply at Buy Trains, including the forced train purchase.",
+      "If the Yellow Sign gives a corporation a gold-trimmed Carcosa train, see Gold-trimmed Carcosa trains under Buy Trains.",
+    ],
+  },
+  {
+    /* D-36 / OD-GR-3 (A2, "never"): the Sign judges the fleet after the Run -> Dividends settlement, and never takes
+       a Gentle Rust reprieve. Shown only where both variants are on. */
+    scope: "gentleRust",
+    p: "With Gentle Rust, a rusted train awaiting or on its Final Run is never the train the Yellow Sign takes.",
+  },
+];
+
+const CARCOSA_TRAIN_RULES: readonly RuleNode[] = [
+  {
+    scope: "unpredictableRevenue",
+    p: "The Yellow Sign may give a corporation a gold-trimmed Carcosa train. It is an extra train, not one taken from the Bank, and it runs like any other train of its type.",
+  },
+  { scope: "unpredictableRevenue", h: "While it is gold-trimmed" },
+  {
+    scope: "unpredictableRevenue",
+    ul: [
+      "It does not count against the train limit. It is still owned: it runs, and a corporation holding it is not trainless.",
+      "It never changes the phase. The phase — and with it rust and the train limit — changes only when the first train of its type is bought from the Bank.",
+      "It cannot be traded in for a Diesel. An ordinary train of the same type still can be.",
+      "The corporation holding it bears the Carcosan curse. The fog does not lift the curse; only the Blood Price does.",
+    ],
+  },
+  { scope: "unpredictableRevenue", h: "The fog" },
+  {
+    scope: "unpredictableRevenue",
+    ul: [
+      "Once a Diesel has been bought from the Bank, the gold-trimmed train has one more whole Operating Round set. It disappears at the end of the set after the one in which that Diesel was bought — or, if a Diesel had already been bought, after the set in which the gold-trimmed train arrived.",
+      "It disappears whether or not its corporation operates, and the corporation receives nothing for it.",
+      "A gold-trimmed Diesel does not count as a Diesel bought from the Bank.",
+    ],
+  },
+  { scope: "unpredictableRevenue", h: "The Blood Price" },
+  {
+    scope: "unpredictableRevenue",
+    ul: [
+      "Another corporation may buy the gold-trimmed train under the ordinary rules for buying a train from another corporation: an agreed price, during the buyer's turn, with the seller's president agreeing.",
+      "That purchase is the Blood Price. The buying corporation pays the agreed price, and its share price moves 1 cell left and 1 cell down. The selling corporation's share price does not move, and it is released from the Carcosan curse.",
+      "The buyer receives an ordinary train. It counts against the buyer's train limit, so the buyer needs room for it. It runs and rusts like any train of its type, may be sold again as an ordinary sale, may be traded in for a Diesel, and never disappears into the fog.",
+      "Buying it changes no phase, even if no train of its type has yet been bought from the Bank — like every purchase from another corporation. The phase changes when the first one is bought from the Bank.",
+      "If the seller also holds an ordinary train of the same type, the offer names which one is sold. Selling the ordinary one is an ordinary sale: no Blood Price, and the gold-trimmed train stays gold-trimmed, with its curse and its fog.",
+    ],
   },
 ];
 
@@ -4341,6 +4442,13 @@ function OperatingRoundPage({
             <span style={styles.calloutText}>{note.text}</span>
           </div>
         ))}
+        {/* UR-6 (UR-F13): Unpredictable Revenue's die and the Yellow Sign's consequences, as one tagged block of this
+            section -- the GR-3 shape. Absent from every game that does not play it. */}
+        {applies({ scope: "unpredictableRevenue" }) && (
+          <OpBlock title="Unpredictable Revenue" scope="unpredictableRevenue" testId="rules-operating-unpredictable-revenue">
+            <RuleDocument nodes={UNPREDICTABLE_REVENUE_RULES} columns={false} />
+          </OpBlock>
+        )}
       </OperatingSection>
 
       {/* ================= 5. BUY TRAINS ================= */}
@@ -4373,6 +4481,13 @@ function OperatingRoundPage({
         {applies({ scope: "gentleRust" }) && (
           <OpBlock title="Gentle Rust" scope="gentleRust" testId="rules-operating-gentle-rust">
             <RuleDocument nodes={GENTLE_RUST_RULES} columns={false} />
+          </OpBlock>
+        )}
+        {/* UR-6 (UR-F13): the gold-trimmed Carcosa train and the Blood Price -- the train limit, the trade-in and the
+            purchase are looked up here. Absent from every game that does not play Unpredictable Revenue. */}
+        {applies({ scope: "unpredictableRevenue" }) && (
+          <OpBlock title="Gold-trimmed Carcosa trains" scope="unpredictableRevenue" testId="rules-operating-carcosa-trains">
+            <RuleDocument nodes={CARCOSA_TRAIN_RULES} columns={false} />
           </OpBlock>
         )}
         {/* THE EXCEPTION, MARKED AS ONE. A rule that can cost a player the game gets the warning ink and a

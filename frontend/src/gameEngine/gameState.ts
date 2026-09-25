@@ -279,6 +279,9 @@ export interface PublicCompanyState {
    * which cost two batches).
    * EMPTIED AT THE OPERATING ROUND BOUNDARY, which is what "until the end of the Operating Round" means: the
    * exemption expires, the train becomes ordinary, and a corporation left over the limit discards down.
+   * [UR-6 (audit Appendix B item 3): SUPERSEDED by #1672 (S9-2). This list is synthetic PROVENANCE only now -- it is
+   * never emptied at a boundary and is no train-limit exemption (that is `carcosan_trains`, the whole Carcosa
+   * lifetime); it follows its copy through a sale, the Blood Price and the Bank Pool (`returned_ghost_trains`, UR-4).]
    *
    * OPTIONAL, AND #232'S RULE APPLIES: `undefined` is "this build does not report it", never "there are
    * none" -- and a standard game never has one. */

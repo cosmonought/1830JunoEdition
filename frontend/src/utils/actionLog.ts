@@ -31,6 +31,7 @@ import { dieselExchangeCostFor } from "../gameEngine/dieselExchange";
 import { KANAWHA_LICENSE_COST } from "../gameEngine/kanawhaLicense";
 import { pendingTrainDiscards } from "../gameEngine/trainDiscard";
 import { numberedPrivate } from "../gameEngine/privateOrdinal";
+import { saleCopyKind } from "./saleCopyDisclosure";
 
 export interface ActionLogContext {
   /** The board and room as they stand BEFORE this action -- design note #1. */
@@ -562,22 +563,46 @@ export function describeGameplayAction(
     return `${context.labelForAddress(offer.owner)} ${accept ? "accepted" : "declined"} $${offer.price} for ${offer.private_name}.`;
   }
 
+  /* ==================================================================
+      UR-6 (U-42; OD-UR-5(b), (c)): THE OFFER, THE ANSWER AND THE TRADE NAME THE COPY
+     ==================================================================
+     These three lines named the MODEL, so under Unpredictable Revenue a line read the same whether the seller parted
+     with its gold-trimmed copy (the Blood Price) or an ordinary copy of the same model beside it (an ordinary sale).
+     `saleCopyKind` asks the authority's own predicates of the BEFORE board -- the one the proposal, the answer and the
+     settlement are judged on -- and the sentence names what it found: the gold-trimmed copy (the Blood Price, paid by
+     the BUYER, the train cured into an ordinary one), or an ordinary copy beside a gold-trimmed one (no Blood Price).
+     Every other sale -- every standard game, every seller without a gold-trimmed copy of the model -- keeps its
+     sentence byte for byte. The buyer's market move is the chart step's own line (`App.tsx`, #1090), reported with
+     the atom's figures; the seller's price never moves, so no line here gives it one. */
   if ("ProposeTrainPurchase" in msg) {
-    const { buyer_ticker, price, seller_ticker, model_type, seller_president } =
+    const { buyer_ticker, price, seller_ticker, seller_protocol_id, model_type, seller_president, gilded } =
       msg.ProposeTrainPurchase;
-    return (
-      `${buyer_ticker} offers $${price} for one of ${seller_ticker}'s ${model_type}-trains. ` +
-      `${context.labelForAddress(seller_president ?? "")} must answer.`
-    );
+    const answerer = `${context.labelForAddress(seller_president ?? "")} must answer.`;
+    const kind = saleCopyKind(gameState, seller_protocol_id, model_type, gilded);
+    if (kind === "bloodPrice") {
+      return (
+        `${buyer_ticker} offers $${price} for ${seller_ticker}'s gold-trimmed ${model_type}-train — ` +
+        `buying it is the Blood Price. ${answerer}`
+      );
+    }
+    if (kind === "ordinaryBesideGilded") {
+      return (
+        `${buyer_ticker} offers $${price} for an ordinary ${model_type}-train from ${seller_ticker} — ` +
+        `not the gold-trimmed one, so no Blood Price. ${answerer}`
+      );
+    }
+    return `${buyer_ticker} offers $${price} for one of ${seller_ticker}'s ${model_type}-trains. ${answerer}`;
   }
 
   if ("AnswerTrainPurchase" in msg) {
     const offer = gameState?.train_purchase_offer ?? null;
     if (!offer) return null;
     const { accept } = msg.AnswerTrainPurchase;
+    const kind = saleCopyKind(gameState, offer.seller_protocol_id, offer.model_type, offer.gilded);
+    const copy = kind === "bloodPrice" ? "gold-trimmed " : kind === "ordinaryBesideGilded" ? "ordinary " : "";
     return (
       `${context.labelForAddress(offer.seller_president ?? "")} ${accept ? "accepted" : "declined"} ` +
-      `$${offer.price} for ${offer.seller_ticker}'s ${offer.model_type}-train.`
+      `$${offer.price} for ${offer.seller_ticker}'s ${copy}${offer.model_type}-train.`
     );
   }
 
@@ -915,7 +940,7 @@ export function describeGameplayAction(
        what this sentence should have said (#1053's rule: the sentence carries the figures, the diagnostic
        goes quiet). TWO TREASURIES MOVE, so the suffix names both; `treasurySuffix` is one corporation's
        transition and would leave the seller's out. */
-    const { buyer_protocol_id, seller_protocol_id, model_type, price } =
+    const { buyer_protocol_id, seller_protocol_id, model_type, price, gilded } =
       msg.BuyTrainFromCorporation;
     const buyer = corp(gameState, buyer_protocol_id);
     const seller = corp(gameState, seller_protocol_id);
@@ -925,10 +950,17 @@ export function describeGameplayAction(
     ]
       .filter((pair): pair is [string, string] => pair[1] !== null)
       .map(([ticker, move]) => `${ticker} treasury ${move}`);
-    return (
-      `${buyer} bought a ${model_type}-train from ${seller} for $${price}.` +
-      (moves.length > 0 ? ` ${moves.join("; ")}.` : "")
-    );
+    /* UR-6 (U-42): the copy -- see the offer's note above. The Blood Price is the BUYER's (OD-UR-5(b)) and cures the
+       train (OD-UR-5(a) = 5a-1): the buyer now holds an ordinary train, and the seller is released from the curse. */
+    const kind = saleCopyKind(gameState, seller_protocol_id, model_type, gilded);
+    const sentence =
+      kind === "bloodPrice"
+        ? `${buyer} bought ${seller}'s gold-trimmed ${model_type}-train for $${price}, paying the Blood Price: ` +
+          `it is an ordinary ${model_type}-train now, and ${seller} is released from the Carcosan curse.`
+        : kind === "ordinaryBesideGilded"
+          ? `${buyer} bought an ordinary ${model_type}-train from ${seller} for $${price} — not the gold-trimmed one, so no Blood Price.`
+          : `${buyer} bought a ${model_type}-train from ${seller} for $${price}.`;
+    return sentence + (moves.length > 0 ? ` ${moves.join("; ")}.` : "");
   }
 
   if ("AcceptTrainOffer" in msg) return `${actingPlayer(context)} accepted a train offer.`;

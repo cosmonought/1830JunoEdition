@@ -22,6 +22,7 @@ import { depotInventory, openDepotTiers } from "../gameEngine/gamePhase";
 import { gildedSalePositions } from "../gameEngine/trainSaleAuthority";
 import * as S from "../utils/yellowSignRunBoundSupport";
 import { readStripped } from "../utils/sourceScan";
+import { offerSettlesAsBloodPrice } from "../utils/saleCopyDisclosure";
 
 declare global {
   // eslint-disable-next-line no-var
@@ -135,6 +136,12 @@ describe("the Buy Trains roster: one gold-trimmed badge, and each badge sends it
 });
 
 describe("the consent prompt tells the seller which copy it is answering for", () => {
+  /* UR-6 (independent UR-4 review, D1): the prompt now discloses the Blood Price from `bloodPrice`, which the shell
+     derives with the canonical predicate on the board (`offerSettlesAsBloodPrice` -> `isCarcosanTransfer`) rather than
+     from the wire field -- so this builds the proposal as the shell does, on `mixed()` (B&O: a real 6 and the gilded
+     6). The assertions are UR-4's, unchanged; the unnamed offer on this board is the ambiguous one the authority refuses,
+     so it reads as a plain offer and claims no Blood Price. `unpredictableRevenueDisclosure` covers the unnamed offer
+     the authority DOES settle as the Blood Price. */
   const proposal = (gilded?: boolean): TrainTradeProposal => ({
     sellerProtocolId: BO,
     sellerTicker: "B&O",
@@ -145,6 +152,7 @@ describe("the consent prompt tells the seller which copy it is answering for", (
     modelType: "6",
     price: "300",
     ...(gilded === undefined ? {} : { gilded }),
+    bloodPrice: offerSettlesAsBloodPrice(mixed(), { seller_protocol_id: BO, model_type: "6", gilded }),
   });
 
   it("the gilded copy: the Blood Price, the BUYER's price drops, the seller is released", () => {

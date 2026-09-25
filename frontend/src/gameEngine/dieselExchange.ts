@@ -242,6 +242,55 @@ export function reprievedExchangeReason(
     : `${marked} of ${ticker}'s ${model}-trains are on their Gentle Rust final run and cannot be traded in for a Diesel; ${free === 1 ? "one" : free} can.`;
 }
 
+/* ==================================================================
+    UR-6 (UR-3's deferral; OD-UR-7 = 7-A, D-41): THE PANEL SHOWS THE GOLD-TRIMMED TRAIN IT MAY NOT TAKE, TOO
+   ==================================================================
+   UR-3 took the gilded copies out of `exchangeableTrains`, and the row -- one chip per candidate -- simply lost them, the
+   shape GR-3 (U-11) fixed for a Final Run copy: a corporation visibly holding a gold-trimmed 6 beside an ordinary 5 saw
+   only the 5 and no reason, and one holding only the gilded 6 saw the gate's sentence with no chip it referred to. The
+   row now draws those copies too, greyed, with the refusal's own sentence. Presentation only, like the Final Run pair
+   above: both helpers ask this module's multiset reading; neither decides legality -- `dieselExchangeRefusal` does,
+   unchanged. */
+
+/** The unreprieved 4-, 5- and 6-trains `company` holds that the Carcosa gilding covers, roster order, one entry per
+ *  gilded copy: owned `["5","6","6"]`, gilding `["6"]` -> `["6"]`. With `reprievedExchangeCopies` and
+ *  `exchangeableTrains`, every eligible copy is in exactly one of the three. */
+export function gildedExchangeCopies(
+  company:
+    | { owned_trains?: readonly string[] | null; pending_rust_trains?: readonly string[] | null; carcosan_trains?: readonly string[] | null }
+    | null
+    | undefined,
+): string[] {
+  if (!company) return [];
+  const gilded = [...(company.carcosan_trains ?? [])];
+  return unreprievedTrains(company).filter((model) => {
+    const at = gilded.indexOf(model);
+    if (at < 0) return false;
+    gilded.splice(at, 1);
+    return DIESEL_EXCHANGE_TIERS.includes(model);
+  });
+}
+
+/** Why a gold-trimmed copy of `model` may not be traded in, or `null` when no copy of it is gilded. When no ordinary
+ *  copy is left, this is the gate's own sentence (`gildedExchangeReason`), byte for byte; beside an ordinary copy it
+ *  says the ordinary one still trades. */
+export function gildedExchangeCopyReason(
+  company: {
+    ticker?: string | null;
+    owned_trains?: readonly string[] | null;
+    pending_rust_trains?: readonly string[] | null;
+    carcosan_trains?: readonly string[] | null;
+  },
+  model: string,
+): string | null {
+  if (!gildedExchangeCopies(company).includes(model)) return null;
+  const whole = gildedExchangeReason(company, model);
+  if (whole !== null) return whole;
+  const ticker = company.ticker ?? "This corporation";
+  const free = exchangeableTrains(company).filter((entry) => entry === model).length;
+  return `${ticker}'s gold-trimmed ${model}-train cannot be traded in for a Diesel; ${free === 1 ? "its ordinary one" : "its ordinary ones"} can.`;
+}
+
 /** ==================================================================
  *   DESIGN NOTE 1702 (GR-3): MAY A TRADE-IN STILL BE OPEN AFTER THIS DEPOT PURCHASE?
  *  ==================================================================
@@ -294,11 +343,15 @@ export interface DieselExchangeOffer {
   cost: number;
   /** Final Run copies of eligible tiers (`reprievedExchangeCopies`), each with `reprievedExchangeReason`. */
   finalRun?: readonly { model: string; reason: string }[];
+  /** UR-6: gold-trimmed Carcosa copies of eligible tiers (`gildedExchangeCopies`), each with
+   *  `gildedExchangeCopyReason`. Absent wherever the buyer holds no such copy -- every standard game. */
+  gilded?: readonly { model: string; reason: string }[];
 }
 
 export function dieselExchangeOfferFor(state: GameStateResponse | null, companyId: number): DieselExchangeOffer | null {
   if (!state || !dieselExchangeEnabled(state) || !dieselAvailable(state)) return null;
   const buyer = state.public_companies.find((entry) => entry.company_id === companyId);
+  const gildedCopies = gildedExchangeCopies(buyer);
   return {
     models: exchangeableTrains(buyer),
     problem: dieselExchangeRefusal(state, companyId),
@@ -307,5 +360,15 @@ export function dieselExchangeOfferFor(state: GameStateResponse | null, companyI
       model,
       reason: buyer ? (reprievedExchangeReason(buyer, model) ?? "") : "",
     })),
+    /* UR-6: only where a gilding exists (#232: absent is "none"), so the offer every standard table builds keeps its
+       shape key for key. */
+    ...(gildedCopies.length > 0
+      ? {
+          gilded: gildedCopies.map((model) => ({
+            model,
+            reason: buyer ? (gildedExchangeCopyReason(buyer, model) ?? "") : "",
+          })),
+        }
+      : {}),
   };
 }

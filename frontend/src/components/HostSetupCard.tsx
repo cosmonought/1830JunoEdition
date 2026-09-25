@@ -72,7 +72,8 @@ export const HOUSE_RULE_ROWS: ReadonlyArray<{
   { key: "gentleRust", title: "Gentle Rust", tag: "easier" },
   { key: "dynamicStockMarket", title: "Dynamic Market", tag: "riskier" },
   { key: "delayedAuction", title: "Delayed Auction", tag: "harder" },
-  { key: "unpredictableRevenue", title: "Unpredictable Routes", tag: "chaotic" },
+  // UR-6 (UR-F14; OD-UR-12 = 12-A, D-45): the canonical name. This screen said "Unpredictable Routes".
+  { key: "unpredictableRevenue", title: "Unpredictable Revenue", tag: "chaotic" },
 ];
 
 /** The dev-subsidy line under the ante -- the project's gas-subsidisation rule, said where the money is set. */

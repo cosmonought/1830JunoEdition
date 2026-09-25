@@ -475,6 +475,7 @@ export interface FlavourResolution {
  *      "permanently remove from the global Malus pool" half: no second corporation can ever draw it.
  *   3. The corporation IS the marked one, the bucket IS `criticalBonus`, Carcosa has not been seen, and the
  *      seeded tenth hits -> the Stage 2 line is forced in place of whatever was drawn.
+ *      [UR-6 (audit Appendix B item 8): not a tenth -- `CARCOSA_CHANCE_IN_100`, 60 in 100 since #1421.]
  *   4. The natural draw IS the Stage 2 line by any other route -> skipped. It is reachable only through (3).
  *
  * THE SKIP WALKS FORWARD FROM THE NATURAL INDEX rather than splicing the array, and that is the whole of why
@@ -493,6 +494,8 @@ export interface FlavourResolution {
    THE SHAPE IS RIGHT AND ONE WORD IN IT WAS WRONG: "the RNG check", singular. There is no single check. The
    Mark fires when the natural line DRAW lands on it inside phases 2-4; Carcosa needs a critical bonus, the
    marked corporation acting, phases 5-D, and a 1-in-5 seeded roll; the Fog is a debt with no roll at all.
+   [UR-6 (audit Appendix B item 8): the roll is `CARCOSA_CHANCE_IN_100` -- 60 in 100 since #1421, not 1 in 5 -- and
+   the Fog is no longer a run stage at all on the run path (OD-UR-2: `fogAtSetEnd`, at the end of the set).]
    Three stages, three sets of gates, and a single boolean cannot say which.
    SO THE FLAG NAMES ITS STAGE. `ForcedSignStage` is the same union `FlavourResolution.stage` already reports,
    which means the thing you ask for and the thing you get back are one vocabulary.
@@ -568,8 +571,10 @@ export function resolveFlavourLine(input: {
       DESIGN NOTE 1092: THE FOG OUTRANKS EVERY OTHER LINE, INCLUDING THE ESCALATION
      ==================================================================
      FIRST, AND UNCONDITIONALLY ON THE BUCKET. The other two stages are lottery tickets -- the Mark needs its
-     own line to be drawn, the escalation needs a critical bonus and a 1-in-5 roll -- and either could be
-     asked on the same turn the fog is due. A debt that has come due does not wait for a better draw.
+     own line to be drawn, the escalation needs a critical bonus and a 1-in-5 roll [UR-6, Appendix B item 8: 60 in
+     100 since #1421] -- and either could be asked on the same turn the fog is due. A debt that has come due does not
+     wait for a better draw. [UR-3 / OD-UR-2: this branch is the unpinned legacy request's; the run path's fog falls
+     at the end of the set.]
      THE ROLL ITSELF IS UNTOUCHED, ruled explicitly: "you can actually give them whatever bonus/malus they
      roll -- it doesn't have to be 0%." So this replaces the CLAUSE and nothing else; the swing, the tint and
      the flash are whatever the die said. The train's last run is an ordinary run that happens to be its
@@ -588,7 +593,7 @@ export function resolveFlavourLine(input: {
     !state.carcosaSeen &&
     /* Design note #1128: the three CHANCE-AND-WINDOW gates, skipped together when forced. They are what make
        this stage unreachable on demand -- a critical bonus you cannot roll for, a phase you cannot skip to,
-       and a 1-in-5. The three conditions above are not gates in that sense; they are who the story is about,
+       and a 1-in-5 [UR-6: 60 in 100 since #1421]. The three conditions above are not gates in that sense; they are who the story is about,
        and forcing past them would print another corporation's sentence. */
     (forced === "carcosa" ||
       (bucket === "criticalBonus" &&

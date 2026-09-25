@@ -265,9 +265,11 @@ describe("OD-UR-2 at the boundary: exactly the end of N+1", () => {
   });
 
   it("a train that already left by a Blood Price is not chased: the boundary acts only on the gilding that exists", () => {
-    /* The sale is settled by the production helper the reducer's arm uses (`settleTrainSale`, #1090 as implemented
-       today -- OD-UR-5 is OPEN and not decided here). Whatever the sale leaves gilded is what the boundary removes;
-       under the current implementation that is nothing, and no orphan marker is created. */
+    /* The sale is settled by the production helper the reducer's arm uses (`settleTrainSale`). [UR-6 (independent UR-4
+       review, D5): this said "OD-UR-5 is OPEN and not decided here". It has since been decided (D-48, D-50) and
+       implemented in UR-4: only the gold-trimmed copy's sale is the Blood Price, which cures the train and releases the
+       seller. The unnamed sale below is that sale -- unambiguous, since CPR holds no ordinary 6.] Whatever the sale
+       leaves gilded is what the boundary removes; here that is nothing, and no orphan marker is created. */
     const board = lastTurn(6, 6);
     const sold = settleTrainSale(board, BO, CPR, "6", "300");
     const after = endTurn(sold);

@@ -633,6 +633,7 @@ import {
 /* Design note #1091: the curse's vocabulary, shared by the log, the three name surfaces and the
    scoreboard so none of them can word it differently. */
 import { CARCOSA_STAMP_STEP, carcosaEpitaph, cursedCompanies } from "./utils/carcosaCurse";
+import { offerSettlesAsBloodPrice, saleCopyKind } from "./utils/saleCopyDisclosure";
 import AppFooter from "./components/AppFooter";
 import GameIntroOverlay from "./components/GameIntroOverlay";
 import GameOutroOverlay from "./components/GameOutroOverlay";
@@ -4006,8 +4007,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
       price: offer.price,
       // UR-4 (OD-UR-5(c)): the copy on offer, so the seller answers knowing whether it is the Blood Price.
       ...(offer.gilded === undefined ? {} : { gilded: offer.gilded }),
+      /* UR-6 (independent UR-4 review, D1): and whether the authority will SETTLE it as the Blood Price, asked of the
+         canonical predicate on this board -- an unnamed offer for the seller's only gold-trimmed copy is the Blood
+         Price too, and the prompt (the seller's consent and every other seat's pending-offer view) must say so. The
+         board, not just the offer, is the dependency: the answer reads the seller's fleet. */
+      bloodPrice: offerSettlesAsBloodPrice(gameState, offer),
     };
-  }, [gameState?.train_purchase_offer]);
+  }, [gameState]);
 
   /* Inspecting and dispatching are separate gestures; only the green check is gated.
      See docs/ai_architecture/canvas_rendering.md - App.tsx #163 */
@@ -7462,7 +7468,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
                    the next rebuild.
                    THE MODEL IS NAMED ON THE MESSAGE, like the Mark's is (#902): by the time an old log
                    replays to here the fleet has moved on, and re-deriving "the marked train" against a later
-                   roster could take a different one than the game took. */
+                   roster could take a different one than the game took.
+                   [UR-6 (audit Appendix B item 9): SUPERSEDED -- since #1661 the request names no model (the reducer
+                   derives the train it takes, below), and since UR-3 (OD-UR-2) the fog is a set-boundary transition,
+                   so this legacy dispatch is reached only on an unpinned board.] */
                 const taken = (ran?.carcosan_trains ?? [])[0] ?? null;
                 // UR-3 (OD-UR-2): unreachable on a pinned table -- the run's resolution has no fog stage there.
                 if (taken && !signPinned) {
@@ -7531,7 +7540,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
                  the reducer refuses a duplicate on its own (#1092), and skipping it on a replay would rebuild
                  a game in which the fog never took the train.
                  [UR-3: on a pinned table there is no dispatch to guard -- the stage is part of the run's entry and
-                 every replay of that entry re-applies it; the paragraph above is the unpinned legacy path's.] */
+                 every replay of that entry re-applies it; the paragraph above is the unpinned legacy path's.]
+                 [UR-6 (audit Appendix B item 10): and even there the dispatch above never moved the board from here --
+                 #1407's catch-up guard refuses every dispatch made inside the drain (UR-F1). A stored request replays
+                 as its own log entry; nothing depends on this block being unguarded.] */
               const ephemeral = !replayingHistory;
               /* Design note #1081: `null` is the unchanged bucket's default -- "nothing happened" has nothing
                  to sound like. Guarded HERE rather than inside `playVariantCue`, because that function's
@@ -7941,12 +7953,47 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
             }
             /* UR-3 (OD-UR-2, D-38): THE FOG AT THE END OF AN OPERATING-ROUND SET. The fleet-loss diff above leaves
                it out (it is neither a rust nor a discard), so it is told here, once per corporation, in the Sign's own
-               words and tint. A minimal line only: the fog's formal notice -- its modal, sound and film at the
-               boundary -- is later work (UR-6), and the legacy run-borne fog on an unpinned board narrates itself
-               through its run's clause, which `describeFogAtSetEnd` never reports. */
+               words and tint. [UR-6: the fog's formal notice -- its ruled sound and film -- now follows below.] The
+               legacy run-borne fog on an unpinned board narrates itself through its run's clause, which
+               `describeFogAtSetEnd` never reports. */
+            let fogFellAtSetEnd = false;
             for (const fog of describeFogAtSetEnd(settledBefore, settledAfter)) {
               const trains = fog.models.map((model) => `${model}-train`).join(" and ");
               logInfo(`${CARCOSA_FOG_LINE} ${fog.ticker} lost its gold-trimmed ${trains}.`, "", null, "sign");
+              fogFellAtSetEnd = true;
+            }
+            /* ==================================================================
+                UR-6 (OD-UR-2, D-38; the cue #1092 / #1093 RULED): THE FOG'S OWN SOUND AND FILM, WHERE THE FOG NOW FALLS
+               ==================================================================
+               RULED (#1092): "This audio should play if and only if the Carcosan train disappears into the fog." RULED
+               (#1093): the fog gets "a separate video instead of the usual bonus/malus animation". Both rode the fog's
+               RUN stage; UR-3 moved the fog to this boundary (OD-UR-2), so on every table the train now vanished in
+               silence, with only the line above -- the formal notice UR-3 left to UR-6. Played here, once per boundary
+               however many corporations lost a train, from the same cue (`variantCueFor`, `stage: "fog"`): the sound
+               through `playVariantCue` under the same two toggles as the run's cues, the film through the same
+               overlay and window. The clip carries no audio of its own, so it holds no duck (#1093).
+               EPHEMERAL, #1094's rule: a sound and a film are events, and a refresh or an Undo that replays this
+               boundary must not raise them again -- so the guard is `replayingHistory`, as for every other raiser.
+               The Activity Log line above is the durable notice and is written on every replay. No modal is added:
+               none was ruled, and the line is the record. */
+            if (fogFellAtSetEnd && !replayingHistory) {
+              const fogCue = variantCueFor({ line: CARCOSA_FOG_LINE, bucket: "unchanged", stage: "fog" });
+              if (fogCue.audio !== null) {
+                playVariantCue(fogCue.audio, sfxEnabledRef.current && sfxRevenueRef.current);
+              }
+              if (fogCue.video) {
+                if (hauntingTimerRef.current !== null) window.clearTimeout(hauntingTimerRef.current);
+                setHaunting({
+                  src: `/audio/${fogCue.video}`,
+                  composite: fogCue.videoComposite ?? "feather",
+                  ms: fogCue.videoMs,
+                  startedAt: performance.now(),
+                });
+                hauntingTimerRef.current = window.setTimeout(() => {
+                  setHaunting(null);
+                  hauntingTimerRef.current = null;
+                }, fogCue.videoMs);
+              }
             }
             if (queuedNotices.length !== pendingFleetNoticesRef.current.length) {
               pendingFleetNoticesRef.current = queuedNotices;
@@ -10811,11 +10858,21 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
           price: proposal.price,
           gilded: proposal.gilded, // UR-4: the copy (sandbox only -- see `handleMakeTrainOffer`)
         });
+        /* UR-6 (U-42): the copy, as the drain's own trade line names it (`saleCopyKind`, the authority's predicates on
+           the board this sale is judged on) -- the gold-trimmed copy's sale is the Blood Price, an ordinary copy beside
+           it is not. A seller with no gold-trimmed copy of the model reads exactly as before. */
+        const copyKind = saleCopyKind(gameState, proposal.sellerProtocolId, proposal.modelType, proposal.gilded);
+        const trainPhrase =
+          copyKind === "bloodPrice"
+            ? `the gold-trimmed ${proposal.modelType}-train`
+            : copyKind === "ordinaryBesideGilded"
+              ? `an ordinary ${proposal.modelType}-train`
+              : `a ${proposal.modelType}-train`;
         logInfo(
           "Train Trade",
           samePresident
-            ? `${proposal.buyerTicker} bought a ${proposal.modelType}-train from ${proposal.sellerTicker} for $${proposal.price} — same President, so it completed immediately.`
-            : `${proposal.buyerTicker} offered $${proposal.price} to ${proposal.sellerTicker} for a ${proposal.modelType}-train. Awaiting ${proposal.sellerPresidentLabel}.`,
+            ? `${proposal.buyerTicker} bought ${trainPhrase} from ${proposal.sellerTicker} for $${proposal.price} — same President, so it completed immediately.`
+            : `${proposal.buyerTicker} offered $${proposal.price} to ${proposal.sellerTicker} for ${trainPhrase}. Awaiting ${proposal.sellerPresidentLabel}.`,
         );
         return;
       }

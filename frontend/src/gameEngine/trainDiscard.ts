@@ -45,6 +45,9 @@
 // trim exempted the reprieve and not the ghost; the ghost's own expiry (`expireGhostTrains`, #1046, at the
 // round boundary) is unchanged by this note and out of its scope. Only a COUNTABLE train may be discarded:
 // discarding a reprieved one would spend a train and leave the obligation standing.
+// [UR-6 (UR audit Appendix B item 7; Gentle Rust Appendix B item 15): `expireGhostTrains` is DELETED (#1672), and the
+// Yellow Sign's exemption is the gilding (`carcosan_trains`), for the gold-trimmed train's whole Carcosa lifetime --
+// `countableTrainCount` reads that, not `ghost_trains`, which is provenance only.]
 //
 // THE GATE: while any corporation is over the limit, every message but `DiscardTrain` and the room's own
 // `CloseRoom` is refused by identity in `applySandboxActionCore`, before any arm and before the identity and

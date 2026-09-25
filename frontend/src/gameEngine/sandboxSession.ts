@@ -4225,7 +4225,9 @@ function settleOperatingCursor(
        CHEAPEST-FIRST AND REPRIEVED-EXEMPT, through the same `trimToTrainLimit` every other caller uses --
        #1034's rule, so the newly-ordinary ghost competes with the rest of the fleet on the ordinary terms
        rather than being singled out. It is usually the newest and most expensive train, so it usually
-       survives, which is the generous reading of a gift. */
+       survives, which is the generous reading of a gift.
+       [UR-6 (audit Appendix B item 4): THIS NOTE IS SUPERSEDED, kept as the record -- #1672 below retired the
+       OR-long grace and its trim; nothing Carcosan happens at this transition.] */
     /* #1672 (S9-2): `expireGhostTrains` is gone from this transition and from the file. The limit exemption
        is no longer an OR-long grace on a separate list -- it lasts as long as the train is gilded -- so there
        is nothing for an Operating Round's end to expire, and nothing to trim for. */
@@ -6366,7 +6368,11 @@ function applyOneAction(
      "the cheapest train" against a later roster would take a different train on the rebuild than it took in
      the game, which is the whole class of bug #902's "an old log replays to the game it was played as" rule
      exists to prevent.
-     REFUSES BY RETURNING THE STATE IT WAS HANDED (#778), like every other gate here. */
+     REFUSES BY RETURNING THE STATE IT WAS HANDED (#778), like every other gate here.
+     [UR-6 (audit Appendix B item 6): SUPERSEDED on pinned boards. Since #1661 (S9-1) the reducer DERIVES the stage,
+     train and award from the committed board and draw (below), and since UR-3 (OD-UR-1) a pinned table refuses this
+     request outright -- the stage is part of the run's own entry. The carried `model` / `cash` survive only on the
+     unpinned legacy path, which replays what it stored.] */
   if ("YellowSignEvent" in msg) {
     const { protocol_id, stage, model, cash, revenue_seed, debug_force } = msg.YellowSignEvent;
     const company = state.public_companies.find((entry) => entry.company_id === protocol_id);
@@ -6914,7 +6920,11 @@ function applyYellowSignOutcome(
      IT JOINS `owned_trains` LIKE ANY OTHER TRAIN and is ALSO listed in `ghost_trains`, which is #979's
      shape: the roster stays the one place a fleet lives, and the exception is a mark beside it. A separate
      array of ghost trains would be a second roster to fall out of step with the first.
-     THE FLAG IS CLEARED HERE. "Remove the corporation's flag ... so it cannot re-occur." */
+     THE FLAG IS CLEARED HERE. "Remove the corporation's flag ... so it cannot re-occur."
+     [UR-6 (audit Appendix B item 5): the ruling's two clauses quoted above are SUPERSEDED by #1672 (S9-2): the gift
+     is the Depot's lowest open tier (`carcosaGiftModel`), not "the current phase's tier", and its train-limit
+     exemption is the gilding (`carcosan_trains`), for its whole Carcosa lifetime -- not "until the end of the
+     Operating Round". `ghost_trains` is provenance only.] */
   return {
     ...state,
     public_companies: state.public_companies.map((entry) =>

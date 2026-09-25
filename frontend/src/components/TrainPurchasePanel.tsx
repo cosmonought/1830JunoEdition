@@ -99,6 +99,12 @@ export interface TrainTradeProposal {
    *  the gilded copy (the Blood Price), `false` an ordinary one. Absent when the seller holds none: the sale is unnamed,
    *  exactly as before UR-4. */
   gilded?: boolean;
+  /** UR-6 (independent UR-4 review D1): DISPLAY ONLY, never sent -- whether the authority will settle this offer as the
+   *  Blood Price if the seller accepts. Derived by the shell from the canonical predicate
+   *  (`offerSettlesAsBloodPrice` -> `isCarcosanTransfer`), so an UNNAMED offer the authority resolves to the seller's
+   *  only gold-trimmed copy is disclosed exactly as a named one is. `gilded` above is the wire field; this is the
+   *  answer. Absent means "not the Blood Price" (every standard game; the contract path, which has no Carcosa). */
+  bloodPrice?: boolean;
 }
 
 /** A price is any integer of at least 1 -- `train_trade::MINIMUM_TRAIN_PRICE`.
@@ -256,6 +262,10 @@ export function TrainPurchasePanel({
   /* #1702 (GR-3, U-11): the Final Run copies the row shows greyed, and the distinct sentences explaining them. */
   const exchangeFinalRun = dieselExchange?.finalRun ?? [];
   const exchangeFinalRunReasons = Array.from(new Set(exchangeFinalRun.map((entry) => entry.reason)));
+  /* UR-6 (OD-UR-7, UR-3's deferral): the gold-trimmed Carcosa copies the row shows greyed, and their sentences -- the
+     same treatment as the Final Run copies above. */
+  const exchangeGilded = dieselExchange?.gilded ?? [];
+  const exchangeGildedReasons = Array.from(new Set(exchangeGilded.map((entry) => entry.reason)));
   const exchangeCost = dieselExchange?.cost ?? 0;
 
   /* ---- Corporate section state ---- */
@@ -981,7 +991,10 @@ export function TrainPurchasePanel({
                DEAD WITH ITS REASON (#619): the gate's sentence is the button's title and the line under it. */}
             {/* #1702 (GR-3, U-11): the row also appears for a corporation whose only 4/5/6 is on its Final Run --
                 greyed, with the refusal's sentence -- rather than vanishing and leaving the player to guess. */}
-            {dieselExchange && onExchangeForDiesel && (exchangeModels.length > 0 || exchangeFinalRun.length > 0) && (
+            {/* UR-6: and for one whose only 4/5/6 is gold-trimmed by Carcosa (OD-UR-7), for the same reason. */}
+            {dieselExchange &&
+              onExchangeForDiesel &&
+              (exchangeModels.length > 0 || exchangeFinalRun.length > 0 || exchangeGilded.length > 0) && (
               <div style={styles.exchangeRow}>
                 <span style={styles.exchangeLead}>Trade in</span>
                 <div style={styles.exchangeChips} role="radiogroup" aria-label="Train to trade in for a D-train">
@@ -1016,6 +1029,25 @@ export function TrainPurchasePanel({
                       title={entry.reason}
                       aria-label={`${entry.model}-train on its Final Run: ${entry.reason}`}
                       data-testid="exchange-final-run-chip"
+                    >
+                      {entry.model}
+                    </button>
+                  ))}
+                  {/* UR-6 (OD-UR-7): a gold-trimmed Carcosa copy, shown and not selectable -- the Final Run chip's
+                      treatment and the same style; the reason is the title, the accessible name, and the visible line
+                      under the row. */}
+                  {exchangeGilded.map((entry, index) => (
+                    <button
+                      key={`gilded-${entry.model}-${index}`}
+                      type="button"
+                      role="radio"
+                      aria-checked={false}
+                      aria-disabled={true}
+                      disabled
+                      style={{ ...styles.exchangeChip, ...styles.exchangeChipFinalRun }}
+                      title={entry.reason}
+                      aria-label={`Gold-trimmed ${entry.model}-train: ${entry.reason}`}
+                      data-testid="exchange-gilded-chip"
                     >
                       {entry.model}
                     </button>
@@ -1055,6 +1087,14 @@ export function TrainPurchasePanel({
                 {exchangeModels.length > 0 &&
                   exchangeFinalRunReasons.map((reason) => (
                     <p key={reason} style={styles.note} data-testid="exchange-final-run-note">
+                      {reason}
+                    </p>
+                  ))}
+                {/* UR-6: the gold-trimmed copies explain themselves beside an ordinary candidate, as the Final Run ones do;
+                    with none, the gate's sentence above already names the gilding. */}
+                {exchangeModels.length > 0 &&
+                  exchangeGildedReasons.map((reason) => (
+                    <p key={reason} style={styles.note} data-testid="exchange-gilded-note">
                       {reason}
                     </p>
                   ))}
@@ -1528,6 +1568,7 @@ export function TrainTradePrompt({
   onReject,
 }: TrainTradePromptProps) {
   if (!proposal) return null;
+  const bloodPrice = proposal.bloodPrice === true;
 
   return (
     <div style={styles.promptRoot} role="alertdialog" aria-label="Train offer">
@@ -1538,14 +1579,18 @@ export function TrainTradePrompt({
 
       <p style={styles.promptBody}>
         <strong>{proposal.buyerTicker}</strong> wants to buy{" "}
-        {proposal.gilded === true ? "the gold-trimmed " : proposal.gilded === false ? "an ordinary " : "a "}
+        {bloodPrice ? "the gold-trimmed " : proposal.gilded === false ? "an ordinary " : "a "}
         <strong>{proposal.modelType}-train</strong> from{" "}
         <strong>{proposal.sellerTicker}</strong> for <strong>${proposal.price}</strong>.
       </p>
       {/* UR-4 (OD-UR-5(b), (c)): the seller answers for one copy, so it is told which -- and, for the gold-trimmed
           copy, that the sale is the Blood Price: the BUYER's share price drops, and the seller is released from
-          the curse. An ordinary copy's offer leaves the gilded copy (and the curse) exactly where they are. */}
-      {proposal.gilded === true && (
+          the curse. An ordinary copy's offer leaves the gilded copy (and the curse) exactly where they are.
+          UR-6 (independent UR-4 review, D1): KEYED ON WHAT THE AUTHORITY WILL SETTLE, not on the wire field. This read
+          `proposal.gilded === true`, so an UNNAMED offer for a seller's only gold-trimmed copy -- legal, and settled as
+          the Blood Price -- was shown as "a 6-train" with no warning. `bloodPrice` is the shell's answer from the
+          canonical predicate; the same prompt is the pending-offer view every other seat reads ("Waiting on ..."). */}
+      {bloodPrice && (
         <p style={styles.promptWho} role="note">
           This is the Blood Price: {proposal.buyerTicker}&apos;s share price will drop (1 cell Left, 1 cell Down), and{" "}
           {proposal.sellerTicker} is released from the Carcosan curse.
@@ -1576,7 +1621,7 @@ export function TrainTradePrompt({
           }}
           title={
             viewerIsSeller
-              ? `Sell one ${proposal.modelType}-train to ${proposal.buyerTicker} for $${proposal.price}.`
+              ? `Sell ${bloodPrice ? "the gold-trimmed" : "one"} ${proposal.modelType}-train to ${proposal.buyerTicker} for $${proposal.price}.`
               : `Only ${proposal.sellerPresidentLabel} can accept this offer.`
           }
         >

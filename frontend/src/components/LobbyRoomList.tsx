@@ -48,7 +48,8 @@ const RULE_TITLES: ReadonlyArray<{
   { key: "gentleRust", title: "Gentle Rust" },
   { key: "dynamicStockMarket", title: "Dynamic Market" },
   { key: "delayedAuction", title: "Delayed Auction" },
-  { key: "unpredictableRevenue", title: "Unpredictable Routes" },
+  // UR-6 (UR-F14; OD-UR-12 = 12-A, D-45): the canonical name. The room list said "Unpredictable Routes".
+  { key: "unpredictableRevenue", title: "Unpredictable Revenue" },
 ];
 
 /** The house rules in force, as titles. The bank is a column of its own, so it is not repeated here. */

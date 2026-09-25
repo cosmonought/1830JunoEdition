@@ -108,6 +108,11 @@ export interface TrainBadgeCommonProps {
  *  typo into a red test rather than a chip that lost its icon in one game state nobody plays often. */
 export const YELLOW_SIGN_IMAGE = "/images/yellow-sign.png";
 
+/** UR-6 (UR-F12): what a gold-trimmed Carcosa chip says to a hovering player -- the rule, since a chip has no board to
+ *  ask whether a Diesel has been bought yet. See the chip's note where it is used. */
+export const CARCOSA_CHIP_TOOLTIP =
+  "Gold-trimmed Carcosa train — a gift of the Yellow Sign. Occupies no train-limit slot while it stays gold-trimmed, and cannot be traded in for a Diesel. It vanishes into the fog at the end of the Operating Round set after the one in which a Diesel is first bought from the Bank (or after the set it arrived in, if a Diesel came first) — unless another corporation buys it first and pays the Blood Price.";
+
 export interface TrainChipsProps extends TrainBadgeCommonProps {
   /** `undefined`/`null` means UNKNOWN -- a contract predating the field -- and
    *  renders "?", never "none". See `PublicCompanyState.owned_trains`. `readonly`
@@ -628,8 +633,15 @@ export function TrainChips({
                 thisTurnPool.splice(at, 1);
                 return "this-turn";
               })();
+        /* UR-6 (UR-F12): THE GILDED CHIP STATES THE LIFETIME THE OWNER RULED. It said "Occupies no train-limit slot
+           until this Operating Round ends" -- #1046's OR-long grace, superseded by #1672 (the exemption lasts the whole
+           Carcosa lifetime) and by OD-UR-2 (D-38: the fog takes it at the END of the Operating Round set after the
+           doom trigger, never on a run). A chip has no board to ask whether the first Diesel has been bought, so it
+           names the rule, not a round: the exemption while gold-trimmed, no Diesel trade-in (OD-UR-7), the fog, and
+           the Blood Price the BUYER pays (OD-UR-5(b)). Named as the Buy Trains panel names it -- "gold-trimmed
+           Carcosa train" -- so a player meets one name for one train. `CARCOSA_CHIP_TOOLTIP`. */
         const warning = isGhost
-          ? "Yellow Sign ghost train — gifted by Carcosa. Occupies no train-limit slot until this Operating Round ends."
+          ? CARCOSA_CHIP_TOOLTIP
           : isFinalRun
             ? finalRunChipTooltip(finalRunWhen)
             : rustTooltip(tier, phase, outlook, inDangerWindow);
@@ -880,7 +892,7 @@ export function TrainChips({
             {isGhost ? (
               <img
                 src={YELLOW_SIGN_IMAGE}
-                alt="Carcosa ghost train"
+                alt="Gold-trimmed Carcosa train"
                 aria-label="Yellow Sign"
                 height={compact ? 9 : 10}
                 style={{

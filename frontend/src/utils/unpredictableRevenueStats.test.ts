@@ -747,7 +747,7 @@ describe("Carcosan Railways and The Redeemer when the BUYER pays the Blood Price
   /* #1421: Carcosan Railways is "a president who lived through any of the sequence without paying the Blood Price";
      The Redeemer "paid the Blood Price and took the Carcosan train off another corporation" -- the buyer, always. So a
      seller released by a buyer's Blood Price saw the Sign and never paid it: the logic stands under the buyer-pays ruling
-     (only the blurb's "to be rid of it" is stale -- copy, UR-6). */
+     (only the blurb's "to be rid of it" was stale -- copy, corrected in UR-6; the qualification pinned here is unchanged). */
   const board = giftSixBoard();
   const run = runMsg(CO, [LONG_ROUTE], [0], ["5"], GIFT_90);
   const gifted = reduce(board, run);

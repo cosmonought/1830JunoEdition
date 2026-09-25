@@ -984,7 +984,8 @@ export function gameHistoryFrom(log: readonly SandboxAction[], policy: ReplayPol
          OD-UR-5(b): the accolade is #1421's "a president who lived through any of the sequence without paying the Blood
          Price"; the one who pays it is the buyer (the Redeemer) and always was here, so a seller released by a buyer's
          Blood Price still saw the Sign and never paid it -- it keeps the accolade. Only the blurb's "to be rid of it",
-         which reads as though the Carcosan president could pay, is stale: copy, UR-6. */
+         which reads as though the Carcosan president could pay, was stale: copy, UR-6 (corrected there, `accolades.ts`;
+         the qualification here is unchanged). */
       const gildingOf = (company: typeof seller) => (company?.carcosan_trains ?? []).filter((entry) => entry === model).length;
       const gildingBurned = gildingOf(seller) > gildingOf(companyById(after, Number(body.seller_protocol_id)));
       if (seller && buyer?.president && gildingBurned && moved.includes(model)) {

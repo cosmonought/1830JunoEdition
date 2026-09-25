@@ -21,7 +21,7 @@
 export {};
 
 const { readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
-const { YELLOW_SIGN_IMAGE } =
+const { YELLOW_SIGN_IMAGE, CARCOSA_CHIP_TOOLTIP } =
   require("../components/TrainBadges") as typeof import("../components/TrainBadges");
 
 const BADGES = readStripped("components/TrainBadges.tsx");
@@ -129,7 +129,10 @@ describe("the image cannot break the chip it sits in", () => {
        is the point. The locomotive is decoration, because the model number beside it says everything; the
        sign is the ONLY thing on the chip that says this train is a ghost, so a reader that skipped it would
        hear an ordinary 5-train. */
-    expect(image()).toContain('alt="Carcosa ghost train"');
+    /* UR-6 (UR-F12): named as the Buy Trains panel names it -- "gold-trimmed Carcosa train" -- so a player meets one
+       name for one train (it was "Carcosa ghost train"). The contract this case pins -- `alt`, not `aria-hidden` --
+       is unchanged. */
+    expect(image()).toContain('alt="Gold-trimmed Carcosa train"');
     expect(image()).toContain('aria-label="Yellow Sign"');
     expect(image()).not.toContain('aria-hidden="true"');
     // The locomotive stays decorative, which is what makes the asymmetry deliberate rather than an oversight.
@@ -139,8 +142,13 @@ describe("the image cannot break the chip it sits in", () => {
   it("tells a hovering player what the unfamiliar icon means", () => {
     /* AN ICON NOBODY HAS SEEN BEFORE needs a sentence more than a rust countdown does -- and a ghost is never
        in a rust window, so replacing the tooltip costs nothing. */
-    expect(BADGES).toContain("Yellow Sign ghost train");
-    expect(BADGES).toContain("Occupies no train-limit slot");
+    /* UR-6 (UR-F12): the sentence now states the ruled lifetime -- the exemption while it stays gold-trimmed (#1672),
+       and the fog at the end of the Operating Round set after the doom trigger (OD-UR-2) -- where it said "until this
+       Operating Round ends", #1046's superseded grace. The name follows the Buy Trains panel's. */
+    expect(BADGES).toContain("CARCOSA_CHIP_TOOLTIP");
+    expect(CARCOSA_CHIP_TOOLTIP).toContain("Gold-trimmed Carcosa train");
+    expect(CARCOSA_CHIP_TOOLTIP).toContain("Occupies no train-limit slot while it stays gold-trimmed");
+    expect(CARCOSA_CHIP_TOOLTIP).not.toContain("until this Operating Round ends");
   });
 });
 

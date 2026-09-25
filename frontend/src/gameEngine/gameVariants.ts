@@ -495,7 +495,9 @@ export interface GameVariants {
    *  train-limit slot (`countableTrainCount`, #1034), and it may not be sold or traded in for a Diesel (#1700).
    *  See `gentleRustGrace.ts`. */
   gentleRust: boolean;
-  /** Every running train rolls a d6 against its printed revenue -- design note #903. */
+  /** One d6 per corporation per Operating turn, applied to the turn's aggregate printed route revenue and rounded to
+   *  the nearest $10 -- design note #903 as #941 ruled it (#903's per-train roll is superseded). [UR-6: audit
+   *  Appendix B item 1.] */
   unpredictableRevenue: boolean;
   /** The share price moves by how MUCH was paid rather than by the fact of paying -- design note #908. */
   dynamicStockMarket: boolean;
@@ -1111,6 +1113,11 @@ export function revenueFlavourClause(roll: RevenueRoll, parts: RevenueSeedParts)
  *
  * AND IT IS WHAT ITEMS 2 AND 3 REQUIRE ANYWAY: both the new log sentence and the floating modifier ask
  * "did THIS run's payout actually change", which is a question about one run.
+ *
+ * [UR-6 (audit Appendix B item 2): SUPERSEDED IN ITS PREMISE. #941 ruled one roll per corporation per Operating turn
+ * on the turn's aggregate printed revenue, so the die -- and this rounding -- now apply once to the TURN's total
+ * (`rollTurnRevenue`), not to each run. The helper is unchanged; only "per run" is history. Its exact-$5 tie is
+ * OD-UR-10 = 10-C's to change (UR-F20, UR-7), not this note's.]
  *
  * INTEGERS THROUGHOUT. `value + 5` and the division are the whole of it; `Math.floor` on the quotient is the
  * rounding, exactly as `applyRevenuePercent` does it one step earlier. */

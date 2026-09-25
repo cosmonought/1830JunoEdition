@@ -486,7 +486,14 @@ describe("the third stage moves the board like the other two", () => {
        is pinned here is that the shell still dispatches on the fog rather than taking the train itself. */
     expect(APP).toContain('resolved.stage === "fog"');
     expect(APP).toContain('"YellowSignEvent",');
-    expect(APP).not.toContain('stage: "fog"');
+    /* [UR-6: the dispatch is what may not name the stage. `stage: "fog"` now appears once in the shell -- the fog's
+       ruled CUE at the set boundary (`variantCueFor({ .., stage: "fog" })`, OD-UR-2's formal notice), which picks a
+       sound and a film and dispatches nothing -- so the pin reads the message bodies themselves.] */
+    const bodies = APP.match(/YellowSignEvent: \{[^}]*\}/g) ?? [];
+    expect(bodies.length).toBeGreaterThan(0);
+    for (const body of bodies) expect(body).not.toMatch(/\bstage:/);
+    expect(APP.split('stage: "fog"').length - 1).toBe(1);
+    expect(APP).toContain('variantCueFor({ line: CARCOSA_FOG_LINE, bucket: "unchanged", stage: "fog" })');
   });
 
   it("no longer takes the train at the round boundary", () => {
@@ -738,8 +745,12 @@ describe("the fog has ONE log line: the run's clause on the legacy path, the set
        (modal, sound, film at the boundary) is later work.] */
     expect(CARCOSA_FOG_LINE).toBe("The gold-trimmed train disappeared back into the fog.");
     expect(CARCOSA_FOG_LINE).toBe(FOG_LINE);
-    // Exactly one use: the boundary line (plus its import).
-    expect(APP.split("CARCOSA_FOG_LINE").length - 1).toBe(2);
+    /* Exactly one SENTENCE: the boundary line. [UR-6 (OD-UR-2's formal notice): the constant is now read twice at the
+       boundary -- the line, and the fog's ruled cue (`variantCueFor({ line: CARCOSA_FOG_LINE, .., stage: "fog" })`),
+       which plays a sound and a film and writes no sentence. So three uses with the import, and one `logInfo`.] */
+    expect(APP.split("CARCOSA_FOG_LINE").length - 1).toBe(3);
+    expect(APP.split("logInfo(`${CARCOSA_FOG_LINE}").length - 1).toBe(1);
+    expect(APP).toContain('variantCueFor({ line: CARCOSA_FOG_LINE, bucket: "unchanged", stage: "fog" })');
     expect(APP).toContain("for (const fog of describeFogAtSetEnd(settledBefore, settledAfter)) {");
     expect(APP).toContain("logInfo(`${CARCOSA_FOG_LINE} ${fog.ticker} lost its gold-trimmed ${trains}.`, \"\", null, \"sign\");");
     /* The old diff-derived receipt stays gone -- both halves, so a survivor cannot resurrect a second line. */

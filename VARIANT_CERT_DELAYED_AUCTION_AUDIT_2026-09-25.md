@@ -4,6 +4,7 @@
 OD-DA-4 and the lobby-copy ruling recorded (§19; ledger D-52 … D-56); two review corrections applied — DA-4's
 standard-game obligation (§22) and the pre-closure v10 log scan (§23). rev 1 is the audit as reviewed; its analysis is kept
 unchanged below except where marked *(rev 2)*.
+**rev 3** (2026-09-25): OD-DA-2b decided on owner review (§19; ledger D-57); one wording check noted for DA-5.
 
 **Date:** 2026-09-25 · **Pass:** DA-1 (audit / design only — no gameplay code changed) · **Status of the variant:**
 `DEFERRED — PRE-LAUNCH VARIANT CERTIFICATION REQUIRED` (S9-7). **NOT certified.**
@@ -494,7 +495,7 @@ OD-DA-3.
 | R17 | No corporate purchase of unsold privates | §3.1 | `BuyPrivateCompany` owner check | refused | `moneyConservation.test.ts:385` | PASS; UI false affordance DA-F8k |
 | R18 | Corporate window after the auction (phases 3–4, ½–2×) | §3.1 | offer authority | correct | `offerMatrix74PrivatePurchase.test.ts` | PASS; MISSING TEST (DA) |
 | R19 | Privates close with the first 5-train, also unsold ones | §2.5 | `1349-1356` | closed in `private_companies`, **still offered by the atom** | none | **BUG DA-F9 (LOW)** — *(rev 2)* intended behaviour decided (D-55: the delayed auction is cancelled) |
-| R20 | Certificate limit / 60% when the auction pushes a player over | §4.3 (silent for this case) | divestment debt | allowed; conform at next SR turn | none | **OWNER DECISION OD-DA-2** — *(rev 2)* decided for the forced C&A grant (D-53); OD-DA-2b open |
+| R20 | Certificate limit / 60% when the auction pushes a player over | §4.3 (silent for this case) | divestment debt | allowed; conform at next SR turn | none | **OWNER DECISION OD-DA-2** — *(rev 2)* decided (D-53; OD-DA-2b → D-57, rev 3) |
 | R21 | Private hexes before the auction | §6.2.1(4) + S6-7 / #1694 (recorded reading: an unsold private releases — made on the premise that no tile is laid before the auction) | `privateReservations.ts:296-303` | open | `stage106LayTileClosure.test.ts:531` | **OWNER DECISION OD-DA-3** — *(rev 2)* decided (D-54): current behaviour stands; rationale amended |
 | R22 | Bank break in the trigger set → end, no auction | §8 / rulebook end rule | `4668-4674` | GameEnd first | none (DA) | PASS; MISSING TEST |
 | R23 | Replay / restore / undo | architecture | rebuild from log | correct by construction | standard only | PASS; MISSING TEST |
@@ -525,7 +526,7 @@ OD-DA-3.
 code-traced) · **MISSING TEST — 12** (DA-T1 … T12)
 · **STALE COPY/UI — 14 surfaces** (DA-F8a–n) · **OWNER DECISION — 3** (OD-DA-1 … 3) · **DEFERRED NONBLOCKER — 1**
 (DA-F11). *(rev 2: every OWNER DECISION above is now decided — §19 — except OD-DA-2b, the residual scope of
-OD-DA-2; OD-DA-4 was raised and decided on review.)*
+OD-DA-2; OD-DA-4 was raised and decided on review.)* *(rev 3: OD-DA-2b decided — D-57.)*
 
 **Stop-condition note.** DA-F1, DA-F2, DA-F5 and DA-F7 reach the standard game; DA-F5 does so in legitimate play
 (probe R1). None invalidates the certification premise: the auction's own buy / bid / contest / markdown / revenue rules
@@ -553,10 +554,20 @@ rev-1 analysis that follows is kept as the record of the options considered.**
   in the immediately following Stock Round and may not make an ordinary stock purchase while illegally over the applicable
   limit." DA-5 checks that the existing divestment debt (`forcedDivestment.ts`; S8-11 m5 — it blocks buying and passing)
   implements "first legal opportunity" exactly, including a turn on which no legal sale exists.
-  **OD-DA-2b — OPEN (scope residue; not decided here).** The ruling is worded for the forced C&A grant. The rev-1 question
-  also covered a voluntary face-value purchase or bid, a lone-bid award and a forced $0 SV taking that puts a player over
-  the certificate limit (a private certificate counts). Today these are allowed and the divestment debt applies. To be
-  confirmed before DA-5.
+  **OD-DA-2b — DECIDED (D-57, rev 3).** "A player may acquire a private company through the delayed auction even if
+  that acquisition, or a mandatory share benefit attached to it, temporarily puts the player over the overall
+  certificate limit or an applicable corporation ownership limit. This applies to: a competitive auction win; a
+  single-bid award; a forced $0 SV acquisition; mandatory stock/share consequences of the acquired private. The player
+  must cure every curable excess at the first legal opportunity during their next Stock Round turn and may not make an
+  ordinary stock purchase while illegally over a limit. However, a player may not voluntarily place or increase a bid
+  if winning that private would create an excess that cannot be cured by legal stock sales in the immediately
+  following Stock Round. Mandatory acquisitions, especially the forced $0 SV taking, remain allowed even if they
+  create such an overage; the game must not deadlock." Implementation (DA-5): a bid / raise refusal for an incurable
+  excess (auction authority, both locks); the divestment debt limited to curable excess — today it blocks buying and
+  passing until sold down (S8-11 m5), which would deadlock a player with no legal sale; and a no-deadlock guarantee
+  after a mandatory acquisition. *Wording check for DA-5 (not a new decision):* the curability restriction names bids
+  and raises; a voluntary face-value purchase of the lowest private (§1.2 option 2) falls under the general allowance
+  as worded — confirm before implementing if the restriction is meant to reach it.
 - **OD-DA-3 — unsold private-company hexes — DECIDED (D-54).** "Before the delayed auction, ordinary track construction is
   governed by the ordinary track rules. An unsold private does not create a blanket prohibition on laying ordinary track on
   its printed hex. Ownership-specific private powers remain unavailable until that private is owned. Amend the prior
@@ -704,10 +715,10 @@ $0 path, `SetBoPar` ownership, Waterfall* gate). T9 synthetic board: first 5-tra
 
 | Pass | Scope | Model | Depends on | Replay-semantic? | Owner gate |
 |---|---|---|---|---|---|
-| **DA-2** | Owner rulings OD-DA-1 … 3; copy sign-off for DA-F8a — *(rev 2)* **done on owner review 2026-09-25** (D-52 … D-56); OD-DA-2b open | — (owner) | DA-1 | — | the rulings |
+| **DA-2** | Owner rulings OD-DA-1 … 3; copy sign-off for DA-F8a — *(rev 2)* **done on owner review 2026-09-25** (D-52 … D-56); OD-DA-2b decided (D-57, rev 3) | — (owner) | DA-1 | — | the rulings |
 | **DA-3** | Authority gates: DA-F1 (round / activity gate for every auction message, both locks), DA-F2 (`SetBoPar` requires the named player to own the BO private + `boIsLocked`), DA-F7 (B&O par owed before handoff / certificate reserved); standard-game goldens and a corpus sweep for refusal-added effects | **Extra** (mechanical, but touches Classic authority — review the corpus sweep carefully) | DA-1 | refusal-added (Classic + DA) | full-suite gate |
 | **DA-4** | Seating and Priority Deal: DA-F3 (seed the delayed auction from the PD holder), DA-F4 + DA-F5 (derive the post-auction PD from the auction's own record of the last face-value purchase, not from the seat mirror), reconciling #905 / #1235 in one rule for both openings | **MAX** (touches the standard auction's PD and #1235's reasoning; proof obligation *(rev 2 review correction)*: "Standard auction behavior and replay remain unchanged except for the explicitly certified DA-F5 Priority Deal correction.") | DA-3 | yes (DA logs; standard logs with a $0 taking) | full-suite gate |
-| **DA-5** | Private-grant consequences: DA-F6 (conservation, presidency, float) implementing D-52 (reserved PRR certificate), D-53, D-54 (no behaviour change; comment rationale) and D-55 (the first 5-train cancels the pending auction, releases the reservation, unlocks the B&O — DA-F9) *(rev 2)* | **Extra** | DA-2, DA-3 | yes (DA only; OD-DA-3 possibly both) | full-suite gate |
+| **DA-5** | Private-grant consequences: DA-F6 (conservation, presidency, float) implementing D-52 (reserved PRR certificate), D-53, D-54 (no behaviour change; comment rationale) and D-55 (the first 5-train cancels the pending auction, releases the reservation, unlocks the B&O — DA-F9) *(rev 2)*; D-57 (auction overage rule: bid / raise refusal for an incurable excess, curable-only divestment, no deadlock) *(rev 3)* | **Extra** | DA-2, DA-3 | yes (DA only; OD-DA-3 possibly both) | full-suite gate |
 | **DA-6** | UI / copy: DA-F8a–n (DA-F8a per D-56 *(rev 2)*), Rules Reference variant branches, the false affordance, the Activity Log line at the boundary | **Extra** | DA-2 … DA-5 | no | owner copy review |
 | **DA-7** | Certification game G-DA + tails + DA-T1 … T12; S10-6(A) / S10-18(B) residue closed by tests | **Extra** (MAX only if the game design needs rework) | DA-3 … DA-6 | no (tests) | full-suite gate |
 | **DA-8** | Version closure v10 → v11, changelog, backlog closure, certification record | **Extra** | DA-7 | the boundary itself | owner full-suite gate + commit |
@@ -748,6 +759,7 @@ must not be silently reinterpreted under v11 semantics**. `RULES_ENGINE_VERSION`
 
 *(rev 2, owner review 2026-09-25: accepted for implementation planning; OD-DA-1 … OD-DA-4 and the lobby copy decided —
 D-52 … D-56; OD-DA-2b open; review corrections recorded in §22 and §23. Still NOT certified.)*
+*(rev 3: OD-DA-2b decided — D-57.)*
 
 Delayed Auction remains `DEFERRED — PRE-LAUNCH VARIANT CERTIFICATION REQUIRED` and is **not certified**. The owner spec
 is confirmed and consistently implemented at the trigger; the general auction is sound; eight defects (five HIGH, two

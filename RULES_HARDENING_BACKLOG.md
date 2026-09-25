@@ -38,7 +38,7 @@ interpretation of, the 2018 rulebook (or a product ruling), recorded so it is ne
 | 7 | Transaction + cash authority / auction | done in five slices — 7.1 `08a59ec` (money ledger), 7.2 `a927e5f` (stock / par), 7.3 `d0a0792` (auction), 7.4 `6ecdfb1` (offers, consent, replay-safe settlement identity); **7.5** (`RULES_ENGINE_VERSION` 4 → 5, replay / golden / corpus reconciliation — `BATCH7.5_REPLAY_VERSION_CLOSURE_2026-09-16.md`, uncommitted, awaiting the owner's full-suite gate) |
 | 8 | Stock / OR edge cases + timing | Part B — design pass done 2026-09-16 (`STAGE8_AUTHORITY_DESIGN_2026-09-16.md`: five slices 8.1 → 8.5, one 5 → 6 bump at closure); **owner rulings R1–R4 recorded 2026-09-16** (design §0, D-29 … D-32), **S8-14 ruled 2026-09-17** (design §0, D-33); Opus is the default model for every Stage-8 slice; **Slice 8.1 implemented 2026-09-16 — S8-1 / S8-3 / S8-4 `RESOLVED` (**committed `05b5dfc`**; design §2.8)**; **Slice 8.2 implemented 2026-09-16 — S8-5 / S8-6 / S8-12 / S8-13 `RESOLVED`; S8-14 `RESOLVED` 2026-09-17 by the owner's ruling (the tiled OO home hex, #1617) (**committed `efe4098`**; design §5.9)**; **Slice 8.3 implemented 2026-09-17 — S8-2 `RESOLVED` (#1620, design §4.4): `presidentFor(company, seating)` with §5.4's clockwise tie-break from the former president's seat, one ordering rule for settlement and forced-sale projection alike, corpus-neutral (18 logs / 3,131 entries / 7 presidency changes / 0 ties / 0 disagreements); S10-18's presidency-tie gap closed; **S8-15 `RESOLVED` 2026-09-17 by the owner's ruling** (the Scenario-D presidency exchange, #1622: two ordinary 10 %s where the successor has them, otherwise the other-20 card one-for-one for the President's Certificate, percentages unmoved either way); **S9-14 `RESOLVED` 2026-09-17 — absorbed into 8.3 by owner ruling** (#1624: V-7.2's 10 % exchange certificate must already be in the Bank Pool before a half-sale of the other-20, and a president who must first receive that card during a presidency transfer is subject to the same requirement — a sale cannot supply its own prerequisite); **S9-13 filed and left OPEN by the same ruling** (the chart walks one row per 10 %, not per certificate — Stage 9) (**committed `02a9838`**); **Slice 8.4 implemented 2026-09-17 — S8-10 `RESOLVED`** (#1630–#1634, design §6.8): the M&H exchange is an authority of its own (`mohawkExchange.ts`), a free player-initiated interjection that consumes no Stock Round purchase, seat, pass streak or Priority Deal, queued as `pending_mh_exchange` when the request arrives off-turn and settled — fully revalidated — at the next legal between-turn boundary, ahead of every `buildOperatingOrder` so an SR→OR float is never locked out of the round it just qualified for; the owner's source choice is never switched for them (**committed `fc5a575`**); **Slice 8.5 implemented 2026-09-17 — the closure pass (UNCOMMITTED, awaiting the owner's review and full-suite gate; design §17)**: `RULES_ENGINE_VERSION` **5 → 6** with changelog row 6 and the derived supported list, **S8-8 `RESOLVED`** (#1640, the last share-price nominal out of the 6.6.3 projection), the corpus reconciliation measured from HEAD under v6 (18 files / 4,105 stored / 3,103 applied / 1,131 reducer no-ops / deterministic 18 of 18 / 0 boards ending with a queued M&H request), the five closure matrices and eight static source audits (`stage85Matrices.test.ts`), and **S10-23 / S10-24 filed** by that auditing |
 | 9 | Variants + map data + variant authority | **CLOSED 2026-09-19, `RULES_ENGINE_VERSION` 7** — see the Stage 9 closure banner (Part B) |
-| 10 | Replay / settlement / release hardening | **CLOSED 2026-09-23, `RULES_ENGINE_VERSION` 8** (authority / replay / tooling slices 10.1–10.6 + the closure pass) — see the Stage 10 closure banner (Part B); deferred S10 items are assigned to later phases there. **Next phase: VARIANT CERTIFICATION** (Gentle Rust, Unpredictable Revenue, Delayed Auction) — *(2026-09-24)* **standalone Gentle Rust CERTIFIED, `RULES_ENGINE_VERSION` 9** (Variant Certification 1A, GR-1 … GR-5, #1699–#1705; S9-7); Unpredictable Revenue: **UR-1 audit / design done 2026-09-24** (verdict C, NOT certified — S9-7, `VARIANT_CERT_UNPREDICTABLE_REVENUE_AUDIT_2026-09-24.md`); **owner rulings recorded 2026-09-24 (UR-2 part 1: 10 of 13 decided — D-36 closed, D-37 … D-45; OD-UR-5 / -6 / -10 open) — UR-3 unblocked**; *(2026-09-24, documentation only)* **OD-UR-10 DECIDED — 10-C, an exact tie rounds toward printed (D-47); implementation pending (UR-7, UR-F20); OD-UR-5 / -6 then still open**; *(2026-09-24, documentation only)* **OD-UR-5 (a) and (c) and OD-UR-6 DECIDED (D-48, D-49) — OD-UR-5(b) still OPEN**; *(2026-09-24, documentation only)* **OD-UR-5(a) clarified by the owner (D-48): the cured train is an additional ordinary train whose synthetic-origin provenance survives only for the +1 supply accounting, and the Blood Price, an intercorporate purchase, changes no phase — no owner question remains on it**; *(2026-09-24, documentation only)* **OD-UR-5(b) DECIDED — the buyer only (D-50), and the OD-UR-6.1 per-train question DECIDED — the printed completed route (D-51): every Unpredictable Revenue owner decision is made (verdict B — specification complete, implementation defects remain)**; **UR-3 implemented 2026-09-24 — COMPLETE: owner-gated (full repository Jest), committed and pushed as `9d0cf3a`: run-bound Yellow Sign, fog at the end of N+1, UR-F4 / UR-F17, and UR-F19 under OD-UR-13 (decided during UR-3 — D-46: the Mark's train leaves the game; phase progression monotonic) — v9, NOT certified** (S9-7, audit rev 7); *(2026-09-25)* **UR-4 implemented — COMPLETE: owner-gated (full repository Jest), committed and pushed as `a6183b5`: the Blood Price copy by copy (UR-F21 `RESOLVED`) and paid by the buyer (UR-F22 `RESOLVED`), OD-UR-5(a) pinned live, the cured copy's provenance carried through the Bank Pool — v9, NOT certified** (S9-7, audit rev 8 / rev 9); *(2026-09-25)* **UR-5 implemented — COMPLETE: owner-gated (full repository Jest), committed and pushed as `0d8157e`: the variant's statistics as ruled (OD-UR-6 — UR-F8 `RESOLVED`: paid corporation revenue, printed completed routes per train, a Mark-nullified route nothing, the Carcosa gift no purchase, the Blood Price the buyer's; The Cowboy's printed line — UR-F9 `RESOLVED`) — derived history only, v9, NOT certified** (S9-7, audit rev 9 / rev 10); *(2026-09-25)* **UR-6 implemented — COMPLETE: owner-gated, committed locally as `cd889cb` (not pushed; local `main` one commit ahead of `origin/main`, as the owner confirmed): replay-neutral UI / copy / Rules Reference parity (UR-F12, UR-F13, UR-F14 `RESOLVED`; the independent UR-4 review's D1 — the Blood Price disclosed wherever the authority will settle one; U-42's copy; Appendix B 1 – 14) — v9, NOT certified** (S9-7, audit rev 10 / rev 11); *(2026-09-25)* **UR-7 implemented — COMPLETE: owner-gated (full repository Jest), committed and pushed as `ff7a04b` (with UR-6's `cd889cb`): OD-UR-10 = 10-C in the die's rounding (UR-F20 `RESOLVED`) with the Rules Reference's tie sentence; the host's Yellow Sign debug chip shown only where its force can act (UR-N62); the constructed certification game (G1, two tails, + G0) through the server's path; the matrix recomputed (59 / 3 / 0 / 0 / 0; 25 / 2 / 0 / 0 / 1); corpus unchanged, 0 ties — v9 (10-C owed to row 10), NOT certified; S10-21's completed game not built (routed); UR-8 remains** (S9-7, audit rev 11, `VARIANT_CERT_UNPREDICTABLE_REVENUE_CERTIFICATION_2026-09-25.md`); *(2026-09-25)* **UR-8 — UNPREDICTABLE REVENUE CERTIFIED (standalone and with Gentle Rust), `RULES_ENGINE_VERSION` 10**: the one deliberate 9 → 10 boundary (changelog row 10 — exactly the eight replay semantics of UR-3, UR-4 and UR-7), a v9 room held and never reinterpreted, the corpus and the constructed game unchanged across the boundary, S10-21 closed as superseded — **UR-1 … UR-8 complete**; uncommitted, awaiting the owner's full-suite gate (S9-7, Part E row 10, audit rev 12, certification document §Q); Delayed Auction still owed |
+| 10 | Replay / settlement / release hardening | **CLOSED 2026-09-23, `RULES_ENGINE_VERSION` 8** (authority / replay / tooling slices 10.1–10.6 + the closure pass) — see the Stage 10 closure banner (Part B); deferred S10 items are assigned to later phases there. **Next phase: VARIANT CERTIFICATION** (Gentle Rust, Unpredictable Revenue, Delayed Auction) — *(2026-09-24)* **standalone Gentle Rust CERTIFIED, `RULES_ENGINE_VERSION` 9** (Variant Certification 1A, GR-1 … GR-5, #1699–#1705; S9-7); Unpredictable Revenue: **UR-1 audit / design done 2026-09-24** (verdict C, NOT certified — S9-7, `VARIANT_CERT_UNPREDICTABLE_REVENUE_AUDIT_2026-09-24.md`); **owner rulings recorded 2026-09-24 (UR-2 part 1: 10 of 13 decided — D-36 closed, D-37 … D-45; OD-UR-5 / -6 / -10 open) — UR-3 unblocked**; *(2026-09-24, documentation only)* **OD-UR-10 DECIDED — 10-C, an exact tie rounds toward printed (D-47); implementation pending (UR-7, UR-F20); OD-UR-5 / -6 then still open**; *(2026-09-24, documentation only)* **OD-UR-5 (a) and (c) and OD-UR-6 DECIDED (D-48, D-49) — OD-UR-5(b) still OPEN**; *(2026-09-24, documentation only)* **OD-UR-5(a) clarified by the owner (D-48): the cured train is an additional ordinary train whose synthetic-origin provenance survives only for the +1 supply accounting, and the Blood Price, an intercorporate purchase, changes no phase — no owner question remains on it**; *(2026-09-24, documentation only)* **OD-UR-5(b) DECIDED — the buyer only (D-50), and the OD-UR-6.1 per-train question DECIDED — the printed completed route (D-51): every Unpredictable Revenue owner decision is made (verdict B — specification complete, implementation defects remain)**; **UR-3 implemented 2026-09-24 — COMPLETE: owner-gated (full repository Jest), committed and pushed as `9d0cf3a`: run-bound Yellow Sign, fog at the end of N+1, UR-F4 / UR-F17, and UR-F19 under OD-UR-13 (decided during UR-3 — D-46: the Mark's train leaves the game; phase progression monotonic) — v9, NOT certified** (S9-7, audit rev 7); *(2026-09-25)* **UR-4 implemented — COMPLETE: owner-gated (full repository Jest), committed and pushed as `a6183b5`: the Blood Price copy by copy (UR-F21 `RESOLVED`) and paid by the buyer (UR-F22 `RESOLVED`), OD-UR-5(a) pinned live, the cured copy's provenance carried through the Bank Pool — v9, NOT certified** (S9-7, audit rev 8 / rev 9); *(2026-09-25)* **UR-5 implemented — COMPLETE: owner-gated (full repository Jest), committed and pushed as `0d8157e`: the variant's statistics as ruled (OD-UR-6 — UR-F8 `RESOLVED`: paid corporation revenue, printed completed routes per train, a Mark-nullified route nothing, the Carcosa gift no purchase, the Blood Price the buyer's; The Cowboy's printed line — UR-F9 `RESOLVED`) — derived history only, v9, NOT certified** (S9-7, audit rev 9 / rev 10); *(2026-09-25)* **UR-6 implemented — COMPLETE: owner-gated, committed locally as `cd889cb` (not pushed; local `main` one commit ahead of `origin/main`, as the owner confirmed): replay-neutral UI / copy / Rules Reference parity (UR-F12, UR-F13, UR-F14 `RESOLVED`; the independent UR-4 review's D1 — the Blood Price disclosed wherever the authority will settle one; U-42's copy; Appendix B 1 – 14) — v9, NOT certified** (S9-7, audit rev 10 / rev 11); *(2026-09-25)* **UR-7 implemented — COMPLETE: owner-gated (full repository Jest), committed and pushed as `ff7a04b` (with UR-6's `cd889cb`): OD-UR-10 = 10-C in the die's rounding (UR-F20 `RESOLVED`) with the Rules Reference's tie sentence; the host's Yellow Sign debug chip shown only where its force can act (UR-N62); the constructed certification game (G1, two tails, + G0) through the server's path; the matrix recomputed (59 / 3 / 0 / 0 / 0; 25 / 2 / 0 / 0 / 1); corpus unchanged, 0 ties — v9 (10-C owed to row 10), NOT certified; S10-21's completed game not built (routed); UR-8 remains** (S9-7, audit rev 11, `VARIANT_CERT_UNPREDICTABLE_REVENUE_CERTIFICATION_2026-09-25.md`); *(2026-09-25)* **UR-8 — UNPREDICTABLE REVENUE CERTIFIED (standalone and with Gentle Rust), `RULES_ENGINE_VERSION` 10**: the one deliberate 9 → 10 boundary (changelog row 10 — exactly the eight replay semantics of UR-3, UR-4 and UR-7), a v9 room held and never reinterpreted, the corpus and the constructed game unchanged across the boundary, S10-21 closed as superseded — **UR-1 … UR-8 complete**; uncommitted, awaiting the owner's full-suite gate (S9-7, Part E row 10, audit rev 12, certification document §Q); Delayed Auction still owed — *(2026-09-25)* **DA-1 audit / design complete** (`VARIANT_CERT_DELAYED_AUCTION_AUDIT_2026-09-25.md`; NOT certified; DA-F1 … DA-F11; *(owner review 2026-09-25)* accepted for implementation planning, OD-DA-1 … 4 decided — D-52 … D-56, OD-DA-2b open — S9-7, Variant Certification 1C) |
 
 UI/polish-only items are **not** forced into a numbered stage; they live in Part C (the UX backlog).
 
@@ -297,7 +297,7 @@ board marks (`privateHexMarkers`: a framed-initials mark for a barred hex, the #
 the frame for a player-owned C&SL) and the hover / click sentence (`describePrivateHexStatus`). **D&H exception
 (#1694a, owner ruling on the revised 2018 text):** F16 is NOT barred — any railroad may lay there under the ordinary
 rules (connectivity included), which forfeits the D&H's powers (`dhPowerState`); its mark stays the star, never the
-frame, and the hover says so. #714 corrected precisely (blanket "never a restriction" wrong; F16 exception right).
+frame, and the hover says so. #714 corrected precisely (blanket "never a restriction" wrong; F16 exception right). *(Rationale amended 2026-09-25 by D-54 / OD-DA-3: an unsold private releases its hex **by ruling** — ordinary track rules govern its printed hex and ownership-specific powers stay unavailable until it is owned — not because "no tile is laid before the auction has sold everything", the premise the Delayed Auction removes. `privateReservations.ts` #1694 still states that premise; it is corrected in the implementing pass. Behaviour unchanged.)*
 **Pinned boards only** (#1696): the status is empty on a legacy board, so the marks follow the replay.
 *(Original entry, kept:)* Status `OPEN` (missing everywhere; `privateReservations.ts` is a badge). Rulebook §6.2.1 (4). Notes: audit M5.
 Replay: refusal-added — sweep; bump. Detail: add to `filterSandboxPlacements` (and therefore to both atoms):
@@ -1812,7 +1812,7 @@ Status, per variant (GR-5, 2026-09-24; UR-8, 2026-09-25): **Gentle Rust (standal
 RULES_ENGINE_VERSION 9`** · **Unpredictable Revenue — `CERTIFIED — CLOSED 2026-09-25 at RULES_ENGINE_VERSION 10`** (UR-8,
 the 9 → 10 boundary; awaiting the owner's full-suite gate and commit — "Variant Certification 1B — CLOSED" below) *(was
 `DEFERRED — PRE-LAUNCH VARIANT CERTIFICATION REQUIRED`; the progress note, as written at UR-7: UR-1 audit / design complete 2026-09-24, verdict C; owner rulings recorded 2026-09-24 — 10 of 13 decided, OD-UR-5 / -6 / -10 open; **UR-3 COMPLETE 2026-09-24 — owner-gated (full repository Jest), committed and pushed as `9d0cf3a`** — OD-UR-13, raised by UR-3, decided during it and implemented (D-46); **OD-UR-10 decided 2026-09-24 (10-C — an exact tie rounds toward printed; D-47; implementation pending, UR-7)**; **OD-UR-5 (a) and (c) decided (D-48) and OD-UR-6 decided (D-49; 6.1 in principle)**; *(later the same day)* **OD-UR-5(b) decided — the buyer only (D-50) — and the OD-UR-6.1 per-train question decided — the printed completed route (D-51): no owner decision remains open (verdict B — specification complete)**; *(2026-09-25)* **UR-4 COMPLETE — owner-gated, committed and pushed as `a6183b5` (UR-F21, UR-F22 `RESOLVED`; audit rev 8)**; *(2026-09-25)* **UR-5 COMPLETE — owner-gated, committed and pushed as `0d8157e` (UR-F8, UR-F9 `RESOLVED`; audit rev 9 / rev 10)**; *(2026-09-25)* **UR-6 COMPLETE — owner-gated, committed locally as `cd889cb`, not pushed (UR-F12, UR-F13, UR-F14 `RESOLVED`; audit rev 10 / rev 11)**; *(2026-09-25)* **UR-7 implemented — uncommitted, awaiting the owner's gate (UR-F20 `RESOLVED`; the constructed certification game; audit rev 11)**; NOT certified — UR-8 remains; see Variant Certification 1B below)* ·
-**Delayed Auction — `DEFERRED — PRE-LAUNCH VARIANT CERTIFICATION REQUIRED`** · **the Gentle Rust + Unpredictable Revenue
+**Delayed Auction — `DEFERRED — PRE-LAUNCH VARIANT CERTIFICATION REQUIRED`** *(DA-1 audit / design complete 2026-09-25 — audit complete, NOT certified; owner review the same day accepted it for implementation planning and decided OD-DA-1 … 4 — D-52 … D-56; see Variant Certification 1C below)* · **the Gentle Rust + Unpredictable Revenue
 interaction — `CERTIFIED` with Unpredictable Revenue at `RULES_ENGINE_VERSION` 10 (UR-8; the constructed game G1 plays
 both).** *(Was NOT certified until UR-8.)* *(OD-GR-3 owner-DECIDED 2026-09-24 — D-36: the Mark judges the fleet after the
 Run → Dividends settlement, so a Gentle Rust Final Run train is never a candidate; the interaction is implemented and
@@ -2148,6 +2148,63 @@ cryptographic seed source; AWS / live multiplayer, D-43), **UR-F15** (INFO), and
 UR-N11, UR-N24, R12. Evidence: `VARIANT_CERT_UNPREDICTABLE_REVENUE_CERTIFICATION_2026-09-25.md` §Q; specification:
 `VARIANT_CERT_UNPREDICTABLE_REVENUE_AUDIT_2026-09-24.md` (rev 12).
 
+
+**Variant Certification 1C — Delayed Auction — DA-1 audit / design (2026-09-25).** Status: **audit complete — NOT
+certified**; Delayed Auction stays `DEFERRED — PRE-LAUNCH VARIANT CERTIFICATION REQUIRED`. Document:
+`VARIANT_CERT_DELAYED_AUCTION_AUDIT_2026-09-25.md`. Baseline `8d42d68`, `RULES_ENGINE_VERSION` 10 (unchanged). DA-1 changed
+no gameplay code, test, fixture, golden or corpus; ran focused suites only (28 suites / 751 tests, all passing); committed
+nothing. Owner anchors confirmed and not contradicted: SR1 opens without the auction; the auction begins **after the
+Operating Round set in which the first 3-train is bought** (an OR-set boundary — not "the start of Phase 3"); the B&O is
+locked until the auction concludes (#904 / #904a / #905 / #1228). PASS: trigger timing and idempotence, replay / restore /
+undo by rebuild, the first-SR sale restriction (owner ruling Q2), private revenue before the auction, no corporate purchase
+of an unsold private, the corporate window after it, and the general auction rules inherited unchanged (M1 / M2 / S7-2).
+New items — all `OPEN` unless stated:
+- **DA-F1** (HIGH; DA + Classic) — no round / activity gate on the Waterfall* messages: the dormant atom is live in Stock
+  and Operating Rounds, actions apply as the atom's cursor (another player — probe: a forged SR1 `WaterfallBuyLowest`
+  charged a different player for the SV), a forged SR1 all-pass marks the SV down, and a forged `WaterfallPass` after any
+  auction pays an extra round of private income. Probe-confirmed.
+- **DA-F2** (HIGH; DA + the standard auction window) — `SetBoPar` asks neither the BO private's ownership nor
+  `boIsLocked`: any player can take the B&O presidency while the private is unsold. Probe-confirmed; pinned permissively by
+  `turnAuthority.test.ts:333` and `parMarkArrival.test.ts:134`.
+- **DA-F3** (HIGH; DA) — the delayed auction's first actor is dealt seat 0, not the Priority Deal holder (§1.2; #905's own
+  note). Probe-confirmed.
+- **DA-F4** (HIGH; DA) — the Priority Deal after the delayed auction is taken from the seat pointer, which steps once per
+  auction action but starts from the last operating president rather than the auction's first actor (probe: the PD went
+  to the last face-value buyer himself). Probe-confirmed.
+- **DA-F5** (MEDIUM; Classic, legitimate play) — the $0-SV branch moves the auction cursor two seats and the seat one,
+  so after an auction in which the SV was marked down to $0 and taken, the Stock Round opens with the last buyer instead
+  of his left neighbour. Probe-confirmed on a standard game.
+- **DA-F6** (HIGH; DA) — the C&A grant creates a PRR share when neither the IPO nor the pool holds 10%, and settles neither
+  the PRR presidency (§5.4, "immediately") nor its float at 60% (§5.3) at the grant — both wait for a later share trade,
+  so PRR can enter the next OR set unfloated. Probe-confirmed.
+- **DA-F7** (MEDIUM; Classic + DA) — the B&O par is not required before `OpenStockRound` and the President's Certificate is
+  not reserved for the BO owner once the B&O unlocks (UI-only gate). Probe-confirmed on a standard game (another player
+  parred the B&O in SR1; the owner's `SetBoPar` was then refused with the collision sentence).
+- **DA-F8** (UI / copy; 14 surfaces, audit §14 a–n) — incl. the owner-supplied lobby blurb "the start of Phase 3" (#1168;
+  owner copy sign-off needed), `AuctionPromptModal`'s hard-coded "Stock Round 1", the "Pre-Game" panel titles, the Rules
+  Reference Overview lead and phase-2 cell, the tutorials, the C&A long text, the B&O card note, and the "Buy Private
+  Company" false affordance before the auction. To Part C when scheduled.
+- **DA-F9** (LOW; DA edge) — a first 5-train inside the trigger set closes the privates, but the atom still offers them.
+  Code-traced.
+- **DA-F10** (tests) — no end-to-end delayed-auction test and no delayed fixture; gaps DA-T1 … DA-T12 (audit §20).
+- **DA-F11** `DEFERRED` (non-blocker) — no 3-train ever → no auction (acknowledged by #905); document and test on a short
+  bank.
+**Owner decisions — DECIDED on owner review, 2026-09-25 (Part D, D-52 … D-56):** OD-DA-1 — one specific 10% PRR
+certificate is reserved for the C&A from setup and granted with the ordinary post-share consequences (D-52); OD-DA-2 — a
+forced C&A grant may put the recipient over the certificate limit / 60% cap, cured at the first legal opportunity in the
+immediately following Stock Round, with no ordinary stock purchase while over (D-53) — **OD-DA-2b open**: the ruling's
+wording does not cover a voluntary auction purchase or bid, a lone-bid award or a forced $0 SV taking that exceeds the
+certificate limit; OD-DA-3 — unsold private hexes follow the ordinary track rules; the #1694 / S6-7 rationale is amended
+(D-54); OD-DA-4 — a first 5-train before the pending delayed auction cancels it, returns the reserved C&A certificate to
+ordinary PRR supply and unlocks the B&O (D-55); lobby copy (D-56).
+**Routing dispositions:** S10-6(A) mined (see S10-6); S10-18(B) covered at the reducer for the standard game, residue
+DA-T4 / DA-T12 (see S10-18); M1 (S7-3), M2 (S7-4) and M7 (S8-7) fixed in the general authority and inherited — not
+reopened; S8-5's Delayed-Auction re-check done by reading (no delayed-specific home-token path; the related question is
+OD-DA-3). **Proposed sequence:** DA-2 owner decisions (done on owner review, 2026-09-25) → DA-3 authority gates (F1, F2, F7; Extra) → DA-4 seating / Priority Deal (F3, F4, F5; MAX; **review correction** — its obligation is "Standard auction behavior and replay remain unchanged except for the explicitly certified DA-F5 Priority Deal correction.", never that all standard logs are unchanged) → DA-5 grant consequences and the rulings (F6, F9; D-52 … D-55; Extra) → DA-6 UI / copy (F8;
+Extra) → DA-7 certification game G-DA + tails + DA-T1 … T12 (Extra) → DA-8 closure with one deliberate `RULES_ENGINE_VERSION` 10 → 11 boundary (none before). **Review correction:** before that
+closure, scan **all** relevant v10 room / corpus logs — not only delayed-auction rooms — for an SV marked down to $0 followed
+by the forced $0 purchase, because DA-F5 affects legitimate Classic play; old v10 rooms are not silently reinterpreted under
+v11 semantics.
 
 **Owner ruling, recorded verbatim in substance.** Gentle Rust, Unpredictable Revenue and Delayed Auction have
 **not** received complete specification audits as independent optional variants. They must **not** be labelled
@@ -3429,6 +3486,12 @@ triage). `DEFERRED`.
 to that certification, inspected there rather than at Phase 4. (B) The remaining **forced-purchase / other useful**
 cases → **Phase-4 Rust retirement preflight**, which **must finish before `src/` / the Rust gameplay crate is
 deleted**. Nothing mined in the routing pass.
+**DA-1 (2026-09-25): (A) MINED** — `VARIANT_CERT_DELAYED_AUCTION_AUDIT_2026-09-25.md` §17. `src/tests.rs` has 13 auction tests; its
+interrupt cases (lone-bid cascade `10216`, contest `10315`, SV markdown `10465`, all-pass revenue `17070`, $0 forced
+taking `17150`) have TS equivalents except a dedicated lone-bid cascade test; neither side tests a multi-company cascade, a
+$0 taking followed by a cascade, a contest cascading into a contest, or the Priority Deal after an auction ending in a
+cascade / contest (Rust: left of the last winner; TS #1235: left of the last actor — see DA-F4 / DA-F5). Rust has no
+delayed auction. The tests are DA-T6 / DA-T7 (S9-7, Variant Certification 1C). (B) unchanged. S10-6 stays `DEFERRED` for (B).
 
 **S10-7. Engine tests and packaging.** 304 engine-adjacent suites still live in `frontend/src/utils/` (Jest
 `roots` + per-suite classification, Batch 1 §6d); a repo-root `shared/` package needs CRA's `ModuleScopePlugin`,
@@ -3646,6 +3709,12 @@ playtest if still missing. (B) **Auction escrow at the reducer** (S7-4 — aucti
 escrow) → **Variant Certification — Delayed Auction**, preferred so the auction authority gets one coherent test audit;
 no later than the UI / readiness sweep. (C) **Terrain-fee-once on an upgrade of preprinted track** → **UI / readiness +
 residual test-gap sweep**. No tests added here.
+**DA-1 (2026-09-25), (B):** reducer-level escrow coverage exists for the standard game since Batch 7.3
+(`auctionAuthority.test.ts` §2 / §3 / §5, lines 194-325 and 442-496), so the "without a machine-level test" wording is stale
+for (B). Residue owned by Delayed Auction certification: escrow with shares and cash in play during a delayed auction and the
+server-room path (DA-T4, DA-T12); the only escrow hole found is DA-F1 (bids accepted outside the auction). (B) is not closed
+until those tests exist. (A) is also reducer-tested (`stockTransactionAuthority.test.ts:607-631`); its ingress / real-run
+residue is DA-T1.
 
 **S10-19. August 2026 audits (`AUDIT_PART1_BACKEND.md`, `AUDIT_PART2_FRONTEND.md`).** Their actionable items
 were either fixed then (code cites "Audit G-5/G-9/G-11/G-12/G-15", "F-3", `config.ts` env for F-4,
@@ -4792,6 +4861,43 @@ the Revenue-per-OR chart, White Elephant and Little Engine read the paid turn to
 implemented — UR-5 (UR-F8) *(implemented 2026-09-25 — UR-5, uncommitted, awaiting the owner's gate: UR-F8 `RESOLVED`)*;
 derived history only, no version effect. `OWNER DECISION` (statistics). Source: the owner's
 ruling (UR audit rev 7, "Owner rulings" — OD-UR-6 row).
+
+**D-52. Delayed Auction: one specific 10% PRR certificate is reserved for the Camden & Amboy from setup (OD-DA-1 — DECIDED
+2026-09-25).** Owner ruling: "Reserve one specific 10% PRR certificate from setup until C&A's initial purchase. It is
+unavailable for ordinary stock purchase while reserved. When C&A is acquired, transfer that reserved certificate to the
+buyer and run the ordinary post-share consequences, including float and presidency reconciliation if applicable. The
+reserved certificate counts as sold only when granted." Removes DA-F6's share-creation case at its source; the presidency /
+float half of DA-F6 is delivered as the ordinary post-share consequences. Released to ordinary PRR supply if the C&A closes
+unsold (D-55). Not implemented — DA-5. `OWNER DECISION` (variant specification). Source: owner review of
+`VARIANT_CERT_DELAYED_AUCTION_AUDIT_2026-09-25.md` (§19).
+
+**D-53. Delayed Auction: a forced C&A share grant may place its recipient over the certificate limit and/or the 60% cap
+(OD-DA-2 — DECIDED 2026-09-25).** Owner ruling: "A forced C&A share grant may temporarily place the recipient over the
+certificate limit and/or 60% ownership cap. The recipient must cure the violation at the first legal opportunity in the
+immediately following Stock Round and may not make an ordinary stock purchase while illegally over the applicable limit."
+Scope note (not part of the ruling): a voluntary auction purchase or bid, a lone-bid award or a forced $0 SV taking that
+puts a player over the certificate limit is not covered by this wording — **OD-DA-2b, open**, to be confirmed before DA-5.
+Not implemented — DA-5 (check the existing divestment debt against "first legal opportunity"). `OWNER DECISION`.
+
+**D-54. Delayed Auction: unsold private-company hexes follow the ordinary track rules (OD-DA-3 — DECIDED 2026-09-25;
+amends the #1694 / S6-7 rationale).** Owner ruling: "Before the delayed auction, ordinary track construction is governed by
+the ordinary track rules. An unsold private does not create a blanket prohibition on laying ordinary track on its printed
+hex. Ownership-specific private powers remain unavailable until that private is owned. Amend the prior #1694/S6-7 rationale
+accordingly." Current behaviour already matches; S6-7 is annotated; the `privateReservations.ts` #1694 comment is corrected
+in the implementing pass. #1694a (F16) is unchanged. `OWNER DECISION`.
+
+**D-55. Delayed Auction: a first 5-train bought before the pending delayed auction cancels it (OD-DA-4 — DECIDED
+2026-09-25).** Owner ruling: "Phase 5 wins. If the first 5-train is bought before the pending delayed auction occurs, unsold
+privates close and the delayed auction is cancelled. Any reserved/attached stock associated with an unsold private returns
+to ordinary corporate stock supply. In particular, the reserved C&A PRR certificate returns to normal PRR supply and B&O
+must no longer remain locked merely because its private can no longer be sold." Sets the intended behaviour for DA-F9. Not
+implemented — DA-5. `OWNER DECISION`.
+
+**D-56. Delayed Auction lobby description (owner copy ruling, 2026-09-25).** Replace the stale "start of Phase 3"
+description (`VARIANT_COPY.delayedAuction.blurb`, `gameVariants.ts:283`, #1168) with wording equivalent to: "after the
+Operating Round set in which the first 3-train is purchased, immediately before the next Stock Round." The ruling addresses
+the timing description; the closing sentence ("Watch your cash carefully …", pinned by `variantCopy.test.ts:182-187`) is not
+addressed by it. Not implemented — DA-6 (DA-F8a). `OWNER DECISION` (product copy).
 
 ---
 

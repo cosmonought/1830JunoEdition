@@ -493,10 +493,11 @@ export function operatingLegalityRefusal(
     return privatePurchaseRefusal(state, { buyerId: protocol_id, privateId: private_id, price }, actor, "settlement");
   }
   if ("BuyTrainFromCorporation" in msg) {
-    const { buyer_protocol_id, seller_protocol_id, model_type, price } = msg.BuyTrainFromCorporation;
+    const { buyer_protocol_id, seller_protocol_id, model_type, price, gilded } = msg.BuyTrainFromCorporation;
     return trainSaleRefusal(
       state,
-      { buyerId: buyer_protocol_id, sellerId: seller_protocol_id, model: model_type, price },
+      // UR-4 (OD-UR-5(c) = 5c-2): and the copy -- the same intent the reducer's core gate judges.
+      { buyerId: buyer_protocol_id, sellerId: seller_protocol_id, model: model_type, price, gilded },
       actor,
       mapGrid,
       "settlement",

@@ -222,6 +222,9 @@ export function nextDerivedAction(input: DerivedActionInput): DerivedAction | nu
             seller_protocol_id: trainOffer.seller_protocol_id,
             model_type: trainOffer.model_type,
             price: trainOffer.price,
+            /* UR-4 (OD-UR-5(c) = 5c-2): the copy the seller agreed to, when the offer named one. Only then -- an offer
+               that named none derives the settlement every offer before UR-4 derived, byte for byte (#232). */
+            ...(trainOffer.gilded === undefined ? {} : { gilded: trainOffer.gilded }),
           },
         },
         key,

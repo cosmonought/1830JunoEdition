@@ -146,23 +146,25 @@ describe("BuyTrainFromCorporation: the Blood Price occurs exactly when the legal
   const sale = M.buyTrain(PRR, NYC, "3", "150");
 
   it("C. a legal Carcosan transfer: the train and the money move, and exactly ONE Blood Price step lands", () => {
+    /* UR-4 (OD-UR-5(b), backlog D-50): the step lands on the BUYER (PRR), never on the seller (NYC) -- #1090's seller
+       move is superseded (UR-F22). Until UR-4 this case pinned NYC's token. */
     const board = gilded();
-    const mark = board.market_positions![NYC]!;
+    const mark = board.market_positions![PRR]!;
     const landed = projectBloodPriceMove(mark)!;
     const after = reduce(board, sale, P1);
     expect(trains(after, PRR)).toEqual([...trains(board, PRR), "3"]);
     expect(trains(after, NYC)).toEqual(["2"]);
     expect(treasury(after, PRR)).toBe(treasury(board, PRR) - 150);
     expect(treasury(after, NYC)).toBe(treasury(board, NYC) + 150);
-    expect([after.market_positions![NYC]!.x, after.market_positions![NYC]!.y, after.market_positions![NYC]!.price]).toEqual([
+    expect([after.market_positions![PRR]!.x, after.market_positions![PRR]!.y, after.market_positions![PRR]!.price]).toEqual([
       landed.x,
       landed.y,
       landed.price,
     ]);
-    // ONE step: not two, and no other token moved.
+    // ONE step: not two, and no other token moved -- the seller's included.
     expect(projectBloodPriceMove(landed)).not.toEqual(landed);
-    for (const id of [PRR, CO]) expect(after.market_positions![id]).toEqual(board.market_positions![id]);
-    expect(report(board, sale, P1)).toEqual({ companyId: NYC, from: mark.price, to: landed.price, reason: "bloodPrice" });
+    for (const id of [NYC, CO]) expect(after.market_positions![id]).toEqual(board.market_positions![id]);
+    expect(report(board, sale, P1)).toEqual({ companyId: PRR, from: mark.price, to: landed.price, reason: "bloodPrice" });
   });
 
   it("D. every refusal of the transfer: no train, no money, no Blood Price", () => {

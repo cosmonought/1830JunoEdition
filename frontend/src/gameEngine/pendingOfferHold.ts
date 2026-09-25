@@ -154,16 +154,26 @@ export function privateSettlementMatches(
   );
 }
 
-/** Whether this `BuyTrainFromCorporation` is the settlement of THIS offer: seller, buyer, model AND price. */
+/** Whether this `BuyTrainFromCorporation` is the settlement of THIS offer: seller, buyer, model AND price -- and, since
+ *  UR-4 (OD-UR-5(c) = 5c-2), THE COPY: the seller consented to the gold-trimmed copy or to an ordinary one, and a
+ *  settlement naming the other is not that consent. Absent on both sides is the unnamed sale every offer before UR-4
+ *  was, and still matches itself. */
 export function trainSettlementMatches(
   offer: TrainPurchaseOffer,
-  settlement: { buyer_protocol_id: number; seller_protocol_id: number; model_type: string; price: string | number },
+  settlement: {
+    buyer_protocol_id: number;
+    seller_protocol_id: number;
+    model_type: string;
+    price: string | number;
+    gilded?: boolean;
+  },
 ): boolean {
   return (
     offer.seller_protocol_id === settlement.seller_protocol_id &&
     offer.buyer_protocol_id === settlement.buyer_protocol_id &&
     offer.model_type === settlement.model_type &&
-    Number(offer.price) === Number(settlement.price)
+    Number(offer.price) === Number(settlement.price) &&
+    (offer.gilded ?? null) === (settlement.gilded ?? null)
   );
 }
 

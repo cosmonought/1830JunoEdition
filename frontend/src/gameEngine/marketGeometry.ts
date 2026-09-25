@@ -222,6 +222,9 @@ export function projectRiseMove(from: {
  *  ==================================================================
  *
  *  RULED: "Upon successful transfer, execute the Left 1, Down 1 market movement for the selling corporation."
+ *  [UR-4 -- SUPERSEDED BY OD-UR-5(b) (backlog D-50): the corporation that moves is the BUYER, and only the buyer; the
+ *  seller gets no movement (its benefit is release from the curse). The geometry below is unchanged -- which token it
+ *  is asked of is the chart arm's (`applySandboxMarketAction`, `buyer_protocol_id`). Do not restore the seller move.]
  *
  *  BUILT FROM THE TWO MOVES THAT ALREADY EXIST rather than as a new walk. The left step IS a withhold step,
  *  ledge rule and all, and the down step IS a share-sale step -- so this composes `projectDividendCellMove`

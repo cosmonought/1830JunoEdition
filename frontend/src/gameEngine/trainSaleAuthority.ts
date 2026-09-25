@@ -59,6 +59,71 @@ export interface TrainSaleIntent {
   model: string;
   /** As the message or the offer carries it (a string on the wire, #701). Judged as a whole number >= 1. */
   price: number | string;
+  /** UR-4 (OD-UR-5(c) = 5c-2): the copy named -- `true` the gold-trimmed one, `false` an ordinary one, absent unnamed.
+   *  See `resolveSaleCopy`. */
+  gilded?: boolean;
+}
+
+/* ==================================================================
+    UR-4 (OD-UR-5(c) = 5c-2, backlog D-48): THE SALE NAMES THE COPY -- A MULTISET CHOICE, NEVER A TRAIN IDENTITY
+   ==================================================================
+   OWNER RULING: "If the selling corporation owns a gilded copy and an ordinary copy of model X, the sale must
+   distinguish which copy is sold: selling the ordinary copy does NOT trigger the Blood Price and does not purify or
+   remove the gilded copy; selling the gilded copy DOES trigger the Blood Price."
+   WHAT WAS HERE BEFORE (UR-F21): nothing. The sale named a MODEL, and the Blood Price was "the seller's gilding names
+   the model" (`isCarcosanTransfer`) -- so a corporation holding a real 6 beside its gilded 6 could not sell the real
+   one without paying the Blood Price, being absolved and burning the gilding off the copy it kept.
+   THE SMALLEST REPRESENTATION THAT SAYS IT. Copies of one model are interchangeable except for two multiset marks
+   the seller already carries (`gameState.ts` #1089): the gilding (`carcosan_trains`) and a Gentle Rust reprieve
+   (`pending_rust_trains`, which GR-2 already keeps off the market, #1700). So the only question a sale can leave open
+   is "the gilded copy or an ordinary one", and one optional boolean on the message answers it -- the same multiset
+   reading `exchangeableTrains` gives the Diesel trade-in (OD-UR-7) and #1700 gives the reprieve. No train identity is
+   introduced anywhere; the stored log gains one optional field on a message only a Carcosan seller ever needs it on.
+   ABSENT IS STILL LEGAL WHERE IT CANNOT BE AMBIGUOUS -- a seller holding only gilded copies of the model (then it is the
+   Blood Price, as it always was) or only ordinary ones (then it is the ordinary sale every message before UR-4 was).
+   Where it could be either, an unnamed sale is REFUSED, atomically, at every moment (proposal, answer, settlement):
+   the authority does not guess which copy a president meant, and the client that sends it is told why. */
+
+/** The copies of `model` a seller could part with, by kind: gold-trimmed, and ordinary (neither gilded nor on a
+ *  Gentle Rust Final Run). Multisets throughout -- `min` guards a board whose marks outnumber its trains. */
+export function saleCopies(
+  seller: { owned_trains?: readonly string[] | null; carcosan_trains?: readonly string[] | null; pending_rust_trains?: readonly string[] | null },
+  model: string,
+): { gilded: number; ordinary: number } {
+  const owned = copiesOwned(seller.owned_trains ?? [], model);
+  const gilded = Math.min(owned, copiesOwned(seller.carcosan_trains ?? [], model));
+  const reprieved = copiesOwned(seller.pending_rust_trains ?? [], model);
+  return { gilded, ordinary: Math.max(0, owned - gilded - reprieved) };
+}
+
+/** Which copy this sale takes -- `"gilded"` (the Blood Price) or `"ordinary"` -- or `null` when the request names a copy
+ *  the seller does not hold, or names none where both kinds are held (ambiguous). An unnamed sale of a model with no
+ *  gilded copy is `"ordinary"` whatever else is true of it; whether the seller can sell at all is asked elsewhere. */
+export function resolveSaleCopy(
+  seller: Parameters<typeof saleCopies>[0] | null | undefined,
+  model: string,
+  gilded: boolean | undefined,
+): "gilded" | "ordinary" | null {
+  const copies = saleCopies(seller ?? {}, model);
+  if (gilded === true) return copies.gilded > 0 ? "gilded" : null;
+  if (gilded === false) return copies.ordinary > 0 ? "ordinary" : null;
+  if (copies.gilded > 0 && copies.ordinary > 0) return null;
+  return copies.gilded > 0 ? "gilded" : "ordinary";
+}
+
+/** The refusal `resolveSaleCopy`'s `null` stands for, in the words a president reads, or `null`. */
+export function saleCopyRefusal(
+  seller: Parameters<typeof saleCopies>[0] & { ticker?: string | null },
+  model: string,
+  gilded: boolean | undefined,
+): string | null {
+  if (resolveSaleCopy(seller, model, gilded) !== null) return null;
+  const ticker = seller.ticker ?? "This corporation";
+  if (gilded === true) return `${ticker} holds no gold-trimmed ${model}-train to sell.`;
+  if (gilded === false) {
+    return `Every ${model}-train ${ticker} holds is gold-trimmed by Carcosa — selling it is the Blood Price, so the sale must name the gold-trimmed copy.`;
+  }
+  return `${ticker} holds both a gold-trimmed and an ordinary ${model}-train; the sale must name which copy is sold (selling the gold-trimmed one is the Blood Price).`;
 }
 
 export type TrainSaleMoment = "proposal" | "answer" | "settlement";
@@ -127,6 +192,11 @@ export function trainSaleRefusal(
     // #1702 (GR-3): the sentence lives in `reprievedSaleReason` below, so the offer roster greys with these words.
     return reprievedSaleReason(seller, intent.model) as string;
   }
+  /* UR-4 (OD-UR-5(c) = 5c-2): AND THE COPY. A named copy the seller does not hold, or an unnamed sale where the seller
+     holds both a gold-trimmed and an ordinary copy, is refused here -- beside "owns the train", so the proposal, the
+     answer, the settlement and the Blood Price's chart step all refuse it together and nothing moves. */
+  const copyRefusal = saleCopyRefusal(seller, intent.model, intent.gilded);
+  if (copyRefusal !== null) return copyRefusal;
 
   /* ---- 7. A whole price of at least $1 (6.6) -------------------------------------------------- */
   if (!Number.isInteger(price) || price < 1) {
@@ -175,6 +245,7 @@ export function trainSaleRefusal(
       seller_protocol_id: intent.sellerId,
       model_type: intent.model,
       price,
+      gilded: intent.gilded, // UR-4: the seller agreed to THIS copy, not to the model
     });
   if (consented) return null;
   if (actor === null || actor === undefined) {
@@ -197,7 +268,7 @@ export function trainSaleRefusal(
  *  the payload's `seller_president` is narration. One offer at a time (ruled Q6). */
 export function proposeTrainPurchaseRefusal(
   state: GameStateResponse,
-  proposal: { seller_protocol_id: number; buyer_protocol_id: number; model_type: string; price: number | string },
+  proposal: { seller_protocol_id: number; buyer_protocol_id: number; model_type: string; price: number | string; gilded?: boolean },
   actor: string | null | undefined,
   mapGrid: MapGridResponse | undefined,
 ): string | null {
@@ -211,7 +282,13 @@ export function proposeTrainPurchaseRefusal(
   }
   return trainSaleRefusal(
     state,
-    { buyerId: proposal.buyer_protocol_id, sellerId: proposal.seller_protocol_id, model: proposal.model_type, price: proposal.price },
+    {
+      buyerId: proposal.buyer_protocol_id,
+      sellerId: proposal.seller_protocol_id,
+      model: proposal.model_type,
+      price: proposal.price,
+      gilded: proposal.gilded, // UR-4: the copy on offer
+    },
     actor,
     mapGrid,
     "proposal",
@@ -235,7 +312,7 @@ export function answerTrainPurchaseRefusal(
   if (!answer.accept) return null;
   return trainSaleRefusal(
     state,
-    { buyerId: offer.buyer_protocol_id, sellerId: offer.seller_protocol_id, model: offer.model_type, price: offer.price },
+    { buyerId: offer.buyer_protocol_id, sellerId: offer.seller_protocol_id, model: offer.model_type, price: offer.price, gilded: offer.gilded },
     actor,
     mapGrid,
     "answer",
@@ -285,4 +362,25 @@ export function reprievedSaleReason(
   return marked === 1
     ? `One of ${ticker}'s ${model}-trains is on its Gentle Rust final run and cannot be sold to another corporation; ${free === 1 ? "the other" : "the others"} can.`
     : `${marked} of ${ticker}'s ${model}-trains are on their Gentle Rust final run and cannot be sold to another corporation; ${free === 1 ? "one" : free} can.`;
+}
+
+/** ==================================================================
+ *   UR-4 (OD-UR-5(c) = 5c-2): WHICH ROSTER BADGES ARE THE GOLD-TRIMMED COPY
+ *  ==================================================================
+ *  The offer roster draws one badge per train (#282) and must let a buyer choose between the seller's gilded copy (the
+ *  Blood Price) and an ordinary copy of the same model. The gilding is a multiset beside `owned_trains`, so which
+ *  badge is "the" gilded one is a convention -- the one `TrainBadges` (#1088) and `finalRunPositions` (#1702) already
+ *  use: the marks are consumed in roster order, first match first. The choice the badge sends is the COPY KIND
+ *  (`gilded: true / false`), never the position, so the convention decides only which badge wears the gold. */
+export function gildedSalePositions(company: {
+  owned_trains?: readonly string[] | null;
+  carcosan_trains?: readonly string[] | null;
+}): boolean[] {
+  const marks = [...(company.carcosan_trains ?? [])];
+  return (company.owned_trains ?? []).map((model) => {
+    const at = marks.indexOf(model);
+    if (at < 0) return false;
+    marks.splice(at, 1);
+    return true;
+  });
 }

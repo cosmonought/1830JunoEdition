@@ -4004,6 +4004,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
       buyerTicker: offer.buyer_ticker,
       modelType: offer.model_type,
       price: offer.price,
+      // UR-4 (OD-UR-5(c)): the copy on offer, so the seller answers knowing whether it is the Blood Price.
+      ...(offer.gilded === undefined ? {} : { gilded: offer.gilded }),
     };
   }, [gameState?.train_purchase_offer]);
 
@@ -6903,6 +6905,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
              ==================================================================
              RULED: "The gold-trimmed train was transferred. A Blood Price was paid: [Selling Corp]'s stock
              dropped from $X to $Y."
+             [UR-4 (OD-UR-5(b), D-50): SUPERSEDED IN ONE WORD -- the corporation named is the BUYING one. The Blood
+             Price moves the buyer's marker Left 1 / Down 1 and never the seller's (UR-F22); `ticker` below is the
+             token that actually moved (`marketResult.moved.companyId`, the chart step's buyer), so the sentence
+             reads "[Buying Corp]'s stock dropped". Do not restore the seller.]
              ITS OWN LINE, NOT A CLAUSE ON THE SALE, which is the opposite of #1054's decision for the
              dividend and right for the opposite reason. A dividend's price move is a CONSEQUENCE OF THE
              DECLARATION and belongs in its sentence; this is a second event with its own cause, its own
@@ -10770,7 +10776,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
   // of these four is that they change what BOTH players can do next, and the
   // poll interval is too slow for an action the player just took themselves.
   const handleMakeTrainOffer = useCallback(
-    (input: { sellerProtocolId: number; modelType: string; price: string }) => {
+    (input: { sellerProtocolId: number; modelType: string; price: string; gilded?: boolean }) => {
       runGameplayAction("BuyTrainFromCorporation", {
         BuyTrainFromCorporation: {
           game_id: gameId,
@@ -10778,11 +10784,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
           seller_protocol_id: input.sellerProtocolId,
           model_type: input.modelType,
           price: input.price,
+          /* UR-4 (OD-UR-5(c) = 5c-2): the copy, when the panel named one (the seller holds a gold-trimmed copy of the
+             model). Room / sandbox only: the contract has no Carcosa, so the online path never names a copy. */
+          ...(sandbox && input.gilded !== undefined ? { gilded: input.gilded } : {}),
         },
       });
       refreshTrainOffers();
     },
-    [runGameplayAction, gameId, refreshTrainOffers, actingProtocolId],
+    [runGameplayAction, gameId, refreshTrainOffers, actingProtocolId, sandbox],
   );
 
   /** The consent fork is decided here because only this file knows the deployment: same president settles, different presidents ask (on chain online, locally in sandbox).
@@ -10800,6 +10809,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
           sellerProtocolId: proposal.sellerProtocolId,
           modelType: proposal.modelType,
           price: proposal.price,
+          gilded: proposal.gilded, // UR-4: the copy (sandbox only -- see `handleMakeTrainOffer`)
         });
         logInfo(
           "Train Trade",
@@ -10825,6 +10835,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
             buyer_ticker: proposal.buyerTicker,
             model_type: proposal.modelType,
             price: proposal.price,
+            // UR-4 (OD-UR-5(c) = 5c-2): the copy on offer, when the seller holds a gold-trimmed one of the model.
+            ...(proposal.gilded === undefined ? {} : { gilded: proposal.gilded }),
           },
         },
       );

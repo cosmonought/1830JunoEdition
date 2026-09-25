@@ -255,12 +255,17 @@ export const GAMEPLAY_MESSAGE_SCHEMA: Readonly<Record<string, Readonly<Record<st
   AnswerFundingPrivateOffer: { game_id: "int?", private_id: "int", accept: "bool" },
   RescindFundingPrivateOffer: { game_id: "int?", private_id: "int" },
   DeclareBankruptcy: { game_id: "int?" },
+  /* UR-4 (OD-UR-5(c) = 5c-2): `gilded` names the COPY sold when the seller holds a gold-trimmed copy of the model --
+     `true` the gilded copy (the Blood Price), `false` an ordinary one. OPTIONAL: every stored sale omits it, and an
+     unnamed sale is still legal wherever it cannot be ambiguous. SHAPE ONLY, as ever: whether the named copy exists,
+     and whether an unnamed sale is ambiguous, is the authority's (`trainSaleRefusal`). */
   BuyTrainFromCorporation: {
     game_id: "int?",
     buyer_protocol_id: "int",
     seller_protocol_id: "int",
     model_type: "string",
     price: "string",
+    gilded: "bool?",
   },
   AdvanceOperatingSubPhase: { game_id: "int?", protocol_id: "int" },
   BeginOperatingRound: { game_id: "int?" },
@@ -351,6 +356,7 @@ export const GAMEPLAY_MESSAGE_SCHEMA: Readonly<Record<string, Readonly<Record<st
     buyer_ticker: "string?",
     model_type: "string",
     price: "string",
+    gilded: "bool?", // UR-4: the copy on offer -- see `BuyTrainFromCorporation`
   },
   AnswerTrainPurchase: { game_id: "int?", seller_protocol_id: "int", accept: "bool" },
   /* #1594 (Batch 7.4): the two ordinary rescissions (S7-14) and the player <-> player private-company trade

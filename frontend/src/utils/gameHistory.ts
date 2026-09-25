@@ -727,7 +727,8 @@ export function gameHistoryFrom(log: readonly SandboxAction[], policy: ReplayPol
     }
 
     /* CARCOSAN RAILWAYS and THE REDEEMER (#1421): a stage of the sign lands on the president of the corporation
-       it happened to; the Blood Price is a corporation buying a train the seller's `carcosan_trains` names. */
+       it happened to; the Blood Price is a corporation buying the gilded COPY the seller's `carcosan_trains` names --
+       read below from the gilding the sale burns (UR-4, OD-UR-5(c)), never from the model alone. */
     if (kind === "YellowSignEvent") {
       const company = companyById(before, Number(body.protocol_id));
       const companyAfter = companyById(after, Number(body.protocol_id));
@@ -779,7 +780,15 @@ export function gameHistoryFrom(log: readonly SandboxAction[], policy: ReplayPol
       const buyer = companyById(before, Number(body.buyer_protocol_id));
       const model = String(body.model_type);
       const moved = trainsRemoved(seller?.owned_trains ?? [], companyById(after, Number(body.seller_protocol_id))?.owned_trains ?? []);
-      if (seller && buyer?.president && (seller.carcosan_trains ?? []).includes(model) && moved.includes(model)) {
+      /* UR-4 (OD-UR-5(c) = 5c-2, UR-F21): THE REDEEMER READS THE COPY THAT WAS SOLD. This asked "does the seller's
+         gilding name the model, and did a copy move" -- so a seller holding a gilded and an ordinary 6 who sold the
+         ORDINARY one minted a Redeemer for a sale that paid no Blood Price. It reads the entry's own effect now: the
+         seller's gilding of that model burned by this sale, which is the Blood Price and nothing else (only the
+         Blood Price clears a gilding in a sale; the fog never rides a sale). The credit stays on the buying president
+         -- the one who pays it (OD-UR-5(b)). The broad statistics basis (OD-UR-6) is UR-5's, not this line's. */
+      const gildingOf = (company: typeof seller) => (company?.carcosan_trains ?? []).filter((entry) => entry === model).length;
+      const gildingBurned = gildingOf(seller) > gildingOf(companyById(after, Number(body.seller_protocol_id)));
+      if (seller && buyer?.president && gildingBurned && moved.includes(model)) {
         bump(bloodPrices, buyer.president, 1);
       }
       /* #1438: SALT and SUGAR -- the price against the depot's, credited to the buying president. The price is

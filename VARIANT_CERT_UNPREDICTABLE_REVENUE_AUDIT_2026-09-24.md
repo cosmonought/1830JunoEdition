@@ -87,6 +87,29 @@ verdict moves from C to B — specification complete, implementation defects fou
 certified. No production code, test, log, fixture, golden, export or corpus file changed; `RULES_ENGINE_VERSION` is
 still **9**.
 
+**Rev 8 (2026-09-25) — UR-4 implemented: the Blood Price, copy by copy, paid by the buyer** *(uncommitted, awaiting the
+owner's full repository Jest gate)*. OD-UR-5 is implemented and pinned live, on every table (pinned and unpinned — the
+corpus holds no gilded train, no provenance marker and no Carcosan transfer, measured). **(c) — UR-F21 FIXED:** the sale
+names the copy — one optional boolean, `gilded`, on `BuyTrainFromCorporation` and `ProposeTrainPurchase` (so on the offer
+and its derived settlement); multiset copy selection, no persistent train identity; an unnamed sale of a model the seller
+holds both gold-trimmed and ordinary is refused atomically at the proposal, the answer, the settlement, the chart step and
+hosted ingress; the ordinary copy's sale leaves the gilding, the curse, the deadline and the gilded copy's provenance where
+they were; The Redeemer reads the gilding the sale burned (the one narrow statistics coupling). **(b) — UR-F22 FIXED:**
+the Blood Price moves the BUYER's marker Left 1 / Down 1 and never the seller's; the Train Purchase warning, the consent
+prompt, the market arm's and the narration's design notes, and the suites that pinned the seller move (`BPA`, `S103`,
+`S103b`, GR-2's S8 control; `B60`'s source pins) are updated — no seller-move language remains in the Blood Price path.
+**(a) — pinned live:** the cured train is ordinary (limit, running, rust, sale, trade-in, fog, curse, clock) and keeps only
+its synthetic-origin provenance, the +1; the Blood Price turns no phase, rust, Gentle Rust mark, shelf, era or real-D
+trigger (a 6, a D, an LPF 7; Gentle Rust; 18XX+ tiles), and the first REAL train of the tier still does all of it.
+**Provenance lifecycle:** one concrete defect found and fixed narrowly — a cured copy traded in for a Diesel (or, on a
+constructed board, discarded) went to the Bank Pool as a PRINTED train (the Depot lost a printed copy it never sold) and
+left its marker behind to swallow the corporation's next copy of the model (#1675's hazard, reachable once 5a-1 made the
+cured train tradable); the pool now carries the additional copy's provenance (`returned_ghost_trains`, absent on every
+board without one) and a pool purchase hands it to the buyer. `RULES_ENGINE_VERSION` stays **9** (UR-F21 / UR-F22 are owed
+to the 9 → 10 boundary, UR-8 — §15 item (6)); the 18-file corpus is unchanged (0 differences in 3,763 engine applications;
+Y8V `b4fae877c35604fe`, 3XD `74db6e4bad736fec`). No owner decision is new or re-opened. The verdict stays **B**;
+Unpredictable Revenue is NOT certified. See "UR-4 implementation (rev 8)".
+
 **Verdict: B — SPECIFICATION COMPLETE (every owner decision made, rev 7) / IMPLEMENTATION DEFECTS FOUND.** *(Rev 1 – rev 6:
 C — specification incomplete, owner decisions required.)*
 The revenue die itself — one server-drawn 32-bit number per corporation turn, committed in the log, consumed by
@@ -120,6 +143,7 @@ the fog's run-triggered collection, which OD-UR-2 makes a defect.)*
 | 5 | 2026-09-24 | **UR-3 status corrected; OD-UR-5 (a), (c) and OD-UR-6 decided (documentation only).** UR-3 recorded COMPLETE — owner-gated (full repository Jest), committed and pushed as `9d0cf3a`; no certification claim changed. OD-UR-5(a) = 5a-1 (the Blood Price buyer's train is ordinary — an additional ordinary train, only +1 in circulation, never a special class of train); OD-UR-5(c) = 5c-2 (the sale names the copy; only the gilded copy's sale is the Blood Price) — new finding UR-F21; OD-UR-5(b) OPEN. OD-UR-6: 6.1 paid revenue (in principle; the per-train allocation isolated), 6.2 a Mark-nullified route not earned, 6.3 a synthetic gift not a purchase and a Blood Price acquisition a purchase — UR-F8's targets. Counts 29 / 13 / 19 / 1 / 0 and 6 / 9 / 12 / 0 / 1; decisions 13 of 14 DECIDED, OD-UR-5(b) OPEN. Nothing implemented; `RULES_ENGINE_VERSION` 9. Verdict stays C; NOT certified. |
 | 6 | 2026-09-24 | **The Blood Price's cured train — the owner's clarification (documentation only).** Rev 5's question for UR-4 (does a cured train count toward the phase at the buyer?) is CLOSED — no owner decision remains and no new gameplay exception is required: the Blood Price is an intercorporate purchase, not a Bank / Depot purchase, so it changes no phase, rust, Gentle Rust mark, Depot tier, 18XX+ era or real-D doom trigger; the cured train is an additional ordinary train whose synthetic-origin provenance survives only for the +1 supply accounting (supply provenance ≠ supernatural status). UR-4 implementation note — one marker (`ghost_trains`), two concepts today; the representation not prescribed. "Bonus train" restated as "additional ordinary train". OD-UR-5(b) OPEN; OD-UR-6.1's per-train sub-question unchanged; counts unchanged. Nothing implemented; `RULES_ENGINE_VERSION` 9. Verdict stays C; NOT certified. |
 | 7 | 2026-09-24 | **Owner policy closed — OD-UR-5(b) and OD-UR-6.1's per-train question decided (documentation only).** OD-UR-5(b): the buyer only — the buyer pays the cash price and its marker moves Left 1 / Down 1; the seller gets no separate movement (its benefit is release from the curse); never both; #1090's seller move superseded — new finding UR-F22 (UR-4). OD-UR-6.1 per train: the printed value of the train's successfully completed route — not an allocation of the paid total; turn / corporation statistics use the paid revenue; a Mark-nullified route contributes nothing. OD-UR-5 and OD-UR-6 fully DECIDED (backlog D-50, D-51); decisions 14 of 14; UR-F11 closed; UR-N51 OWNER DECISION → DEFECT UR-F22; counts 29 / 13 / 20 / 0 / 0 and 6 / 9 / 12 / 0 / 1 — no OWNER DECISION row. UR-4, UR-5, UR-6, UR-7 and G1 without an owner-decision blocker. Verdict C → **B** (specification complete, implementation defects found). Nothing implemented; `RULES_ENGINE_VERSION` 9. NOT certified. |
+| 8 | 2026-09-25 | **UR-4 implemented (uncommitted, awaiting the owner's gate).** OD-UR-5 on every table: (c) the sale names the copy — optional `gilded` on `BuyTrainFromCorporation` / `ProposeTrainPurchase` / the offer / its derived settlement; an unnamed sale of a model held both gilded and ordinary refused atomically at every moment; provenance leaves with the copy that has it; The Redeemer reads the gilding the sale burned — **UR-F21 FIXED**; (b) the buyer's marker moves Left 1 / Down 1, never the seller's; warning, prompt and design notes updated; `BPA`, `S103`, `S103b`, GR-2 S8 and `B60` pins updated — **UR-F22 FIXED**; (a) the cured train pinned ordinary, and the Blood Price pinned to turn no phase / rust / mark / shelf / era / real-D trigger. Found and fixed narrowly: a cured copy traded in (or, constructed, discarded) became a printed pool train and left a stale marker — the pool's provenance `returned_ghost_trains`, read by the Depot tally, the phase and the real-D check; a pool purchase hands it on. Three new suites (50 tests; 30 fail / 20 pass on the baseline); focused Jest 263 suites / 5,228 tests green; tsc (frontend, server) 0; build: 49 warnings, identical to the baseline; 18-file corpus 0 differences. `RULES_ENGINE_VERSION` 9. Verdict stays B; NOT certified. |
 
 ## Owner rulings (rev 2)
 
@@ -131,7 +155,8 @@ in this section is as recorded in rev 2.)* *(Rev 4: **OD-UR-10** moved from OPEN
 implementation is pending, UR-F20.)* *(Rev 5: **OD-UR-5 (a) and (c)** and **OD-UR-6** moved to DECIDED — documentation
 only; **OD-UR-5(b) stays OPEN**.)* *(Rev 6: the owner clarified OD-UR-5(a) — the cured train's provenance, and why the
 Blood Price changes no phase; see its row. No ruling moved.)* *(Rev 7: **OD-UR-5(b)** and OD-UR-6.1's per-train question
-moved to DECIDED — documentation only; **nothing remains OPEN**.)*
+moved to DECIDED — documentation only; **nothing remains OPEN**.)* *(Rev 8: **OD-UR-5 implemented** — UR-4; no ruling
+moved, and none was re-opened.)*
 
 ### DECIDED
 
@@ -142,7 +167,7 @@ moved to DECIDED — documentation only; **nothing remains OPEN**.)*
 | **OD-UR-2** | **N+1 + boundary.** 2.1 deadline **N+1**: a doom trigger in Operating-Round set N lets the gilded train survive through the whole next set, N+1. 2.2 removal **at the boundary**: the train disappears automatically at the **end** of set N+1 — an authoritative OR-set-boundary transition, **not** a run stage and **not** a Yellow Sign client request. So: no extra post-deadline run; no indefinite survival because the corporation never operates again; no post-deadline window to sell it before a run. It combines #1089's "next full set" lifespan with S9-3's removal at a set boundary; **#1092's run-triggered collection is superseded. Do not restore the current `N+1 + on-run` behaviour.** Narration / UI may need its own boundary notice later. | UR-N45, UR-N46, §1.2 item 1, UR-F11 (expiry half); new **UR-F18** | UR-3 (fog authority and removal location); the notice in UR-6 |
 | **OD-UR-3** | **3-A.** Synthetic (gifted) Carcosa trains **do not advance the game phase**; the phase follows REAL trains. A gift above the current phase may exist and operate early, but by itself it does not change the phase, rust trains, mark trains for Gentle Rust, open the next depot shelf, advance the 18XX+ era, receive Phase Rusher treatment or trigger any ordinary phase-change consequence. When the first REAL train of that tier is bought, the normal phase change happens then. This keeps #1672's gift rule and #1046's expectation that the gift changes nothing beyond the recipient's own fleet. A synthetic D is still not a real D purchase. | UR-N39, UR-N44, X4, X5; UR-F4 | UR-4 |
 | **OD-UR-4** | **4-A — minted.** The Mark's half-face-value treasury award is found money, created outside the Bank; it is not paid by the Bank. The money-conservation exemption (`MINTS_BY_DESIGN`) is **intended variant law, not an unresolved defect**. This also governs the award's source for any future rule that reuses the Mark's award. | UR-N33, X12; UR-F10 closed as intended | no gameplay change; the exemption's stale comment (Appendix B item 11) is corrected in a later slice |
-| **OD-UR-5 (a), (b), (c)** *(rev 5 — (a), (c) ruled 2026-09-24; (a) clarified rev 6; **(b) ruled rev 7 — OD-UR-5 fully DECIDED**)* | **(a) 5a-1 — the Blood Price buyer's train is ORDINARY.** A train acquired through the Blood Price becomes an ordinary train for the buyer: the supernatural / gilded / Carcosan status is cured by the Blood Price. It is an **additional ordinary train**: the synthetic Carcosa gift becomes one more ordinary train in circulation — effectively **+1 relative to the printed depot supply** — and **not** a special class of train, nor one that keeps any special exemption (the owner's informal "bonus train" means only this). After the acquisition it is ordinary: it counts against the buyer's train limit; runs normally; rusts normally; can later be sold normally; can be a Diesel trade-in if otherwise eligible; and has no fog deadline, no gilding, no Carcosan train-limit exemption and no other supernatural status. *(Rev 6 — the owner's clarification, which closes rev 5's phase question for UR-4; no owner decision remains on it:)* the train keeps only the provenance / accounting marker needed to remember that it originated synthetically rather than consuming one of the printed Depot copies, and that provenance means only the +1 — **synthetic origin / supply provenance may persist; supernatural rules status does not** (it ends at the Blood Price). The Blood Price changes no phase for the base game's reason: it is an **intercorporate train purchase, not a purchase from the Bank / Depot**, and the phase change, rust and the other first-train consequences are triggered by the qualifying Depot purchase — so it advances no phase, triggers no rust, creates no Gentle Rust marks, opens no new Depot tier, advances no 18XX+ era and does not start the real-D doom trigger merely because the train is a D. That is **not** because the cured train stays supernatural; no new gameplay exception is required (§12.2). **(c) 5c-2 — the sale names the copy.** If the selling corporation owns a gilded copy and an ordinary copy of model X, the sale must distinguish which copy is sold: selling the ordinary copy does **not** trigger the Blood Price and does not purify or remove the gilded copy; selling the gilded copy **does** trigger the Blood Price. **(b) — the BUYER only** *(rev 7)*. When a corporation buys the gilded train through the Blood Price, the buyer pays the cash price and **the buyer's stock marker moves Left 1 / Down 1**; the seller gets **no** separate stock-price movement — the seller's benefit is its release from the Carcosan curse / supernatural burden. The market penalty is **never** applied to both corporations. This follows S9-3's "The purchasing corporation pays the required Blood Price consequences" and **supersedes #1090's "Left 1, Down 1 market movement for the selling corporation" — today's implementation; do not restore the seller move** (UR-F22). | UR-N50, UR-N51 (rev 7), UR-N52 (rev 6), UR-N54; §1.2 items 2 and 3; UR-F11 (closed rev 7); UR-F21; UR-F22 (rev 7) | (a) is today's behaviour (#1090; GHL E) — UR-4 pins it live, keeping the +1 supply accounting while the cured train is otherwise ordinary (rev 6 — §12.2); (c) not implemented — UR-4 (UR-F21); (b) not implemented — UR-4 (UR-F22; the copy in UR-6) |
+| **OD-UR-5 (a), (b), (c)** *(rev 5 — (a), (c) ruled 2026-09-24; (a) clarified rev 6; **(b) ruled rev 7 — OD-UR-5 fully DECIDED**)* | **(a) 5a-1 — the Blood Price buyer's train is ORDINARY.** A train acquired through the Blood Price becomes an ordinary train for the buyer: the supernatural / gilded / Carcosan status is cured by the Blood Price. It is an **additional ordinary train**: the synthetic Carcosa gift becomes one more ordinary train in circulation — effectively **+1 relative to the printed depot supply** — and **not** a special class of train, nor one that keeps any special exemption (the owner's informal "bonus train" means only this). After the acquisition it is ordinary: it counts against the buyer's train limit; runs normally; rusts normally; can later be sold normally; can be a Diesel trade-in if otherwise eligible; and has no fog deadline, no gilding, no Carcosan train-limit exemption and no other supernatural status. *(Rev 6 — the owner's clarification, which closes rev 5's phase question for UR-4; no owner decision remains on it:)* the train keeps only the provenance / accounting marker needed to remember that it originated synthetically rather than consuming one of the printed Depot copies, and that provenance means only the +1 — **synthetic origin / supply provenance may persist; supernatural rules status does not** (it ends at the Blood Price). The Blood Price changes no phase for the base game's reason: it is an **intercorporate train purchase, not a purchase from the Bank / Depot**, and the phase change, rust and the other first-train consequences are triggered by the qualifying Depot purchase — so it advances no phase, triggers no rust, creates no Gentle Rust marks, opens no new Depot tier, advances no 18XX+ era and does not start the real-D doom trigger merely because the train is a D. That is **not** because the cured train stays supernatural; no new gameplay exception is required (§12.2). **(c) 5c-2 — the sale names the copy.** If the selling corporation owns a gilded copy and an ordinary copy of model X, the sale must distinguish which copy is sold: selling the ordinary copy does **not** trigger the Blood Price and does not purify or remove the gilded copy; selling the gilded copy **does** trigger the Blood Price. **(b) — the BUYER only** *(rev 7)*. When a corporation buys the gilded train through the Blood Price, the buyer pays the cash price and **the buyer's stock marker moves Left 1 / Down 1**; the seller gets **no** separate stock-price movement — the seller's benefit is its release from the Carcosan curse / supernatural burden. The market penalty is **never** applied to both corporations. This follows S9-3's "The purchasing corporation pays the required Blood Price consequences" and **supersedes #1090's "Left 1, Down 1 market movement for the selling corporation" — today's implementation; do not restore the seller move** (UR-F22). | UR-N50, UR-N51 (rev 7), UR-N52 (rev 6), UR-N54; §1.2 items 2 and 3; UR-F11 (closed rev 7); UR-F21; UR-F22 (rev 7) | (a) is today's behaviour (#1090; GHL E) — UR-4 pins it live, keeping the +1 supply accounting while the cured train is otherwise ordinary (rev 6 — §12.2); (c) not implemented — UR-4 (UR-F21); (b) not implemented — UR-4 (UR-F22; the copy in UR-6) *(rev 8: **implemented — UR-4**: (a) pinned live, with the +1 carried through the Bank Pool; (c) UR-F21 fixed; (b) UR-F22 fixed, the directly affected Blood Price copy with it — "UR-4 implementation (rev 8)")* |
 | **OD-UR-6** *(rev 5 — ruled 2026-09-24; 6.1's per-train question ruled rev 7 — OD-UR-6 fully DECIDED)* | **6.1 — actual paid revenue (DECIDED IN PRINCIPLE; completed rev 7).** Revenue statistics reflect the revenue actually paid after the Unpredictable Revenue die adjustment, not merely the printed pre-die total; corporation / turn-level revenue statistics use the paid figure. The die modifies the corporation's whole turn total, so a statistic that needs a per-train adjusted value has no canonical allocation: ~~that allocation is an **isolated, still-open sub-question of 6.1** — neither the printed figure nor a proportional split is adopted by default~~. *(Rev 7 — the per-train question DECIDED:)* **individual train / route statistics use the PRINTED value of that train's successfully completed route**: the die modifies the corporation's whole turn total, no canonical adjusted dollar amount belongs to an individual train, and the printed route value is the actual route-specific quantity. It is **not an allocation of the paid total** — no proportional, equal or die-adjusted per-train value is invented. So corporation / turn-level revenue statistics use the paid revenue, and train / route statistics use the printed completed route. **6.2 — a Mark-nullified route does not count as earned.** A train whose route the Mark nullified did not earn that revenue (the owner: "the train disappeared instead of completing the run; it never made it to the station"). *(Rev 7, with 6.1's per-train rule: a completed route contributes its printed value to the per-train statistics; a Mark-nullified route contributes nothing.)* **6.3 — a synthetic Carcosa gift is NOT a purchase.** The gift counts for no purchase-count statistic, no "bought a Diesel" statistic, and no purchase-based accolade (The Early Adopter and analogous purchase-derived awards). A later acquisition of the formerly gilded train by another corporation through the Blood Price **IS** a genuine train purchase by the buyer and receives ordinary purchase-based statistical / accolade treatment — Diesel-purchase treatment included, when the train is a Diesel and the award otherwise qualifies (it follows 5a-1). Derived history only — no version effect. | UR-N58, X11; UR-F8; §10 | UR-5 (not implemented) |
 | **OD-UR-7** | **7-A — refused.** A gilded / Carcosan train may **not** be a Diesel trade-in. Buying a Diesel normally stays legal; trading in an ordinary, non-gilded eligible train stays legal (the analogue of Gentle Rust's D-35). If the corporation also owns an ordinary copy of the gilded train's model, the implementation must keep that copy tradable rather than forbid every copy of the model. **Copy-selection architecture is not designed here.** | UR-N42, X6; UR-F17 | UR-4 |
 | **OD-UR-8** | **8-B — the Easter egg stays.** The Rules Reference discloses what a player needs for informed decisions — the Unpredictable Revenue die and rounding already meant to be known, a gilded train's train-limit treatment, its eventual disappearance, and the Blood Price's consequences once OD-UR-5 is decided *(rev 7: it is — the OD-UR-5 row)* — but **not** the Yellow Sign's hidden trigger conditions or odds merely for completeness. | UR-N60, X15; UR-F13 | UR-6, after OD-UR-5 *(rev 7: decided)* |
@@ -352,6 +377,141 @@ reinterpretation of unpinned logs.
 `server/tsconfig.json` and a scratch reconciliation script; every file replayed under `DEVELOPMENT_CORPUS_POLICY`,
 recording per engine application the pre-entry state digest, grid hash, cursor and derived-action answer, then the finals.
 See §16 (rev 3) for the figures.
+
+---
+
+## UR-4 implementation (rev 8, 2026-09-25 — uncommitted, awaiting the owner's full repository Jest gate)
+
+**Scope, as the owner's UR-4 brief set it:** OD-UR-5 — (c) the copy-specific sale (UR-F21), (b) the buyer-only market
+movement (UR-F22), (a) the cured train's ordinary treatment pinned live — and the +1 supply provenance through the cured
+train's whole lifecycle; The Redeemer's narrow coupling to the same model-level predicate. **Not in scope and not
+touched:** UR-5's statistics (UR-F8, UR-F9 — OD-UR-6), UR-6's copy / UI / Rules Reference work beyond the Blood Price
+surfaces this slice changes (UR-F12, UR-F13, UR-F14, Appendix B), OD-UR-10's tie rule (UR-F20), the constructed
+certification game (UR-7), the version bump (UR-8). `RULES_ENGINE_VERSION` stays **9**. Starting point: local `main` =
+`4b937a45ee8402723e4d5be12649dae3c199c748` ("Finalize Unpredictable Revenue rulings"), one commit ahead of `origin/main`
+(`9d0cf3a`), the tracked tree clean (only the pre-existing untracked `.claude/`); nothing committed or pushed.
+
+### The design
+
+* **Copy selection — one optional boolean, multiset semantics, no train identity.** `BuyTrainFromCorporation` and
+  `ProposeTrainPurchase` gain `gilded?: boolean` (schema `"bool?"`, shape-checked at hosted ingress); the offer
+  (`train_purchase_offer.gilded`) carries it and the derived settlement copies it — only when present, so an offer that
+  names no copy derives the settlement every offer derived before, key for key (#232). Copies of one model differ only by
+  two multiset marks the seller already carries: the gilding (`carcosan_trains`) and a Gentle Rust reprieve (already off
+  the market, GR-2). So the one question a sale can leave open is "the gilded copy or an ordinary one".
+  `trainSaleAuthority.ts` (`saleCopies`, `resolveSaleCopy`, `saleCopyRefusal`): `gilded: true` needs a gilded copy,
+  `gilded: false` an ordinary (ungilded, unreprieved) one; **absent** is legal only where it cannot be ambiguous (only
+  gilded copies of the model → the Blood Price, as it always was; no gilded copy → the ordinary sale); absent while both
+  kinds are held is **refused** — *"B&O holds both a gold-trimmed and an ordinary 6-train; the sale must name which copy
+  is sold (selling the gold-trimmed one is the Blood Price)."* It is asked inside `trainSaleRefusal`, beside "owns the
+  train", so the proposal, the answer, the settlement (the reducer's core gate and hosted ingress, `turnRefusal`) and the
+  chart step's `isCarcosanSale` refuse it together and nothing moves. Consent (`trainSettlementMatches`) includes the
+  copy: a settlement naming the other copy than the accepted offer is not consented (refused; the offer stands).
+* **The Blood Price is the GILDED copy's sale.** `isCarcosanTransfer(state, seller, model, gilded?)` answers
+  `resolveSaleCopy(..) === "gilded"`; `settleTrainSale(.., gilded?)` burns the gilding, clears the curse and the doom
+  clock, and lets the chart move, only then. An ordinary copy sold beside a gilded one moves the train and the money and
+  nothing else.
+* **Provenance leaves with the copy that has it** (`departingCopyCarriesProvenance`): the gilded copy always takes a
+  marker; an ordinary copy takes one only when the fleet holds more markers of the model than gilded copies (a copy an
+  earlier Blood Price cured). Before UR-4 the sale moved a marker unconditionally, so an ordinary sale beside a gilded copy
+  carried the GILDED copy's provenance away with it (part of UR-F21).
+* **The buyer's marker moves (UR-F22).** `applySandboxMarketAction`'s `BuyTrainFromCorporation` arm moves
+  `buyer_protocol_id` Left 1 / Down 1 (`projectBloodPriceMove`, stamped by `withArrival`, S9-11) and neither reads nor
+  writes the seller's token — one mover, never both. The chart step's report names the buyer, so the Activity Log's
+  "*A Blood Price was paid: [Buying Corp]'s stock dropped from $X to $Y*" follows without a shell change.
+* **The Bank Pool's provenance (`returned_ghost_trains`).** A new optional state field, a sub-multiset of
+  `returned_trains`. The Diesel trade-in and the president's discard move a departing copy's marker, when it has one, into
+  it; `buyReturnedTrain` hands one to the buyer when the pool holds a copy of that model (the additional copy goes first —
+  the convention the sale and the trade-in follow); the pool's rust filters it with its train (never reached in play). In
+  `gamePhase.ts`, `printedPooledTrainsByTier` — the pool minus its provenance — is what the Depot tally subtracts and what
+  the phase counts (#1512, #1530), and `realDieselPurchased` ignores a pooled synthetic D; `bankPoolTrains` still sells the
+  whole pool (the cured copy is an ordinary train). Absent on every board without an additional copy — the standard game
+  and every corpus log — which therefore read byte for byte as before.
+* **"One marker, two concepts" — resolved without a split (§12.2, rev 6).** `ghost_trains` has meant only synthetic
+  provenance since #1672; the supernatural status is `carcosan_trains` + `is_carcosan` + the doom clock, and the Blood
+  Price clears exactly that. The marker's three reads are all supply facts — the Depot tally (the +1), and the phase and
+  the real-D check, which ask which printed trains the Depot has sold. The phase reading is the owner's reason made
+  derivable (a phase is begun by the qualifying Depot purchase; the Blood Price is an intercorporate purchase of a copy
+  the Depot never sold), not a status: the cured train is ordinary for the limit, running, rust, sale, trade-in, fog,
+  curse and clock. No field was split and nothing reads the marker as a supernatural status.
+* **Every table, pinned and unpinned — no legacy branch.** UR-3's precedent for rules the corpus never exercises (the fog,
+  the phase, the trade-in): measured, no corpus file holds a gilded train, a provenance marker or a Carcosan transfer
+  (11 stored `BuyTrainFromCorporation`, 0 Carcosan), so no stored entry is reinterpreted — and an unpinned client (a
+  Firestore room) cannot reach #1090's model-level sale or seller move either.
+* **The Redeemer — the one narrow statistics coupling.** `gameHistory.ts` read "the seller's gilding names the model and
+  a copy moved"; it reads the entry's own effect now — the seller's gilding of that model burned by the sale — which is
+  the Blood Price and nothing else. The credit stays on the buying president, who pays (OD-UR-5(b)). The Blood Price
+  acquisition stays an intercorporate purchase in the history (train spend; the seller's `sold` fate) — OD-UR-6.3's
+  "genuine purchase", for UR-5 to build on. Nothing else in the statistics moved.
+* **The normal UI names the copy** (the Playtest Readiness gate: a legal action must not need a crafted message). The Buy
+  Trains roster marks the gold-trimmed badge (`gildedSalePositions` — the chips' multiset order; a gold border,
+  `data-gilded`) and each badge sends its own copy — `gilded: true` / `false` — only when the seller holds a gilded copy
+  of that model (otherwise the unnamed sale, byte for byte). The warning reads "*⚠ WARNING: Buying the gold-trimmed
+  Carcosa Train incurs a Blood Price. The buying corporation's share price will immediately drop (1 cell Left, 1 cell
+  Down).*" and shows only for the gilded copy; the consent prompt tells the seller which copy it is answering for and, for
+  the gilded copy, that the buyer's price drops and the seller is released from the curse. The online (contract) path
+  never names a copy (the contract has no Carcosa). UI-parity classification: UR-F21 → LEGALITY SYNC / NEW ACTION (the
+  copy choice), UR-F22 → STATE VISIBILITY (the warning and the prompt) — both resolved here (backlog Part C, U-42).
+
+### Finding status (rev 8)
+
+| id | status | evidence (durable, `frontend/src/`) |
+|---|---|---|
+| UR-F21 | **FIXED** (every table) | `utils/carcosaBloodPrice.test.ts` A1–A8, F2, I1, I3, I5, J2; `utils/carcosaBloodPriceStats.test.ts` (The Redeemer); `components/carcosaBloodPricePanel.test.tsx`; `GHL` E (the two-copy case now names the copy), GR-2 S8 (its control names the gilded copy) |
+| UR-F22 | **FIXED** (every table) | `utils/carcosaBloodPrice.test.ts` B1–B4, I2, I4, J2; `BPA`, `S103` "the Blood Price (#1090)", `S103b` C, GR-2 S8 control — each now pins the BUYER's move; `B60` pins the warning's buyer wording; `components/carcosaBloodPricePanel.test.tsx` |
+| *(new, found and fixed in UR-4)* stale provenance through the Bank Pool | **FIXED** (every table) | `utils/carcosaBloodPrice.test.ts` D2–D6, I6; the standard-game control H4 |
+
+**Reproduced before fixing.** The three new suites (50 tests) were run against the untouched baseline (a scratch mirror of
+`4b937a45` whose tree hash, `05f74c68…`, equals the owner's checkout): **30 fail, 20 pass**. The 20 are the baseline
+evidence and the controls: 5a's ordinary train (no gilding, curse, deadline or exemption; the limit; running; the second
+sale; the trade-in's legality; the +1 across the sale), the phase / real-D negative controls, the fog after the gilded
+sale, the standard-game controls, the unnamed offer's derived settlement, the roster without gilding, and The Redeemer on
+a gilded sale. All 50 pass on the tree.
+
+### The provenance lifecycle, path by path
+
+| path | before UR-4 | UR-4 |
+|---|---|---|
+| the Blood Price (the gilded copy) | the marker moves to the buyer (#1673) | unchanged (A3, D1) |
+| an ordinary sale beside a gilded copy | the GILDED copy's marker left with the ordinary copy (UR-F21) | stays with the gilded copy (A1, A7) |
+| a later sale of the cured copy (the second hop) | the marker follows (#1673) | unchanged (C4) |
+| Diesel trade-in of the cured copy (legal: it is ordinary, OD-UR-7 refuses only the gilded copy) | **defect** — the pooled copy counted as a PRINTED train (standard phase 6: the Depot's last printed 6 vanished from sale) and the marker stayed at the corporation, stale, ready to swallow its next copy of the model | the marker moves into the pool with the copy; the printed Depot is untouched (D2, I6) |
+| a Bank Pool purchase of that copy | a physical copy, no provenance | the marker moves to the buyer; the printed tally unchanged, including a buy-back by the trader (D3, D4) |
+| the president's discard of the cured copy | the same defect as the trade-in — **constructed only**: a cured copy exists only from phase 5, and every limit from phase 5 on is 2 and never falls, so no discard can fall due while one is held | the marker moves into the pool (D5); the pooled synthetic copy is never the phase, a pooled synthetic D never a real D (D6) |
+| ordinary rust | never meets a synthetic copy: the gift is the Depot's lowest tier in phases 5 – D, always a 5, 6, 7 or D, none of which rusts (D7) | a real D's arrival rusts the 4s and leaves a cured 6 exactly as an ordinary 6 (D7); the pool's rust filters the pool's provenance with its train (invariant only) |
+| the fog | takes only gilded copies, one marker each (#1675, OD-UR-2) | unchanged — the cured copy is never taken (C3, F1) |
+| the Mark | phases 2 – 4 only; no synthetic copy exists there | unchanged |
+| replay / restore / undo | — | the markers are board state written by the entries: replay and restore reach the same digest; an undo takes them back (I1, I2, I4, I6) |
+
+The stale marker is a concrete defect only through the Bank Pool, and it is intrinsic to UR-4: it became reachable when
+5a-1 made the cured train ordinary and so tradable. It is fixed narrowly, by the pool's own multiset; no broader
+train-supply architecture problem was found.
+
+### Phase / real-D, fog, standard controls — pinned
+
+* **The Blood Price turns nothing** (E1–E3). A cured 6 above phase 5: no phase 6, no rust of the 3s, no Gentle Rust mark,
+  the D shelf closed, the era and the Depot unchanged — until the first REAL 6 from the Depot does all of it. A cured D at
+  phase 6: no phase D, no rust (or mark) of the 4s, `realDieselPurchased` false, no doom clock for another gilded
+  corporation, no Gray era under the 18XX+ tiles — on the standard, Gentle Rust, 18XX+ and Level Playing Field tables
+  alike — until a REAL Diesel (a trade-in) does. An LPF cured 7 is not the phase either.
+* **Fog / curse** (F1, F2, C3). The gilded copy's sale absolves the seller (curse, gilding, clock) and no fog is ever
+  due; the buyer's cured train survives the seller's old deadline and every later boundary; the seller's REAL same-model
+  copy is never taken. The ordinary copy's sale leaves the curse, the gilded copy and the deadline, and the boundary fog
+  then takes that copy only.
+* **Standard mode** (H1–H4, J3). Variant off, an unnamed sale settles exactly as before — no Blood Price, no market move,
+  no marker written; `gilded: true` is refused (there is no gilded copy) and `gilded: false` is the ordinary sale;
+  same-model ordinary sales under the variant equal the standard game's; the trade-in, the discard and the pool purchase
+  write no provenance field.
+
+### Deferred and recorded (not implemented here)
+
+* **UR-5 — Carcosan Railways under OD-UR-5(b).** Its blurb ("Saw the Yellow Sign and never paid the Blood Price to be rid
+  of it") predates the buyer-pays ruling: a seller released by a buyer's Blood Price never pays it. Whether its president
+  keeps the accolade is a statistics question for UR-5 (OD-UR-6's pass); the history still excludes only the paying
+  (buying) president, exactly as before UR-4 (backlog S9-7, UR-4 block).
+* **UR-6 — copy.** The Activity Log's offer and trade lines name the model, not the copy (the panel and the consent
+  prompt do); the Rules Reference's Blood Price text (UR-F13: an additional ordinary train, the buyer's marker, the copy
+  named).
 
 ---
 
@@ -574,18 +734,18 @@ DEFERRED any more. Conformance still describes the code at `3f862c4`.)*
 
 | id | clause | authority | status | conformance |
 |---|---|---|---|---|
-| UR-N49 | Selling a gilded train to another corporation (ordinary inter-corporation sale rules) absolves the seller: `is_carcosan` cleared, the gilding burned, the doom clock cleared. | #1090 RULED | CONFIRMED | conforms (`sandboxSession.ts:1993–2018`) |
-| UR-N50 | What the buyer receives. *(Rev 5, OD-UR-5(a) = 5a-1: an ORDINARY train — it counts against the buyer's train limit, runs normally, rusts normally, can be sold again normally and can be a Diesel trade-in if otherwise eligible; it has no fog deadline, no gilding, no Carcosan train-limit exemption and no other supernatural status. It is an additional ordinary train — +1 in circulation relative to the printed depot supply — never a special class of train (the owner's "bonus train" means only this).)* *(Rev 6, the owner's clarification: it keeps only its synthetic-origin provenance, for that +1 supply accounting (UR-N52); the Blood Price, an intercorporate purchase and not a Bank / Depot purchase, changes no phase, rust, Gentle Rust mark, Depot tier, 18XX+ era or real-D doom trigger.)* | #1090 ("a standard train") vs S9-3 ("remains a ghost train and STILL disappears on the same D-triggered schedule"); **OD-UR-5(a) = 5a-1 (rev 5; clarified rev 6)** | ~~**CONTESTED → OD-UR-5(a)**~~ CONFIRMED *(rev 5)* | implemented: an ordinary train — conforms (GHL E); its synthetic provenance travels (#1673) — the "+1" — see §12.2 (OD-UR-5) on the phase; *(rev 6)* the sale buys nothing from the Depot, so the phase, the shelf and the real-D check do not move — conforms by reading; UR-4 pins it live |
-| UR-N51 | Whose share price moves. *(Rev 7, OD-UR-5(b): the BUYER's — the buyer pays the cash price and its marker moves Left 1 / Down 1; the seller gets no separate stock-price movement (its benefit is release from the Carcosan curse); the penalty is never applied to both.)* | #1090 ("for the selling corporation") vs S9-3 wording ("The purchasing corporation pays the required Blood Price consequences"); **OD-UR-5(b) (rev 7)** | ~~**AMBIGUOUS → OD-UR-5(b)**~~ CONFIRMED *(rev 7)* | implemented: the seller, Left 1 / Down 1 — **DEFECT UR-F22** (#1090's move, superseded) |
-| UR-N52 | Synthetic provenance (`ghost_trains`) travels with the train — one occurrence, unconditionally. *(Rev 6, the owner's clarification of OD-UR-5(a): after a Blood Price this provenance is supply accounting only — the train originated synthetically rather than consuming a printed Depot copy, the +1 — and never a supernatural status, which ends at the Blood Price.)* | #1673; OD-UR-5(a) (rev 6) | CONFIRMED (project, from "synthetic") | conforms |
-| UR-N53 | The authority (server included) charges the Blood Price exactly on a legal Carcosan transfer. | #1690 | CONFIRMED | conforms *(rev 7: whose marker the charge moves is UR-N51 — UR-F22)* |
-| UR-N54 | ~~A sale of a model the seller holds as both a gilded and an ordinary copy is the Carcosan transfer.~~ *(Rev 5, OD-UR-5(c) = 5c-2:)* when the seller holds a gilded and an ordinary copy of one model, the sale names the copy — selling the ordinary copy is an ordinary sale (no Blood Price; the gilded copy stays gilded), selling the gilded copy is the Blood Price. | `isCarcosanTransfer` (model-level); **OD-UR-5(c) = 5c-2 (rev 5)** | ~~**PROJECT → OD-UR-5(c)**~~ CONFIRMED *(rev 5)* | **DEFECT UR-F21** — model-level today: any sale of that model is the Carcosan transfer |
+| UR-N49 | Selling a gilded train to another corporation (ordinary inter-corporation sale rules) absolves the seller: `is_carcosan` cleared, the gilding burned, the doom clock cleared. | #1090 RULED | CONFIRMED | conforms (`sandboxSession.ts:1993–2018`) *(rev 8: re-asserted live for the gilded COPY's sale — seller absolved, gilding burned, clock cleared, never fogged afterwards; an ordinary copy's sale absolves nothing — UR-4, `carcosaBloodPrice` A3, F1, F2)* |
+| UR-N50 | What the buyer receives. *(Rev 5, OD-UR-5(a) = 5a-1: an ORDINARY train — it counts against the buyer's train limit, runs normally, rusts normally, can be sold again normally and can be a Diesel trade-in if otherwise eligible; it has no fog deadline, no gilding, no Carcosan train-limit exemption and no other supernatural status. It is an additional ordinary train — +1 in circulation relative to the printed depot supply — never a special class of train (the owner's "bonus train" means only this).)* *(Rev 6, the owner's clarification: it keeps only its synthetic-origin provenance, for that +1 supply accounting (UR-N52); the Blood Price, an intercorporate purchase and not a Bank / Depot purchase, changes no phase, rust, Gentle Rust mark, Depot tier, 18XX+ era or real-D doom trigger.)* | #1090 ("a standard train") vs S9-3 ("remains a ghost train and STILL disappears on the same D-triggered schedule"); **OD-UR-5(a) = 5a-1 (rev 5; clarified rev 6)** | ~~**CONTESTED → OD-UR-5(a)**~~ CONFIRMED *(rev 5)* | implemented: an ordinary train — conforms (GHL E); its synthetic provenance travels (#1673) — the "+1" — see §12.2 (OD-UR-5) on the phase; *(rev 6)* the sale buys nothing from the Depot, so the phase, the shelf and the real-D check do not move — conforms by reading; UR-4 pins it live *(rev 8: **pinned live — UR-4**: an ordinary train at the buyer — limit, running, second sale, trade-in, fog, curse, clock (`carcosaBloodPrice` C1–C5, F1); the +1 through the Depot and the Bank Pool (D1–D6); no phase / rust / mark / shelf / era / real-D consequence of the sale itself (E1–E3))* |
+| UR-N51 | Whose share price moves. *(Rev 7, OD-UR-5(b): the BUYER's — the buyer pays the cash price and its marker moves Left 1 / Down 1; the seller gets no separate stock-price movement (its benefit is release from the Carcosan curse); the penalty is never applied to both.)* | #1090 ("for the selling corporation") vs S9-3 wording ("The purchasing corporation pays the required Blood Price consequences"); **OD-UR-5(b) (rev 7)** | ~~**AMBIGUOUS → OD-UR-5(b)**~~ CONFIRMED *(rev 7)* | implemented: the seller, Left 1 / Down 1 — **DEFECT UR-F22** (#1090's move, superseded) *(rev 8: **conforms — UR-F22 FIXED (UR-4)**: the buyer's marker moves Left 1 / Down 1, the seller's never — `carcosaBloodPrice` B1–B4, I2, I4; `BPA`, `S103`, `S103b` updated)* |
+| UR-N52 | Synthetic provenance (`ghost_trains`) travels with the train — one occurrence, unconditionally. *(Rev 6, the owner's clarification of OD-UR-5(a): after a Blood Price this provenance is supply accounting only — the train originated synthetically rather than consuming a printed Depot copy, the +1 — and never a supernatural status, which ends at the Blood Price.)* | #1673; OD-UR-5(a) (rev 6) | CONFIRMED (project, from "synthetic") | conforms *(rev 8: and through the Bank Pool — `returned_ghost_trains`; the marker leaves with the copy that has it, never the gilded copy's with an ordinary copy — UR-4, `carcosaBloodPrice` A7, D2–D6)* |
+| UR-N53 | The authority (server included) charges the Blood Price exactly on a legal Carcosan transfer. | #1690 | CONFIRMED | conforms *(rev 7: whose marker the charge moves is UR-N51 — UR-F22)* *(rev 8: re-asserted — the server charges it on the gilded copy's legal sale, to the BUYER; `S103` and `carcosaBloodPrice` I2 / I4)* |
+| UR-N54 | ~~A sale of a model the seller holds as both a gilded and an ordinary copy is the Carcosan transfer.~~ *(Rev 5, OD-UR-5(c) = 5c-2:)* when the seller holds a gilded and an ordinary copy of one model, the sale names the copy — selling the ordinary copy is an ordinary sale (no Blood Price; the gilded copy stays gilded), selling the gilded copy is the Blood Price. | `isCarcosanTransfer` (model-level); **OD-UR-5(c) = 5c-2 (rev 5)** | ~~**PROJECT → OD-UR-5(c)**~~ CONFIRMED *(rev 5)* | **DEFECT UR-F21** — model-level today: any sale of that model is the Carcosan transfer *(rev 8: **conforms — UR-F21 FIXED (UR-4)**: `gilded` names the copy; an unnamed sale of a model held both ways is refused — `carcosaBloodPrice` A1–A8, I1, I3, I5)* |
 
 ### J. Statistics and awards
 
 | id | clause | authority | status | conformance |
 |---|---|---|---|---|
-| UR-N55 | Carcosan Railways (lived through any stage, never redeemed) and The Redeemer (paid the Blood Price). | #1421 | CONFIRMED | conforms by reading; **no live coverage (S10-21)**; *(rev 5: The Redeemer reads the model — under 5c-2 it must read the copy sold, UR-F21)*; *(rev 7: under OD-UR-5(b) the buyer pays the Blood Price, and The Redeemer already credits the buyer's president — no change)* |
+| UR-N55 | Carcosan Railways (lived through any stage, never redeemed) and The Redeemer (paid the Blood Price). | #1421 | CONFIRMED | conforms by reading; **no live coverage (S10-21)**; *(rev 5: The Redeemer reads the model — under 5c-2 it must read the copy sold, UR-F21)*; *(rev 7: under OD-UR-5(b) the buyer pays the Blood Price, and The Redeemer already credits the buyer's president — no change)* *(rev 8: The Redeemer reads the gilding the sale burned — the copy, not the model; UR-4, `carcosaBloodPriceStats`; Carcosan Railways under the buyer-pays rule → UR-5)* |
 | UR-N56 | The sign's takings (Mark, fog) are not obsolescence: fate "taken"; excluded from Gravedigger and The Rust Belt. | #1422, #1431 | CONFIRMED | conforms (`gameHistory.ts:562`, `:723–735`) |
 | UR-N57 | The Cowboy counts the runs whose flavour line was an animal line. | #1429, #1438 | CONFIRMED (catalogue) | **DEFECT UR-F9** (reads the natural line, not the printed one) |
 | UR-N58 | Which figure revenue statistics use under the variant (printed or paid), whether a Mark-nullified run counts as earned, and whether a synthetic gift counts as a purchase. *(Rev 5, OD-UR-6: the revenue actually paid — 6.1, in principle; corporation / turn level; a per-train figure's allocation is an isolated open sub-question — a Mark-nullified route is not earned (6.2); a synthetic gift is not a purchase, a later Blood Price acquisition is (6.3).)* *(Rev 7: the per-train question DECIDED — a per-train statistic uses the printed value of the train's successfully completed route, not an allocation of the paid total; a Mark-nullified route contributes nothing.)* | none; **OD-UR-6 (rev 5)** | ~~**OPEN → OD-UR-6**~~ CONFIRMED *(rev 5; the per-train question decided rev 7 — OD-UR-6 fully decided)* | today: printed; nullified runs counted; gifts counted as bought — **DEFECT UR-F8** (UR-5); *(rev 7)* per train, today's printed basis conforms for completed routes — only the nullified route's inclusion does not |
@@ -1124,7 +1284,9 @@ Status and evidence: "UR-3 implementation (rev 3)".)* *(Rev 4: UR-F20 is new —
 half-up tie a defect; not implemented, UR-7.)* *(Rev 5: UR-F21 is new — OD-UR-5(c)'s copy distinction makes the
 model-level Carcosan transfer a defect (UR-4); UR-F8 gets its targets from OD-UR-6; UR-F11's Blood Price half narrows to
 OD-UR-5(b).)* *(Rev 7: UR-F22 is new — OD-UR-5(b)'s buyer-only move makes #1090's seller move a defect (UR-4); UR-F8's
-per-train target is decided; UR-F11 is closed — every contradiction it named is ruled.)*
+per-train target is decided; UR-F11 is closed — every contradiction it named is ruled.)* *(Rev 8: UR-4 fixed UR-F21 and
+UR-F22, and — found in the slice, intrinsic to 5a-1 — the cured copy's stale provenance through the Bank Pool, not given a
+UR-F number because it is fixed in the slice that exposed it ("UR-4 implementation (rev 8)").)*
 
 | id | severity | class | finding | evidence | needs |
 |---|---|---|---|---|---|
@@ -1148,8 +1310,8 @@ per-train target is decided; UR-F11 is closed — every contradiction it named i
 | **UR-F18** *(rev 2)* | MEDIUM | rules (ruled timing) | The fog is collected as a **run stage** — on the Carcosan corporation's first run after set N+1, through the sign request (`fogIsDue`, `YS:380`; the `stage === "fog"` arm) — where OD-UR-2 rules an **automatic removal at the end of set N+1**, at the OR-set boundary. Today's form gives the train one more run, keeps it alive indefinitely if its corporation stops running, leaves a post-deadline window to sell it, and (unbound) lets another seat collect it (UR-F2, P-D). **Do not restore `N+1 + on-run`.** | §6.1; UR-N45, UR-N46 | none — OD-UR-2 **decided** — UR-3 (fog authority and removal location) · **FIXED rev 3** |
 | **UR-F19** *(rev 3)* | MEDIUM | rules state (pre-existing since #1046; reachable once UR-F1 is fixed) | The Mark removes the taken train from `owned_trains` and puts it nowhere; the derived depot (TOTAL − owned − pooled) takes it back as phantom stock when it is of the phase's own tier, and when it was the only train of that tier in play the phase falls back a tier (probe: phase 3 → 2, the depot offers 2-trains again; statistics credit a "phase move"). | probe (rev 3) | **OD-UR-13 — DECIDED** (rev 3, 2026-09-24): removed from the game, never the Bank Pool; phase progression monotonic — UR-3 · **FIXED rev 3 (pinned Unpredictable Revenue tables — `removed_trains`; unpinned residual)** |
 | **UR-F20** *(rev 4)* | MEDIUM | rules (ruled tie direction) | An exact $5 tie of the modified revenue rounds half up (`roundToTen`), where OD-UR-10 = 10-C rules it toward the printed revenue. Only the +10% face can differ: printed $50 pays $60 where the rule gives $50 ($150: $170 vs $160; $250: $280 vs $270) — the +$1.67 expected bias at printed ≡ $50 (mod $100) (§8.2). | §8.2; `GV:1117`, `:1232` | OD-UR-10 **decided** (10-C, rev 4) — UR-7 (the rounding table and the tie rule); replay-semantic, owed to the v10 boundary · **OPEN — not implemented** |
-| **UR-F21** *(rev 5)* | MEDIUM | rules (ruled copy distinction) | A seller holding a gilded and an ordinary copy of one model cannot sell the ordinary copy as an ordinary sale: the Carcosan transfer is model-level (`isCarcosanTransfer`: the seller's `carcosan_trains` names the model), so any sale of that model charges the Blood Price, absolves the seller and burns the gilding — where OD-UR-5(c) = 5c-2 rules that the sale names the copy and only the gilded copy's sale is the Blood Price. The sale message names a model (`BuyTrainFromCorporation.model_type`), and The Redeemer reads the same model-level predicate. | `sS:2053`; UR-N54, UR-N55 | OD-UR-5(c) **decided** (5c-2, rev 5) — UR-4 (how a sale names the copy; replay-semantic, owed to the v10 boundary) · **OPEN — not implemented** |
-| **UR-F22** *(rev 7)* | MEDIUM | rules (ruled market consequence) | The Blood Price moves the **seller's** stock marker Left 1 / Down 1 — #1090's market arm, whose design note reads *"THE SELLER MOVES, NOT THE BUYER. The toll is for letting the thing go."* — where OD-UR-5(b) rules that the **buyer's** marker moves and the seller gets no separate stock-price movement (never both). Two player-facing surfaces repeat the superseded rule — the Train Purchase panel's warning (*"The selling corporation's share price will immediately drop (1 cell Left, 1 cell Down)"*) and the narration's design note (*"[Selling Corp]'s stock dropped"*) — and two suites pin it (`BPA`, `S103`: the seller's token). **Do not restore the seller move** from #1090, from that code, that copy or those tests. | `sS:2674`, `:2679`, `:2695` (at `9d0cf3a`); `TrainPurchasePanel.tsx:1388–1389`; `App.tsx:6904`; UR-N51 | OD-UR-5(b) **decided** (the buyer only, rev 7) — UR-4 (the move and its tests; replay-semantic, owed to the v10 boundary) and UR-6 (the copy) · **OPEN — not implemented** |
+| **UR-F21** *(rev 5)* | MEDIUM | rules (ruled copy distinction) | A seller holding a gilded and an ordinary copy of one model cannot sell the ordinary copy as an ordinary sale: the Carcosan transfer is model-level (`isCarcosanTransfer`: the seller's `carcosan_trains` names the model), so any sale of that model charges the Blood Price, absolves the seller and burns the gilding — where OD-UR-5(c) = 5c-2 rules that the sale names the copy and only the gilded copy's sale is the Blood Price. The sale message names a model (`BuyTrainFromCorporation.model_type`), and The Redeemer reads the same model-level predicate. | `sS:2053`; UR-N54, UR-N55 | OD-UR-5(c) **decided** (5c-2, rev 5) — UR-4 (how a sale names the copy; replay-semantic, owed to the v10 boundary) · ~~OPEN — not implemented~~ **FIXED rev 8 (UR-4)** — the optional `gilded` on the sale / proposal / offer / derived settlement; an unnamed ambiguous sale refused; provenance with the copy; The Redeemer reads the copy (every table) |
+| **UR-F22** *(rev 7)* | MEDIUM | rules (ruled market consequence) | The Blood Price moves the **seller's** stock marker Left 1 / Down 1 — #1090's market arm, whose design note reads *"THE SELLER MOVES, NOT THE BUYER. The toll is for letting the thing go."* — where OD-UR-5(b) rules that the **buyer's** marker moves and the seller gets no separate stock-price movement (never both). Two player-facing surfaces repeat the superseded rule — the Train Purchase panel's warning (*"The selling corporation's share price will immediately drop (1 cell Left, 1 cell Down)"*) and the narration's design note (*"[Selling Corp]'s stock dropped"*) — and two suites pin it (`BPA`, `S103`: the seller's token). **Do not restore the seller move** from #1090, from that code, that copy or those tests. | `sS:2674`, `:2679`, `:2695` (at `9d0cf3a`); `TrainPurchasePanel.tsx:1388–1389`; `App.tsx:6904`; UR-N51 | OD-UR-5(b) **decided** (the buyer only, rev 7) — UR-4 (the move and its tests; replay-semantic, owed to the v10 boundary) and UR-6 (the copy) · ~~OPEN — not implemented~~ **FIXED rev 8 (UR-4)** — the buyer's marker moves, never the seller's; the warning, the prompt, the design notes and `BPA` / `S103` / `S103b` / GR-2 S8 / `B60` updated (every table) |
 
 Stale comments and documentation are listed in Appendix B (not numbered findings).
 
@@ -1270,6 +1432,10 @@ phase (below).*
   copy that repeats it or from the tests that pin it (UR-F22 names them). Not implemented — **UR-F22** (UR-4; the copy
   in UR-6).
 * *(Rev 5)* **(c) = 5c-2** — the sale names the copy: **UR-F21** (UR-4).
+* *(Rev 8)* **Implemented — UR-4.** (a) pinned live, the +1 carried through the Bank Pool (`returned_ghost_trains`); (b)
+  UR-F22 fixed; (c) UR-F21 fixed — one optional `gilded` boolean, multiset copy selection, no train identity. The "one
+  marker, two concepts" note above is resolved without a split: `ghost_trains` is supply provenance only, and its phase /
+  real-D reads are the Depot-purchase reason, not a status ("UR-4 implementation (rev 8)").
 
 **OD-UR-6 — the statistics' basis under the variant** (UR-N58, UR-F8). Printed or paid for The Workhorse, The
 Juggernaut, Master of the Line, the per-train ledger, the revenue chart, White Elephant and Little Engine; whether a
@@ -1353,6 +1519,10 @@ isolated sub-question), UR-F11's Blood Price half narrows to the market conseque
 *(Rev 7.)* OD-UR-5(b) and OD-UR-6.1's per-train question are decided: UR-N51 becomes a defect with a decided target,
 **UR-F22** (UR-4); UR-F8 has every target (UR-5); UR-F11 is closed. **No finding waits on an owner decision.**
 
+*(Rev 8.)* **UR-4 fixed UR-F21 and UR-F22** (and the Bank Pool provenance leg it found). Still open: UR-F8, UR-F9 (UR-5);
+UR-F12, UR-F13, UR-F14 (UR-6); UR-F15 (INFO); UR-F16 (routed to AWS / live multiplayer); UR-F20 (UR-7); and the unpinned
+(Firestore) residuals of UR-3 (S10-11). No finding waits on an owner decision.
+
 ---
 
 ## 13. Certification matrix
@@ -1379,7 +1549,10 @@ from DEFECT to "fixed with durable R / S evidence" (see "UR-3 implementation (re
 re-asserted in UR-7, against the constructed game.)* *(Rev 4: one row moved — UR-N6, CERTIFIED NOW → DEFECT UR-F20, by
 OD-UR-10; "Counts (rev 4)" below.)* *(Rev 5: UR-N50 → CORRECT BUT NEEDS LIVE TEST, UR-N54 → DEFECT UR-F21, UR-N58 →
 DEFECT UR-F8 and X11 → DEFECT, by OD-UR-5 and OD-UR-6; "Counts (rev 5)" below.)* *(Rev 7: UR-N51, OWNER DECISION →
-DEFECT UR-F22, by OD-UR-5(b); no OWNER DECISION row remains; "Counts (rev 7)" below.)*
+DEFECT UR-F22, by OD-UR-5(b); no OWNER DECISION row remains; "Counts (rev 7)" below.)* *(Rev 8: as UR-3 did, UR-4 does
+NOT recompute the matrix. It moves the rows it touches — UR-N50 (pinned live), UR-N51 (UR-F22), UR-N54 (UR-F21), with
+UR-N49, N52, N53 and N55 re-asserted — to "fixed / pinned with durable R / S evidence" ("UR-4 implementation (rev 8)");
+their certification status is re-asserted in UR-7, against the constructed game. The counts below stay rev 7's.)*
 
 ### 13.1 Clauses
 
@@ -1433,13 +1606,13 @@ DEFECT UR-F22, by OD-UR-5(b); no OWNER DECISION row remains; "Counts (rev 7)" be
 | UR-N46 | the fog is not a run stage | #1092, superseded in placement by OD-UR-2 (rev 2) | `YS:490` (fog first) | [R] B60 "leaves the roll entirely alone" (the run-stage form) | **DEFECT UR-F18** *(rev 2: was CERTIFIED NOW for the run-stage fog)* | R + G |
 | UR-N47 | Carcosan after the fog | #1089 | `sS:6490–6530` | [R] YSA 6b | CERTIFIED NOW | G |
 | UR-N48 | the fog removes one copy + gilding + provenance | #1675 | `sS:6490–6530` | [R] GHL G | CERTIFIED NOW | — |
-| UR-N49 | the Blood Price absolves the seller | #1090 | `sS:1993–2018` | [R] GHL E | CERTIFIED NOW (re-assert after OD-UR-5 — *rev 5: after (b) and UR-F21's copy-level sale*; *rev 7: (b) decided — after UR-F21 and UR-F22*) | G |
-| UR-N50 | what the buyer receives — *(rev 5)* an ordinary train (5a-1) | #1090 vs S9-3; OD-UR-5(a) = 5a-1 (rev 5) | `sS:1949–2018` | [R] GHL E (no curse, gilding, exemption or deadline; the buyer's limit; never fogged; the depot tally unchanged — the "+1") | CORRECT BUT NEEDS LIVE TEST *(rev 5: was OWNER DECISION OD-UR-5(a) — decided 5a-1; the implementation already conforms; still to pin live: rusts normally, sells again normally, a Diesel trade-in when eligible)* | R + G |
-| UR-N51 | whose share price moves — *(rev 7)* the buyer's only (OD-UR-5(b)) | #1090 vs S9-3; OD-UR-5(b) (rev 7) | `sS:2644–2680` *(at `9d0cf3a`: `:2674–2695`)* | [R] BPA; [S] S103 — both pin the seller's move, the superseded rule | **DEFECT UR-F22** *(rev 7: was OWNER DECISION OD-UR-5(b) — decided: the buyer only; the seller moves today)* | R + S |
-| UR-N52 | provenance travels with the train | #1673 | `sS:1949–1962` | [R] GHL E | CERTIFIED NOW | — |
-| UR-N53 | the server charges the Blood Price on a legal transfer | #1690 | `sS:2986–2995` | [S] S103 "the Blood Price (#1090)"; [R] BPA | CERTIFIED NOW *(rev 7: re-assert after UR-F22 — the charge's target moves to the buyer)* | S |
-| UR-N54 | identical gilded + ordinary copies — *(rev 5)* the sale names the copy (5c-2) | project; OD-UR-5(c) = 5c-2 (rev 5) | `sS:2026`, `:2053` | none | **DEFECT UR-F21** *(rev 5: was OWNER DECISION OD-UR-5(c) — decided 5c-2; model-level today)* | R |
-| UR-N55 | Carcosan Railways, The Redeemer | #1421 | `gameHistory.ts:721–750` | none live (displaced, S10-21) | CORRECT BUT NEEDS LIVE TEST *(rev 5: The Redeemer reads the model — under 5c-2 it reads the copy sold, UR-F21; rev 7: it already credits the buyer, who pays under OD-UR-5(b))* | G (S10-21) |
+| UR-N49 | the Blood Price absolves the seller | #1090 | `sS:1993–2018` | [R] GHL E | CERTIFIED NOW (re-assert after OD-UR-5 — *rev 5: after (b) and UR-F21's copy-level sale*; *rev 7: (b) decided — after UR-F21 and UR-F22*) | G *(rev 8: re-asserted by UR-4 — [R][S] `carcosaBloodPrice` A3, F1, I2)* |
+| UR-N50 | what the buyer receives — *(rev 5)* an ordinary train (5a-1) | #1090 vs S9-3; OD-UR-5(a) = 5a-1 (rev 5) | `sS:1949–2018` | [R] GHL E (no curse, gilding, exemption or deadline; the buyer's limit; never fogged; the depot tally unchanged — the "+1") | CORRECT BUT NEEDS LIVE TEST *(rev 5: was OWNER DECISION OD-UR-5(a) — decided 5a-1; the implementation already conforms; still to pin live: rusts normally, sells again normally, a Diesel trade-in when eligible)* | R + G *(rev 8: pinned with durable [R][S] evidence by UR-4 — `carcosaBloodPrice` C, D, E, F, I; re-asserted in UR-7)* |
+| UR-N51 | whose share price moves — *(rev 7)* the buyer's only (OD-UR-5(b)) | #1090 vs S9-3; OD-UR-5(b) (rev 7) | `sS:2644–2680` *(at `9d0cf3a`: `:2674–2695`)* | [R] BPA; [S] S103 — both pin the seller's move, the superseded rule | **DEFECT UR-F22** *(rev 7: was OWNER DECISION OD-UR-5(b) — decided: the buyer only; the seller moves today)* | R + S *(rev 8: UR-F22 fixed with durable [R][S][U] evidence by UR-4 — `carcosaBloodPrice` B, I2, I4; `BPA`, `S103`, `S103b`; the panel; re-asserted in UR-7)* |
+| UR-N52 | provenance travels with the train | #1673 | `sS:1949–1962` | [R] GHL E | CERTIFIED NOW | — *(rev 8: and the Bank Pool leg, UR-4 — `carcosaBloodPrice` D2–D6, I6)* |
+| UR-N53 | the server charges the Blood Price on a legal transfer | #1690 | `sS:2986–2995` | [S] S103 "the Blood Price (#1090)"; [R] BPA | CERTIFIED NOW *(rev 7: re-assert after UR-F22 — the charge's target moves to the buyer)* | S *(rev 8: re-asserted — the charge's target is the buyer, UR-4)* |
+| UR-N54 | identical gilded + ordinary copies — *(rev 5)* the sale names the copy (5c-2) | project; OD-UR-5(c) = 5c-2 (rev 5) | `sS:2026`, `:2053` | none | **DEFECT UR-F21** *(rev 5: was OWNER DECISION OD-UR-5(c) — decided 5c-2; model-level today)* | R *(rev 8: UR-F21 fixed with durable [R][S][U] evidence by UR-4 — `carcosaBloodPrice` A, I1, I3, I5; the panel; re-asserted in UR-7)* |
+| UR-N55 | Carcosan Railways, The Redeemer | #1421 | `gameHistory.ts:721–750` | none live (displaced, S10-21) | CORRECT BUT NEEDS LIVE TEST *(rev 5: The Redeemer reads the model — under 5c-2 it reads the copy sold, UR-F21; rev 7: it already credits the buyer, who pays under OD-UR-5(b))* | G (S10-21) *(rev 8: The Redeemer's copy reading fixed with [R] evidence — `carcosaBloodPriceStats`; the rest stays G, S10-21)* |
 | UR-N56 | the sign's takings are not obsolescence | #1422, #1431 | `gameHistory.ts:562`, `:723–735` | [RP] CV4-based history suites (no UR case) | CORRECT BUT NEEDS LIVE TEST | G |
 | UR-N57 | The Cowboy | #1429 | `gameHistory.ts:451–457` | none live | **DEFECT UR-F9** | R |
 | UR-N58 | statistics basis — *(rev 5)* paid (6.1, in principle), a nullified route not earned (6.2), a gift not a purchase and a Blood Price acquisition a purchase (6.3); *(rev 7)* per train, the printed completed route | OD-UR-6 (rev 5) | `gameHistory.ts:431–476`, `:651–670` | — | **DEFECT UR-F8** *(rev 5: was OWNER DECISION OD-UR-6 — decided; the per-train allocation was 6.1's isolated open sub-question — rev 7: decided, the printed completed route)* | G |
@@ -1604,7 +1777,7 @@ train (hence two tails); the standard control and the LPF shelf need different d
 | **UR-1** (this) | audit / design | two documents | focused suites + probes (deleted) | — | 9 | — | — |
 | **UR-2** | owner spec review. **Part 1 DONE (rev 2, 2026-09-24):** OD-UR-1, OD-GR-3, OD-UR-2, OD-UR-3, OD-UR-4, OD-UR-7, OD-UR-8, OD-UR-9, OD-UR-11, OD-UR-12 recorded here and in the backlog (D-36 closed; D-37 … D-45). **Part 2 pending:** OD-UR-5, OD-UR-6, OD-UR-10 — needed before UR-4's Blood Price part, UR-5's statistics and UR-7's rounding evidence respectively; **none of them is needed for UR-3** *(rev 4: OD-UR-10 DECIDED — 10-C; still pending: OD-UR-5, OD-UR-6)* *(rev 5: OD-UR-5 (a), (c) and OD-UR-6 DECIDED; still pending: OD-UR-5(b))* *(rev 7: OD-UR-5(b) and OD-UR-6.1's per-train question DECIDED — **UR-2 complete: every owner decision made**)* | documents only | — | **is** the decision step | 9 | — | low |
 | **UR-3** | the Yellow Sign's authority, **as ruled**: (0) reproduce UR-F1; make every run stage an **automatic consequence of the authoritative run** and remove the client-sent `YellowSignEvent` as a source of authority on pinned tables — nothing dispatched from the drain, nothing a client can omit, delay, redirect or manufacture (OD-UR-1: UR-F1, UR-F2); the variant gate (UR-F3); the Mark on the **post-settlement fleet** — a Final Run train never a candidate — with route attribution (UR-F5) and narration (UR-F6) on the same basis (OD-GR-3); the breakdown from the authority's pairing (UR-F7); **the fog out of the run stages** and into an authoritative **OR-set-boundary transition at the end of set N+1** (OD-UR-2: UR-F18); optionally refuse a seedless pinned run (UR-F15) | `sS` (run arm, `YellowSignEvent` arm, `applyYellowSignOutcome`, the OR-set boundary), `YS` (`resolveYellowSign`, `runWithoutTrain`, `fogIsDue`), `gameEngine/derivedActions.ts` / the room engine (if the stage is recorded as a derived entry), `turnAuthority.ts`, `serverIngress.ts`, `messageSchema.ts`, `App.tsx` (narration, a boundary notice), `utils/gameHistory.ts` (stage readers), `utils/sessionKey.ts` | P-A, P-C, P-D, P-G1′, P-G2′, P-H, P-J as durable R / S tests (every crafted request refused; the owed stage applied by the authority); no reprieved copy ever a Mark candidate; the fog removed at the end of N+1 and never on a run; a drain-level harness or source pins for the shell; `YSA` / `YSI` / `B48` / `B60` / `FSR` inverted where their contract changes; legacy branches unchanged; 18-file sweep | **none outstanding** — OD-UR-1, OD-GR-3, OD-UR-2 decided (rev 2) | 9 | **yes** | **high** |
-| **UR-4** | the Carcosa lifecycle: synthetic trains never advance the phase (OD-UR-3: UR-F4 — including a gifted D's doom clock and the Phase Rusher / rust-cause credit); a gilded train refused as a Diesel trade-in while an ordinary copy of its model stays tradable (OD-UR-7: UR-F17); the Blood Price's consequences (OD-UR-5 — **OPEN**; can be split off if the rest lands first) *(rev 5: (a) decided — pin today's ordinary train live ~~and confirm the cured train's phase treatment with the owner~~; (c) decided — the copy-level sale, UR-F21; (b) OPEN)* *(rev 6: (a)'s phase question is closed by the owner — the Blood Price is an intercorporate purchase and changes no phase; UR-4 keeps the +1 supply accounting and makes sure the cured train is otherwise ordinary, §12.2; no owner blocker remains for (a))* *(rev 7: (b) decided — the buyer's marker moves, not the seller's, UR-F22; **UR-4 has no owner-decision blocker**)* | `GP` (`derivePhase` / depot), `sS` (`buyDepotTrain`, exchange arm, `settleTrainSale`, `startCarcosanDoomClock`, gift), `YS` (`carcosaGiftModel`), `gameEngine/dieselExchange.ts`, `trainLimit.ts` callers | P-B, P-F, P-I durable; `GHL` extended (LPF windows); 18-file sweep (no corpus ghost exists) | OD-UR-3, OD-UR-7 decided; **OD-UR-5 OPEN** *(rev 5: OD-UR-5(a) and (c) decided; **(b) OPEN**)* *(rev 7: OD-UR-5 fully decided — **none outstanding**)* | 9 | **yes** | **high** (phase machinery) |
+| **UR-4** | **(rev 8: IMPLEMENTED — uncommitted, awaiting the owner's gate: UR-F21 and UR-F22 fixed, OD-UR-5(a) pinned live, the Bank Pool provenance leg fixed — "UR-4 implementation (rev 8)")** the Carcosa lifecycle: synthetic trains never advance the phase (OD-UR-3: UR-F4 — including a gifted D's doom clock and the Phase Rusher / rust-cause credit); a gilded train refused as a Diesel trade-in while an ordinary copy of its model stays tradable (OD-UR-7: UR-F17); the Blood Price's consequences (OD-UR-5 — **OPEN**; can be split off if the rest lands first) *(rev 5: (a) decided — pin today's ordinary train live ~~and confirm the cured train's phase treatment with the owner~~; (c) decided — the copy-level sale, UR-F21; (b) OPEN)* *(rev 6: (a)'s phase question is closed by the owner — the Blood Price is an intercorporate purchase and changes no phase; UR-4 keeps the +1 supply accounting and makes sure the cured train is otherwise ordinary, §12.2; no owner blocker remains for (a))* *(rev 7: (b) decided — the buyer's marker moves, not the seller's, UR-F22; **UR-4 has no owner-decision blocker**)* | `GP` (`derivePhase` / depot), `sS` (`buyDepotTrain`, exchange arm, `settleTrainSale`, `startCarcosanDoomClock`, gift), `YS` (`carcosaGiftModel`), `gameEngine/dieselExchange.ts`, `trainLimit.ts` callers | P-B, P-F, P-I durable; `GHL` extended (LPF windows); 18-file sweep (no corpus ghost exists) | OD-UR-3, OD-UR-7 decided; **OD-UR-5 OPEN** *(rev 5: OD-UR-5(a) and (c) decided; **(b) OPEN**)* *(rev 7: OD-UR-5 fully decided — **none outstanding**)* | 9 | **yes** | **high** (phase machinery) |
 | **UR-5** | money and statistics: the award stays **minted** (OD-UR-4 decided — no gameplay change; correct `MINTS_BY_DESIGN`'s stale comment, Appendix B item 11); the statistics' basis (OD-UR-6 — **OPEN**; UR-F8) *(rev 5: decided — 6.1 paid, in principle; 6.2; 6.3)* *(rev 7: per train, the printed completed route — OD-UR-6 fully decided)*; The Cowboy (UR-F9) | `MC` (comment), `utils/gameHistory.ts`, `utils/accolades.ts` | history cases; the constructed game's statistics | **OD-UR-6 OPEN** *(rev 5: decided; 6.1's per-train allocation to be answered before the per-train statistics)* *(rev 7: answered — **none outstanding**)* | 9 | **no** — the award's source does not change; statistics are derived history (as U-9) | medium |
 | **UR-6** | UI / copy / Rules Reference: disclosure per 8-B (UR-F13; the Blood Price text once OD-UR-5 is decided); **"Unpredictable Revenue"** everywhere (UR-F14); the chip tooltip on OD-UR-2's lifetime (UR-F12); the fog's boundary notice (OD-UR-2); Appendix B's stale comments | `components/RulesReference.tsx`, `components/TrainBadges.tsx`, `components/HostSetupCard.tsx`, `components/LobbyRoomList.tsx`, `GV` copy and field docs, comments in `sS` / `YS` / `gameState.ts` / `trainDiscard.ts` / `trainLimit.ts` / `App.tsx` | copy / render tests | OD-UR-8, OD-UR-12 decided; OD-UR-5 for the Blood Price text *(rev 5: (a) and (c) decided; (b) pending)* *(rev 7: OD-UR-5 fully decided — none outstanding; the Blood Price copy names the buyer's move, UR-F22)* | 9 | no (replay-neutral) | low |
 | **UR-7** | certification evidence: the matrix as durable tests (every clause, R1 – R13), G1 (two tails) + G0, S10-21's completed game, the 18-file corpus reconciliation; OD-UR-11 needs no change (accepted); OD-UR-10's tie rule applied or confirmed *(rev 4: applied — 10-C, ties toward printed, UR-F20; the die's rounding step and the rounding table)*; OD-UR-9 is not UR's (routed to AWS / live multiplayer) | a UR certification document; `utils/unpredictableRevenueCertification*.test.ts`; a constructed-game helper (test support only); the S10-21 fixture; *(rev 4)* `GV` (the die's rounding step) | as named | ~~**OD-UR-10 OPEN**~~ *(rev 4: OD-UR-10 decided — 10-C)*; G1 also needs OD-UR-5 (a)(b) and OD-UR-6 *(rev 5: only OD-UR-5(b), and 6.1's per-train allocation for the per-train statistics)* *(rev 7: none — OD-UR-5 and OD-UR-6 fully decided; OD-UR-10 decided since rev 4)* | 9 | no (evidence) *(rev 4: **yes** for the tie rule, UR-F20 — replay-semantic; the rest is evidence)* | medium |
@@ -1615,7 +1788,9 @@ UR-F4 and UR-F17 and — OD-UR-13 decided during the slice — the Mark's taken 
 Blood Price's consequences (OD-UR-5 — OPEN). The version boundary's items (1) – (5) and (8) below are implemented at v9
 and owed to row 10.)* *(Rev 4: item (7) is decided — 10-C — and routed to UR-7, UR-F20; not implemented.)* *(Rev 5: UR-4's
 Blood Price part is (a) today's behaviour, (c) UR-F21 and (b) OPEN; item (6) below says which of them changes replay.)*
-*(Rev 7: (b) is decided — UR-F22 — so UR-4's Blood Price part has no owner blocker.)*
+*(Rev 7: (b) is decided — UR-F22 — so UR-4's Blood Price part has no owner blocker.)* *(Rev 8: **UR-4 is implemented**
+(uncommitted, awaiting the owner's full repository Jest gate) — item (6) below is implemented at v9 and owed to row 10.
+Next: UR-5, UR-6, UR-7, UR-8, in the owner's order.)*
 
 *(Rev 2: the table reflects the rulings. The only change of ownership is the fog: its authority and removal location
 move from UR-4 into UR-3, so UR-3 never builds a run-bound fog that OD-UR-2 has ruled out. The doom-clock arithmetic
@@ -1627,7 +1802,9 @@ the post-settlement fleet, never a Final Run train, with its route attribution (
 OR-set-boundary removal at the end of set N+1 (UR-3; OD-UR-2); (4) synthetic trains never advance the phase (UR-4;
 OD-UR-3); (5) no gilded Diesel trade-in (UR-4; OD-UR-7); (6) the Blood Price's consequences, if OD-UR-5 changes them
 (UR-4) — *(rev 5: (a) does not, it is today's behaviour; (c) does — the copy-level sale, UR-F21; (b) OPEN)* *(rev 7: (b)
-does — the buyer's marker moves instead of the seller's, UR-F22)*; (7) the tie rule, if OD-UR-10 changes it — *(rev 4: it does — 10-C, an exact tie rounds toward printed; UR-7,
+does — the buyer's marker moves instead of the seller's, UR-F22)* *(rev 8: implemented at v9 in UR-4 — the copy-level
+sale, an unnamed ambiguous sale refused (UR-F21), the buyer's move (UR-F22), and the Bank Pool's provenance of an
+additional copy (`returned_ghost_trains`) so a cured train traded in stays additional; every table, the corpus unchanged)*; (7) the tie rule, if OD-UR-10 changes it — *(rev 4: it does — 10-C, an exact tie rounds toward printed; UR-7,
 UR-F20; not implemented)*; *(rev 3)* (8) the Mark's taken train removed from the game —
 `removed_trains`, counted toward the phase and off the depot, never purchasable — so the phase never falls back across it
 (UR-3; OD-UR-13). Named as NOT rules: the award's source (OD-UR-4 keeps the mint — no
@@ -1735,6 +1912,48 @@ pushed.
 and the backlog changed. No production code, test, log, fixture, golden, export or corpus file was touched; no test,
 typecheck or build was run; `RULES_ENGINE_VERSION` is still **9**; `git diff --check` is clean. Nothing was committed or
 pushed.
+
+**Rev 8 (UR-4 implementation, 2026-09-25).** Starting point, verified before any work: local `main` =
+`4b937a45ee8402723e4d5be12649dae3c199c748` ("Finalize Unpredictable Revenue rulings"), **1 ahead / 0 behind**
+`origin/main` (`9d0cf3a`) — as expected, the documentation checkpoint not yet pushed; the tracked tree clean, only the
+pre-existing untracked `.claude/`; no `.git/index.lock`. Nothing was reset, pulled, rebased, merged or checked out. The work
+was done in a scratch copy — `origin/main` (`9d0cf3a`) plus the two checkpoint documents copied from the owner's checkout,
+whose tree hash (`05f74c6893ebb11f464b1274184f948802136878`) equals the checkout's `4b937a45^{tree}` — and only the changed
+files were written back to the owner's checkout. **Nothing committed or pushed**; the local documentation commit is
+untouched. The full Jest suite was **not** run (the owner's gate).
+
+* **New suites:** `utils/carcosaBloodPrice.test.ts` 42, `utils/carcosaBloodPriceStats.test.ts` 2,
+  `components/carcosaBloodPricePanel.test.tsx` 6 — **50 tests, all passing**; against the untouched baseline **30 fail
+  and 20 pass** ("UR-4 implementation (rev 8)").
+* **Updated where their contract changed** (each with a UR-4 note; the seller-move pins inverted to the buyer, never
+  deleted): `utils/bloodPriceArrival.test.ts` (the mover is the buyer), `utils/stage103CompositionCoupling.test.ts` ("the
+  BUYER's token moves"), `utils/stage103bChartCoreAtomicity.test.ts` C, `utils/gentleRustTransactionLocks.test.ts` S8 (its
+  Blood Price control names the gilded copy and pins the buyer), `utils/stage95GhostLimit.test.ts` E (the two-copy case
+  names the copy, the ordinary copy's sale added; its OD-UR-5 speculation closed), `utils/batch60.test.ts` (the Blood Price
+  block's title, the panel's warning pins).
+* **Focused Jest: 263 suites, 5,228 tests — all pass** — every suite that mentions the variant, the Sign, Carcosa,
+  provenance, the Blood Price, the Diesel exchange, the Depot / phase / pool, the intercorporate sale and its offer,
+  derived actions, the fleet-loss diff, statistics / accolades, `turnRefusal` / ingress / the schema, `RoomSession` /
+  replay / digests or Gentle Rust, and every suite that source-pins a changed file (`CI=true react-app-rewired test
+  --watchAll=false --maxWorkers=2`, six batches). The corpus-dependent suites ran with the five export logs and the eight
+  server logs in place.
+* **`frontend tsc --noEmit`: exit 0. `server tsc` (`server/tsconfig.json`, the repository's TypeScript 4.9.5): exit 0.**
+* **Production build:** exit 0, "Compiled with warnings" — **49 ESLint warning lines** plus webpack's pre-existing
+  "Critical dependency" notice, **the same set as the baseline build** compared modulo line numbers: none new (the files
+  UR-4 touches carry exactly their baseline warnings — `App.tsx` 17, `sandboxSession.ts` 10, `TrainPurchasePanel.tsx` 2,
+  `derivedActions.ts` 1). `GENERATE_SOURCEMAP=false`, in the scratch copy.
+* **Corpus reconciliation (18 files, baseline vs tree, `DEVELOPMENT_CORPUS_POLICY`)** — scratch builds of each compiled
+  with `server/tsconfig.json`, and a scratch script (not added to the repository) recording per engine application the
+  pre-entry state digest, grid hash, cursor, derived-action answer and known phase, then the finals: stored / applied /
+  dropped **4,105 / 3,731 / 374**; **3,763** engine applications; state / grid / cursor / derived-action / known-phase
+  differences **0 / 0 / 0 / 0 / 0**; final boards equal **18 / 18**; the known phase never decreases (0 in 3,763);
+  **JUNO-Y8V** 668 / 628 / 40, 632 applications, `OperatingRound 13`, **`b4fae877c35604fe`**; **JUNO-3XD** 322 / 320 / 2,
+  323 applications, `StockRound 12`, **`74db6e4bad736fec`**; 0 legacy discards; all 18 unpinned. Presence: no corpus
+  board carries a gilding, a provenance marker or a pool provenance entry; 11 stored `BuyTrainFromCorporation`, **0**
+  Carcosan transfers — so UR-4 reinterprets no stored entry. Corpus file bytes (md5) identical to the owner's checkout.
+* `git diff --check`: clean. `RULES_ENGINE_VERSION` still **9**. No stored log, golden, fixture, export or corpus file
+  edited, migrated, repinned or regenerated. Two throwaway probe tests ran in the scratch copy only and were deleted;
+  nothing temporary was created in the owner's checkout.
 
 ---
 

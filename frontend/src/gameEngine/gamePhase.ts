@@ -423,7 +423,8 @@ export function depotInventory(state: GameStateResponse | null): DepotTier[] {
   const phase = derivePhase(state);
   const order = tierOrderFor(state);
   const currentIndex = phase ? order.indexOf(phase.tier) : 0;
-  const pooled = pooledTrainsByTier(state);
+  // UR-4 (OD-UR-5(a)): the pool's PRINTED copies -- an additional (cured) copy in the pool never took a printed one.
+  const pooled = printedPooledTrainsByTier(state);
   // UR-3 (OD-UR-13): a train the Mark removed from the game is never stock (see `derivePhase`).
   const removed = removedTrainsByTier(state);
 
@@ -586,6 +587,32 @@ export function pooledTrainsByTier(state: GameStateResponse | null): Map<TrainTi
   return out;
 }
 
+/** ==================================================================
+ *   UR-4 (OD-UR-5(a) = 5a-1, D-48): THE POOL'S PRINTED COPIES -- THE ADDITIONAL ONE IS NOT PRINTED STOCK
+ *  ==================================================================
+ *  The Bank Pool (`returned_trains`) as the DEPOT'S ACCOUNTING reads it: every pooled copy EXCEPT the additional ones
+ *  (`returned_ghost_trains`, a sub-multiset -- a copy a Blood Price cured, traded in or discarded). A pooled printed train
+ *  was bought off the printed Depot, so it is subtracted from the Depot's stock (#1512) and it is the phase it began
+ *  (#1530); an additional copy never came off the printed Depot, so it is neither -- exactly as its provenance reads on
+ *  a fleet (`derivePhase`, #1046 / OD-UR-3). The pool still SELLS it like any pool train (`bankPoolTrains` reads the
+ *  whole pool, `pooledTrainsByTier`): it is an ordinary train. Identical to `pooledTrainsByTier` on every board whose
+ *  pool holds no additional copy (#232) -- the standard game and every corpus log. */
+export function printedPooledTrainsByTier(state: GameStateResponse | null): Map<TrainTier, number> {
+  const out = new Map<TrainTier, number>();
+  const additional = [...(state?.returned_ghost_trains ?? [])];
+  for (const model of state?.returned_trains ?? []) {
+    const at = additional.indexOf(model);
+    if (at >= 0) {
+      additional.splice(at, 1);
+      continue;
+    }
+    const tier = trainTier(model);
+    if (!tier) continue;
+    out.set(tier, (out.get(tier) ?? 0) + 1);
+  }
+  return out;
+}
+
 /** UR-3 (OD-UR-13): how many trains of each tier have been removed from the game by the Yellow Sign's Mark
  *  (`removed_trains`). Bought trains that exist nowhere any more: never stock, never purchasable -- but the phase
  *  their purchase began has begun. Empty on every board that carries no such removal (#232). */
@@ -635,7 +662,9 @@ export function realDieselPurchased(gameState: GameStateResponse | null): boolea
       if (trainTier(model) === "D") return true;
     }
   }
-  return (gameState.returned_trains ?? []).some((model) => trainTier(model) === "D");
+  /* UR-4 (OD-UR-5(a)): a pooled Diesel was bought (#1530) -- unless it is an additional copy, whose provenance says it
+     never came off the Depot (`returned_ghost_trains`); a synthetic D is not a real D wherever it sits. */
+  return (printedPooledTrainsByTier(gameState).get("D") ?? 0) > 0;
 }
 
 export function derivePhase(gameState: GameStateResponse | null): GamePhase | null {
@@ -693,7 +722,13 @@ export function derivePhase(gameState: GameStateResponse | null): GamePhase | nu
        for nothing here, a bought copy of the same model beside it counts as it always did, and the first REAL train
        of the tier is therefore the phase change (rust, marks, shelf, era, doom clock, limit) that it is in the printed
        game. `ghost_trains` travels with the train (#1673), so a synthetic train is never the phase whoever holds it;
-       what a Blood Price does to its GILDING (OD-UR-5, open) is not decided here. */
+       what a Blood Price does to its GILDING (OD-UR-5, open) is not decided here.
+       [UR-4 -- OD-UR-5 DECIDED (D-48, D-50): the Blood Price CURES the train (5a-1) -- the buyer's copy is ordinary in
+       every rule (limit, running, rust, sale, trade-in, fog) -- and this marker is all it keeps: SUPPLY PROVENANCE, the
+       +1 relative to the printed Depot. Reading it here is not a supernatural status; it is the base game's own reason:
+       the phase is begun by the qualifying DEPOT purchase, and the Blood Price is an intercorporate purchase of a copy
+       the Depot never sold. So it turns nothing -- no phase, rust, Gentle Rust mark, shelf, era or real-D trigger -- and
+       the first REAL train of the tier still does all of it (`carcosaBloodPrice.test.ts`, section E).] */
     const ghosts = [...(company.ghost_trains ?? [])];
     for (const model of trains) {
       const tier = trainTier(model);
@@ -714,10 +749,12 @@ export function derivePhase(gameState: GameStateResponse | null): GamePhase | nu
      whose purchase turned the phase (6.6.1 lets them choose any train), and the phase must not fall back to 4
      for it: rust has happened, the privates have closed, the limit is 2. So pooled trains count toward
      `highest` -- and only toward `highest`; they were never printed stock (#1512 subtracts them below). */
-  for (const model of gameState.returned_trains ?? []) {
-    const pooledTier = trainTier(model);
-    if (pooledTier) highest = Math.max(highest, order.indexOf(pooledTier));
-  }
+  /* UR-4 (OD-UR-5(a) = 5a-1): ...and only a PRINTED pooled train. An additional copy in the pool (a train a Blood Price
+     cured, then traded in or discarded) was never a Depot purchase, so it began no phase -- the provenance reading every
+     fleet copy already gets (OD-UR-3, above), kept when the copy moves into the pool. */
+  printedPooledTrainsByTier(gameState).forEach((_count, pooledTier) => {
+    highest = Math.max(highest, order.indexOf(pooledTier));
+  });
   /* ==================================================================
       UR-3 (OD-UR-13 -- DECIDED 2026-09-24): AND A TRAIN THE MARK TOOK WAS BOUGHT TOO -- THE PHASE NEVER FALLS BACK
      ==================================================================
@@ -742,7 +779,7 @@ export function derivePhase(gameState: GameStateResponse | null): GamePhase | nu
      train for sale twice, and on the open shelf a phantom 6. Subtracted here and in `depotInventory`, the
      two readers of this figure, so a train is in exactly one place. [UR-3, OD-UR-13: and a train the Mark removed
      from the game is subtracted beside it -- it is in no place at all, and least of all back on the shelf.] */
-  const pooledByTier = pooledTrainsByTier(gameState);
+  const pooledByTier = printedPooledTrainsByTier(gameState); // UR-4: the additional copy is not printed stock
   const depotRemaining =
     total === null
       ? null

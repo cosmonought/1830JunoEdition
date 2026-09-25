@@ -420,6 +420,10 @@ export interface TrainPurchaseOffer {
   buyer_protocol_id: number;
   buyer_ticker: string;
   model_type: string;
+  /** UR-4 (OD-UR-5(c) = 5c-2): WHICH COPY -- `true` the seller's gold-trimmed (Carcosan) copy of `model_type`, whose sale
+   *  is the Blood Price; `false` an ordinary copy. Copied from the proposal when it named one, and carried to the
+   *  derived settlement; absent when the proposal did not (legal only where no ambiguity exists, #232). */
+  gilded?: boolean;
   /** String, matching the contract's `Uint128` -- see `ProposeTrainPurchaseMsg`. */
   price: string;
   /** Design note #1597 (Batch 7.4, R74-B): WHICH offer this is -- its instance id, `offer_serial`'s value at the
@@ -632,6 +636,28 @@ export interface GameStateResponse {
    * path). Absent everywhere else (#232): the standard game, every table without the variant, and every unpinned
    * board -- the development corpus's stored Mark (JUNO-Z6C 203) replays exactly as it was played. */
   removed_trains?: readonly string[];
+  /** ==================================================================
+   *   UR-4 (OD-UR-5(a) = 5a-1, D-48): THE BANK POOL'S SUPPLY PROVENANCE -- THE ADDITIONAL COPY STAYS ADDITIONAL
+   *  ==================================================================
+   *
+   * `ghost_trains` beside `returned_trains`, and for #1672 / #1673's reason: SYNTHETIC PROVENANCE, "this train never
+   * came off the depot shelf". A train cured by the Blood Price is ORDINARY (5a-1) -- it can be traded in for a Diesel,
+   * and in a constructed board discarded -- and it keeps ONLY its provenance, the +1 relative to the printed supply.
+   * Before UR-4 that marker stayed behind at the corporation when the train went into the pool: the pooled copy then
+   * counted as a PRINTED train (one printed copy gone from the Depot for a trade that never touched it) and the stale
+   * marker waited to swallow the next copy of that model the corporation acquired (#1675's hazard, reachable once the
+   * cured train became ordinary).
+   *
+   * A SUB-MULTISET OF `returned_trains`, one entry per additional copy in the pool, by model. Written by the two arms
+   * that put a fleet's train in the pool (the Diesel trade-in, the president's discard) when the departing copy is the
+   * fleet's additional one; spent by the pool purchase, which hands it to the buyer's `ghost_trains`; filtered by the
+   * pool's rust with its train. READ AS SUPPLY ONLY: the depot tally does not count it as a printed copy, the phase and
+   * the real-D check do not count it as a Depot purchase (`gamePhase.ts`) -- and `bankPoolTrains` still sells it like
+   * any pool train (it is an ordinary train). Never a supernatural status: the gilding stays in `carcosan_trains`, and a
+   * gilded copy can reach neither arm (OD-UR-7; a gilded copy is limit-exempt, so no discard is owed for it).
+   *
+   * Absent everywhere no additional copy has entered the pool (#232) -- the standard game, and every corpus log. */
+  returned_ghost_trains?: readonly string[];
   /** ==================================================================
    *   DESIGN NOTE 1172: THE COUNT RULE 4 WAS ALWAYS WAITING FOR
    *  ==================================================================

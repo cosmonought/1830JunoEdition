@@ -201,6 +201,10 @@ export type GameplayExecuteMsg =
         seller_protocol_id: number;
         model_type: string;
         price: string;
+        /** UR-4 (OD-UR-5(c) = 5c-2): which copy -- `true` the seller's gold-trimmed copy (the Blood Price), `false` an
+         *  ordinary one; absent is the unnamed sale, legal only where it cannot be ambiguous. Room / sandbox only: the
+         *  contract has no Carcosa and the online path never sends it. */
+        gilded?: boolean;
       };
     }
   | { AcceptTrainOffer: { game_id: number; offer_id: number } }

@@ -533,18 +533,21 @@ describe("C. the shell's market sentence asks the reducer's own chart step", () 
       withState(withCorp(withCorp(operatingBoard({ step: "Hardware" }), NYC, { president: P1, carcosan_trains: ["3"] }), PRR, {}), patch);
     const sale = M.buyTrain(PRR, NYC, "3", "150");
 
-    it("the server's composition now charges it: the seller's token moves Left 1, Down 1 on a legal transfer", () => {
+    it("the server's composition now charges it: the BUYER's token moves Left 1, Down 1 on a legal transfer", () => {
+      /* UR-4 (OD-UR-5(b), backlog D-50): the mover is the BUYER (PRR); the seller (NYC) does not move (UR-F22). Until
+         UR-4 this case pinned #1090's seller move. */
       const board = gilded();
       expect(isCarcosanTransfer(board, NYC, "3")).toBe(true);
-      const mark = board.market_positions![NYC]!;
+      const mark = board.market_positions![PRR]!;
       const landed = projectBloodPriceMove(mark);
       expect(landed).not.toBeNull();
       const after = reduce(board, sale, P1);
       expect(after.public_companies.find((entry) => entry.company_id === PRR)?.owned_trains).toContain("3"); // it settled
-      expect(after.market_positions?.[NYC]?.price).toBe(landed!.price);
-      expect([after.market_positions?.[NYC]?.x, after.market_positions?.[NYC]?.y]).toEqual([landed!.x, landed!.y]);
+      expect(after.market_positions?.[PRR]?.price).toBe(landed!.price);
+      expect([after.market_positions?.[PRR]?.x, after.market_positions?.[PRR]?.y]).toEqual([landed!.x, landed!.y]);
+      expect(after.market_positions?.[NYC]).toEqual(board.market_positions?.[NYC]); // the seller never moves
       // ...and the sentence names it.
-      expect(report(board, sale, P1)).toEqual({ companyId: NYC, from: mark.price, to: landed!.price, reason: "bloodPrice" });
+      expect(report(board, sale, P1)).toEqual({ companyId: PRR, from: mark.price, to: landed!.price, reason: "bloodPrice" });
     });
 
     it("before 10.3 the providers' market context could not: it carried no `isCarcosanSale`", () => {

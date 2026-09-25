@@ -99,6 +99,7 @@ import {
   answerTrainPurchaseRefusal,
   proposeTrainPurchaseRefusal,
   rescindTrainPurchaseRefusal,
+  resolveSaleCopy,
   sellerPresident,
   trainSaleRefusal,
 } from "./trainSaleAuthority";
@@ -1376,13 +1377,21 @@ export function applyPhaseChange(
      president's `DiscardTrain` is what puts a train in. */
   const returnedAfter = survivingReturned;
   const returnedChanged = returnedAfter !== returnedBefore && returnedAfter?.length !== returnedBefore?.length;
+  /* UR-4 (OD-UR-5(a)): the pool's provenance (`returned_ghost_trains`) is a sub-multiset of the pool, so it goes with
+     any pooled copy the rust takes. Never reached in play -- an additional copy is always a 5, 6, 7 or D (the gift's
+     window), and none of those rusts -- but the invariant is kept where the pool loses trains. */
+  const provenanceBefore = state.returned_ghost_trains;
+  const provenanceAfter =
+    provenanceBefore && doomed.size > 0 ? provenanceBefore.filter((model) => !doomed.has(model)) : provenanceBefore;
+  const provenanceChanged = provenanceAfter?.length !== provenanceBefore?.length;
 
-  if (!changed && !privatesChanged && !returnedChanged) return state;
+  if (!changed && !privatesChanged && !returnedChanged && !provenanceChanged) return state;
   return {
     ...state,
     ...(changed ? { public_companies: companies } : {}),
     ...(privatesChanged ? { private_companies: privates } : {}),
     ...(returnedChanged ? { returned_trains: returnedAfter } : {}),
+    ...(provenanceChanged ? { returned_ghost_trains: provenanceAfter } : {}),
   };
 }
 
@@ -1912,21 +1921,110 @@ function buyReturnedTrain(
   // #1560: all or nothing -- a refused charge leaves the returned list alone as well as the treasury.
   const paid = transfer({ ...state, returned_trains: returned }, { corporation: companyId }, BANK, cost);
   if (!paid.ok) return state;
-  return withTrains(paid.state, companyId, (trains) => [...trains, modelType]);
+  const delivered = withTrains(paid.state, companyId, (trains) => [...trains, modelType]);
+  /* ==================================================================
+      UR-4 (OD-UR-5(a) = 5a-1): THE POOL'S ADDITIONAL COPY LEAVES WITH ITS PROVENANCE
+     ==================================================================
+     "Purchasing it from the pool later must not duplicate or erase supply provenance." When the pool holds an
+     additional copy of this model (`returned_ghost_trains`, written by the trade-in and the discard), the copy sold is
+     that one -- copies of one model are interchangeable, and the additional one goes first, the convention the sale and
+     the trade-in already follow (`departingCopyCarriesProvenance`) -- and its marker moves from the pool to the buyer's
+     `ghost_trains`. So the Depot's printed tally is the same before and after, whichever copy the pool held. Nothing is
+     written when the pool holds no provenance (#232). */
+  const poolProvenance = state.returned_ghost_trains ?? [];
+  if (!poolProvenance.includes(modelType)) return delivered;
+  return {
+    ...delivered,
+    returned_ghost_trains: withoutOne(poolProvenance, modelType),
+    public_companies: delivered.public_companies.map((entry) =>
+      entry.company_id === companyId ? { ...entry, ghost_trains: [...(entry.ghost_trains ?? []), modelType] } : entry,
+    ),
+  };
+}
+
+/** ==================================================================
+ *   UR-4 (OD-UR-5(a), backlog D-48): WHICH COPY'S PROVENANCE LEAVES WITH A DEPARTING TRAIN
+ *  ==================================================================
+ *  `ghost_trains` is a multiset of SYNTHETIC PROVENANCE ("this copy never came off the depot shelf") and
+ *  `carcosan_trains` a multiset of GILDING; a gilded copy is always one of the synthetic ones (the gift writes both,
+ *  #1672). So when a copy of `model` leaves a fleet, whether it takes a provenance marker with it is a multiset
+ *  question with a single answer:
+ *    the GILDED copy (only the Blood Price moves one)    -- takes a marker whenever the fleet holds one of that model;
+ *    an ORDINARY copy (a sale, a trade-in, a discard)    -- takes one only if the fleet holds more markers of that model
+ *                                                           than gilded copies: the surplus belongs to a copy an
+ *                                                           earlier Blood Price cured, and copies of one model are
+ *                                                           interchangeable, so that is the one that goes.
+ *  NEVER a gilded copy's own marker on an ordinary departure (UR-F21: the model is not the copy -- before UR-4 an
+ *  ordinary sale beside a gilded copy carried the gilded copy's provenance away with it). One occurrence, never both,
+ *  never none -- the convention of every other multiset here (#1673, #1675). */
+function departingCopyCarriesProvenance(
+  company: Pick<PublicCompanyState, "owned_trains" | "ghost_trains" | "carcosan_trains"> | null | undefined,
+  model: string,
+  copy: "gilded" | "ordinary",
+): boolean {
+  const count = (list: readonly string[] | null | undefined) => (list ?? []).filter((entry) => entry === model).length;
+  const markers = count(company?.ghost_trains);
+  if (markers === 0) return false;
+  if (copy === "gilded") return true;
+  const gildedCopies = Math.min(count(company?.carcosan_trains), count(company?.owned_trains), markers);
+  return markers > gildedCopies;
+}
+
+/** One occurrence of `model` out of a provenance multiset. */
+function withoutOne(list: readonly string[], model: string): string[] {
+  const at = list.indexOf(model);
+  return at < 0 ? [...list] : [...list.slice(0, at), ...list.slice(at + 1)];
+}
+
+/** ==================================================================
+ *   UR-4 (OD-UR-5(a) = 5a-1, D-48): A FLEET TRAIN INTO THE BANK POOL TAKES ITS PROVENANCE WITH IT
+ *  ==================================================================
+ *  The two arms that put a fleet's train in the pool -- the Diesel trade-in (#1314) and the president's discard
+ *  (#1530) -- moved the train and left `ghost_trains` where it was. Harmless while only a GILDED copy could carry a
+ *  marker (it can do neither: OD-UR-7 refuses its trade-in, and it is limit-exempt, so no discard is owed for it); not
+ *  once 5a-1 made the Blood Price buyer's train ORDINARY. A cured copy traded in went to the pool as a PRINTED train (the
+ *  pool counts against the Depot's printed stock, #1512 -- one printed copy gone from sale by a trade that never
+ *  touched the Depot) and its marker stayed behind to swallow the next copy of that model the corporation acquired
+ *  (#1675: "a marker for a train that no longer exists is a lie to two authorities").
+ *  So the departing copy's marker, when it has one (`departingCopyCarriesProvenance`, ordinary copy), moves with it to
+ *  the pool's own multiset, `returned_ghost_trains`. Nothing is written when no marker moves (#232): every board
+ *  without an additional copy -- the standard game, every corpus log -- is byte-identical to before. */
+function withProvenanceToPool(
+  before: GameStateResponse,
+  after: GameStateResponse,
+  companyId: number,
+  model: string,
+): GameStateResponse {
+  const company = before.public_companies.find((entry) => entry.company_id === companyId);
+  if (!departingCopyCarriesProvenance(company, model, "ordinary")) return after;
+  return {
+    ...after,
+    public_companies: after.public_companies.map((entry) =>
+      entry.company_id === companyId ? { ...entry, ghost_trains: withoutOne(entry.ghost_trains ?? [], model) } : entry,
+    ),
+    returned_ghost_trains: [...(after.returned_ghost_trains ?? []), model],
+  };
 }
 
 /** Moves one train and the price the other way. Exported so the consent flow settles a trade the same way the reducer does. Absent model is a no-op, not a throw.
- *  See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #191 */
+ *  See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #191
+ *
+ *  UR-4 (OD-UR-5(c) = 5c-2): `gilded` names the COPY -- `true` the gold-trimmed one (the Blood Price), `false` an
+ *  ordinary one, absent unnamed. A copy the seller does not hold, or an unnamed sale where it holds both kinds, is a
+ *  no-op here exactly as it is a refusal in `trainSaleRefusal` (the core asks that first, by identity). */
 export function settleTrainSale(
   state: GameStateResponse,
   buyerId: number,
   sellerId: number,
   modelType: string,
   price: string,
+  gilded?: boolean,
 ): GameStateResponse {
   const seller = state.public_companies.find((entry) => entry.company_id === sellerId);
   const index = (seller?.owned_trains ?? []).indexOf(modelType);
   if (index < 0) return state;
+  const copy = resolveSaleCopy(seller, modelType, gilded);
+  if (copy === null) return state;
 
   const paid = Number(price);
   const amount = Number.isFinite(paid) && paid > 0 ? paid : 0;
@@ -1969,27 +2067,30 @@ export function settleTrainSale(
      the fog's own splice). A corporation holding two 6-trains of which one is synthetic hands over one
      marker with one train, never both and never none.
 
-     UNCONDITIONAL, unlike everything below it. The carcosan block is gated on the seller's gilding because
-     an ordinary sale must not move a market token; provenance has no such gate. A train that has already
-     been through one Blood Price is synthetic and NOT gilded, and its next sale must still carry the marker
-     -- gating this on the gilding would lose it on the second hop. */
-  const sellerGhosts = seller?.ghost_trains ?? null;
-  const ghostAt = sellerGhosts === null ? -1 : sellerGhosts.indexOf(modelType);
-  const settled =
-    ghostAt < 0
-      ? withTrain
-      : {
-          ...withTrain,
-          public_companies: withTrain.public_companies.map((entry) => {
-            if (entry.company_id === sellerId) {
-              return { ...entry, ghost_trains: sellerGhosts!.filter((_m, at) => at !== ghostAt) };
-            }
-            if (entry.company_id === buyerId) {
-              return { ...entry, ghost_trains: [...(entry.ghost_trains ?? []), modelType] };
-            }
-            return entry;
-          }),
-        };
+     NOT GATED ON THE GILDING: a train that has already been through one Blood Price is synthetic and NOT gilded, and
+     its next sale must still carry the marker -- gating this on the gilding would lose it on the second hop.
+     [UR-4 (OD-UR-5(c) = 5c-2): BUT GATED ON THE COPY. "Unconditional" moved the seller's marker with ANY sale of the
+     model, so an ORDINARY copy sold beside the gilded one took the gilded copy's provenance with it (UR-F21). The
+     marker now leaves with the copy that has one -- `departingCopyCarriesProvenance`: the gilded copy always, an
+     ordinary copy only when the seller holds a marker no gilded copy accounts for (a cured copy).]
+     [UR-4 (OD-UR-5(a) = 5a-1): what the marker MEANS at the buyer is supply accounting only -- the +1 relative to the
+     printed Depot. It confers nothing: no gilding, no exemption, no fog deadline, no curse. The depot tally, the phase
+     and the real-D check read it as "not a printed copy / not a Depot purchase", which is also why the transfer
+     changes no phase: it is an intercorporate purchase, not a Depot purchase (`gamePhase.ts`).] */
+  const settled = !departingCopyCarriesProvenance(seller, modelType, copy)
+    ? withTrain
+    : {
+        ...withTrain,
+        public_companies: withTrain.public_companies.map((entry) => {
+          if (entry.company_id === sellerId) {
+            return { ...entry, ghost_trains: withoutOne(seller?.ghost_trains ?? [], modelType) };
+          }
+          if (entry.company_id === buyerId) {
+            return { ...entry, ghost_trains: [...(entry.ghost_trains ?? []), modelType] };
+          }
+          return entry;
+        }),
+      };
 
   /* ==================================================================
       DESIGN NOTE 1090: THE BLOOD PRICE, AND WHAT ELSE MOVES WITH THE TRAIN
@@ -2005,24 +2106,25 @@ export function settleTrainSale(
                         burned off by the sale. That is the ruled "becomes a standard train".
        `is_carcosan`     CLEARS at the seller. The one eraser in the game.
        the doom clock    clears with it: there is nothing left for the fog to come for.
-       the share price   is the caller's, not this function's -- see below.
+       the share price   is the chart step's, not this function's -- see below.
 
      THE BUYER IS NOT CURSED. Ruled explicitly ("becomes a standard train for the buying corporation"), and
      it is what makes the trade a real decision rather than a hot potato: somebody has to want the train.
+     [UR-4: confirmed by OD-UR-5(a) = 5a-1 -- the buyer's train is ORDINARY, cured by the Blood Price.]
 
-     ONLY WHEN THE TRAIN WAS ACTUALLY CARCOSAN. An ordinary sale between two corporations must not move a
-     market token, so the seller's mark is the gate and `movedCarcosan` reports it to the caller.
+     ONLY WHEN THE COPY SOLD IS THE GILDED ONE. An ordinary sale between two corporations must not move a
+     market token or lift a curse. [UR-4 (OD-UR-5(c) = 5c-2): this gate read the seller's gilding of the MODEL, so any
+     sale of that model was the Blood Price (UR-F21). It reads the COPY now -- `resolveSaleCopy`, the authority's own
+     answer -- and an ordinary copy sold beside a gilded one leaves the gilding, the curse and the deadline exactly
+     where they were.]
 
      THE MARKET MOVE IS NOT PERFORMED HERE, deliberately. This function is a reducer over `public_companies`;
-     the chart lives in `SandboxMarketPrices`, a separate structure the caller owns (`applySandboxMarketAction`
+     the chart lives in `SandboxMarketPrices`, a separate structure the chart step owns (`applySandboxMarketAction`
      is the only thing that writes it). Reaching across would give the market two authors, which is the split
-     #891 keeps costing us. `carcosanTransfer` is returned instead and `App.tsx` moves the token. */
+     #891 keeps costing us. [UR-4 (OD-UR-5(b), D-50): and the marker it moves is the BUYER's -- see the chart arm.] */
+  if (copy !== "gilded") return settled;
   const marked = seller?.carcosan_trains ?? [];
-  const markedAt = marked.indexOf(modelType);
-  if (markedAt < 0) return settled;
-
-  const survivingMarks = [...marked];
-  survivingMarks.splice(markedAt, 1);
+  const survivingMarks = withoutOne(marked, modelType);
   return {
     ...settled,
     public_companies: settled.public_companies.map((entry) =>
@@ -2031,11 +2133,11 @@ export function settleTrainSale(
             ...entry,
             carcosan_trains: survivingMarks,
             is_carcosan: false,
-            /* #1673: the SYNTHETIC marker has already moved to the buyer, above and unconditionally. What
-               this block clears is the GILDING, and #1090's rule is untouched by the split: the buyer
-               receives an ORDINARY train -- no gilding, no exemption, no deadline, never taken by the fog,
-               and subject to the buyer's ordinary train limit. Its provenance travels with it because
-               provenance is a fact about the train; its curse does not because the sale burns that off. */
+            /* #1673: the SYNTHETIC marker has already moved to the buyer, above. What this block clears is the
+               GILDING, and #1090's rule is untouched by the split: the buyer receives an ORDINARY train -- no
+               gilding, no exemption, no deadline, never taken by the fog, and subject to the buyer's ordinary
+               train limit. Its provenance travels with it because provenance is a fact about the train; its curse
+               does not because the sale burns that off. */
             ...(survivingMarks.length === 0
               ? { carcosan_doom_after_macro_round: undefined }
               : {}),
@@ -2049,14 +2151,21 @@ export function settleTrainSale(
  *
  *  Design note #1090: a predicate rather than a return value on the settle, because the caller needs the
  *  answer to decide whether to move the market and what to log, and it needs it while the seller still has
- *  the flag. Asking after the fact would require the caller to diff two states for a boolean. */
+ *  the flag. Asking after the fact would require the caller to diff two states for a boolean.
+ *
+ *  UR-4 (OD-UR-5(c) = 5c-2, UR-F21): THE COPY, NOT THE MODEL. This answered "the seller's gilding names the model", so
+ *  selling an ordinary copy beside a gilded one was the Blood Price. It answers for the copy the sale names now
+ *  (`gilded`), through the authority's own `resolveSaleCopy`: `true` only when that copy is the gold-trimmed one. An
+ *  unnamed sale where the seller holds both kinds is no transfer at all -- the authority refuses it. */
 export function isCarcosanTransfer(
   state: GameStateResponse,
   sellerId: number,
   modelType: string,
+  gilded?: boolean,
 ): boolean {
   const seller = (state.public_companies ?? []).find((entry) => entry.company_id === sellerId);
-  return (seller?.carcosan_trains ?? []).includes(modelType);
+  if (!seller || !(seller.owned_trains ?? []).includes(modelType)) return false;
+  return resolveSaleCopy(seller, modelType, gilded) === "gilded";
 }
 
 /* A reducer over the auction's own response shape, with the same charter: pointers, counters and lists, no rules. The cash side is RETURNED for the caller to apply -- one state change per atom.
@@ -2608,7 +2717,9 @@ export interface SandboxMarketContext {
    * #748a AND #774 ARE THE SAME LESSON TWICE and this is the third: "the board and the chart would then
    * disagree permanently, and the visible symptom is a price drop with no matching change in anybody's
    * holdings -- which reads as a market bug rather than as a refused action." A Blood Price charged on a
-   * non-Carcosan sale would be exactly that, and charged on a trade the seller had no warning about. */
+   * non-Carcosan sale would be exactly that, and charged on a trade the seller had no warning about.
+   * [UR-4: the predicate answers for the COPY the message names (OD-UR-5(c)), and the token it lets move is the
+   * BUYER's (OD-UR-5(b)) -- the arm below.] */
   projectBloodPrice?: (from: SandboxMarketMark) => SandboxMarketMark | null;
   isCarcosanSale?: (sellerId: number, modelType: string) => boolean;
 }
@@ -2671,31 +2782,44 @@ export function applySandboxMarketAction(
   /* ==================================================================
       DESIGN NOTE 1090: THE ONLY MARKET MOVE A TRAIN CAN CAUSE
      ==================================================================
-     RULED: "Upon successful transfer, execute the Left 1, Down 1 market movement for the selling
-     corporation."
+     RULED (#1090, as first written): "Upon successful transfer, execute the Left 1, Down 1 market movement for the
+     selling corporation." [SUPERSEDED -- see UR-4 below.]
      GATED ON THE SELLER'S MARK, not on the model: two corporations may both hold a 5-train and only one of
      them holds THE 5-train. `isCarcosanSale` asks the game state, which still carries the flag at this point
-     because this atom runs before the reducer clears it.
-     THE SELLER MOVES, NOT THE BUYER. The toll is for letting the thing go.
+     because this atom runs before the reducer clears it. [UR-4 (OD-UR-5(c) = 5c-2): and not on the seller's gilding of
+     the model either -- on the COPY the sale names. A seller holding a gilded and an ordinary 6 sells either; only the
+     gilded copy's sale is the Blood Price (`chartStepContext`'s `isCarcosanSale` reads the message's `gilded`).]
+     ==================================================================
+      UR-4 (OD-UR-5(b) -- DECIDED 2026-09-24, backlog D-50): THE BUYER'S MARKER MOVES, NEVER THE SELLER'S (UR-F22)
+     ==================================================================
+     OWNER RULING: "When a corporation buys the gilded train through the Blood Price, the buyer pays the cash price and
+     the buyer's stock marker moves Left 1 / Down 1; the seller gets no separate stock-price movement -- the seller's
+     benefit is its release from the Carcosan curse / supernatural burden. The market penalty is never applied to both
+     corporations." It follows S9-3's "The purchasing corporation pays the required Blood Price consequences" and
+     supersedes #1090's seller move, which this arm carried ("THE SELLER MOVES, NOT THE BUYER. The toll is for letting
+     the thing go."). DO NOT RESTORE THE SELLER MOVE -- not from #1090, not from that sentence, not from the tests or
+     the copy that repeated it.
+     ONE MOVER: `buyer_protocol_id`. The seller's token is not read and not written, so a Blood Price can never move
+     two tokens, and an ordinary sale (the gate above) moves none.
      A MOVE THAT LANDS WHERE IT STARTED IS NOT A MOVE. At the chart's bottom-left corner both steps clamp,
      and reporting `from === to` would print "its share price fell from $X to $X". */
   if ("BuyTrainFromCorporation" in msg) {
-    const { seller_protocol_id, model_type } = msg.BuyTrainFromCorporation;
+    const { buyer_protocol_id, seller_protocol_id, model_type } = msg.BuyTrainFromCorporation;
     if (ctx?.isCarcosanSale?.(seller_protocol_id, model_type) !== true) return unchanged;
-    const mark = prices[seller_protocol_id] ?? null;
+    const mark = prices[buyer_protocol_id] ?? null;
     if (mark === null || !ctx?.projectBloodPrice) return unchanged;
     const landed = ctx.projectBloodPrice(mark);
     if (!landed || (landed.x === mark.x && landed.y === mark.y)) return unchanged;
     return {
-      // Design note #646 / S9-11: every landing is stamped with its arrival -- including this one, which
-      // wrote the bare cell straight into `prices` and left the seller's token with no `enteredAt` at all.
+      // Design note #646 / S9-11: every landing is stamped with its arrival -- including this one, which once
+      // wrote the bare cell straight into `prices` and left the moved token with no `enteredAt` at all.
       // Unstamped, #647's 6.0 tie-break (`operatingOrderKey`) reads `arrival` as `Infinity` and the token
       // sorts after every stamped token sharing its cell, and a later arrival into the same cell would
       // outrank a Blood Price landing that got there first.
-      prices: { ...prices, [seller_protocol_id]: withArrival(prices, seller_protocol_id, landed) },
+      prices: { ...prices, [buyer_protocol_id]: withArrival(prices, buyer_protocol_id, landed) },
       tradePrice: null,
       moved: {
-        companyId: seller_protocol_id,
+        companyId: buyer_protocol_id,
         from: mark.price,
         to: landed.price,
         reason: "bloodPrice",
@@ -3014,11 +3138,12 @@ function chartStepContext(
       if (!("BuyTrainFromCorporation" in msg)) return false;
       const sale = msg.BuyTrainFromCorporation;
       if (sale.seller_protocol_id !== sellerId || sale.model_type !== modelType) return false;
-      if (!isCarcosanTransfer(state, sellerId, modelType)) return false;
+      // UR-4 (OD-UR-5(c) = 5c-2): the COPY the message names -- the gilded one is the Blood Price, an ordinary one is not.
+      if (!isCarcosanTransfer(state, sellerId, modelType, sale.gilded)) return false;
       return (
         trainSaleRefusal(
           state,
-          { buyerId: sale.buyer_protocol_id, sellerId, model: modelType, price: sale.price },
+          { buyerId: sale.buyer_protocol_id, sellerId, model: modelType, price: sale.price, gilded: sale.gilded },
           ctx?.actor,
           ctx?.mapGrid,
           "settlement",
@@ -3589,11 +3714,12 @@ function applySandboxActionCoreJudged(
      consent (a matching accepted offer, or one president over both). The refusal is by identity; the
      retirement of a refused accepted settlement is `applySandboxActionCore`'s one deliberate mutation (#1596). */
   if ("BuyTrainFromCorporation" in msg) {
-    const { buyer_protocol_id, seller_protocol_id, model_type, price } = msg.BuyTrainFromCorporation;
+    const { buyer_protocol_id, seller_protocol_id, model_type, price, gilded } = msg.BuyTrainFromCorporation;
     if (
       trainSaleRefusal(
         state,
-        { buyerId: buyer_protocol_id, sellerId: seller_protocol_id, model: model_type, price },
+        // UR-4: and the copy (OD-UR-5(c)) -- an ambiguous or impossible copy is refused here, by identity.
+        { buyerId: buyer_protocol_id, sellerId: seller_protocol_id, model: model_type, price, gilded },
         ctx?.actor,
         ctx?.mapGrid,
         "settlement",
@@ -4984,7 +5110,7 @@ function applyOneAction(
   }
 
   if (isProposeTrainPurchaseMsg(msg)) {
-    const { seller_protocol_id, seller_ticker, buyer_protocol_id, buyer_ticker, model_type, price } =
+    const { seller_protocol_id, seller_ticker, buyer_protocol_id, buyer_ticker, model_type, price, gilded } =
       msg.ProposeTrainPurchase;
     const seller = state.public_companies.find((entry) => entry.company_id === seller_protocol_id);
     const buyer = state.public_companies.find((entry) => entry.company_id === buyer_protocol_id);
@@ -5000,6 +5126,8 @@ function applyOneAction(
         buyer_protocol_id,
         buyer_ticker: buyer.ticker ?? buyer_ticker,
         model_type,
+        // UR-4 (OD-UR-5(c) = 5c-2): the copy on offer, when the proposal named one -- absent otherwise (#232).
+        ...(gilded === undefined ? {} : { gilded }),
         price,
         instance,
       },
@@ -5869,10 +5997,19 @@ function applyOneAction(
        hasn't rusted)". Returned BEFORE the phase settles, so a 4-train traded in for the very first Diesel
        is put in the depot and then scrapped by the same rust sweep that takes every other 4 -- the depot is
        not a place to hide a train from the phase. */
-    const returned: GameStateResponse = {
-      ...exchanged,
-      returned_trains: [...(exchanged.returned_trains ?? []), model_type],
-    };
+    /* UR-4 (OD-UR-5(a) = 5a-1): and a copy a Blood Price cured goes into the pool AS the additional copy -- its
+       provenance with it (`withProvenanceToPool`), never left behind at the corporation to swallow its next copy of the
+       model, and never read as one of the printed trains (#1675's hazard, reachable once the cured train is ordinary
+       and so tradable). A gilded copy never reaches this line (OD-UR-7, `dieselExchangeRefusal`). */
+    const returned: GameStateResponse = withProvenanceToPool(
+      state,
+      {
+        ...exchanged,
+        returned_trains: [...(exchanged.returned_trains ?? []), model_type],
+      },
+      protocol_id,
+      model_type,
+    );
     return after !== null && after !== before ? applyPhaseChange(returned, after) : returned;
   }
 
@@ -5946,13 +6083,19 @@ function applyOneAction(
     const at = owned.indexOf(model_type);
     if (at < 0) return state;
     const remaining = [...owned.slice(0, at), ...owned.slice(at + 1)];
-    return {
-      ...state,
-      public_companies: state.public_companies.map((entry) =>
-        entry.company_id === protocol_id ? { ...entry, owned_trains: remaining } : entry,
-      ),
-      returned_trains: [...(state.returned_trains ?? []), model_type],
-    };
+    // UR-4 (OD-UR-5(a)): an additional (cured) copy enters the pool with its provenance -- see the trade-in above.
+    return withProvenanceToPool(
+      state,
+      {
+        ...state,
+        public_companies: state.public_companies.map((entry) =>
+          entry.company_id === protocol_id ? { ...entry, owned_trains: remaining } : entry,
+        ),
+        returned_trains: [...(state.returned_trains ?? []), model_type],
+      },
+      protocol_id,
+      model_type,
+    );
   }
 
   if ("EmergencyBuyHardware" in msg) {
@@ -5998,7 +6141,7 @@ function applyOneAction(
   if ("BuyTrainFromCorporation" in msg) {
     /* Settle the transfer; whether the counterparty AGREED is train_trade.rs's offer flow and the panel's consent modal. One train, since msg.rs carries no count.
        See docs/ai_architecture/sandbox_reducer.md - sandboxSession.ts #191 */
-    const { buyer_protocol_id, seller_protocol_id, model_type, price } =
+    const { buyer_protocol_id, seller_protocol_id, model_type, price, gilded } =
       msg.BuyTrainFromCorporation;
     /* #1247: THE OFFER THIS PURCHASE SETTLES COMES OFF THE BOARD FIRST, whatever the sale then does. Cleared
        before `settleTrainSale` rather than after, because a sale that cannot be made (the train has gone)
@@ -6034,7 +6177,8 @@ function applyOneAction(
           )
         : null;
     const funded = contribution !== null && contribution.ok ? contribution.state : settling;
-    return settleTrainSale(funded, buyer_protocol_id, seller_protocol_id, model_type, price);
+    // UR-4 (OD-UR-5(c)): the copy the core has already judged -- the gilded one is the Blood Price, an ordinary one is not.
+    return settleTrainSale(funded, buyer_protocol_id, seller_protocol_id, model_type, price, gilded);
   }
 
   if ("BuyPrivateCompany" in msg) {

@@ -436,6 +436,10 @@ export interface ProposeTrainPurchaseMsg {
     buyer_protocol_id: number;
     buyer_ticker: string;
     model_type: string;
+    /** UR-4 (OD-UR-5(c) = 5c-2): the copy on offer when the seller holds a gold-trimmed copy of `model_type` -- `true`
+     *  the gilded copy (the Blood Price), `false` an ordinary one. Optional: absent is the unnamed sale every message
+     *  before UR-4 was, legal wherever it cannot be ambiguous (`trainSaleRefusal`). Room / sandbox only. */
+    gilded?: boolean;
     /** A STRING, matching `TrainTradeProposal` and the contract's `Uint128`. Unlike the private offer's
      *  integer price this one does have a contract to match, and parsing it to `Number` anywhere on the path
      *  would be a silent precision bug for no benefit. */

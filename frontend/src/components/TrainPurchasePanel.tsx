@@ -47,7 +47,7 @@ import { stationTickerColor } from "./hexContractTypes";
 /* Design note #1702 (GR-3, U-11): which copies a Gentle Rust mark covers, and the sale authority's own sentence
    for them -- asked, never restated, so the roster greys exactly what `trainSaleRefusal` refuses. */
 import { finalRunPositions } from "../gameEngine/gentleRustGrace";
-import { reprievedSaleReason } from "../gameEngine/trainSaleAuthority";
+import { gildedSalePositions, reprievedSaleReason } from "../gameEngine/trainSaleAuthority";
 /* Design note #1702 (GR-3): the trade-in row's inputs -- the table's price and the Final Run copies included --
    as `dieselExchangeOfferFor` builds them. Re-exported for the bar, which forwards it. */
 import type { DieselExchangeOffer } from "../gameEngine/dieselExchange";
@@ -95,6 +95,10 @@ export interface TrainTradeProposal {
    *  and parsing to `Number` here would be a silent precision bug for no
    *  benefit. */
   price: string;
+  /** UR-4 (OD-UR-5(c) = 5c-2): the copy on offer, when the seller holds a gold-trimmed copy of `modelType` -- `true`
+   *  the gilded copy (the Blood Price), `false` an ordinary one. Absent when the seller holds none: the sale is unnamed,
+   *  exactly as before UR-4. */
+  gilded?: boolean;
 }
 
 /** A price is any integer of at least 1 -- `train_trade::MINIMUM_TRAIN_PRICE`.
@@ -305,11 +309,15 @@ export function TrainPurchasePanel({
   const [laterTrainsOpen, setLaterTrainsOpen] = useState(false);
   /* Design note #282: `position` indexes into the seller's `owned_trains`, which is what tells two identical
      models apart. The dispatch still names only the model -- one 3-train is interchangeable with another --
-     so this exists purely so the badge the player clicked is the badge that looks selected. */
+     so this exists purely so the badge the player clicked is the badge that looks selected.
+     UR-4 (OD-UR-5(c) = 5c-2): EXCEPT ONE DIFFERENCE, which the dispatch now names: whether the badge is the seller's
+     gold-trimmed copy (`gildedSalePositions`, the chips' own multiset order). `gilded` is `null` when the seller holds
+     no gold-trimmed copy of the model -- the sale is then sent unnamed, byte for byte what it was before UR-4. */
   const [selection, setSelection] = useState<{
     sellerId: number;
     model: string;
     position: number;
+    gilded: boolean | null;
   } | null>(null);
   const [priceText, setPriceText] = useState("1");
 
@@ -1239,6 +1247,9 @@ export function TrainPurchasePanel({
                    the sale authority's sentence for each such model. One badge per train is kept (#282): an
                    ordinary copy beside a reprieved one stays live, because the authority sells it. */
                 const finalRunAt = finalRunPositions(company);
+                // UR-4 (OD-UR-5(c)): which badges are the gold-trimmed copy, and which models the seller holds gilded.
+                const gildedAt = gildedSalePositions(company);
+                const gildedModels = new Set((trains ?? []).filter((_, at) => gildedAt[at]));
                 const finalRunReasons = Array.from(
                   new Set(
                     (trains ?? [])
@@ -1306,6 +1317,10 @@ export function TrainPurchasePanel({
                             selection?.position === position;
                           const isFinalRun = finalRunAt[position] === true;
                           const finalRunReason = isFinalRun ? reprievedSaleReason(company, model) : null;
+                          const isGilded = gildedAt[position] === true;
+                          /* UR-4: the copy is named only when the seller holds a gilded copy of this model -- then
+                             this badge IS a choice between the Blood Price and an ordinary sale. */
+                          const namedCopy = gildedModels.has(model) ? isGilded : null;
                           return (
                             <button
                               key={`${model}-${position}`}
@@ -1317,23 +1332,29 @@ export function TrainPurchasePanel({
                                   : undefined
                               }
                               data-final-run={isFinalRun ? "true" : undefined}
+                              data-gilded={isGilded ? "true" : undefined}
                               onClick={() => {
                                 setSelection({
                                   sellerId: company.company_id,
                                   model,
                                   position,
+                                  gilded: namedCopy,
                                 });
                                 setPriceText("1");
                               }}
                               style={{
                                 ...styles.badge,
+                                // UR-4: the gold trim first, so the selection's border still shows on a chosen gilded badge.
+                                ...(isGilded ? styles.badgeGilded : {}),
                                 ...(isSelected ? styles.badgeSelected : {}),
                                 ...(!canTrade || isFinalRun ? styles.badgeDisabled : {}),
                                 ...(isFinalRun ? styles.badgeFinalRun : {}),
                               }}
                               title={
                                 finalRunReason ??
-                                (canTrade
+                                (canTrade && isGilded
+                                  ? `Offer for ${company.ticker}'s gold-trimmed Carcosa ${model}-train — buying it pays the Blood Price.`
+                                  : canTrade
                                   ? `Offer for this ${model}-train of ${company.ticker}'s.`
                                   : (tradeBlockedReason ??
                                     `${company.ticker} holds this ${model}-train.`))
@@ -1362,6 +1383,7 @@ export function TrainPurchasePanel({
               <div style={styles.offerBox}>
                 <span style={styles.offerHeading}>
                   {buyer?.ticker ?? "This corporation"} offers for {selectedSeller.ticker}&apos;s{" "}
+                  {selection.gilded === true ? "gold-trimmed " : selection.gilded === false ? "ordinary " : ""}
                   {selection.model}-train
                 </span>
                 {/* ==================================================================
@@ -1382,10 +1404,19 @@ export function TrainPurchasePanel({
                     IT NAMES THE MOVEMENT rather than the outcome, because the outcome depends on where the
                     token sits and this panel does not know the chart. "One cell left, one cell down" is
                     checkable against the board in front of them; a predicted price would be a second
-                    opinion about a move `projectBloodPriceMove` owns. */}
-                {(selectedSeller.carcosan_trains ?? []).includes(selection.model) && (
+                    opinion about a move `projectBloodPriceMove` owns.
+                    ==================================================================
+                     UR-4 (OD-UR-5(b) = the BUYER only, D-50; OD-UR-5(c) = 5c-2, D-48)
+                    ==================================================================
+                    THE BUYER'S PRICE, AND ONLY FOR THE GILDED COPY. This warned that "the selling corporation's
+                    share price will immediately drop" (#1090's superseded move, UR-F22) and appeared whenever the
+                    seller's gilding named the MODEL (UR-F21). The ruling: the buyer pays the Blood Price and its
+                    marker moves Left 1 / Down 1; the seller gets no movement; only the gold-trimmed copy's sale is
+                    the Blood Price. So the warning names the buyer and shows only for that copy -- an ordinary
+                    copy chosen beside it is an ordinary sale. Do not restore the seller's wording. */}
+                {selection.gilded === true && (
                   <span style={styles.bloodPriceWarning} role="note">
-                    ⚠ WARNING: Transferring the Carcosa Train incurs a Blood Price. The selling
+                    ⚠ WARNING: Buying the gold-trimmed Carcosa Train incurs a Blood Price. The buying
                     corporation&apos;s share price will immediately drop (1 cell Left, 1 cell Down).
                   </span>
                 )}
@@ -1422,6 +1453,8 @@ export function TrainPurchasePanel({
                         buyerTicker: buyer.ticker,
                         modelType: selection.model,
                         price: priceText.trim(),
+                        // UR-4: the copy, only when the seller holds a gold-trimmed one of this model.
+                        ...(selection.gilded === null ? {} : { gilded: selection.gilded }),
                       });
                       setSelection(null);
                     }}
@@ -1504,10 +1537,20 @@ export function TrainTradePrompt({
       </div>
 
       <p style={styles.promptBody}>
-        <strong>{proposal.buyerTicker}</strong> wants to buy a{" "}
+        <strong>{proposal.buyerTicker}</strong> wants to buy{" "}
+        {proposal.gilded === true ? "the gold-trimmed " : proposal.gilded === false ? "an ordinary " : "a "}
         <strong>{proposal.modelType}-train</strong> from{" "}
         <strong>{proposal.sellerTicker}</strong> for <strong>${proposal.price}</strong>.
       </p>
+      {/* UR-4 (OD-UR-5(b), (c)): the seller answers for one copy, so it is told which -- and, for the gold-trimmed
+          copy, that the sale is the Blood Price: the BUYER's share price drops, and the seller is released from
+          the curse. An ordinary copy's offer leaves the gilded copy (and the curse) exactly where they are. */}
+      {proposal.gilded === true && (
+        <p style={styles.promptWho} role="note">
+          This is the Blood Price: {proposal.buyerTicker}&apos;s share price will drop (1 cell Left, 1 cell Down), and{" "}
+          {proposal.sellerTicker} is released from the Carcosan curse.
+        </p>
+      )}
 
       <p style={styles.promptWho}>
         {viewerIsSeller
@@ -2240,6 +2283,8 @@ const styles: Record<string, React.CSSProperties> = {
   badgeDisabled: { opacity: 0.5, cursor: "not-allowed" },
   /* #1702 (GR-3, U-11): a Final Run train in the seller roster -- struck through as well as dimmed. */
   badgeFinalRun: { textDecoration: "line-through" },
+  // UR-4 (OD-UR-5(c)): the gold-trimmed copy, told apart from an ordinary copy of the same model.
+  badgeGilded: { border: "1px solid #c9a227", color: "#e8c547" },
   badgeCount: { fontSize: FONT_SIZE.micro, color: "#a8a6a0", fontWeight: 400 },
   badgeNone: { fontSize: FONT_SIZE.small, color: "#6e6c68", fontStyle: "italic" },
 

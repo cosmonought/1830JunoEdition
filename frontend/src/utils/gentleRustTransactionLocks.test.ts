@@ -576,12 +576,18 @@ describe("S. OD-GR-1: a reprieved train may not be sold or transferred to anothe
 
     // Control: the same harness DOES charge the Blood Price for a gilded ORDINARY train -- so the silence above is
     // the Gentle Rust refusal, not a harness that cannot see the chart.
+    /* UR-4 (OD-UR-5(b) / (c), backlog D-50 / D-48): C&O holds TWO 3s, one of them gilded, so the sale names the gilded
+       copy (an unnamed sale of that model is ambiguous and refused -- UR-F21); and the Blood Price moves the BUYER's
+       token Left 1 / Down 1, never the seller's (UR-F22). This control pinned #1090's seller move until UR-4. */
     const gildedThree = reduce(saleStart(true, ["3"]), BUY(PRR), P1);
-    const mark = gildedThree.market_positions![CO]!;
+    const bloodSale = ({ BuyTrainFromCorporation: { game_id: 1, buyer_protocol_id: PRR, seller_protocol_id: CO, model_type: "3", price: "150", gilded: true } }) as unknown as Msg;
+    expect(stateDigest(reduce(gildedThree, SALE(PRR, CO, "3", "150"), P1))).toBe(stateDigest(gildedThree)); // unnamed: ambiguous
+    const mark = gildedThree.market_positions![PRR]!;
     const landed = projectBloodPriceMove(mark)!;
-    const sold = reduce(gildedThree, SALE(PRR, CO, "3", "150"), P1);
-    expect([sold.market_positions![CO]!.x, sold.market_positions![CO]!.y, sold.market_positions![CO]!.price]).toEqual([landed.x, landed.y, landed.price]);
-    expect(report(gildedThree, SALE(PRR, CO, "3", "150"), P1)).toEqual({ companyId: CO, from: mark.price, to: landed.price, reason: "bloodPrice" });
+    const sold = reduce(gildedThree, bloodSale, P1);
+    expect([sold.market_positions![PRR]!.x, sold.market_positions![PRR]!.y, sold.market_positions![PRR]!.price]).toEqual([landed.x, landed.y, landed.price]);
+    expect(sold.market_positions![CO]).toEqual(gildedThree.market_positions![CO]); // the seller never moves
+    expect(report(gildedThree, bloodSale, P1)).toEqual({ companyId: PRR, from: mark.price, to: landed.price, reason: "bloodPrice" });
     expect([fleetOf(sold, CO), marksOf(sold, CO), company(sold, CO).is_carcosan]).toEqual([["2", "3"], ["2"], false]);
     expectMarksWithinFleets(sold);
   });

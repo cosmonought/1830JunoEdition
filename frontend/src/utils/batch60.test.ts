@@ -508,7 +508,10 @@ describe("the third stage moves the board like the other two", () => {
 /* #1090 -- the Blood Price                                           */
 /* ------------------------------------------------------------------ */
 
-describe("a Carcosan transfer costs the seller more than the train", () => {
+/* UR-4 (OD-UR-5, backlog D-48 / D-50): this block's title read "costs the SELLER more than the train" -- #1090's
+   seller move, superseded by OD-UR-5(b): the BUYER pays the Blood Price and only its marker moves (UR-F22). The
+   seller's side of the transfer is its release from the curse, which the cases below still pin. */
+describe("a Carcosan transfer: the Blood Price (#1090) -- the buyer pays it, the seller is released", () => {
   const held = () =>
     board([
       company({ owned_trains: ["5"], carcosan_trains: ["5"], is_carcosan: true, carcosan_doom_after_macro_round: 6 }),
@@ -589,9 +592,13 @@ describe("a Carcosan transfer costs the seller more than the train", () => {
        this panel is what a proposer composes in and what a recipient reads -- and a second copy is the #891
        shape this codebase produces more than any other. ABOVE THE PRICE, because a cost disclosed after the
        number is typed is a cost disclosed after the decision. */
-    expect(PANEL).toContain("Transferring the Carcosa Train incurs a Blood Price");
+    /* UR-4 (OD-UR-5(b), (c)): the warning names the BUYING corporation's price (UR-F22 -- never the seller's again) and
+       shows for the gold-trimmed COPY the buyer chose, not for any copy of the model (UR-F21). */
+    expect(PANEL).toContain("Buying the gold-trimmed Carcosa Train incurs a Blood Price");
+    expect(PANEL).toMatch(/The buying\s+corporation&apos;s share price will immediately drop/);
+    expect(PANEL).not.toMatch(/The selling\s+corporation&apos;s share price/);
     expect(PANEL).toContain("(1 cell Left, 1 cell Down)");
-    expect(PANEL).toContain("(selectedSeller.carcosan_trains ?? []).includes(selection.model)");
+    expect(PANEL).toContain("{selection.gilded === true && (");
     /* ==================================================================
         DESIGN NOTE 1090: THIS ORDERING WAS VACUOUS IN ITS FIRST DRAFT
        ==================================================================

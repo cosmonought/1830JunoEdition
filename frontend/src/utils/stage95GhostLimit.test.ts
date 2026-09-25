@@ -304,7 +304,11 @@ describe("E. the Blood Price burns the gilding off (#1090, authoritative and unc
     /* UR-3, OD-UR-3 = 3-A (D-39): AND THE PHASE NO LONGER SAYS D. Provenance travels with the train (#1673), so the
        synthetic D is not the phase whoever holds it: the phase is the highest REAL tier, the seller's 4. What a Blood
        Price does to the gilding and to the buyer (OD-UR-5) is open and not decided by this; were it ever ruled to
-       make the train real, that ruling would drop the provenance marker and the phase would follow it. */
+       make the train real, that ruling would drop the provenance marker and the phase would follow it.
+       [UR-4 -- OD-UR-5 DECIDED (D-48): the train is CURED and ordinary for the buyer (5a-1), but it is an ADDITIONAL
+       copy -- "supply provenance may persist != supernatural status persists" -- so the marker stays, and the phase
+       does not follow it: the Blood Price is an intercorporate purchase, never the Depot purchase that begins a phase.
+       The speculation above is closed; `carcosaBloodPrice.test.ts` (E) pins the ruling.] */
     expect(derivePhase(after)?.tier).toBe("4");
   });
 
@@ -318,12 +322,21 @@ describe("E. the Blood Price burns the gilding off (#1090, authoritative and unc
         co({ company_id: BUYER, ticker: "PRR", owned_trains: [], treasury: "900" }),
       ],
     } as unknown as GameStateResponse;
-    const after = settleTrainSale(twoSixes, BUYER, SELLER, "6", "100");
+    /* UR-4 (OD-UR-5(c) = 5c-2): the sale NAMES THE COPY now. This case was an unnamed sale of a model held both gilded
+       and ordinary, which is ambiguous and a no-op (the authority refuses it, UR-F21); the gilded copy's sale is the one
+       it always described. */
+    expect(settleTrainSale(twoSixes, BUYER, SELLER, "6", "100")).toBe(twoSixes);
+    const after = settleTrainSale(twoSixes, BUYER, SELLER, "6", "100", true);
     expect(of(after, SELLER).owned_trains).toEqual(["6"]);
     expect(of(after, SELLER).ghost_trains).toEqual([]);
     expect(of(after, BUYER).ghost_trains).toEqual(["6"]);
     // The seller keeps its remaining, ordinary 6 — and it counts.
     expect(countableTrainsOf(of(after, SELLER))).toEqual(["6"]);
+    // UR-4: and the ORDINARY copy's sale leaves the gilded copy's one marker (and its gilding) at home.
+    const ordinary = settleTrainSale(twoSixes, BUYER, SELLER, "6", "100", false);
+    expect(of(ordinary, SELLER).ghost_trains).toEqual(["6"]);
+    expect(of(ordinary, SELLER).carcosan_trains).toEqual(["6"]);
+    expect(of(ordinary, BUYER).ghost_trains ?? []).toEqual([]);
   });
 
   it("and survives a SECOND hop, when the train is synthetic but no longer gilded", () => {

@@ -139,6 +139,11 @@ describe("the wiring: the mark is the reducer's, and the shell no longer stands 
       ...seed,
       player_addresses: ["p-a", "p-b"],
       market_positions: {},
+      /* DA-3 (DA-F2): `SetBoPar` is the B&O private's owner's act, so the fixture gives "p-a" the private it pars
+         from. The "start" scenario leaves every private unsold, which the reducer now refuses. */
+      private_companies: seed.private_companies.map((entry) =>
+        entry.private_id === 6 ? { ...entry, owner: "p-a", owner_protocol_id: null } : entry,
+      ),
     };
     const { applySandboxAction } = require("../gameEngine/sandboxSession") as typeof import("../gameEngine/sandboxSession");
     const after = applySandboxAction(

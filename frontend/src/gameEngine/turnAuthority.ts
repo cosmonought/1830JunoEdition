@@ -44,7 +44,7 @@ import { actingAddress } from "./gameState";
 /* #1220: the SAME predicate the shell dispatches by (#546), not a second list. A copy here would drift the
    moment an eleventh message joined the family, and drift in this direction locks players out of moves. */
 import { isSandboxOnlyMsg, type SandboxLogMsg } from "./gameSetup";
-import { BO_PRIVATE_ID, BO_TICKER } from "./gameConstants";
+import { BO_TICKER } from "./gameConstants";
 /* Design note #1660 (Stage 9, Slice 9.4b, S9-12): the D&H's OWN legality -- its hex, the owning corporation,
    once, and the same-turn timing the base game's rule states -- the same predicate the reducer's arm asks, so
    ingress and the arm cannot disagree about a D&H free-station refusal. */
@@ -79,7 +79,7 @@ import { withRules } from "./boardSelection";
 import { resolveVariants } from "./gameVariants";
 /* Design note #1580 (Batch 7.3): the private auction's rules, from the one module that owns them. Not a
    second implementation -- `turnAuthority` states no auction rule of its own. */
-import { auctionRefusal, isAuctionMessage } from "./auctionAuthority";
+import { auctionHandoffRefusal, auctionRefusal, boParRefusal, isAuctionMessage } from "./auctionAuthority";
 /* Design notes #1590-#1595 (Batch 7.4): the ordinary offers' hold and their three authorities -- the same
    predicates the reducer's core asks, so the two locks cannot disagree; ingress answers with the sentence. */
 import { legacyOfferMessageRefusal, pendingOfferBlock } from "./pendingOfferHold";
@@ -549,22 +549,16 @@ function roomMessageRefusal(input: TurnAuthorityInput, actor: string): string | 
     return null;
   }
 
-  if ("OpenStockRound" in msg) {
-    if (state.current_round_type !== "WaterfallAuction") return "The Stock Round is already open.";
-    const unsold = waterfall?.privates.length ?? 0;
-    if (unsold > 0) {
-      return `The auction is not over yet — ${unsold} private ${unsold === 1 ? "company is" : "companies are"} still for sale.`;
-    }
-    return null;
-  }
+  /* DA-3 (DA-F7): the handoff's rules live in `auctionAuthority`, asked here and by the reducer's board gate --
+     the round, nothing unsold, and the B&O par owed by the BO private's owner. */
+  if ("OpenStockRound" in msg) return auctionHandoffRefusal(state, waterfall);
 
+  /* DA-3 (DA-F2): the sender must name themselves, and must own the BO private -- an unsold (or closed) private
+     hands its certificate to nobody. Was: the owner was asked only when there was one. */
   if ("SetBoPar" in msg) {
     const { player } = msg.SetBoPar;
-    const owner = state.private_companies.find((entry) => entry.private_id === BO_PRIVATE_ID)?.owner ?? null;
-    if (actor !== player || (owner !== null && owner !== actor)) {
-      return `Only the ${BO_TICKER} private's owner pars the ${BO_TICKER}.`;
-    }
-    return null;
+    if (actor !== player) return `Only the ${BO_TICKER} private's owner pars the ${BO_TICKER}.`;
+    return boParRefusal(state, player);
   }
 
   if ("PlaceHomeStation" in msg) {

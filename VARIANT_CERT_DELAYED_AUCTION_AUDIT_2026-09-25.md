@@ -10,6 +10,8 @@ acquisition, a face-value purchase included, and the must-sell obligation covers
 (resolution-time mechanics) recorded as open.
 **rev 5** (2026-09-25): OD-DA-2d decided (§19; ledger D-59) — honour the award; no Delayed Auction owner decision
 remains open.
+**rev 6** (2026-09-25): **DA-3 implemented** — DA-F1, DA-F2 and DA-F7 FIXED (authority gates, §18 / §22); test
+gaps DA-T5 closed and DA-T2 / DA-T12 closed in part (§20). No other finding changed; still NOT certified.
 
 **Date:** 2026-09-25 · **Pass:** DA-1 (audit / design only — no gameplay code changed) · **Status of the variant:**
 `DEFERRED — PRE-LAUNCH VARIANT CERTIFICATION REQUIRED` (S9-7). **NOT certified.**
@@ -291,7 +293,7 @@ bought (`settle`; `OpenStockRound` gate) — PASS.
 | Ordinary IPO purchase | refused (same rule) | same; `variantRules.test.ts:91` (predicate-level) | PASS; MISSING TEST at reducer + ingress (DA-T2) |
 | Bank Pool purchase | unreachable (nobody can hold B&O to sell) | — | PASS |
 | Sale / presidency transfer | unreachable (no holdings) | — | PASS |
-| **`SetBoPar`** | **accepted from any player while the BO private is unowned** — ingress owner rule skipped, reducer never asks ownership or `boIsLocked` | `turnAuthority.ts:561-567`; `sandboxSession.ts:5021-5034`, `7273-7292`; probe P3 | **BUG DA-F2** |
+| **`SetBoPar`** | **accepted from any player while the BO private is unowned** — ingress owner rule skipped, reducer never asks ownership or `boIsLocked` | `turnAuthority.ts:561-567`; `sandboxSession.ts:5021-5034`, `7273-7292`; probe P3 | **BUG DA-F2** — *(rev 6)* **FIXED by DA-3** |
 | Setup / debug | `SetupGame` after the deal refused at ingress (`turnAuthority.ts:547`); no debug message grants shares | | PASS |
 | Replay | the lock is `boIsLocked(variants, private_auction_complete)`, derived | `gameVariants.ts:756-765` | PASS |
 
@@ -484,15 +486,15 @@ OD-DA-3.
 | R1 | SR1 opens without the auction | A1 | `sandboxSession.ts:4927-4938` | SR1, macro 1, auction owed, atom dealt inactive | `auctionSeating.test.ts:164` | PASS |
 | R2 | Auction after the OR set of the first 3-train | A2 | `4715-4729`; `491-535` | fires at set end, tier ≥ 3, once | `variantRules.test.ts:207-272` (hand-built) | PASS; MISSING TEST (real run, DA-T3) |
 | R3 | Trigger cannot fire twice / be manufactured | A2 | `4935`, `5015`; ingress `552-559` | one-shot; pure consequence | `variantRules.test.ts:230` | PASS |
-| R4 | Auction contents cannot be touched before the trigger | A1/A2 + §1.2 | `auctionAuthority.ts:281-295`; `applyAuctionStep 2939-2941` | **accepted in SR/OR** | none | **BUG DA-F1** |
+| R4 | Auction contents cannot be touched before the trigger | A1/A2 + §1.2 | `auctionAuthority.ts:281-295`; `applyAuctionStep 2939-2941` | **accepted in SR/OR** | none | **BUG DA-F1** — *(rev 6)* **FIXED by DA-3** |
 | R5 | Auction begins with the PD holder | §1.2; #905 note | `gameSetup.ts:763`; `3010-3018` | begins with dealt seat 0 | none | **BUG DA-F3** |
 | R6 | PD after the auction: left of the last face-value buyer; unchanged by bid resolutions | §1.2, §1.2.2 | `4970-5019` (`priority := active_player_index`) | wrong under the variant; off by one after a $0 taking in any game | standard only (`auctionSeating.test.ts:325-343`) | **BUG DA-F4 / DA-F5** |
 | R7 | Buy / bid / pass / contest / cascade / SV / all-pass rules | §1.2–1.2.3 | `auctionAuthority.ts`; `2226-2660` | correct | `auctionAuthority.test.ts` (42), `miniAuctionTurn`, `atomicReducer`, goldens | PASS (inherited) |
 | R8 | Escrow | §1.2.1 | `auctionEscrow.ts` | derived, correct | `auctionAuthority.test.ts` §2/§3/§5 | PASS; MISSING TEST (DA context) |
 | R9 | First-SR sale ban on the true SR1 only | §5.1 + ruling Q2 | `stockTransactionAuthority.ts:496-503, 535` | correct | `stockTransactionAuthority.test.ts:608-630` | PASS; MISSING TEST (ingress / real run) |
 | R10 | B&O locked for par / buy / sell | A3 | `sharePurchase.ts:107-116` | refused | `variantRules.test.ts:91-165` (predicate) | PASS; MISSING TEST (reducer + ingress) |
-| R11 | B&O locked for `SetBoPar` / par only by the BO owner | A3; §3.0, §5.2 | `turnAuthority.ts:561-567`; `5021-5034`; `7273-7292` | **anyone, while unowned** | pinned permissive (`turnAuthority.test.ts:333`) | **BUG DA-F2** |
-| R12 | B&O par immediate; certificate reserved for the BO owner | §3.0 "immediately" | UI-only | not enforced | none | **BUG DA-F7** |
+| R11 | B&O locked for `SetBoPar` / par only by the BO owner | A3; §3.0, §5.2 | `turnAuthority.ts:561-567`; `5021-5034`; `7273-7292` | **anyone, while unowned** | pinned permissive (`turnAuthority.test.ts:333`) | **BUG DA-F2** — *(rev 6)* **FIXED by DA-3** |
+| R12 | B&O par immediate; certificate reserved for the BO owner | §3.0 "immediately" | UI-only | not enforced | none | **BUG DA-F7** — *(rev 6)* **FIXED by DA-3** |
 | R13 | B&O unlocks when the auction concludes | A3 | `5015` | at `OpenStockRound` | none end-to-end | PASS; MISSING TEST |
 | R14 | C&A grant conserves shares | §3.0 | `2972-2985`; `privateExchange.ts:176-183` | **creates a share when piles are short** | none | **BUG DA-F6**; source → OD-DA-1 *(rev 2: decided — reserved certificate, D-52)* |
 | R15 | Grant → immediate presidency change; float at 60% | §5.4, §5.3 | no `settlePresidencies` / `applyFloatThreshold` after the grant | **both late** — only at the next `BuyStock` (either) / `SellStock` (presidency) of any corporation | none | **BUG DA-F6** |
@@ -513,13 +515,13 @@ OD-DA-3.
 
 | ID | Severity | Scope | Summary | Evidence |
 |---|---|---|---|---|
-| **DA-F1** | HIGH | DA (buy / bid / markdown) + Classic (pass) | No round or activity gate on Waterfall* messages: the dormant atom is live in SR1/SR2/ORs; actions apply as the **atom's cursor** (another player); a forged `WaterfallPass` after any auction pays extra private income and counts as an SR pass after acting | `auctionAuthority.ts:281-295`; `sandboxSession.ts:2939-2941, 5430-5432, 5770-5772`; `turnAuthority.ts:357-364, 412-414`; `gameState.ts:915-980`; probes P2, P4, P5 |
-| **DA-F2** | HIGH | DA + Classic (auction window) | `SetBoPar` needs neither the BO private's ownership nor `boIsLocked`; any player can take the B&O presidency while the private is unsold (all of SR1 → the auction under the variant) | `turnAuthority.ts:561-567`; `sandboxSession.ts:3854-3862, 5021-5034, 7273-7292`; probe P3 |
+| **DA-F1** *(FIXED — DA-3, rev 6)* | HIGH | DA (buy / bid / markdown) + Classic (pass) | No round or activity gate on Waterfall* messages: the dormant atom is live in SR1/SR2/ORs; actions apply as the **atom's cursor** (another player); a forged `WaterfallPass` after any auction pays extra private income and counts as an SR pass after acting | `auctionAuthority.ts:281-295`; `sandboxSession.ts:2939-2941, 5430-5432, 5770-5772`; `turnAuthority.ts:357-364, 412-414`; `gameState.ts:915-980`; probes P2, P4, P5 |
+| **DA-F2** *(FIXED — DA-3, rev 6)* | HIGH | DA + Classic (auction window) | `SetBoPar` needs neither the BO private's ownership nor `boIsLocked`; any player can take the B&O presidency while the private is unsold (all of SR1 → the auction under the variant) | `turnAuthority.ts:561-567`; `sandboxSession.ts:3854-3862, 5021-5034, 7273-7292`; probe P3 |
 | **DA-F3** | HIGH | DA-only | The delayed auction's first actor is dealt seat 0, not the PD holder | `gameSetup.ts:763`; `sandboxSession.ts:3010-3018, 4715-4729`; probe Q1 |
 | **DA-F4** | HIGH | DA-only | The PD after the delayed auction comes from the seat pointer, which steps once per main-rotation action but **starts from the last operating president** instead of the auction's first actor (probe: the PD went to the last buyer himself) | `sandboxSession.ts:4970-5019`; `operatingOrder.ts:211-221`; probe Q1 |
 | **DA-F5** | MEDIUM | **Classic (legitimate play)** and DA | The $0-SV branch moves the cursor two seats and the seat one; the SR PD after such an auction is the last buyer instead of his left neighbour | `sandboxSession.ts:2463, 2475` vs `547-590`; probe R1 |
 | **DA-F6** | HIGH | DA-only | C&A grant: share creation when IPO < 10% and pool < 10%; presidency and float not settled at the grant (only at a later share trade) | `sandboxSession.ts:2972-2985`; `privateExchange.ts:176-183`; probes Q2, Q3 |
-| **DA-F7** | MEDIUM | Classic + DA | B&O par not required before the handoff; President's Certificate not reserved for the BO owner once the B&O unlocks | `turnAuthority.ts:552-559`; `sandboxSession.ts:4970-5019`; `sharePurchase.ts:107-116`; UI-only gate; probe R2 |
+| **DA-F7** *(FIXED — DA-3, rev 6)* | MEDIUM | Classic + DA | B&O par not required before the handoff; President's Certificate not reserved for the BO owner once the B&O unlocks | `turnAuthority.ts:552-559`; `sandboxSession.ts:4970-5019`; `sharePurchase.ts:107-116`; UI-only gate; probe R2 |
 | **DA-F8** | — | UI | Stale / pre-game-assuming copy and one false affordance (§14, a–n) | §14 |
 | **DA-F9** | LOW | DA-only edge | First 5-train inside the trigger set closes the privates, but the atom still offers them | `sandboxSession.ts:1349-1356` vs atom `privates`; code-traced |
 | **DA-F10** | — | tests | No end-to-end delayed-auction test, no delayed fixture (§20) | test inventory |
@@ -708,17 +710,17 @@ the corporate window after it, and the closure of unsold privates by the first 5
 | ID | Gap | Class |
 |---|---|---|
 | DA-T1 | Delayed SR1 sale refused at **ingress** and in a real run; post-auction SR sale allowed (overlaps S10-18(A)) | first-SR |
-| DA-T2 | B&O lock through the reducer and ingress for `BuyStock` (par and ordinary) and `SetBoPar` (after DA-F2) | B&O-lock / refusal |
+| DA-T2 | B&O lock through the reducer and ingress for `BuyStock` (par and ordinary) and `SetBoPar` (after DA-F2) | B&O-lock / refusal | *(rev 6: CLOSED IN PART by DA-3 — `SetBoPar` at both locks and the B&O trading after the auction; the pre-auction `BuyStock` refusal is still asserted at predicate level only)* |
 | DA-T3 | Real run: deal → SR1 → OR1 → SR2 → OR with the first 3-train → auction armed → handoff (not hand-built boards); first 3 by an earlier vs the last corporation; later 3/4 in the same set | delayed-trigger |
 | DA-T4 | Escrow in a delayed auction with shares and cash already in play (S10-18(B) residue) | escrow |
-| DA-T5 | Auction messages refused outside the auction round, in both games (after DA-F1) | refusal-authority |
+| DA-T5 | Auction messages refused outside the auction round, in both games (after DA-F1) | refusal-authority | *(rev 6: CLOSED by DA-3 — `da3AuthorityGates.test.ts` cases 1–6)* |
 | DA-T6 | S10-6: lone-bid cascade; multi-company cascade; $0 taking followed by a cascade; contest cascading into a contest | state-machine |
 | DA-T7 | PD after an auction ending in a cascade / contest / after a $0 taking — standard and delayed (DA-F3/F4/F5) | state-machine |
 | DA-T8 | Corporate purchase of a private in the first OR after the delayed auction; BO closure on B&O's first train after a delayed auction | rule-semantics |
 | DA-T9 | C&A grant: share conservation invariant; presidency change; float at 60% (DA-F6 + OD-DA-1) | rule-semantics |
 | DA-T10 | Composition: GR + UR on the trigger set (fog order, grace trains) | composition |
 | DA-T11 | Bank break inside the trigger set → GameEnd with the auction owed; first 5-train inside the trigger set (DA-F9) | edge |
-| DA-T12 | Server-room parity + `RevertTo` across the boundary for a delayed game (`RoomSession`, digest) | server / replay-undo |
+| DA-T12 | Server-room parity + `RevertTo` across the boundary for a delayed game (`RoomSession`, digest) | server / replay-undo | *(rev 6: CLOSED IN PART by DA-3 — room refusal with nothing appended in a delayed room; restore and `RevertTo` of the B&O-par obligation in a standard room)* |
 
 Low-value permutation tests deliberately not listed.
 
@@ -756,7 +758,7 @@ $0 path, `SetBoPar` ownership, Waterfall* gate). T9 synthetic board: first 5-tra
 | Pass | Scope | Model | Depends on | Replay-semantic? | Owner gate |
 |---|---|---|---|---|---|
 | **DA-2** | Owner rulings OD-DA-1 … 3; copy sign-off for DA-F8a — *(rev 2)* **done on owner review 2026-09-25** (D-52 … D-56); OD-DA-2b decided (D-57, rev 3); OD-DA-2c decided (D-58, rev 4); OD-DA-2d decided (D-59, rev 5) | — (owner) | DA-1 | — | the rulings |
-| **DA-3** | Authority gates: DA-F1 (round / activity gate for every auction message, both locks), DA-F2 (`SetBoPar` requires the named player to own the BO private + `boIsLocked`), DA-F7 (B&O par owed before handoff / certificate reserved); standard-game goldens and a corpus sweep for refusal-added effects | **Extra** (mechanical, but touches Classic authority — review the corpus sweep carefully) | DA-1 | refusal-added (Classic + DA) | full-suite gate |
+| **DA-3** | *(rev 6)* **DONE 2026-09-25.** Authority gates: DA-F1 (round / activity gate for every auction message, both locks), DA-F2 (`SetBoPar` requires the named player to own the BO private + `boIsLocked`), DA-F7 (B&O par owed before handoff / certificate reserved); standard-game goldens and a corpus sweep for refusal-added effects | **Extra** (mechanical, but touches Classic authority — review the corpus sweep carefully) | DA-1 | refusal-added (Classic + DA) | full-suite gate |
 | **DA-4** | Seating and Priority Deal: DA-F3 (seed the delayed auction from the PD holder), DA-F4 + DA-F5 (derive the post-auction PD from the auction's own record of the last face-value purchase, not from the seat mirror), reconciling #905 / #1235 in one rule for both openings | **MAX** (touches the standard auction's PD and #1235's reasoning; proof obligation *(rev 2 review correction)*: "Standard auction behavior and replay remain unchanged except for the explicitly certified DA-F5 Priority Deal correction.") | DA-3 | yes (DA logs; standard logs with a $0 taking) | full-suite gate |
 | **DA-5** | Private-grant consequences: DA-F6 (conservation, presidency, float) implementing D-52 (reserved PRR certificate), D-53, D-54 (no behaviour change; comment rationale) and D-55 (the first 5-train cancels the pending auction, releases the reservation, unlocks the B&O — DA-F9) *(rev 2)*; D-57 (auction overage rule: bid / raise refusal for an incurable excess, curable-only divestment, no deadlock) *(rev 3)*; D-58 (the same refusal for a face-value purchase, a win and a single-bid award; must-sell limited to curable excess) and D-59 (an award from a bid legal when accepted is honoured after an involuntary change and exempt like a mandatory acquisition; the acceptance check counts the player's other standing bids) *(rev 4, rev 5)* | **Extra** | DA-2, DA-3 | yes (DA only; OD-DA-3 possibly both) | full-suite gate |
 | **DA-6** | UI / copy: DA-F8a–n (DA-F8a per D-56 *(rev 2)*), Rules Reference variant branches, the false affordance, the Activity Log line at the boundary | **Extra** | DA-2 … DA-5 | no | owner copy review |
@@ -802,6 +804,7 @@ D-52 … D-56; OD-DA-2b open; review corrections recorded in §22 and §23. Stil
 *(rev 3: OD-DA-2b decided — D-57.)*
 *(rev 4: OD-DA-2c decided — D-58; OD-DA-2d open.)*
 *(rev 5: OD-DA-2d decided — D-59; no Delayed Auction owner decision remains open. Still NOT certified.)*
+*(rev 6: DA-3 implemented — DA-F1, DA-F2, DA-F7 fixed; `RULES_ENGINE_VERSION` still 10. Still NOT certified.)*
 
 Delayed Auction remains `DEFERRED — PRE-LAUNCH VARIANT CERTIFICATION REQUIRED` and is **not certified**. The owner spec
 is confirmed and consistently implemented at the trigger; the general auction is sound; eight defects (five HIGH, two

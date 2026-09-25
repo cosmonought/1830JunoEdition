@@ -52,6 +52,12 @@ import { trainPurchaseRefusal } from "../gameEngine/trainPurchaseGate";
 import { depotInventory } from "../gameEngine/gamePhase";
 import { boPresidencyRefusal, returnedTrainRefusal } from "../gameEngine/sandboxSession";
 import { BO_TICKER } from "../gameEngine/gameConstants";
+import {
+  auctionHandoffRefusal,
+  auctionRefusal,
+  boParRefusal,
+  isAuctionMessage,
+} from "../gameEngine/auctionAuthority";
 import { dieselExchangeRefusal } from "../gameEngine/dieselExchange";
 // UR-3 (OD-UR-1 = 1-A, D-37): the pinned table's refusal of a client-sent Yellow Sign, shared with ingress and the gate.
 import { yellowSignRequestRefusal } from "../gameEngine/yellowSign";
@@ -310,7 +316,15 @@ export function refusalReasonFor(
 
   /* #1246: the B&O grant's own refusal (#904b), the same call the reducer's arm makes on the same state. The
      shell used to print this sentence itself before falling through; now the REFUSED line carries it. */
-  if ("SetBoPar" in msg) return boPresidencyRefusal(before, BO_TICKER);
+  if ("SetBoPar" in msg) {
+    /* DA-3 (DA-F2): the private's ownership first -- the reducer's board gate asks it before the arm asks #904b. */
+    const { player } = (msg as { SetBoPar: { player: string } }).SetBoPar;
+    return boParRefusal(before, player) ?? boPresidencyRefusal(before, BO_TICKER);
+  }
+
+  /* DA-3 (DA-F1, DA-F7): the auction's own gate and the handoff's, the predicates the reducer's board gate asks. */
+  if ("OpenStockRound" in msg) return auctionHandoffRefusal(before, before.waterfall ?? null);
+  if (isAuctionMessage(msg)) return auctionRefusal(before, before.waterfall ?? null, msg);
 
   /* #1247: a second answer finds the question settled (#662). The arm returns the state unchanged, which the
      drain reads as a refusal -- and it is one, of the harmless kind, so the line says which. */

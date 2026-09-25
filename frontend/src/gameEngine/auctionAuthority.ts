@@ -61,6 +61,8 @@ import {
   minimumBidFor,
 } from "./auctionEscrow";
 import type { SandboxLogMsg } from "./gameSetup";
+import { BO_PRIVATE_ID, BO_TICKER } from "./gameConstants";
+import { PRESIDENT_CERTIFICATE_PERCENT } from "./presidencyTransfer";
 
 /** The player the auction atom is waiting on -- the same derivation `applySandboxWaterfallAction` applies
  *  every action under, so the rule and the mutation judge one person (#1232/#544). */
@@ -112,6 +114,109 @@ function contestBlock(waterfall: WaterfallStateResponse | null): string | null {
     waterfall?.privates.find((entry) => entry.private_id === contest.private_id)?.name ??
     "a private company";
   return `The auction for ${name} is still being contested — it is settled with a raise or a pass, and nothing else in the auction happens until it is.`;
+}
+
+/* ==================================================================
+    DA-3 (DA-F1): AN AUCTION MESSAGE IS JUDGED ONLY WHILE AN AUCTION IS OPEN
+   ==================================================================
+   FOUND BY DA-1 (`VARIANT_CERT_DELAYED_AUCTION_AUDIT_2026-09-25.md`, probes P2, P4, P5). Every predicate in this
+   file judged a message against the atom and never asked whether the atom was RUNNING. Under the Delayed Auction
+   the atom is dealt with every private on it and lies dormant from Stock Round 1 onwards, so the Stock Round seat
+   could buy the Schuylkill Valley in the atom cursor's name (another player paid), bid in that player's name, or
+   mark the SV down with a round of passes; and in EVERY game a `WaterfallPass` sent after the auction still
+   counted towards the atom's all-pass and paid a round of private income. The dashboard mounts only in the
+   auction round, so the UI was the only gate.
+   ONE CONDITION, ASKED FIRST, AT BOTH LOCKS: the round is the auction AND the atom has not been closed.
+   `waterfall_auction_active` is written only by the atom's own lifecycle -- `settle` closes it when the last
+   private leaves, `settleAuctionLifecycle` deals a delayed auction dormant and arms it when the round reaches it,
+   `OpenStockRound` closes it -- so it is the authoritative "is this auction open" in both games, and a later
+   rule that cancels an auction (DA-5) closes it through the same field rather than through a bypass here.
+   ABSENT READS AS OPEN (#232): a hand-built atom that never wrote the field has said nothing about its state. A
+   board with no atom at all has no auction to act in. */
+/** Why no auction action can be taken right now, or `null` while an auction is open. */
+export function auctionClosedRefusal(
+  state: GameStateResponse,
+  waterfall: WaterfallStateResponse | null,
+): string | null {
+  if (state.current_round_type !== "WaterfallAuction") {
+    return "There is no private company auction running — auction actions are taken only in the Auction Round.";
+  }
+  if (!waterfall || waterfall.waterfall_auction_active === false) {
+    return "The private company auction is closed — every private company on offer has been allocated.";
+  }
+  return null;
+}
+
+/* ==================================================================
+    DA-3 (DA-F2, DA-F7): THE B&O PRESIDENT'S CERTIFICATE IS THE B&O PRIVATE'S, AND IT IS OWED AT ONCE
+   ==================================================================
+   Rulebook §3.0 (the BO private): its owner "immediately receives the president's certificate of the B&O railroad
+   without further payment and immediately sets a par share value". Two defects hung off that sentence.
+   DA-F2 -- `SetBoPar` asked who SENT it, and asked the private's owner only when there was one: while the BO
+   private was unsold any seated player could name themselves and take the B&O presidency for nothing (the
+   standard auction's window, and the whole of the Delayed Auction's Stock Round 1 onwards -- the #904a lock was
+   asked by share purchases alone). THE CERTIFICATE BELONGS TO THE PRIVATE: `SetBoPar` is legal only for the BO
+   private's owner, so while it is unsold -- or closed -- nobody takes it by this path, in either game. That is
+   private-company state, not a round number or a UI latch, so a later rule that closes an unsold BO private
+   (DA-5) removes the path by changing the private, not by adding an exception here.
+   DA-F7 -- the par was sequenced by the auction modal only: a handoff sent before it let another player par the
+   B&O in the Stock Round and silently collide the owner's grant (#904b). THE OBLIGATION IS DERIVED, NOT
+   STORED: the private is held by a player, the B&O has no president, and the certificate is still in the initial
+   offering. Replay, restore and `RevertTo` rebuild it from the log with nothing else to keep in step; the
+   owner's `SetBoPar` discharges it by giving the B&O a president. A grant `boPresidencyRefusal` would refuse (the
+   certificate already gone) is never owed -- an obligation that cannot be discharged would stop the game. */
+function boPrivateOf(state: GameStateResponse) {
+  return state.private_companies?.find((entry) => entry.private_id === BO_PRIVATE_ID) ?? null;
+}
+
+/** The player the B&O President's Certificate and par are owed to right now, or `null`. */
+export function boParOwedTo(state: GameStateResponse): string | null {
+  const priv = boPrivateOf(state);
+  if (!priv || priv.closed || !priv.owner || priv.owner_protocol_id != null) return null;
+  const bo = state.public_companies?.find((company) => company.ticker === BO_TICKER);
+  if (!bo || bo.president != null) return null;
+  if ((Number(bo.ipo_pool_percentage) || 0) < PRESIDENT_CERTIFICATE_PERCENT) return null;
+  return priv.owner;
+}
+
+/** Why `player` may not take the B&O President's Certificate through `SetBoPar`, or `null`. The presidency
+ *  and invented-shares preconditions stay `boPresidencyRefusal`'s (#904b), asked by the arm after this. */
+export function boParRefusal(state: GameStateResponse, player: string | null | undefined): string | null {
+  const priv = boPrivateOf(state);
+  if (!priv || priv.closed) {
+    return `The ${BO_TICKER} private company is not in play, so there is no ${BO_TICKER} President's Certificate to hand over.`;
+  }
+  if (!priv.owner) {
+    return `The ${BO_TICKER} private company has not been sold — whoever buys it receives the ${BO_TICKER} President's Certificate and sets the par.`;
+  }
+  if (priv.owner_protocol_id != null || priv.owner !== player) {
+    return `Only the ${BO_TICKER} private's owner pars the ${BO_TICKER}.`;
+  }
+  return null;
+}
+
+/** DA-F7: the auction waits while the B&O par is owed. */
+function boParOwedBlock(state: GameStateResponse): string | null {
+  return boParOwedTo(state) === null
+    ? null
+    : `The ${BO_TICKER} par comes first — the ${BO_TICKER} private's owner takes the President's Certificate and sets the par before the auction goes on.`;
+}
+
+/** Why the auction cannot hand off to the Stock Round, or `null`. The round and "nothing left unsold" rules are
+ *  the ones ingress always asked (now asked by the reducer too); DA-F7 adds the owed B&O par. */
+export function auctionHandoffRefusal(
+  state: GameStateResponse,
+  waterfall: WaterfallStateResponse | null,
+): string | null {
+  if (state.current_round_type !== "WaterfallAuction") return "The Stock Round is already open.";
+  const unsold = waterfall?.privates.length ?? 0;
+  if (unsold > 0) {
+    return `The auction is not over yet — ${unsold} private ${unsold === 1 ? "company is" : "companies are"} still for sale.`;
+  }
+  if (boParOwedTo(state) !== null) {
+    return `The ${BO_TICKER} par comes first — the ${BO_TICKER} private's owner takes the President's Certificate and sets the par before the Stock Round opens.`;
+  }
+  return null;
 }
 
 /* ---- the three main-rotation actions --------------------------------------------------------- */
@@ -283,6 +388,14 @@ export function auctionRefusal(
   waterfall: WaterfallStateResponse | null,
   msg: SandboxLogMsg,
 ): string | null {
+  if ("BidOnPrivate" in msg) return legacyBidRefusal(state);
+  if (!isAuctionMessage(msg)) return null;
+  /* DA-3 (DA-F1, DA-F7): is an auction open, and is it waiting on the B&O par -- asked of every waterfall message
+     before anything about the action itself, so no rule below ever judges a dormant or finished atom. */
+  const closed = auctionClosedRefusal(state, waterfall);
+  if (closed !== null) return closed;
+  const owed = boParOwedBlock(state);
+  if (owed !== null) return owed;
   if ("WaterfallBuyLowest" in msg) return waterfallBuyRefusal(state, waterfall);
   if ("WaterfallBidHigher" in msg) return waterfallBidRefusal(state, waterfall, msg.WaterfallBidHigher);
   if ("WaterfallPass" in msg) return waterfallPassRefusal(state, waterfall);
@@ -290,7 +403,6 @@ export function auctionRefusal(
     return miniRaiseRefusal(state, waterfall, msg.WaterfallMiniAuctionRaise);
   }
   if ("WaterfallMiniAuctionPass" in msg) return miniPassRefusal(state, waterfall);
-  if ("BidOnPrivate" in msg) return legacyBidRefusal(state);
   return null;
 }
 
@@ -304,4 +416,27 @@ export function isAuctionMessage(msg: SandboxLogMsg): boolean {
     "WaterfallMiniAuctionPass" in msg ||
     "BidOnPrivate" in msg
   );
+}
+
+/* ---- DA-3: the auction's lifecycle, as one gate for the reducer ------------------------------------ */
+
+/** Whether this message is one the auction's lifecycle judges: the auction messages, the handoff and the B&O
+ *  par. The reducer's board gate asks `auctionLifecycleRefusal` for exactly these, above both atoms. */
+export function isAuctionLifecycleMessage(msg: SandboxLogMsg): boolean {
+  return isAuctionMessage(msg) || "OpenStockRound" in msg || "SetBoPar" in msg;
+}
+
+/** Why this auction-lifecycle message is illegal right now, or `null`. The same predicates ingress asks
+ *  (`turnRefusal`), so the two locks cannot come to differ. */
+export function auctionLifecycleRefusal(
+  state: GameStateResponse,
+  waterfall: WaterfallStateResponse | null,
+  msg: SandboxLogMsg,
+): string | null {
+  if ("OpenStockRound" in msg) return auctionHandoffRefusal(state, waterfall);
+  if ("SetBoPar" in msg) {
+    const par = (msg as { SetBoPar?: { player?: string | null } }).SetBoPar;
+    return boParRefusal(state, par?.player ?? null);
+  }
+  return auctionRefusal(state, waterfall, msg);
 }

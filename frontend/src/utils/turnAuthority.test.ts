@@ -329,8 +329,11 @@ describe("each room message has an owner, #1249", () => {
     expect(refusal(won, BOB, { SetBoPar: { player: BOB, par_value: "100" } })).toBeNull();
     expect(refusal(won, ALICE, { SetBoPar: { player: BOB, par_value: "100" } })).toBe("Only the B&O private's owner pars the B&O.");
     expect(refusal(won, ALICE, { SetBoPar: { player: ALICE, par_value: "100" } })).toBe("Only the B&O private's owner pars the B&O.");
-    // Whether the B&O CAN be parred is `boPresidencyRefusal`'s question, not this gate's.
-    expect(refusal(board(), BOB, { SetBoPar: { player: BOB, par_value: "100" } })).toBeNull();
+    /* DA-3 (DA-F2): an UNSOLD B&O private hands its certificate to nobody. This line was `toBeNull()` -- it pinned
+       the bypass DA-1 found. Whether an OWNED private's B&O can still be parred stays `boPresidencyRefusal`'s. */
+    expect(refusal(board(), BOB, { SetBoPar: { player: BOB, par_value: "100" } })).toBe(
+      "The B&O private company has not been sold — whoever buys it receives the B&O President's Certificate and sets the par.",
+    );
   });
 
   it("PlaceHomeStation: the corporation's president; the D&H's own legality for a D&H token (#1660, S9-12)", () => {

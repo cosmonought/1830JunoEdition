@@ -77,7 +77,7 @@ import {
 import { BO_TICKER, SV_PRIVATE_ID, eraForPhase } from "./gameConstants";
 /* Design note #1580 (Batch 7.3): the private auction's one authority. Asked ABOVE the auction atom, because
    that atom runs before the board -- see `applySandboxActionOnBoard`. */
-import { auctionRefusal, isAuctionMessage } from "./auctionAuthority";
+import { auctionLifecycleRefusal, isAuctionLifecycleMessage } from "./auctionAuthority";
 /* Design notes #1590-#1595 (Batch 7.4): the ordinary offers' one hold and their three authorities -- the
    corporation's private purchase, the intercorporate train sale, and the player <-> player private trade --
    asked here by identity and at ingress with the sentence, the #1570/#1580 shape. */
@@ -3172,7 +3172,13 @@ function boardGateRefusal(
   ctx?: SandboxActionContext,
 ): "held" | "auction" | null {
   if (authoritativeHoldRefusal(state, msg, ctx) !== null) return "held";
-  if (isAuctionMessage(msg) && auctionRefusal(state, state.waterfall ?? null, msg) !== null) return "auction";
+  /* DA-3 (DA-F1, DA-F2, DA-F7): the auction's whole lifecycle is judged here, by identity, above both atoms --
+     an auction message only while an auction is open and not waiting on the B&O par, `OpenStockRound` only
+     once nothing is unsold and the par is set, `SetBoPar` only from the BO private's owner. The same predicates
+     ingress asks (`auctionAuthority.ts`). */
+  if (isAuctionLifecycleMessage(msg) && auctionLifecycleRefusal(state, state.waterfall ?? null, msg) !== null) {
+    return "auction";
+  }
   return null;
 }
 

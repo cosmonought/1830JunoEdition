@@ -450,6 +450,7 @@ import {
   yellowSignStateOf,
   forcedSignStagesAvailable,
   nextForcedSign,
+  forcedSignToolInForce, // UR-7 (UR-N62): the chip only where its force can act
   // UR-3 (OD-UR-1, OD-UR-2): a pinned table's Sign is read off the run it rode; its fog off the set boundary.
   CARCOSA_FOG_LINE,
   describeFogAtSetEnd,
@@ -4281,6 +4282,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
     if (!isSandboxHost) return;
     /* #1404: the cycle offers only the stages the game can still reach -- see `forcedSignStagesAvailable`. */
     const state = sandboxStateRef.current;
+    /* UR-7 (UR-N62): and only on a board where the force can act -- an unpinned Unpredictable Revenue board. A pinned
+       table drops and refuses the waiver, so arming it there would write a flag nothing reads. */
+    if (!forcedSignToolInForce(state)) return;
     const next = nextForcedSign(
       forcedSign,
       yellowSignStateOf(state?.public_companies ?? [], actionLogRef.current.map((entry) => entry.label)),
@@ -4296,6 +4300,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
          shifted glyph -- the same trap `ConnectWalletButton`'s Escape handler avoids by comparing a name. */
       if (!event.ctrlKey || !event.shiftKey) return;
       if (event.key.toLowerCase() !== "y") return;
+      /* UR-7 (UR-N62): no tool on this board, so the keystroke is left to the browser rather than swallowed. */
+      if (!forcedSignToolInForce(sandboxStateRef.current)) return;
       event.preventDefault();
       cycleForcedSign();
     };
@@ -13689,7 +13695,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
                 Rejoin a seat
               </button>
             )}
-            {isSandboxHost && (
+            {/* UR-7 (UR-N62): only where the force can act (`forcedSignToolInForce`: an unpinned Unpredictable Revenue
+                board). On a pinned table the chip changed nothing, and its tooltips named the Sign's hidden windows to
+                a host who is also a player (OD-UR-8, D-42) and called the fog a run stage (OD-UR-2 retired that). */}
+            {isSandboxHost && forcedSignToolInForce(sandboxState) && (
               <button
                 type="button"
                 style={{

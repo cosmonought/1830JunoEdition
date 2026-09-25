@@ -20,6 +20,7 @@ import {
   revenueDieFace,
   revenueOutcome,
   rollTurnRevenue,
+  roundRevenueTowardPrinted,
   roundToTen,
   STANDARD_VARIANTS,
   turnRevenueSentence,
@@ -117,9 +118,15 @@ describe("the roll is rounded before anyone reads it (design note #938)", () => 
            once-per-turn roll; what these cases need is many distinct seeds, which any varying part supplies. */
         const parts = seedByCompany(ordinal);
         const percent = REVENUE_MODIFIER_BY_FACE[revenueDieFace(parts) - 1];
+        /* UR-7 (OD-UR-10 = 10-C, UR-F20): THE TWO STEPS ARE STILL COMPOSED IN THIS ORDER, and the rounding step is now
+           the ruled one -- an exact $5 tie goes toward the printed total instead of up. The oracle below was
+           `roundToTen(applyRevenuePercent(printed, percent))`, which is the same thing everywhere except face 5 on a
+           printed $50 mod $100 ($55 -> $50, not $60); the whole table is pinned in `revenueTieRounding.test.ts`. */
         expect(rollTurnRevenue(printed, parts).adjusted).toBe(
-          roundToTen(applyRevenuePercent(printed, percent)),
+          roundRevenueTowardPrinted(applyRevenuePercent(printed, percent), printed),
         );
+        // The degenerate `adjusted = roundToTen(printed)` is still ruled out: the percentage is applied first.
+        if ((percent === 80 || percent === 120) && printed >= 30) expect(rollTurnRevenue(printed, parts).adjusted).not.toBe(printed);
       }
     }
   });

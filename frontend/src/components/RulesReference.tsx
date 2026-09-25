@@ -838,13 +838,14 @@ const GENTLE_RUST_RULES: readonly RuleNode[] = [
  *  TWO TAGGED BLOCKS, where the rules act: the die and the Sign's taking in Dividends (where revenue is paid), the
  *  gold-trimmed train and the Blood Price in Buy Trains (where limits, trade-ins and purchases are looked up) -- the
  *  GR-3 shape (#1702). Every node carries the scope, so a standard game renders none of it.
- *  THE ROUNDING IS "TO THE NEAREST $10" AND NO MORE. OD-UR-10 = 10-C (an exact $5 tie rounds toward the printed
- *  revenue) is decided but NOT implemented -- UR-F20 is UR-7's -- so the page names no tie direction: the engine's is
- *  still half-up. UR-7 owes the tie sentence here when it lands 10-C; until then no example below lands on a tie. */
+ *  THE ROUNDING IS "TO THE NEAREST $10", AND AN EXACT TIE GOES TOWARD PRINTED. UR-6 stopped at the nearest $10 because
+ *  OD-UR-10 = 10-C was decided but not yet implemented. UR-7 implemented it (UR-F20: `roundRevenueTowardPrinted`, the
+ *  die's own step), so the page now says the one sentence a player needs. It names no face and no odds -- the same page
+ *  already prints the face table -- and nothing about the Yellow Sign's trigger (D-42). */
 const UNPREDICTABLE_REVENUE_RULES: readonly RuleNode[] = [
   {
     scope: "unpredictableRevenue",
-    p: "Each time a corporation runs its trains, one die is rolled for the whole turn and applied to the total revenue of all its routes. Its revenue for the turn is that total at the percentage below, rounded to the nearest $10.",
+    p: "Each time a corporation runs its trains, one die is rolled for the whole turn and applied to the total revenue of all its routes. Its revenue for the turn is that total at the percentage below, rounded to the nearest $10. If the result lands exactly halfway between two $10 values, it is rounded toward the printed route total.",
   },
   {
     scope: "unpredictableRevenue",

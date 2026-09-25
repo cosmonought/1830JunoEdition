@@ -8,14 +8,15 @@
 // for informed decisions: the die and its rounding, the gold-trimmed train's train-limit treatment and its
 // disappearance, the Blood Price's consequences (OD-UR-5, fully decided) -- and what it must NOT: the Yellow Sign's
 // trigger conditions or odds. Each concept below is the implemented rule as of UR-6 and names the ruling it states.
-// OD-UR-10 = 10-C (an exact $5 tie rounds toward printed) is decided but not implemented -- UR-F20 is UR-7's -- so the
-// page says "rounded to the nearest $10" and no tie direction.
+// OD-UR-10 = 10-C (an exact $5 tie rounds toward printed) was decided but not implemented at UR-6, so the page said
+// "rounded to the nearest $10" and no tie direction. UR-7 implemented it (UR-F20) and added the tie sentence -- pinned
+// below against the engine's own figures.
 
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
 import RulesReference from "./RulesReference";
-import { REVENUE_MODIFIER_BY_FACE, resolveVariants } from "../gameEngine/gameVariants";
+import { REVENUE_MODIFIER_BY_FACE, resolveVariants, rollTurnRevenue } from "../gameEngine/gameVariants";
 import { markPayout } from "../gameEngine/yellowSign";
 import { readStripped } from "../utils/sourceScan";
 
@@ -82,6 +83,7 @@ describe("the die, as implemented (UR-N4 ... UR-N18)", () => {
     const concepts: Array<[string, RegExp]> = [
       ["UR-N4 one roll per turn, on the aggregate", /one die is rolled for the whole turn and applied to the total revenue of all its routes/i],
       ["UR-N6 rounding to $10", /rounded to the nearest \$10/],
+      ["UR-N6 / OD-UR-10 an exact tie toward printed (UR-7)", /If the result lands exactly halfway between two \$10 values, it is rounded toward the printed route total\./],
       ["UR-N6 the rounding can widen the swing (no tie example)", /\$80 run at 80% is \$64, which rounds to \$60/],
       ["UR-N13 never $0 for a positive run", /at least \$10/],
       ["UR-N10/N11 printed values for choosing routes", /highest revenue rule at their printed values.*die applies only when the run is made/i],
@@ -109,10 +111,16 @@ describe("the die, as implemented (UR-N4 ... UR-N18)", () => {
     expect(faces).toEqual(["1:80%", "2:90%", "3:100%", "4:100%", "5:110%", "6:120%"]);
   });
 
-  it("the rounding names no tie direction -- 10-C is UR-7's (UR-F20), and the engine still rounds a tie up", () => {
+  it("the tie sentence says what the engine does (UR-7, OD-UR-10 = 10-C) -- once, and never half up", () => {
+    /* UR-6 pinned the ABSENCE of any tie direction while the engine still rounded a tie up (UR-F20). UR-7 implemented
+       10-C, so the page states it -- and the statement is checked against the engine's own die, not against a copy. */
     openPage({ unpredictableRevenue: true });
     const text = `${flat(dieBlock())} ${flat(carcosaBlock())}`;
-    expect(text).not.toMatch(/\btie|halfway|toward(s)? (the )?printed|rounds? up|half[- ]up|\$45|\$55|\$165|\$275/i);
+    expect(text.match(/halfway/gi) ?? []).toHaveLength(1);
+    expect(text).not.toMatch(/rounds? up|half[- ]up|rounded up/i);
+    // What "toward the printed route total" means, in the engine: +10% on $150 is $165 -> $160; -10% is $135 -> $140.
+    const byFace = (printed: number, face: number) => rollTurnRevenue(printed, { macroRound: 1, subRound: 1, companyId: 1, turnSeed: face - 1 }).adjusted;
+    expect([byFace(50, 5), byFace(50, 2), byFace(150, 5), byFace(150, 2), byFace(250, 5), byFace(250, 2)]).toEqual([50, 50, 160, 140, 270, 230]);
   });
 });
 

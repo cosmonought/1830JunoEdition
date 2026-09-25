@@ -1118,11 +1118,53 @@ export function revenueFlavourClause(roll: RevenueRoll, parts: RevenueSeedParts)
  * on the turn's aggregate printed revenue, so the die -- and this rounding -- now apply once to the TURN's total
  * (`rollTurnRevenue`), not to each run. The helper is unchanged; only "per run" is history. Its exact-$5 tie is
  * OD-UR-10 = 10-C's to change (UR-F20, UR-7), not this note's.]
+ * [UR-7: DONE BESIDE IT, NOT IN IT. The die's step now calls `roundRevenueTowardPrinted` below, which sends an exact
+ * $5 tie toward the printed total and otherwise defers to this helper. This one stays the generic half-up rounding.]
  *
  * INTEGERS THROUGHOUT. `value + 5` and the division are the whole of it; `Math.floor` on the quotient is the
  * rounding, exactly as `applyRevenuePercent` does it one step earlier. */
 export function roundToTen(value: number): number {
   return Math.floor((value + 5) / 10) * 10;
+}
+
+/** The die's $10 rounding, with OD-UR-10's tie rule -- UR-7 (UR-F20).
+ *
+ *  ==================================================================
+ *   OD-UR-10 = 10-C: AN EXACT $5 TIE ROUNDS TOWARD THE PRINTED REVENUE
+ *  ==================================================================
+ *
+ *  RULED (the owner, 2026-09-24; backlog D-47): "When the modified Unpredictable Revenue amount lands exactly halfway
+ *  between two $10 increments, round toward the corporation's original printed revenue." Every other amount rounds to
+ *  the nearest $10 exactly as `roundToTen` does. Printed $50: $45 -> $50, $55 -> $50; printed $150: $135 -> $140,
+ *  $165 -> $160; printed $250: $225 -> $230, $275 -> $270. The owner's reasons: damp the die at low figures, steady it
+ *  at high ones, keep it symmetric around the printed figure, and remove half up's upward bias -- with it the six faces'
+ *  mean is exactly the printed figure at every printed multiple of $10 (under half up it was printed + $1.67 wherever
+ *  printed is $50 mod $100).
+ *
+ *  `printed` IS THE TURN'S PRINTED TOTAL -- the figure the die modified (#941), never a train's. Every printed route
+ *  value on the three boards is a multiple of $10, so only faces 2 and 5 can tie, only at printed $50 mod $100, and only
+ *  face 5 pays differently from half up (face 2's tie already rounded up to printed).
+ *
+ *  THE ONE CASE THE RULE CANNOT DECIDE -- printed itself sitting exactly on the halfway mark, so both tens are equally
+ *  near it -- keeps half up. It needs a printed total that is not a multiple of $10, which no route produces (the only
+ *  such figures in the game are Private Company incomes, and the die never touches those, UR-N12).
+ *
+ *  `adjusted` IS THE EXACT MODIFIED AMOUNT, in whole dollars. `rollTurnRevenue` asks this only when `printed x percent`
+ *  lands exactly halfway (a remainder of 500 in hundredths of a ten), so a dollar figure that merely LOOKS like a tie --
+ *  $45 shown for an exact $45.10 -- never reaches it.
+ *
+ *  INTEGERS ONLY, like everything the die touches: the tie test is a remainder, the candidates are the tens either side,
+ *  and the choice is a comparison of whole-dollar distances. */
+export function roundRevenueTowardPrinted(adjusted: number, printed: number): number {
+  const remainder = ((adjusted % 10) + 10) % 10;
+  if (remainder !== 5) return roundToTen(adjusted);
+  const lower = adjusted - 5;
+  const upper = adjusted + 5;
+  const toLower = Math.abs(printed - lower);
+  const toUpper = Math.abs(printed - upper);
+  if (toLower < toUpper) return lower;
+  if (toUpper < toLower) return upper;
+  return roundToTen(adjusted);
 }
 
 /** Whether a roll's payout ended up above, below, or exactly at the printed figure.
@@ -1228,14 +1270,25 @@ export function turnRevenueSentence(
  *
  *  Design note #941: `printed` IS NOW A TURN TOTAL, not one train's route. The function is unchanged --
  *  a percentage and a rounding do not care what they are given -- but every caller had to move, and the name
- *  kept saying "route". Callers pass the sum; the reducer keeps the sum so it can re-apply on each train. */
+ *  kept saying "route". Callers pass the sum; the reducer keeps the sum so it can re-apply on each train.
+ *
+ *  UR-7 (OD-UR-10 = 10-C, UR-F20): on an exact $5 tie the rounding step asks `roundRevenueTowardPrinted`, so the tie
+ *  goes toward `printed` instead of up; every other amount rounds exactly as before. Still the ONE implementation -- the reducer's run arms, the Mark's re-roll of what remains
+ *  (`runWithoutTrain`), the narration and the statistics all call this, always on the committed draw -- so an undo, a
+ *  replay and a restore reach the same rounded figure the run paid. */
 export function rollTurnRevenue(printed: number, parts: RevenueSeedParts): RevenueRoll {
   const face = revenueDieFace(parts);
   const percent = REVENUE_MODIFIER_BY_FACE[face - 1];
+  const modified = applyRevenuePercent(printed, percent);
+  /* UR-7: THE TIE IS JUDGED ON THE EXACT MODIFIED AMOUNT, `printed x percent / 100`, never on the dollar figure. For
+     every printed total the boards produce -- a multiple of $10 -- the two are the same number; off that grid (no route
+     reaches it) a figure like $41 at 110% is $45.10, which the dollar step shows as $45 but which is NOT halfway, so it
+     keeps the rounding it always had. 10-C changes exact ties and nothing else. */
+  const exactTie = (((printed * percent) % 1000) + 1000) % 1000 === 500;
   return {
     face,
     percent,
     printed,
-    adjusted: roundToTen(applyRevenuePercent(printed, percent)),
+    adjusted: exactTie ? roundRevenueTowardPrinted(modified, printed) : roundToTen(modified),
   };
 }

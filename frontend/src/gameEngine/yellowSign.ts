@@ -913,6 +913,23 @@ export function yellowSignRequestRefusal(state: Pick<GameStateResponse, "rules_e
   return "The Yellow Sign is resolved by the game itself, as part of the run that draws it; no player sends it.";
 }
 
+/** UR-7 (UR-N62): whether the host's playtest force -- #1128's "SIGN" chip and its Ctrl+Shift+Y shortcut -- can act on
+ *  this board at all.
+ *
+ *  ONLY WHERE THE LEGACY REQUEST PATH STILL RUNS: a dealt, UNPINNED board playing Unpredictable Revenue (a Firestore
+ *  sandbox room, S10-11's residual). There the narration arms `debug_force` on the request it sends (#1128, #1661). On
+ *  a pinned table the waiver is dropped at ingress and refused by the reducer, the shell sends no request at all, and
+ *  the Sign is the run's own consequence (OD-UR-1) -- so the chip there could change nothing, while its tooltips named
+ *  the Sign's phase windows and whom it can visit next, which OD-UR-8 keeps hidden from players (D-42), and described
+ *  the fog as a run stage, which OD-UR-2 retired. The shell renders the chip, and honours the shortcut, only where this
+ *  answers true. A standard table has no Yellow Sign to force. */
+export function forcedSignToolInForce(
+  state: Pick<GameStateResponse, "rules_engine_version" | "variants"> | null | undefined,
+): boolean {
+  if (!state) return false;
+  return yellowSignRequestRefusal(state) === null && resolveVariants(state.variants).unpredictableRevenue;
+}
+
 /** What the authority applied at this turn's run, as it wrote it on the corporation (`last_run_yellow_sign`). */
 export type RunYellowSignRecord = NonNullable<PublicCompanyState["last_run_yellow_sign"]>;
 

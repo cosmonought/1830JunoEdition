@@ -9,7 +9,7 @@
 // the viewer's own -- so two tunnels would mean two URLs, a second hostname baked into `.env.local`, and a
 // mixed-content rule waiting to be tripped. This puts both behind one port:
 //
-//    /gs  and below   ->  the game server on :8917, WebSocket upgrade and all
+//    /gs  exactly     ->  the game server on :8917, WebSocket upgrade and all
 //    everything else  ->  the app
 //
 // THE APP IS SERVED FROM `frontend/build` BY DEFAULT, and the reason is the free tunnel's meter. A CRA dev
@@ -39,11 +39,32 @@ const DEV = process.argv.includes("--dev") || process.env.APP_MODE === "dev";
 const BUILD_DIR = path.resolve(__dirname, "..", "frontend", "build");
 
 /** THE PATH DECIDES. The game server's WebSocketServer is attached with no `path`, so it accepts the
- *  upgrade whatever the URL says -- the prefix is for this file to route on, not for it to read. */
+ *  upgrade whatever the URL says -- the prefix is for this file to route on, not for it to read.
+ *  LIVE-0: EXACTLY `/gs`, a query string allowed, and nothing below it. The route used to be "`/gs` and
+ *  below", which handed `/gs/anything` -- and `/gs/../anything` -- to the game server as well. Both client
+ *  sockets open exactly the URL `.env.local` names (`wss://<host>/gs`) and the probe in PLAYTEST_NGROK.md
+ *  asks for exactly `/gs`, so that is the whole route; every other path is the app's. */
 const isGame = (url) => {
   const u = String(url || "/");
-  return u === GAME_PREFIX || u.startsWith(GAME_PREFIX + "/") || u.startsWith(GAME_PREFIX + "?");
+  const query = u.indexOf("?");
+  return (query === -1 ? u : u.slice(0, query)) === GAME_PREFIX;
 };
+
+/** LIVE-0: A MALFORMED ESCAPE IS THE CLIENT'S ERROR, NOT THE PROXY'S DEATH. `decodeURIComponent` throws on a
+ *  bad `%` sequence (`/%E0%A4%A`), and a throw inside a request handler is an uncaught exception that takes
+ *  the whole proxy down -- every player's page and socket with it. `null` here, and the caller answers 400. */
+const decodeRequestPath = (url) => {
+  try {
+    return decodeURIComponent(String(url || "/").split("?")[0]);
+  } catch {
+    return null;
+  }
+};
+
+/** LIVE-0: INSIDE THE BUILD MEANS THE BUILD DIRECTORY ITSELF OR BELOW A SEPARATOR IN IT. A bare
+ *  `startsWith(BUILD_DIR)` also admitted any sibling that merely shares the prefix -- `frontend/build-x/...`,
+ *  reachable as `/../build-x/...`. */
+const isInsideBuild = (file) => file === BUILD_DIR || file.startsWith(BUILD_DIR + path.sep);
 
 /* ------------------------------------------------------------------ */
 /*  Serving the build                                                   */
@@ -60,14 +81,15 @@ const TYPES = {
 const COMPRESSIBLE = /^(text\/|application\/(json|manifest\+json)|image\/svg)/;
 
 function serveStatic(req, res) {
-  const requested = decodeURIComponent(String(req.url || "/").split("?")[0]);
+  const requested = decodeRequestPath(req.url);
+  if (requested === null) return end(res, 400, "malformed URL: bad percent-encoding");
 
   /* SOURCE MAPS ARE REFUSED, and it is not squeamishness: `main.js.map` is 15 MB, which is 1.5% of a
      month's transfer for one devtools window. Debug against the dev server on this machine instead. */
   if (requested.endsWith(".map")) return end(res, 404, "source maps are not served over the tunnel -- see playtest-proxy.js");
 
   let file = path.resolve(BUILD_DIR, "." + requested);
-  if (!file.startsWith(BUILD_DIR)) return end(res, 403, "no");
+  if (!isInsideBuild(file)) return end(res, 403, "no");
 
   let stat = null;
   try { stat = fs.statSync(file); } catch { stat = null; }
@@ -152,12 +174,18 @@ server.on("upgrade", (req, socket, head) => {
 });
 
 /* 127.0.0.1 ONLY. The tunnel agent runs on this machine and reaches this from localhost; binding wider
-   would put the game on the local network as well, which nobody asked for. */
-server.listen(LISTEN_PORT, "127.0.0.1", () => {
-  console.log(
-    `playtest proxy on http://127.0.0.1:${LISTEN_PORT}\n` +
-      `  ${GAME_PREFIX}            -> 127.0.0.1:${GAME_PORT}   game server\n` +
-      `  everything else -> ${DEV ? `127.0.0.1:${APP_PORT}   app (CRA dev server, hot reload)` : BUILD_DIR + "  (production build, gzipped)"}\n` +
-      `  point the tunnel at ${LISTEN_PORT}; .env.local needs REACT_APP_GAME_SERVER_URL=wss://<tunnel-host>${GAME_PREFIX}`,
-  );
-});
+   would put the game on the local network as well, which nobody asked for.
+   LIVE-0: AND ONLY WHEN RUN. `node playtest-proxy.js` (and `start-playtest.ps1`, which runs exactly that)
+   listens as before; `require`-ing the file for the routing and path checks opens no port. */
+if (require.main === module) {
+  server.listen(LISTEN_PORT, "127.0.0.1", () => {
+    console.log(
+      `playtest proxy on http://127.0.0.1:${LISTEN_PORT}\n` +
+        `  ${GAME_PREFIX}            -> 127.0.0.1:${GAME_PORT}   game server\n` +
+        `  everything else -> ${DEV ? `127.0.0.1:${APP_PORT}   app (CRA dev server, hot reload)` : BUILD_DIR + "  (production build, gzipped)"}\n` +
+        `  point the tunnel at ${LISTEN_PORT}; .env.local needs REACT_APP_GAME_SERVER_URL=wss://<tunnel-host>${GAME_PREFIX}`,
+    );
+  });
+}
+
+module.exports = { isGame, decodeRequestPath, isInsideBuild, serveStatic, BUILD_DIR, GAME_PREFIX };

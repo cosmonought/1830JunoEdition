@@ -20,7 +20,10 @@ import type { Server as HttpServer } from "http";
 
 import { WebSocket } from "ws";
 
-import { createGameServer, trustClaimedIdentity } from "./gameServer";
+import { createGameServer, GAME_SERVER_BIND_HOST, trustClaimedIdentity } from "./gameServer";
+import type { LogStore } from "./fileLogStore";
+import type { StagingRoomRecord } from "../../frontend/src/utils/lobbyProtocol";
+import type { SandboxRoomDoc } from "../../frontend/src/utils/sandboxRoom";
 // S10-5: the client's own chat frame shapes, so the harness cannot drift from what a browser reads.
 import type { ChatFrame, ChatSendRequest } from "../../frontend/src/utils/roomDocLink";
 
@@ -196,6 +199,15 @@ async function main(): Promise<void> {
     resolveIdentity: trustClaimedIdentity,
   });
   port = await listeningPort(server.http);
+
+  /* LIVE-0: LOOPBACK, AS THE BANNER SAYS. The address the socket actually holds, not the constant it was
+     asked for -- `listen(port)` with no host held every interface while the banner printed 127.0.0.1. */
+  const bound = server.http.address();
+  check(
+    "the server listens on 127.0.0.1 only, not on every interface (LIVE-0)",
+    GAME_SERVER_BIND_HOST === "127.0.0.1" && typeof bound === "object" && bound !== null && bound.address === "127.0.0.1",
+    bound,
+  );
 
   const alice = await connect(ALICE, "SMOKE");
   const bob = await connect(BOB, "SMOKE");
@@ -449,6 +461,8 @@ async function main(): Promise<void> {
 
   await durableLog();
 
+  await stagingLobbyParked();
+
   // eslint-disable-next-line no-console
   console.log(process.exitCode === 1 ? "\nSMOKE FAILED" : "\nSMOKE PASSED");
 }
@@ -563,6 +577,110 @@ async function durableLog(): Promise<void> {
   rejoined.socket.close();
   await second.close();
   fs.rmSync(directory, { recursive: true, force: true });
+}
+
+/* ==================================================================
+    LIVE-0: THE STAGING LOBBY IS PARKED, AND THE JOIN GAME LIST IS NOT
+   ==================================================================
+   A store that already holds a staging room, as `lobby.json` does on a machine that ever used the Web3
+   lobby. Parked, none of it may be answered and nothing may be written back -- while the SAME `lobby-hello`
+   keeps carrying the public sandbox list (#1415), which is live. And no refusal may be an `error` frame:
+   the client fans those out to every error listener on the lobby socket, the live lobby's banners among
+   them. */
+async function stagingLobbyParked(): Promise<void> {
+  const now = Date.now();
+  const stored: StagingRoomRecord = {
+    room: {
+      id: "r-stored-1",
+      name: "Stored staging room",
+      hostAddress: "juno1storedhost",
+      hostDisplayName: "Host",
+      maxPlayers: 4,
+      seatCount: 1,
+      status: "staging",
+      chainGameId: null,
+      anteUjuno: "1000000",
+      virtualBankStart: "12000",
+      variants: {} as StagingRoomRecord["room"]["variants"],
+      createdAtMs: now,
+      launchError: null,
+    },
+    seats: [
+      { address: "juno1storedhost", displayName: "Host", ready: true, isHost: true, onChain: false, joinedAtMs: now, lastSeenMs: now },
+    ],
+  };
+  let lobbySaves = 0;
+  const docs = new Map<string, SandboxRoomDoc>();
+  const store: LogStore = {
+    loadLog: async () => [],
+    appendLog: async () => undefined,
+    loadRoomDoc: async (room) => docs.get(room) ?? null,
+    saveRoomDoc: async (room, doc) => {
+      docs.set(room, doc);
+    },
+    listRooms: async () => [...docs.keys()],
+    loadLobby: async () => [stored],
+    saveLobby: async () => {
+      lobbySaves += 1;
+    },
+  };
+  const server = createGameServer({ port: 0, build: BUILD, resolveIdentity: trustClaimedIdentity, store });
+  port = await listeningPort(server.http);
+
+  const probe = await connectRoom(CAROL, "LIVE0-PROBE");
+  await probe.next();
+
+  probe.send({ kind: "lobby-hello" });
+  const staging = await probe.nextOf("lobby");
+  const listed = await probe.nextOf("rooms");
+  check(
+    "a lobby-hello answers no staging rooms, though the store holds one (LIVE-0)",
+    Array.isArray(staging.rooms) && (staging.rooms as unknown[]).length === 0,
+    staging,
+  );
+  check("and still answers the public sandbox list Join Game rides (#1415)", Array.isArray(listed.rooms), listed);
+
+  probe.send({ kind: "lobby-watch", roomId: stored.room.id });
+  const watched = await probe.nextOf("lobby-room");
+  check(
+    "a lobby-watch of that stored staging room sees no room and no seats",
+    watched.roomId === stored.room.id && watched.room === null && Array.isArray(watched.seats) && (watched.seats as unknown[]).length === 0,
+    watched,
+  );
+
+  probe.send({
+    kind: "lobby-write",
+    requestId: "live0-create",
+    write: { op: "create-room", name: "x", maxPlayers: 4, hostAddress: "juno1x", hostDisplayName: "X", anteUjuno: "0", virtualBankStart: "12000", variants: {} },
+  });
+  const created = await probe.nextOf("lobby-ack");
+  probe.send({ kind: "lobby-write", requestId: "live0-bind", write: { op: "bind-chain-game-id", roomId: stored.room.id, chainGameId: 7 } });
+  const chained = await probe.nextOf("lobby-ack");
+  check(
+    "a lobby-write is refused in its own ack -- create-room and bind-chain-game-id alike",
+    created.requestId === "live0-create" && created.ok === false && typeof created.reason === "string" &&
+      chained.requestId === "live0-bind" && chained.ok === false,
+    { created, chained },
+  );
+
+  /* THE LIVE PATH, UNCHANGED: a public sandbox room hosted after the hello reaches that socket's list. */
+  const host = await connectRoom(ALICE, "LIVE0-PUBLIC");
+  await host.next();
+  host.write({ op: "host", hostId: ALICE, nickname: "Alice", variants: {} });
+  await host.next();
+  const relisted = await probe.nextOf("rooms");
+  check(
+    "a public sandbox room hosted after the hello still reaches that socket's list",
+    Array.isArray(relisted.rooms) && (relisted.rooms as { code: string }[]).some((row) => row.code === "LIVE0-PUBLIC"),
+    relisted,
+  );
+
+  check("nothing was written back to the staging lobby's store", lobbySaves === 0, lobbySaves);
+  check("and no refusal went out as an `error` frame", !probe.seen.includes("error"), probe.seen);
+
+  host.socket.close();
+  probe.socket.close();
+  await server.close();
 }
 
 void main();

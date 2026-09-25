@@ -16,13 +16,14 @@ machine is not theirs.
 So `server\playtest-proxy.js` puts both behind **one** port, 8918:
 
 ```
-  /gs and below     ->  127.0.0.1:8917   the game server, WebSocket upgrade and all
+  /gs (exactly)     ->  127.0.0.1:8917   the game server, WebSocket upgrade and all
   everything else   ->  the app
 ```
 
 Node's standard library only — nothing to install, and it binds to `127.0.0.1`, so there is no Windows
 firewall prompt and the game does not appear on your local network. The tunnel agent reaches it from
-localhost because it runs here too.
+localhost because it runs here too. The game server binds `127.0.0.1` as well (LIVE-0), so the proxy is the
+only way in from outside: `ngrok -> proxy -> 127.0.0.1:8917`, never the game server's port directly.
 
 **The app is served from `frontend\build`, not from the dev server**, and the reason is the meter. The free
 plan gives **1 GB of transfer and 20,000 requests a month**. A CRA dev server ships an unminified bundle in
@@ -48,11 +49,19 @@ That must print a version. If it says *"is not recognized"*, ngrok is not instal
 window matters**, because PATH is read when the window opens and an install cannot reach back into one that
 is already running.
 
-Then, once:
+Then, once, install **your own** ngrok authtoken into ngrok's local configuration. Copy it from your ngrok
+dashboard (dashboard.ngrok.com, the *Your Authtoken* page) and type this, with the token in place of the
+placeholder:
 
 ```powershell
-ngrok config add-authtoken 3J3ZRqQAjePpO0keBbDtMulMM5O_4C9rCPwHJmcK1h36sxVDP
+ngrok config add-authtoken <YOUR_NGROK_AUTHTOKEN>
 ```
+
+ngrok stores the token in its own config file on this machine, outside the checkout, and that is the only place
+it belongs. **Never put a real authtoken or ngrok API key into this repository** -- not in this file, not in
+`start-playtest.ps1`, not in `.env.local`, not in a screenshot. The repo is publicly cloneable, and a token
+that reaches a commit has to be rotated in the ngrok dashboard; deleting the line afterwards does not
+un-publish it (LIVE-0). `frontend/src/utils/liveHygiene.test.ts` fails the suite on anything shaped like one.
 
 > **PASTING MULTI-LINE POWERSHELL INTO THE CONSOLE DOES NOT WORK THE WAY IT LOOKS.** The console runs each
 > line the moment it arrives, so an `if { }` on one line and its `elseif { }` on the next arrive as two

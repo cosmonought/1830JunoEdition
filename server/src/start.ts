@@ -20,7 +20,7 @@
 
 import * as path from "path";
 
-import { createGameServer, trustClaimedIdentity } from "./gameServer";
+import { createGameServer, GAME_SERVER_BIND_HOST, trustClaimedIdentity } from "./gameServer";
 import { createFileLogStore } from "./fileLogStore";
 import { RULES_ENGINE_VERSION, SUPPORTED_RULES_ENGINE_VERSIONS } from "../../frontend/src/gameEngine/rulesVersion";
 
@@ -107,7 +107,7 @@ const builtAt = (() => {
 
 // eslint-disable-next-line no-console
 console.log(
-  `1830 game server listening on ws://127.0.0.1:${port} (build "${build}", INSECURE local identity)\n` +
+  `1830 game server listening on ws://${GAME_SERVER_BIND_HOST}:${port} (build "${build}", INSECURE local identity)\n` +
     `  compiled ${builtAt} UTC -- if a fix you just made is not in this stamp, the server was not rebuilt\n` +
     `  rooms stored in ${dataDir} -- one .log.jsonl per room, synced before any client is answered (#1250)\n` +
     `  rules engine version ${RULES_ENGINE_VERSION} (supports [${SUPPORTED_RULES_ENGINE_VERSIONS.join(", ")}]); ` +

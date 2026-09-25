@@ -253,6 +253,24 @@ type ClientFrame =
   | LobbyWatchFrame
   | LobbyWriteFrame;
 
+/* ==================================================================
+    LIVE-0: THE STAGING LOBBY IS PARKED ON THE SERVER TOO
+   ==================================================================
+   #525 parked the on-chain staging lobby's UI behind `WEB3_LOBBY_ENABLED` (`Lobby.tsx`), but this process
+   kept answering its frames -- unauthenticated, a wallet address believed from the frame, and a first-writer
+   `bind-chain-game-id` (LIVE-1 B-6). Parked here the same way: one constant, nothing deleted. The escrow
+   integration replaces it properly; until then no staging room can be read or written through this server.
+   `lobby-hello` STAYS ANSWERED, because it is also the subscription the PUBLIC SANDBOX ROOM LIST rides
+   (#1415, `useSandboxRooms`). Its `rooms` frame is live; only its staging `lobby` frame is parked, as an
+   empty list. `lobby-watch` is answered with no room and watches nothing. `lobby-write` is refused in its
+   own `lobby-ack`, applies nothing and saves nothing, so `lobby.json` is never rewritten.
+   EACH REFUSAL IS THE FRAME ITS CALLER ALREADY LISTENS FOR, NOT AN `error`. `roomDocLink.ts` fans an `error`
+   out to every error listener on the lobby socket -- the Join Game list's among them -- and `Lobby.tsx`
+   renders those banners outside the Web3 gate, so a refusal sent as `error` would put a red banner on the
+   live lobby. */
+const STAGING_LOBBY_ENABLED: boolean = false;
+const STAGING_LOBBY_PARKED_REASON = "The on-chain staging lobby is switched off on this server.";
+
 /** #1361a: how much of a transcript a room keeps and sends. Mirrors `CHAT_HISTORY_LIMIT` in `ChatBox.tsx`. */
 const CHAT_HISTORY_LIMIT = 200;
 const MAX_CHAT_MESSAGE_LENGTH = 500;
@@ -276,6 +294,17 @@ const publicDoc = (doc: SandboxRoomDoc | null): SandboxRoomDoc | null => {
     players: doc.players.map((player) => ({ ...player, hasPin: Boolean(seatPins?.[player.id]) })),
   };
 };
+
+/* ==================================================================
+    LIVE-0: LOOPBACK ONLY
+   ==================================================================
+   `http.listen(port)` with no host binds EVERY interface -- the local network, and anything else routed to
+   this machine -- while the startup line said `127.0.0.1` (LIVE-1 B-8). Nothing on the playtest path needs
+   more than loopback: two tabs here connect to 127.0.0.1, and a tunnelled playtest reaches this server only
+   through `playtest-proxy.js`, which runs on this machine and forwards to 127.0.0.1. So it binds loopback,
+   and `start.ts` prints this same constant, so the banner cannot say one thing while the socket does
+   another. Where a deployment binds is LIVE-5's question, deliberately not a flag here. */
+export const GAME_SERVER_BIND_HOST = "127.0.0.1";
 
 export interface GameServerOptions {
   port: number;
@@ -1006,16 +1035,24 @@ export function createGameServer(options: GameServerOptions): {
           return;
         }
 
-        /* ---- THE STAGING LOBBY (#1361b) ---- on any socket; the list is public. */
+        /* ---- THE STAGING LOBBY (#1361b) ---- on any socket; the list is public. PARKED (LIVE-0): see
+           `STAGING_LOBBY_ENABLED` -- the hello still carries the public sandbox list, and nothing else. */
         if (frame.kind === "lobby-hello") {
           await lobbyReady;
           lobbySockets.add(socket);
-          send(socket, { kind: "lobby", rooms: lobbyRooms() } as never);
+          send(socket, { kind: "lobby", rooms: STAGING_LOBBY_ENABLED ? lobbyRooms() : [] } as never);
           /* #1415: and the list a table actually joins by. */
           send(socket, { kind: "rooms", rooms: await sandboxRooms() } as never);
           return;
         }
         if (frame.kind === "lobby-watch") {
+          if (!STAGING_LOBBY_ENABLED) {
+            lobbyWatch.delete(socket);
+            if (typeof frame.roomId === "string" && frame.roomId) {
+              send(socket, { kind: "lobby-room", roomId: frame.roomId, room: null, seats: [] } as never);
+            }
+            return;
+          }
           await lobbyReady;
           if (typeof frame.roomId === "string" && frame.roomId) {
             lobbyWatch.set(socket, frame.roomId);
@@ -1032,8 +1069,14 @@ export function createGameServer(options: GameServerOptions): {
           return;
         }
         if (frame.kind === "lobby-write") {
-          await lobbyReady;
           const ask: LobbyWriteFrame = frame;
+          if (!STAGING_LOBBY_ENABLED) {
+            // eslint-disable-next-line no-console
+            console.log("  lobby: refused a staging-lobby write -- the staging lobby is parked on this server (LIVE-0)");
+            send(socket, { kind: "lobby-ack", requestId: ask.requestId, ok: false, reason: STAGING_LOBBY_PARKED_REASON } as never);
+            return;
+          }
+          await lobbyReady;
           const write = ask.write;
           if (!write || typeof write !== "object" || typeof write.op !== "string") {
             send(socket, { kind: "lobby-ack", requestId: ask.requestId, ok: false, reason: "That is not a lobby write." } as never);
@@ -1412,7 +1455,7 @@ export function createGameServer(options: GameServerOptions): {
     });
   });
 
-  http.listen(options.port);
+  http.listen(options.port, GAME_SERVER_BIND_HOST);
 
   return {
     http,

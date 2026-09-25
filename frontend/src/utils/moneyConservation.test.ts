@@ -11,9 +11,13 @@
 //
 // TWO EXCEPTIONS, AND THEY ARE THE ONLY TWO. `SetupGame` deals the money onto the table, and the Yellow
 // Sign's cash award mints (`stage === "mark"`: "award the corporation cash equal to 0.5x the deleted train's
-// depot value" with no payer) -- which is Stage 9's S9-1 and is deliberately NOT fixed here. Anything else
-// that moves the total is a defect, and this sweep is how it gets found instead of being discovered as a bank
-// that broke four Operating Rounds early.
+// depot value" with no payer). UR-5 (2026-09-25): that mint is INTENDED VARIANT LAW, not an open defect -- the
+// owner ruled OD-UR-4 = 4-A (backlog D-40): the award is found money, created outside the Bank. (This header once
+// called it "Stage 9's S9-1, deliberately NOT fixed here"; S9-1 closed the Sign's derivation, and the mint stayed
+// by ruling.) On a pinned table the Mark rides the run's own entry (UR-3); the corpus is unpinned and holds only
+// the legacy request's shape, which is what `MINTS_BY_DESIGN` names. Anything else that moves the total is a
+// defect, and this sweep is how it gets found instead of being discovered as a bank that broke four Operating
+// Rounds early.
 //
 // BEFORE THIS BATCH THE CORPUS FAILED THIS EVERYWHERE: 23 non-conserving entries in JUNO-FCJ, 27 in JUNO-Z6C,
 // 17 in JUNO-3XD, 10 in JUNO-CV4. Every one was an auction purchase the bank was never credited for, a
@@ -185,6 +189,10 @@ describe("the whole corpus conserves money after every replayed entry", () => {
   }
 
   it("the Yellow Sign award is still the one minting rule left, and it is Stage 9's (S9-1)", () => {
+    /* UR-5 (2026-09-25; UR audit Appendix B item 11): OD-UR-4 = 4-A (backlog D-40) rules the Mark's award MINTED --
+       "found money, created outside the Bank" -- so this case pins intended variant law, not a defect awaiting S9-1.
+       The two sentences below that expected S9-1 to take the exemption away are corrected in place; the case's title is
+       kept as it was, because the Batch 7.3 / 7.5 records cite it by name -- read its "(S9-1)" as history. */
     /* Recorded as a POSITIVE assertion rather than as a silent exemption. Batch 7.1 wrote it on JUNO-Z6C 203,
        where the Mark awards the C&O half the taken train's depot value with no payer.
 
@@ -199,17 +207,19 @@ describe("the whole corpus conserves money after every replayed entry", () => {
              later entry in the log places, so every later entry -- 203's Mark included -- is a reducer no-op.
        So the stored corpus mints nothing at all under version 5: not because S9-1 was fixed (it was not), but
        because the one log that exercised it stops at 34. What this case pins is therefore both halves: the
-       corpus list is empty for the reason above, AND the Mark still mints on a board that reaches it. If S9-1
-       is ever closed the second half fails and the exemption in `MINTS_BY_DESIGN` comes out with it. The freeze
-       itself is characterized step by step in `gameHistory.test.ts` (Batch 7.5).
+       corpus list is empty for the reason above, AND the Mark still mints on a board that reaches it. (UR-5: S9-1
+       closed (#1661) without touching the mint, and OD-UR-4 keeps it -- the exemption in `MINTS_BY_DESIGN` stays; it
+       would come out only with a ruling that the award has a payer.) The freeze itself is characterized step by step
+       in `gameHistory.test.ts` (Batch 7.5).
 
        SLICE 8.2 RE-PIN (S8-5, #1610 / #1614; the Stage-8 design's corpus table predicted it): THE CORPUS REACHES 203
        AGAIN. The freeze at 34 was the float-time home hold, which is retired: B&O floated at 33 owes nothing in the
        Stock Round, and its home is owed at its first operating turn (after 40), where the development corpus's policy
        supplies the choice recorded at 32 (I15). The log runs on, and at 203 C&O's Mark (`YellowSignEvent`, stage
        "mark", its 3-train taken) credits C&O $90 -- half the train's depot value, with no payer: the Batch 7.1
-       observation, back on the stored corpus. S9-1 is unchanged and still Stage 9's; the corpus list below names that
-       one entry, and the synthetic board after it still pins the rule itself. Nothing else in the corpus mints. */
+       observation, back on the stored corpus. (UR-5: the mint is variant law -- OD-UR-4, D-40 -- not S9-1's open
+       item.) The corpus list below names that one entry, and the synthetic board after it still pins the rule itself.
+       Nothing else in the corpus mints. */
     const z6c = logs.find((entry) => entry.name === "server/JUNO-Z6C");
     if (z6c) {
       const steps = walk(z6c.entries);

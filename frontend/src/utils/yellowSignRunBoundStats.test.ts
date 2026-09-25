@@ -13,6 +13,9 @@
 //   * the stage lands on its bearer for the Carcosan Railways accolade (#1421), as the request's entry did;
 //   * the run's figures (lifetime revenue, the ledger's earnings) keep their basis -- the run as priced at its own
 //     entry, in full -- exactly what they booked when the Mark was a later entry of its own;
+//     (UR-5, 2026-09-25: SUPERSEDED -- OD-UR-6 is decided (D-49 / D-51) and implemented: the corporation is credited
+//     the revenue it was paid and each train the printed routes it completed, a Mark-nullified route nothing. The two
+//     pins below that carried this basis now carry the ruled one; `unpredictableRevenueStats.test.ts` is UR-5's suite.)
 //   * the boundary fog's gilded train is `taken` and the fog is a stage on its bearer;
 //   * a gift above the phase is not the phase, so nobody is credited with rushing it (OD-UR-3).
 //
@@ -48,6 +51,7 @@ const S = require("./yellowSignRunBoundSupport") as typeof import("./yellowSignR
 const { applySandboxAction } = require("../gameEngine/sandboxSession") as typeof import("../gameEngine/sandboxSession");
 const { derivePhase } = require("../gameEngine/gamePhase") as typeof import("../gameEngine/gamePhase");
 const YS = require("../gameEngine/yellowSign") as typeof import("../gameEngine/yellowSign");
+const GV = require("../gameEngine/gameVariants") as typeof import("../gameEngine/gameVariants");
 const { gameHistoryFrom } = require("./gameHistory") as typeof import("./gameHistory");
 
 const { CO, BO, NYC, CPR, P1, P2, P3, GULF, TWO_ROUTE, THREE_ROUTE, LONG_ROUTE, urBoard, runMsg, partsFor, companyOf } = S;
@@ -122,9 +126,14 @@ describe("the Mark, applied by the run's own entry", () => {
     expect(carcosan.detail).toBe("Marked by an Outer God");
   });
 
-  it("the run's figures keep their basis: $110 printed in full, $50 to the 2 and $60 to the 3 (OD-UR-6 is open)", () => {
-    expect(autopsyOf(history, CO).lifetimeRevenue).toBe(110);
-    expect(ledger(history, CO, "2")?.earned).toBe(50);
+  /* UR-5 (OD-UR-6 decided -- D-49 / D-51): this pinned UR-3's interim basis, "$110 printed in full, $50 to the 2 and
+     $60 to the 3 (OD-UR-6 is open)". The ruled basis replaces it: the corporation is credited what it was PAID -- the
+     kept run, re-rolled -- and the Mark's route was never completed, so the taken 2 earns nothing and the 3 its printed
+     $60 (`unpredictableRevenueStats.test.ts` C). */
+  it("the run's figures are the settled run's (UR-5): the kept run as paid, nothing to the taken 2, $60 to the 3", () => {
+    expect(autopsyOf(history, CO).lifetimeRevenue).toBe(Number(companyOf(after, CO).last_route_revenue));
+    expect(autopsyOf(history, CO).lifetimeRevenue).toBe(GV.rollTurnRevenue(60, partsFor(MARK_110)).adjusted);
+    expect(ledger(history, CO, "2")?.earned).toBe(0);
     expect(ledger(history, CO, "3")?.earned).toBe(60);
   });
 });
@@ -150,9 +159,15 @@ describe("the Mark and a Gentle Rust Final Run in ONE entry", () => {
     expect(top(history, "rust-belt")).toEqual([P1, 80, null]);
   });
 
-  it("the run keeps its full basis -- both routes, as they were priced at the run", () => {
-    expect(autopsyOf(history, CO).lifetimeRevenue).toBe(110);
-    expect(ledger(history, CO, "3")?.earned).toBe(60);
+  /* UR-5 (OD-UR-6 decided): this pinned "the run keeps its full basis -- both routes, as they were priced at the run".
+     The ruled basis: the 2's Final Run COMPLETED its $50 route (the train is destroyed at the settlement, after the run),
+     so it keeps it; the Sign's 3 never made it to the station, so its $60 is not earned; the corporation is credited the
+     kept run as paid. */
+  it("the run is booked as it settled (UR-5): the 2's completed Final Run earns $50, the Sign's 3 nothing", () => {
+    expect(autopsyOf(history, CO).lifetimeRevenue).toBe(Number(companyOf(after, CO).last_route_revenue));
+    expect(autopsyOf(history, CO).lifetimeRevenue).toBe(GV.rollTurnRevenue(50, partsFor(MARK_110)).adjusted);
+    expect(ledger(history, CO, "2")?.earned).toBe(50);
+    expect(ledger(history, CO, "3")?.earned).toBe(0);
   });
 });
 

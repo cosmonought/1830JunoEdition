@@ -52,7 +52,18 @@ import { depotCostFor, depotInventory, derivePhase, trainTier } from "../gameEng
 import { citySlotCount } from "../gameEngine/stationTokens";
 import { boardFor, withRules } from "../gameEngine/boardSelection";
 import { flavorBucketFor, resolveVariants, revenueFlavourClause, rollTurnRevenue } from "../gameEngine/gameVariants";
-import { describeFogAtSetEnd, runBeforeSign, runYellowSignWritten, yellowSignStageApplied } from "../gameEngine/yellowSign";
+import {
+  describeFogAtSetEnd,
+  fogIsDue,
+  narrateRunYellowSign,
+  resolveFlavourLine,
+  runBeforeSign,
+  runWithoutTrain,
+  runYellowSignWritten,
+  yellowSignStageApplied,
+  yellowSignStateFromCompanies,
+  type FlavourResolution,
+} from "../gameEngine/yellowSign";
 import { variantCueFor } from "./variantSfx";
 import { tileStock } from "./tileSupply";
 import { describeFleetLosses, describeReprieveExpiries } from "../gameEngine/sandboxSession";
@@ -79,8 +90,9 @@ export interface CorporationSample {
   holdings: ReadonlyArray<readonly [string, number]>;
   ipoPercentage: number;
   poolPercentage: number;
-  /** #1414/#1420: the printed revenue of its run IN this round (written as the run happens); 0 in a round
-   *  it did not run. */
+  /** #1414/#1420: the revenue of its run IN this round (written as the run happens); 0 in a round it did not
+   *  run. UR-5 (OD-UR-6.1): the figure the run left for the Dividends step -- the revenue actually paid, after the
+   *  Unpredictable Revenue die and the Yellow Sign's Mark; the printed total wherever no die is rolled. */
   revenue: number;
   treasury: number;
   trains: readonly string[];
@@ -125,11 +137,17 @@ export type { Accolade } from "./accolades";
    sold on is not lost, even without a per-train line. */
 export interface FleetLedgerRow {
   model: string;
-  /** How many of this model the corporation acquired over the game. */
+  /** How many of this model the corporation acquired over the game -- "n = number of trains the corporation held"
+   *  (#1431's ruling), so a Carcosa gift is counted here: it was held. It is not a purchase count (UR-5, OD-UR-6.3:
+   *  the gift is in no purchase statistic, and it cost nothing -- `paid`). */
   count: number;
   paid: number;
+  /** UR-5 (OD-UR-6.1 / 6.2): the PRINTED value of every route this model's trains successfully completed -- never a
+   *  share of the corporation's die-adjusted payout, and nothing for a route the Yellow Sign's Mark nullified. Under
+   *  Unpredictable Revenue the rows need not add up to the corporation's revenue. */
   earned: number;
-  /** Runs this model took part in, counting each train separately. */
+  /** Runs this model took part in, counting each train separately. UR-5 (OD-UR-6.2): only routes it completed -- a
+   *  train the Mark took "never made it to the station". */
   trainRounds: number;
   fates: { rusted: number; discarded: number; sold: number; traded: number; taken: number; kept: number };
 }
@@ -200,7 +218,8 @@ function sample(state: GameStateResponse, label: string, atIndex: number): Round
       holdings: company.player_holdings.map((h) => [h.player, h.percentage] as const),
       ipoPercentage: company.ipo_pool_percentage,
       poolPercentage: company.bank_pool_percentage,
-      revenue: num(company.printed_route_revenue ?? company.last_route_revenue),
+      // UR-5 (OD-UR-6.1): the paid figure first -- identical to the printed one wherever no die is rolled.
+      revenue: num(company.last_route_revenue ?? company.printed_route_revenue),
       treasury: num(company.treasury),
       trains: [...(company.owned_trains ?? [])],
     })),
@@ -268,6 +287,111 @@ function trainsRemoved(before: readonly string[], after: readonly string[]): str
   return removed;
 }
 
+/* ==================================================================
+    UR-5 (OD-UR-6 -- owner rulings D-49 / D-51; UR-F8): A RUN IS BOOKED AS IT SETTLED, AT TWO LEVELS
+   ==================================================================
+   OWNER RULINGS (2026-09-24): "Corporation / turn-level revenue statistics use the ACTUAL PAID revenue after the
+   Unpredictable Revenue die adjustment." "Individual train / route statistics use the PRINTED value of that train's
+   successfully completed route" -- "not an allocation of the paid total": no proportional, equal or die-adjusted
+   per-train figure is invented, and the per-train figures are not expected to add up to the paid turn total. "A
+   Mark-nullified route does not count as earned -- the train disappeared instead of completing the run; it never made
+   it to the station."
+   TWO LEVELS, TWO FIGURES, ONE MOMENT. What a run earned is read off the board the run SETTLED, never off the run as
+   priced before the Sign acted:
+     THE CORPORATION / TURN -- `last_route_revenue`, the figure the run leaves for the Dividends step (which must
+       declare exactly it, audit C1): the die applied, and on a pinned table the Mark's kept run re-rolled. The
+       Workhorse and lifetime revenue, the Juggernaut, the Revenue-per-OR chart, and through lifetime revenue the White
+       Elephant and the Little Engine, read it. Where no die is rolled it IS the printed total, so the standard game
+       books exactly the figure it always has.
+     THE TRAIN / ROUTE -- `last_run_breakdown`, each completed route's own printed figure. Master of the Line and the
+       fleet ledger's "earned" and "runs" read it. On a pinned table the Mark lands in the run's own entry (UR-3) and has
+       already taken the nullified route out of the breakdown, so it is never booked -- not booked and then subtracted.
+   THE LEGACY REQUEST (an unpinned board's `YellowSignEvent`, a later entry of the same turn) settles the run a second
+   time, so its Mark amends the turn's booking before any tally is drawn from it (the `YellowSignEvent` block below):
+   the history never ends up claiming a route that the Sign nullified was completed. The tallies themselves are drawn
+   from the bookings once, at the end -- which is also what lets a max (Master of the Line, the Juggernaut) be amended.
+   Derived statistics only: no board, message, digest or version changes. */
+interface RunBooking {
+  companyId: number;
+  /** The corporation's turn -- the round it ran in and itself -- so a legacy request finds the run it settles. */
+  turn: string;
+  /** The round label the run happened in, for the Juggernaut's and Master of the Line's sentences. */
+  round: string;
+  ticker: string;
+  /** The corporation's president as the run settled -- who presided over the run. */
+  holder: string | null;
+  /** The corporation / turn level: the revenue the run left for the Dividends step (OD-UR-6.1). */
+  paid: number;
+  /** The train / route level: every route completed, at its printed figure (OD-UR-6.1 / 6.2). */
+  completed: Array<{ model: string; printed: number }>;
+  /** The round's sample the run is written onto (#1420), kept so a legacy Mark can correct it. */
+  sample: CorporationSample | undefined;
+  /** #1429 / UR-5 (UR-F9): whether the flavour line printed for this run was one of the Cowboy's animal lines. */
+  wildlife: boolean;
+  /** Whether the authority accepted the run (its `routes_run_this_turn` rose). A refused run is booked as it always was
+   *  -- at the figures the board still holds -- but a legacy Sign settles only the run that was accepted. */
+  accepted: boolean;
+  /** Whether the corporation's Dividends step has paid this run out. From then on the paid figure is history: a legacy
+   *  request delayed past it (UR-F2's shape) moves `last_route_revenue`, not the money that was paid. */
+  declared: boolean;
+}
+
+/** The corporation / turn figure a run leaves: what the Dividends step pays (OD-UR-6.1). */
+function paidRevenueOf(company: Pick<PublicCompanyState, "last_route_revenue" | "printed_route_revenue">): number {
+  return Math.max(0, num(company.last_route_revenue ?? company.printed_route_revenue));
+}
+
+/** The routes a run completed, each at its printed figure (OD-UR-6.1 / 6.2), off the board the run settled. */
+function completedRoutesOf(company: Pick<PublicCompanyState, "last_run_breakdown">): RunBooking["completed"] {
+  return (company.last_run_breakdown ?? []).map((run) => ({ model: run.model, printed: Math.max(0, num(run.printed_revenue)) }));
+}
+
+const turnOf = (state: GameStateResponse, companyId: number) => `${roundKey(state)}#${companyId}`;
+
+/* ==================================================================
+    UR-5 (UR-F9): THE COWBOY COUNTS THE LINE THE TABLE READ, NOT THE ONE THE DIE DREW
+   ==================================================================
+   #1429's Farmhand (The Cowboy) counts "run-ins with the wildlife" -- the runs whose flavour line was one of the animal
+   lines. It re-derived the NATURAL line off the run's recorded seed, which is the line the Yellow Sign REPLACES when a
+   stage fires (a Mark or a gift prints the Sign's own clause) and SKIPS when the Mark's line is spent (#1044) -- and it
+   asked even of a run that earned nothing, for which the shell prints no line at all (#1017's guard). So it now asks the
+   same resolution the shell prints (`App.tsx`, the run's narration): on a pinned table `narrateRunYellowSign` -- the
+   stage the authority applied, off its record -- and on an unpinned one the legacy resolution, asked of the flags every
+   replay writes (`resolveFlavourLine`, the shell's own call; a playtest waiver is not in the run's message, so a
+   forced stage is caught where it lands, in the `YellowSignEvent` block). The roll is the turn's as it was run: the kept
+   total plus a route the Mark nullified (`runBeforeSign`), exactly the total the shell rolls. */
+function printedFlavourOf(
+  before: GameStateResponse,
+  after: GameStateResponse,
+  companyId: number,
+  turnSeed: number,
+  routeOrder: readonly number[] | null,
+): { resolution: FlavourResolution; bucket: ReturnType<typeof flavorBucketFor> } | null {
+  const company = companyById(after, companyId);
+  if (!company) return null;
+  const asRun = runBeforeSign(company, runYellowSignWritten(before, after, companyId), routeOrder).printed;
+  if (asRun <= 0) return null; // #1017: a run that earned nothing prints no flavour line
+  const parts = { macroRound: before.macro_round_number ?? 0, subRound: before.sub_round_index ?? 0, companyId, turnSeed };
+  const roll = rollTurnRevenue(asRun, parts);
+  const bucket = flavorBucketFor(roll);
+  if (typeof before.rules_engine_version === "number") {
+    return { resolution: narrateRunYellowSign(before, after, companyId, parts).resolution, bucket };
+  }
+  const ran = companyById(before, companyId);
+  const resolution = resolveFlavourLine({
+    naturalLine: revenueFlavourClause(roll, parts),
+    bucket,
+    ticker: ran?.ticker ?? company.ticker,
+    parts,
+    state: yellowSignStateFromCompanies(before.public_companies),
+    phaseTier: derivePhase(before)?.tier ?? "2",
+    owned: ran?.owned_trains,
+    fogDue: fogIsDue(ran, before.macro_round_number ?? 0),
+    forced: null,
+  });
+  return { resolution, bucket };
+}
+
 function parsePayload(entry: ReplayEntry): Record<string, Record<string, unknown>> | null {
   try {
     const parsed = JSON.parse(entry.payload) as unknown;
@@ -318,7 +442,8 @@ export function gameHistoryFrom(log: readonly SandboxAction[], policy: ReplayPol
   const rustCauseByTier = new Map<string, string | null>();
   const dumps: Tally = new Map();
   const walls: Tally = new Map();
-  let bestRun: { holder: string | null; ticker: string; model: string; revenue: number; round: string } | null = null;
+  // UR-5: every run, as it settled -- the run tallies below are drawn from these once, after the replay.
+  const runBookings: RunBooking[] = [];
   // Keyed by company id.
   const lifetimeRevenue: Tally = new Map();
   const dividendsPaid: Tally = new Map();
@@ -426,44 +551,25 @@ export function gameHistoryFrom(log: readonly SandboxAction[], policy: ReplayPol
       } else {
         bump(withheld, String(companyId), Math.max(0, treasuryDelta));
       }
+      /* UR-5 (OD-UR-6.1): the turn's run is now PAID -- its figure is what the Dividends step paid on, whatever a
+         later legacy request does to `last_route_revenue` (the Sign's own `YellowSignEvent` block below). Only a
+         declaration that took effect (money or the cursor moved) pays anything out. */
+      const tookEffect = paid > 0 || treasuryDelta !== 0 || before.operating_sub_phase !== after.operating_sub_phase;
+      const turn = turnOf(before, companyId);
+      const run = [...runBookings].reverse().find((booking) => booking.turn === turn && booking.accepted);
+      if (run && tookEffect) run.declared = true;
     }
 
-    /* MASTER OF THE LINE and lifetime revenue: the run the reducer priced. */
+    /* MASTER OF THE LINE and lifetime revenue: the run the reducer priced -- booked as it SETTLED (UR-5, OD-UR-6:
+       `RunBooking` above), the corporation's paid figure and each completed route's printed one. */
     if (kind === "RunMultipleRoutes") {
       const companyId = Number(body.protocol_id);
       const company = companyById(after, companyId);
       if (company) {
-        /* UR-3: ON A PINNED TABLE THE MARK LANDS IN THIS ENTRY, so `after` holds the KEPT run. These tallies keep the
-           basis they have always had -- the run as it was priced, in full, at its own entry -- because what a Mark
-           should do to the statistics is OD-UR-6, which is open (`runBeforeSign` puts the nullified route back). */
-        const runBasis = runBeforeSign(
-          company,
-          runYellowSignWritten(before, after, companyId),
-          Array.isArray(body.train_indices) ? (body.train_indices as number[]) : null,
-        );
-        const printed = runBasis.printed;
-        bump(lifetimeRevenue, String(companyId), printed);
-        /* #1429: JUGGERNAUT (the biggest single run), the rounds a corporation operated (the divisor for the
-           Dividend Machine, the Little Engine and the White Elephant), and THE FARMHAND -- the Unpredictable
-           Revenue flavour read back off the run's own recorded seed, the way the shell composed it, and
-           classed by the sound it would have played: an animal's, or not. */
-        bump(runsOperated, String(companyId), 1);
-        if (printed > (peakRun.get(String(companyId)) ?? 0)) {
-          peakRun.set(String(companyId), printed);
-          peakRunRound.set(String(companyId), roundLabelOf(before));
-        }
-        for (const run of runBasis.breakdown) {
-          bump(ledgerEarned, `${companyId}:${run.model}`, num(run.printed_revenue));
-          bump(ledgerRounds, `${companyId}:${run.model}`, 1);
-        }
-        const turnSeed = typeof body.revenue_seed === "number" ? body.revenue_seed : null;
-        if (turnSeed !== null && resolveVariants(after.variants).unpredictableRevenue && company.president) {
-          const parts = { macroRound: before.macro_round_number ?? 0, subRound: before.sub_round_index ?? 0, companyId, turnSeed };
-          const roll = rollTurnRevenue(printed, parts);
-          const bucket = flavorBucketFor(roll);
-          const cue = variantCueFor({ line: revenueFlavourClause(roll, parts), bucket });
-          if (cue.audio && ANIMAL_SOUNDS.has(cue.audio)) bump(animalRuns, company.president, 1);
-        }
+        /* UR-3 left these tallies on the run as it was priced in full (`runBeforeSign` put a Mark-nullified route back)
+           while OD-UR-6 was open. It is decided (D-49 / D-51): `after` is the settled run -- on a pinned table the Mark
+           has already landed in this entry, taken its train's route out of the breakdown and re-rolled the kept run --
+           so it is read as it stands. */
         /* ==================================================================
             DESIGN NOTE 1420: THE OR'S REVENUE IS WRITTEN ONTO THE OR'S SAMPLE
            ==================================================================
@@ -472,16 +578,42 @@ export function gameHistoryFrom(log: readonly SandboxAction[], policy: ReplayPol
            the OR's sample was taken nobody had run yet and every figure was zero. The fix is not a different
            field but a different moment: each run is written onto the sample of the round it happened in, as
            it happens. The figure is the one the reducer priced, and the Final sample (which repeats the last
-           OR) is left alone -- the chart does not draw it. */
-        const current = rounds[rounds.length - 1];
-        const entry = current?.corporations.find((c) => c.companyId === companyId);
-        if (entry) entry.revenue = printed;
-        for (const run of runBasis.breakdown) {
-          const revenue = num(run.printed_revenue);
-          if (bestRun === null || revenue > bestRun.revenue) {
-            bestRun = { holder: company.president ?? null, ticker: company.ticker, model: run.model, revenue, round: roundLabelOf(before) };
+           OR) is left alone -- the chart does not draw it. (UR-5: the paid figure, OD-UR-6.1.) */
+        const booking: RunBooking = {
+          companyId,
+          turn: turnOf(before, companyId),
+          round: roundLabelOf(before),
+          ticker: company.ticker,
+          holder: company.president ?? null,
+          paid: paidRevenueOf(company),
+          completed: completedRoutesOf(company),
+          sample: rounds[rounds.length - 1]?.corporations.find((c) => c.companyId === companyId),
+          wildlife: false,
+          accepted: (company.routes_run_this_turn ?? 0) > (companyById(before, companyId)?.routes_run_this_turn ?? 0),
+          declared: false,
+        };
+        if (booking.sample) booking.sample.revenue = booking.paid;
+        /* #1429: JUGGERNAUT (the biggest single run -- drawn from the bookings after the replay, UR-5), the rounds a
+           corporation operated (the divisor for the Dividend Machine, the Little Engine and the White Elephant), and
+           THE FARMHAND -- the Unpredictable Revenue flavour read back off the run's own recorded seed, the way the
+           shell composed it, and classed by the sound it would have played: an animal's, or not. (UR-5, UR-F9: the
+           line the shell PRINTED -- `printedFlavourOf`.) */
+        bump(runsOperated, String(companyId), 1);
+        const turnSeed = typeof body.revenue_seed === "number" ? body.revenue_seed : null;
+        if (turnSeed !== null && resolveVariants(after.variants).unpredictableRevenue) {
+          const printedLine = printedFlavourOf(
+            before,
+            after,
+            companyId,
+            turnSeed,
+            Array.isArray(body.train_indices) ? (body.train_indices as number[]) : null,
+          );
+          if (printedLine) {
+            const cue = variantCueFor({ line: printedLine.resolution.line, bucket: printedLine.bucket, stage: printedLine.resolution.stage });
+            booking.wildlife = cue.audio !== null && ANIMAL_SOUNDS.has(cue.audio);
           }
         }
+        runBookings.push(booking);
         const routes = Array.isArray(body.routes) ? (body.routes as Array<Array<{ hex?: string }>>) : [];
         lastRoutes.set(companyId, new Set(routes.flat().map((stop) => stop?.hex ?? "").filter(Boolean)));
       }
@@ -657,23 +789,49 @@ export function gameHistoryFrom(log: readonly SandboxAction[], policy: ReplayPol
     }
 
     /* FLEET ADMIRAL, SALVAGER, EARLY ADOPTER: trains that joined a roster, and how. */
+    /* ==================================================================
+        UR-5 (OD-UR-6.3 -- owner ruling D-49; UR-F8): ACQUIRED IS NOT BOUGHT -- THE CARCOSA GIFT IS NOT A PURCHASE
+       ==================================================================
+       OWNER RULING (2026-09-24): "A synthetic Carcosa gift is NOT a purchase. The gift counts for no purchase-count
+       statistic, no 'bought a Diesel' statistic, and no purchase-based accolade (The Early Adopter and analogous
+       purchase-derived awards). A later acquisition of the formerly gilded train by another corporation through the
+       Blood Price IS a genuine train purchase by the buyer" -- Diesel-purchase treatment included.
+       EVERY OTHER WAY A TRAIN JOINS A ROSTER IS A PURCHASE, which is why this stays a roster diff rather than a list of
+       message kinds: the Depot (`BuyHardwareFromPool`, the forced `EmergencyBuyHardware`), the Bank Pool (the same
+       message naming a returned model -- a cured copy's provenance travels with it, and it is still just bought), the
+       Diesel exchange, and another corporation (`BuyTrainFromCorporation`, the offer's derived settlement included --
+       and so the Blood Price, whose buyer receives an ordinary, cured train). The Mark, the fog, rust, a discard and a
+       Gentle Rust Final Run only ever take trains away.
+       THE GIFT IS THE ONE COPY THAT ARRIVES GILDED. `applyYellowSignOutcome` writes the train, its provenance and its
+       gilding (`carcosan_trains`) together -- #1089's "the one moment they are the same train for the same reason" --
+       and no purchase delivers a gilded copy: the Blood Price burns the gilding as it sells, and an ordinary copy's
+       sale leaves the gilding where it was (UR-4). So a copy is a gift exactly when this entry gilded it at the
+       corporation that received it, on either road the gift takes (the run's own entry on a pinned table, a legacy
+       `YellowSignEvent` on an unpinned one). Not provenance: a cured copy keeps its synthetic origin (`ghost_trains`)
+       through the Blood Price and a Bank Pool purchase, and both of those are purchases (OD-UR-5(a), 6.3).
+       WHAT THE GIFT STILL IS, is a train the corporation HELD: the fleet ledger counts it among "the number of trains
+       the corporation held" (#1431's ruling), at $0 -- nothing was paid -- and books its runs and its fate like any
+       other train's. Fleet Admiral ("bought more trains") and the Early Adopter ("the first corporation to buy a
+       Diesel") count purchases only. The standard game has no gift, so it counts exactly what it always did. */
     for (const company of after.public_companies) {
       const was = companyById(before, company.company_id);
       const gained = trainsRemoved(company.owned_trains ?? [], was?.owned_trains ?? []); // after minus before
       if (gained.length === 0) continue;
-      bump(trainsBought, String(company.company_id), gained.length);
-      /* #1431: what this gain cost, split across the models gained (one, in every case but a multi-train
-         buy summarised as one message). The treasury drop plus, on a forced buy, the president's own cash. */
+      const gildedNow = trainsRemoved(company.carcosan_trains ?? [], was?.carcosan_trains ?? []); // gilded by this entry
+      const bought = trainsRemoved(gained, gildedNow); // gained minus the gifts
+      // Only a real purchase opens a Fleet Admiral entry: a zero would still carry the fleet-value tie-break (#1416).
+      if (bought.length > 0) bump(trainsBought, String(company.company_id), bought.length);
+      /* #1431: what this gain cost, split across the models BOUGHT (one, in every case but a multi-train buy
+         summarised as one message). The treasury drop plus, on a forced buy, the president's own cash. A gift costs
+         nothing (UR-5). */
       const drop = Math.max(0, num(was?.treasury) - num(company.treasury));
       const personal =
         kind === "EmergencyBuyHardware" && actor && Number(body.protocol_id) === company.company_id
           ? Math.max(0, (cashOf(before, actor) ?? 0) - (cashOf(after, actor) ?? 0))
           : 0;
-      for (const model of gained) {
-        bump(ledgerCount, `${company.company_id}:${model}`, 1);
-        bump(ledgerPaid, `${company.company_id}:${model}`, (drop + personal) / gained.length);
-      }
-      if (firstDiesel === null && gained.some((model) => trainTier(model) === "D")) {
+      for (const model of gained) bump(ledgerCount, `${company.company_id}:${model}`, 1);
+      for (const model of bought) bump(ledgerPaid, `${company.company_id}:${model}`, (drop + personal) / bought.length);
+      if (firstDiesel === null && bought.some((model) => trainTier(model) === "D")) {
         firstDiesel = { companyId: company.company_id, ticker: company.ticker, president: company.president ?? null, round: roundLabelOf(before) };
       }
     }
@@ -748,12 +906,46 @@ export function gameHistoryFrom(log: readonly SandboxAction[], policy: ReplayPol
         bump(signStages, bearer, 1);
         signStageNames.set(bearer, [...(signStageNames.get(bearer) ?? []), stage]);
       }
+      /* ==================================================================
+          UR-5 (OD-UR-6.2): THE LEGACY REQUEST SETTLES THE RUN IT FOLLOWS, SO ITS BOOKING IS AMENDED
+         ==================================================================
+         On an unpinned board (the development corpus, a Firestore room) the Sign is this later entry of the same
+         turn, and a Mark here takes its train and that train's route out of the run the turn's booking holds -- the
+         route `runWithoutTrain` finds (by fleet slot, then by model), the one the reducer's own Mark arm removes. So
+         the turn's booking is amended before any tally is drawn:
+           THE TRAIN / ROUTE LEVEL -- the taken train's route is not a completed route (6.2); every other train's
+           route was completed and keeps its printed figure. Read off `runWithoutTrain(.., null)` on the board the
+           Mark acted on, which is the reducer's remainder without its roll -- the same answer whether the arm then
+           re-rolled the kept run (a request, or a stored Mark carrying its seed) or, for a stored Mark without one,
+           zeroed both totals under #1046's ruling ("it receives no standard route revenue for this submission") and
+           left the breakdown standing: that ruling took the corporation's REVENUE, which is the level below.
+           THE CORPORATION / TURN LEVEL -- what the board now leaves for the Dividends step (the kept run re-rolled, or
+           nothing), unless the Dividends step has already paid this run out: a request delayed past it (UR-F2's
+           shape) changes `last_route_revenue`, not the money that was paid, and the paid figure stands.
+         Only the ACCEPTED run of THIS turn, while it stands (`routes_run_this_turn`): a request delayed into another
+         turn cannot rewrite a run it did not follow, and a refused duplicate is never the run the Sign settles. And
+         whatever stage landed, the line the table read for that run was the Sign's, not an animal's (UR-F9). */
+      if (applied && company && companyAfter && (company.routes_run_this_turn ?? 0) > 0) {
+        const turn = turnOf(before, Number(body.protocol_id));
+        const booking = [...runBookings].reverse().find((entry) => entry.turn === turn && entry.accepted);
+        if (booking) {
+          if (applied.stage === "mark" && applied.model) {
+            booking.completed = completedRoutesOf({ last_run_breakdown: runWithoutTrain(company, applied.model, null).breakdown });
+            if (!booking.declared) {
+              booking.paid = paidRevenueOf(companyAfter);
+              if (booking.sample) booking.sample.revenue = booking.paid;
+            }
+          }
+          booking.wildlife = false;
+        }
+      }
     }
     /* UR-3 (OD-UR-1, OD-UR-2): ON A PINNED TABLE NO `YellowSignEvent` REACHES THE LOG. The Mark and the gift ride the
        run's entry (read off the record it wrote, never off a fleet diff a Final Run expiry shares), and the fog falls
        at the end of an Operating-Round set (`describeFogAtSetEnd`). Booked exactly as the request's entry above books
        them -- the same fate, the same stage on the same bearer -- so what the accolades count is unchanged (OD-UR-6 is
-       open); only where the event is found has moved. */
+       open); only where the event is found has moved. (UR-5: OD-UR-6 is decided and implemented at the run's booking
+       above -- the Mark's route earns nothing, the gift is bought by nobody; the fates and the stages are as here.) */
     if (kind === "RunMultipleRoutes") {
       const companyId = Number(body.protocol_id);
       const record = runYellowSignWritten(before, after, companyId);
@@ -785,7 +977,14 @@ export function gameHistoryFrom(log: readonly SandboxAction[], policy: ReplayPol
          ORDINARY one minted a Redeemer for a sale that paid no Blood Price. It reads the entry's own effect now: the
          seller's gilding of that model burned by this sale, which is the Blood Price and nothing else (only the
          Blood Price clears a gilding in a sale; the fog never rides a sale). The credit stays on the buying president
-         -- the one who pays it (OD-UR-5(b)). The broad statistics basis (OD-UR-6) is UR-5's, not this line's. */
+         -- the one who pays it (OD-UR-5(b)). The broad statistics basis (OD-UR-6) is UR-5's, not this line's.
+         UR-5 (OD-UR-6.3): and the Blood Price is a genuine purchase BY THE BUYER -- the roster diff above counts the
+         buyer's cured copy as bought (Fleet Admiral, a Diesel's Early Adopter), the treasury drop below is its train
+         spend, the seller's copy is `sold` and the seller is credited with no purchase. CARCOSAN RAILWAYS UNDER
+         OD-UR-5(b): the accolade is #1421's "a president who lived through any of the sequence without paying the Blood
+         Price"; the one who pays it is the buyer (the Redeemer) and always was here, so a seller released by a buyer's
+         Blood Price still saw the Sign and never paid it -- it keeps the accolade. Only the blurb's "to be rid of it",
+         which reads as though the Carcosan president could pay, is stale: copy, UR-6. */
       const gildingOf = (company: typeof seller) => (company?.carcosan_trains ?? []).filter((entry) => entry === model).length;
       const gildingBurned = gildingOf(seller) > gildingOf(companyById(after, Number(body.seller_protocol_id)));
       if (seller && buyer?.president && gildingBurned && moved.includes(model)) {
@@ -821,6 +1020,28 @@ export function gameHistoryFrom(log: readonly SandboxAction[], policy: ReplayPol
 
   const final = engine.snapshot.state;
   if (entries.length > 0) rounds.push(sample(final, "Final", lastIndex));
+
+  /* UR-5 (OD-UR-6): the run tallies, drawn once from the runs as they settled (`RunBooking`) -- the corporation's
+     paid figure for lifetime revenue and the Juggernaut, each completed route's printed figure for the fleet ledger and
+     Master of the Line. In log order, and a later figure must BEAT an earlier one, exactly as the running tallies did:
+     a tie keeps the first run to reach it. */
+  let bestRun: { holder: string | null; ticker: string; model: string; revenue: number; round: string } | null = null;
+  for (const booking of runBookings) {
+    const id = String(booking.companyId);
+    bump(lifetimeRevenue, id, booking.paid);
+    if (booking.paid > (peakRun.get(id) ?? 0)) {
+      peakRun.set(id, booking.paid);
+      peakRunRound.set(id, booking.round);
+    }
+    for (const route of booking.completed) {
+      bump(ledgerEarned, `${booking.companyId}:${route.model}`, route.printed);
+      bump(ledgerRounds, `${booking.companyId}:${route.model}`, 1);
+      if (bestRun === null || route.printed > bestRun.revenue) {
+        bestRun = { holder: booking.holder, ticker: booking.ticker, model: route.model, revenue: route.printed, round: booking.round };
+      }
+    }
+    if (booking.wildlife && booking.holder) bump(animalRuns, booking.holder, 1);
+  }
 
   /* ---- #1416: every accolade in the catalogue, from its tally ---- */
 

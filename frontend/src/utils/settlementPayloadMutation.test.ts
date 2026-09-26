@@ -11,8 +11,10 @@
 // the code the Rust contract uses for the same refusal (`BadSeq` -> `BAD_SEQ`, ...). Then the TypeScript-only hazards:
 // unsafe numbers, malformed hex, stale SET-0A field names, strings with no UTF-8 form, getters that answer twice.
 //
-// `SET0C_MUTATION_EXPORT=<file>` writes the wire-representable cases and their TypeScript outcome as JSON, for a Rust
-// run of `Payload::try_from` + `check_shape` over the same inputs (the SET-0C report records that comparison).
+// The wire-representable cases (the `judged` ones) are mirrored, in order, under the same names and with the same
+// expected outcome, by `contracts/escrow/tests/set0c_vectors.rs` (`Payload::try_from` + `check_shape` + the 2..7 and
+// sum rules). `SET0C_MUTATION_EXPORT=<file>` writes them and their TypeScript outcome as JSON for a by-hand diff
+// against that table; a case added here belongs there too.
 
 import { readFileSync, writeFileSync } from "fs";
 import { join } from "path";
@@ -73,7 +75,7 @@ function diffOffsets(a: Uint8Array, c: Uint8Array): number[] {
 }
 const within = (offsets: number[], from: number, to: number) => offsets.length > 0 && offsets.every((o) => o >= from && o < to);
 
-/* Wire-representable cases and their outcome, for the Rust comparison run. */
+/* Wire-representable cases and their outcome (mirrored by the Rust table in contracts/escrow/tests/set0c_vectors.rs). */
 const exported: Array<{ name: string; usage: SettlementPayloadUse; wire: Loose; ts: string }> = [];
 function judged(name: string, payload: SettlementPayloadV1, usage: SettlementPayloadUse): string {
   const outcome = code(() => checkSettlementPayloadV1(payload, usage));

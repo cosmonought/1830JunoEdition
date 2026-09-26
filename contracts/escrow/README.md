@@ -45,6 +45,7 @@ profile, and the library denies `clippy::arithmetic_side_effects` outside tests.
 |---|---|
 | `vectors` | byte layout, digests and RFC 6979 signatures reproduced from the Python generator, replayed on chain |
 | `golden` | SET-0A P1–P13, Q16 and the 13 case previews, off chain and on chain |
+| `set0c_vectors` | SET-0C: the TypeScript builder's vectors (`frontend/src/utils/__fixtures__/settlement/settlementPayloadVectorsV1.json`) re-derived by the crate — domains, roster hashes, payload bytes, SETTLE/CONSENT digests, shape per message, payouts and dust, JSON form — plus the 71 TypeScript mutation outcomes and single-byte decoder classification |
 | `funding`, `start`, `consent_key`, `checkpoint`, `settlement`, `challenge`, `resolver`, `liveness`, `annul`, `admin`, `terminal` | each message's rules, refusals and boundaries |
 | `matrix` | every execute message × every state × paused/unpaused × six caller roles, against an oracle written from §9.1 as amended by the closed decisions |
 | `invariants` | the seventeen escrow invariants: targeted tests plus a seeded random-sequence checker with an independent payout/refund model, which also runs the emergency rotation and finally drains every live game under a permanent pause |

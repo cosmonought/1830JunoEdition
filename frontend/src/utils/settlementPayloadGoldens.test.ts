@@ -11,7 +11,7 @@
 // from each of the thirteen golden boards (rebuilt in-repo, pinned by `terminal_state_hash_v1`) through
 // `buildSettlementPayloadV1`, and requires its `appraisal_state_hash`, `settlement_weights`, reason byte, seat order and
 // previewed payouts to equal all three. The resulting payloads are pinned as SET-0C's own vector file, which the
-// Python checker next to it re-derives from the frozen specification.
+// escrow crate (`contracts/escrow/tests/set0c_vectors.rs`) and the Python checker next to it both re-derive.
 //
 // It also pins the properties the builder exists for: one snapshot for hash and weights, chain seat order never turn
 // order, no player or principal id in the bytes, and settlement certified for rules engine v10 only.
@@ -417,7 +417,7 @@ describe("the SET-0C golden payload vector file", () => {
       real_fields: "appraisal_state_hash, settlement_weights, reason, kind and seat order are the boards' real values (equal to SET-0A rev 2)",
       test_fields: `domain inputs, log_len, log_hash (= SHA-256("18JUNO/TEST/log")), state_schema_version, signer_key_id and issued_at are test values`,
       checked_by:
-        "frontend/src/utils/__fixtures__/settlement/verify_set0c_payload_vectors.py (the escrow crate's independent Python encoder, run by hand); the Rust crate was run over this file once in SET-0C (report section 7) -- no committed Rust test reads it yet",
+        "contracts/escrow/tests/set0c_vectors.rs (the escrow crate re-derives every domain, byte, digest, shape, payout and dust value; cargo test) and frontend/src/utils/__fixtures__/settlement/verify_set0c_payload_vectors.py (the escrow crate's independent Python encoder, run by hand)",
       domains: domains.map((d) => ({
         name: d.name,
         supplied_by_rust_vectors: d.supplied,

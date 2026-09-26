@@ -494,6 +494,19 @@ describe("LIVE-3A: answers are matched by the submission they name", () => {
     expect(entries).toEqual([[entry(0)], [entry(1, { actor: "p-bob" })], []]);
   });
 
+  it("only an identical entry ID is a duplicate: the same index with a DIFFERENT id is handed on, never dropped", () => {
+    const { wire, entries } = live();
+    wire.open();
+    wire.deliver(hello([entry(0), entry(1)]));
+    // The very same entry again (same id): suppressed -- it would be applied twice.
+    wire.deliver(applied([entry(1)]));
+    // A DIFFERENT entry claiming index 1 is not a duplicate. It is a divergence the shell must see (its id-prefix
+    // check rebuilds), so it is delivered -- a client never silently keeps one history because the index matched.
+    const other = entry(1, { id: "e1-other", actor: "p-bob" });
+    wire.deliver(applied([other]));
+    expect(entries).toEqual([[entry(0), entry(1)], [], [other]]);
+  });
+
   it("a reconnect keeps an IN-FLIGHT submission pending, and settles it when its entry lands", async () => {
     const { client, wire, stale, reconnect } = live();
     wire.open();

@@ -7,6 +7,7 @@ import { WebSocket } from "ws";
 
 import { createGameServer, type GameServerOptions } from "../gameServer";
 import type { LogStore } from "../fileLogStore";
+import { StoreDefiniteError } from "../persistence/storeResult";
 import { RoomSession, type ServerLogEntry } from "../../../frontend/src/utils/roomSession";
 import {
   DEFAULT_SANDBOX_SCENARIO,
@@ -61,7 +62,9 @@ export interface HeldAppend {
   room: string;
   entries: readonly ServerLogEntry[];
   release(): void;
-  /** Reject the append; `landed` puts the entries in the store first (bytes reached the file, then an error). */
+  /** Reject the append. LIVE-3B: without `landed` it is a DEFINITE failure (nothing reached storage); with
+   *  `landed` the entries are put in the store first and the rejection is UNCERTAIN (bytes reached the file, then an
+   *  error the store could not settle by its redo). */
   fail(landed?: boolean): void;
 }
 
@@ -69,6 +72,7 @@ export interface HeldSave {
   room: string;
   doc: SandboxRoomDoc;
   release(): void;
+  /** A definite failure (before the rename): the previous document stands. */
   fail(): void;
 }
 
@@ -81,9 +85,12 @@ export function controlledStore() {
   const control = {
     holdAppends: false,
     holdSaves: false,
-    /** Immediate append failures, in order. */
+    /** Immediate append failures, in order: `landed: false` is definite, `landed: true` uncertain (LIVE-3B). */
     failAppends: [] as Array<{ landed: boolean }>,
+    /** Definite room-document failures (before the rename). */
     failSaves: 0,
+    /** Uncertain room-document failures (after the rename), which the actor holds for a restart. */
+    failSavesUncertain: 0,
     failLoads: 0,
     loadDelayMs: 0,
   };
@@ -115,7 +122,7 @@ export function controlledStore() {
             },
             fail: (landed = false) => {
               if (landed) land(room, entries);
-              reject(new Error("injected append failure"));
+              reject(landed ? new Error("injected uncertain append failure") : new StoreDefiniteError("injected append failure"));
             },
           });
         });
@@ -123,7 +130,9 @@ export function controlledStore() {
       const failure = control.failAppends.shift();
       if (failure) {
         if (failure.landed) land(room, entries);
-        return Promise.reject(new Error("injected append failure"));
+        return Promise.reject(
+          failure.landed ? new Error("injected uncertain append failure") : new StoreDefiniteError("injected append failure"),
+        );
       }
       land(room, entries);
       return Promise.resolve();
@@ -144,13 +153,19 @@ export function controlledStore() {
               docs.set(room, JSON.stringify(doc));
               resolve();
             },
-            fail: () => reject(new Error("injected save failure")),
+            fail: () => reject(new StoreDefiniteError("injected save failure")),
           });
         });
       }
       if (control.failSaves > 0) {
         control.failSaves -= 1;
-        return Promise.reject(new Error("injected save failure"));
+        return Promise.reject(new StoreDefiniteError("injected save failure"));
+      }
+      if (control.failSavesUncertain > 0) {
+        // The rename landed, then an error the store could not settle: the new document IS stored.
+        control.failSavesUncertain -= 1;
+        docs.set(room, JSON.stringify(doc));
+        return Promise.reject(new Error("injected uncertain save failure"));
       }
       docs.set(room, JSON.stringify(doc));
       return Promise.resolve();

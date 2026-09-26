@@ -22,6 +22,7 @@ import * as path from "path";
 
 import { createGameServer, GAME_SERVER_BIND_HOST, trustClaimedIdentity } from "./gameServer";
 import { createFileLogStore } from "./fileLogStore";
+import { acquireDataLock, LOCK_STALE_AFTER_MS, type DataLock } from "./persistence/processLock";
 import { RULES_ENGINE_VERSION, SUPPORTED_RULES_ENGINE_VERSIONS } from "../../frontend/src/gameEngine/rulesVersion";
 
 /* ==================================================================
@@ -74,19 +75,105 @@ if (legacyLogsFlag !== "refuse" && legacyLogsFlag !== "development-corpus") {
 }
 const legacyLogs: "refuse" | "development-corpus" = legacyLogsFlag;
 
-createGameServer({
-  port,
-  build,
-  resolveIdentity: trustClaimedIdentity,
-  /* #1225: local play explains itself. The same condition as the insecure identity, because they describe
-     the same situation -- a table at a kitchen table, where the cost of a verbose frame is nothing and the
-     cost of an unexplained divergence is an evening. */
-  explainDivergence: true,
-  /* #1250: the log is on disk and synced before any client is answered, so a restart restores every room
-     it was serving. `start.ts` used to say "a restart starts an empty room"; it no longer does. */
-  store: createFileLogStore(dataDir),
-  legacyLogs,
-});
+/* ==================================================================
+    LIVE-3B (§8.8, F-12): ONE SERVER PER DATA DIRECTORY
+   ==================================================================
+   Two servers on one `data/` fork every log they both write. So before anything is read, this process takes the
+   directory's lock (`persistence/processLock.ts`): a lock directory with a heartbeat, taken over only when its
+   heartbeat is stale, by an atomic rename only one racer can win. Refused -> exit 2, like every other startup
+   refusal here. Lost later (another process took it over) -> this one is FENCED and exits 3 at once, writing
+   nothing more. A write the store cannot settle even by redoing it -> exit 4 after telling the table: the load
+   after a restart is the only safe way to learn what the disk holds (§8.2 step 7, the fsyncgate rule). */
+const EXIT_LOCK_REFUSED = 2;
+const EXIT_FENCED = 3;
+const EXIT_STORE_UNCERTAIN = 4;
+
+let lock: DataLock | null = null;
+let stopping = false;
+
+async function main(): Promise<void> {
+  const acquired = await acquireDataLock(dataDir, {
+    // eslint-disable-next-line no-console
+    log: (line) => console.warn(line),
+    onLost: (reason) => {
+      // eslint-disable-next-line no-console
+      console.error(
+        `\nFENCED: ${reason}\nAnother game server owns ${dataDir} now. This process stops writing and exits (${EXIT_FENCED}).`,
+      );
+      process.exit(EXIT_FENCED);
+    },
+  });
+  if (!acquired.ok) {
+    // eslint-disable-next-line no-console
+    console.error(
+      [
+        `Refusing to start: ${acquired.reason}.`,
+        "",
+        "Only one game server may use a data directory at a time. If that server is still running, stop it first",
+        "(or pass --data <another directory>). If it crashed, its lock goes stale after " +
+          `${LOCK_STALE_AFTER_MS / 1000} s without a heartbeat and the next start takes it over.`,
+      ].join("\n"),
+    );
+    process.exit(EXIT_LOCK_REFUSED);
+  }
+  const held = acquired.lock;
+  lock = held;
+  if (acquired.tookOver) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `  took over a stale data-directory lock (no heartbeat for ${Math.round(acquired.tookOver.ageMs / 1000)} s` +
+        `${acquired.tookOver.previous ? `, last held by pid ${acquired.tookOver.previous.pid} on ${acquired.tookOver.previous.host}` : ""})`,
+    );
+  }
+
+  const failFast = (room: string, detail: string) => {
+    if (stopping) return;
+    stopping = true;
+    // eslint-disable-next-line no-console
+    console.error(
+      `\nSTORE UNCERTAIN in ${room}: ${detail}\n` +
+        "The server could not confirm that a write reached the disk, even after redoing it. It stops now rather than\n" +
+        "write anything behind it; restart it, and the load will read what the disk really holds (LIVE-3 §8.2).",
+    );
+    // A moment for the `unavailable` frames already queued to reach the table, then out.
+    setTimeout(() => {
+      held.releaseSync();
+      process.exit(EXIT_STORE_UNCERTAIN);
+    }, 1_500).unref();
+  };
+
+  createGameServer({
+    port,
+    build,
+    resolveIdentity: trustClaimedIdentity,
+    /* #1225: local play explains itself. The same condition as the insecure identity, because they describe
+       the same situation -- a table at a kitchen table, where the cost of a verbose frame is nothing and the
+       cost of an unexplained divergence is an evening. */
+    explainDivergence: true,
+    /* #1250: the log is on disk and synced before any client is answered, so a restart restores every room
+       it was serving. LIVE-3B: positional, looped, synced writes; a torn tail repaired at load; a damaged log held
+       for `tools/logDoctor.ts`; and every write first checks that this process still holds the lock. */
+    store: createFileLogStore(dataDir, { onRestartRequired: failFast, writerCheck: () => held.verify() }),
+    legacyLogs,
+    onRestartRequired: failFast,
+  });
+
+  const release = (code: number) => {
+    if (stopping) return;
+    stopping = true;
+    void held.release().finally(() => process.exit(code));
+  };
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"] as const) {
+    try {
+      process.on(signal, () => release(0));
+    } catch {
+      // a signal this platform does not have
+    }
+  }
+  process.on("exit", () => held.releaseSync());
+
+  printBanner(held.instanceId);
+}
 
 /* ==================================================================
     THE STARTUP LINE CARRIES A STAMP, AND THE REASON IS #1238's PLAYTEST
@@ -105,13 +192,23 @@ const builtAt = (() => {
   }
 })();
 
-// eslint-disable-next-line no-console
-console.log(
-  `1830 game server listening on ws://${GAME_SERVER_BIND_HOST}:${port} (build "${build}", INSECURE local identity)\n` +
-    `  compiled ${builtAt} UTC -- if a fix you just made is not in this stamp, the server was not rebuilt\n` +
-    `  rooms stored in ${dataDir} -- one .log.jsonl per room, synced before any client is answered (#1250)\n` +
-    `  rules engine version ${RULES_ENGINE_VERSION} (supports [${SUPPORTED_RULES_ENGINE_VERSIONS.join(", ")}]); ` +
-    (legacyLogs === "development-corpus"
-      ? "LEGACY LOGS ADMITTED (--legacy-logs development-corpus): unpinned rooms replay under this engine (#1520)"
-      : "unpinned (legacy) rooms are held, not replayed -- pass --legacy-logs development-corpus for local playtests (#1520)"),
-);
+function printBanner(instanceId: string): void {
+  // eslint-disable-next-line no-console
+  console.log(
+    `1830 game server listening on ws://${GAME_SERVER_BIND_HOST}:${port} (build "${build}", INSECURE local identity)\n` +
+      `  compiled ${builtAt} UTC -- if a fix you just made is not in this stamp, the server was not rebuilt\n` +
+      `  rooms stored in ${dataDir} -- one .log.jsonl per room, synced before any client is answered (#1250)\n` +
+      `  data directory locked by instance ${instanceId} (pid ${process.pid}); a second server on it is refused (LIVE-3B)\n` +
+      `  rules engine version ${RULES_ENGINE_VERSION} (supports [${SUPPORTED_RULES_ENGINE_VERSIONS.join(", ")}]); ` +
+      (legacyLogs === "development-corpus"
+        ? "LEGACY LOGS ADMITTED (--legacy-logs development-corpus): unpinned rooms replay under this engine (#1520)"
+        : "unpinned (legacy) rooms are held, not replayed -- pass --legacy-logs development-corpus for local playtests (#1520)"),
+  );
+}
+
+main().catch((error) => {
+  // eslint-disable-next-line no-console
+  console.error("Refusing to start:", error);
+  lock?.releaseSync();
+  process.exit(EXIT_LOCK_REFUSED);
+});

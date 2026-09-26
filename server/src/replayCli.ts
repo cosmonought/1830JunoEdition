@@ -31,6 +31,9 @@
 // Usage:  node server/dist/server/src/replayCli.js <path-to-exported-log.json>
 
 import { readFileSync } from "fs";
+import { basename } from "path";
+
+import { scanLog } from "./persistence/logFormat";
 
 /* #1500: the game machine, through its front door -- the same one `gameServer.ts` uses. */
 import {
@@ -61,11 +64,23 @@ interface RawLog {
 function main(): void {
   const path = process.argv[2];
   if (!path) {
-    console.error("usage: replayCli <path-to-exported-log.json>");
+    console.error("usage: replayCli <path-to-exported-log.json | room.log.jsonl>");
     process.exit(2);
   }
 
-  const raw = JSON.parse(readFileSync(path, "utf8")) as RawLog;
+  /* LIVE-3B: A STORED LOG TOO, not only an export -- `logDoctor`'s workflow replays a repaired `.log.jsonl` copy
+     here before it is installed. Read through the store's own reader, so a torn or corrupt file is refused rather
+     than half-read, and the store's `batch` stamps never reach replay. */
+  const raw: RawLog = /\.jsonl(\.repaired)?$/.test(path)
+    ? (() => {
+        const scan = scanLog(readFileSync(path));
+        if (scan.classification !== "clean") {
+          console.error(`  REFUSED: ${path} is ${scan.classification.toUpperCase()} -- ${scan.detail}. Run tools/logDoctor on it.`);
+          process.exit(3);
+        }
+        return { roomCode: basename(path).replace(/\.log\.jsonl(\.repaired)?$/, ""), actions: scan.entries as unknown as ExportedEntry[] };
+      })()
+    : (JSON.parse(readFileSync(path, "utf8")) as RawLog);
   /* #1188: an export carries `msg`; the stored log carries `payload`. Normalised once so a file from either
      source replays identically -- and so a future exporter carrying `payload` verbatim needs no change
      here. */

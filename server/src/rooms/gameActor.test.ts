@@ -12,6 +12,8 @@ import * as os from "os";
 import * as path from "path";
 
 import { createFileLogStore, type LogStore } from "../fileLogStore";
+import { COMMITTED } from "../persistence/storeResult";
+import { stripStoreMetadata } from "../persistence/logFormat";
 import { RoomEngine } from "../../../frontend/src/gameEngine/replayLog";
 import { stateDigest } from "../../../frontend/src/gameEngine";
 import {
@@ -68,9 +70,9 @@ describe("the executor", () => {
     const counters = newActorCounters();
     const port: GameStorePort = {
       loadLog: async () => [],
-      appendBatch: async () => undefined,
+      appendBatch: async () => COMMITTED,
       loadRoomDoc: async () => null,
-      saveRoomDoc: async () => undefined,
+      saveRoomDoc: async () => COMMITTED,
     };
     const actor = new GameActor({
       gameId: "UNIT",
@@ -235,9 +237,9 @@ describe("the registry", () => {
               await sleep(20);
               return [];
             },
-            appendBatch: async () => undefined,
+            appendBatch: async () => COMMITTED,
             loadRoomDoc: async () => null,
-            saveRoomDoc: async () => undefined,
+            saveRoomDoc: async () => COMMITTED,
           },
           newSession: () => probeSession("reg"),
           restore: (session, entries) => session.restore(entries),
@@ -405,14 +407,15 @@ describe("durable before visible", () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "live3a-p2b-"));
     const file = createFileLogStore(directory);
     let delayNext = false;
+    // LIVE-3B: the server asks the classified `appendBatch` when a store has it, so that is what is delayed.
     const store: LogStore = {
       ...file,
-      appendLog: async (room, entries) => {
+      appendBatch: async (room, entries) => {
         if (delayNext) {
           delayNext = false;
           await sleep(40);
         }
-        return file.appendLog(room, entries);
+        return file.appendBatch(room, entries);
       },
     };
     const lines = () =>
@@ -813,10 +816,63 @@ describe("the point of no return (E-9, E-13)", () => {
     }
   });
 
-  test("21: a rejected append whose entries DID land stands -- applied, never 'refused but stored'", async () => {
+  test("21 (LIVE-3B): an append the store could not settle is `unavailable` and held for a restart -- never read back, never 'refused but stored'", async () => {
     const control = controlledStore();
+    // The bytes reached the file, then an error the store's own redo could not settle.
     control.control.failAppends.push({ landed: true });
-    const { server, port } = await startServer({ store: control.store });
+    const restarts: string[] = [];
+    const first = await startServer({ store: control.store, onRestartRequired: (room) => restarts.push(room) });
+    try {
+      const bob = await Client.open(first.port, BOB);
+      bob.hello(ROOM);
+      await bob.next((f) => f.kind === "catch-up");
+      const alice = await Client.open(first.port, ALICE);
+      alice.hello(ROOM);
+      await alice.next((f) => f.kind === "catch-up");
+      alice.submit(SETUP, { baseIndex: -1, submissionId: "d1" });
+      const unsure = await alice.answerTo("d1");
+      assert.deepEqual([unsure.kind, unsure.code], ["refused", "unavailable"], "never `retry` for a move that may have landed");
+      assert.equal((await bob.next((f) => f.kind === "status")).state, "unavailable");
+      assert.deepEqual(restarts, [ROOM]);
+      assert.equal(first.server.counters.restartRequired, 1);
+
+      // The store DOES show the entry, and the 3A rule would have adopted it by reading it back. 3B never reads.
+      await sleep(1_200); // past the 3A read-back's first attempt (1 s)
+      assert.deepEqual(control.indices(ROOM), [0]);
+      assert.equal(control.calls.loadLog, 1, "no read-back after an uncertain write");
+      assert.equal(first.server.counters.reconciled, 0);
+      assert.equal(bob.of("applied").length, 0, "nothing the actor could not vouch for was sent");
+      // While held, writes are refused and nothing reaches the store.
+      alice.submit(PASS, { baseIndex: -1, submissionId: "while-held" });
+      assert.equal((await alice.answerTo("while-held")).code, "unavailable");
+      assert.equal(control.calls.appendLog, 1);
+      await Promise.all([alice.close(), bob.close()]);
+    } finally {
+      await stopServer(first.server);
+    }
+
+    // The restart reads what the store really holds, and the nonce makes the retry a catch-up, not a second deal.
+    const second = await startServer({ store: control.store });
+    try {
+      const back = await Client.open(second.port, ALICE);
+      back.hello(ROOM);
+      const hello = await back.next((f) => f.kind === "catch-up");
+      assert.deepEqual((hello.entries as SeenEntry[]).map((e) => e.submission_id), ["d1"]);
+      back.submit(SETUP, { baseIndex: -1, submissionId: "d1" });
+      assert.equal((await back.answerTo("d1")).kind, "catch-up");
+      assert.deepEqual(control.indices(ROOM), [0]);
+      await back.close();
+    } finally {
+      await stopServer(second.server);
+    }
+  });
+});
+
+describe("E-11: a store call that does not answer in time (LIVE-3B)", () => {
+  test("29, 30: a late append holds the game; the next task of that game does not run; when it lands it is adopted exactly once", async () => {
+    const control = controlledStore();
+    control.control.holdAppends = true;
+    const { server, port } = await startServer({ store: control.store, storeTimeoutMs: 60 });
     try {
       const bob = await Client.open(port, BOB);
       bob.hello(ROOM);
@@ -825,55 +881,108 @@ describe("the point of no return (E-9, E-13)", () => {
       alice.hello(ROOM);
       await alice.next((f) => f.kind === "catch-up");
       alice.submit(SETUP, { baseIndex: -1, submissionId: "d1" });
-      const answer = await alice.answerTo("d1");
-      assert.equal(answer.kind, "applied");
-      const heard = await bob.next((f) => f.kind === "applied");
-      assert.deepEqual((heard.entries as SeenEntry[]).map((e) => e.index), [0]);
+      const held = await control.nextHeldAppend();
+
+      // Past the timeout: uncertain, not failed. The submitter is told `unavailable`, every subscriber is told.
+      const unsure = await alice.answerTo("d1");
+      assert.deepEqual([unsure.kind, unsure.code], ["refused", "unavailable"]);
+      assert.equal((await bob.next((f) => f.kind === "status")).state, "unavailable");
+      assert.equal(server.counters.storeTimeouts, 1);
+
+      // The next task of this game queues behind the late call: it neither runs nor writes.
+      bob.submit(BUY, { baseIndex: -1, submissionId: "b1" });
+      await sleep(150);
+      assert.equal(bob.frames.filter((f) => f.inReplyTo === "b1").length, 0, "the next task did not run");
+      assert.equal(control.calls.appendLog, 1, "nothing was written behind the late call");
+      // A reconnecting hello meanwhile is served the committed view and told the move is in flight.
+      const tab = await Client.open(port, ALICE);
+      tab.hello(ROOM);
+      const reconnect = await tab.next((f) => f.kind === "catch-up");
+      assert.deepEqual([reconnect.entries, reconnect.inFlight], [[], ["d1"]]);
+
+      // It lands: adopted once -- history to every subscriber, the submitter included -- and the hold lifts.
+      held.release();
+      for (const client of [alice, bob, tab]) {
+        const landed = await client.next((f) => f.kind === "applied", `the late deal for ${client.claim}`);
+        assert.equal(landed.inReplyTo, undefined);
+        assert.deepEqual((landed.entries as SeenEntry[]).map((e) => e.submission_id), ["d1"]);
+      }
+      assert.equal((await bob.next((f) => f.kind === "status")).state, "live");
+      // Only now does the queued task run -- on the committed deal (stale: it was sent from -1).
+      const b1 = await bob.answerTo("b1");
+      assert.equal(b1.kind, "catch-up");
+      await sleep(30);
+      for (const client of [alice, bob, tab]) {
+        const deals = client.seen().filter((e) => e.submission_id === "d1");
+        assert.equal(new Set(deals.map((e) => e.id)).size, 1, `${client.claim} was handed exactly one deal`);
+      }
+      assert.equal(alice.of("abandoned").length + tab.of("abandoned").length, 0);
       assert.deepEqual(control.indices(ROOM), [0]);
-      await Promise.all([alice.close(), bob.close()]);
+      assert.equal(server.counters.lateAdopted, 1);
+      assert.equal(server.counters.restartRequired, 0);
+      await Promise.all([alice.close(), bob.close(), tab.close()]);
     } finally {
       await stopServer(server);
     }
   });
 
-  test("an append whose outcome cannot be read back holds the game `unavailable` until the store answers", async () => {
+  test("30: a late append that then DEFINITELY fails is abandoned -- nothing stored, the hold lifts, the next move is judged afresh", async () => {
     const control = controlledStore();
-    control.control.failAppends.push({ landed: true });
-    control.control.failLoads = 0;
-    const { server, port } = await startServer({ store: control.store });
+    control.control.holdAppends = true;
+    const { server, port } = await startServer({ store: control.store, storeTimeoutMs: 40 });
     try {
-      const bob = await Client.open(port, BOB);
-      bob.hello(ROOM);
-      await bob.next((f) => f.kind === "catch-up"); // loaded now, so the next read that fails is the read-back
       const alice = await Client.open(port, ALICE);
       alice.hello(ROOM);
       await alice.next((f) => f.kind === "catch-up");
-      control.control.failLoads = 1;
       alice.submit(SETUP, { baseIndex: -1, submissionId: "d1" });
-      const unsure = await alice.answerTo("d1");
-      assert.deepEqual([unsure.kind, unsure.code], ["refused", "unavailable"]);
-      assert.equal((await bob.next((f) => f.kind === "status")).state, "unavailable");
-
-      // While held: reads are served from the committed view, writes are refused, the submission is in flight.
-      await alice.close();
-      const again = await Client.open(port, ALICE);
-      again.hello(ROOM);
-      const hello = await again.next((f) => f.kind === "catch-up");
-      assert.deepEqual([hello.entries, hello.inFlight], [[], ["d1"]]);
-      assert.equal((await again.next((f) => f.kind === "status")).state, "unavailable");
-      again.submit(PASS, { baseIndex: -1, submissionId: "while-held" });
-      assert.equal((await again.answerTo("while-held")).code, "unavailable");
-
-      // The store answers on the next read-back: what it holds stands, and the game resumes.
-      const resumed = await bob.next((f) => f.kind === "applied", "the entry that landed");
-      assert.deepEqual((resumed.entries as SeenEntry[]).map((e) => e.submission_id), ["d1"]);
-      assert.equal((await bob.next((f) => f.kind === "status")).state, "live");
-      assert.equal((await again.next((f) => f.kind === "applied")).inReplyTo, undefined);
-      await sleep(20);
-      assert.equal(again.of("abandoned").length, 0);
-      assert.equal(server.counters.reconciled, 1);
+      const held = await control.nextHeldAppend();
+      assert.equal((await alice.answerTo("d1")).code, "unavailable");
+      held.fail(false);
+      // The hold lifts, and the move that never landed is abandoned to the player who was told it was in flight.
+      assert.equal((await alice.next((f) => f.kind === "status" && f.state === "live")).state, "live");
+      const gone = await alice.next((f) => f.kind === "abandoned");
+      assert.equal(gone.inReplyTo, "d1");
+      assert.deepEqual(control.indices(ROOM), []);
+      control.control.holdAppends = false;
+      alice.submit(SETUP, { baseIndex: -1, submissionId: "d2" });
+      assert.equal((await alice.answerTo("d2")).kind, "applied");
       assert.deepEqual(control.indices(ROOM), [0]);
-      await Promise.all([again.close(), bob.close()]);
+      await alice.close();
+    } finally {
+      await stopServer(server);
+    }
+  });
+
+  test("31: a late append that never settles keeps the game unavailable and asks for a restart", async () => {
+    const control = controlledStore();
+    control.control.holdAppends = true;
+    const restarts: string[] = [];
+    const { server, port } = await startServer({
+      store: control.store,
+      storeTimeoutMs: 30,
+      storeRestartAfterMs: 80,
+      onRestartRequired: (room, detail) => restarts.push(`${room}: ${detail}`),
+    });
+    try {
+      const alice = await Client.open(port, ALICE);
+      alice.hello(ROOM);
+      await alice.next((f) => f.kind === "catch-up");
+      alice.submit(SETUP, { baseIndex: -1, submissionId: "d1" });
+      await control.nextHeldAppend(); // never released
+      assert.equal((await alice.answerTo("d1")).code, "unavailable");
+      await until(() => restarts.length === 1, "the restart request");
+      assert.match(restarts[0], /has still not settled/);
+      // Still held: a hello is served the committed prefix and told it is unavailable; a move does not run.
+      const carol = await Client.open(port, CAROL);
+      carol.hello(ROOM);
+      assert.deepEqual((await carol.next((f) => f.kind === "catch-up")).entries, []);
+      assert.equal((await carol.next((f) => f.kind === "status")).state, "unavailable");
+      alice.submit(PASS, { baseIndex: -1, submissionId: "after" });
+      await sleep(60);
+      assert.equal(alice.frames.filter((f) => f.inReplyTo === "after").length, 0);
+      assert.equal(control.calls.appendLog, 1);
+      assert.deepEqual(control.indices(ROOM), []);
+      await Promise.all([alice.close(), carol.close()]);
     } finally {
       await stopServer(server);
     }
@@ -917,6 +1026,37 @@ describe("room authority is serialized with the moves (§21 LIVE-3A, F-10)", () 
       log.hello(ROOM);
       assert.equal((await log.next((f) => f.kind === "catch-up" || f.kind === "error")).kind, "catch-up");
       await Promise.all([host.close(), usurper.close(), fresh.close(), log.close()]);
+    } finally {
+      await stopServer(server);
+    }
+  });
+
+  test("26 (LIVE-3B): a room document whose save could not be confirmed holds the room for a restart, and is not read back", async () => {
+    const control = controlledStore();
+    const restarts: string[] = [];
+    const { server, port } = await startServer({ store: control.store, onRestartRequired: (room) => restarts.push(room) });
+    try {
+      const host = await openRoomDoc(port, ALICE, ROOM);
+      host.roomWrite(ROOM, { op: "host", hostId: ALICE, nickname: "Alice", variants: {} });
+      await host.next((f) => f.kind === "room" && (f.doc as { hostId?: string } | null)?.hostId === ALICE);
+      const watcher = await Client.open(port, BOB);
+      watcher.hello(ROOM);
+      await watcher.next((f) => f.kind === "catch-up");
+      const usurper = await openRoomDoc(port, BOB, ROOM);
+      const loadsBefore = control.calls.loadRoomDoc;
+      control.control.failSavesUncertain = 1; // the rename landed, then an error the redo could not settle
+      usurper.roomWrite(ROOM, { op: "host", hostId: BOB, nickname: "Bob", variants: {} });
+      const refusal = await usurper.next((f) => f.kind === "error");
+      assert.equal(refusal.code, "room-write-refused");
+      assert.match(String(refusal.reason), /could not confirm/);
+      assert.equal((await watcher.next((f) => f.kind === "status")).state, "unavailable");
+      assert.deepEqual(restarts, [ROOM]);
+      assert.equal(control.calls.loadRoomDoc, loadsBefore, "the document was not read back to guess the outcome");
+      // Held: the log takes no move.
+      watcher.submit(SETUP, { baseIndex: -1, submissionId: "held-deal" });
+      assert.equal((await watcher.answerTo("held-deal")).code, "unavailable");
+      assert.deepEqual(control.indices(ROOM), []);
+      await Promise.all([host.close(), usurper.close(), watcher.close()]);
     } finally {
       await stopServer(server);
     }
@@ -987,7 +1127,9 @@ describe("restarts", () => {
       assert.equal(lines.length, 1);
       // And the restored board is the committed one: its digest is what the catch-up carries.
       const restored = probeSession("verify");
-      restored.restore(lines.map((line) => JSON.parse(line)));
+      // LIVE-3B: one line per entry still, each stamped with its batch -- store metadata, stripped before replay.
+      assert.deepEqual(JSON.parse(lines[0]).batch, [0, 0]);
+      restored.restore(lines.map((line) => stripStoreMetadata(JSON.parse(line))));
       assert.equal(stateDigest(restored.state), retry.digest);
       await back.close();
       await stopServer(second.server);

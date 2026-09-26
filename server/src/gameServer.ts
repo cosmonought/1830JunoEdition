@@ -83,13 +83,16 @@ import {
   type SandboxRoomSummary,
 } from "../../frontend/src/utils/sandboxRoomSummary";
 import type { LogStore } from "./fileLogStore";
+import { COMMITTED, outcomeOf } from "./persistence/storeResult";
 /* LIVE-3A: every mutation of a game runs on that game's actor, and every read comes from its committed view. */
 import {
   GameActor,
+  HELD_REASON,
   UNAVAILABLE_REASON,
   newActorCounters,
   type ActorCounters,
   type BatchSettlement,
+  type DocSettlement,
   type GameFaults,
   type GameStorePort,
   type Subscriber,
@@ -330,11 +333,12 @@ export interface GameServerOptions {
       DESIGN NOTE 1250: THE STORE IS AWAITED BEFORE ANYBODY IS TOLD
      ==================================================================
      Where a room's history lives. In memory when absent -- a test, the smoke run -- and on disk through
-     `fileLogStore.ts` in `start.ts`. `appendLog` is awaited between `session.submit` and the answer, so the
-     `applied` frame and the fan-out both describe entries the disk has synced; a store that rejects rolls the
-     session back (`discardAfter`) and the submitter is refused, because a move the disk does not hold did
-     not happen (#1209, read literally). The room document is saved through the same store after every write
-     and loaded with the log, so a restart restores a game whose roster still has names. */
+     `fileLogStore.ts` in `start.ts`. The append is awaited between `session.submit` and the answer, so the
+     `applied` frame and the fan-out both describe entries the disk has synced; a write the store DEFINITELY did
+     not take rolls the session back and the submitter is told `retry`, because a move the disk does not hold did
+     not happen (#1209, read literally) -- and one whose outcome the store could not settle holds the room
+     (LIVE-3B). The room document is saved through the same store, before it is published, and loaded with the
+     log, so a restart restores a game whose roster still has names. */
   store?: LogStore;
   /** #1225: send per-field digests with every answer so a diverged client can name the field itself. A
    *  local-play diagnostic; `start.ts` turns it on wherever it turns on the insecure identity, because those
@@ -350,6 +354,13 @@ export interface GameServerOptions {
   onAppend?: (room: string, entries: readonly ServerLogEntry[]) => void;
   /** Test-only fault injection for the LIVE-3A regressions (LIVE-3D generalises it). Never set by `start.ts`. */
   faults?: GameFaults;
+  /** LIVE-3B E-11: the store-call timeout inside an actor task (5 s when absent) and how long a late write may stay
+   *  unsettled before a restart is asked for (60 s). Tests shorten both. */
+  storeTimeoutMs?: number;
+  storeRestartAfterMs?: number;
+  /** LIVE-3B: a game holds a store outcome only a process restart can resolve (a write whose redo failed, or one
+   *  that never settled). `start.ts` fails fast; without it the game simply stays held. */
+  onRestartRequired?: (room: string, detail: string) => void;
 }
 
 interface Attached {
@@ -370,6 +381,11 @@ const EXPIRED_REASON = "The game server did not get to that move in time, so it 
 const LOAD_FAILED_REASON = "The game server could not load this room right now. It will keep trying.";
 /** F-10: a room document the store did not take. */
 const ROOM_SAVE_FAILED_REASON = "The server could not record that change to the room, so it was not made. Try again.";
+/** LIVE-3B (§8.7): a room document whose save could not be confirmed either way; the room is held for a restart. */
+const ROOM_SAVE_UNCONFIRMED_REASON =
+  "The server could not confirm that change to the room was recorded. The room is paused until the server restarts.";
+const docRefusal = (settled: DocSettlement): string =>
+  settled.kind === "unresolved" ? ROOM_SAVE_UNCONFIRMED_REASON : ROOM_SAVE_FAILED_REASON;
 /** E-9: a reference ties the sentence a player reads to the line in this window (LIVE-2 §11.5). */
 const errorRef = (): string => Math.random().toString(36).slice(2, 8).toUpperCase().padEnd(6, "0");
 
@@ -512,14 +528,31 @@ export function createGameServer(options: GameServerOptions): {
      without one (a test, the smoke run) the game lives in memory, exactly as before. */
   const counters = { ...newActorCounters(), submitAhead: 0, submitResync: 0, internal: 0 };
   const store = options.store;
+  /* LIVE-3B: WRITES ANSWER WITH A CLASS -- committed, definitely not, or uncertain (persistence/storeResult.ts). A
+     store with the classified methods (the file store) is asked directly; a legacy store that only resolves or
+     rejects is read conservatively: a rejection is uncertain unless it threw `StoreDefiniteError`. */
   const storePort: GameStorePort = {
     loadLog: async (code) => (store ? await store.loadLog(code) : []),
     appendBatch: async (code, entries) => {
-      if (store && entries.length > 0) await store.appendLog(code, entries);
+      if (!store || entries.length === 0) return COMMITTED;
+      if (store.appendBatch) return store.appendBatch(code, entries);
+      try {
+        await store.appendLog(code, entries);
+        return COMMITTED;
+      } catch (error) {
+        return outcomeOf(error);
+      }
     },
     loadRoomDoc: async (code) => (store ? await store.loadRoomDoc(code) : null),
     saveRoomDoc: async (code, doc) => {
-      if (store) await store.saveRoomDoc(code, doc);
+      if (!store) return COMMITTED;
+      if (store.replaceRoomDoc) return store.replaceRoomDoc(code, doc);
+      try {
+        await store.saveRoomDoc(code, doc);
+        return COMMITTED;
+      } catch (error) {
+        return outcomeOf(error);
+      }
     },
   };
   const games = new GameRegistry({
@@ -545,6 +578,9 @@ export function createGameServer(options: GameServerOptions): {
         warn: (line) => console.warn(line),
         counters,
         faults: options.faults,
+        storeTimeoutMs: options.storeTimeoutMs,
+        storeRestartAfterMs: options.storeRestartAfterMs,
+        onRestartRequired: (gameId, detail) => options.onRestartRequired?.(gameId, detail),
       }),
   });
 
@@ -983,6 +1019,11 @@ export function createGameServer(options: GameServerOptions): {
       answer({ kind: "refused", code: "unavailable", reason: UNAVAILABLE_REASON, build: options.build });
       return;
     }
+    /* LIVE-3B (§8.5, §17 class 5): a log held `corrupt` takes no move until an operator repairs it offline. */
+    if (tx.view.hold?.reason === "corrupt") {
+      answer({ kind: "refused", code: "held", reason: HELD_REASON, build: options.build });
+      return;
+    }
     const session = tx.session;
     const before = session.entries.length;
 
@@ -1419,7 +1460,7 @@ export function createGameServer(options: GameServerOptions): {
                 await tx.commitRoomDoc({ ...doc, seatPins: { ...pins, [actor]: frame.pin } }, (settled) => ({
                   after: () => {
                     if (settled.kind !== "committed") {
-                      answer(false, ROOM_SAVE_FAILED_REASON);
+                      answer(false, docRefusal(settled));
                       return;
                     }
                     /* The setter's own device holds the seat's first token, so its own log socket -- which said
@@ -1489,7 +1530,7 @@ export function createGameServer(options: GameServerOptions): {
                   (settled) => ({
                     after: () => {
                       if (settled.kind !== "committed") {
-                        answer(false, ROOM_SAVE_FAILED_REASON);
+                        answer(false, docRefusal(settled));
                         return;
                       }
                       // eslint-disable-next-line no-console
@@ -1567,7 +1608,7 @@ export function createGameServer(options: GameServerOptions): {
               await tx.commitRoomDoc(doc, (settled) => ({
                 after: () => {
                   if (settled.kind !== "committed") {
-                    refuse(ROOM_SAVE_FAILED_REASON, committed as SandboxRoomDoc | null);
+                    refuse(docRefusal(settled), committed as SandboxRoomDoc | null);
                     return;
                   }
                   taken = true;

@@ -4,8 +4,10 @@
 // server, the real `RoomSession`, the real client link (`serverLink.ts`) and real sockets.
 //
 // Several clients submit into one game at once, from seeded choices, while the store delays every append and
-// fails some -- half of those AFTER the entries reached it -- and sockets are dropped and reconnect. Whatever the
-// interleaving, the invariants hold:
+// fails some, and sockets are dropped and reconnect. LIVE-3B: the store answers with its classified outcomes --
+// some appends DEFINITELY fail (nothing written), some are uncertain and REDONE by the store (written once,
+// committed), and some answer only after the actor's store timeout (E-11), then land or definitely fail. Whatever
+// the interleaving, the invariants hold:
 //   - the store holds no duplicate index and no gap;
 //   - no client is ever sent an entry the store does not already hold at that index (checked on receipt);
 //   - no client holds two different entries at one index, is handed one entry twice, or has to resync;
@@ -23,6 +25,7 @@ import { connectServerLink, type ServerLink, type SocketLike } from "../../../fr
 import type { ServerLogEntry } from "../../../frontend/src/utils/roomSession";
 import { stateDigest } from "../../../frontend/src/gameEngine";
 import type { LogStore } from "../fileLogStore";
+import { COMMITTED, throwUnlessCommitted, type StoreWriteOutcome } from "../persistence/storeResult";
 import {
   ALICE,
   BOB,
@@ -59,33 +62,47 @@ function mulberry32(seed: number): () => number {
   };
 }
 
-/** Appends are delayed 0-3 ms; 5% fail with nothing written and 5% fail AFTER the entries were written. The log
- *  only grows, as a file does. */
+/** The actor's store timeout in this run (E-11): short, so some appends answer late. */
+const STORE_TIMEOUT_MS = 12;
+
+/** Appends are delayed 0-3 ms. 5% definitely fail (nothing written); 5% were uncertain and the store's REDO made them
+ *  durable (written once, `committed`, `redone`); 4% answer only after the actor's timeout (E-11) and then land or
+ *  definitely fail, half each. The log only grows, as a file does. */
 function faultyStore(random: () => number) {
   const log: ServerLogEntry[] = [];
   let doc: string | null = null;
-  const stats = { appends: 0, lost: 0, landed: 0, inFlight: 0 };
+  const stats = { appends: 0, lost: 0, landed: 0, late: 0, inFlight: 0 };
+  const appendBatch = async (_room: string, entries: readonly ServerLogEntry[]): Promise<StoreWriteOutcome> => {
+    stats.appends += 1;
+    stats.inFlight += 1;
+    try {
+      const roll = random();
+      if (roll >= 0.1 && roll < 0.14) {
+        stats.late += 1;
+        await sleep(STORE_TIMEOUT_MS + 5 + Math.floor(random() * 20));
+        if (random() < 0.5) return { kind: "definite", detail: "injected: late, then nothing written" };
+        log.push(...(JSON.parse(JSON.stringify(entries)) as ServerLogEntry[]));
+        return COMMITTED;
+      }
+      await sleep(Math.floor(random() * 4));
+      if (roll < 0.05) {
+        stats.lost += 1;
+        return { kind: "definite", detail: "injected: nothing written" };
+      }
+      log.push(...(JSON.parse(JSON.stringify(entries)) as ServerLogEntry[]));
+      if (roll < 0.1) {
+        stats.landed += 1;
+        return { kind: "committed", redone: true }; // written, the sync failed, the redo made it durable
+      }
+      return COMMITTED;
+    } finally {
+      stats.inFlight -= 1;
+    }
+  };
   const store: LogStore = {
     loadLog: async () => JSON.parse(JSON.stringify(log)) as ServerLogEntry[],
-    appendLog: async (_room, entries) => {
-      stats.appends += 1;
-      stats.inFlight += 1;
-      try {
-        const roll = random();
-        await sleep(Math.floor(random() * 4));
-        if (roll < 0.05) {
-          stats.lost += 1;
-          throw new Error("injected: nothing written");
-        }
-        log.push(...(JSON.parse(JSON.stringify(entries)) as ServerLogEntry[]));
-        if (roll < 0.1) {
-          stats.landed += 1;
-          throw new Error("injected: written, then the sync failed");
-        }
-      } finally {
-        stats.inFlight -= 1;
-      }
-    },
+    appendBatch,
+    appendLog: async (room, entries) => throwUnlessCommitted(await appendBatch(room, entries)),
     loadRoomDoc: async () => (doc === null ? null : JSON.parse(doc)),
     saveRoomDoc: async (_room, next) => {
       doc = JSON.stringify(next);
@@ -166,12 +183,13 @@ function player(port: number, claim: string, durable: () => readonly ServerLogEn
 test(`seeded concurrent submits, faulty appends and reconnects: ${SEEDS} schedules x ${STEPS} steps`, async () => {
   let lostTotal = 0;
   let landedTotal = 0;
+  let lateTotal = 0;
   let droppedTotal = 0;
   let committedTotal = 0;
   for (let seed = 1; seed <= SEEDS; seed += 1) {
     const choose = mulberry32(seed);
     const faults = faultyStore(mulberry32(seed * 7919));
-    const { server, port } = await startServer({ store: faults.store });
+    const { server, port } = await startServer({ store: faults.store, storeTimeoutMs: STORE_TIMEOUT_MS });
     const players = PLAYERS.map((claim) => player(port, claim, () => faults.log));
     const pending: Array<Promise<void>> = [];
     const submit = (who: Player, msg: object) => {
@@ -250,6 +268,7 @@ test(`seeded concurrent submits, faulty appends and reconnects: ${SEEDS} schedul
 
       lostTotal += faults.stats.lost;
       landedTotal += faults.stats.landed;
+      lateTotal += faults.stats.late;
       committedTotal += faults.log.length;
       await observer.close();
     } finally {
@@ -258,5 +277,5 @@ test(`seeded concurrent submits, faulty appends and reconnects: ${SEEDS} schedul
     }
   }
   // The faults were exercised, not merely configured.
-  assert.ok(lostTotal > 0 && landedTotal > 0 && droppedTotal > 0 && committedTotal > SEEDS, "faults exercised");
+  assert.ok(lostTotal > 0 && landedTotal > 0 && lateTotal > 0 && droppedTotal > 0 && committedTotal > SEEDS, "faults exercised");
 });

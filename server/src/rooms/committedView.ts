@@ -21,8 +21,9 @@
 //   entries       exactly the durable log, frozen
 //   digest        the board at the watermark; `fields` beside it when the server explains divergences (#1225)
 //   roomDoc       the legacy room document as last durably saved -- authority-bearing today (host, PINs)
-//   hold          why the game will not take a write: `version` (#1520) or `uncertain` (a store outcome not
-//                 yet known); `incompatible` is the frame a version hold answers with
+//   hold          why the game will not take a write: `version` (#1520), `uncertain` (a store outcome not
+//                 yet known) or `corrupt` (LIVE-3B: a damaged log, held for an operator); `incompatible` is the
+//                 frame a version hold answers with
 //   version       +1 per publish, for diagnostics and tests
 
 import type { RoomSession, ServerLogEntry } from "../../../frontend/src/utils/roomSession";
@@ -30,11 +31,16 @@ import type { SandboxRoomDoc } from "../../../frontend/src/utils/sandboxRoom";
 import type { BuildId, ServerMessage } from "../../../frontend/src/utils/serverProtocol";
 import { fieldDigests, stateDigest } from "../../../frontend/src/gameEngine";
 
-export type HoldReason = "version" | "uncertain";
+/** `version`: #1520. `uncertain`: a store outcome not yet known (§17 class 4). `corrupt`: LIVE-3B -- the load found
+ *  damage that is not a torn final batch, so no history is served until an operator repairs the file (§8.5). */
+export type HoldReason = "version" | "uncertain" | "corrupt";
 
 export interface Hold {
   readonly reason: HoldReason;
   readonly detail: string;
+  /** LIVE-3B: an uncertain outcome only a process restart can resolve (a failed redo, §8.2 step 7). Never read
+   *  back: after a failed `fsync` a read can show bytes the disk does not hold. */
+  readonly restart?: boolean;
 }
 
 export interface CommittedView {

@@ -36,16 +36,23 @@
 //        tasks are cancelled at once and never run; a running task finishes whatever its socket does
 //   E-9  a throw before the commit rolls back and commits nothing (F-13)
 //   E-10 a game held for an unknown store outcome takes no log write; every hold and resume is announced
+//   E-11 (LIVE-3B) every store call has a timeout (5 s); a WRITE that is late is uncertain, never failed: the game
+//        is held and the task keeps waiting for that same call -- nothing rolls back, nothing runs behind it
 //   E-12 one actor per game (the registry)
 //   E-13 the commit is the point of no return: committed -> MUST publish, rebuilding from the store if the next
 //        view cannot be built; definite failure -> roll back; uncertain -> resolve before anything else runs
 //
-// WHAT 3A DOES NOT DO (LIVE-3B, immediately next): batch stamps, positional writes, short-write loops, torn-tail
-// repair, fsync failure semantics, directory sync, the process lock and logDoctor. 3A makes a game's appends
-// strictly one at a time -- which alone ends P2b's reordering -- and resolves a rejected append by reloading the
-// room from the store (the LIVE-3A temporary rule, §21). It does not make the file itself crash-safe.
+// LIVE-3B: THE STORE NOW SAYS HOW A WRITE ENDED (persistence/storeResult.ts), so the 3A temporary rule -- "a
+// rejected append: reload the room, and whatever the store shows wins" -- is gone. That re-read is exactly what
+// LIVE-3 §8.2 step 7 forbids: after a failed `fsync` the page cache can show a batch the disk does not hold. Now:
+//   committed  (possibly after the store REDID the batch at its offset) -> publish;
+//   definite   (nothing reached storage) -> roll back, `retry`;
+//   uncertain  (the store's redo failed too) -> held `uncertain` until the PROCESS RESTARTS; never read back.
+// A load that finds a damaged log holds the game `corrupt`: no history served, nothing written, the file untouched
+// until an operator repairs it (§8.5).
 
 import type { RoomSession, ServerLogEntry } from "../../../frontend/src/utils/roomSession";
+import { isStoreCorrupt, outcomeOf, type StoreWriteOutcome } from "../persistence/storeResult";
 import { AHEAD_REASON, RESYNC_REASON } from "../../../frontend/src/utils/roomSession";
 import type { SandboxRoomDoc } from "../../../frontend/src/utils/sandboxRoom";
 import type { BuildId } from "../../../frontend/src/utils/serverProtocol";
@@ -64,7 +71,15 @@ import {
 export const ACTOR_QUEUE_BOUND = 256;
 /** E-8: how long a queued task may wait before it is answered `retry` instead of run. */
 export const TASK_DEADLINE_MS = 10_000;
-/** §17 class 4: the backoff between attempts to read back a store whose outcome is not known. */
+/** E-11: how long one store call may take before its outcome is treated as uncertain (LIVE-3 §3.3). */
+export const STORE_TIMEOUT_MS = 5_000;
+/** E-11: how long past that a late WRITE may stay unsettled before the process is asked to restart -- the only way
+ *  left to learn what the disk holds (LIVE-3 §4.2: "about 60 s if uncertain"). */
+export const STORE_RESTART_AFTER_MS = 60_000;
+/** §8.5 / §17 class 5: what a room held `corrupt` says to everyone who asks. */
+export const HELD_REASON = "This game is paused for maintenance.";
+/** §17 class 4: the backoff between attempts to read back a store whose outcome is not known -- LIVE-3B: used only
+ *  where a read-back is safe (the history is durable and only the view could not be built). */
 export const RECONCILE_FIRST_MS = 1_000;
 export const RECONCILE_MAX_MS = 30_000;
 
@@ -128,7 +143,9 @@ export type BatchSettlement =
 export type DocSettlement =
   | { readonly kind: "committed"; readonly view: CommittedView }
   /** The store did not take the document; the previous one stands. */
-  | { readonly kind: "failed"; readonly reason: string };
+  | { readonly kind: "failed"; readonly reason: string }
+  /** LIVE-3B: unknown -- the rename may have landed. The game is held until the process restarts (§8.7). */
+  | { readonly kind: "unresolved"; readonly reason: string };
 
 /** What a task is handed. */
 export interface Tx {
@@ -152,14 +169,15 @@ export interface Tx {
   commitRoomDoc(doc: SandboxRoomDoc, deliver: (settled: DocSettlement) => Delivery): Promise<DocSettlement>;
 }
 
-/** The store, as the actor sees it. Today's `LogStore` (fileLogStore.ts) sits behind it through `gameServer`; LIVE-3B
- *  replaces the durability mechanics beneath this seam without touching the executor. */
+/** The store, as the actor sees it. Today's `LogStore` (fileLogStore.ts) sits behind it through `gameServer`.
+ *  LIVE-3B: writes answer with a classified outcome; a rejection is read as uncertain (`outcomeOf`). */
 export interface GameStorePort {
+  /** Rejects `StoreCorruptError` for a log held for an operator (the actor holds the game `corrupt`). */
   loadLog(gameId: string): Promise<readonly ServerLogEntry[]>;
-  /** One submission's whole burst (L3-4). Resolves once it is on disk; rejects otherwise. */
-  appendBatch(gameId: string, entries: readonly ServerLogEntry[]): Promise<void>;
+  /** One submission's whole burst (L3-4): committed, definitely not written, or uncertain. */
+  appendBatch(gameId: string, entries: readonly ServerLogEntry[]): Promise<StoreWriteOutcome>;
   loadRoomDoc(gameId: string): Promise<SandboxRoomDoc | null>;
-  saveRoomDoc(gameId: string, doc: SandboxRoomDoc): Promise<void>;
+  saveRoomDoc(gameId: string, doc: SandboxRoomDoc): Promise<StoreWriteOutcome>;
 }
 
 /** Counted per server, read by tests and the smoke run. LIVE-3C turns these into §18's metrics. */
@@ -175,6 +193,14 @@ export interface ActorCounters {
   deliveryDropped: number;
   abandoned: number;
   helloResync: number;
+  /** LIVE-3B: store calls past the E-11 timeout; late writes adopted once they committed. */
+  storeTimeouts: number;
+  lateAdopted: number;
+  /** LIVE-3B: writes the store could not settle even by redoing them; games asking for a restart. */
+  storeUncertain: number;
+  restartRequired: number;
+  /** LIVE-3B: games held `corrupt` at load. */
+  heldCorrupt: number;
 }
 
 export function newActorCounters(): ActorCounters {
@@ -190,6 +216,11 @@ export function newActorCounters(): ActorCounters {
     deliveryDropped: 0,
     abandoned: 0,
     helloResync: 0,
+    storeTimeouts: 0,
+    lateAdopted: 0,
+    storeUncertain: 0,
+    restartRequired: 0,
+    heldCorrupt: 0,
   };
 }
 
@@ -218,6 +249,12 @@ export interface GameActorDeps {
   warn(line: string): void;
   readonly counters: ActorCounters;
   readonly faults?: GameFaults;
+  /** E-11: the store-call timeout. `STORE_TIMEOUT_MS` when absent; tests shorten it. */
+  readonly storeTimeoutMs?: number;
+  /** E-11: how long a late write may stay unsettled before a restart is asked for. */
+  readonly storeRestartAfterMs?: number;
+  /** LIVE-3B: this game holds an outcome only a process restart can resolve (§8.2 step 7). */
+  onRestartRequired?(gameId: string, detail: string): void;
 }
 
 /** How a `hello` was answered (§3.5). */
@@ -248,7 +285,6 @@ type Adopted =
   | { readonly ok: false; readonly detail: string };
 
 const describe = (error: unknown): string => (error instanceof Error ? error.message : String(error));
-const sameDocument = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
 
 export class GameActor {
   readonly gameId: string;
@@ -272,6 +308,10 @@ export class GameActor {
   private readonly reported = new Map<string, Set<object>>();
   private reconcileTimer: ReturnType<typeof setTimeout> | null = null;
   private reconcileDelayMs = RECONCILE_FIRST_MS;
+  /** Submissions a late write left in flight and settled when it ended: their task's own end must not settle
+   *  them a second time. */
+  private readonly settledLate = new Set<string>();
+  private restartRequested = false;
   private loaded = false;
   private disposed = false;
 
@@ -321,7 +361,16 @@ export class GameActor {
 
   private async load(): Promise<void> {
     /* RESTORED THROUGH `apply`, NEVER `submit` (#1203): a stored log already holds its derived entries. */
-    const entries = await this.deps.store.loadLog(this.gameId);
+    let entries: readonly ServerLogEntry[] = [];
+    let corrupt: string | null = null;
+    try {
+      entries = await this.awaitRead(this.deps.store.loadLog(this.gameId), "load of the log");
+    } catch (error) {
+      if (!isStoreCorrupt(error)) throw error;
+      /* LIVE-3B (§8.5): HELD, NOT GUESSED AT. The file is untouched; no history is served and nothing is written
+         until an operator repairs it offline (`tools/logDoctor.ts`) and the server is restarted. */
+      corrupt = describe(error);
+    }
     const roomDoc = await this.deps.loadRoomDoc();
     const session = this.deps.newSession();
     if (entries.length > 0) this.deps.restore(session, entries);
@@ -332,8 +381,32 @@ export class GameActor {
       roomDoc,
       explainDivergence: this.deps.explainDivergence,
       version: 1,
+      ...(corrupt === null ? {} : { hold: { reason: "corrupt" as const, detail: corrupt } }),
     });
+    if (corrupt !== null) {
+      this.deps.counters.heldCorrupt += 1;
+      this.deps.warn(`  store: ${this.gameId} is HELD (corrupt): ${corrupt}. No history is served until an operator repairs it.`);
+    }
     this.loaded = true;
+  }
+
+  /** E-11 for a READ: past the timeout the caller is told it failed. The read itself is left to finish in the
+   *  store's per-file order -- a read changes nothing the next call could build on (a load's torn-tail repair runs
+   *  ahead of every later call on that file). */
+  private async awaitRead<T>(pending: Promise<T>, label: string): Promise<T> {
+    const limit = this.deps.storeTimeoutMs ?? STORE_TIMEOUT_MS;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        this.deps.counters.storeTimeouts += 1;
+        reject(new Error(`the store did not answer the ${label} of ${this.gameId} within ${limit} ms`));
+      }, limit);
+    });
+    try {
+      return await Promise.race([pending, late]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /* ---------------------------------------------------------------------------
@@ -348,6 +421,7 @@ export class GameActor {
    *  lost that is about to land (§4.2). */
   subscribe(key: object, subscriber: Subscriber, fromIndex: number, baseId?: string): SubscribeAnswer {
     const view = this.view;
+    if (view.hold?.reason === "corrupt") return { kind: "held", frame: heldFrame() };
     if (view.incompatible !== null) return { kind: "held", frame: view.incompatible };
     if (fromIndex > view.watermark) {
       return { kind: "resync", watermark: view.watermark, reason: AHEAD_REASON };
@@ -539,21 +613,29 @@ export class GameActor {
     if (run.commitIssued) throw new Error("E-6: a task commits at most once");
     run.commitIssued = true; // E-13: from here the task publishes, or settles as absent or unresolved
     const before = this.view;
-    let failure: unknown = null;
-    try {
-      await this.deps.store.appendBatch(this.gameId, batch);
-    } catch (error) {
-      failure = error ?? new Error("the store rejected the append");
-    }
+    const priorHold = before.hold;
+    const { outcome, late } = await this.awaitWrite(
+      () => this.deps.store.appendBatch(this.gameId, batch),
+      `append of ${batch.length} entries`,
+      (detail) => {
+        /* E-11: LATE IS UNCERTAIN, NOT FAILED. The game is held now and the submitter told `unavailable`; its
+           submission is in flight (a reconnecting hello reports it) until this very call settles. Nothing is rolled
+           back -- the batch may yet land -- and the task does not end, so nothing runs behind it. */
+        const origin = task.origin;
+        if (origin?.submissionId !== undefined) this.unresolved.set(origin.submissionId, origin.principal);
+        const { reply } = deliver({ kind: "unresolved", reason: detail });
+        this.publish(withHold(this.view, { reason: "uncertain", detail }), task, { reply: reply ?? null });
+      },
+    );
 
-    if (failure === null) {
-      /* COMMITTED. The task MUST publish. If the next view cannot be built from the session (the digest threw),
-         the game is reloaded from the store -- whose history now holds the batch -- and published from that; the
-         submitter is answered from the reloaded view. */
+    if (outcome.kind === "committed") {
+      /* COMMITTED (the store may have redone it -- the same bytes at the same offset, synced). The task MUST publish.
+         If the next view cannot be built from the session (the digest threw), the game is reloaded from the store --
+         whose history now holds the batch, durably, so reading it back is safe -- and published from that. */
       let view: CommittedView;
       let entries: readonly ServerLogEntry[] = batch;
       try {
-        view = this.buildNextView(this.session as RoomSession, before);
+        view = this.buildNextView(this.session as RoomSession, this.view);
       } catch (error) {
         this.deps.counters.viewRebuiltFromStore += 1;
         this.deps.warn(
@@ -561,54 +643,95 @@ export class GameActor {
             `reloading the game from the store (E-13)`,
         );
         const adopted = await this.adoptStore(before);
-        if (!adopted.ok) return this.settleUnresolved(task, adopted.detail, deliver);
+        if (!adopted.ok) return this.settleUnresolved(task, adopted.detail, late ? null : deliver, false);
         this.session = adopted.session;
         view = adopted.view;
         entries = adopted.landed;
       }
       const settled: BatchSettlement = { kind: "committed", view, entries };
-      this.publish(view, task, deliver(settled), entries);
+      if (!late) {
+        this.publish(view, task, deliver(settled), entries);
+        return settled;
+      }
+      /* A LATE COMMIT IS ADOPTED EXACTLY ONCE: published as history to every subscriber -- the submitter included,
+         who was told `unavailable` and kept the move pending -- and the hold lifts with it. */
+      this.deps.counters.lateAdopted += 1;
+      this.deps.warn(`  store: ${this.gameId}: the late append committed; published at index ${view.watermark}`);
+      this.publish(view, null, { fanout: this.appliedFrame(entries, view) }, entries);
+      this.settleUnresolvedSubmissions(true);
       return settled;
     }
 
-    /* ==================================================================
-        LIVE-3A: A REJECTED APPEND IS UNCERTAIN, AND THE STORE DECIDES (§21, the temporary rule until LIVE-3B)
-       ==================================================================
-       Today's store can reject after its bytes reached the file -- `write` then a failing `sync` -- so a rejection
-       does not prove the entries absent, and answering "try again" for a move that landed invites a second
-       purchase (LIVE-3 Appendix C.2 #7) or the F-13 shape one layer down: refused, and stored. So the room is
-       reloaded from the store before anything else runs, and what the store holds is what stands:
-         nothing past the committed history -> the move did not happen: rolled back, `retry`;
-         some or all of the batch            -> those entries are durable: published, and the submitter is
-                                                answered by whether its own entry is among them;
-         the store cannot be read back       -> unknown: the game is held `uncertain` (E-10) and read back again
-                                                on a backoff.
-       LIVE-3B replaces this with positional redo writes and never trusts a read after an fsync error; until then a
-       torn tail left by the failed write is today's loader's problem (F-8), which is why 3B follows at once. */
     this.deps.counters.storeAppendFailed += 1;
-    this.deps.warn(
-      `  store: could not append ${batch.length} entries for ${this.gameId} — ${describe(failure)}; ` +
-        `reloading the game from the store before anything else runs (LIVE-3A)`,
-    );
-    const adopted = await this.adoptStore(before);
-    if (!adopted.ok) return this.settleUnresolved(task, adopted.detail, deliver);
-    this.session = adopted.session; // the clean rebuild E-4 asks for, from the store's own history
-    if (adopted.landed.length === 0) {
-      const settled: BatchSettlement = { kind: "absent", reason: describe(failure) };
-      this.deliverOnly(task, deliver(settled));
+    if (outcome.kind === "definite") {
+      /* §4.1: NOTHING REACHED THE DISK. Rolled back -- the nonce with it, so a retry is judged afresh. */
+      this.deps.warn(`  store: could not append ${batch.length} entries for ${this.gameId} — ${outcome.detail}; nothing was written`);
+      this.rollbackSession();
+      const settled: BatchSettlement = { kind: "absent", reason: outcome.detail };
+      if (!late) {
+        this.deliverOnly(task, deliver(settled));
+        return settled;
+      }
+      this.publish(withHold(this.view, priorHold), null, {}); // the hold lifts; the in-flight move is abandoned
+      this.settleUnresolvedSubmissions(true);
       return settled;
     }
-    this.deps.warn(
-      `  store: ${this.gameId} holds ${adopted.landed.length} entries past index ${before.watermark} after the failed ` +
-        `append; they stand (the log wins)`,
+    /* UNCERTAIN, AND THE STORE'S OWN REDO COULD NOT SETTLE IT (§8.2 step 7): held until the process restarts. Never
+       read back -- a read after a failed `fsync` can show bytes the disk does not hold. */
+    this.deps.counters.storeUncertain += 1;
+    return this.settleUnresolved(task, outcome.detail, late ? null : deliver, true);
+  }
+
+  /** E-11: one store WRITE, awaited for at most the store timeout -- and never abandoned. On time: its outcome.
+   *  Late: `onLate` holds the game NOW, and the SAME call is still awaited, so the task does not end: no later task
+   *  of this game runs, nothing is rolled back, and nothing is written behind it until the call's own outcome is
+   *  known. A call that never settles keeps the game held and, after `storeRestartAfterMs` more, asks for the
+   *  process restart that is then the only way to learn what the disk holds. */
+  private async awaitWrite(
+    call: () => Promise<StoreWriteOutcome>,
+    label: string,
+    onLate: (detail: string) => void,
+  ): Promise<{ readonly outcome: StoreWriteOutcome; readonly late: boolean }> {
+    let settled: Promise<StoreWriteOutcome>;
+    try {
+      settled = call().then(
+        (outcome) => outcome,
+        (error) => outcomeOf(error),
+      );
+    } catch (error) {
+      settled = Promise.resolve(outcomeOf(error));
+    }
+    const limit = this.deps.storeTimeoutMs ?? STORE_TIMEOUT_MS;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const lateSignal = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), limit);
+    });
+    const first = await Promise.race([settled, lateSignal]);
+    clearTimeout(timer);
+    if (first !== null) return { outcome: first, late: false };
+
+    const detail = `the store did not answer the ${label} within ${limit} ms`;
+    this.deps.counters.storeTimeouts += 1;
+    this.deps.warn(`  store: ${this.gameId}: ${detail}; held until that call settles (E-11)`);
+    onLate(detail);
+    const restartAfter = this.deps.storeRestartAfterMs ?? STORE_RESTART_AFTER_MS;
+    const restartTimer = setTimeout(
+      () => this.requireRestart(`the ${label} has still not settled ${limit + restartAfter} ms after it was issued`),
+      restartAfter,
     );
-    const settled: BatchSettlement = { kind: "committed", view: adopted.view, entries: adopted.landed };
-    this.publish(adopted.view, task, deliver(settled), adopted.landed);
-    return settled;
+    (restartTimer as { unref?: () => void }).unref?.();
+    try {
+      return { outcome: await settled, late: true };
+    } finally {
+      clearTimeout(restartTimer);
+    }
   }
 
   /** The room document, durable before it is visible (F-10: it used to change in memory first and be saved
-   *  "quietly", so a failed save silently reverted the roster, a PIN or the host at the next restart). */
+   *  "quietly", so a failed save silently reverted the roster, a PIN or the host at the next restart).
+   *  LIVE-3B: the store answers how the save ended (§8.7) -- a failure BEFORE the rename leaves the previous document
+   *  standing; one at or after it is uncertain, redone by the store, and if that fails the game is held for a
+   *  restart. The 3A read-back ("does the store hold the new document?") is gone for the same reason as the log's. */
   private async commitRoomDoc(
     task: Task<unknown>,
     run: RunState,
@@ -617,36 +740,33 @@ export class GameActor {
   ): Promise<DocSettlement> {
     if (run.commitIssued) throw new Error("E-6: a task commits at most once");
     run.commitIssued = true;
-    let failure: unknown = null;
-    try {
-      await this.deps.store.saveRoomDoc(this.gameId, doc);
-    } catch (error) {
-      failure = error ?? new Error("the store rejected the room document");
+    const priorHold = this.view.hold;
+    const { outcome, late } = await this.awaitWrite(
+      () => this.deps.store.saveRoomDoc(this.gameId, doc),
+      "room document save",
+      (detail) => this.publish(withHold(this.view, { reason: "uncertain", detail }), null, {}),
+    );
+    if (outcome.kind === "committed") {
+      const base = late ? withHold(this.view, priorHold) : this.view;
+      const view = withRoomDoc(base, Object.freeze(doc));
+      const settled: DocSettlement = { kind: "committed", view };
+      this.publish(view, task, deliver(settled));
+      return settled;
     }
-    if (failure !== null) {
-      this.deps.counters.storeDocFailed += 1;
-      /* WHICH DOCUMENT DOES THE STORE HOLD NOW? A save can report failure after its rename landed. The previous
-         document stays authoritative unless the new one is what the store holds -- then it stands, and the writer
-         is told it did. */
-      let stored: SandboxRoomDoc | null | undefined;
-      try {
-        stored = await this.deps.store.loadRoomDoc(this.gameId);
-      } catch {
-        stored = undefined;
-      }
-      if (stored === undefined || stored === null || !sameDocument(stored, doc)) {
-        this.deps.warn(
-          `  store: could not save the room document for ${this.gameId} — ${describe(failure)}; the previous document stands`,
-        );
-        const settled: DocSettlement = { kind: "failed", reason: describe(failure) };
-        this.deliverOnly(task, deliver(settled));
-        return settled;
-      }
-      this.deps.warn(`  store: the room document for ${this.gameId} reported a failed save but the store holds it; it stands`);
+    this.deps.counters.storeDocFailed += 1;
+    if (outcome.kind === "definite") {
+      this.deps.warn(
+        `  store: could not save the room document for ${this.gameId} — ${outcome.detail}; the previous document stands`,
+      );
+      if (late) this.publish(withHold(this.view, priorHold), null, {});
+      const settled: DocSettlement = { kind: "failed", reason: outcome.detail };
+      this.deliverOnly(task, deliver(settled));
+      return settled;
     }
-    const view = withRoomDoc(this.view, Object.freeze(doc));
-    const settled: DocSettlement = { kind: "committed", view };
-    this.publish(view, task, deliver(settled));
+    this.deps.counters.storeUncertain += 1;
+    const settled: DocSettlement = { kind: "unresolved", reason: outcome.detail };
+    this.deliverOnly(task, deliver(settled));
+    this.hold(outcome.detail, null, null, true);
     return settled;
   }
 
@@ -666,7 +786,7 @@ export class GameActor {
   private async adoptStore(before: CommittedView): Promise<Adopted> {
     let entries: readonly ServerLogEntry[];
     try {
-      entries = await this.deps.store.loadLog(this.gameId);
+      entries = await this.awaitRead(this.deps.store.loadLog(this.gameId), "read-back of the log");
     } catch (error) {
       return { ok: false, detail: `the store could not be read back: ${describe(error)}` };
     }
@@ -687,34 +807,55 @@ export class GameActor {
   }
 
   /** §17 class 4: the outcome is unknown. The private session goes back to the committed view (a safe subset of
-   *  whatever the store holds), the game takes no log write until the store is read back, and the submission is
-   *  reported in `inFlight` until then. */
+   *  whatever the store holds), the game takes no log write, and the submission is reported in `inFlight` until the
+   *  outcome is known. `restart`: only a process restart can learn it (a store write whose redo failed) -- nothing is
+   *  read back; otherwise (the history is durable and only its view failed) the store is read back on a backoff.
+   *  `deliver` is null when the submitter was already answered (a late write, E-11). */
   private settleUnresolved(
     task: Task<unknown>,
     detail: string,
-    deliver: (settled: BatchSettlement) => Delivery,
+    deliver: ((settled: BatchSettlement) => Delivery) | null,
+    restart: boolean,
   ): BatchSettlement {
     this.deps.counters.unresolved += 1;
     this.rollbackSession();
     if (task.origin?.submissionId !== undefined) this.unresolved.set(task.origin.submissionId, task.origin.principal);
     const settled: BatchSettlement = { kind: "unresolved", reason: detail };
-    const { reply } = deliver(settled);
-    this.hold(detail, task, reply ?? null);
+    const reply = deliver === null ? null : deliver(settled).reply ?? null;
+    this.hold(detail, deliver === null ? null : task, reply, restart);
     return settled;
   }
 
-  /** Enter (or stay in) the `uncertain` hold: publish it -- every subscriber is told -- and read the store back on
-   *  a backoff. */
-  private hold(detail: string, task: Task<unknown> | null = null, reply: object | null = null): void {
+  /** Enter (or stay in) the `uncertain` hold and publish it -- every subscriber is told. Then either read the store
+   *  back on a backoff, or (`restart`) ask for the process restart that is the only safe way to learn the outcome. */
+  private hold(detail: string, task: Task<unknown> | null = null, reply: object | null = null, restart = false): void {
     this.deps.warn(
       `  store: ${this.gameId} is HELD (uncertain): ${detail}. Log writes are refused and reads are served from ` +
-        `index ${this.committed?.watermark ?? -1} until the store can be read back (LIVE-3 §17 class 4).`,
+        `index ${this.committed?.watermark ?? -1} ` +
+        (restart ? "until the server is restarted (LIVE-3 §8.2 step 7)." : "until the store can be read back (LIVE-3 §17 class 4)."),
     );
     if (this.committed !== null) {
-      const hold: Hold = { reason: "uncertain", detail };
+      const hold: Hold = restart ? { reason: "uncertain", detail, restart: true } : { reason: "uncertain", detail };
       this.publish(withHold(this.committed, hold), task, { reply });
     }
-    this.scheduleReconcile();
+    if (restart) this.requireRestart(detail);
+    else this.scheduleReconcile();
+  }
+
+  /** Once per game: say that only a restart can resolve what this game is holding, and tell the server. */
+  private requireRestart(detail: string): void {
+    if (this.restartRequested || this.disposed) return;
+    this.restartRequested = true;
+    this.deps.counters.restartRequired += 1;
+    this.deps.warn(
+      `  store: ${this.gameId} holds a store outcome only a restart can resolve — ${detail}. Log writes are refused; ` +
+        `restart the server, and the load will read what the disk really holds (LIVE-3 §8.2 step 7).`,
+    );
+    try {
+      this.deps.onRestartRequired?.(this.gameId, detail);
+    } catch (error) {
+      this.deps.warn(`  actor: the restart hook threw for ${this.gameId} — ${describe(error)}`);
+    }
   }
 
   private scheduleReconcile(): void {
@@ -731,7 +872,7 @@ export class GameActor {
   /** A `repair` task: read the store back; if it can be, what it holds stands, and the game resumes. */
   private async reconcile(): Promise<void> {
     const before = this.view;
-    if (before.hold?.reason !== "uncertain") return;
+    if (before.hold?.reason !== "uncertain" || before.hold.restart === true) return;
     const adopted = await this.adoptStore(before);
     if (!adopted.ok) {
       this.deps.warn(`  store: ${this.gameId} is still held — ${adopted.detail}; reading it back again later`);
@@ -746,9 +887,15 @@ export class GameActor {
       `  store: ${this.gameId} resumed at index ${view.watermark} (${landed.length} entries found past ${before.watermark})`,
     );
     this.publish(view, null, landed.length > 0 ? { fanout: this.appliedFrame(landed, view) } : {}, landed);
-    /* The submissions whose outcome was unknown are settled now: a landed one by the fan-out just sent, the rest
-       by `abandoned` to their principal's sockets and to every socket that was told they were in flight. */
+    this.settleUnresolvedSubmissions(false);
+  }
+
+  /** The submissions whose outcome was unknown are settled now: a landed one by the fan-out just sent, the rest by
+   *  `abandoned` to their principal's sockets and to every socket that was told they were in flight. `late`: their
+   *  task is still running (E-11), so its own end must not settle them again. */
+  private settleUnresolvedSubmissions(late: boolean): void {
     this.unresolved.forEach((principal, submissionId) => {
+      if (late) this.settledLate.add(submissionId);
       const told = this.reported.get(submissionId);
       this.reported.delete(submissionId);
       if (this.landed(principal, submissionId)) return;
@@ -855,6 +1002,7 @@ export class GameActor {
     const origin = task.origin;
     const submissionId = origin?.submissionId;
     if (origin === undefined || submissionId === undefined) return;
+    if (this.settledLate.delete(submissionId)) return; // settled when its late write ended (E-11)
     if (this.unresolved.has(submissionId)) return;
     const told = this.reported.get(submissionId);
     this.reported.delete(submissionId);
@@ -906,5 +1054,11 @@ export class GameActor {
 export function statusFrame(hold: Hold | null): object {
   if (hold === null) return { kind: "status", state: "live" };
   if (hold.reason === "uncertain") return { kind: "status", state: "unavailable", reason: UNAVAILABLE_REASON };
+  if (hold.reason === "corrupt") return { kind: "status", state: "held", reason: HELD_REASON };
   return { kind: "status", state: "held", reason: hold.detail };
+}
+
+/** §8.5 / §17 class 5: a hello to a room held `corrupt` -- no history is served, and nothing is registered. */
+export function heldFrame(): object {
+  return { kind: "error", code: "held", reason: HELD_REASON };
 }

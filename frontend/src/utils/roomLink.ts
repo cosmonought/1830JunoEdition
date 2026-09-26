@@ -195,7 +195,9 @@ function attach(channel: Channel): void {
   void session.ensure(force).then((state) => {
     if (channel.retired || channels.get(channel.key) !== channel) return;
     if (state === "ready") attachNow(channel);
-    else if (state === "unknown") scheduleReconnect(channel);
+    /* LIVE-2E: "unprofiled" waits like "unknown" -- the upgrade refuses a browser with no profile, so no socket opens
+       until `ProfileGate` has one (a profile action forces the next bootstrap). */
+    else if (state === "unknown" || state === "unprofiled") scheduleReconnect(channel);
     /* "ended": terminal for this page -- `SessionEndedNotice` asks the player; nothing reconnects. */
   });
 }

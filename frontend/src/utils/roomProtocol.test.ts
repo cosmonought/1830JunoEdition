@@ -100,6 +100,8 @@ describe("refusalMessage: what a player reads", () => {
     ["held", /paused on the server/],
     ["money-games-disabled", /stakes are not open/],
     ["session-ended", /session on this browser has ended/],
+    /* LIVE-2E: profiles are mandatory; a room frame from an unprofiled browser is told how to play. */
+    ["profile-required", /^Sign in to a profile to play\.$/],
     ["internal", /went wrong on the server/],
     ["gone", /closed/],
   ];

@@ -17,6 +17,13 @@ touches Vercel, and no push is needed.
 > `GS_ALLOWED_ORIGINS=https://<tunnel host>` and `GS_TRUSTED_PROXY_HOPS=1` (ngrok is the one hop that appends
 > `X-Forwarded-For`); `start-playtest.ps1` does exactly that. Every browser is one guest principal (its session
 > cookie), so two players need two browsers (or one normal and one private window), not two tabs.
+>
+> **LIVE-2E (2026-09-26): profiles are mandatory.** A hosted browser first sees the profile gate: **Create profile**
+> (a name; the recovery key is shown once -- save it), **Recover existing profile** (paste the key) or **Link existing
+> profile** (a 10-minute, single-use code from **Profile → Link another device** on a signed-in device). Until then the
+> browser can open no game socket at all. A recovered or linked device is the same player: it has every seat the profile
+> already holds. Local development (`?dev_claim=` tabs) gives each tab a synthetic development profile, so nothing here
+> changes for two-tab play on this machine.
 
 ---
 

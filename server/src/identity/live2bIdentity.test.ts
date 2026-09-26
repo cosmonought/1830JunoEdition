@@ -4,6 +4,9 @@
 // API, the upgrade order and its refusals, the frozen socket context, revocation / eviction / rotation as they reach
 // open sockets, the identity limits, the malformed-close cooldown, the startup mode lock (spawned processes), and the
 // ordinary local development flow. Production-mode cases present real cookies and an Origin, as a browser does.
+// LIVE-2E: profiles are mandatory, so a production case that opens a game socket first creates its browser's profile
+// (`POST /gs/api/profile`, testSupport's `profiledCookie`); an unprofiled cookie's upgrade is 403 at step "profile".
+// The profile surface itself is `live2eProfiles.test.ts`.
 
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
@@ -26,6 +29,8 @@ import {
   devIdentity,
   devSocketUrl,
   openGame,
+  profiledBrowser,
+  profiledCookie,
   quietConsole,
   startServer,
   stopServer,
@@ -37,6 +42,7 @@ import { decideUpgrade } from "./authenticateUpgrade";
 import { IdentityLimiter } from "./limiter";
 import { IdentityService } from "./sessions";
 import { createMemoryIdentityStore } from "./store";
+import { readSessionCookie } from "./cookies";
 import { DEFAULT_INGRESS_LIMITS } from "../ingress/limits";
 
 quietConsole();
@@ -90,6 +96,9 @@ const cookieFrom = (answer: Answer): string => {
 
 const bootstrap = (port: number, cookie?: string, body = "{}") => request(port, "/gs/api/session", { cookie, body });
 
+/** LIVE-2E: a browser that may open game sockets -- bootstrapped AND profiled (an unprofiled one's upgrade is 403). */
+const profiled = (port: number, name = "Player") => profiledCookie(port, name, PROD_ORIGIN);
+
 interface Upgrade {
   status: number;
   retryAfter?: string;
@@ -132,11 +141,19 @@ describe("LIVE-2B bootstrap and revoke API", () => {
       assert.equal(first.headers["cache-control"], "no-store");
       assert.ok(!Object.keys(first.headers).some((name) => name.startsWith("access-control")), "no CORS");
       assert.ok(!first.body.includes("pr_") && !first.body.includes("se_"), "no id on the wire");
+      assert.equal(JSON.parse(first.body).profile, null, "LIVE-2E: a new browser is unprofiled -- the profile gate");
       const cookie = cookieFrom(first);
       const again = await bootstrap(port, cookie);
       assert.equal(again.status, 200);
       assert.equal(again.headers["set-cookie"], undefined);
+      assert.equal(JSON.parse(again.body).profile, null);
       assert.equal(server.identity.sizes().principals, 1);
+      // LIVE-2E: once profiled, the bootstrap names the profile -- by name only, never an id.
+      assert.equal((await request(port, "/gs/api/profile", { cookie, body: JSON.stringify({ name: "Ann" }) })).status, 201);
+      const named = await bootstrap(port, cookie);
+      assert.deepEqual(JSON.parse(named.body).profile, { name: "Ann", otherSessions: 0 });
+      assert.ok(!named.body.includes("pr_") && !named.body.includes("pf_") && !named.body.includes("se_"), "no id on the wire");
+      assert.equal(server.identity.sizes().principals, 1, "the profile binds THIS browser's principal");
     } finally {
       await stopServer(server);
     }
@@ -168,7 +185,7 @@ describe("LIVE-2B bootstrap and revoke API", () => {
   test("revoke: 204, the cookie cleared, every socket of the session closed 4401, and the session never comes back", async () => {
     const { server, port } = await prodServer();
     try {
-      const cookie = cookieFrom(await bootstrap(port));
+      const cookie = await profiled(port);
       const a = await upgrade(port, { cookie });
       const b = await upgrade(port, { cookie });
       assert.equal(a.status, 101);
@@ -187,6 +204,8 @@ describe("LIVE-2B bootstrap and revoke API", () => {
       assert.equal((await request(port, "/gs/api/session/revoke", { cookie })).status, 401);
       const fresh = await bootstrap(port, cookie, '{"fresh":true}');
       assert.equal(fresh.status, 201, "only the explicit fresh path mints a new guest");
+      assert.equal(JSON.parse(fresh.body).profile, null, "a fresh browser is unprofiled: the profile stays with its principal");
+      assert.equal((await upgrade(port, { cookie: cookieFrom(fresh) })).status, 403, "and it opens no game socket until it signs in");
     } finally {
       await stopServer(server);
     }
@@ -195,7 +214,7 @@ describe("LIVE-2B bootstrap and revoke API", () => {
   test("rotation after 7 days: the open socket stays; the old cookie cannot upgrade but still bootstraps for 24 h to the same principal", async () => {
     const { server, port, clock } = await prodServer();
     try {
-      const old = cookieFrom(await bootstrap(port));
+      const old = await profiled(port);
       const open = await upgrade(port, { cookie: old });
       assert.equal(open.status, 101);
       clock.now += 8 * DAY;
@@ -215,6 +234,7 @@ describe("LIVE-2B bootstrap and revoke API", () => {
       const lost = await bootstrap(port, old);
       assert.equal(lost.status, 200, "the grace path");
       assert.equal(server.identity.sizes().principals, 1, "every cookie on the same principal");
+      assert.equal(JSON.parse(lost.body).profile.name, "Player", "and on the same profile");
       clock.now += DAY;
       assert.deepEqual(JSON.parse((await bootstrap(port, old)).body), { error: "session-ended", reason: "rotated" });
       open.socket?.terminate();
@@ -227,7 +247,7 @@ describe("LIVE-2B bootstrap and revoke API", () => {
   test("eviction: the 11th active session evicts the oldest, and its open socket closes 4401", async () => {
     const { server, port, clock } = await prodServer({ limits: { graceMintsPerSession: { capacity: 100, refillPerSecond: 1 } } });
     try {
-      const s0 = cookieFrom(await bootstrap(port));
+      const s0 = await profiled(port);
       clock.now += 8 * DAY;
       const successors: string[] = [];
       successors.push(cookieFrom(await bootstrap(port, s0)));
@@ -263,8 +283,9 @@ describe("LIVE-2B bootstrap and revoke API", () => {
   test("an operator disable reaches the running process: the principal's sockets close 4401 and its cookie ends", async () => {
     const { server, port, clock } = await prodServer();
     try {
-      const cookie = cookieFrom(await bootstrap(port));
+      const cookie = await profiled(port);
       const socket = await upgrade(port, { cookie });
+      assert.equal(socket.status, 101);
       const principalId = (server.identity.authenticate({ kind: "session", sessionId: sessionIdOf(cookie), secret: cookie.split(".")[2] }, clock.now) as { principalId: string }).principalId;
       await server.identity.disablePrincipal(principalId, clock.now);
       assert.equal(await socket.closed, 4401);
@@ -279,7 +300,7 @@ describe("LIVE-2B upgrade", () => {
   test("each refusal class, before any WebSocket exists: 404, 403, 401, and a forged or malformed cookie is 401", async () => {
     const { server, port } = await prodServer();
     try {
-      const cookie = cookieFrom(await bootstrap(port));
+      const cookie = await profiled(port);
       assert.equal((await upgrade(port, { path: "/", cookie })).status, 404, "production accepts /gs only");
       assert.equal((await upgrade(port, { path: "/gs/", cookie })).status, 404);
       assert.equal((await upgrade(port, { cookie, origin: "https://evil.example" })).status, 403);
@@ -290,6 +311,12 @@ describe("LIVE-2B upgrade", () => {
       assert.equal((await upgrade(port, { cookie: forged })).status, 401);
       assert.equal((await upgrade(port, { cookie: `${cookie}; ${cookie}` })).status, 401, "a duplicate cookie");
       assert.equal((await upgrade(port, { path: "/gs?dev_claim=p-alice" })).status, 401, "production ignores a dev claim");
+      // LIVE-2E: an authenticated but UNPROFILED browser is refused too (403, step "profile") -- and a dev claim beside
+      // its cookie changes nothing.
+      const unprofiled = cookieFrom(await bootstrap(port));
+      assert.equal((await upgrade(port, { cookie: unprofiled })).status, 403);
+      assert.equal((await upgrade(port, { path: "/gs?dev_claim=p-alice", cookie: unprofiled })).status, 403);
+      assert.equal(server.upgrades.refused["profile:403"], 2);
       assert.equal(server.upgrades.accepted, 0);
       assert.equal(server.socketCounts().total, 0, "no socket was ever made");
       const ok = await upgrade(port, { cookie });
@@ -303,8 +330,8 @@ describe("LIVE-2B upgrade", () => {
   test("the order is frozen: the first failing step answers", async () => {
     const limits = { ...DEFAULT_INGRESS_LIMITS.identity };
     const identity = IdentityService.fromSnapshot(createMemoryIdentityStore(), { principals: [], sessions: [] });
-    const counts = { global: 0, ip: 0, principal: 0 };
-    const gate = (over: { counts?: Partial<typeof counts> } = {}) => {
+    const counts = { global: 0, ip: 0, principal: 0, session: 0 };
+    const gate = (over: { counts?: Partial<typeof counts>; hasProfile?: (principalId: string) => boolean } = {}) => {
       const limiter = new IdentityLimiter(limits, () => 0);
       const c = { ...counts, ...(over.counts ?? {}) };
       return {
@@ -317,8 +344,9 @@ describe("LIVE-2B upgrade", () => {
         devAuthenticator: null,
         limiter,
         limits,
-        counts: { global: () => c.global, forIp: () => c.ip, forPrincipal: () => c.principal, forAggregate: () => 0 },
+        counts: { global: () => c.global, forIp: () => c.ip, forPrincipal: () => c.principal, forAggregate: () => 0, forSession: () => c.session },
         now: () => 0,
+        hasProfile: over.hasProfile ?? ((principalId: string) => identity.isProfiled(principalId)),
       };
     };
     const req = (url: string, headers: Record<string, string>, remoteAddress = "203.0.113.1") => ({ url, headers, socket: { remoteAddress } as never });
@@ -335,28 +363,57 @@ describe("LIVE-2B upgrade", () => {
     assert.equal(status(decideUpgrade(req("/gs", { origin: "https://evil.example" }), gate())), "origin:403");
     // Origin fine, no cookie: authentication answers.
     assert.equal(status(decideUpgrade(req("/gs", { origin: PROD_ORIGIN }), gate())), "authenticate:401");
-    // Authenticated, principal at its cap: the cap answers -- 3 for a provisional guest.
     const created = await identity.bootstrap({ kind: "none" }, false, 0);
     const cookie = (created.kind === "ok" ? created.setCookie ?? "" : "").split(";")[0];
-    assert.equal(status(decideUpgrade(req("/gs", { origin: PROD_ORIGIN, cookie }), gate({ counts: { principal: 3 } }))), "principal-cap:429");
-    const accepted = decideUpgrade(req("/gs", { origin: PROD_ORIGIN, cookie }), gate({ counts: { principal: 2 } }));
+    // LIVE-2E: authenticated but unprofiled -- the profile step answers, before any cap (even one already full).
+    assert.equal(status(decideUpgrade(req("/gs", { origin: PROD_ORIGIN, cookie }), gate({ counts: { principal: 99, session: 99 } }))), "profile:403");
+    // The provisional cap (6) is defence in depth now -- an unprofiled principal never reaches it -- so it is exercised
+    // here through a gate that answers "has a profile" for a principal that was never activated.
+    assert.equal(status(decideUpgrade(req("/gs", { origin: PROD_ORIGIN, cookie }), gate({ counts: { principal: 6 }, hasProfile: () => true }))), "principal-cap:429");
+    assert.equal(decideUpgrade(req("/gs", { origin: PROD_ORIGIN, cookie }), gate({ counts: { principal: 5 }, hasProfile: () => true })).ok, true);
+    // Profiled (which makes the principal durable): the principal's cap is 24, across every device.
+    assert.equal((await identity.createProfile(readSessionCookie(cookie), "Ann", 0)).kind, "ok");
+    assert.equal(status(decideUpgrade(req("/gs", { origin: PROD_ORIGIN, cookie }), gate({ counts: { principal: 24 } }))), "principal-cap:429");
+    // LIVE-2E: the SESSION (one browser, all its tabs) has its own cap, checked first.
+    assert.equal(status(decideUpgrade(req("/gs", { origin: PROD_ORIGIN, cookie }), gate({ counts: { session: 12 } }))), "principal-cap:429");
+    const accepted = decideUpgrade(req("/gs", { origin: PROD_ORIGIN, cookie }), gate({ counts: { principal: 23, session: 11 } }));
     assert.ok(accepted.ok);
     assert.ok(accepted.ok && Object.isFrozen(accepted.ctx), "the context is frozen");
     assert.deepEqual(accepted.ok ? Object.keys(accepted.ctx).sort() : [], ["ipKey", "openedAt", "principalId", "sessionExpiresAt", "sessionId"]);
   });
 
-  test("global, IP, principal and provisional socket caps; 503/429 carry Retry-After", async () => {
-    const { server, port } = await prodServer({ limits: { maxSocketsGlobal: 4, maxSocketsPerIp: 3, maxSocketsPerProvisionalPrincipal: 2 } });
+  test("global, IP, session, principal (and no provisional) socket caps; 503/429 carry Retry-After", async () => {
+    const { server, port } = await prodServer({
+      limits: { maxSocketsGlobal: 5, maxSocketsPerIp: 4, maxSocketsPerSession: 2, maxSocketsPerPrincipal: 3, maxSocketsPerProvisionalPrincipal: 2 },
+    });
     try {
+      // LIVE-2E: a never-profiled guest opens NOTHING -- 403 at the profile step, before its provisional cap.
       const guest = cookieFrom(await bootstrap(port));
-      const opened = [await upgrade(port, { cookie: guest }), await upgrade(port, { cookie: guest })];
-      const capped = await upgrade(port, { cookie: guest });
-      assert.equal(capped.status, 429, "a provisional guest holds at most its cap");
-      assert.ok(capped.retryAfter);
-      const other = cookieFrom(await bootstrap(port));
+      const unprofiled = await upgrade(port, { cookie: guest });
+      assert.equal(unprofiled.status, 403);
+      assert.equal(unprofiled.retryAfter, undefined);
+      // One browser (session) holds at most its cap.
+      const { cookie: first, recoveryKey } = await profiledBrowser(port, "Ann", PROD_ORIGIN);
+      const opened = [await upgrade(port, { cookie: first }), await upgrade(port, { cookie: first })];
+      const sessionCapped = await upgrade(port, { cookie: first });
+      assert.equal(sessionCapped.status, 429, "a browser holds at most its session cap");
+      assert.ok(sessionCapped.retryAfter);
+      // A second device of the SAME principal (recovered with the key) is its own session, but the principal's cap
+      // counts every device.
+      const second = cookieFrom(await bootstrap(port));
+      const recovered = await request(port, "/gs/api/profile/recover", { cookie: second, body: JSON.stringify({ recoveryKey }) });
+      assert.equal(recovered.status, 200);
+      const device2 = cookieFrom(recovered);
+      opened.push(await upgrade(port, { cookie: device2 }));
+      const principalCapped = await upgrade(port, { cookie: device2 });
+      assert.equal(principalCapped.status, 429, "the principal holds at most its cap across devices");
+      assert.equal(server.upgrades.refused["principal-cap:429"], 2);
+      // Another player at the same address: the address's cap.
+      const other = await profiled(port, "Bea");
       opened.push(await upgrade(port, { cookie: other }));
       const ipCapped = await upgrade(port, { cookie: other });
       assert.equal(ipCapped.status, 429, "the address holds at most its cap");
+      assert.equal(server.upgrades.refused["ip:429"], 1);
       for (const each of opened) assert.equal(each.status, 101);
       for (const each of opened) each.socket?.terminate();
       await until(() => server.socketCounts().total === 0, "the sockets to go");
@@ -365,7 +422,7 @@ describe("LIVE-2B upgrade", () => {
     }
     const tight = await prodServer({ limits: { maxSocketsGlobal: 1 } });
     try {
-      const cookie = cookieFrom(await bootstrap(tight.port));
+      const cookie = await profiled(tight.port);
       const one = await upgrade(tight.port, { cookie });
       const two = await upgrade(tight.port, { cookie });
       assert.equal(one.status, 101);
@@ -417,8 +474,9 @@ describe("LIVE-2B upgrade", () => {
     ];
     const prod = await prodServer();
     try {
-      const cookie = cookieFrom(await bootstrap(prod.port));
+      const cookie = await profiled(prod.port);
       const socket = await upgrade(prod.port, { cookie });
+      assert.equal(socket.status, 101);
       for (const frame of legacy) socket.socket?.send(JSON.stringify(frame));
       await until(() => socket.frames.filter((frame) => frame.code === "bad-frame").length === legacy.length, "every legacy frame refused");
       assert.equal(socket.frames.filter((frame) => frame.code === "no-seat-identity").length, 0);
@@ -447,7 +505,7 @@ describe("LIVE-2B upgrade", () => {
     const clock = { now: 1_750_000_000_000 };
     const { server, port } = await prodServer({ clock, limits: { sweepIntervalMs: 50 } });
     try {
-      const cookie = cookieFrom(await bootstrap(port));
+      const cookie = await profiled(port);
       const active = await upgrade(port, { cookie });
       const idle = await upgrade(port, { cookie });
       clock.now += 30 * DAY;
@@ -477,7 +535,7 @@ describe("LIVE-2B limits", () => {
   test("every upgrade: per address (429) and for the whole server (503)", async () => {
     const perIp = await prodServer({ limits: { upgradesPerIp: { capacity: 2, refillPerSecond: 0.001 } } });
     try {
-      const cookie = cookieFrom(await bootstrap(perIp.port));
+      const cookie = await profiled(perIp.port);
       const a = await upgrade(perIp.port, { cookie });
       const b = await upgrade(perIp.port, { cookie });
       assert.equal((await upgrade(perIp.port, { cookie })).status, 429);
@@ -488,7 +546,7 @@ describe("LIVE-2B limits", () => {
     }
     const global = await prodServer({ limits: { upgradesGlobal: { capacity: 1, refillPerSecond: 0.001 } } });
     try {
-      const cookie = cookieFrom(await bootstrap(global.port));
+      const cookie = await profiled(global.port);
       const a = await upgrade(global.port, { cookie });
       assert.equal((await upgrade(global.port, { cookie })).status, 503);
       a.socket?.terminate();
@@ -722,6 +780,13 @@ describe("LIVE-2B nothing secret reaches a log line", () => {
       secrets.push(cookie, cookie.split(".")[2]);
       const session = service.peekSession(sessionIdOf(cookie));
       if (session) secrets.push(session.secret_hash);
+      // LIVE-2E: the profile's creation -- one refused by the store first -- and its recovery key.
+      store.failNext.push("definite");
+      assert.equal((await request(port, "/gs/api/profile", { cookie, body: JSON.stringify({ name: "Ann" }) })).status, 503);
+      const created = await request(port, "/gs/api/profile", { cookie, body: JSON.stringify({ name: "Ann" }) });
+      assert.equal(created.status, 201);
+      const recoveryKey = JSON.parse(created.body).recoveryKey as string;
+      secrets.push(recoveryKey, recoveryKey.split(".")[1]);
       await upgrade(port, { cookie: `${cookie}x` });
       await upgrade(port, { cookie, origin: "https://evil.example" });
       const socket = await upgrade(port, { cookie });
@@ -757,8 +822,9 @@ describe("LIVE-2B adversarial-review regressions", () => {
       devAuthenticator: null,
       limiter: new IdentityLimiter(limits, () => 0),
       limits,
-      counts: { global: () => 0, forIp: () => 0, forPrincipal: () => counts.principal ?? 0, forAggregate: () => counts.aggregate ?? 0 },
+      counts: { global: () => 0, forIp: () => 0, forPrincipal: () => counts.principal ?? 0, forAggregate: () => counts.aggregate ?? 0, forSession: () => 0 },
       now: () => 0,
+      hasProfile: (principalId: string) => identity.isProfiled(principalId),
     };
   }
   const req = (headers: Record<string, string>, remoteAddress = "203.0.113.1") => ({ url: "/gs", headers, socket: { remoteAddress } as never });
@@ -767,30 +833,43 @@ describe("LIVE-2B adversarial-review regressions", () => {
     const created = await identity.bootstrap({ kind: "none" }, false, now);
     return (created.kind === "ok" ? created.setCookie ?? "" : "").split(";")[0];
   }
+  /** LIVE-2E: a guest that has created its profile -- the only kind of principal a gate lets through. */
+  async function playerCookie(identity: IdentityService, now = 0): Promise<string> {
+    const cookie = await guestCookie(identity, now);
+    const made = await identity.createProfile(readSessionCookie(cookie), "Player", now);
+    assert.equal(made.kind, "ok");
+    return cookie;
+  }
 
   test("High: one address refused by its own limits cannot drain the server's 50/s budget", async () => {
     const identity = IdentityService.fromSnapshot(createMemoryIdentityStore(), { principals: [], sessions: [] });
     const gate = gateFor(identity, limitsWith({ upgradesGlobal: { capacity: 3, refillPerSecond: 0.0001 }, failedUpgradesPerIp: { capacity: 2, refillPerSecond: 0.0001 } }));
     const attacker = (n: number) => verdict(decideUpgrade(req({ origin: "https://evil.example" }), gate));
     assert.deepEqual([0, 1, 2, 3, 4, 5].map(attacker), ["origin:403", "origin:403", "ip:429", "ip:429", "ip:429", "ip:429"]);
-    const cookie = await guestCookie(identity);
+    const cookie = await playerCookie(identity);
     assert.equal(verdict(decideUpgrade(req({ origin: PROD_ORIGIN, cookie }, "198.51.100.2"), gate)), 101, "another address is served");
   });
 
   test("Medium: a principal at its socket cap does not spend its address's failed-upgrade budget (NAT neighbours)", async () => {
     const identity = IdentityService.fromSnapshot(createMemoryIdentityStore(), { principals: [], sessions: [] });
     const limits = limitsWith({ failedUpgradesPerIp: { capacity: 1, refillPerSecond: 0.0001 } });
-    const capped = gateFor(identity, limits, { principal: 3 });
-    const a = await guestCookie(identity);
+    const capped = gateFor(identity, limits, { principal: limits.maxSocketsPerPrincipal });
+    const a = await playerCookie(identity);
     for (let n = 0; n < 5; n += 1) assert.equal(verdict(decideUpgrade(req({ origin: PROD_ORIGIN, cookie: a }), capped)), "principal-cap:429");
-    const b = await guestCookie(identity);
+    const b = await playerCookie(identity);
     const neighbour = { ...capped, counts: { ...capped.counts, forPrincipal: () => 0 } };
     assert.equal(verdict(decideUpgrade(req({ origin: PROD_ORIGIN, cookie: b }), neighbour)), 101);
+    /* LIVE-2E review I3: an unprofiled browser's refusal (403 at the profile step) IS a failed upgrade, charged like an
+       Origin or authentication refusal -- the client never opens a socket before its profile exists, so only a
+       misbehaving one gets here, and it must not get more tries than a wrong cookie does. */
+    const unprofiled = await guestCookie(identity);
+    assert.equal(verdict(decideUpgrade(req({ origin: PROD_ORIGIN, cookie: unprofiled }), neighbour)), "profile:403");
+    assert.equal(verdict(decideUpgrade(req({ origin: PROD_ORIGIN, cookie: unprofiled }), neighbour)), "ip:429", "the address's failed budget (1) is spent");
   });
 
   test("Low/Medium: an IPv6 /48 holds at most ten addresses' worth of sockets", async () => {
     const identity = IdentityService.fromSnapshot(createMemoryIdentityStore(), { principals: [], sessions: [] });
-    const cookie = await guestCookie(identity);
+    const cookie = await playerCookie(identity);
     const full = gateFor(identity, limitsWith({}), { aggregate: 640 });
     assert.equal(verdict(decideUpgrade(req({ origin: PROD_ORIGIN, cookie }, "2001:db8:1:2::5"), full)), "ip:429");
     assert.equal(verdict(decideUpgrade(req({ origin: PROD_ORIGIN, cookie }, "203.0.113.7"), full)), 101, "IPv4 has no aggregate");

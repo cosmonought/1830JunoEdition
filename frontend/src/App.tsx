@@ -127,8 +127,11 @@ import {
 } from "./utils/sandboxRoom";
 /* LIVE-2D: the server-owned room protocol -- the room socket, the RoomView the waiting room renders, and the
    refusal sentences. */
+import { InGameHostControl } from "./components/InGameHostControl";
 import { roomOp, watchRoom, type RoomLoss } from "./utils/roomLink";
 import { DEV_IDENTITY_BUILD } from "./utils/devIdentity";
+/* LIVE-2E: a create names the host's seat after the profile when nobody chose a name. */
+import { profileNickname } from "./utils/profileApi";
 import {
   JOIN_CODE_EXAMPLE,
   parseJoinCode,
@@ -4235,7 +4238,6 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   /* Log index of the last round-opening action, derived from the log rather than counted, so an undo cannot leave it stale.
      See docs/ai_architecture/state_machine.md - App.tsx #592 */
   const roundBoundaryIndexRef = useRef<number | null>(null);
-  const sandboxSeatRef = useRef<string>("");
   useEffect(() => {
     sandboxRoomRef.current = sandboxRoomCode;
   }, [sandboxRoomCode]);
@@ -4248,12 +4250,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      the reducer everywhere it could be sent (UR-7), and the room document it lived on is gone. The host is read
      from the server's view: `you.role`. */
   const isSandboxHost = sandbox && sandboxRoom !== null && sandboxRoom.you.role === "host";
-  /* Who the log records as having acted. A LABEL, not an identity -- the
-     sandbox has no authentication and this is for the readout, not for
-     permission. */
-  useEffect(() => {
-    sandboxSeatRef.current = sandboxPlayerLabel(viewerAddress ?? "") ?? "sandbox";
-  }, [viewerAddress]);
+  /* LIVE-2E: `sandboxSeatRef` (a readout label that also named the host's seat at create) is gone -- a create sends the
+     profile's name (`profileNickname`), and the server seeds a seat from the profile when none is sent. */
 
   const [routesRunThisTurn, setRoutesRunThisTurn] = useState<{
     protocolId: number;
@@ -12454,7 +12452,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             },
             onError: (message) => {
               linkExplainedRef.current = true;
-              setSandboxRoomError(withoutSupportRef(message));
+              /* LIVE-2E: the socket's own `error` event ("connection error") always precedes that socket's close,
+                 and the link reconnects after it by itself. Shown verbatim it REPLACED the reconnecting banner,
+                 which `onStatus("open")` below is the only thing that clears -- so after a game-server restart
+                 every table kept "connection error" in its top bar although it was live again (e2e: restart with
+                 two devices seated). It is the reconnecting banner, and it goes when the socket is back. */
+              setSandboxRoomError(message === "connection error" ? RECONNECTING_BANNER : withoutSupportRef(message));
             },
             /* LIVE-2D: read access to this game was withdrawn (kicked, the table cancelled or expired, a private
                table dealt without this tab, a full watcher cap). The link has stopped; the shell says so once. */
@@ -12584,7 +12587,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     setSandboxRoomBusy(true);
     setSandboxRoomError(null);
     try {
-      const answer = await createHostedGame(STANDARD_VARIANTS, undefined, sandboxSeatRef.current || "Host");
+      /* LIVE-2E: nobody chose a name on this path, so the host's seat starts with the profile's. */
+      const answer = await createHostedGame(STANDARD_VARIANTS, undefined, profileNickname());
       const created = gameIdOf(answer);
       if (!answer.ok || created === null) {
         if (!answer.ok) sayRoomRefusal(answer.code, answer.reason);
@@ -12671,7 +12675,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
    *  change only THIS principal's own seat; the frame names no seat. */
   const handleSetSandboxNickname = useCallback(
     (nickname: string) => {
-      const named = nickname.trim() || "Player";
+      /* LIVE-2E: a cleared name falls back to the profile's, as a new seat's does on the server. */
+      const named = profileNickname(nickname) || "Player";
       /* Design note #1169: shown before it is written, so the control answers at once. */
       setPendingSeat((current) => ({ ...current, nickname: named }));
       void runRoomOp({ type: "set-profile", nickname: named }, { busy: false }).then((ok) => {
@@ -13560,7 +13565,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           // shown. Displaying "game #0" would invite someone to go looking
           // for game 0 on chain.
           <>
-            <span style={styles.sandboxBadge}>🧪 OFFLINE SANDBOX</span>
+            {/* LIVE-2E: a hosted table is a live, server-owned game -- not "offline" (the e2e run found the label
+                misleading). Only a table-less sandbox is OFFLINE SANDBOX. */}
+            <span style={styles.sandboxBadge}>{sandboxRoomCode ? "♜ HOSTED TABLE" : "🧪 OFFLINE SANDBOX"}</span>
             {/* LIVE-2D: the seat-PIN chips (#1341) and the forced-sign chip (#1128) are gone with the seat PINs and the
                 room document. A watcher is told so here, since nothing on the board is theirs to press. */}
             {sandboxRoom !== null && localId === "" && (
@@ -13568,6 +13575,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                 👁 Watching
               </span>
             )}
+            {/* LIVE-2E: the host hands the role on mid-game -- the same `transfer-host` op as the waiting room's. */}
+            <InGameHostControl room={sandboxRoom} busy={sandboxRoomBusy} onTransferHost={handleTransferHost} />
             {/* ==================================================================
                 DESIGN NOTE 1119: A LABEL THAT OUTLIVED BOTH THINGS IT NAMED
                ==================================================================

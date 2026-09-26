@@ -80,7 +80,8 @@ describe("the table's house rules travel with `create` and live on the server's 
   it("opens a table from the shell's own gate on the printed game", () => {
     /* A table that opened on `undefined` would deal 1830 anyway -- `resolveVariants` sees to that -- but the
        waiting room would render its terms from a config nobody had chosen. */
-    expect(readStripped("App.tsx")).toContain("createHostedGame(STANDARD_VARIANTS, undefined, sandboxSeatRef.current || \"Host\")");
+    /* LIVE-2E: the host's seat is named after the profile (`profileNickname`), not the retired readout label. */
+    expect(readStripped("App.tsx")).toContain("createHostedGame(STANDARD_VARIANTS, undefined, profileNickname())");
   });
 });
 

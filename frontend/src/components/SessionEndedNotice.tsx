@@ -1,28 +1,32 @@
 // frontend/src/components/SessionEndedNotice.tsx
 //
-// LIVE-2B (LIVE-2 §4.1): THE EXPLICIT NEW-GUEST DECISION. When the server says this browser's session has ended
-// (`401 session-ended`), the links stop and this notice asks the player. Only the button replaces the identity
-// -- `POST /gs/api/session {"fresh": true}` -- and then the page reloads under the new guest. There is no
-// automatic path and no console-only one. Seat transfer and recovery are LIVE-2E's; this says so plainly.
+// LIVE-2B (LIVE-2 §4.1): THE EXPLICIT DECISION AFTER A SESSION ENDS. When the server says this browser's session has
+// ended (`401 session-ended`), the links stop and this notice asks the player. Only the button replaces the session
+// -- `POST /gs/api/session {"fresh": true}` -- and then the page reloads. There is no automatic path and no
+// console-only one.
+//
+// LIVE-2E: PROFILES ARE MANDATORY, so "Continue" no longer starts anybody new: it gives this browser a fresh,
+// unprofiled session and the reload lands on `ProfileGate`, where the recovery key (or a link code from another
+// signed-in device) brings the SAME profile back -- with its seats, which the server kept all along.
 
-import React, { useEffect, useState } from "react";
+import { forgetActiveTable } from "../utils/activeGame";
+import React, { useState } from "react";
 
 import { sessionEndedSentence, sessionPort, type SessionPort } from "../utils/sessionBootstrap";
+import { useSession } from "../utils/useSession";
+import { disabledLook, profileStyles as styles } from "./profileStyles";
 
 export function SessionEndedNotice({ port = sessionPort() }: { port?: SessionPort }): JSX.Element | null {
-  const [state, setState] = useState(port.state);
+  const { state, endedReason } = useSession(port);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
-  useEffect(() => {
-    setState(port.state);
-    return port.subscribe(() => setState(port.state));
-  }, [port]);
   if (state !== "ended") return null;
   const continueFresh = async () => {
     setBusy(true);
     setFailed(false);
     const next = await port.startFresh();
-    if (next === "ready") {
+    if (next === "unprofiled" || next === "ready") {
+      forgetActiveTable();
       window.location.reload();
       return;
     }
@@ -30,32 +34,30 @@ export function SessionEndedNotice({ port = sessionPort() }: { port?: SessionPor
     setFailed(true);
   };
   return (
-    <div
-      role="alertdialog"
-      aria-labelledby="session-ended-title"
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 10000,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        background: "rgba(0, 0, 0, 0.6)",
-      }}
-    >
-      <div style={{ maxWidth: 420, padding: 24, borderRadius: 8, background: "#1d2230", color: "#f2f2f2", fontFamily: "sans-serif" }}>
-        <h2 id="session-ended-title" style={{ marginTop: 0 }}>
-          Your session on this browser has ended
+    <div role="alertdialog" aria-labelledby="session-ended-title" style={styles.overlay}>
+      <div style={{ ...styles.card, maxWidth: "440px" }}>
+        <h2 id="session-ended-title" style={styles.heading}>
+          You're signed out on this browser
         </h2>
-        <p>{sessionEndedSentence(port.endedReason)}</p>
-        <p>
-          Continuing starts over as a new guest. Seats held by the old session stay with it; moving a seat to a new
-          session is not available yet.
+        <p style={styles.text}>{sessionEndedSentence(endedReason)}</p>
+        <p style={styles.text}>
+          Your profile and its seats are kept. To sign this browser back in, continue and use your recovery key, or a
+          link code from another device that is still signed in.
         </p>
-        <button type="button" onClick={() => void continueFresh()} disabled={busy} style={{ padding: "8px 16px", fontSize: 16 }}>
-          {busy ? "Starting…" : "Continue as a new guest"}
+        <button
+          type="button"
+          onClick={() => void continueFresh()}
+          disabled={busy}
+          style={disabledLook(styles.primary, busy)}
+          data-testid="session-ended-continue"
+        >
+          {busy ? "Continuing…" : "Continue"}
         </button>
-        {failed ? <p role="alert">The game server could not be reached. Try again in a moment.</p> : null}
+        {failed ? (
+          <p role="alert" style={styles.error}>
+            The game server could not be reached. Try again in a moment.
+          </p>
+        ) : null}
       </div>
     </div>
   );

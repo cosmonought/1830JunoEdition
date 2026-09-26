@@ -10,6 +10,7 @@
 // is already on "disk" before the server starts (a restart, a stored history), exactly as the file adapter would find
 // it.
 
+import * as http from "http";
 import { WebSocket } from "ws";
 
 import { createGameServer, type GameServerIdentity, type GameServerOptions } from "../gameServer";
@@ -189,7 +190,16 @@ export const ROOMY_IDENTITY_LIMITS: Partial<IdentityLimits> = Object.freeze({
   upgradesPerIp: { capacity: 1e6, refillPerSecond: 1e6 },
   upgradesGlobal: { capacity: 1e6, refillPerSecond: 1e6 },
   maxSocketsPerPrincipal: 1_000,
+  /* LIVE-2E: a development claim is one session, so a suite's many sockets for one claim meet this cap too. */
+  maxSocketsPerSession: 1_000,
   maxSocketsPerIp: 10_000,
+  /* LIVE-2E: every production browser a suite makes is a bootstrap and a profile creation from 127.0.0.1, and some
+     redeem credentials; the suites that are about those budgets set them explicitly. */
+  guestCreatesPerIp: { capacity: 1e6, refillPerSecond: 1e6 },
+  profileCreatesPerIp: { capacity: 1e6, refillPerSecond: 1e6 },
+  credentialRedeemsPerIp: { capacity: 1e6, refillPerSecond: 1e6 },
+  profileActionsPerSession: { capacity: 1e6, refillPerSecond: 1e6 },
+  credentialRedeemsPerSession: { capacity: 1e6, refillPerSecond: 1e6 },
 });
 
 /** LIVE-2D: every game is server-owned now, so every suite meets the room limits (creates, membership ops, the
@@ -261,15 +271,28 @@ let requests = 0;
 export class Client {
   readonly frames: Frame[] = [];
   private cursor = 0;
+  /** The close code, once the socket closes (LIVE-2E: 4401 when its session ends). */
+  readonly closed: Promise<number>;
 
   private constructor(
     readonly socket: WebSocket,
     readonly claim: string,
-  ) {}
+  ) {
+    this.closed = new Promise((resolve) => socket.once("close", (code) => resolve(code)));
+  }
 
   static open(port: number, claim: string): Promise<Client> {
+    return Client.connect(new WebSocket(devSocketUrl(port, claim), { origin: DEV_ORIGIN }), claim);
+  }
+
+  /** LIVE-2E: a PRODUCTION socket -- `/gs`, the browser's session cookie and an allowed Origin, exactly as a browser
+   *  opens one. `label` only names the client in a timeout message. Rejects when the upgrade is refused. */
+  static openWithCookie(port: number, cookie: string, label: string, origin: string = PROD_ORIGIN): Promise<Client> {
+    return Client.connect(new WebSocket(`ws://127.0.0.1:${port}/gs`, { headers: { Cookie: cookie }, origin }), label);
+  }
+
+  private static connect(socket: WebSocket, claim: string): Promise<Client> {
     return new Promise((resolve, reject) => {
-      const socket = new WebSocket(devSocketUrl(port, claim), { origin: DEV_ORIGIN });
       const client = new Client(socket, claim);
       openClients.add(client);
       socket.on("close", () => openClients.delete(client));
@@ -453,6 +476,100 @@ export async function seedGame(records: RecordStore, claims: readonly string[] =
   if (put.kind !== "committed") throw new Error(`seedGame: the record store refused the seed (${JSON.stringify(put)})`);
   return record.game_id;
 }
+
+/* ==================================================================
+    LIVE-2E: PRODUCTION BROWSERS -- A COOKIE, AND A PROFILE BEFORE ANY GAME SOCKET
+   ==================================================================
+   Profiles are mandatory: a production (cookie) principal opens no game socket until its browser has created, recovered
+   or linked a profile -- the upgrade answers 403 (step "profile"). So a suite that needs a real cookie principal on a
+   socket walks what a browser walks: `POST /gs/api/session` (201 + the session cookie), then `POST /gs/api/profile`
+   (201 + the recovery key, shown once). Real HTTP, the allowed Origin, JSON. */
+export const PROD_ORIGIN = "https://play.example";
+
+export interface ApiAnswer {
+  status: number;
+  headers: http.IncomingHttpHeaders;
+  /** The raw body text (`""` for none). */
+  text: string;
+  /** The parsed body, or `null` for an empty or non-JSON one. */
+  body: Record<string, unknown> | null;
+}
+
+/** One request to the same-origin API, as a browser sends it (POST, the allowed Origin, JSON) unless told otherwise. */
+export function apiRequest(
+  port: number,
+  pathname: string,
+  options: { cookie?: string; body?: object | string; origin?: string | null; contentType?: string | null; method?: string; headers?: Record<string, string> } = {},
+): Promise<ApiAnswer> {
+  return new Promise((resolve, reject) => {
+    const headers: Record<string, string> = { ...(options.headers ?? {}) };
+    if (options.origin !== null) headers.Origin = options.origin ?? PROD_ORIGIN;
+    if (options.contentType !== null) headers["Content-Type"] = options.contentType ?? "application/json";
+    if (options.cookie) headers.Cookie = options.cookie;
+    const method = options.method ?? "POST";
+    const payload = typeof options.body === "string" ? options.body : JSON.stringify(options.body ?? {});
+    const req = http.request({ host: "127.0.0.1", port, path: pathname, method, headers }, (res) => {
+      let text = "";
+      res.on("data", (chunk) => (text += String(chunk)));
+      res.on("end", () => {
+        let body: Record<string, unknown> | null = null;
+        try {
+          body = text === "" ? null : (JSON.parse(text) as Record<string, unknown>);
+        } catch {
+          body = null;
+        }
+        resolve({ status: res.statusCode ?? 0, headers: res.headers, text, body });
+      });
+    });
+    req.on("error", reject);
+    if (method === "GET" || method === "HEAD") req.end();
+    else req.end(payload);
+  });
+}
+
+/** The cookie one Set-Cookie delivered, as the browser sends it back (`name=value`), or `null` when none was set. */
+export function cookieFromAnswer(answer: ApiAnswer): string | null {
+  const set = answer.headers["set-cookie"];
+  if (!set || set.length !== 1) return null;
+  return set[0].split(";")[0];
+}
+
+/** A fresh browser: `POST /gs/api/session` with no cookie -- 201 and a new, UNPROFILED principal's cookie. */
+export async function bootstrapCookie(port: number, origin: string = PROD_ORIGIN): Promise<string> {
+  const answer = await apiRequest(port, "/gs/api/session", { origin });
+  const cookie = cookieFromAnswer(answer);
+  if (answer.status !== 201 || cookie === null) throw new Error(`bootstrap: expected 201 + a cookie, got ${answer.status} ${answer.text}`);
+  return cookie;
+}
+
+export interface ProfiledBrowser {
+  /** The session cookie (`__Host-gs_session=v1.se_….<secret>`), unchanged by the profile's creation. */
+  cookie: string;
+  /** The recovery key, as the one response that delivers it showed it. */
+  recoveryKey: string;
+  /** The profile's display name as the server cleaned it. */
+  name: string;
+}
+
+/** LIVE-2E: "bootstrap + create profile + cookie" over real HTTP -- a browser that may now open game sockets. */
+export async function profiledBrowser(port: number, name = "Player", origin: string = PROD_ORIGIN): Promise<ProfiledBrowser> {
+  const cookie = await bootstrapCookie(port, origin);
+  const created = await apiRequest(port, "/gs/api/profile", { cookie, body: { name }, origin });
+  if (created.status !== 201 || created.body === null) throw new Error(`create profile: expected 201, got ${created.status} ${created.text}`);
+  const profile = created.body.profile as { name: string };
+  return { cookie, recoveryKey: created.body.recoveryKey as string, name: profile.name };
+}
+
+/** `profiledBrowser`, when only the cookie is wanted. */
+export async function profiledCookie(port: number, name = "Player", origin: string = PROD_ORIGIN): Promise<string> {
+  return (await profiledBrowser(port, name, origin)).cookie;
+}
+
+/** The session id (`se_…`) a session cookie carries -- for `server.identity.peekSession` and the socket indexes. */
+export const sessionIdOfCookie = (cookie: string): string => cookie.split("=")[1].split(".")[1];
+
+/** A session cookie as the identity service reads it. */
+export const cookieRead = (cookie: string) => ({ kind: "session" as const, sessionId: sessionIdOfCookie(cookie), secret: cookie.split(".")[2] });
 
 /** A session built exactly as the server builds one, for computing logs and boards outside it. */
 export function probeSession(tag = "probe"): RoomSession {

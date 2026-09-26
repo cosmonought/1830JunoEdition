@@ -44,6 +44,9 @@ import { useUiScale } from "../utils/useUiScale";
 // Design note #524: the sandbox lobby lives on this screen now.
 import SandboxRoomBar from "./SandboxRoomBar";
 import { createHostedGame, gameIdOf, joinHostedGame, type RoomSetup } from "../utils/sandboxRoom";
+/* LIVE-2E: the profile chip (link a device, rotate the key, sign out), and the profile's name as the host's seat name. */
+import { ProfileMenu } from "./ProfileMenu";
+import { profileNickname } from "../utils/profileApi";
 // #1415: the host's setup card -- type, pace, visibility, then the house rules -- before the room exists; and
 // the join card, the code box for an unlisted table.
 import { HostSetupCard } from "./HostSetupCard";
@@ -85,7 +88,7 @@ function disabledButtonStyle(
 export interface LobbyProps {
   /** LIVE-2D: enter a server-owned table by its `gameId` -- after Host (the server seated the host), Join (the server
    *  seated this principal, or admitted it to watch), or Watch on a public row (no op at all: a public table is
-   *  readable by any authenticated guest). The shell opens the table's RoomView and log by that id; the seat, if
+   *  readable by any signed-in profile). The shell opens the table's RoomView and log by that id; the seat, if
    *  any, is the server's answer in `RoomView.you`, never this screen's. */
   onEnterSandbox: (gameId: string) => void;
 }
@@ -232,7 +235,8 @@ export function Lobby({ onEnterSandbox }: LobbyProps) {
           setSandboxRoomError("The game server is not configured in this build.");
           return;
         }
-        const answer = await createHostedGame(variants, setup, "Host");
+        /* LIVE-2E: the lobby has no name field, so the host's seat starts with the profile's name. */
+        const answer = await createHostedGame(variants, setup, profileNickname());
         const gameId = gameIdOf(answer);
         if (!answer.ok || gameId === null) {
           setSandboxRoomError(answer.ok ? refusalMessage("internal") : sayRefusal(answer.code, answer.reason));
@@ -343,6 +347,9 @@ export function Lobby({ onEnterSandbox }: LobbyProps) {
           </div>
         )}
         <div style={styles.utilityAccount}>
+        {/* LIVE-2E: who this browser plays as -- the profile chip, first in the account corner. Its menu links another
+            device, rotates the recovery key and signs devices out. */}
+        <ProfileMenu />
         {/* Design note #1336: the text-size control, on the first screen a player sees. The same component
             as the bars'; the scale it writes is the one every later screen reads. */}
         <UiScalePicker />
@@ -551,7 +558,7 @@ export function Lobby({ onEnterSandbox }: LobbyProps) {
         busy={sandboxRoomBusy}
         refusal={roomRefusal}
         onJoin={(code) => void handleJoinListedRoom(code)}
-        /* LIVE-2D: Watch needs no op -- a public table is readable by any authenticated guest; the shell opens its
+        /* LIVE-2D: Watch needs no op -- a public table is readable by any signed-in profile; the shell opens its
            RoomView and log by game id, and the viewer holds no seat and is never given one. */
         onWatch={(gameId) => onEnterSandbox(gameId)}
       />

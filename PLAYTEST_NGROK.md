@@ -215,9 +215,13 @@ actually from outside your machine.
 Send players the `https://` URL, and tell them two things:
 
 - **ngrok shows a warning page first.** Click **Visit Site**. It appears once per browser.
-- **One browser each.** A guest is its browser's session cookie, so every tab of one browser is the same player
-  (a reload keeps the seat). To play two seats yourself, use a second browser or a private window. This only
-  really binds you: everyone else is on their own machine.
+- **Make a profile first.** The first visit asks for a name (**Create profile**) and shows a recovery key once --
+  save it: it is the way back in from a new browser. A second device of your own joins the same profile with
+  **Profile → Link another device** on the first one and **Link existing profile** on the second (a code that works
+  once, for 10 minutes); it then has your seats. (LIVE-2E: there is no playing without a profile.)
+- **One browser each.** A player is their profile, and every tab of one browser is the same player (a reload keeps
+  the seat). To play two seats yourself, use two profiles in two browsers (or a normal and a private window). This
+  only really binds you: everyone else is on their own machine.
 
 **Use the ngrok URL yourself too**, rather than `localhost`. One origin for everybody is one story to debug.
 

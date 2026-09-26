@@ -234,15 +234,17 @@ function identityBanner(): string {
   const posture =
     config.mode === "development"
       ? "  DEVELOPMENT IDENTITY: each tab is who its ?dev_claim= says, loopback only (Origin, Host and peer) -- NEVER point a tunnel at this server\n" +
+        "  profiles: each development claim has a synthetic development profile (never stored); the same profile gate as production\n" +
         "  rooms: the server-owned protocol (room-op, GameRecords in games/) -- the same one production runs\n" +
         "  remote playtests: run GS_MODE=production behind the tunnel (see PLAYTEST_TRANSPORT.md), never this mode\n"
       : `  PRODUCTION IDENTITY: the ${SESSION_COOKIE_NAME} cookie (Secure; HttpOnly; SameSite=Strict), bootstrapped at POST /gs/api/session; trusted proxy hops ${config.trustedProxyHops}\n` +
+        "  profiles: REQUIRED to play (LIVE-2E) -- create, recover (recovery key) or link a device at /gs/api/profile/*; an unprofiled browser opens no game socket\n" +
         "  rooms: the server-owned protocol (room-op, GameRecords in games/)\n";
   return (
     posture +
     `  allowed origins: ${config.allowedOrigins.join(", ")}${config.notes.length > 0 ? ` (${config.notes.join("; ")})` : ""}\n` +
-    `  limits: ${limits.maxSocketsGlobal} sockets, ${limits.maxSocketsPerIp} per address, ${limits.maxSocketsPerPrincipal} per player ` +
-    `(${limits.maxSocketsPerProvisionalPrincipal} new guest); upgrades 60/min per address, 50/s in all\n`
+    `  limits: ${limits.maxSocketsGlobal} sockets, ${limits.maxSocketsPerIp} per address, ${limits.maxSocketsPerSession} per browser, ` +
+    `${limits.maxSocketsPerPrincipal} per player (${limits.maxSocketsPerProvisionalPrincipal} before a first table); upgrades 60/min per address, 50/s in all\n`
   );
 }
 

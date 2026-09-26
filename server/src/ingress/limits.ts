@@ -99,6 +99,22 @@ export interface IdentityLimits {
    *  (each is a new durable session record for an activated guest): burst 5, then 10 an hour. Two tabs and a lost
    *  Set-Cookie need two or three; a replayed or stolen rotated cookie gets no more. */
   graceMintsPerSession: BucketSpec;
+  /** LIVE-2E: profile creations, per IP key (each writes durable records): burst 5, then 10 an hour. */
+  profileCreatesPerIp: BucketSpec;
+  /** LIVE-2E: profile creations, the whole server: 300 an hour. */
+  profileCreatesGlobal: BucketSpec;
+  /** LIVE-2E: recovery-key and link-code redemptions -- right or wrong -- per IP key: burst 10, then 30 an hour.
+   *  Independent of every room limit; a guess costs the same as a right answer. */
+  credentialRedeemsPerIp: BucketSpec;
+  /** LIVE-2E: the same, per SESSION (the browser making them): burst 10, then 30 an hour. There is no server-wide
+   *  redemption budget (LIVE-2E review M1): it would let a few addresses switch recovery off for everybody. */
+  credentialRedeemsPerSession: BucketSpec;
+  /** LIVE-2E: link-code issues, recovery-key rotations and "sign out other devices", per SESSION (review H1: a
+   *  principal-wide budget let one device starve the owner's others): burst 6, then 30 an hour. */
+  profileActionsPerSession: BucketSpec;
+  /** LIVE-2E: sockets per SESSION -- one browser or device, all of its tabs (they share the cookie). */
+  maxSocketsPerSession: number;
+  /** Sockets per principal, across every session (device) that authenticates it. */
   maxSocketsPerPrincipal: number;
   maxSocketsPerProvisionalPrincipal: number;
   maxSocketsPerIp: number;
@@ -164,8 +180,21 @@ export const DEFAULT_INGRESS_LIMITS: IngressLimits = Object.freeze({
     guestCreatesGlobal: { capacity: 600, refillPerSecond: 600 / 3600 },
     bootstrapsPerSession: { capacity: 60, refillPerSecond: perMinute(60) },
     graceMintsPerSession: { capacity: 5, refillPerSecond: 10 / 3600 },
-    maxSocketsPerPrincipal: 12,
-    maxSocketsPerProvisionalPrincipal: 3,
+    profileCreatesPerIp: { capacity: 5, refillPerSecond: 10 / 3600 },
+    profileCreatesGlobal: { capacity: 300, refillPerSecond: 300 / 3600 },
+    credentialRedeemsPerIp: { capacity: 10, refillPerSecond: 30 / 3600 },
+    credentialRedeemsPerSession: { capacity: 10, refillPerSecond: 30 / 3600 },
+    profileActionsPerSession: { capacity: 6, refillPerSecond: 30 / 3600 },
+    /* LIVE-2E: THE CAPS FROM THE CLIENT'S ACTUAL TOPOLOGY. One tab holds at most THREE sockets: the lobby channel
+       (the public list and the create/join ops; it closes 1.5 s after nothing listens), one room channel per open
+       table (its view, chat and presence share it) and the game-log link -- two while seated at a table, one in the
+       lobby, three only in the moment between them. So a session (a browser: its tabs share the cookie) is allowed
+       FOUR TABS at that peak (12), and a principal TWO DEVICES at theirs (24). The per-address (64, 640 per /48) and
+       global (2,000) caps are unchanged: a household or a NAT is bounded exactly as before. A new, never-activated
+       browser gets two tabs (6) -- enough not to be refused for opening a second tab, still bounded per address. */
+    maxSocketsPerSession: 12,
+    maxSocketsPerPrincipal: 24,
+    maxSocketsPerProvisionalPrincipal: 6,
     maxSocketsPerIp: 64,
     maxSocketsGlobal: 2_000,
     malformedClosesForCooldown: 3,

@@ -45,7 +45,7 @@ import { createServer, type Server as HttpServer } from "http";
 import { WebSocketServer, type WebSocket } from "ws";
 
 import { decideUpgrade, refuseUpgrade, type ConnectionContext } from "./identity/authenticateUpgrade";
-import type { DevAuthenticator } from "./identity/devAuthenticator";
+import { DEV_PRINCIPAL_PREFIX, devClaimOf, type DevAuthenticator } from "./identity/devAuthenticator";
 import { handleIdentityHttp } from "./identity/httpApi";
 import { IdentityLimiter } from "./identity/limiter";
 import type { GsMode } from "./identity/mode";
@@ -816,6 +816,19 @@ export function createGameServer(options: GameServerOptions): {
   };
   /* LIVE-2C: THE ACTIVATION SEAM is at the server-owned room boundary (`rooms/roomHost.ts`): create, join and
      take-seat make the principal durable BEFORE the task that writes a GameRecord naming it. */
+
+  /* ==================================================================
+      LIVE-2E: A PROFILE IS REQUIRED TO PLAY
+     ==================================================================
+     A cookie principal plays only once it has a profile (`identity.isProfiled`). A DEVELOPMENT principal
+     (`pr_dev_<claim>`, loopback only) has a synthetic development profile named for its claim -- in development mode
+     only, and never stored, exactly like the principal itself -- so local play runs the same gate and the same room
+     model. In production a `pr_dev_` principal cannot exist (no cookie maps to one), and this answers `false` anyway. */
+  const developmentProfiles = mode === "development" && (identityOptions.devAuthenticator ?? null) !== null;
+  const hasProfile = (principalId: string): boolean =>
+    principalId.startsWith(DEV_PRINCIPAL_PREFIX) ? developmentProfiles : identity.isProfiled(principalId);
+  const profileNameOf = (principalId: string): string | null =>
+    principalId.startsWith(DEV_PRINCIPAL_PREFIX) ? (developmentProfiles ? devClaimOf(principalId) : null) : identity.profileName(principalId);
   identity.setHooks({
     onSessionsEnded: (sessionIds) => {
       for (const sessionId of sessionIds) for (const socket of [...(socketsBySession.get(sessionId) ?? [])]) closeForSession(socket, "revoked");
@@ -847,6 +860,7 @@ export function createGameServer(options: GameServerOptions): {
     shuffle: options.shuffle ?? ((items) => cryptoShuffle(items)),
     onSubscriptionChange: (socket) => reindexGames(socket),
     readersOf: (gameId) => socketsByGame.get(gameId) ?? [],
+    profileNameOf,
     errorRef,
     // eslint-disable-next-line no-console
     warn: (line) => console.warn(line),
@@ -933,8 +947,10 @@ export function createGameServer(options: GameServerOptions): {
           forIp: (key) => socketsByIp.get(key)?.size ?? 0,
           forAggregate: (aggregate) => socketsByAggregate.get(aggregate)?.size ?? 0,
           forPrincipal: (principalId) => socketsByPrincipal.get(principalId)?.size ?? 0,
+          forSession: (sessionId) => socketsBySession.get(sessionId)?.size ?? 0,
         },
         now: identityNow,
+        hasProfile,
       });
     } catch (error) {
       const ref = errorRef();
@@ -1185,6 +1201,22 @@ export function createGameServer(options: GameServerOptions): {
         return;
       }
       buckets.consecutiveLimited = 0;
+
+      /* LIVE-2E: DEFENCE IN DEPTH. The upgrade already refused an unprofiled principal, and a profile is never taken
+         away (a disabled one ends every session, 4401) -- but no room, list, log, chat, presence or move frame is
+         handled for a principal without one, whatever path it came by. One answer, `profile-required`, before any game
+         is looked up, so nothing about a table's existence is said. */
+      if (!hasProfile(ctx.principalId)) {
+        const reason = "Create or sign in to a profile to play.";
+        if (frame.kind === "room-op") {
+          send(socket, { kind: "room-ack", requestId: (frame as unknown as { requestId: string }).requestId, ok: false, code: "profile-required", reason });
+        } else if (frame.kind === "submit") {
+          send(socket, answering({ kind: "refused", code: "profile-required", reason, build: options.build }, submissionIdOf(frame)));
+        } else if (frame.kind !== "presence-set") {
+          send(socket, { kind: "error", code: "profile-required", reason });
+        }
+        return;
+      }
 
       /* ==================================================================
           LIVE-2D: ONE ROOM PROTOCOL, BY `gameId`

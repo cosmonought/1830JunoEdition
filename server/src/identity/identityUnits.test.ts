@@ -6,6 +6,7 @@
 
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "crypto";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -18,11 +19,20 @@ import { createDevAuthenticator, devClaimOf, isLoopbackAddress } from "./devAuth
 import { createFileIdentityStore, IDENTITY_FILE } from "./fileStore";
 import {
   base32Lower,
+  canonicalLinkCode,
+  linkCodeHash,
+  mintLinkCode,
   mintPrincipalId,
+  mintProfileId,
+  mintRecoveryKey,
   mintSecret,
   mintSessionId,
   mintUnique,
+  parseRecoveryKey,
   PRINCIPAL_ID_PATTERN,
+  PROFILE_ID_PATTERN,
+  RECOVERY_KEY_PATTERN,
+  RECOVERY_SELECTOR_PATTERN,
   secretBytes,
   secretHash,
   secretMatches,
@@ -98,6 +108,44 @@ describe("LIVE-2B ids", () => {
   });
 });
 
+describe("LIVE-2E profile ids, recovery keys and link codes", () => {
+  test("a profile id is pf_ + 26 canonical symbols; a recovery key is rk_<selector>.<secret>, parsed only in its canonical spelling", () => {
+    assert.match(mintProfileId(), PROFILE_ID_PATTERN);
+    const { selector, secret, key } = mintRecoveryKey();
+    assert.match(selector, RECOVERY_SELECTOR_PATTERN);
+    assert.match(key, RECOVERY_KEY_PATTERN);
+    assert.equal(key, `${selector}.${secret}`);
+    assert.equal(secretBytes(secret)?.length, 32, "a 256-bit secret, the session cookie's shape");
+    assert.deepEqual(parseRecoveryKey(` \n${key}\t `), { selector, secret }, "surrounding whitespace is forgiven");
+    const padBitsSet = `${secret.slice(0, 42)}${secret[42] === "B" ? "C" : "B"}`;
+    for (const bad of [key.toUpperCase(), `${key}=`, `${key}x`, key.replace(".", ":"), `${selector}.${secret.slice(1)}`, `${selector}.${padBitsSet}`, selector, `pr_${key.slice(3)}`, "", `${" ".repeat(170)}${key}`, 42, null]) {
+      assert.equal(parseRecoveryKey(bad), null, String(bad));
+    }
+  });
+
+  test("a link code: 20 Crockford symbols shown as five groups of four; case, spaces, hyphens and look-alikes forgiven; kept only as a domain-separated digest", () => {
+    const seen = new Set<string>();
+    for (let n = 0; n < 200; n += 1) {
+      const { canonical, display } = mintLinkCode();
+      assert.match(canonical, /^[0-9A-HJKMNP-TV-Z]{20}$/);
+      assert.match(display, /^[0-9A-HJKMNP-TV-Z]{4}(-[0-9A-HJKMNP-TV-Z]{4}){4}$/);
+      assert.equal(display.replace(/-/g, ""), canonical);
+      assert.equal(canonicalLinkCode(display.toLowerCase()), canonical);
+      assert.equal(canonicalLinkCode(` ${(canonical.match(/.{5}/g) as string[]).join(" ")} `), canonical);
+      seen.add(canonical);
+    }
+    assert.equal(seen.size, 200);
+    assert.equal(canonicalLinkCode("iiii-llll-oooo-0000-1111"), "11111111000000001111", "I and L are 1, O is 0");
+    for (const bad of ["", "ABCD-EFGH", "ABCD-EFGH-JKMN-PQRS-TVWXY", "UUUU-UUUU-UUUU-UUUU-UUUU", "ABCD_EFGH_JKMN_PQRS_TVWX", "A".repeat(65), 7, null]) {
+      assert.equal(canonicalLinkCode(bad), null, String(bad));
+    }
+    const code = mintLinkCode().canonical;
+    assert.match(linkCodeHash(code), /^[0-9a-f]{64}$/);
+    assert.notEqual(linkCodeHash(code), createHash("sha256").update(code).digest("hex"), "domain-separated from a bare SHA-256");
+    assert.notEqual(linkCodeHash(code), linkCodeHash(mintLinkCode().canonical));
+  });
+});
+
 describe("LIVE-2B cookie", () => {
   const sessionId = mintSessionId();
   const secret = mintSecret();
@@ -142,7 +190,13 @@ describe("LIVE-2B sessions (the service, on a stepped clock)", () => {
     assert.equal(outcome.kind, "ok");
     assert.equal(outcome.kind === "ok" && outcome.created, true);
     assert.equal(store.stats.commits, 0);
-    assert.deepEqual(store.snapshot(), { principals: [], sessions: [] });
+    assert.deepEqual(store.snapshot(), { principals: [], sessions: [], profiles: [], links: [] });
+    // LIVE-2E: the principal a bootstrap mints is UNPROFILED -- it may reach the profile gate and nothing else.
+    const auth = identity.authenticate(readOf(outcome.kind === "ok" ? outcome.setCookie : null), T0);
+    assert.ok(auth.kind === "ok");
+    assert.equal(identity.peekPrincipal(auth.principalId)?.kind, "unprofiled");
+    assert.equal(identity.peekPrincipal(auth.principalId)?.account_link, null);
+    assert.equal(identity.isProfiled(auth.principalId), false);
   });
 
   test("idle expiry at 30 days; the write-behind slides it, at most once per 15 minutes", async () => {
@@ -331,6 +385,31 @@ describe("LIVE-2B sessions (the service, on a stepped clock)", () => {
     assert.deepEqual(identity.classify(read, false, T0 + 100 * DAY), { kind: "ended", reason: "expired" }, "still known at day 100");
     await identity.sweep(T0 + 182 * DAY);
     assert.equal(identity.sizes().sessions, 0, "collected after the cookie's 180 days");
+  });
+
+  test("LIVE-2E: createProfile binds THIS principal -- principal, sessions and profile in one commit; a refused commit changes nothing", async () => {
+    const { identity, store } = await service();
+    const created = await identity.bootstrap({ kind: "none" }, false, T0);
+    const read = readOf(created.kind === "ok" ? created.setCookie : null);
+    const principalId = (identity.authenticate(read, T0) as { principalId: string }).principalId;
+    assert.deepEqual(await identity.createProfile(read, " padded", T0), { kind: "bad-name" }, "the service takes only a cleaned name");
+    store.failNext.push("definite");
+    assert.deepEqual(await identity.createProfile(read, "Ann", T0), { kind: "unavailable" });
+    assert.equal(identity.isProvisional(principalId), true, "still provisional");
+    assert.equal(identity.isProfiled(principalId), false);
+    assert.equal(store.stats.commits, 0);
+    assert.equal((await identity.createProfile(read, "Ann", T0 + 1)).kind, "ok");
+    assert.equal(store.stats.commits, 1, "ONE commit");
+    const snapshot = store.snapshot();
+    assert.deepEqual([snapshot.principals.length, snapshot.sessions.length, snapshot.profiles.length], [1, 1, 1]);
+    assert.equal(snapshot.principals[0].principal_id, principalId, "the browser's own principal -- never a new one");
+    assert.equal(snapshot.principals[0].activated_at, T0 + 1);
+    assert.equal(identity.isProvisional(principalId), false);
+    assert.equal(identity.profileName(principalId), "Ann");
+    assert.deepEqual(identity.accountView(principalId, read.kind === "session" ? read.sessionId : "", T0 + 1), { name: "Ann", otherSessions: 0 });
+    assert.deepEqual(await identity.createProfile(read, "Other", T0 + 2), { kind: "already-profiled", name: "Ann" });
+    assert.deepEqual(await identity.createProfile({ kind: "none" }, "Ann", T0), { kind: "not-authenticated" });
+    assert.equal(store.stats.commits, 1);
   });
 });
 

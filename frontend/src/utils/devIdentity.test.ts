@@ -83,4 +83,32 @@ describe("development identity is build-time only (LIVE-2B)", () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  /* LIVE-2E: the LIVE-2D owner gate found the development branch's TEXT in `main.*.js.map` after the minifier had
+     deleted the code. Production maps are off for good (`.env.production`), `npm run build` runs the scan, and a map
+     in the bundle fails it whatever the map contains. */
+  it("production builds carry no source maps: .env.production turns them off, and the build script itself scans every build", () => {
+    const envProduction = fs.readFileSync(path.join(__dirname, "..", "..", ".env.production"), "utf8");
+    expect(envProduction).toMatch(/^GENERATE_SOURCEMAP=false$/m);
+    expect(envProduction).not.toMatch(/REACT_APP_DEV_IDENTITY/);
+    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "..", "package.json"), "utf8")) as { scripts: Record<string, string> };
+    /* LIVE-2E review L4: part of `build` itself, not a `postbuild` hook that `--ignore-scripts` (or a platform calling
+       react-app-rewired directly through npm) would skip. */
+    expect(pkg.scripts.build).toBe("react-app-rewired build && node scripts/scanDevIdentity.js");
+    expect(pkg.scripts.postbuild).toBeUndefined();
+  });
+
+  it("the bundle scanner reports every source map, clean or not", () => {
+    const scanner = require("../../scripts/scanDevIdentity.js") as { findSourceMaps(dir: string): string[] };
+    const dir = fs.mkdtempSync(path.join(require("os").tmpdir(), "mapscan-"));
+    try {
+      fs.mkdirSync(path.join(dir, "static", "js"), { recursive: true });
+      fs.writeFileSync(path.join(dir, "static", "js", "main.abc.js"), "var a=1;");
+      expect(scanner.findSourceMaps(dir)).toEqual([]);
+      fs.writeFileSync(path.join(dir, "static", "js", "main.abc.js.map"), "{}");
+      expect(scanner.findSourceMaps(dir)).toEqual([path.join("static", "js", "main.abc.js.map")]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

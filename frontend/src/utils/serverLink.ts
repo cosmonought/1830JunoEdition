@@ -414,8 +414,9 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
      ==================================================================
      A refused upgrade reaches the browser only as a close before `onopen` (1006). Three of those in a row -- or a
      4401, the server saying the session ended under an open socket -- and the next attempt bootstraps again first
-     (a cookie rotated by another tab, or lost with a response, is recovered to the same guest), then the existing
-     backoff resumes. A session the server says has ended stops the link: `SessionEndedNotice` asks the player. */
+     (a cookie rotated by another tab, or lost with a response, is recovered to the same principal), then the existing
+     backoff resumes. A session the server says has ended stops the link: `SessionEndedNotice` asks the player.
+     LIVE-2E: only a PROFILED session is "ready"; "unprofiled" backs off like "unknown" and never opens a socket. */
   const session = options.session ?? appSessionPort();
   let failedOpens = 0;
   let rebootstrap = false;

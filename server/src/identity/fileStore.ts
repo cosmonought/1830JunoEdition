@@ -20,6 +20,7 @@
 // never guessed at.
 //
 // ONLY ACTIVATED PRINCIPALS AND THEIR SESSIONS ARE EVER HERE, AND NEVER A SECRET -- `secret_hash` is SHA-256 of it.
+// LIVE-2E: profiles (their recovery key only as `recovery_hash`) and link codes (only as `link_hash`) too, v2.
 // Nothing in this file prints a record.
 
 import { randomBytes } from "crypto";
@@ -27,11 +28,44 @@ import * as path from "path";
 
 import { nodeStoreFs, type StoreFileHandle, type StoreFs } from "../fileLogStore";
 import { StoreDefiniteError, StoreUncertainError } from "../persistence/storeResult";
-import { applyChange, checkSnapshot, IdentityStoreCorruptError, type IdentityChange, type IdentitySnapshot, type IdentityStore } from "./store";
+import { applyChange, checkSnapshot, IdentityStoreCorruptError, type FullIdentitySnapshot, type IdentityChange, type IdentityStore } from "./store";
 
 export const IDENTITY_FILE = "identity.json";
 const FORMAT = "gs-identity";
-const VERSION = 1;
+/** LIVE-2E: version 2 adds `profiles` and `links`, and a principal's `kind` is "unprofiled" | "profile". */
+export const IDENTITY_FILE_VERSION = 2;
+const VERSION = IDENTITY_FILE_VERSION;
+
+/* ==================================================================
+    LIVE-2E: THE v1 -> v2 MIGRATION, EXPLICIT AND ONE WAY
+   ==================================================================
+   A v1 file (LIVE-2B/2C/2D) holds activated GUEST principals and their sessions. Each becomes an `unprofiled`
+   principal with `account_link: null`, and the file gains empty `profiles` and `links`. Nothing is invented: an
+   unprofiled principal keeps its sessions and its seats, and can play again only once its own browser creates a
+   profile, which binds THAT principal -- so its seats come with it, untouched. The migrated snapshot is validated
+   exactly like a v2 one, and the next commit writes v2. A file of any other shape still refuses the start. */
+export function migrateIdentityDocument(parsed: unknown, where: string): FullIdentitySnapshot {
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new IdentityStoreCorruptError(`${where}: not a ${FORMAT} document`);
+  }
+  const document = parsed as { format?: unknown; version?: unknown; principals?: unknown; sessions?: unknown; profiles?: unknown; links?: unknown };
+  const keys = Object.keys(parsed).sort().join(",");
+  if (document.format === FORMAT && document.version === 1 && keys === "format,principals,sessions,version") {
+    if (!Array.isArray(document.principals)) throw new IdentityStoreCorruptError(`${where}: not a ${FORMAT} v1 document`);
+    const principals = document.principals.map((record: unknown, at: number) => {
+      const principal = record as Record<string, unknown> | null;
+      if (typeof principal !== "object" || principal === null || principal.kind !== "guest" || principal.account_link !== null) {
+        throw new IdentityStoreCorruptError(`${where}: v1 principal #${at} is not a v1 guest record`);
+      }
+      return { ...principal, kind: "unprofiled" };
+    });
+    return checkSnapshot({ principals, sessions: document.sessions, profiles: [], links: [] }, `${where} (migrated from v1)`);
+  }
+  if (document.format === FORMAT && document.version === VERSION && keys === "format,links,principals,profiles,sessions,version") {
+    return checkSnapshot({ principals: document.principals, sessions: document.sessions, profiles: document.profiles, links: document.links }, where);
+  }
+  throw new IdentityStoreCorruptError(`${where}: not a ${FORMAT} v1 or v${VERSION} document`);
+}
 
 export interface FileIdentityStoreOptions {
   fs?: StoreFs;
@@ -64,7 +98,7 @@ export function createFileIdentityStore(directory: string, options: FileIdentity
   const target = path.join(directory, IDENTITY_FILE);
   const stats = { commits: 0, redone: 0, definite: 0, uncertain: 0 };
   /** What the file holds: set by the load, and by each committed write. `null` until loaded. */
-  let current: IdentitySnapshot | null = null;
+  let current: FullIdentitySnapshot | null = null;
   let poisoned: string | null = null;
   let temporaries = 0;
   let chain: Promise<unknown> = Promise.resolve();
@@ -133,7 +167,7 @@ export function createFileIdentityStore(directory: string, options: FileIdentity
     return { kind: "committed" };
   }
 
-  const load = (): Promise<IdentitySnapshot> =>
+  const load = (): Promise<FullIdentitySnapshot> =>
     serial(async () => {
       await io.mkdir(directory);
       let raw: Buffer;
@@ -141,8 +175,8 @@ export function createFileIdentityStore(directory: string, options: FileIdentity
         raw = await io.readFile(target);
       } catch (error) {
         if (codeOf(error) !== "ENOENT") throw error;
-        current = { principals: [], sessions: [] };
-        return { principals: [], sessions: [] };
+        current = { principals: [], sessions: [], profiles: [], links: [] };
+        return { principals: [], sessions: [], profiles: [], links: [] };
       }
       let parsed: unknown;
       try {
@@ -150,19 +184,8 @@ export function createFileIdentityStore(directory: string, options: FileIdentity
       } catch {
         throw new IdentityStoreCorruptError(`${target}: not JSON`);
       }
-      const document = parsed as { format?: unknown; version?: unknown; principals?: unknown; sessions?: unknown };
-      if (
-        typeof parsed !== "object" ||
-        parsed === null ||
-        Array.isArray(parsed) ||
-        Object.keys(parsed).sort().join(",") !== "format,principals,sessions,version" ||
-        document.format !== FORMAT ||
-        document.version !== VERSION
-      ) {
-        throw new IdentityStoreCorruptError(`${target}: not a ${FORMAT} v${VERSION} document`);
-      }
-      current = checkSnapshot({ principals: document.principals, sessions: document.sessions }, target);
-      return JSON.parse(JSON.stringify(current)) as IdentitySnapshot;
+      current = migrateIdentityDocument(parsed, target);
+      return JSON.parse(JSON.stringify(current)) as FullIdentitySnapshot;
     });
 
   const commit = (change: IdentityChange): Promise<void> =>
@@ -177,7 +200,7 @@ export function createFileIdentityStore(directory: string, options: FileIdentity
       }
       const next = checkSnapshot(applyChange(current, change), "identity commit");
       const bytes = Buffer.from(
-        `${JSON.stringify({ format: FORMAT, version: VERSION, principals: next.principals, sessions: next.sessions })}\n`,
+        `${JSON.stringify({ format: FORMAT, version: VERSION, principals: next.principals, sessions: next.sessions, profiles: next.profiles, links: next.links })}\n`,
         "utf8",
       );
       const first = await replaceOnce(bytes, false);

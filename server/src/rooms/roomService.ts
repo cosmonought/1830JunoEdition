@@ -49,6 +49,8 @@ export interface OpEnv {
   held: boolean;
   /** A fresh `player_id` (the op checks it is unused in this record). */
   mintPlayerId: () => string;
+  /** LIVE-2E: the nickname a newly taken seat starts with (the principal's profile name); "Player" when absent. */
+  defaultNickname?: string;
 }
 
 export interface OpEffects {
@@ -91,6 +93,11 @@ export function cleanNickname(raw: unknown): string {
     out = next;
   }
   return "";
+}
+
+/** LIVE-2E: a new seat's first nickname -- the profile's name, cleaned like any nickname, else "Player". */
+function seededNickname(env: OpEnv): string {
+  return (env.defaultNickname !== undefined ? cleanNickname(env.defaultNickname) : "") || DEFAULT_NICKNAME;
 }
 
 function freshPlayerId(env: OpEnv): string {
@@ -199,7 +206,7 @@ export function takeSeat(env: OpEnv): OpOutcome {
   if (existing !== null) return { ok: true, record: null, data: { gameId: env.record.game_id, playerId: existing.player_id } };
   if (isKicked(env.record, env.principalId)) return refused("kicked", "You were removed from this table.");
   if (env.record.seats.length >= capacityOf(env.record)) return refused("room-full", "Every seat at this table is taken.");
-  const seat = newSeat(env, DEFAULT_NICKNAME, null);
+  const seat = newSeat(env, seededNickname(env), null);
   return {
     ok: true,
     record: next(env.record, env.now, (draft) => {
@@ -220,11 +227,11 @@ export function joinByCode(env: OpEnv, takeSeatToo: boolean): OpOutcome {
   const needsAdmission = env.record.visibility === "private" && !isAdmitted(env.record, env.principalId);
   if (needsAdmission) {
     const unseated = env.record.admitted.filter((entry) => seatOf(env.record, entry.principal_id) === null).length;
-    if (unseated >= MAX_UNSEATED_ADMISSIONS) return refused("room-full", "This table has as many guests waiting as it takes.");
+    if (unseated >= MAX_UNSEATED_ADMISSIONS) return refused("room-full", "This table has as many players waiting to be seated as it takes.");
   }
   const seatWanted = takeSeatToo && waiting && env.record.seats.length < capacityOf(env.record);
   if (!needsAdmission && !seatWanted) return { ok: true, record: null, data: { gameId: env.record.game_id, playerId: null, code: env.record.join_code } };
-  const seat = seatWanted ? newSeat(env, DEFAULT_NICKNAME, null) : null;
+  const seat = seatWanted ? newSeat(env, seededNickname(env), null) : null;
   return {
     ok: true,
     record: next(env.record, env.now, (draft) => {

@@ -98,6 +98,8 @@ export interface RoomHostDeps {
   readersOf: (gameId: string) => Iterable<WebSocket>;
   errorRef: () => string;
   warn: (line: string) => void;
+  /** LIVE-2E: a principal's profile name, to seed a new seat's nickname (presentation only; `null` when none). */
+  profileNameOf?: (principalId: string) => string | null;
 }
 
 /** The facts the log gives, read inside a task (the board is the session's, equal to the committed view). */
@@ -294,7 +296,7 @@ export function createRoomHost(deps: RoomHostDeps) {
     };
   }
 
-  function dropView(socket: WebSocket): void {
+  function dropView(socket: WebSocket, options: { quiet?: boolean } = {}): void {
     const gameId = viewGameOf.get(socket);
     if (gameId === undefined) return;
     viewGameOf.delete(socket);
@@ -307,13 +309,20 @@ export function createRoomHost(deps: RoomHostDeps) {
     const principalId = principalOf(socket);
     const game = peekLoaded(gameId);
     const seat = game?.view.record && principalId !== null ? seatOf(game.view.record, principalId) : null;
-    if (seat && presence.get(gameId)?.delete(seat.player_id)) broadcastPresence(gameId);
+    /* LIVE-2E: PRESENCE IS THE SEAT'S, NOT THE SOCKET'S. A player with two tabs or two devices is one seat; closing
+       one of them must not make the seat look gone while another of its sockets still reads the table. The hint is
+       cleared only when the LAST socket of that principal leaves -- and everybody else's `online` is recomputed. */
+    const stillHere = principalId !== null && [...(viewSubs.get(gameId) ?? [])].some((other) => principalOf(other) === principalId);
+    if (seat && !stillHere && presence.get(gameId)?.delete(seat.player_id)) broadcastPresence(gameId);
+    /* Not from an eviction: that path's record change is pushed by its own publish, and a nested push there would
+       only repeat it. */
+    if (seat && !stillHere && !options.quiet && viewSubs.has(gameId)) broadcastView(gameId);
     deps.onSubscriptionChange(socket);
   }
 
   /** Lost read access (kicked, dropped at the deal, a room gone private): told once, closed 4410 (§6.2). */
   function evict(socket: WebSocket, code: string, reason: string): void {
-    dropView(socket);
+    dropView(socket, { quiet: true });
     deps.send(socket, { kind: "error", code, reason });
     if (socket.readyState === socket.OPEN) socket.close(4410, "room access lost");
   }
@@ -482,7 +491,9 @@ export function createRoomHost(deps: RoomHostDeps) {
         fresh = await claimFreshCode(record.game_id);
         if (fresh === null) return { ok: false, code: "unavailable", reason: UNAVAILABLE };
       }
-      const env: OpEnv = { record, facts, principalId, now: at, held, mintPlayerId: () => mintPlayerId() };
+      /* LIVE-2E: a seat taken here starts with the profile's name (the room's own `set-profile` still decides it). */
+      const seed = deps.profileNameOf?.(principalId) ?? null;
+      const env: OpEnv = { record, facts, principalId, now: at, held, mintPlayerId: () => mintPlayerId(), ...(seed !== null ? { defaultNickname: seed } : {}) };
       const result = op(env, fresh);
       if (!result.ok || result.record === null) {
         releaseLater(fresh ?? undefined, record.game_id);
@@ -567,7 +578,7 @@ export function createRoomHost(deps: RoomHostDeps) {
       return true;
     } catch (error) {
       const ref = deps.errorRef();
-      deps.warn(`  identity: could not make a guest durable before a room change (ref ${ref}) -- ${error instanceof Error ? error.message : String(error)}`);
+      deps.warn(`  identity: could not make a principal durable before a room change (ref ${ref}) -- ${error instanceof Error ? error.message : String(error)}`);
       return false;
     }
   }
@@ -620,7 +631,8 @@ export function createRoomHost(deps: RoomHostDeps) {
           visibility: op.visibility === "private" ? "private" : "public",
           exactPlayers: (op.exactPlayers as number | null) ?? null,
           variants: resolveVariants(op.variants as never),
-          nickname: op.nickname,
+          /* LIVE-2E: a create that names nobody is the profile's name, not "Host". */
+          nickname: typeof op.nickname === "string" && op.nickname.trim() !== "" ? op.nickname : (deps.profileNameOf?.(ctx.principalId) ?? op.nickname),
           color: (op.color as string | null | undefined) ?? null,
           hostPlayerId: mintPlayerId(),
         });
@@ -918,19 +930,26 @@ export function createRoomHost(deps: RoomHostDeps) {
   }
 
   /** Whether one more non-seated reader fits (§12.2 viewer cap): counted over EVERY socket reading the game -- its
-   *  view or its log (review L5) -- and only for a watcher (V) or a member (M); a seat always fits. */
+   *  view or its log (review L5) -- and only for a watcher (V) or a member (M); a seat always fits.
+   *  LIVE-2E: COUNTED BY PRINCIPAL, NOT BY SOCKET. One person's tabs and devices are one watcher: they cannot fill the
+   *  table's watcher seats by opening tabs, and a watcher's own second socket (its log, a second tab) always fits
+   *  once its first did. */
   function viewerRoomFor(socket: WebSocket, gameId: string): boolean {
     const record = peekLoaded(gameId)?.view.record;
     if (!record) return true;
-    const role = roleOf(record, principalOf(socket));
+    const mine = principalOf(socket);
+    const role = roleOf(record, mine);
     if (role !== "V" && role !== "M") return true;
-    let viewers = 0;
+    const viewers = new Set<string>();
     for (const other of new Set([...(viewSubs.get(gameId) ?? []), ...deps.readersOf(gameId)])) {
       if (other === socket) continue;
-      const theirs = roleOf(record, principalOf(other));
-      if (theirs === "V" || theirs === "M") viewers += 1;
+      const theirs = principalOf(other);
+      if (theirs === null) continue;
+      if (theirs === mine) return true; // already one of the table's watchers
+      const theirRole = roleOf(record, theirs);
+      if (theirRole === "V" || theirRole === "M") viewers.add(theirs);
     }
-    return viewers < record.policy.max_viewers;
+    return viewers.size < record.policy.max_viewers;
   }
 
   /** Whether `socket` may read `gameId`'s log NOW -- the hello gate and every log push (§14.3 item 5). */

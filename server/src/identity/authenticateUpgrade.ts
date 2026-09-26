@@ -17,7 +17,9 @@
 //   4. Origin            exactly one allow-listed Origin                                403
 //   5. authenticate      production: the session cookie; development: the dev
 //                        authenticator (its environment refusals are 403)               401 / 403
-//   6. principal cap     12 sockets, or 3 for a provisional guest                        429 + Retry-After
+//   5b. profile          LIVE-2E: the principal must have a profile                      403
+//   6. socket caps       12 per session (one browser), 24 per principal (every device), or
+//                        6 for a never-activated one (LIVE-2E)                          429 + Retry-After
 //   7. `handleUpgrade`   by the caller, SYNCHRONOUSLY after this returns ok -- nothing here awaits, so no other
 //                        upgrade can slip between the caps above and the socket's registration.
 //
@@ -52,6 +54,8 @@ export interface SocketCounts {
   /** An IPv6 /48's sockets (LIVE-2 §7.3: the aggregate at ten times the /64's cap). */
   forAggregate(aggregate: string): number;
   forPrincipal(principalId: string): number;
+  /** LIVE-2E: one session's sockets (one browser: every tab of it). */
+  forSession(sessionId: string): number;
 }
 
 export interface UpgradeGate {
@@ -66,9 +70,12 @@ export interface UpgradeGate {
   limits: IdentityLimits;
   counts: SocketCounts;
   now: () => number;
+  /** LIVE-2E: whether this principal has a profile (a development principal: its synthetic development profile).
+   *  An unprofiled principal opens no game socket at all. */
+  hasProfile: (principalId: string) => boolean;
 }
 
-export type UpgradeStep = "path" | "capacity" | "ip" | "origin" | "authenticate" | "principal-cap";
+export type UpgradeStep = "path" | "capacity" | "ip" | "origin" | "authenticate" | "profile" | "principal-cap";
 
 export type UpgradeDecision =
   | { ok: true; ctx: ConnectionContext; ip: IpKey }
@@ -173,8 +180,24 @@ export function decideUpgrade(request: Pick<IncomingMessage, "headers" | "socket
     ({ principalId, sessionId, sessionExpiresAt, provisional } = auth);
   }
 
-  /* 6. PER-PRINCIPAL SOCKETS -- refused without spending the ADDRESS's failed-upgrade budget: one player's extra tabs
-     must not lock out everybody behind the same NAT (LIVE-2B adversarial review). */
+  /* 5b. LIVE-2E: A PROFILE IS REQUIRED. An unprofiled principal (the temporary one a browser gets from the bootstrap)
+     opens no game socket: no public list, no room, no log, no chat, no presence -- nothing, not even whether a
+     private table exists, is reachable before a profile. 403, charged to the address's failed-upgrade budget like
+     any other refused upgrade (LIVE-2E review I3): the client never opens a socket before its profile exists, so
+     only a misbehaving one ever gets here. */
+  if (!gate.hasProfile(principalId)) {
+    limiter.deny("profile-required");
+    return failed(403, "profile", "no profile");
+  }
+
+  /* 6. PER-SESSION AND PER-PRINCIPAL SOCKETS -- refused without spending the ADDRESS's failed-upgrade budget: one
+     player's extra tabs must not lock out everybody behind the same NAT (LIVE-2B adversarial review). LIVE-2E: a
+     session (one browser) and a principal (every device of it) are capped separately, so a second device is not
+     counted against the first one's tabs (see `DEFAULT_INGRESS_LIMITS.identity` for the derivation). */
+  if (gate.counts.forSession(sessionId) >= limits.maxSocketsPerSession) {
+    limiter.deny("sockets-session");
+    return { ok: false, status: 429, step: "principal-cap", retryAfterMs: 5_000, why: "too many sockets for this browser" };
+  }
   const cap = provisional ? limits.maxSocketsPerProvisionalPrincipal : limits.maxSocketsPerPrincipal;
   if (gate.counts.forPrincipal(principalId) >= cap) {
     limiter.deny(provisional ? "sockets-provisional" : "sockets-principal");

@@ -19,6 +19,8 @@ import AudioControls from "./AudioControls";
 /* Design note #1273: the text-size picker's steps and store. */
 import { styles as appStyles } from "../styles/appStyles";
 import { UiScalePicker } from "./UiScalePicker";
+/* LIVE-2E: the profile chip, reachable at the table and in the waiting room as well as the lobby. */
+import { ProfileMenu } from "./ProfileMenu";
 import { type AudioCategoryToggle } from "./AudioControlPopover";
 
 /* ------------------------------------------------------------------ */
@@ -231,6 +233,10 @@ export default function TopBar({
           IT RELOADS. The scale is baked into style tables at module load, and the log makes a reload
           survivable (#1250, #1253); a control pressed once per browser does not need to be live. */}
       <UiScalePicker />
+
+      {/* LIVE-2E: who this browser plays as, and its profile actions (link a device, rotate the recovery key, sign
+          out). With the player-only controls, before the wallet cluster that can cost money. */}
+      <ProfileMenu />
 
       {/* ==================================================================
            DESIGN NOTE 1119: THE ENV VAR WAS THE PART ONLY A DEVELOPER COULD USE

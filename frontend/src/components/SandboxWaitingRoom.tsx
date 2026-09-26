@@ -568,7 +568,7 @@ export function SandboxWaitingRoom({
                 </p>
                 {/* LIVE-2D: the seat is this browser's -- reload or reconnect and it is still yours. */}
                 <p style={styles.faintNote}>
-                  Your seat is kept for this browser: reload or reconnect and you are still seated.
+                  Your seat is kept for your profile: reload, reconnect or sign in on another device and you are still seated.
                 </p>
               </section>
 

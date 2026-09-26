@@ -137,3 +137,15 @@ export function writeActiveSandboxRoom(gameId: string | null): void {
    shell's auto-seat on a table somebody had only asked to watch; the auto-seat is gone (a seat is taken at the server
    by Host, Join or "Take a seat", never by entering a table), so there is nothing to hold back. The resume served the
    seat-PIN rejoin, which is gone with the PINs. */
+
+/** LIVE-2E: forget which table this tab was at -- on "Sign out this device" and when a signed-out tab continues to
+ *  the profile gate. The pointer is only a game id (no credential), but a DIFFERENT profile signing in on this tab
+ *  must not be sent back to the previous profile's table. */
+export function forgetActiveTable(): void {
+  try {
+    window.sessionStorage.removeItem(ACTIVE_GAME_STORAGE_KEY);
+    window.sessionStorage.removeItem(ACTIVE_SANDBOX_ROOM_STORAGE_KEY);
+  } catch {
+    /* storage disabled: nothing was kept */
+  }
+}

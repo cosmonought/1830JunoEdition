@@ -379,8 +379,10 @@ describe("the room is the page, and the text carries its own ground", () => {
        lobby behind `WEB3_LOBBY_ENABLED`, and that branch is deleted -- so the field goes with it. */
     expect(LOBBY).not.toContain("WEB3_LOBBY_ENABLED");
     expect(LOBBY).not.toContain('placeholder="Display name"');
-    // #1415: the terms ride along; the nickname is still the literal. LIVE-2D: a `create` op, no client id.
-    expect(LOBBY).toContain('const answer = await createHostedGame(variants, setup, "Host");');
+    // #1415: the terms ride along. LIVE-2D: a `create` op, no client id. LIVE-2E: with no name field here, the host's
+    // seat is named after the profile (`profileNickname`) -- never a typed-in name, and never the old literal.
+    expect(LOBBY).toContain("const answer = await createHostedGame(variants, setup, profileNickname());");
+    expect(LOBBY).not.toContain('createHostedGame(variants, setup, "Host")');
     expect(LOBBY).not.toContain("localPlayerId");
   });
 

@@ -3,12 +3,18 @@
 //
 // LIVE-2B (LIVE-2 §4.3 "Client behavior"): the session is bootstrapped before any socket opens; three failed opens
 // (or a 4401) bootstrap again before the next attempt; a `session-ended` answer stops the links and NEVER becomes a
-// new guest on its own; only the explicit decision sends `{fresh: true}`; and nothing in the client reads the
+// new session on its own; only the explicit decision sends `{fresh: true}`; and nothing in the client reads the
 // HttpOnly cookie.
+//
+// LIVE-2E: PROFILES ARE MANDATORY. "ready" is a PROFILED session; a bootstrap that answers `profile: null` is
+// "unprofiled", which opens no socket anywhere; `account` follows every bootstrap answer, by name only.
 
 import { connectServerLink, type SocketLike } from "./serverLink";
 import { resetRoomLinks, setRoomSocketFactory, watchRoom, type SocketLike as RoomSocketLike } from "./roomLink";
-import { httpSessionPort, installSessionPort, readySessionPort, sessionEndpointFor, sessionPort } from "./sessionBootstrap";
+import { httpSessionPort, installSessionPort, readySessionPort, sessionEndedSentence, sessionEndpointFor, sessionPort } from "./sessionBootstrap";
+
+/** LIVE-2E: a bootstrap answer for a PROFILED browser -- the only kind a socket opens for. */
+const PROFILED = { ok: true, expiresAt: 1, profile: { name: "Brad", otherSessions: 0 } };
 
 interface Call {
   input: string;
@@ -73,7 +79,7 @@ describe("the hosted session bootstrap (LIVE-2B)", () => {
     expect(http.calls[0].input).toBe("https://play.example/gs/api/session");
     expect(http.calls[0].init).toMatchObject({ method: "POST", credentials: "same-origin", cache: "no-store", body: "{}" });
     expect(http.calls[0].init.headers["Content-Type"]).toBe("application/json");
-    await http.answer(201, { ok: true });
+    await http.answer(200, PROFILED);
     expect(wire.made).toHaveLength(1);
     expect(wire.made[0].url).toBe("wss://play.example/gs"); // no dev claim outside a development-identity build
     link.close();
@@ -93,7 +99,7 @@ describe("the hosted session bootstrap (LIVE-2B)", () => {
       socketFactory: wire.factory,
       schedule: (callback) => later.push(callback),
     });
-    await http.answer(200, { ok: true });
+    await http.answer(200, PROFILED);
     for (let n = 0; n < 3; n += 1) {
       expect(wire.made).toHaveLength(n + 1);
       wire.made[n].socket.onclose?.({ code: 1006 }); // refused at the upgrade: closed before it opened
@@ -102,7 +108,7 @@ describe("the hosted session bootstrap (LIVE-2B)", () => {
     }
     expect(http.calls).toHaveLength(2); // the re-bootstrap, after the third failure
     expect(wire.made).toHaveLength(3);
-    await http.answer(200, { ok: true, rotated: true });
+    await http.answer(200, { ...PROFILED, rotated: true });
     expect(wire.made).toHaveLength(4);
     wire.made[3].socket.onopen?.({});
     wire.made[3].socket.onclose?.({ code: 4401 });
@@ -112,7 +118,7 @@ describe("the hosted session bootstrap (LIVE-2B)", () => {
     link.close();
   });
 
-  it("session-ended stops every link and is never turned into a new guest; only the explicit choice sends {fresh: true}", async () => {
+  it("session-ended stops every link and is never turned into a new session; only the explicit choice sends {fresh: true}", async () => {
     const http = manualFetch();
     const session = httpSessionPort({ endpoint: "https://play.example/gs/api/session", fetch: http.fetch });
     installSessionPort(session);
@@ -137,8 +143,11 @@ describe("the hosted session bootstrap (LIVE-2B)", () => {
     expect(http.calls.every((call) => !call.init.body.includes("fresh"))).toBe(true);
     const fresh = session.startFresh();
     expect(http.calls[1].init.body).toBe('{"fresh":true}');
-    await http.answer(201, { ok: true });
-    expect(await fresh).toBe("ready");
+    /* LIVE-2E: a fresh session is a temporary, UNPROFILED one -- the profile gate, never a new player. */
+    await http.answer(201, { ok: true, expiresAt: 1, profile: null });
+    expect(await fresh).toBe("unprofiled");
+    expect(session.account).toBeNull();
+    expect(wire.made).toHaveLength(0);
   });
 
   it("the room link waits for the session too (LIVE-2D: `roomLink`, keyed by game id)", async () => {
@@ -148,7 +157,7 @@ describe("the hosted session bootstrap (LIVE-2B)", () => {
     setRoomSocketFactory(wire.factory as unknown as (url: string) => RoomSocketLike);
     const stop = watchRoom(GAME, { onView: () => undefined });
     expect(wire.made).toHaveLength(0);
-    await http.answer(201, { ok: true });
+    await http.answer(200, PROFILED);
     expect(wire.made).toHaveLength(1);
     stop();
   });
@@ -168,11 +177,14 @@ describe("the hosted session bootstrap (LIVE-2B)", () => {
       const http = manualFetch();
       const session = httpSessionPort({ endpoint: "https://play.example/gs/api/session", fetch: http.fetch });
       const pending = session.ensure();
-      await http.answer(201, { ok: true, expiresAt: 1 });
-      expect(await pending).toBe("ready");
+      await http.answer(201, { ok: true, expiresAt: 1, profile: null });
+      expect(await pending).toBe("unprofiled");
+      const again = session.ensure(true);
+      await http.answer(200, PROFILED);
+      expect(await again).toBe("ready");
       const fresh = session.startFresh();
-      await http.answer(201, { ok: true });
-      expect(await fresh).toBe("ready");
+      await http.answer(201, { ok: true, profile: null });
+      expect(await fresh).toBe("unprofiled");
       expect(reads).toBe(0);
       expect(JSON.stringify(session)).not.toMatch(/gs_session|v1\./);
     } finally {
@@ -188,5 +200,116 @@ describe("the hosted session bootstrap (LIVE-2B)", () => {
     expect(sessionEndpointFor("https://play.example")).toBeNull();
     expect(sessionPort().state).toBe("ready");
     expect(readySessionPort().refreshable).toBe(false);
+    /* LIVE-2E: the always-ready port stands in a development profile, with no credentials behind it. */
+    expect(readySessionPort().account).toEqual({ name: "Development", otherSessions: 0, development: true });
+  });
+});
+
+describe("mandatory profiles (LIVE-2E)", () => {
+  it("an unprofiled browser is 'unprofiled': no socket opens, and the links wait without asking the server again", async () => {
+    const http = manualFetch();
+    const session = httpSessionPort({ endpoint: "https://play.example/gs/api/session", fetch: http.fetch });
+    installSessionPort(session);
+    const wire = sockets();
+    const later: Array<() => void> = [];
+    const link = connectServerLink({
+      url: "wss://play.example/gs",
+      gameId: GAME,
+      build: "b",
+      onEntries: () => undefined,
+      socketFactory: wire.factory,
+      schedule: (callback) => later.push(callback),
+    });
+    setRoomSocketFactory(wire.factory as unknown as (url: string) => RoomSocketLike);
+    const stop = watchRoom(GAME, { onView: () => undefined });
+    await http.answer(201, { ok: true, expiresAt: 1, profile: null });
+    await flush();
+    expect(session.state).toBe("unprofiled");
+    expect(session.account).toBeNull();
+    expect(await session.ensure()).toBe("unprofiled");
+    for (let n = 0; n < 3; n += 1) {
+      later.shift()?.();
+      await flush();
+    }
+    expect(wire.made).toHaveLength(0);
+    expect(http.calls).toHaveLength(1); // the first answer stands until a profile action forces the next bootstrap
+    /* A profile is created: the forced bootstrap says so, and the next attempt opens the socket. */
+    const forced = session.ensure(true);
+    await http.answer(200, { ok: true, expiresAt: 1, profile: { name: "Brad", otherSessions: 2 } });
+    expect(await forced).toBe("ready");
+    expect(session.account).toEqual({ name: "Brad", otherSessions: 2 });
+    later.shift()?.();
+    await flush();
+    expect(wire.made.length).toBeGreaterThanOrEqual(1);
+    expect(wire.made.every((made) => made.url === "wss://play.example/gs")).toBe(true);
+    link.close();
+    stop();
+  });
+
+  it("the account follows every bootstrap answer, by name and count only", async () => {
+    const http = manualFetch();
+    const session = httpSessionPort({ endpoint: "https://play.example/gs/api/session", fetch: http.fetch });
+    let notified = 0;
+    session.subscribe(() => (notified += 1));
+    const first = session.ensure();
+    await http.answer(200, { ok: true, expiresAt: 1, profile: { name: "Brad", otherSessions: 1 } });
+    expect(await first).toBe("ready");
+    expect(session.account).toEqual({ name: "Brad", otherSessions: 1 });
+    const second = session.ensure(true);
+    await http.answer(200, { ok: true, expiresAt: 1, profile: { name: "Brad", otherSessions: 0 } });
+    expect(await second).toBe("ready");
+    expect(session.account).toEqual({ name: "Brad", otherSessions: 0 });
+    expect(notified).toBe(2);
+    /* A malformed profile is no profile: the gate, never a guessed one. */
+    const third = session.ensure(true);
+    await http.answer(200, { ok: true, profile: { name: 7 } });
+    expect(await third).toBe("unprofiled");
+    expect(session.account).toBeNull();
+    /* An ended session names no account. */
+    const fourth = session.ensure(true);
+    await http.answer(401, { error: "session-ended", reason: "signed-out-remotely" });
+    expect(await fourth).toBe("ended");
+    expect(session.account).toBeNull();
+    expect(session.endedReason).toBe("signed-out-remotely");
+  });
+
+  it("a 200 whose body cannot be read is not an answer about the profile: the caller retries", async () => {
+    const calls: string[] = [];
+    const session = httpSessionPort({
+      endpoint: "https://play.example/gs/api/session",
+      fetch: async (input) => {
+        calls.push(input);
+        return { status: 200, json: async () => Promise.reject(new SyntaxError("not json")) };
+      },
+    });
+    expect(await session.ensure()).toBe("unknown");
+    expect(session.state).toBe("unknown");
+    expect(await session.ensure()).toBe("unknown");
+    expect(calls).toHaveLength(2);
+  });
+
+  it("a forced bootstrap never joins a request that was already on the wire: it follows it", async () => {
+    const http = manualFetch();
+    const session = httpSessionPort({ endpoint: "https://play.example/gs/api/session", fetch: http.fetch });
+    const early = session.ensure();
+    const forcedA = session.ensure(true);
+    const forcedB = session.ensure(true);
+    expect(http.calls).toHaveLength(1);
+    await http.answer(201, { ok: true, profile: null }); // the answer from before the profile existed
+    expect(await early).toBe("unprofiled");
+    await flush();
+    expect(http.calls).toHaveLength(2); // one follow-up, shared by both forced callers
+    await http.answer(200, PROFILED);
+    expect(await forcedA).toBe("ready");
+    expect(await forcedB).toBe("ready");
+    expect(session.account?.name).toBe("Brad");
+  });
+
+  it("names the LIVE-2E reasons a session ends", () => {
+    expect(sessionEndedSentence("replaced")).toBe("This browser signed in to a profile, which replaced its earlier session.");
+    expect(sessionEndedSentence("signed-out-remotely")).toBe("It was signed out from another of your devices.");
+    for (const reason of ["expired", "logout", "evicted", "operator", "principal-disabled", "rotated", "unreadable", "replaced", "signed-out-remotely", null]) {
+      expect(sessionEndedSentence(reason)).not.toMatch(/guest/i);
+    }
   });
 });

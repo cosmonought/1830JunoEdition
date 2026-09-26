@@ -20,6 +20,7 @@
 import {
   ACTIVE_GAME_STORAGE_KEY,
   ACTIVE_SANDBOX_ROOM_STORAGE_KEY,
+  forgetActiveTable,
   readActiveGame,
   readActiveSandboxRoom,
   writeActiveSandboxRoom,
@@ -207,5 +208,19 @@ describe("the client persists no principal, player id, seat PIN or seat token (L
         "utils/uiScale.ts: UI_SCALE_STORAGE_KEY",
       ].sort(),
     );
+  });
+});
+
+describe("signing out forgets the table (LIVE-2E)", () => {
+  it("forgetActiveTable clears both resume pointers, so another profile on this tab is not sent to the last one's table", () => {
+    window.sessionStorage.setItem(ACTIVE_GAME_STORAGE_KEY, JSON.stringify({ gameId: 0, roomId: "offline-sandbox", mode: "sandbox" }));
+    writeActiveSandboxRoom("g_0123456789abcdefghjkmnpqr0");
+    forgetActiveTable();
+    expect(window.sessionStorage.getItem(ACTIVE_GAME_STORAGE_KEY)).toBeNull();
+    expect(readActiveSandboxRoom()).toBeNull();
+    const menu = readStripped("components/ProfileMenu.tsx");
+    const notice = readStripped("components/SessionEndedNotice.tsx");
+    expect(menu).toMatch(/forgetActiveTable\(\);\s*window\.location\.reload\(\)/);
+    expect(notice).toMatch(/forgetActiveTable\(\);\s*window\.location\.reload\(\)/);
   });
 });

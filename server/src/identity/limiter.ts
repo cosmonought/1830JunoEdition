@@ -16,6 +16,12 @@ export class IdentityLimiter {
   readonly guestCreatesGlobal: KeyedBuckets;
   readonly bootstraps: KeyedBuckets;
   readonly graceMints: KeyedBuckets;
+  /* LIVE-2E */
+  readonly profileCreates: IpBuckets;
+  readonly profileCreatesGlobal: KeyedBuckets;
+  readonly credentialRedeems: IpBuckets;
+  readonly credentialRedeemsPerSession: KeyedBuckets;
+  readonly profileActions: KeyedBuckets;
   readonly cooldowns: MalformedCooldowns;
   readonly denied: DeniedCounters = {};
 
@@ -29,6 +35,11 @@ export class IdentityLimiter {
     this.guestCreatesGlobal = new KeyedBuckets(limits.guestCreatesGlobal, now, 1);
     this.bootstraps = new KeyedBuckets(limits.bootstrapsPerSession, now, keys);
     this.graceMints = new KeyedBuckets(limits.graceMintsPerSession, now, keys);
+    this.profileCreates = new IpBuckets(limits.profileCreatesPerIp, now, factor, keys);
+    this.profileCreatesGlobal = new KeyedBuckets(limits.profileCreatesGlobal, now, 1);
+    this.credentialRedeems = new IpBuckets(limits.credentialRedeemsPerIp, now, factor, keys);
+    this.credentialRedeemsPerSession = new KeyedBuckets(limits.credentialRedeemsPerSession, now, keys);
+    this.profileActions = new KeyedBuckets(limits.profileActionsPerSession, now, keys);
     this.cooldowns = new MalformedCooldowns(
       limits.malformedClosesForCooldown,
       limits.malformedCloseWindowMs,
@@ -50,6 +61,11 @@ export class IdentityLimiter {
     this.guestCreatesGlobal.prune();
     this.bootstraps.prune();
     this.graceMints.prune();
+    this.profileCreates.prune();
+    this.profileCreatesGlobal.prune();
+    this.credentialRedeems.prune();
+    this.credentialRedeemsPerSession.prune();
+    this.profileActions.prune();
     this.cooldowns.prune();
   }
 
@@ -63,6 +79,11 @@ export class IdentityLimiter {
       this.guestCreatesGlobal.size +
       this.bootstraps.size +
       this.graceMints.size +
+      this.profileCreates.size +
+      this.profileCreatesGlobal.size +
+      this.credentialRedeems.size +
+      this.credentialRedeemsPerSession.size +
+      this.profileActions.size +
       this.cooldowns.size
     );
   }

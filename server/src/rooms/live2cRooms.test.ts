@@ -39,7 +39,7 @@ import {
 import { RULES_ENGINE_VERSION } from "../../../frontend/src/gameEngine/rulesVersion";
 import { parseClientFrame } from "../../../frontend/src/gameEngine/messageSchema";
 import type { ServerLogEntry } from "../../../frontend/src/utils/roomSession";
-import { BUILD, BUY, Client, controlledStore, devIdentity, probeSession, quietConsole, sleep, startServer, stopServer, until, type Frame } from "./testSupport";
+import { apiRequest, BUILD, BUY, Client, controlledStore, devIdentity, probeSession, quietConsole, sleep, startServer, stopServer, until, type Frame } from "./testSupport";
 import {
   GAME_ID_PATTERN,
   JOIN_CODE_ALPHABET,
@@ -744,25 +744,36 @@ describe("LIVE-2C create, join and seats", () => {
     }
   });
 
-  test("activation before reference: a cookie guest is made durable before any record names it, and a failure writes no record", async () => {
+  test("activation before reference: a cookie principal is durable before any record names it, and a failure writes no record", async () => {
+    /* LIVE-2E: a cookie principal reaches a room only through its profile, and the profile's creation is the durable
+       write -- the principal, its sessions and the profile in ONE commit -- so it is durable before its first socket,
+       let alone its first record. A failed creation writes nothing and opens nothing; the room-side activation is then
+       a no-op, and a failed record write still leaves no record. */
     const identityStore = createMemoryIdentityStore();
     const service = IdentityService.fromSnapshot(identityStore, { principals: [], sessions: [] });
     const records = createMemoryRecordStore();
     const { server, port } = await serve({ records, identity: { mode: "production", allowedOrigins: [PROD_ORIGIN], trustedProxyHops: 0, service } });
     try {
       const cookie = await prodCookie(port);
-      const socket = await prodSocket(port, cookie);
       assert.equal(identityStore.snapshot().principals.length, 0, "a fresh guest is provisional: nothing durable yet");
+      await assert.rejects(prodSocket(port, cookie), /403/, "and it opens no game socket before it has a profile");
       identityStore.failNext.push("definite");
-      const refused = await socket.op(CREATE());
-      assert.equal(refused.code, "unavailable");
-      assert.equal(records.records.size, 0, "activation failed: no record names the guest");
-      assert.equal(identityStore.snapshot().principals.length, 0);
+      assert.equal((await apiRequest(port, "/gs/api/profile", { cookie, body: { name: "Hana" }, origin: PROD_ORIGIN })).status, 503);
+      assert.deepEqual(identityStore.snapshot(), { principals: [], sessions: [], profiles: [], links: [] }, "a refused creation writes nothing");
+      await assert.rejects(prodSocket(port, cookie), /403/, "nor opens anything");
+      assert.equal((await apiRequest(port, "/gs/api/profile", { cookie, body: { name: "Hana" }, origin: PROD_ORIGIN })).status, 201);
+      const afterCreate = identityStore.snapshot();
+      assert.equal(afterCreate.principals.length, 1, "the profile made the principal durable");
+      assert.ok(afterCreate.principals[0].activated_at !== null && afterCreate.principals[0].kind === "profile");
+      assert.equal(afterCreate.sessions.length, 1, "with its session");
+      assert.equal(afterCreate.profiles.length, 1);
+      const socket = await prodSocket(port, cookie);
+      const commits = identityStore.stats.commits;
       records.failPuts.push("definite");
       const lost = await socket.op(CREATE());
       assert.equal(lost.code, "unavailable");
-      assert.equal(records.records.size, 0, "the record write failed after activation");
-      assert.equal(identityStore.snapshot().principals.length, 1, "a harmless durable guest with no seat -- the only possible remainder");
+      assert.equal(records.records.size, 0, "the record write failed: no record");
+      assert.equal(identityStore.stats.commits, commits, "activation had nothing left to write");
       const made = await socket.op(CREATE());
       assert.equal(made.ok, true, JSON.stringify(made));
       const record = records.records.get(dataOf(made).gameId as string) as GameRecord;
@@ -1014,7 +1025,8 @@ describe("LIVE-2C chat, presence and the waiting-room clock", () => {
       table.guests[0].client.send({ kind: "chat-send", gameId: table.gameId, text: "  hello table  " });
       await until(() => watcher.of("chat").some((frame) => (frame.messages as unknown[]).length === 1), "the line, delivered to readers");
       const line = (watcher.of("chat").pop()?.messages as Array<{ author: string; displayName: string; text: string }>)[0];
-      assert.deepEqual([line.author, line.displayName, line.text], [table.guests[0].playerId, "Player", "hello table"]);
+      // LIVE-2E: a seat starts with its profile's name -- under the development authenticator, the claim.
+      assert.deepEqual([line.author, line.displayName, line.text], [table.guests[0].playerId, table.guests[0].client.claim, "hello table"]);
       assertNoPrincipalIds([watcher, ...everyone(table)]);
       // Chat before joining the room's view is refused: membership is checked per frame, never cached.
       const cold = await Client.open(port, table.guests[0].client.claim);
@@ -1165,7 +1177,8 @@ describe("LIVE-2C start", () => {
       assert.equal(deals.length, 1, "one deal");
       const deal = JSON.parse(deals[0].payload).SetupGame as { players: Array<{ id: string; nickname: string }>; variants: Record<string, unknown>; build: string; rules_engine_version: number };
       assert.deepEqual(deal.players.map((player) => player.id), [g1.playerId, g2.playerId, table.hostPlayerId], "Fisher-Yates over the injected source");
-      assert.deepEqual(deal.players.map((player) => player.nickname), ["Player", "Player", "Hana"]);
+      // LIVE-2E: a taken seat starts with its profile's name (the development claim); the host named itself "Hana".
+      assert.deepEqual(deal.players.map((player) => player.nickname), [g1.client.claim, g2.client.claim, "Hana"]);
       assert.equal(deal.variants.rules, CURRENT_RULES_REVISION);
       assert.equal(deal.build, BUILD);
       assert.equal(deal.rules_engine_version, RULES_ENGINE_VERSION);

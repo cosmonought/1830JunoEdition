@@ -29,7 +29,7 @@
   },
   "scripts": {
     "start": "react-app-rewired start",
-    "build": "react-app-rewired build",
+    "build": "react-app-rewired build && node scripts/scanDevIdentity.js",
     "typecheck": "tsc --noEmit",
     "verify": "npm run typecheck && npm run build",
     "test": "react-app-rewired test",

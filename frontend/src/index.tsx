@@ -14,12 +14,14 @@ import { createRoot } from "react-dom/client";
 import App from "./App";
 // Design note #761: an uncaught render throw becomes a readable, copyable report instead of a blank page.
 import { CrashScreen } from "./components/CrashScreen";
+import { ProfileGate } from "./components/ProfileGate";
 import { SessionEndedNotice } from "./components/SessionEndedNotice";
 import { GAME_SERVER_URL } from "./config";
 import { createAppSessionPort, installSessionPort } from "./utils/sessionBootstrap";
 
 /* LIVE-2B (LIVE-2 §4.3): before any link opens a socket, the session is bootstrapped (`POST /gs/api/session`) -- the
-   links ask this port first. A development-identity build (and a build with no game server) needs no bootstrap. */
+   links ask this port first. A development-identity build (and a build with no game server) needs no bootstrap.
+   LIVE-2E: and the app itself waits behind `ProfileGate` until that session is a PROFILED one. */
 installSessionPort(createAppSessionPort(GAME_SERVER_URL));
 
 const ROOT_ELEMENT_ID = "root";
@@ -38,8 +40,12 @@ root.render(
      anywhere below -- including one raised by StrictMode's own double-invoked render in development. */
   <CrashScreen>
     <React.StrictMode>
-      <App />
-      {/* LIVE-2B: the explicit "Continue as a new guest" decision when the server says the session ended. */}
+      {/* LIVE-2E: profiles are mandatory -- the app renders only for a profiled session; before that, the gate. */}
+      <ProfileGate>
+        <App />
+      </ProfileGate>
+      {/* LIVE-2B: the explicit "Continue" decision when the server says the session ended (LIVE-2E: it leads back to
+          the gate, where the recovery key or a device-link code restores the profile). */}
       <SessionEndedNotice />
     </React.StrictMode>
   </CrashScreen>,

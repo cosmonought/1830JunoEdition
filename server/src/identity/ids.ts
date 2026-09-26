@@ -42,6 +42,10 @@ export function base32Lower(bytes: Uint8Array): string {
 const ID_BODY = "[0-9a-hjkmnp-tv-z]{25}[048cgmrw]";
 export const PRINCIPAL_ID_PATTERN = new RegExp(`^pr_${ID_BODY}$`);
 export const SESSION_ID_PATTERN = new RegExp(`^se_${ID_BODY}$`);
+/** LIVE-2E: a profile's private id -- never on the wire, in a RoomView, a log, a URL or a chain. */
+export const PROFILE_ID_PATTERN = new RegExp(`^pf_${ID_BODY}$`);
+/** LIVE-2E: a recovery key's SELECTOR (a lookup key, 128 bits, so it cannot be enumerated). */
+export const RECOVERY_SELECTOR_PATTERN = new RegExp(`^rk_${ID_BODY}$`);
 /** 42 free symbols, then a last symbol whose two padding bits are zero. */
 export const SECRET_PATTERN = /^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/;
 export const SECRET_BYTES = 32;
@@ -53,6 +57,8 @@ export const cryptoRandom: RandomSource = (size) => randomBytes(size);
 export const mintPrincipalId = (random: RandomSource = cryptoRandom): string => `pr_${base32Lower(random(ID_BYTES))}`;
 export const mintSessionId = (random: RandomSource = cryptoRandom): string => `se_${base32Lower(random(ID_BYTES))}`;
 export const mintSecret = (random: RandomSource = cryptoRandom): string => random(SECRET_BYTES).toString("base64url");
+export const mintProfileId = (random: RandomSource = cryptoRandom): string => `pf_${base32Lower(random(ID_BYTES))}`;
+export const mintRecoverySelector = (random: RandomSource = cryptoRandom): string => `rk_${base32Lower(random(ID_BYTES))}`;
 
 /** The secret's 32 bytes, or `null` for anything that is not the canonical 43-symbol spelling of exactly 32. */
 export function secretBytes(secret: string): Buffer | null {
@@ -87,4 +93,61 @@ export function mintUnique(mint: () => string, taken: (id: string) => boolean, a
     if (!taken(id)) return id;
   }
   throw new Error(`identity: ${attempts} consecutive id collisions -- the random source is not random`);
+}
+
+/* ==================================================================
+    LIVE-2E: THE PROFILE CREDENTIALS
+   ==================================================================
+   RECOVERY KEY   `rk_<26 base32>.<43 base64url>` -- a 128-bit SELECTOR (the lookup key; unguessable, so a wrong one
+                  cannot tell anybody which profiles exist) and a 256-bit SECRET, exactly the session cookie's shape.
+                  The store keeps the selector and SHA-256 of the secret's 32 bytes; verification is constant-time.
+                  A random bearer secret, not a password: SHA-256 is the right hash for it (no KDF buys anything).
+   LINK CODE      20 symbols of upper-case Crockford base32 (100 bits), shown as `XXXX-XXXX-XXXX-XXXX-XXXX` so a
+                  person can type it on a second device. Short-lived (10 minutes), single use, and stored only as
+                  SHA-256 of its canonical spelling -- the record is found BY that digest, so the code itself is
+                  never compared and there is nothing to time.
+   Neither is ever logged, put in a URL, or kept by the client beyond the moment it is shown. */
+
+export const RECOVERY_KEY_PATTERN = /^rk_[0-9a-hjkmnp-tv-z]{25}[048cgmrw]\.[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/;
+
+export function mintRecoveryKey(random: RandomSource = cryptoRandom): { selector: string; secret: string; key: string } {
+  const selector = mintRecoverySelector(random);
+  const secret = mintSecret(random);
+  return { selector, secret, key: `${selector}.${secret}` };
+}
+
+/** A recovery key as typed or pasted: surrounding whitespace forgiven, nothing else. `null` when it cannot be one. */
+export function parseRecoveryKey(raw: unknown): { selector: string; secret: string } | null {
+  if (typeof raw !== "string" || raw.length > 200) return null;
+  const key = raw.trim();
+  if (!RECOVERY_KEY_PATTERN.test(key)) return null;
+  const [selector, secret] = key.split(".");
+  if (!RECOVERY_SELECTOR_PATTERN.test(selector) || secretBytes(secret) === null) return null;
+  return { selector, secret };
+}
+
+export const LINK_CODE_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+export const LINK_CODE_SYMBOLS = 20;
+
+/** 20 symbols, 5 uniform bits each (a byte's low five bits: 256 is a multiple of 32). */
+export function mintLinkCode(random: RandomSource = cryptoRandom): { canonical: string; display: string } {
+  const bytes = random(LINK_CODE_SYMBOLS);
+  let canonical = "";
+  for (const byte of bytes) canonical += LINK_CODE_ALPHABET[byte & 31];
+  return { canonical, display: (canonical.match(/.{4}/g) as string[]).join("-") };
+}
+
+/** A link code as typed: case, spaces and hyphens forgiven, and Crockford's look-alikes (I and L are 1, O is 0).
+ *  `null` unless exactly 20 symbols of the alphabet remain. */
+export function canonicalLinkCode(raw: unknown): string | null {
+  if (typeof raw !== "string" || raw.length > 64) return null;
+  const body = raw.toUpperCase().replace(/[\s-]+/g, "").replace(/[IL]/g, "1").replace(/O/g, "0");
+  if (body.length !== LINK_CODE_SYMBOLS) return null;
+  for (const symbol of body) if (!LINK_CODE_ALPHABET.includes(symbol)) return null;
+  return body;
+}
+
+/** What the store keeps for a link code: hex SHA-256 of its canonical spelling (domain-separated). */
+export function linkCodeHash(canonical: string): string {
+  return createHash("sha256").update(`gs-link-code:${canonical}`, "utf8").digest("hex");
 }

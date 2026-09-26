@@ -21,7 +21,8 @@
 
 import * as path from "path";
 
-import { createGameServer, GAME_SERVER_BIND_HOST } from "./gameServer";
+import { createGameServer, GAME_SERVER_BIND_HOST, LEGACY_ROOM_HANDLERS } from "./gameServer";
+import { createFileRecordStore } from "./rooms/recordStore";
 import { createFileLogStore } from "./fileLogStore";
 import { SESSION_COOKIE_NAME } from "./identity/cookies";
 import { createDevAuthenticator } from "./identity/devAuthenticator";
@@ -61,6 +62,22 @@ if (!resolved.ok) {
   process.exit(2);
 }
 const config = resolved.config;
+/* ==================================================================
+    LIVE-2C (LIVE-2 §13.4 step 3): PRODUCTION IS NOT STARTABLE WHILE THE LEGACY ROOM PROTOCOL IS IN THE BUILD
+   ==================================================================
+   The legacy room handlers (`room-write`, `seat-pin`, `claim-seat`, `lobby-*`, the `room`-keyed hello, chat and
+   presence) are registered in DEVELOPMENT only, and `createGameServer` refuses to build a production server with any
+   of them. This build still carries them for local testing, so a production start is refused here -- exit 2, before
+   the data directory is touched -- until LIVE-2D deletes them (and empties `LEGACY_ROOM_HANDLERS`). */
+if (config.mode === "production" && LEGACY_ROOM_HANDLERS.length > 0) {
+  // eslint-disable-next-line no-console
+  console.error(
+    `Refusing to start: GS_MODE=production is not available in this build -- it still carries the legacy room protocol ` +
+      `(${LEGACY_ROOM_HANDLERS.length} handlers: ${LEGACY_ROOM_HANDLERS.join(", ")}), which production never serves. ` +
+      "LIVE-2D removes it; until then run GS_MODE=development for local play.",
+  );
+  process.exit(2);
+}
 /* `createDevAuthenticator` reads GS_MODE at call time; a mode given as `--mode` is made the environment's too. */
 process.env.GS_MODE = config.mode;
 
@@ -175,6 +192,14 @@ async function main(): Promise<void> {
        it was serving. LIVE-3B: positional, looped, synced writes; a torn tail repaired at load; a damaged log held
        for `tools/logDoctor.ts`; and every write first checks that this process still holds the lock. */
     store: createFileLogStore(dataDir, { onRestartRequired: failFast, writerCheck: () => held.verify() }),
+    /* LIVE-2C: the server-owned GameRecords and the join-code index, beside the rooms under the same lock:
+       `games/<game_id>.json` and `games/join-codes.json`, each replaced whole and durably (LIVE-3B §8.7). */
+    records: createFileRecordStore(dataDir, {
+      writerCheck: () => held.verify(),
+      onRestartRequired: (key, detail) => failFast(`the game records (${key})`, detail),
+    }),
+    /* The legacy room protocol: development only (LIVE-2C). Production never reaches this line (refused above). */
+    legacyRoomProtocol: config.mode === "development",
     legacyLogs,
     onRestartRequired: failFast,
   });
@@ -219,9 +244,10 @@ function identityBanner(): string {
   const posture =
     config.mode === "development"
       ? "  DEVELOPMENT IDENTITY: each tab is who its ?dev_claim= says, loopback only (Origin, Host and peer) -- NEVER point a tunnel at this server\n" +
-        "  remote playtests are not supported by this revision: use the last pre-LIVE-2B revision (90838071) until production mode can seat players (LIVE-2C/2D)\n"
+        "  rooms: the server-owned protocol (room-op, GameRecords in games/) and, for local testing only, the legacy room protocol beside it\n" +
+        "  remote playtests are not supported by this revision: use the last pre-LIVE-2B revision (90838071) until LIVE-2D\n"
       : `  PRODUCTION IDENTITY: the ${SESSION_COOKIE_NAME} cookie (Secure; HttpOnly; SameSite=Strict), bootstrapped at POST /gs/api/session; trusted proxy hops ${config.trustedProxyHops}\n` +
-        "  the legacy room protocol has no seat identity for a cookie principal yet: rooms answer no-seat-identity until LIVE-2C/2D\n";
+        "  rooms: the server-owned protocol only (room-op); the legacy room protocol is not registered\n";
   return (
     posture +
     `  allowed origins: ${config.allowedOrigins.join(", ")}${config.notes.length > 0 ? ` (${config.notes.join("; ")})` : ""}\n` +

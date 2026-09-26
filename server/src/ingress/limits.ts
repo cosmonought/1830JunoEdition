@@ -45,6 +45,40 @@ export interface IngressLimits {
   buckets: Record<BucketName, BucketSpec>;
   /** LIVE-2B (LIVE-2 §12.2): identity, upgrade and socket limits. */
   identity: IdentityLimits;
+  /** LIVE-2C (LIVE-2 §12.2): the limits keyed by principal, game and seat, now that seats have owners. */
+  rooms: RoomLimits;
+}
+
+/** LIVE-2C (LIVE-2 §12.2). */
+export interface RoomLimits {
+  /** Room creation: per principal, per IP key, and for the whole server. */
+  createsPerPrincipal: BucketSpec;
+  createsPerIp: BucketSpec;
+  createsGlobal: BucketSpec;
+  /** Hosted non-terminal rooms per principal (`limit-reached`). */
+  maxHostedRooms: number;
+  /** Seated non-terminal games per principal (`limit-reached`). */
+  maxSeatedGames: number;
+  /** Join-code failures: per principal and per IP key (10 minutes), and for the whole server (an hour). */
+  joinFailuresPerPrincipal: BucketSpec;
+  joinFailuresPerIp: BucketSpec;
+  joinFailuresGlobal: BucketSpec;
+  /** Membership ops (join, take, release, leave, ready, profile) per principal. */
+  membershipOpsPerPrincipal: BucketSpec;
+  /** Gameplay submits per seat and per game. */
+  submitsPerSeat: BucketSpec;
+  submitsPerGame: BucketSpec;
+  /** Chat per principal per game. */
+  chatPerSeat: BucketSpec;
+  /** Join-code rotations (rotate-code, going private) per game: each rewrites the join index. */
+  codeRotationsPerGame: BucketSpec;
+  /** The public list is rebroadcast at most this often. */
+  listCoalesceMs: number;
+  /** An unknown game id is remembered as unknown this long (no repeated store reads). */
+  unknownGameTtlMs: number;
+  maxUnknownGames: number;
+  /** A socket that authenticated but never subscribed to anything is closed 1000 after this. */
+  unsubscribedReapMs: number;
 }
 
 /** LIVE-2B (LIVE-2 §4.3, §12.2). */
@@ -142,21 +176,42 @@ export const DEFAULT_INGRESS_LIMITS: IngressLimits = Object.freeze({
     sweepIntervalMs: 60_000,
     maxApiBodyBytes: 4 * 1024,
   }),
+  rooms: Object.freeze({
+    createsPerPrincipal: { capacity: 5, refillPerSecond: 5 / 3600 },
+    createsPerIp: { capacity: 10, refillPerSecond: 10 / 3600 },
+    createsGlobal: { capacity: 60, refillPerSecond: 60 / 3600 },
+    maxHostedRooms: 3,
+    maxSeatedGames: 10,
+    joinFailuresPerPrincipal: { capacity: 10, refillPerSecond: 10 / 600 },
+    joinFailuresPerIp: { capacity: 30, refillPerSecond: 30 / 600 },
+    joinFailuresGlobal: { capacity: 1_000, refillPerSecond: 1_000 / 3600 },
+    membershipOpsPerPrincipal: { capacity: 10, refillPerSecond: perMinute(20) },
+    submitsPerSeat: { capacity: 20, refillPerSecond: 3 },
+    submitsPerGame: { capacity: 30, refillPerSecond: 10 },
+    chatPerSeat: { capacity: 5, refillPerSecond: 1 / 3 },
+    codeRotationsPerGame: { capacity: 5, refillPerSecond: 5 / 3600 },
+    listCoalesceMs: 1_000,
+    unknownGameTtlMs: 60_000,
+    maxUnknownGames: 100_000,
+    unsubscribedReapMs: 60_000,
+  }),
 }) as IngressLimits;
 
 /** The defaults with a test's (or an operator's) overrides; bucket specs merge per bucket. */
 export function resolveLimits(
-  over: Partial<Omit<IngressLimits, "buckets" | "identity">> & {
+  over: Partial<Omit<IngressLimits, "buckets" | "identity" | "rooms">> & {
     buckets?: Partial<Record<BucketName, BucketSpec>>;
     identity?: Partial<IdentityLimits>;
+    rooms?: Partial<RoomLimits>;
   } = {},
 ): IngressLimits {
-  const { buckets, identity, ...rest } = over;
+  const { buckets, identity, rooms, ...rest } = over;
   return {
     ...DEFAULT_INGRESS_LIMITS,
     ...rest,
     buckets: { ...DEFAULT_INGRESS_LIMITS.buckets, ...(buckets ?? {}) },
     identity: { ...DEFAULT_INGRESS_LIMITS.identity, ...(identity ?? {}) },
+    rooms: { ...DEFAULT_INGRESS_LIMITS.rooms, ...(rooms ?? {}) },
   };
 }
 

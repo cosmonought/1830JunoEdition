@@ -55,6 +55,7 @@ import type { RoomSession, ServerLogEntry } from "../../../frontend/src/utils/ro
 import { isStoreCorrupt, outcomeOf, type StoreWriteOutcome } from "../persistence/storeResult";
 import { AHEAD_REASON, RESYNC_REASON } from "../../../frontend/src/utils/roomSession";
 import type { SandboxRoomDoc } from "../../../frontend/src/utils/sandboxRoom";
+import type { GameRecord } from "./gameRecord";
 import type { BuildId } from "../../../frontend/src/utils/serverProtocol";
 import {
   buildCommittedView,
@@ -62,6 +63,7 @@ import {
   entryAt,
   extendsHistory,
   withHold,
+  withRecord,
   withRoomDoc,
   type CommittedView,
   type Hold,
@@ -140,6 +142,21 @@ export type BatchSettlement =
   /** Unknown: the game is held `uncertain` until the store can be read back. */
   | { readonly kind: "unresolved"; readonly reason: string };
 
+/** LIVE-2C: a committed record is immutable all the way down -- its seats and admissions are shared by every reader. */
+function deepFreeze<T>(value: T): T {
+  if (typeof value === "object" && value !== null && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const key of Object.keys(value as object)) deepFreeze((value as Record<string, unknown>)[key]);
+  }
+  return value;
+}
+
+/** LIVE-2C: how a GameRecord commit settled -- exactly like the room document's (durable before visible). */
+export type RecordSettlement =
+  | { readonly kind: "committed"; readonly view: CommittedView }
+  | { readonly kind: "failed"; readonly reason: string }
+  | { readonly kind: "unresolved"; readonly reason: string };
+
 export type DocSettlement =
   | { readonly kind: "committed"; readonly view: CommittedView }
   /** The store did not take the document; the previous one stands. */
@@ -167,6 +184,9 @@ export interface Tx {
   ): Promise<BatchSettlement>;
   /** Durable-before-visible for the legacy room document (§21 LIVE-3A, F-10). Never throws. */
   commitRoomDoc(doc: SandboxRoomDoc, deliver: (settled: DocSettlement) => Delivery): Promise<DocSettlement>;
+  /** LIVE-2C: durable-before-visible for the GameRecord, CONDITIONAL on the committed `record_version` (OCC): the
+   *  record must be the committed one advanced by exactly one (or the first, version 1). Never throws. */
+  commitRecord(record: GameRecord, deliver: (settled: RecordSettlement) => Delivery): Promise<RecordSettlement>;
 }
 
 /** The store, as the actor sees it. Today's `LogStore` (fileLogStore.ts) sits behind it through `gameServer`.
@@ -178,6 +198,10 @@ export interface GameStorePort {
   appendBatch(gameId: string, entries: readonly ServerLogEntry[]): Promise<StoreWriteOutcome>;
   loadRoomDoc(gameId: string): Promise<SandboxRoomDoc | null>;
   saveRoomDoc(gameId: string, doc: SandboxRoomDoc): Promise<StoreWriteOutcome>;
+  /** LIVE-2C: the GameRecord (`null` for a legacy room or a game that does not exist). */
+  loadRecord?(gameId: string): Promise<GameRecord | null>;
+  /** LIVE-2C: conditional put -- `expected` is the committed version (`null`: must not exist). */
+  saveRecord?(record: GameRecord, expected: number | null): Promise<StoreWriteOutcome>;
 }
 
 /** Counted per server, read by tests and the smoke run. LIVE-3C turns these into §18's metrics. */
@@ -243,6 +267,8 @@ export interface GameActorDeps {
   loadRoomDoc(): Promise<SandboxRoomDoc | null>;
   /** Called synchronously inside the publish that changed the committed room document. */
   onRoomDocPublished?(doc: Readonly<SandboxRoomDoc>): void;
+  /** LIVE-2C: called synchronously inside the publish that changed the committed GameRecord. */
+  onRecordPublished?(record: Readonly<GameRecord>): void;
   /** Called inside the publish that made entries durable and visible (`GameServerOptions.onAppend`). */
   onEntriesPublished?(entries: readonly ServerLogEntry[]): void;
   now(): number;
@@ -327,6 +353,23 @@ export class GameActor {
     );
   }
 
+  /** LIVE-2C: whether the load has published a committed view (before it, `view` throws). */
+  get isLoaded(): boolean {
+    return this.committed !== null;
+  }
+
+  /** LIVE-2C: holders that keep this actor resident though nobody reads its log -- the room view's subscribers
+   *  (`roomHost.ts`). An actor with a pin is never idle, so it is never evicted under them. */
+  private pins = 0;
+
+  pin(): void {
+    this.pins += 1;
+  }
+
+  unpin(): void {
+    this.pins = Math.max(0, this.pins - 1);
+  }
+
   /** The committed view. O(1); never waits on the queue. */
   get view(): CommittedView {
     if (this.committed === null) throw new Error(`game ${this.gameId} has not loaded`);
@@ -349,6 +392,7 @@ export class GameActor {
       this.queued.size === 0 &&
       this.running === null &&
       this.subscribers.size === 0 &&
+      this.pins === 0 &&
       this.unresolved.size === 0 &&
       this.reconcileTimer === null &&
       this.committed?.hold?.reason !== "uncertain"
@@ -372,6 +416,8 @@ export class GameActor {
       corrupt = describe(error);
     }
     const roomDoc = await this.deps.loadRoomDoc();
+    /* LIVE-2C: the GameRecord, read in the same single-flight load (a legacy room has none). */
+    const record = this.deps.store.loadRecord ? await this.awaitRead(this.deps.store.loadRecord(this.gameId), "load of the game record") : null;
     const session = this.deps.newSession();
     if (entries.length > 0) this.deps.restore(session, entries);
     this.session = session;
@@ -379,6 +425,7 @@ export class GameActor {
       gameId: this.gameId,
       session,
       roomDoc,
+      record,
       explainDivergence: this.deps.explainDivergence,
       version: 1,
       ...(corrupt === null ? {} : { hold: { reason: "corrupt" as const, detail: corrupt } }),
@@ -576,6 +623,7 @@ export class GameActor {
       },
       commitBatch: (batch, deliver) => this.commitBatch(task, run, batch, deliver),
       commitRoomDoc: (doc, deliver) => this.commitRoomDoc(task, run, doc, deliver),
+      commitRecord: (record, deliver) => this.commitRecord(task, run, record, deliver),
     };
   }
 
@@ -770,12 +818,63 @@ export class GameActor {
     return settled;
   }
 
+  /** LIVE-2C: the GameRecord, durable before visible, conditional on the committed version (OCC). A failure before
+   *  the store's rename leaves the committed record standing; an unresolved one holds the game for a restart. */
+  private async commitRecord(
+    task: Task<unknown>,
+    run: RunState,
+    record: GameRecord,
+    deliver: (settled: RecordSettlement) => Delivery,
+  ): Promise<RecordSettlement> {
+    if (run.commitIssued) throw new Error("E-6: a task commits at most once");
+    run.commitIssued = true;
+    const expected = this.view.record?.record_version ?? null;
+    const save = this.deps.store.saveRecord;
+    if (save === undefined) {
+      const settled: RecordSettlement = { kind: "failed", reason: "this server has no record store" };
+      this.deliverOnly(task, deliver(settled));
+      return settled;
+    }
+    if (record.record_version !== (expected ?? 0) + 1) {
+      const settled: RecordSettlement = { kind: "failed", reason: `record version ${record.record_version} does not follow ${expected ?? "none"}` };
+      this.deliverOnly(task, deliver(settled));
+      return settled;
+    }
+    const priorHold = this.view.hold;
+    const { outcome, late } = await this.awaitWrite(
+      () => save(record, expected),
+      "game record save",
+      (detail) => this.publish(withHold(this.view, { reason: "uncertain", detail }), null, {}),
+    );
+    if (outcome.kind === "committed") {
+      const base = late ? withHold(this.view, priorHold) : this.view;
+      const view = withRecord(base, deepFreeze(record));
+      const settled: RecordSettlement = { kind: "committed", view };
+      this.publish(view, task, deliver(settled));
+      return settled;
+    }
+    this.deps.counters.storeDocFailed += 1;
+    if (outcome.kind === "definite") {
+      this.deps.warn(`  store: could not save the game record for ${this.gameId} — ${outcome.detail}; the previous record stands`);
+      if (late) this.publish(withHold(this.view, priorHold), null, {});
+      const settled: RecordSettlement = { kind: "failed", reason: outcome.detail };
+      this.deliverOnly(task, deliver(settled));
+      return settled;
+    }
+    this.deps.counters.storeUncertain += 1;
+    const settled: RecordSettlement = { kind: "unresolved", reason: outcome.detail };
+    this.deliverOnly(task, deliver(settled));
+    this.hold(outcome.detail, null, null, true);
+    return settled;
+  }
+
   private buildNextView(session: RoomSession, before: CommittedView): CommittedView {
     this.deps.faults?.beforeViewBuild?.(this.gameId);
     return buildCommittedView({
       gameId: this.gameId,
       session,
       roomDoc: before.roomDoc,
+      record: before.record,
       explainDivergence: this.deps.explainDivergence,
       version: before.version + 1,
     });
@@ -932,6 +1031,7 @@ export class GameActor {
     const previous = this.committed;
     this.committed = view; // 1. the committed view, replaced synchronously
     if (view.roomDoc !== null && view.roomDoc !== previous?.roomDoc) this.deps.onRoomDocPublished?.(view.roomDoc);
+    if (view.record !== null && view.record !== previous?.record) this.deps.onRecordPublished?.(view.record);
     const origin = task?.origin;
     if (delivery.reply && origin !== undefined) this.deliverTo(origin, delivery.reply); // 2. the answer
     if (delivery.fanout) {

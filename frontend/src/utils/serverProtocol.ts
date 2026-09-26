@@ -135,6 +135,8 @@ export type ClientMessage = SubmitRequest | DivergenceReport;
 /** The machine code on a refusal the transport decided rather than the rules. Absent on a rules refusal
  *  (`turnAuthority`'s or the reducer's sentence), which every client already shows as-is. */
 export type RefusalCode =
+  /** LIVE-2C (RV-1): the sender holds no seat in the room's GameRecord; nothing was read or recorded. */
+  | "not-seated"
   /** `baseIndex` is above the room's durable watermark: this client holds history the room does not. */
   | "ahead"
   /** `baseId` names an entry the room does not hold at `baseIndex`: the two histories diverged. */

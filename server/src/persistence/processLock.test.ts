@@ -106,6 +106,41 @@ describe("the data-directory lock (§8.8)", () => {
       assert.equal(refused.ok, false);
     }));
 
+  test("FI-28 (LIVE-2C): a takeover landing while a racer is still inspecting cannot hand that racer the winner's fresh lock", () =>
+    withDir("toctou", async (dir) => {
+      const lockDir = strandedLock(dir, { instance_id: "crashed", pid: 1, host: "h", started_at: 0 }, 60_000);
+      /* The loaded-machine interleaving, made deterministic: exactly when the late racer reads the stale owner record,
+         the winner moves the stale lock aside (under the name every racer derives) and creates its own fresh LOCK,
+         which holds no owner record yet. */
+      const promises = fs.promises as unknown as { readFile: (...args: unknown[]) => Promise<unknown> };
+      const realReadFile = promises.readFile;
+      let interleaved = false;
+      promises.readFile = async (...args: unknown[]) => {
+        if (!interleaved && String(args[0]) === path.join(lockDir, "owner.json")) {
+          interleaved = true;
+          fs.renameSync(lockDir, path.join(dir, `${LOCK_DIRECTORY}.stale.crashed`));
+          fs.writeFileSync(path.join(dir, `${LOCK_DIRECTORY}.stale.crashed`, "taken-over-by-winner"), "0\n");
+          fs.mkdirSync(lockDir);
+        }
+        return realReadFile.apply(fs.promises, args);
+      };
+      let late: Awaited<ReturnType<typeof acquireDataLock>>;
+      try {
+        late = await acquireDataLock(dir, { instanceId: "late-racer", heartbeatMs: 3_600_000 });
+      } finally {
+        promises.readFile = realReadFile;
+      }
+      assert.ok(interleaved, "the interleaving happened");
+      assert.equal(late.ok, false, "the late racer met the winner's fresh lock and refused -- it did not move it aside");
+      assert.ok(fs.existsSync(lockDir), "the winner's lock is where the winner made it");
+      assert.deepEqual(
+        fs.readdirSync(dir).filter((name) => name.startsWith(`${LOCK_DIRECTORY}.stale.`)),
+        [`${LOCK_DIRECTORY}.stale.crashed`],
+        "nothing but the stale lock was ever moved aside",
+      );
+      if (late.ok) await late.lock.release();
+    }));
+
   test("simultaneous takeover racers over one stale lock: exactly one wins, every round", () =>
     withDir("race", async (dir) => {
       for (let round = 0; round < 25; round += 1) {

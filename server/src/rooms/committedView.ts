@@ -28,6 +28,7 @@
 
 import type { RoomSession, ServerLogEntry } from "../../../frontend/src/utils/roomSession";
 import type { SandboxRoomDoc } from "../../../frontend/src/utils/sandboxRoom";
+import type { GameRecord } from "./gameRecord";
 import type { BuildId, ServerMessage } from "../../../frontend/src/utils/serverProtocol";
 import { fieldDigests, stateDigest } from "../../../frontend/src/gameEngine";
 
@@ -50,6 +51,8 @@ export interface CommittedView {
   readonly digest: string;
   readonly fields?: Readonly<Record<string, string>>;
   readonly roomDoc: Readonly<SandboxRoomDoc> | null;
+  /** LIVE-2C: the server-owned GameRecord -- the room's authority -- as committed. `null` for a legacy room. */
+  readonly record: Readonly<GameRecord> | null;
   readonly hold: Hold | null;
   readonly incompatible: ServerMessage | null;
   readonly version: number;
@@ -68,6 +71,7 @@ export function buildCommittedView(input: {
   gameId: string;
   session: RoomSession;
   roomDoc: Readonly<SandboxRoomDoc> | null;
+  record?: Readonly<GameRecord> | null;
   /** An `uncertain` hold carried across a publish; a version hold is read off the session itself. */
   hold?: Hold | null;
   explainDivergence: boolean;
@@ -87,6 +91,7 @@ export function buildCommittedView(input: {
     digest: stateDigest(session.state),
     ...(input.explainDivergence ? { fields: Object.freeze(fieldDigests(session.state)) } : {}),
     roomDoc: input.roomDoc,
+    record: input.record ?? null,
     hold,
     incompatible,
     version: input.version,
@@ -96,6 +101,11 @@ export function buildCommittedView(input: {
 /** The same view with a different room document, for a publish that changed only the document. */
 export function withRoomDoc(view: CommittedView, roomDoc: Readonly<SandboxRoomDoc>): CommittedView {
   return Object.freeze({ ...view, roomDoc, version: view.version + 1 });
+}
+
+/** LIVE-2C: the same view with a different GameRecord, for a publish that changed only the record. */
+export function withRecord(view: CommittedView, record: Readonly<GameRecord>): CommittedView {
+  return Object.freeze({ ...view, record, version: view.version + 1 });
 }
 
 /** The same view with a different hold, for a publish that changed only whether the game takes writes. */

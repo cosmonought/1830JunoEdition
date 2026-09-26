@@ -59,7 +59,7 @@ import { RoomEngine, type ReplayEntry, type ReplayProviders, type ReplaySeed } f
 import { fieldDigests, stateDigest } from "../gameEngine/stateDigest";
 import { turnRefusal } from "../gameEngine/turnAuthority";
 import { tileEraFor } from "../gameEngine/gameConstants"; // #1683: the era the lay is judged in
-import { effectiveActions } from "../gameEngine/logRevert";
+import { effectiveActions, type UndoPolicy } from "../gameEngine/logRevert";
 import {
   SERVER_REPLAY_POLICY,
   SUPPORTED_RULES_ENGINE_VERSIONS,
@@ -131,7 +131,16 @@ export interface SubmitInput {
   /** #1249: the room's host from the room document, for the messages whose owner is the host. `null` when
    *  the room has no document (a test); the authority skips the host-only checks then. */
   host?: string | null;
+  /** LIVE-2C (LIVE-2 §2.1, RV-1): whether `actor` holds a seat in the room's GameRecord. `false` is refused at step
+   *  1b -- before the nonce, the staleness answer and `settleOwed`, so a non-seated sender cannot trigger even a
+   *  repair append. Absent (a legacy room, a test) skips the gate. */
+  seated?: boolean;
+  /** LIVE-2C (LIVE-2 §9.2): the room's undo policy for `RevertTo`; absent is the no-money policy. */
+  undoPolicy?: UndoPolicy;
 }
+
+/** LIVE-2C: the sentence a non-seated sender is refused with (step 1b). */
+export const NOT_SEATED_REASON = "You do not have a seat in this game.";
 
 /** LIVE-3A: the sentences on the two refusals that send a client back to rebuild the room from the start. The
  *  client does not show them -- it resyncs -- but they are what the server's window says. */
@@ -402,6 +411,13 @@ export class RoomSession {
        `RevertTo` included, since a rewind is a rebuild under the same unsupported version. */
     if (this.incompatibility !== null) return this.incompatibleFrame(this.incompatibility.reason);
 
+    /* ---- 1b. THE SEAT (LIVE-2C, RV-1) ----
+       A principal with no seat in the room's GameRecord is refused here, before anything reads or moves the
+       board: no nonce is recorded, no catch-up is computed for it and no owed burst is repaired on its behalf. */
+    if (input.seated === false) {
+      return { kind: "refused", code: "not-seated", reason: NOT_SEATED_REASON, build: this.options.build };
+    }
+
     /* ==================================================================
         LIVE-3A (L3-3): `baseIndex` IS TWO-SIDED, AND ANCHORED
        ==================================================================
@@ -499,6 +515,7 @@ export class RoomSession {
          rewrite. `undefined` host (no document) skips the host-only checks rather than refusing everyone. */
       host: input.host,
       log: this.log,
+      undoPolicy: input.undoPolicy,
       // #1540: the grid, for the forced-purchase hold (the route walk needs it).
       mapGrid: this.engine.snapshot.grid,
       /* #1683 (Stage 10.1): the providers' own geometry, era-bound on the board as it stands, so the ingress

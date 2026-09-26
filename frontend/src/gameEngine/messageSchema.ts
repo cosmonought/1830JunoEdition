@@ -722,6 +722,9 @@ export const CLIENT_FRAME_KINDS: readonly string[] = [
   "lobby-hello",
   "lobby-watch",
   "lobby-write",
+  /* LIVE-2C: the server-owned room protocol (LIVE-2 Appendix B). */
+  "room-op",
+  "rooms-watch",
 ];
 
 export function isRecognisedClientFrame(parsed: unknown): parsed is { kind: string } {
@@ -858,12 +861,85 @@ function closedOk(value: unknown, fields: FrameFields): boolean {
   return true;
 }
 
+/* ---- LIVE-2C: the server-owned room protocol (LIVE-2 §6.3, Appendix B) ---- */
+
+/** A server-minted game id (`g_` + 26 canonical lowercase Crockford base32 symbols). */
+export const GAME_ID_PATTERN = /^g_[0-9a-hjkmnp-tv-z]{25}[048cgmrw]$/;
+/** A server-minted seat id (`p-` + 16 lowercase Crockford base32 symbols). */
+export const PLAYER_ID_PATTERN = /^p-[0-9a-hjkmnp-tv-z]{16}$/;
+
+/** `create`'s variants: the known keys only -- and never `rules`, which the server stamps. */
+function createVariantsOk(value: unknown): boolean {
+  return variantsOk(value) && !hasOwn(value as Record<string, unknown>, "rules");
+}
+
+const isVisibility: FrameCheck = (value) => value === "public" || value === "private";
+
+/** Every room-op body, CLOSED (LIVE-2 Appendix B). No op names a record field, a host id (but `transfer-host`'s
+ *  target), a seat's owner or a partial document. Transfer and reclaim are LIVE-2E's and are not here. */
+const ROOM_OPS: Readonly<Record<string, FrameFields>> = nullTable<FrameFields>({
+  create: nullTable({
+    type: req(str(16)),
+    visibility: req(isVisibility),
+    exactPlayers: req((value) => value === null || (Number.isSafeInteger(value) && (value as number) >= 2 && (value as number) <= 7)),
+    variants: req(createVariantsOk),
+    nickname: req(str(MAX_NARRATION_LENGTH)),
+    color: opt((value) => value === null || str(MAX_ID_LENGTH)(value)),
+    /* A stake, chain-neutral (an opaque integer string in the settlement backend's smallest unit): LIVE-2 refuses
+       any non-zero one. No chain's denomination is named here (GNOLAND-1 may share the backend). */
+    stake: opt(str(MAX_AMOUNT_LENGTH)),
+  }),
+  join: nullTable({ type: req(str(16)), code: req(str(32)), takeSeat: req(isBool) }),
+  "take-seat": nullTable({ type: req(str(16)) }),
+  "release-seat": nullTable({ type: req(str(16)) }),
+  leave: nullTable({ type: req(str(16)) }),
+  "set-ready": nullTable({ type: req(str(16)), ready: req(isBool) }),
+  "set-profile": nullTable({
+    type: req(str(16)),
+    nickname: opt(str(MAX_NARRATION_LENGTH)),
+    color: opt((value) => value === null || str(MAX_ID_LENGTH)(value)),
+  }),
+  "set-visibility": nullTable({ type: req(str(16)), visibility: req(isVisibility) }),
+  "rotate-code": nullTable({ type: req(str(16)) }),
+  kick: nullTable({ type: req(str(16)), playerId: req(str(40, PLAYER_ID_PATTERN)) }),
+  "transfer-host": nullTable({ type: req(str(16)), toPlayerId: req(str(40, PLAYER_ID_PATTERN)) }),
+  "start-game": nullTable({ type: req(str(16)) }),
+  "cancel-room": nullTable({ type: req(str(16)) }),
+});
+
+export const ROOM_OP_TYPES: readonly string[] = Object.keys(ROOM_OPS);
+
+function roomOpOk(value: unknown): boolean {
+  if (!isPlainObject(value) || typeof value.type !== "string" || !hasOwn(ROOM_OPS, value.type)) return false;
+  return closedOk(value, ROOM_OPS[value.type]);
+}
+
+/** LIVE-2C: the frames that name EITHER a legacy room (`room`, development only) OR a game (`gameId`) -- exactly one.
+ *  The legacy-only fields (`pin`, `token`, `displayName`) never ride with a `gameId`. */
+const ROUTED_FRAMES: Readonly<Record<string, readonly string[]>> = nullTable({
+  hello: ["pin", "token"],
+  "room-hello": ["pin", "token"],
+  "chat-send": ["displayName"],
+  "presence-set": [],
+});
+
+function routedOk(frame: Record<string, unknown>): boolean {
+  const legacyOnly = hasOwn(ROUTED_FRAMES, frame.kind as string) ? ROUTED_FRAMES[frame.kind as string] : null;
+  if (legacyOnly === null) return true;
+  const byRoom = frame.room !== undefined;
+  const byGame = frame.gameId !== undefined;
+  if (byRoom === byGame) return false;
+  return !byGame || legacyOnly.every((key) => frame[key] === undefined);
+}
+
 /** LIVE-2 §11.2: every control frame is CLOSED -- an unknown field is `bad-frame`, not ignored. Each schema is
  *  what today's client sends, field for field (`serverLink.ts`, `roomDocLink.ts`, `lobby.ts`). */
 const CONTROL_FRAMES: Readonly<Record<string, FrameFields>> = nullTable<FrameFields>({
   hello: nullTable({
     kind: req(str(16)),
-    room: req(str(40, ROOM_PATTERN)),
+    /* LIVE-2C: a legacy room (development) or a server-owned game -- exactly one (`routedOk`). */
+    room: opt(str(40, ROOM_PATTERN)),
+    gameId: opt(str(40, GAME_ID_PATTERN)),
     build: req(str(64, BUILD_PATTERN)),
     /* LIVE-2B: no `claim`. Identity is the connection's, authenticated at the upgrade; a frame naming one is
        `bad-frame` (LIVE-2 §4, §11.2). `pin` and `token` stay until the seat-transfer pass (2D/2E). */
@@ -883,7 +959,8 @@ const CONTROL_FRAMES: Readonly<Record<string, FrameFields>> = nullTable<FrameFie
   }),
   "room-hello": nullTable({
     kind: req(str(16)),
-    room: req(str(40, ROOM_PATTERN)),
+    room: opt(str(40, ROOM_PATTERN)),
+    gameId: opt(str(40, GAME_ID_PATTERN)),
     build: opt(str(64, BUILD_PATTERN)),
     /* LIVE-2B: no `claim` (see `hello`). */
     pin: opt(str(16)),
@@ -911,13 +988,15 @@ const CONTROL_FRAMES: Readonly<Record<string, FrameFields>> = nullTable<FrameFie
   }),
   "chat-send": nullTable({
     kind: req(str(16)),
-    room: req(str(40, ROOM_PATTERN)),
+    room: opt(str(40, ROOM_PATTERN)),
+    gameId: opt(str(40, GAME_ID_PATTERN)),
     text: req(str(MAX_CHAT_TEXT_LENGTH)),
     displayName: opt(str(MAX_NARRATION_LENGTH)),
   }),
   "presence-set": nullTable({
     kind: req(str(16)),
-    room: req(str(40, ROOM_PATTERN)),
+    room: opt(str(40, ROOM_PATTERN)),
+    gameId: opt(str(40, GAME_ID_PATTERN)),
     state: req(presenceStateOk),
   }),
   "lobby-hello": nullTable({ kind: req(str(16)) }),
@@ -931,6 +1010,14 @@ const CONTROL_FRAMES: Readonly<Record<string, FrameFields>> = nullTable<FrameFie
     requestId: req(str(64, REQUEST_ID_PATTERN)),
     write: req(isObject),
   }),
+  /* LIVE-2C (LIVE-2 Appendix B): every room mutation, and the public list. */
+  "room-op": nullTable({
+    kind: req(str(16)),
+    requestId: req(str(64, REQUEST_ID_PATTERN)),
+    gameId: opt(str(40, GAME_ID_PATTERN)),
+    op: req(roomOpOk),
+  }),
+  "rooms-watch": nullTable({ kind: req(str(16)), on: req(isBool) }),
 });
 
 export type ClientFrameParse =
@@ -963,6 +1050,7 @@ export function parseClientFrame(parsed: unknown): ClientFrameParse {
     return { ok: false, reason: BAD_FRAME_REASONS.unknownKind, kind: null };
   }
   if (!closedOk(parsed, CONTROL_FRAMES[kind])) return { ok: false, reason: BAD_FRAME_REASONS.malformed, kind };
+  if (!routedOk(parsed)) return { ok: false, reason: BAD_FRAME_REASONS.malformed, kind };
   return { ok: true, frame: parsed as { kind: string } & Record<string, unknown> };
 }
 

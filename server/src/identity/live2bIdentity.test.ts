@@ -201,8 +201,9 @@ describe("LIVE-2B bootstrap and revoke API", () => {
       assert.equal(JSON.parse(rotated.body).rotated, true);
       const next = cookieFrom(rotated);
       assert.notEqual(next, old);
-      // The socket opened on the old session is untouched, and still answered.
-      open.socket?.send(JSON.stringify({ kind: "lobby-hello" }));
+      // The socket opened on the old session is untouched, and still answered. (LIVE-2C: production serves the
+      // server-owned public list, `rooms-watch`; the legacy `lobby-hello` is not registered there.)
+      open.socket?.send(JSON.stringify({ kind: "rooms-watch", on: true }));
       await until(() => open.frames.some((frame) => frame.kind === "rooms"), "a lobby answer on the rotated session's socket");
       assert.equal(open.socket?.readyState, WebSocket.OPEN);
       assert.equal((await upgrade(port, { cookie: old })).status, 401, "a rotated session opens no new socket");
@@ -392,14 +393,18 @@ describe("LIVE-2B upgrade", () => {
     }
   });
 
-  test("production: a cookie principal has no seat in the legacy room protocol (the explicit 2C seam)", async () => {
+  test("production: no legacy room handler is registered -- its frames are answered as unknown kinds (LIVE-2C)", async () => {
+    /* LIVE-2B answered `no-seat-identity` here, from a registered legacy handler. LIVE-2C's mandatory correction:
+       production registers NO legacy handler at all, so the same frames are `bad-frame` before any room is read. */
     const { server, port } = await prodServer();
     try {
+      assert.equal(server.legacyRoomProtocol, false);
       const cookie = cookieFrom(await bootstrap(port));
       const socket = await upgrade(port, { cookie });
       socket.socket?.send(JSON.stringify({ kind: "room-hello", room: "JUNO-ABC", build: BUILD }));
       socket.socket?.send(JSON.stringify({ kind: "hello", room: "JUNO-ABC", build: BUILD, baseIndex: -1 }));
-      await until(() => socket.frames.filter((frame) => frame.code === "no-seat-identity").length === 2, "two no-seat-identity answers");
+      await until(() => socket.frames.filter((frame) => frame.code === "bad-frame").length === 2, "two bad-frame answers");
+      assert.equal(socket.frames.filter((frame) => frame.code === "no-seat-identity").length, 0);
       assert.equal(server.socketCounts().byGame("JUNO-ABC"), 0);
       socket.socket?.terminate();
     } finally {
@@ -621,7 +626,7 @@ describe("LIVE-2B startup (spawned processes)", () => {
   };
   const PROD = { GS_MODE: "production", GS_ALLOWED_ORIGINS: PROD_ORIGIN, GS_TRUSTED_PROXY_HOPS: "1" };
 
-  test("no mode, and every insecure production setting, exit 2 with a named reason -- and a clean production config starts", async () => {
+  test("no mode, and every insecure production setting, exit 2 with a named reason -- and (LIVE-2C) so does a clean production config", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "live2b-start-"));
     try {
       const cases: Array<[string[], Record<string, string | undefined>, RegExp]> = [
@@ -645,13 +650,13 @@ describe("LIVE-2B startup (spawned processes)", () => {
           assert.match(child.output(), /Refusing to start/);
         }),
       );
-      const ok = run(["--data", path.join(dir, "ok")], PROD);
-      const deadline = Date.now() + 20_000;
-      while (!/GS_MODE=production/.test(ok.output()) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
-      assert.match(ok.output(), /GS_MODE=production/);
-      assert.match(ok.output(), /PRODUCTION IDENTITY: the __Host-gs_session cookie/);
-      ok.child.kill("SIGTERM");
-      await ok.exited;
+      /* LIVE-2C (the mandatory 2B correction): a clean production config is refused while this build still carries the
+         legacy room protocol -- exit 2, before the data directory is touched. LIVE-2D makes production startable. */
+      const refusedProd = run(["--data", path.join(dir, "ok")], PROD);
+      assert.equal(await refusedProd.exited, 2, refusedProd.output());
+      assert.match(refusedProd.output(), /Refusing to start: GS_MODE=production is not available in this build/);
+      assert.match(refusedProd.output(), /legacy room protocol/);
+      assert.equal(fs.existsSync(path.join(dir, "ok")), false, "the refused start never touched its data directory");
       const dev = run(["--data", path.join(dir, "dev")], { GS_MODE: "development" });
       const devDeadline = Date.now() + 20_000;
       while (!/GS_MODE=development/.test(dev.output()) && Date.now() < devDeadline) await new Promise((resolve) => setTimeout(resolve, 20));

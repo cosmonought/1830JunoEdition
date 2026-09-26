@@ -46,6 +46,13 @@ import type { GsMode } from "./identity/mode";
 import { isLoopbackOrigin } from "./identity/origins";
 import { IdentityService } from "./identity/sessions";
 import { createMemoryIdentityStore } from "./identity/store";
+import { createMemoryRecordStore, type RecordStore } from "./rooms/recordStore";
+import { createRoomHost, type RoomHost } from "./rooms/roomHost";
+import { GAME_ID_PATTERN, seatOf, type GameRecord } from "./rooms/gameRecord";
+import type { IpKey } from "./identity/clientIp";
+import type { UndoPolicy } from "../../frontend/src/gameEngine/logRevert";
+import { BAD_FRAME_REASONS } from "../../frontend/src/gameEngine/messageSchema";
+import { cryptoShuffle, NoMoneyRosterSource, type RosterSource } from "./rooms/roomService";
 
 import { RoomSession, type ServerLogEntry } from "../../frontend/src/utils/roomSession";
 import {
@@ -345,6 +352,17 @@ export interface GameServerOptions {
   build: string;
   /** LIVE-2B: authentication at the upgrade (the successor of `resolveIdentity`). */
   identity: GameServerIdentity;
+  /** LIVE-2C: the server-owned GameRecords and the join-code index. In memory when absent; `start.ts` passes the
+   *  file adapter. */
+  records?: RecordStore;
+  /** LIVE-2C (LIVE-2 §13.4 step 3): the LEGACY room protocol (`room-write`, `seat-pin`, `claim-seat`, `lobby-*`, and the
+   *  `room`-keyed hello, room-hello, chat and presence). Registered in DEVELOPMENT mode only (on unless `false`);
+   *  a production server REFUSES to exist with it. LIVE-2D deletes it. */
+  legacyRoomProtocol?: boolean;
+  /** LIVE-2C (LIVE-2 §8.3): where a start's roster comes from. `NoMoneyRosterSource` when absent. */
+  rosterSource?: RosterSource;
+  /** LIVE-2C: the start's shuffle -- `crypto.randomInt` Fisher-Yates when absent; tests inject a fixed one. */
+  shuffle?: <T>(items: readonly T[]) => T[];
   /* ==================================================================
       DESIGN NOTE 1250: THE STORE IS AWAITED BEFORE ANYBODY IS TOLD
      ==================================================================
@@ -384,7 +402,12 @@ export interface GameServerOptions {
 
 interface Attached {
   room: string;
+  /** The legacy actor (a development claim). Empty for a server-owned game: its actor is the seat's `player_id`,
+   *  resolved from the record committed when each submit runs. */
   actor: string;
+  /** LIVE-2C: the connection's principal, and whether `room` is a server-owned game (`g_…`). */
+  principalId: string;
+  owned: boolean;
 }
 
 /* ==================================================================
@@ -422,6 +445,21 @@ const RATE_LIMITED_REASON = "Too many requests too quickly. Wait a moment and tr
 const SUBMIT_RATE_LIMITED_REASON = "You are sending moves too quickly. Wait a moment and try again.";
 const REVERT_BUDGET_REASON = "Too many undos in the last hour. Play on, and undo again later.";
 const LOG_FULL_REASON = "This game has reached the server's limit on its length and cannot take another move.";
+/** LIVE-2C (LIVE-2 §6.3 #20): the deal of a server-owned game is the server's. */
+const SERVER_DEALS_REASON = "The deal is made by the server \u2014 press Start.";
+/** LIVE-2C: the legacy room protocol's frames -- answered in development only (LIVE-2 §13.4 step 3). */
+const LEGACY_KINDS = new Set(["room-write", "seat-pin", "claim-seat", "lobby-hello", "lobby-watch", "lobby-write"]);
+const ROUTED_KINDS = new Set(["hello", "room-hello", "chat-send", "presence-set"]);
+const isLegacyFrame = (frame: { kind: string; room?: unknown }): boolean =>
+  LEGACY_KINDS.has(frame.kind) || (ROUTED_KINDS.has(frame.kind) && frame.room !== undefined);
+/** LIVE-2C (the frozen rollout invariant, LIVE-2 §13.4 step 3): THE LEGACY ROOM HANDLERS COMPILED INTO THIS BUILD.
+ *  A development server registers them; a production server never does, and `createGameServer` throws if asked to.
+ *  `start.ts` refuses `GS_MODE=production` outright (exit 2) while this list is not empty -- LIVE-2D deletes the
+ *  handlers and empties it, and only then is production startable. */
+export const LEGACY_ROOM_HANDLERS: readonly string[] = Object.freeze([
+  ...LEGACY_KINDS,
+  ...[...ROUTED_KINDS].map((kind) => `${kind} {room}`),
+]);
 /** LIVE-2B: a cookie principal has no seat in the legacy room protocol; LIVE-2C binds seats from the GameRecord. */
 const NO_SEAT_IDENTITY_CODE = "no-seat-identity";
 const NO_SEAT_IDENTITY_REASON = "This server cannot seat you in a room yet.";
@@ -468,7 +506,14 @@ export function createGameServer(options: GameServerOptions): {
   identity: IdentityService;
   /** LIVE-2B: the identity limiters, their refusals by name, and the upgrade/socket counters. */
   identityLimiter: IdentityLimiter;
-  upgrades: Readonly<{ accepted: number; refused: Readonly<Record<string, number>>; sessionClosed: number; malformedCooldowns: number }>;
+  upgrades: Readonly<{ accepted: number; refused: Readonly<Record<string, number>>; sessionClosed: number; malformedCooldowns: number; reaped: number }>;
+  /** LIVE-2C: the GameRecord store and the server-owned room authority (tests read their counters). */
+  records: RecordStore;
+  rooms: RoomHost;
+  /** LIVE-2C: whether this server registered the legacy room handlers (development only; never in production). */
+  legacyRoomProtocol: boolean;
+  /** LIVE-2C: how many game actors (each with its RoomSession) are resident -- the allocation-flood tests read it. */
+  residentGames(): number;
   /** LIVE-2B: the live socket indexes, for tests: how many sockets a session / principal / IP key / game holds. */
   socketCounts(): { total: number; bySession(id: string): number; byPrincipal(id: string): number; byIp(key: string): number; byGame(room: string): number };
 } {
@@ -500,6 +545,14 @@ export function createGameServer(options: GameServerOptions): {
   } else {
     throw new Error("createGameServer: identity.mode must be \"development\" or \"production\"");
   }
+  /* LIVE-2C (the frozen rollout invariant, LIVE-2 §13.4 step 3): legacy room handlers exist in DEVELOPMENT only, and a
+     production server refuses to be built with them. */
+  if (mode === "production" && options.legacyRoomProtocol === true) {
+    throw new Error("createGameServer: production mode refuses the legacy room protocol (LIVE-2C; LIVE-2D deletes it)");
+  }
+  const legacyRooms = mode === "development" && options.legacyRoomProtocol !== false;
+  /* Fail closed on the invariant itself: whatever the options said, a production server holds no legacy handler. */
+  if (mode === "production" && legacyRooms) throw new Error("createGameServer: a production server may not register a legacy room handler");
   const identityNow = identityOptions.now ?? (() => Date.now());
   const identity = identityOptions.service ?? IdentityService.fromSnapshot(createMemoryIdentityStore(), { principals: [], sessions: [] });
   /** Who each LOG socket said it was at `hello`, and which room. Identity only: the subscription itself lives on
@@ -693,6 +746,9 @@ export function createGameServer(options: GameServerOptions): {
       }
     },
     loadRoomDoc: async (code) => (store ? await store.loadRoomDoc(code) : null),
+    /* LIVE-2C: only a server-owned game id has a record; a legacy room code never reads the record store. */
+    loadRecord: async (code) => (GAME_ID_PATTERN.test(code) ? await recordStore.load(code) : null),
+    saveRecord: (record, expected) => recordStore.put(record, expected),
     saveRoomDoc: async (code, doc) => {
       if (!store) return COMMITTED;
       if (store.replaceRoomDoc) return store.replaceRoomDoc(code, doc);
@@ -704,6 +760,8 @@ export function createGameServer(options: GameServerOptions): {
       }
     },
   };
+  const recordStore: RecordStore = options.records ?? createMemoryRecordStore();
+  let roomHost: RoomHost | null = null;
   const games = new GameRegistry({
     evictable: store !== undefined,
     now: () => Date.now(),
@@ -722,6 +780,8 @@ export function createGameServer(options: GameServerOptions): {
           roomDocKnown.add(code);
         },
         onEntriesPublished: (entries) => options.onAppend?.(code, entries),
+        /* LIVE-2C: a committed record, published: indexes, re-authorized room views, the public list. */
+        onRecordPublished: (record) => roomHost?.onRecordPublished(record as GameRecord),
         now: () => Date.now(),
         // eslint-disable-next-line no-console
         warn: (line) => console.warn(line),
@@ -1213,6 +1273,32 @@ export function createGameServer(options: GameServerOptions): {
       return;
     }
     /* ==================================================================
+        LIVE-2C: THE ACTOR IS THE SEAT, READ FROM THE RECORD COMMITTED NOW
+       ==================================================================
+       authenticated principal -> the current GameRecord -> its bound seat -> that seat's `player_id`, the actor. The
+       frame never names one. Legacy (development) rooms keep the claim and the room document's host. */
+    let actor = attached.actor;
+    let hostId: string | null = roomDocs.get(attached.room)?.hostId ?? null;
+    let seated: boolean | undefined;
+    let undoPolicy: UndoPolicy | undefined;
+    if (attached.owned) {
+      const bound = host.seatActor(tx, attached.principalId);
+      if (!bound.ok) {
+        answer({ kind: "refused", code: bound.code, reason: bound.reason, build: options.build });
+        return;
+      }
+      actor = bound.actor;
+      hostId = bound.host;
+      seated = true;
+      undoPolicy = { host_undo: bound.policy };
+      const wait = host.submitBudget(attached.room, actor);
+      if (wait > 0) {
+        ingress.rateLimited += 1;
+        answer({ kind: "refused", code: RATE_LIMITED_CODE, reason: SUBMIT_RATE_LIMITED_REASON, retryAfterMs: wait, build: options.build });
+        return;
+      }
+    }
+    /* ==================================================================
         LIVE-2A (LIVE-2 §12.2): THE LOG HAS A LENGTH, AND UNDO HAS A BUDGET
        ==================================================================
        Both are read off the COMMITTED view, before anything is speculated, and a refusal for either appends
@@ -1237,7 +1323,7 @@ export function createGameServer(options: GameServerOptions): {
       const target = effectiveActions(tx.view.entries).find((entry) => entry.index === index);
       /* The budget a revert spends is the reach it uses: its own seat's action, or (the host's) another's. A target
          that does not exist spends the seat's own -- and is then refused by the authority, spending nothing. */
-      revertBudget = revertBudgetFor(attached.room, attached.actor, !target || target.actor === attached.actor ? "self" : "others");
+      revertBudget = revertBudgetFor(attached.room, actor, !target || target.actor === actor ? "self" : "others");
       const wait = revertBudget.retryAfter();
       if (wait > 0) {
         ingress.revertBudgetRefused += 1;
@@ -1265,7 +1351,7 @@ export function createGameServer(options: GameServerOptions): {
     let result: ServerMessage;
     try {
       result = session.submit({
-        actor: attached.actor,
+        actor,
         build: frame.build,
         msg: frame.msg,
         baseIndex: frame.baseIndex,
@@ -1275,7 +1361,9 @@ export function createGameServer(options: GameServerOptions): {
            messages that are the host's to send can be refused to everybody else. `null` for a room
            with no document -- the authority skips the host-only checks then rather than refusing
            everyone. LIVE-3A: the COMMITTED document -- inside this task the map holds exactly the view's. */
-        host: roomDocs.get(attached.room)?.hostId ?? null,
+        host: hostId,
+        seated,
+        undoPolicy,
       });
     } catch (error) {
       tx.rollback();
@@ -1329,7 +1417,11 @@ export function createGameServer(options: GameServerOptions): {
       answer(result);
       return;
     }
+    const board = session.state as { current_round_type?: string | null; room_closed?: boolean };
+    const endedAfter = board.current_round_type === "GameEnd";
+    const closedAfter = board.room_closed === true;
     const settled = await tx.commitBatch(batch, (settled) => submitDelivery(settled, batch, result, inReplyTo));
+    if (settled.kind === "committed" && attached.owned) host.afterGameplay(game, endedAfter, closedAfter);
     if (settled.kind !== "committed" || result.kind !== "applied") return;
     /* LIVE-2A: a revert that landed spends its budget. */
     revertBudget?.record();
@@ -1413,7 +1505,9 @@ export function createGameServer(options: GameServerOptions): {
      ================================================================== */
   const identityLimiter = new IdentityLimiter(limits.identity, identityNow);
   const allowedOrigins: ReadonlySet<string> = new Set(allowedOriginList);
-  const upgrades = { accepted: 0, refused: {} as Record<string, number>, sessionClosed: 0, malformedCooldowns: 0 };
+  const upgrades = { accepted: 0, refused: {} as Record<string, number>, sessionClosed: 0, malformedCooldowns: 0, reaped: 0 };
+  /** Each socket's trusted IP key (with its /48), for the room limits keyed by address. */
+  const ipOfSocket = new Map<WebSocket, IpKey>();
   /** Every live socket's frozen context, and the indexes over it (LIVE-2 §4.4). In memory; they die with the process. */
   const contexts = new Map<WebSocket, ConnectionContext>();
   const socketsBySession = new Map<string, Set<WebSocket>>();
@@ -1446,6 +1540,8 @@ export function createGameServer(options: GameServerOptions): {
     if (docRoom !== undefined) rooms.add(docRoom);
     const logRoom = sockets.get(socket)?.room;
     if (logRoom !== undefined) rooms.add(logRoom);
+    const ownedRoom = roomHost?.viewGameOf(socket);
+    if (ownedRoom !== undefined) rooms.add(ownedRoom);
     if (rooms.size === 0 || !contexts.has(socket)) {
       gamesOfSocket.delete(socket);
       return;
@@ -1459,23 +1555,9 @@ export function createGameServer(options: GameServerOptions): {
     upgrades.sessionClosed += 1;
     socket.close(4401, why === "expired" ? "session expired" : "session ended");
   };
-  /* ==================================================================
-      LIVE-2B (§2): THE ACTIVATION SEAM
-     ==================================================================
-     Before the first DURABLE room action of a principal -- a room document it hosts, a seat it takes or pins --
-     the principal and its sessions are made durable, so a restart can never keep a room whose owner it forgot.
-     Idempotent; a development principal is synthetic and never stored. A store failure refuses the room action. */
-  const activated = async (principalId: string): Promise<boolean> => {
-    try {
-      await identity.activate(principalId, identityNow());
-      return true;
-    } catch (error) {
-      const ref = errorRef();
-      // eslint-disable-next-line no-console
-      console.error(`  identity: could not make a guest durable before a room change (ref ${ref}) -- ${excerpt(error instanceof Error ? error.message : String(error), 300)}`);
-      return false;
-    }
-  };
+  /* LIVE-2C: THE ACTIVATION SEAM MOVED to the server-owned room boundary (`rooms/roomHost.ts`): create, join and
+     take-seat make the principal durable BEFORE the task that writes a GameRecord naming it. The legacy room
+     document never names a principal (development claims only), so its writes no longer activate anything. */
   identity.setHooks({
     onSessionsEnded: (sessionIds) => {
       for (const sessionId of sessionIds) for (const socket of [...(socketsBySession.get(sessionId) ?? [])]) closeForSession(socket, "revoked");
@@ -1483,6 +1565,55 @@ export function createGameServer(options: GameServerOptions): {
     onStoreFailure: (what, error) => {
       // eslint-disable-next-line no-console
       console.error(`  identity store: ${what} was not recorded -- ${excerpt(error instanceof Error ? error.message : String(error), 300)}`);
+    },
+  });
+
+  /* ==================================================================
+      LIVE-2C: THE SERVER-OWNED ROOM AUTHORITY (rooms/roomHost.ts)
+     ================================================================== */
+  const host: RoomHost = createRoomHost({
+    build: options.build,
+    records: recordStore,
+    games,
+    identity,
+    limits,
+    now: identityNow,
+    send: (socket, frame) => send(socket, frame),
+    contextOf: (socket) => contexts.get(socket),
+    ipOf: (socket) => ipOfSocket.get(socket),
+    loadChat: async (gameId) => (options.store?.loadChat ? await options.store.loadChat(gameId) : []),
+    appendChat: async (gameId, entry) => {
+      if (options.store?.appendChat) await options.store.appendChat(gameId, entry);
+    },
+    rosterSource: options.rosterSource ?? new NoMoneyRosterSource(),
+    shuffle: options.shuffle ?? ((items) => cryptoShuffle(items)),
+    onSubscriptionChange: (socket) => reindexGames(socket),
+    readersOf: (gameId) => socketsByGame.get(gameId) ?? [],
+    errorRef,
+    // eslint-disable-next-line no-console
+    warn: (line) => console.warn(line),
+  });
+  roomHost = host;
+
+  /** LIVE-2C (LIVE-2 §14.3 item 5): a log subscriber of a server-owned game is re-authorized on EVERY push, so a
+   *  socket that lost read access (kicked, dropped at the deal) stops receiving at once, before its close lands. */
+  const ownedSubscriberFor = (socket: WebSocket, gameId: string, principalId: string): Subscriber => ({
+    /* The actor keys in-flight and late answers by the log's actor: the seat's `player_id`, read from the record
+       committed at the moment it asks (a watcher that has no seat is keyed by nothing any entry carries). */
+    get principal() {
+      return host.playerIdOf(gameId, principalId) ?? principalId;
+    },
+    isOpen: () => socket.readyState === socket.OPEN,
+    send: (frame) => {
+      const gate = host.canReadLog(socket, gameId);
+      if (!gate.ok) {
+        if (socket.readyState === socket.OPEN) {
+          send(socket, { kind: "error", code: gate.code, reason: gate.reason });
+          socket.close(4410, "room access lost");
+        }
+        return;
+      }
+      send(socket, frame);
     },
   });
 
@@ -1567,6 +1698,7 @@ export function createGameServer(options: GameServerOptions): {
       addTo(socketsBySession, ctx.sessionId, socket);
       addTo(socketsByPrincipal, ctx.principalId, socket);
       addTo(socketsByIp, ctx.ipKey, socket);
+      ipOfSocket.set(socket, ip);
       if (ip.aggregate !== null) {
         aggregateOf.set(socket, ip.aggregate);
         addTo(socketsByAggregate, ip.aggregate, socket);
@@ -1584,6 +1716,7 @@ export function createGameServer(options: GameServerOptions): {
       if (verdict !== "ok") closeForSession(socket, verdict);
     }
     identityLimiter.prune();
+    roomHost?.prune();
     void identity.sweep(now).catch(() => undefined); // a store failure is reported by the identity hook
   }, limits.identity.sweepIntervalMs);
   identitySweep.unref?.();
@@ -1623,6 +1756,9 @@ export function createGameServer(options: GameServerOptions): {
       "seat-pin": "roomOps",
       "claim-seat": "roomOps",
       "lobby-write": "roomOps",
+      /* LIVE-2C: the server-owned room protocol. */
+      "room-op": "roomOps",
+      "rooms-watch": "control",
     }),
   );
 
@@ -1631,6 +1767,15 @@ export function createGameServer(options: GameServerOptions): {
     const ctx = contexts.get(socket) as ConnectionContext;
     /** The legacy room protocol's actor: the development claim; `null` for a cookie principal (the LIVE-2C seam). */
     const legacyActor: string | null = mode === "development" ? devClaimOf(ctx.principalId) : null;
+    /** LIVE-2C (LIVE-2 §12.2): a socket that authenticated but never subscribed to anything is closed after 60 s. */
+    const reapTimer = setTimeout(() => {
+      const subscribed = sockets.has(socket) || roomDocSockets.has(socket) || lobbySockets.has(socket) || host.hasSubscription(socket);
+      if (!subscribed && socket.readyState === socket.OPEN) {
+        upgrades.reaped += 1;
+        socket.close(1000, "no subscription");
+      }
+    }, limits.rooms.unsubscribedReapMs);
+    reapTimer.unref?.();
     /** LIVE-2 §4.4: on EVERY inbound frame, a session that has expired or been revoked closes the socket 4401. */
     const sessionHolds = (): boolean => {
       const verdict = identity.socketVerdict(ctx, identityNow());
@@ -1727,6 +1872,11 @@ export function createGameServer(options: GameServerOptions): {
         socket.close(4429, "rate limited");
         return;
       }
+      if ((frame.kind as string) === "room-op") {
+        /* LIVE-2C: a named operation is answered in its own ack, with the retry hint -- never the legacy `room-write-refused`. */
+        send(socket, { kind: "room-ack", requestId: (frame as unknown as { requestId: string }).requestId, ok: false, code: RATE_LIMITED_CODE, reason: RATE_LIMITED_REASON, retryAfterMs } as never);
+        return;
+      }
       switch (frame.kind) {
         case "submit":
           send(
@@ -1799,6 +1949,84 @@ export function createGameServer(options: GameServerOptions): {
         return;
       }
       buckets.consecutiveLimited = 0;
+
+      /* ==================================================================
+          LIVE-2C: THE LEGACY ROOM PROTOCOL IS DEVELOPMENT-ONLY; THE SERVER-OWNED ONE IS HERE
+         ==================================================================
+         In production no legacy handler is registered: its frames are answered exactly like an unknown kind. */
+      if (!legacyRooms && isLegacyFrame(frame as unknown as { kind: string; room?: unknown })) {
+        badFrame(raw, null, BAD_FRAME_REASONS.unknownKind, undefined);
+        return;
+      }
+      /* The two namespaces never meet: a legacy frame naming a server-owned game id (any case -- a case-insensitive
+         disk maps `G_…` onto `g_…`) is refused, so the development protocol can never attach to, write a document
+         for, chat in or submit into a server-owned game. */
+      const legacyRoom = (frame as unknown as { room?: unknown }).room;
+      /* Judged on the STORAGE key, not the raw string (review M3): the file store writes a room as its code with every
+         character outside [A-Za-z0-9_-] made `_`, so `g.…` and `g~…` name the same files as `g_…`. */
+      if (typeof legacyRoom === "string" && /^g_/i.test(legacyRoom.replace(/[^A-Za-z0-9_-]/g, "_"))) {
+        badFrame(raw, frame.kind, BAD_FRAME_REASONS.malformed, submissionIdOf(frame));
+        return;
+      }
+      const routedGame = (frame as unknown as { gameId?: unknown }).gameId;
+      const gameId = typeof routedGame === "string" ? routedGame : null;
+      if ((frame.kind as string) === "room-op") {
+        await host.handleRoomOp(socket, frame as unknown as { requestId: string; gameId?: string; op: Record<string, unknown> });
+        return;
+      }
+      if ((frame.kind as string) === "rooms-watch") {
+        await host.handleRoomsWatch(socket, (frame as unknown as { on: boolean }).on);
+        return;
+      }
+      if (frame.kind === "room-hello" && gameId !== null) {
+        await host.handleRoomHello(socket, gameId);
+        return;
+      }
+      if (frame.kind === "chat-send" && gameId !== null) {
+        await host.handleChat(socket, gameId, (frame as unknown as { text: string }).text);
+        return;
+      }
+      if (frame.kind === "presence-set" && gameId !== null) {
+        host.handlePresence(socket, gameId, (frame as unknown as { state: unknown }).state);
+        return;
+      }
+      if (frame.kind === "hello" && gameId !== null) {
+        /* LIVE-2C: the log of a server-owned game -- read access per §6.3 #6, re-checked on every push. An unknown
+           id is answered from the negative cache or one store read: it never allocates a session (§11.4 item 4). */
+        const game = await host.actorFor(gameId);
+        if (game === null) {
+          send(socket, { kind: "error", code: "not-found", reason: "There is no such game." });
+          return;
+        }
+        const gate = host.canReadLog(socket, gameId);
+        if (!gate.ok) {
+          send(socket, { kind: "error", code: gate.code, reason: gate.reason });
+          return;
+        }
+        /* The viewer cap counts log readers too (review L5): a watcher cannot pass it by skipping the room view. */
+        if (sockets.get(socket)?.room !== gameId && !host.viewerRoomFor(socket, gameId)) {
+          send(socket, { kind: "error", code: "room-full", reason: "This table has as many watchers as it takes." });
+          return;
+        }
+        sockets.set(socket, { room: gameId, actor: "", principalId: ctx.principalId, owned: true });
+        reindexGames(socket);
+        const helloFrame = frame as unknown as { baseIndex?: unknown; baseId?: unknown };
+        const fromIndex = Number.isInteger(helloFrame.baseIndex) && (helloFrame.baseIndex as number) >= -1 ? (helloFrame.baseIndex as number) : -1;
+        const baseId = typeof helloFrame.baseId === "string" ? helloFrame.baseId : undefined;
+        unsubscribeLog(socket);
+        const subscribed = game.subscribe(socket, ownedSubscriberFor(socket, gameId, ctx.principalId), fromIndex, baseId);
+        if (subscribed.kind === "subscribed") {
+          logSubscriptions.set(socket, game);
+          return;
+        }
+        if (subscribed.kind === "held") {
+          send(socket, subscribed.frame);
+          return;
+        }
+        counters.helloResync += 1;
+        send(socket, { kind: "error", code: "resync", reason: subscribed.reason, watermark: subscribed.watermark });
+        return;
+      }
 
       /* ---- THE WAITING ROOM (#1215) ----
          Answered before the log's frames and kept entirely separate from them. A socket that said
@@ -2003,10 +2231,6 @@ export function createGameServer(options: GameServerOptions): {
                 answer(false, "That is not this seat's current PIN.");
                 return;
               }
-              if (!(await activated(ctx.principalId))) {
-                answer(false, IDENTITY_SAVE_FAILED_REASON);
-                return;
-              }
               await tx.commitRoomDoc({ ...doc, seatPins: { ...pins, [actor]: frame.pin } }, (settled) => ({
                 after: () => {
                   if (settled.kind !== "committed") {
@@ -2071,10 +2295,6 @@ export function createGameServer(options: GameServerOptions): {
                  learns it. Harmless for a seat that already had one -- the document is identical. */
               broadcastRoomDoc(frame.room);
             };
-            if (!(await activated(ctx.principalId))) {
-              answer(false, IDENTITY_SAVE_FAILED_REASON);
-              return;
-            }
             if (!required) {
               await tx.commitRoomDoc(
                 {
@@ -2186,10 +2406,6 @@ export function createGameServer(options: GameServerOptions): {
               broadcastRoomDoc(room);
               return;
             }
-            if (!(await activated(ctx.principalId))) {
-              refuse(IDENTITY_SAVE_FAILED_REASON, committed as SandboxRoomDoc | null);
-              return;
-            }
             await tx.commitRoomDoc(doc, (settled) => ({
               after: () => {
                 if (settled.kind !== "committed") {
@@ -2244,7 +2460,7 @@ export function createGameServer(options: GameServerOptions): {
           socket.close();
           return;
         }
-        sockets.set(socket, { room: frame.room, actor });
+        sockets.set(socket, { room: frame.room, actor, principalId: ctx.principalId, owned: false });
         reindexGames(socket);
         let game: GameActor;
         try {
@@ -2337,6 +2553,11 @@ export function createGameServer(options: GameServerOptions): {
           console.log(`  ingress: stripped ${shape.stripped} undeclared field(s) from a ${shape.kind} (LIVE-2 §11.2)`);
         }
         const parsedFrame: SubmitFrame = { ...frame, msg: shape.value as unknown as SandboxLogMsg };
+        /* LIVE-2C (§6.3 #20): a server-owned game's deal is built by `start-game`; a client's is refused. */
+        if (attached.owned && "SetupGame" in parsedFrame.msg) {
+          answer({ kind: "refused", code: BAD_FRAME_CODE, reason: SERVER_DEALS_REASON, build: options.build });
+          return;
+        }
 
         let game: GameActor;
         try {
@@ -2350,8 +2571,20 @@ export function createGameServer(options: GameServerOptions): {
         /* LIVE-3 §4 STEPS 2-17 ARE ONE TASK ON THE ROOM'S ACTOR (`submitOnActor`). It starts only after every
            task queued before it has published or rolled back, and nothing it does is visible until the store
            has it. Awaited here, so this socket's frames stay in the order it sent them (#1216). */
+        /* LIVE-2C (RV-1): the seat gate BEFORE the actor, against the committed record -- and again inside the task,
+           against the record committed when it runs, and a third time at `RoomSession.submit` step 1b. */
+        let originKey = attached.actor;
+        if (attached.owned) {
+          const committedRecord = game.view.record;
+          const seatNow = committedRecord === null ? null : seatOf(committedRecord, attached.principalId);
+          if (seatNow === null) {
+            answer({ kind: "refused", code: "not-seated", reason: "You do not have a seat in this game.", build: options.build });
+            return;
+          }
+          originKey = seatNow.player_id;
+        }
         const outcome = await game.run("submit", (tx) => submitOnActor(tx, game, attached, parsedFrame, inReplyTo), {
-          origin: originFor(socket, attached.actor, inReplyTo),
+          origin: originFor(socket, originKey, inReplyTo),
         });
         if (outcome.kind === "busy") {
           answer({ kind: "refused", code: "busy", reason: BUSY_REASON, build: options.build });
@@ -2430,6 +2663,16 @@ export function createGameServer(options: GameServerOptions): {
       roomDocActors.delete(socket);
       lobbySockets.delete(socket);
       lobbyWatch.delete(socket);
+      /* LIVE-2C: out of the server-owned room subscriptions and the reap. A close handler has no caller to answer:
+         nothing may escape it, and the identity cleanup below must always run (review H1). */
+      clearTimeout(reapTimer);
+      try {
+        host.dropSocket(socket);
+      } catch (error) {
+        // eslint-disable-next-line no-console
+        console.error(`  rooms: dropping a closed socket's room subscriptions failed (ref ${errorRef()})`, error);
+      }
+      ipOfSocket.delete(socket);
       /* LIVE-2B: out of every identity index. */
       contexts.delete(socket);
       reindexGames(socket);
@@ -2452,6 +2695,10 @@ export function createGameServer(options: GameServerOptions): {
     identity,
     identityLimiter,
     upgrades,
+    records: recordStore,
+    rooms: host,
+    legacyRoomProtocol: legacyRooms,
+    residentGames: () => games.size,
     socketCounts: () => ({
       total: contexts.size,
       bySession: (id: string) => socketsBySession.get(id)?.size ?? 0,

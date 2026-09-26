@@ -222,7 +222,8 @@ describe("the server enforces the terms (design note #1415)", () => {
   });
 
   it("admits no spectator to a private game once dealt", () => {
-    const hello = sliceBetween(SERVER, 'if (frame.kind === "hello") {', "sockets.set(socket, { room: frame.room, actor });");
+    /* LIVE-2C: the legacy (development) hello now also records the socket's principal, and that its room is legacy. */
+    const hello = sliceBetween(SERVER, 'if (frame.kind === "hello") {', "sockets.set(socket, { room: frame.room, actor, principalId: ctx.principalId, owned: false });");
     expect(hello).toContain('roomVisibility(privateDoc) === "private"');
     expect(hello).toContain("This is a private game and cannot be watched.");
   });

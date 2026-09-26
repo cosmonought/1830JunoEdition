@@ -97,14 +97,56 @@ async function readOwner(lockDir: string): Promise<LockOwner | null> {
   }
 }
 
-/** A held lock as a contender sees it, or `null` if it vanished while being looked at. */
+/** A directory's identity (device and inode) and its mtime, or `null` if it is not there. */
+async function statOf(target: string): Promise<{ id: string; mtimeMs: number } | null> {
+  try {
+    const stat = await fs.stat(target, { bigint: true });
+    return { id: `${stat.dev}-${stat.ino}`, mtimeMs: Number(stat.mtimeMs) };
+  } catch (error) {
+    if (codeOf(error) === "ENOENT") return null;
+    throw error;
+  }
+}
+
+/** `inspect`'s owner read. Absent (ENOENT) or not an owner record: anonymous (`null`) -- the same for every racer,
+ *  since owner.json is only ever renamed into place whole. Any OTHER failure (a transient read error on a loaded
+ *  machine) is `undefined`: inconclusive, look again -- never a different identity than the other racers derive. */
+async function readOwnerForInspection(lockDir: string): Promise<LockOwner | null | undefined> {
+  let text: string;
+  try {
+    text = await fs.readFile(path.join(lockDir, "owner.json"), "utf8");
+  } catch (error) {
+    return codeOf(error) === "ENOENT" ? null : undefined;
+  }
+  try {
+    const parsed = JSON.parse(text) as LockOwner;
+    return typeof parsed?.instance_id === "string" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A held lock as a contender sees it, or `null` if it vanished, or was replaced, while being looked at.
+ *
+ *  ==================================================================
+ *   FI-28 (LIVE-2C, REPRODUCED UNDER LOAD): EVERY FACT FROM ONE DIRECTORY
+ *  ==================================================================
+ *  Two of six racers both won a stale takeover when the machine was loaded (2 of 7 heavy runs). The inspection read
+ *  the stale lock's mtime, and then -- after a winner had moved that lock aside and created its own fresh `LOCK`,
+ *  still without an owner record -- read the NEW directory's (missing) owner and heartbeat. Stale age from the old
+ *  directory plus an anonymous identity from the new one made an aside-name no other racer used, so the rename that
+ *  every racer is meant to lose to the first one succeeded, and moved the winner's fresh lock aside. Now the
+ *  directory's identity (device + inode) is read before and after; if it changed, the inspection is discarded and
+ *  the racer looks again -- where it meets the fresh lock and refuses. */
 async function inspect(lockDir: string, now: number): Promise<{ owner: LockOwner | null; ageMs: number; identity: string } | null> {
-  const dirTime = await mtimeOf(lockDir);
-  if (dirTime === null) return null;
-  const owner = await readOwner(lockDir);
+  const before = await statOf(lockDir);
+  if (before === null) return null;
+  const owner = await readOwnerForInspection(lockDir);
   const beats = await Promise.all([mtimeOf(path.join(lockDir, "heartbeat")), mtimeOf(path.join(lockDir, "owner.json"))]);
-  const newest = Math.max(dirTime, ...beats.map((time) => time ?? 0));
-  const identity = owner?.instance_id ?? `anon-${Math.floor(dirTime)}`;
+  const after = await statOf(lockDir);
+  if (owner === undefined || after === null || after.id !== before.id) return null;
+  const newest = Math.max(before.mtimeMs, after.mtimeMs, ...beats.map((time) => time ?? 0));
+  const identity = owner?.instance_id ?? `anon-${Math.floor(before.mtimeMs)}`;
   return { owner, ageMs: now - newest, identity: identity.replace(/[^A-Za-z0-9_-]/g, "_") };
 }
 
@@ -113,9 +155,14 @@ export async function lockStatus(
   dataDir: string,
   options: { now?: number; staleAfterMs?: number } = {},
 ): Promise<{ readonly held: boolean; readonly owner: LockOwner | null; readonly ageMs: number | null }> {
-  const seen = await inspect(path.join(dataDir, LOCK_DIRECTORY), options.now ?? Date.now());
-  if (seen === null) return { held: false, owner: null, ageMs: null };
-  return { held: seen.ageMs < (options.staleAfterMs ?? LOCK_STALE_AFTER_MS), owner: seen.owner, ageMs: seen.ageMs };
+  const lockDir = path.join(dataDir, LOCK_DIRECTORY);
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const seen = await inspect(lockDir, options.now ?? Date.now());
+    if (seen !== null) return { held: seen.ageMs < (options.staleAfterMs ?? LOCK_STALE_AFTER_MS), owner: seen.owner, ageMs: seen.ageMs };
+    if ((await statOf(lockDir)) === null) return { held: false, owner: null, ageMs: null };
+  }
+  /* A lock that keeps changing while it is read is being written by somebody alive. */
+  return { held: true, owner: null, ageMs: null };
 }
 
 export const describeOwner = (owner: LockOwner | null): string =>

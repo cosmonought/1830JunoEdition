@@ -49,7 +49,7 @@ import { BO_TICKER } from "./gameConstants";
    once, and the same-turn timing the base game's rule states -- the same predicate the reducer's arm asks, so
    ingress and the arm cannot disagree about a D&H free-station refusal. */
 import { dhStationRefusal } from "./dhStationAuthority";
-import { revertRefusal, type RevertableAction } from "./logRevert";
+import { revertRefusal, type RevertableAction, type UndoPolicy } from "./logRevert";
 import { pendingDiscardBlock, pendingTrainDiscards } from "./trainDiscard";
 import {
   declareBankruptcyRefusal,
@@ -131,6 +131,8 @@ export interface TurnAuthorityInput {
   /** #1249: the log as it stands, for `RevertTo` -- the one message whose authority is about history rather
    *  than about the board. Same rule as `undoReachFor`; `undefined` skips it for the same reason as `host`. */
   log?: readonly RevertableAction[];
+  /** LIVE-2C (LIVE-2 §9.2): the room's undo policy; absent is the no-money policy. */
+  undoPolicy?: UndoPolicy;
   /** #1540: the board's grid, for the one obligation that needs a route walk (the forced train purchase).
    *  `undefined` -- a test, a caller without a grid -- skips that hold, on #757's rule. */
   mapGrid?: MapGridResponse;
@@ -614,6 +616,7 @@ function roomMessageRefusal(input: TurnAuthorityInput, actor: string): string | 
       actor,
       isHost: host !== undefined && host !== null && actor === host,
       board: state,
+      policy: input.undoPolicy,
     });
   }
 

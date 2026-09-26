@@ -429,14 +429,18 @@ describe("each room message has an owner, #1249", () => {
     expect(refusal({ ...ended, room_closed: true }, BOB, { CloseRoom: {} })).toBeNull();
   });
 
-  it("is wired on the server: the host from the room document, the log from the session", () => {
+  it("is wired on the server: the host from the GameRecord (LIVE-2C) or the legacy room document, the log from the session", () => {
     const fs = require("fs") as typeof import("fs");
     const path = require("path") as typeof import("path");
     const session = fs.readFileSync(path.join(__dirname, "roomSession.ts"), "utf8");
     expect(session).toContain("host: input.host,");
     expect(session).toContain("log: this.log,");
+    expect(session).toContain("undoPolicy: input.undoPolicy,");
     const server = fs.readFileSync(path.join(__dirname, "..", "..", "..", "server", "src", "gameServer.ts"), "utf8");
-    expect(server).toContain("host: roomDocs.get(attached.room)?.hostId ?? null,");
+    /* A legacy (development) room: its document's host. A server-owned game: the record's, read inside the task. */
+    expect(server).toContain("let hostId: string | null = roomDocs.get(attached.room)?.hostId ?? null;");
+    expect(server).toContain("hostId = bound.host;");
+    expect(server).toContain("host: hostId,");
   });
 });
 

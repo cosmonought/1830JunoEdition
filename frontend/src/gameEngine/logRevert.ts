@@ -161,14 +161,27 @@ export function dealEntryOf<T extends RevertableAction>(live: readonly T[]): T |
   return null;
 }
 
-/** Why `actor` may not revert to `index`, or `null` if they may (LIVE-2 RV-2 ... RV-7). */
+/** LIVE-2C (LIVE-2 §9.2, OD-L2-1): the room's undo policy. No-money rooms: the host may take back anyone's last
+ *  action ("last-action"). Money rooms (ESCROW-3) are always "none": the host is then judged as a non-host. */
+export interface UndoPolicy {
+  host_undo: "last-action" | "none";
+}
+
+export const NO_MONEY_UNDO_POLICY: UndoPolicy = Object.freeze({ host_undo: "last-action" as const });
+
+/** Why `actor` may not revert to `index`, or `null` if they may (LIVE-2 RV-2 ... RV-7). RV-1 (the sender is seated)
+ *  is the transport's gate, ahead of this (`RoomSession.submit` step 1b). */
 export function revertRefusal(input: {
   log: readonly RevertableAction[];
   index: number;
   actor: string;
   isHost: boolean;
   board?: RevertBoard;
+  /** LIVE-2C: absent means the no-money policy. */
+  policy?: UndoPolicy;
 }): string | null {
+  /* RV-7 under the money policy: the host's reach is withdrawn -- it is a seat like any other. */
+  const isHost = input.isHost && (input.policy ?? NO_MONEY_UNDO_POLICY).host_undo === "last-action";
   const live = effectiveActions(input.log);
   const deal = dealEntryOf(live);
   /* RV-2. The deal is the log's effective `SetupGame`; on a board seeded already dealt, it precedes the log (-1). */
@@ -185,9 +198,9 @@ export function revertRefusal(input: {
   if (last === null || last.index !== target.index) {
     /* RV-6 -- worded as today's ownership sentence for a player who is not the host, whose reach was already
        exactly this and whose refusal players have read since #592. */
-    return input.isHost ? REVERT_ONE_STEP : REVERT_NOT_YOURS;
+    return isHost ? REVERT_ONE_STEP : REVERT_NOT_YOURS;
   }
-  if (!input.isHost && target.actor !== input.actor) return REVERT_NOT_YOURS; // RV-7
+  if (!isHost && target.actor !== input.actor) return REVERT_NOT_YOURS; // RV-7
   return null;
 }
 
@@ -245,7 +258,10 @@ export function undoReachFor(
   describe: (action: RevertableAction) => string,
   /** LIVE-2A: the board, for RV-3 (no undo once the game has ended). Optional for callers without one. */
   board?: RevertBoard,
+  /** LIVE-2C: the room's undo policy -- the SAME value the server judges with, so the button and the server agree. */
+  policy: UndoPolicy = NO_MONEY_UNDO_POLICY,
 ): UndoReach {
+  isHost = isHost && policy.host_undo === "last-action";
   const live = effectiveActions(actions);
   if (live.length === 0) {
     return {
@@ -276,7 +292,7 @@ export function undoReachFor(
     /* LIVE-2A: THE SERVER'S OWN PREDICATE decides whether the press would be accepted -- the deal floor (RV-5,
        the host's first Undo after Start used to target the deal itself) and the ended game (RV-3) -- so the
        button disables with the server's sentence instead of failing at the server. */
-    const refused = revertRefusal({ log: actions, index: last.index, actor: player, isHost, board });
+    const refused = revertRefusal({ log: actions, index: last.index, actor: player, isHost, board, policy });
     if (refused !== null) return { index: null, summary: "", blockedReason: refused };
     return { index: last.index, summary: describe(last), blockedReason: null };
   }

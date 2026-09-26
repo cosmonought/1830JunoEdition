@@ -132,7 +132,11 @@ fn missing_consents_store_the_settlement_and_open_the_window() {
         Suite::settle_digest(&p).to_vec()
     );
     assert_eq!(gr.deadlines.challenge_window_end, Some(t.plus_seconds(DAY)));
-    assert_eq!(gr.deadlines.liveness_available_at, None);
+    // OD-ESC2-1: a SETTLEABLE game has its own liveness exit.
+    assert_eq!(
+        gr.deadlines.liveness_available_at,
+        Some(t.plus_seconds(DAY + 14 * DAY))
+    );
     assert_eq!(seats_consented(&s, id), vec![true, false, true]);
     let preview: SettlementPreviewResponse = s
         .app
@@ -532,7 +536,7 @@ fn a_terminal_may_share_the_last_checkpoints_log_len_but_not_precede_it() {
         post_settle(&mut s, id, &p, &[]).unwrap_err(),
         ContractError::StaleSeq {
             seq: 199,
-            last_seq: 200
+            trusted_seq: 200
         }
     );
     // A terminal at log_len 0 (seq 1) is not stale on a fresh game.

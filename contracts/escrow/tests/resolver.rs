@@ -165,20 +165,6 @@ fn replace_refusals_leave_the_dispute_open() {
     let other = s.started(3);
     let mut cases: Vec<(Payload, ContractError)> = vec![
         (
-            correction(&s, id, 100, &[1, 1, 1]),
-            ContractError::StaleSeq {
-                seq: 201,
-                last_seq: 201,
-            },
-        ),
-        (
-            correction(&s, id, 99, &[1, 1, 1]),
-            ContractError::StaleSeq {
-                seq: 199,
-                last_seq: 201,
-            },
-        ),
-        (
             correction(&s, other, 101, &[1, 1, 1]),
             ContractError::DomainMismatch {},
         ),
@@ -358,7 +344,10 @@ fn resolve_still_works_after_the_resolver_timeout_until_someone_exits() {
     assert!(matches!(
         s.exec(
             &alice,
-            &ExecuteMsg::LivenessSettle { chain_game_id: id },
+            &ExecuteMsg::LivenessSettle {
+                chain_game_id: id,
+                checkpoint: None
+            },
             &[]
         )
         .unwrap_err(),
@@ -367,36 +356,169 @@ fn resolve_still_works_after_the_resolver_timeout_until_someone_exits() {
 }
 
 #[test]
-fn set_resolver_hands_over_authority_including_for_open_disputes() {
+fn set_resolver_only_affects_games_started_afterwards() {
+    // OD-ESC2-5: a game adopts the resolver at Start and keeps it.
     let mut s = Suite::new();
-    let (id, _) = s.disputed(2);
-    let next = s.addr("resolver-multisig");
+    let a = s.resolver.clone();
+    let b = s.addr("resolver-b");
+    let started_with_a = s.started(2);
+    let funded_before = s.funded(2);
+    let (settleable_with_a, _) = s.settleable(2);
+    let (disputed_with_a, _) = s.disputed(2);
+    for id in [started_with_a, settleable_with_a, disputed_with_a] {
+        assert_eq!(s.game_resolver(id), Some(a.clone()));
+    }
+    assert_eq!(s.game_resolver(funded_before), None, "adopted at Start");
+    let admin = s.admin.clone();
+    let res = s
+        .exec(
+            &admin,
+            &ExecuteMsg::SetResolver {
+                resolver: b.to_string(),
+            },
+            &[],
+        )
+        .unwrap();
+    assert_eq!(attr(&res, "resolver"), b.to_string());
+    assert_eq!(s.config().config.resolver, b);
+    // Started before the change: A adjudicates, B cannot — including disputes
+    // that only open after the change.
+    let later_dispute = {
+        s.settle(started_with_a, 1, 100, &[1, 2], &[]);
+        s.challenge(started_with_a, 1);
+        started_with_a
+    };
+    s.challenge(settleable_with_a, 0);
+    for id in [later_dispute, settleable_with_a, disputed_with_a] {
+        assert_eq!(s.game_resolver(id), Some(a.clone()));
+        assert_eq!(
+            s.exec(
+                &b,
+                &ExecuteMsg::Resolve {
+                    chain_game_id: id,
+                    outcome: ResolveOutcome::Uphold {},
+                },
+                &[],
+            )
+            .unwrap_err(),
+            ContractError::Unauthorized {
+                role: "resolver".to_string()
+            }
+        );
+        s.resolve(id, ResolveOutcome::Uphold {}).unwrap();
+        assert_eq!(s.state(id), GameState::Settled);
+    }
+    // Started after the change (even though funded before it): B.
+    s.start(funded_before);
+    assert_eq!(s.game_resolver(funded_before), Some(b.clone()));
+    let started_with_b = s.started(2);
+    assert_eq!(s.game_resolver(started_with_b), Some(b.clone()));
+    for id in [funded_before, started_with_b] {
+        s.settle(id, 1, 100, &[1, 1], &[]);
+        s.challenge(id, 0);
+        assert_eq!(
+            s.resolve(id, ResolveOutcome::Uphold {}).unwrap_err(),
+            ContractError::Unauthorized {
+                role: "resolver".to_string()
+            }
+        );
+        s.exec(
+            &b,
+            &ExecuteMsg::Resolve {
+                chain_game_id: id,
+                outcome: ResolveOutcome::Annul {},
+            },
+            &[],
+        )
+        .unwrap();
+        assert_eq!(s.state(id), GameState::Annulled);
+    }
+    s.assert_custody();
+}
+
+#[test]
+fn the_admin_cannot_take_over_a_started_games_dispute() {
+    // The reported attack: admin → SetResolver(self) → Uphold, on a game that
+    // had already started. The game keeps the resolver it adopted at Start.
+    let mut s = Suite::new();
+    let (id, _) = s.disputed(3);
     let admin = s.admin.clone();
     s.exec(
         &admin,
         &ExecuteMsg::SetResolver {
-            resolver: next.to_string(),
+            resolver: admin.to_string(),
         },
         &[],
     )
     .unwrap();
-    assert_eq!(s.config().config.resolver, next);
-    assert_eq!(
-        s.resolve(id, ResolveOutcome::Uphold {}).unwrap_err(),
-        ContractError::Unauthorized {
-            role: "resolver".to_string()
-        }
-    );
-    s.exec(
-        &next,
-        &ExecuteMsg::Resolve {
-            chain_game_id: id,
-            outcome: ResolveOutcome::Uphold {},
-        },
-        &[],
-    )
-    .unwrap();
+    for outcome in [
+        ResolveOutcome::Uphold {},
+        ResolveOutcome::Annul {},
+        replace(&correction(&s, id, 150, &[1, 0, 0])),
+    ] {
+        assert_eq!(
+            s.exec(
+                &admin,
+                &ExecuteMsg::Resolve {
+                    chain_game_id: id,
+                    outcome,
+                },
+                &[],
+            )
+            .unwrap_err(),
+            ContractError::Unauthorized {
+                role: "resolver".to_string()
+            }
+        );
+    }
+    assert_eq!(s.state(id), GameState::Disputed);
+    s.resolve(id, ResolveOutcome::Annul {}).unwrap();
+    s.assert_custody();
+}
+
+#[test]
+fn replace_may_correct_the_same_or_an_earlier_terminal_log_position() {
+    // The disputed settlement never constrains its correction.
+    let mut s = Suite::new();
+    let (same, _) = s.disputed(3); // disputed terminal: log 100, seq 201
+    let p = correction(&s, same, 100, &[2, 1, 1]);
+    s.resolve(same, replace(&p)).unwrap();
+    let g = s.game(same).game;
+    assert_eq!(g.state, GameState::Settled);
+    assert_eq!(g.settlement.unwrap().payload.seq.u64(), 201);
+    assert_eq!(g.last_seq.u64(), 201, "raw history keeps the maximum");
+
+    let (earlier, _) = s.disputed(3);
+    let p = correction(&s, earlier, 60, &[1, 1, 2]);
+    s.resolve(earlier, replace(&p)).unwrap();
+    let g = s.game(earlier).game;
+    assert_eq!(g.settlement.unwrap().payload.seq.u64(), 121);
+    assert_eq!(g.last_seq.u64(), 201, "raw history never decreases");
+    s.assert_custody();
+}
+
+#[test]
+fn replace_must_lie_beyond_the_latest_trusted_checkpoint() {
+    let mut s = Suite::new();
+    let id = s.started(3);
+    s.post_checkpoint(id, 50, &[1, 1, 1]); // trusted checkpoint floor: seq 100
+    s.settle(id, 1, 100, &[1, 2, 3], &[]);
+    s.challenge(id, 1);
+    for log_len in [0u64, 10, 49] {
+        let p = correction(&s, id, log_len, &[1, 1, 1]);
+        assert_eq!(
+            s.resolve(id, replace(&p)).unwrap_err(),
+            ContractError::StaleSeq {
+                seq: 2 * log_len + 1,
+                trusted_seq: 100
+            }
+        );
+    }
+    // The checkpoint's own log position is fine (a terminal's seq is 2L + 1).
+    let p = correction(&s, id, 50, &[1, 1, 1]);
+    s.resolve(id, replace(&p)).unwrap();
     assert_eq!(s.state(id), GameState::Settled);
+    assert_eq!(s.game(id).game.settlement.unwrap().payload.seq.u64(), 101);
 }
 
 #[test]
@@ -456,7 +578,10 @@ fn the_resolver_has_no_power_outside_a_dispute() {
     let resolver = s.resolver.clone();
     // Not seated: no liveness exit, no challenge, no key rotation.
     for msg in [
-        ExecuteMsg::LivenessSettle { chain_game_id: id },
+        ExecuteMsg::LivenessSettle {
+            chain_game_id: id,
+            checkpoint: None,
+        },
         ExecuteMsg::SetConsentKey {
             chain_game_id: id,
             new_pubkey: Key::seat(0).pubkey,

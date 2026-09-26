@@ -2,12 +2,14 @@
 //! commitments (hashes), consent keys are public keys, signatures are never
 //! stored.
 
-use cosmwasm_std::{to_json_binary, Binary, Deps, Env, Order, StdError, StdResult, Timestamp};
+use cosmwasm_std::{
+    to_json_binary, Binary, Deps, Env, Order, StdError, StdResult, Timestamp, Uint64,
+};
 use cw_storage_plus::Bound;
 
 use crate::contract::{CONTRACT_NAME, CONTRACT_VERSION};
 use crate::error::ContractError;
-use crate::helpers::{add_secs, best_checkpoint, load_game};
+use crate::helpers::{add_secs, best_checkpoint, load_game, trusted_seq};
 use crate::msg::{
     CheckpointView, CheckpointsResponse, ConfigResponse, GameDeadlines, GameResponse, GameSummary,
     GamesResponse, QueryMsg, SeatView, SeatsResponse, SettlementPreviewResponse, SignerKeyResponse,
@@ -71,11 +73,14 @@ fn config(deps: Deps) -> StdResult<ConfigResponse> {
 }
 
 fn deadlines(game: &Game) -> GameDeadlines {
-    let liveness_available_at = match (game.state, game.started_at) {
-        (GameState::InProgress, Some(started)) => {
+    let liveness_available_at = match (game.state, game.started_at, &game.settlement) {
+        (GameState::InProgress, Some(started), _) => {
             let active = game.last_activity.unwrap_or(started);
             let reference: Timestamp = if active > started { active } else { started };
             add_secs(reference, game.terms.liveness_window_secs).ok()
+        }
+        (GameState::Settleable, _, Some(settlement)) => {
+            add_secs(settlement.window_end, game.terms.liveness_window_secs).ok()
         }
         _ => None,
     };
@@ -100,12 +105,14 @@ fn deadlines(game: &Game) -> GameDeadlines {
 fn game(deps: Deps, chain_game_id: u64) -> StdResult<GameResponse> {
     let game = load_game(deps.storage, chain_game_id).map_err(std_err)?;
     let latest_checkpoint = best_checkpoint(deps.storage, chain_game_id, false).map_err(std_err)?;
+    let trusted_seq = Uint64::new(trusted_seq(deps.storage, &game).map_err(std_err)?);
     let paused = CONFIG.load(deps.storage)?.paused;
     let deadlines = deadlines(&game);
     Ok(GameResponse {
         game,
         paused,
         latest_checkpoint,
+        trusted_seq,
         deadlines,
     })
 }

@@ -6,12 +6,17 @@
 //! it needs to succeed (exact funds, a valid signature, the right time), so the
 //! oracle only has to decide state → role → pause, in that order. Every cell
 //! also checks custody, and a refused cell checks that nothing changed.
+//!
+//! ESCROW-2.1 rows and rules: Checkpoint works while paused (OD-ESC2-1/2);
+//! LivenessSettle covers SETTLEABLE (OD-ESC2-1) and may carry a checkpoint
+//! (OD-ESC2-4); Resolve checks the game's frozen resolver, including after
+//! `SetResolver` moved the global one (OD-ESC2-5).
 
 mod common;
 
 use common::*;
 use cosmwasm_std::{coins, Addr, Coin, HexBinary, Uint128};
-use eighteen_cosmos_escrow::msg::{ExecuteMsg, ResolveOutcome, SeatSignature};
+use eighteen_cosmos_escrow::msg::{ExecuteMsg, ResolveOutcome, SeatSignature, SignedCheckpoint};
 use eighteen_cosmos_escrow::payload::{Payload, KIND_CHECKPOINT, KIND_TERMINAL};
 use eighteen_cosmos_escrow::state::{GameParams, GameState, Mode};
 use eighteen_cosmos_escrow::ContractError;
@@ -62,8 +67,12 @@ enum Msg {
     Finalize,
     Challenge,
     Resolve,
+    /// Resolve after the admin moved the global resolver to the outsider.
+    ResolveAfterResolverChange,
     AnnulByConsent,
     LivenessSettle,
+    /// LivenessSettle carrying a newer signed checkpoint.
+    LivenessSettleWithCheckpoint,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -149,13 +158,18 @@ fn oracle(msg: Msg, state: GameState, role: Role, paused: bool) -> Expect {
                 Expect::Ok(InProgress)
             }
         }
-        Msg::Checkpoint | Msg::Settle => {
+        Msg::Checkpoint => {
+            if !within(&[InProgress]) {
+                Expect::WrongState
+            } else {
+                Expect::Ok(InProgress) // anyone; works while paused (OD-ESC2-1/2)
+            }
+        }
+        Msg::Settle => {
             if !within(&[InProgress]) {
                 Expect::WrongState
             } else if paused {
                 Expect::Paused
-            } else if matches!(msg, Msg::Checkpoint) {
-                Expect::Ok(InProgress)
             } else {
                 Expect::Ok(Settleable) // no consents attached
             }
@@ -180,7 +194,9 @@ fn oracle(msg: Msg, state: GameState, role: Role, paused: bool) -> Expect {
                 Expect::Ok(Disputed) // works while paused
             }
         }
-        Msg::Resolve => {
+        Msg::Resolve | Msg::ResolveAfterResolverChange => {
+            // Only the resolver the game adopted at Start, even after the
+            // global one moved (to the outsider, in the second row).
             if !within(&[Disputed]) {
                 Expect::WrongState
             } else if role != Role::Resolver {
@@ -197,14 +213,27 @@ fn oracle(msg: Msg, state: GameState, role: Role, paused: bool) -> Expect {
             }
         }
         Msg::LivenessSettle => {
-            if !within(&[InProgress, Disputed]) {
+            if !within(&[InProgress, Settleable, Disputed]) {
                 Expect::WrongState
             } else if !seated {
                 Expect::NotSeated
             } else if state == InProgress {
                 Expect::Ok(Cancelled) // no checkpoint was posted
             } else {
-                Expect::Ok(Settled) // resolver timeout pays the stored vector
+                // SETTLEABLE past window_end + liveness, DISPUTED past the
+                // resolver timeout: the (uncompromised) stored vector is paid.
+                Expect::Ok(Settled)
+            }
+        }
+        Msg::LivenessSettleWithCheckpoint => {
+            if !within(&[InProgress, Settleable, Disputed]) {
+                Expect::WrongState
+            } else if !seated {
+                Expect::NotSeated
+            } else if state != InProgress {
+                Expect::WrongState // a checkpoint is only carried from IN_PROGRESS
+            } else {
+                Expect::Ok(Settleable) // the carried checkpoint is promoted
             }
         }
     }
@@ -342,7 +371,7 @@ fn build(
                 coins(bond, DENOM),
             )
         }
-        Msg::Resolve => (
+        Msg::Resolve | Msg::ResolveAfterResolverChange => (
             ExecuteMsg::Resolve {
                 chain_game_id: id,
                 outcome: ResolveOutcome::Uphold {},
@@ -350,9 +379,9 @@ fn build(
             vec![],
         ),
         Msg::AnnulByConsent => {
-            let g = s.game(id).game;
-            let consents = match g.domain {
-                Some(_) => s.annul_sigs(id, &[0, 1, 2], g.last_seq.u64()),
+            let g = s.game(id);
+            let consents = match g.game.domain {
+                Some(_) => s.annul_sigs(id, &[0, 1, 2], g.trusted_seq.u64()),
                 None => vec![SeatSignature {
                     seat_index: 0,
                     signature: Key::seat(0).sign(&[8u8; 32]),
@@ -366,7 +395,18 @@ fn build(
                 vec![],
             )
         }
-        Msg::LivenessSettle => (ExecuteMsg::LivenessSettle { chain_game_id: id }, vec![]),
+        Msg::LivenessSettle => (Suite::liveness_msg(id), vec![]),
+        Msg::LivenessSettleWithCheckpoint => {
+            let p = fresh_payload(s, id, KIND_CHECKPOINT, 0);
+            let (payload, signature) = s.signed(&p);
+            (
+                ExecuteMsg::LivenessSettle {
+                    chain_game_id: id,
+                    checkpoint: Some(SignedCheckpoint { payload, signature }),
+                },
+                vec![],
+            )
+        }
     }
 }
 
@@ -402,7 +442,13 @@ fn run_cell(msg: Msg, state: GameState, role: Role, paused: bool) -> bool {
     let (id, stored) = fixture(&mut s, state);
     match msg {
         Msg::CancelAfterDeadline | Msg::Finalize => s.advance(DAY),
-        Msg::LivenessSettle => s.advance(30 * DAY),
+        Msg::LivenessSettle | Msg::LivenessSettleWithCheckpoint => s.advance(30 * DAY),
+        Msg::ResolveAfterResolverChange => {
+            let admin = s.admin.clone();
+            let next = s.outsider.to_string();
+            s.exec(&admin, &ExecuteMsg::SetResolver { resolver: next }, &[])
+                .unwrap();
+        }
         _ => {}
     }
     if paused {
@@ -419,6 +465,14 @@ fn run_cell(msg: Msg, state: GameState, role: Role, paused: bool) -> bool {
     match (&got, &expected) {
         (Ok(_), Expect::Ok(next)) => {
             assert_eq!(s.state(id), *next, "{cell}");
+            if matches!(msg, Msg::Start) {
+                // The game adopts the global resolver current at Start.
+                assert_eq!(
+                    s.game_resolver(id),
+                    Some(s.config().config.resolver),
+                    "{cell}"
+                );
+            }
         }
         (Err(ContractError::WrongState { actual, .. }), Expect::WrongState) => {
             assert_eq!(actual, state.as_str(), "{cell}");
@@ -488,8 +542,10 @@ row! {
     matrix_finalize => Msg::Finalize,
     matrix_challenge => Msg::Challenge,
     matrix_resolve => Msg::Resolve,
+    matrix_resolve_after_resolver_change => Msg::ResolveAfterResolverChange,
     matrix_annul_by_consent => Msg::AnnulByConsent,
     matrix_liveness_settle => Msg::LivenessSettle,
+    matrix_liveness_settle_with_checkpoint => Msg::LivenessSettleWithCheckpoint,
 }
 
 // ------------------------------------------------------------ global messages
@@ -642,6 +698,7 @@ fn matrix_unknown_game() {
         Msg::Finalize,
         Msg::Resolve,
         Msg::LivenessSettle,
+        Msg::LivenessSettleWithCheckpoint,
     ] {
         for role in ROLES {
             let mut s = Suite::new();
@@ -698,7 +755,10 @@ fn retarget(msg: ExecuteMsg, to: u64) -> ExecuteMsg {
             chain_game_id: to,
             outcome,
         },
-        ExecuteMsg::LivenessSettle { .. } => ExecuteMsg::LivenessSettle { chain_game_id: to },
+        ExecuteMsg::LivenessSettle { checkpoint, .. } => ExecuteMsg::LivenessSettle {
+            chain_game_id: to,
+            checkpoint,
+        },
         other => panic!("not retargeted: {other:?}"),
     }
 }

@@ -64,7 +64,7 @@
       "additionalProperties": false
     },
     {
-      "description": "Takes the next seat with exactly the creator's gross ante.",
+      "description": "Takes the next seat with exactly the creator's gross ante. The consent key must not be another seat's current key.",
       "type": "object",
       "required": [
         "join"
@@ -144,7 +144,7 @@
       "additionalProperties": false
     },
     {
-      "description": "The seat's own wallet replaces its consent key.",
+      "description": "The seat's own wallet replaces its consent key (never with another seat's current key). A real rotation withdraws the seat's recorded consent to the stored settlement; re-setting the current key is a no-op.",
       "type": "object",
       "required": [
         "set_consent_key"
@@ -205,7 +205,7 @@
       "additionalProperties": false
     },
     {
-      "description": "Anyone: posts a signed Checkpoint payload.",
+      "description": "Anyone: posts a signed Checkpoint payload. Works while paused (it moves no funds).",
       "type": "object",
       "required": [
         "checkpoint"
@@ -395,7 +395,7 @@
       "additionalProperties": false
     },
     {
-      "description": "Anyone, with a valid ANNUL signature from every seat.",
+      "description": "Anyone, with a valid ANNUL signature from every seat over the game's trusted sequence (`GameResponse::trusted_seq`).",
       "type": "object",
       "required": [
         "annul_by_consent"
@@ -426,7 +426,7 @@
       "additionalProperties": false
     },
     {
-      "description": "A seated wallet: the liveness exit (IN_PROGRESS inactivity, or a dispute past the resolver timeout). Works while paused.",
+      "description": "A seated wallet: the liveness exit. Works while paused. Available for IN_PROGRESS after the inactivity window, for SETTLEABLE from `window_end + liveness_window`, and for DISPUTED after the resolver timeout.",
       "type": "object",
       "required": [
         "liveness_settle"
@@ -442,6 +442,18 @@
               "type": "integer",
               "format": "uint64",
               "minimum": 0.0
+            },
+            "checkpoint": {
+              "description": "IN_PROGRESS only: a newer signed checkpoint, validated exactly like `Checkpoint` and promoted in the same transaction. Eligibility is decided before it is processed, and it does not restart the liveness clock. Omit it (or pass null) for the plain exit.",
+              "default": null,
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SignedCheckpoint"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "additionalProperties": false
@@ -497,7 +509,7 @@
       "additionalProperties": false
     },
     {
-      "description": "Retire a key; `compromised: true` also stops `LivenessSettle` from using its checkpoints and settlements. A retired key may be escalated to compromised later; never the reverse.",
+      "description": "Retire a key; `compromised: true` also stops `LivenessSettle` from using its checkpoints and settlements and removes their sequence authority. A retired key may be escalated to compromised later; never the reverse.",
       "type": "object",
       "required": [
         "retire_signer_key"
@@ -546,6 +558,7 @@
       "additionalProperties": false
     },
     {
+      "description": "Applies to games started afterwards: a started game keeps the resolver it adopted at `Start`.",
       "type": "object",
       "required": [
         "set_resolver"
@@ -717,7 +730,7 @@
           "additionalProperties": false
         },
         {
-          "description": "A corrected payload (reason ResolverCorrection) authorised by the resolver's transaction; the bond goes back to the challenger.",
+          "description": "A corrected payload (reason ResolverCorrection) authorised by the resolver's transaction; the bond goes back to the challenger. Its seq must exceed the game's trusted checkpoint floor only: the disputed settlement never constrains it, so the same log position is legal.",
           "type": "object",
           "required": [
             "replace"
@@ -874,6 +887,23 @@
           "type": "integer",
           "format": "uint8",
           "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "SignedCheckpoint": {
+      "description": "A signed Checkpoint payload carried inside `LivenessSettle`.",
+      "type": "object",
+      "required": [
+        "payload",
+        "signature"
+      ],
+      "properties": {
+        "payload": {
+          "$ref": "#/definitions/SettlementPayloadV1"
+        },
+        "signature": {
+          "$ref": "#/definitions/HexBinary"
         }
       },
       "additionalProperties": false

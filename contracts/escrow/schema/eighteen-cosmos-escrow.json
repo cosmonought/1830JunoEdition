@@ -197,7 +197,7 @@
         "additionalProperties": false
       },
       {
-        "description": "Takes the next seat with exactly the creator's gross ante.",
+        "description": "Takes the next seat with exactly the creator's gross ante. The consent key must not be another seat's current key.",
         "type": "object",
         "required": [
           "join"
@@ -277,7 +277,7 @@
         "additionalProperties": false
       },
       {
-        "description": "The seat's own wallet replaces its consent key.",
+        "description": "The seat's own wallet replaces its consent key (never with another seat's current key). A real rotation withdraws the seat's recorded consent to the stored settlement; re-setting the current key is a no-op.",
         "type": "object",
         "required": [
           "set_consent_key"
@@ -338,7 +338,7 @@
         "additionalProperties": false
       },
       {
-        "description": "Anyone: posts a signed Checkpoint payload.",
+        "description": "Anyone: posts a signed Checkpoint payload. Works while paused (it moves no funds).",
         "type": "object",
         "required": [
           "checkpoint"
@@ -528,7 +528,7 @@
         "additionalProperties": false
       },
       {
-        "description": "Anyone, with a valid ANNUL signature from every seat.",
+        "description": "Anyone, with a valid ANNUL signature from every seat over the game's trusted sequence (`GameResponse::trusted_seq`).",
         "type": "object",
         "required": [
           "annul_by_consent"
@@ -559,7 +559,7 @@
         "additionalProperties": false
       },
       {
-        "description": "A seated wallet: the liveness exit (IN_PROGRESS inactivity, or a dispute past the resolver timeout). Works while paused.",
+        "description": "A seated wallet: the liveness exit. Works while paused. Available for IN_PROGRESS after the inactivity window, for SETTLEABLE from `window_end + liveness_window`, and for DISPUTED after the resolver timeout.",
         "type": "object",
         "required": [
           "liveness_settle"
@@ -575,6 +575,18 @@
                 "type": "integer",
                 "format": "uint64",
                 "minimum": 0.0
+              },
+              "checkpoint": {
+                "description": "IN_PROGRESS only: a newer signed checkpoint, validated exactly like `Checkpoint` and promoted in the same transaction. Eligibility is decided before it is processed, and it does not restart the liveness clock. Omit it (or pass null) for the plain exit.",
+                "default": null,
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/SignedCheckpoint"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               }
             },
             "additionalProperties": false
@@ -630,7 +642,7 @@
         "additionalProperties": false
       },
       {
-        "description": "Retire a key; `compromised: true` also stops `LivenessSettle` from using its checkpoints and settlements. A retired key may be escalated to compromised later; never the reverse.",
+        "description": "Retire a key; `compromised: true` also stops `LivenessSettle` from using its checkpoints and settlements and removes their sequence authority. A retired key may be escalated to compromised later; never the reverse.",
         "type": "object",
         "required": [
           "retire_signer_key"
@@ -679,6 +691,7 @@
         "additionalProperties": false
       },
       {
+        "description": "Applies to games started afterwards: a started game keeps the resolver it adopted at `Start`.",
         "type": "object",
         "required": [
           "set_resolver"
@@ -850,7 +863,7 @@
             "additionalProperties": false
           },
           {
-            "description": "A corrected payload (reason ResolverCorrection) authorised by the resolver's transaction; the bond goes back to the challenger.",
+            "description": "A corrected payload (reason ResolverCorrection) authorised by the resolver's transaction; the bond goes back to the challenger. Its seq must exceed the game's trusted checkpoint floor only: the disputed settlement never constrains it, so the same log position is legal.",
             "type": "object",
             "required": [
               "replace"
@@ -1007,6 +1020,23 @@
             "type": "integer",
             "format": "uint8",
             "minimum": 0.0
+          }
+        },
+        "additionalProperties": false
+      },
+      "SignedCheckpoint": {
+        "description": "A signed Checkpoint payload carried inside `LivenessSettle`.",
+        "type": "object",
+        "required": [
+          "payload",
+          "signature"
+        ],
+        "properties": {
+          "payload": {
+            "$ref": "#/definitions/SettlementPayloadV1"
+          },
+          "signature": {
+            "$ref": "#/definitions/HexBinary"
           }
         },
         "additionalProperties": false
@@ -1257,7 +1287,7 @@
       "additionalProperties": false,
       "definitions": {
         "CheckpointRecord": {
-          "description": "A checkpoint the contract accepted. The latest one per signer key is kept, so `LivenessSettle` can fall back past a key retired as compromised.",
+          "description": "A checkpoint the contract accepted. The latest one per signer key is kept, so `LivenessSettle` can fall back past a key retired as compromised and the trusted sequence floor can ignore a compromised key's evidence.",
           "type": "object",
           "required": [
             "accepted_at",
@@ -1478,7 +1508,7 @@
               "type": "boolean"
             },
             "resolver": {
-              "description": "The only address that may `Resolve` a disputed game.",
+              "description": "The resolver a game adopts at `Start`. `SetResolver` therefore only changes the adjudicator of games started afterwards.",
               "allOf": [
                 {
                   "$ref": "#/definitions/Addr"
@@ -1585,7 +1615,8 @@
       "required": [
         "deadlines",
         "game",
-        "paused"
+        "paused",
+        "trusted_seq"
       ],
       "properties": {
         "deadlines": {
@@ -1595,7 +1626,7 @@
           "$ref": "#/definitions/Game"
         },
         "latest_checkpoint": {
-          "description": "The highest-seq checkpoint accepted for this game, if any.",
+          "description": "The highest-seq checkpoint accepted for this game, if any (whatever its key's status; see `Checkpoints` for the liveness candidate).",
           "anyOf": [
             {
               "$ref": "#/definitions/CheckpointRecord"
@@ -1608,6 +1639,14 @@
         "paused": {
           "description": "Global pause flag at query time.",
           "type": "boolean"
+        },
+        "trusted_seq": {
+          "description": "The sequence authority now: the highest seq among the game's stored evidence whose signer key is not compromised. A new Checkpoint or Settle must exceed it, and ANNUL signatures sign over it. While the game is live it equals `game.last_seq` unless a signer key was marked compromised.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Uint64"
+            }
+          ]
         }
       },
       "additionalProperties": false,
@@ -1617,7 +1656,7 @@
           "type": "string"
         },
         "CheckpointRecord": {
-          "description": "A checkpoint the contract accepted. The latest one per signer key is kept, so `LivenessSettle` can fall back past a key retired as compromised.",
+          "description": "A checkpoint the contract accepted. The latest one per signer key is kept, so `LivenessSettle` can fall back past a key retired as compromised and the trusted sequence floor can ignore a compromised key's evidence.",
           "type": "object",
           "required": [
             "accepted_at",
@@ -1751,7 +1790,7 @@
               "minimum": 0.0
             },
             "consent_bitmap": {
-              "description": "Bit i set = seat i's consent to the stored settlement verified.",
+              "description": "Bit i set = seat i's consent to the stored settlement verified against seat i's current consent key (rotating that key clears the bit).",
               "type": "integer",
               "format": "uint8",
               "minimum": 0.0
@@ -1794,7 +1833,7 @@
               "$ref": "#/definitions/Timestamp"
             },
             "last_activity": {
-              "description": "Block time of the last `Start` or accepted `Checkpoint`.",
+              "description": "Block time of the last `Start` or accepted ordinary `Checkpoint` (a checkpoint carried by `LivenessSettle` does not refresh it).",
               "anyOf": [
                 {
                   "$ref": "#/definitions/Timestamp"
@@ -1805,7 +1844,7 @@
               ]
             },
             "last_seq": {
-              "description": "Highest accepted payload seq; never decreases.",
+              "description": "Raw history: the highest seq of any payload ever accepted for this game. Never decreases. Kept for audit only: it is NOT an authority gate, because evidence signed by a key later marked compromised loses its sequence authority (see `helpers::trusted_seq`).",
               "allOf": [
                 {
                   "$ref": "#/definitions/Uint64"
@@ -1835,6 +1874,17 @@
               "allOf": [
                 {
                   "$ref": "#/definitions/Uint128"
+                }
+              ]
+            },
+            "resolver": {
+              "description": "`CONFIG.resolver` at `Start`: the only address that may `Resolve` this game, whatever `SetResolver` does later.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Addr"
+                },
+                {
+                  "type": "null"
                 }
               ]
             },
@@ -1922,7 +1972,7 @@
               ]
             },
             "liveness_available_at": {
-              "description": "IN_PROGRESS: `LivenessSettle` from this time.",
+              "description": "IN_PROGRESS: `LivenessSettle` from this time (last Start/Checkpoint + liveness window). SETTLEABLE: from `challenge_window_end` + liveness window.",
               "anyOf": [
                 {
                   "$ref": "#/definitions/Timestamp"
@@ -2213,6 +2263,20 @@
               "type": "string",
               "enum": [
                 "liveness_refund"
+              ]
+            },
+            {
+              "description": "SETTLEABLE + `window_end` + liveness window, stored settlement paid.",
+              "type": "string",
+              "enum": [
+                "settleable_timeout_payout"
+              ]
+            },
+            {
+              "description": "SETTLEABLE + `window_end` + liveness window, the stored settlement's key is compromised and no usable checkpoint exists: refund.",
+              "type": "string",
+              "enum": [
+                "settleable_timeout_refund"
               ]
             }
           ]
@@ -2651,7 +2715,7 @@
               "$ref": "#/definitions/Timestamp"
             },
             "compromised": {
-              "description": "Retired as compromised: its stored checkpoints and settlements are not usable by `LivenessSettle`. Never cleared.",
+              "description": "Retired as compromised: its stored checkpoints and settlements are not usable by `LivenessSettle` and lose their sequence authority (they no longer raise the trusted floor). Never cleared.",
               "type": "boolean"
             },
             "key_id": {
@@ -2725,7 +2789,7 @@
               "$ref": "#/definitions/Timestamp"
             },
             "compromised": {
-              "description": "Retired as compromised: its stored checkpoints and settlements are not usable by `LivenessSettle`. Never cleared.",
+              "description": "Retired as compromised: its stored checkpoints and settlements are not usable by `LivenessSettle` and lose their sequence authority (they no longer raise the trusted floor). Never cleared.",
               "type": "boolean"
             },
             "key_id": {

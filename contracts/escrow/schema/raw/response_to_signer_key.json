@@ -30,7 +30,7 @@
           "$ref": "#/definitions/Timestamp"
         },
         "compromised": {
-          "description": "Retired as compromised: its stored checkpoints and settlements are not usable by `LivenessSettle`. Never cleared.",
+          "description": "Retired as compromised: its stored checkpoints and settlements are not usable by `LivenessSettle` and lose their sequence authority (they no longer raise the trusted floor). Never cleared.",
           "type": "boolean"
         },
         "key_id": {

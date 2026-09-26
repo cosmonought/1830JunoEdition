@@ -12,8 +12,12 @@
 //!                       ‖ variants_digest ‖ u128(ante_gross) ‖ u8(mode))
 //! settle      = SHA-256("18JUNO/SETTLE/v1" ‖ encode(payload))         signed by the settlement key
 //! consent     = SHA-256("18JUNO/CONSENT/v1" ‖ domain ‖ u64(seq) ‖ settle)   signed by a seat's consent key
-//! annul       = SHA-256("18JUNO/ANNUL/v1" ‖ domain ‖ u64(last_seq))        signed by every seat's consent key
+//! annul       = SHA-256("18JUNO/ANNUL/v1" ‖ domain ‖ u64(seq))             signed by every seat's consent key
 //! ```
+//!
+//! The ANNUL `seq` is the game's trusted sequence (`GameResponse::trusted_seq`,
+//! ESCROW-2.1 OD-ESC2-3): equal to `last_seq` unless a signer key was marked
+//! compromised. The byte layout is unchanged.
 //!
 //! Signatures are secp256k1, 64-byte `r ‖ s`, low-s normalised, over the 32-byte
 //! digest; public keys are 33-byte compressed SEC1. `Api::secp256k1_verify`
@@ -124,12 +128,13 @@ pub fn consent_digest(domain: &[u8; 32], seq: u64, settle_digest: &[u8; 32]) -> 
 }
 
 /// The digest every seat's consent key signs to annul a game at its current
-/// `last_seq`; a newer checkpoint makes an older annul signature useless.
-pub fn annul_digest(domain: &[u8; 32], last_seq: u64) -> [u8; 32] {
+/// trusted sequence; a newer trusted checkpoint makes an older annul signature
+/// useless.
+pub fn annul_digest(domain: &[u8; 32], seq: u64) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(TAG_ANNUL);
     hasher.update(domain);
-    hasher.update(last_seq.to_be_bytes());
+    hasher.update(seq.to_be_bytes());
     hasher.finalize().into()
 }
 

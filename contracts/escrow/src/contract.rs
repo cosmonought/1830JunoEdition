@@ -133,9 +133,10 @@ pub fn execute(
             chain_game_id,
             consents,
         } => dispute::annul_by_consent(deps, env, info, chain_game_id, consents),
-        ExecuteMsg::LivenessSettle { chain_game_id } => {
-            dispute::liveness_settle(deps, env, info, chain_game_id)
-        }
+        ExecuteMsg::LivenessSettle {
+            chain_game_id,
+            checkpoint,
+        } => dispute::liveness_settle(deps, env, info, chain_game_id, checkpoint),
         ExecuteMsg::Pause {} => admin::pause(deps, info),
         ExecuteMsg::Unpause {} => admin::unpause(deps, info),
         ExecuteMsg::AddSignerKey { pubkey } => admin::add_signer_key(deps, env, info, pubkey),

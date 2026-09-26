@@ -318,52 +318,283 @@ fn malformed_keys_are_refused() {
     assert_eq!(s.game(id).game.seats[1].consent_pubkey, Key::seat(1).pubkey);
 }
 
+/// A consent counts only while the key that gave it is the seat's current key
+/// (ESCROW-2.1; in ESCROW-2 a recorded consent survived a rotation).
 #[test]
-fn a_recorded_consent_survives_a_later_rotation() {
+fn a_rotation_withdraws_the_seats_recorded_consent() {
     let mut s = Suite::new();
     let id = s.started(3);
-    s.settle(id, 1, 200, &[1, 2, 3], &[0]);
+    let p = s.settle(id, 1, 200, &[1, 2, 3], &[0, 1]);
+    assert_eq!(s.game(id).game.consent_bitmap, 0b011);
     let creator = s.players[0].clone();
+    // Re-setting the current key is a no-op and withdraws nothing.
+    let res = s
+        .exec(&creator, &rotate(id, &Key::seat(0).pubkey), &[])
+        .unwrap();
+    assert_eq!(attr(&res, "consent_withdrawn"), "false");
+    assert_eq!(s.game(id).game.consent_bitmap, 0b011);
+    // A real rotation withdraws seat 0's consent, and only seat 0's.
+    let res = s
+        .exec(&creator, &rotate(id, &rotated(0).pubkey), &[])
+        .unwrap();
+    assert_eq!(attr(&res, "consent_withdrawn"), "true");
+    let g = s.game(id).game;
+    assert_eq!(g.consent_bitmap, 0b010);
+    assert_eq!(g.state, GameState::Settleable);
+    // Seat 0 consents again with its new key; seat 2 completes it.
+    let digest = s.consent_digest(id, &p);
+    let who = s.outsider.clone();
+    for (seat, key) in [(0u8, rotated(0)), (2, Key::seat(2))] {
+        s.exec(
+            &who,
+            &ExecuteMsg::Consent {
+                chain_game_id: id,
+                seat_index: seat,
+                signature: key.sign(&digest),
+            },
+            &[],
+        )
+        .unwrap();
+    }
+    assert_eq!(s.state(id), GameState::Settled);
+}
+
+/// Seat 0 consents with K0 and rotates away; seat 1 adopts K0; K0's on-chain
+/// signature is replayed as seat 1's consent. Seat 0's consent went with the
+/// rotation, so K0 still fills one seat only and 3-of-3 still needs three
+/// distinct keys (review finding, ESCROW-2.1).
+#[test]
+fn one_key_cannot_fill_two_seats_across_a_rotation() {
+    let mut s = Suite::new();
+    let id = s.started(3);
+    let p = s.settle(id, 1, 200, &[1, 2, 3], &[0]);
+    let digest = s.consent_digest(id, &p);
+    let k0_sig = Key::seat(0).sign(&digest);
+    let creator = s.players[0].clone();
+    let alice = s.players[1].clone();
     s.exec(&creator, &rotate(id, &rotated(0).pubkey), &[])
         .unwrap();
+    s.exec(&alice, &rotate(id, &Key::seat(0).pubkey), &[])
+        .unwrap();
+    let who = s.outsider.clone();
+    let consent = |seat: u8, signature: HexBinary| ExecuteMsg::Consent {
+        chain_game_id: id,
+        seat_index: seat,
+        signature,
+    };
+    s.exec(&who, &consent(1, k0_sig.clone()), &[]).unwrap();
+    s.exec(&who, &consent(2, Key::seat(2).sign(&digest)), &[])
+        .unwrap();
+    // Two private keys have signed: not settled.
     let g = s.game(id).game;
-    assert_eq!(g.consent_bitmap, 0b001);
+    assert_eq!(g.consent_bitmap, 0b110);
     assert_eq!(g.state, GameState::Settleable);
+    // K0's signature cannot go back on seat 0 either.
+    assert_eq!(
+        s.exec(&who, &consent(0, k0_sig), &[]).unwrap_err(),
+        ContractError::InvalidConsent { seat_index: 0 }
+    );
+    // Only seat 0's own current key completes it.
+    s.exec(&who, &consent(0, rotated(0).sign(&digest)), &[])
+        .unwrap();
+    assert_eq!(s.state(id), GameState::Settled);
 }
 
 #[test]
-fn a_seat_may_share_another_seats_key_which_acts_as_delegation() {
-    // Documented behaviour: the CONSENT digest carries no seat index, so a
-    // consent key shared by two seats authorises both.
+fn join_refuses_a_consent_key_another_seat_already_holds() {
     let mut s = Suite::new();
-    let id = s.started(2);
+    let id = s.create(0, 4, Mode::Live, ANTE);
+    s.join(id, 1, ANTE);
+    let bob = s.players[2].clone();
+    for (holder, key) in [(0u8, Key::seat(0)), (1, Key::seat(1))] {
+        let msg = ExecuteMsg::Join {
+            chain_game_id: id,
+            consent_pubkey: key.pubkey.clone(),
+            join_ticket: ticket("bob"),
+        };
+        assert_eq!(
+            s.exec(&bob, &msg, &coins(ANTE, DENOM)).unwrap_err(),
+            ContractError::ConsentKeyInUse { seat_index: holder }
+        );
+    }
+    // Upper-case hex decodes to the same bytes: still the same key.
+    let upper = HexBinary::from_hex(&Key::seat(0).pubkey.to_hex().to_uppercase()).unwrap();
+    assert_eq!(
+        s.exec(
+            &bob,
+            &ExecuteMsg::Join {
+                chain_game_id: id,
+                consent_pubkey: upper,
+                join_ticket: ticket("bob"),
+            },
+            &coins(ANTE, DENOM),
+        )
+        .unwrap_err(),
+        ContractError::ConsentKeyInUse { seat_index: 0 }
+    );
+    assert_eq!(s.game(id).game.seats.len(), 2);
+    // A distinct key is accepted.
+    s.join(id, 2, ANTE);
+    assert_eq!(s.game(id).game.seats.len(), 3);
+    s.assert_custody();
+}
+
+#[test]
+fn a_withdrawn_seats_key_is_free_again() {
+    let mut s = Suite::new();
+    let id = s.create(0, 3, Mode::Live, ANTE);
+    s.join(id, 1, ANTE);
     let alice = s.players[1].clone();
-    s.exec(&alice, &rotate(id, &Key::seat(0).pubkey), &[])
+    s.exec(&alice, &ExecuteMsg::Withdraw { chain_game_id: id }, &[])
         .unwrap();
-    let p = s.terminal_payload(id, 1, 300, &[3, 1]);
+    let bob = s.players[2].clone();
+    s.exec(
+        &bob,
+        &ExecuteMsg::Join {
+            chain_game_id: id,
+            consent_pubkey: Key::seat(1).pubkey,
+            join_ticket: ticket("bob"),
+        },
+        &coins(ANTE, DENOM),
+    )
+    .unwrap();
+    assert_eq!(s.game(id).game.seats[1].consent_pubkey, Key::seat(1).pubkey);
+}
+
+#[test]
+fn rotation_refuses_another_seats_current_key() {
+    let mut s = Suite::new();
+    let id = s.started(3);
+    let alice = s.players[1].clone();
+    for (holder, key) in [(0u8, Key::seat(0)), (2, Key::seat(2))] {
+        assert_eq!(
+            s.exec(&alice, &rotate(id, &key.pubkey), &[]).unwrap_err(),
+            ContractError::ConsentKeyInUse { seat_index: holder }
+        );
+    }
+    // Own current key: the idempotent no-op; a fresh key: accepted.
+    let res = s
+        .exec(&alice, &rotate(id, &Key::seat(1).pubkey), &[])
+        .unwrap();
+    assert_eq!(attr(&res, "changed"), "false");
+    s.exec(&alice, &rotate(id, &rotated(1).pubkey), &[])
+        .unwrap();
+    // Once alice moved away, her old key is no seat's current key any more.
+    let bob = s.players[2].clone();
+    s.exec(&bob, &rotate(id, &Key::seat(1).pubkey), &[])
+        .unwrap();
+    let keys: Vec<HexBinary> = s
+        .game(id)
+        .game
+        .seats
+        .iter()
+        .map(|x| x.consent_pubkey.clone())
+        .collect();
+    assert_eq!(
+        keys,
+        vec![Key::seat(0).pubkey, rotated(1).pubkey, Key::seat(1).pubkey]
+    );
+    // And now the creator cannot take bob's (formerly alice's) key.
+    let creator = s.players[0].clone();
+    assert_eq!(
+        s.exec(&creator, &rotate(id, &Key::seat(1).pubkey), &[])
+            .unwrap_err(),
+        ContractError::ConsentKeyInUse { seat_index: 2 }
+    );
+}
+
+#[test]
+fn n_of_n_needs_n_distinct_consent_keys() {
+    // A shared key could previously sign for two seats (the CONSENT and ANNUL
+    // digests carry no seat index). Keys are now unique per game and a
+    // rotation withdraws the seat's recorded consent, so each recorded
+    // consent is backed by that seat's own current key.
+    let mut s = Suite::new();
+    let id = s.started(3);
+    let alice = s.players[1].clone();
+    assert!(matches!(
+        s.exec(&alice, &rotate(id, &Key::seat(0).pubkey), &[])
+            .unwrap_err(),
+        ContractError::ConsentKeyInUse { .. }
+    ));
+    // Seat 0's key cannot stand in for seat 1 in a settlement ...
+    let p = s.terminal_payload(id, 1, 300, &[3, 1, 1]);
     let digest = s.consent_digest(id, &p);
-    let sig = Key::seat(0).sign(&digest);
+    let sig0 = Key::seat(0).sign(&digest);
     let (payload, signature) = s.signed(&p);
     let op = s.operator.clone();
+    let consents = vec![
+        SeatSignature {
+            seat_index: 0,
+            signature: sig0.clone(),
+        },
+        SeatSignature {
+            seat_index: 1,
+            signature: sig0,
+        },
+        SeatSignature {
+            seat_index: 2,
+            signature: Key::seat(2).sign(&digest),
+        },
+    ];
+    assert_eq!(
+        s.exec(
+            &op,
+            &ExecuteMsg::Settle {
+                chain_game_id: id,
+                payload,
+                signature,
+                consents,
+            },
+            &[],
+        )
+        .unwrap_err(),
+        ContractError::InvalidConsent { seat_index: 1 }
+    );
+    // ... nor in an annul.
+    let annul = crypto::annul_digest(&s.domain(id), 0);
+    let a0 = Key::seat(0).sign(&annul);
+    let who = s.outsider.clone();
+    assert_eq!(
+        s.exec(
+            &who,
+            &ExecuteMsg::AnnulByConsent {
+                chain_game_id: id,
+                consents: vec![
+                    SeatSignature {
+                        seat_index: 0,
+                        signature: a0.clone(),
+                    },
+                    SeatSignature {
+                        seat_index: 1,
+                        signature: a0,
+                    },
+                    SeatSignature {
+                        seat_index: 2,
+                        signature: Key::seat(2).sign(&annul),
+                    },
+                ],
+            },
+            &[],
+        )
+        .unwrap_err(),
+        ContractError::InvalidConsent { seat_index: 1 }
+    );
+    // Every seat's own key: accepted.
+    let sigs = s.annul_sigs(id, &[0, 1, 2], 0);
     s.exec(
-        &op,
-        &ExecuteMsg::Settle {
+        &who,
+        &ExecuteMsg::AnnulByConsent {
             chain_game_id: id,
-            payload,
-            signature,
-            consents: vec![
-                SeatSignature {
-                    seat_index: 0,
-                    signature: sig.clone(),
-                },
-                SeatSignature {
-                    seat_index: 1,
-                    signature: sig,
-                },
-            ],
+            consents: sigs,
         },
         &[],
     )
     .unwrap();
-    assert_eq!(s.state(id), GameState::Settled);
+    assert_eq!(s.state(id), GameState::Annulled);
+    let g = s.game(id).game;
+    let mut keys: Vec<Vec<u8>> = g.seats.iter().map(|x| x.consent_pubkey.to_vec()).collect();
+    keys.sort();
+    keys.dedup();
+    assert_eq!(keys.len(), 3, "three seats, three distinct keys");
 }

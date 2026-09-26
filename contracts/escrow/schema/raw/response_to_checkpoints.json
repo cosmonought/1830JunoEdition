@@ -27,7 +27,7 @@
   "additionalProperties": false,
   "definitions": {
     "CheckpointRecord": {
-      "description": "A checkpoint the contract accepted. The latest one per signer key is kept, so `LivenessSettle` can fall back past a key retired as compromised.",
+      "description": "A checkpoint the contract accepted. The latest one per signer key is kept, so `LivenessSettle` can fall back past a key retired as compromised and the trusted sequence floor can ignore a compromised key's evidence.",
       "type": "object",
       "required": [
         "accepted_at",

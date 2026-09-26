@@ -7,7 +7,7 @@ use common::*;
 use cosmwasm_std::{coins, Addr, Coin, HexBinary, Uint128};
 use eighteen_cosmos_escrow::msg::{
     ExecuteMsg, GamesResponse, QueryMsg, ResolveOutcome, SeatSignature, SeatsResponse,
-    SettlementPreviewResponse,
+    SettlementPreviewResponse, SignedCheckpoint,
 };
 use eighteen_cosmos_escrow::payload::{Payload, REASON_RESOLVER_CORRECTION};
 use eighteen_cosmos_escrow::state::{GameState, Mode, Route};
@@ -66,7 +66,10 @@ fn terminal_games(s: &mut Suite) -> Vec<(Route, u64)> {
     let alice = s.players[1].clone();
     s.exec(
         &alice,
-        &ExecuteMsg::LivenessSettle { chain_game_id: id },
+        &ExecuteMsg::LivenessSettle {
+            chain_game_id: id,
+            checkpoint: None,
+        },
         &[],
     )
     .unwrap();
@@ -86,23 +89,46 @@ fn terminal_games(s: &mut Suite) -> Vec<(Route, u64)> {
     s.advance(14 * DAY);
     s.exec(
         &alice,
-        &ExecuteMsg::LivenessSettle { chain_game_id: id },
+        &ExecuteMsg::LivenessSettle {
+            chain_game_id: id,
+            checkpoint: None,
+        },
         &[],
     )
     .unwrap();
     out.push((Route::LivenessRefund, id));
 
-    // Last: retiring key 1 as compromised would break the fixtures above.
-    let (id, _) = s.disputed(3);
-    s.retire_key(1, true);
-    s.advance(30 * DAY);
+    let (id, _) = s.settleable(3);
+    s.advance(DAY + 14 * DAY);
     s.exec(
         &alice,
-        &ExecuteMsg::LivenessSettle { chain_game_id: id },
+        &ExecuteMsg::LivenessSettle {
+            chain_game_id: id,
+            checkpoint: None,
+        },
         &[],
     )
     .unwrap();
-    out.push((Route::ResolverTimeoutRefund, id));
+    out.push((Route::SettleableTimeoutPayout, id));
+
+    // Last: retiring key 1 as compromised would break the fixtures above.
+    let (settleable, _) = s.settleable(3);
+    let (disputed, _) = s.disputed(3);
+    s.retire_key(1, true);
+    s.advance(30 * DAY);
+    for id in [settleable, disputed] {
+        s.exec(
+            &alice,
+            &ExecuteMsg::LivenessSettle {
+                chain_game_id: id,
+                checkpoint: None,
+            },
+            &[],
+        )
+        .unwrap();
+    }
+    out.push((Route::SettleableTimeoutRefund, settleable));
+    out.push((Route::ResolverTimeoutRefund, disputed));
     s.add_key(&Key::signer(2));
     out
 }
@@ -214,7 +240,23 @@ fn battery(s: &Suite, id: u64) -> Vec<(ExecuteMsg, Vec<Coin>)> {
             },
             vec![],
         ),
-        (ExecuteMsg::LivenessSettle { chain_game_id: id }, vec![]),
+        (
+            ExecuteMsg::LivenessSettle {
+                chain_game_id: id,
+                checkpoint: None,
+            },
+            vec![],
+        ),
+        (
+            ExecuteMsg::LivenessSettle {
+                chain_game_id: id,
+                checkpoint: Some(SignedCheckpoint {
+                    payload: Suite::wire(&cp),
+                    signature: sig(&cp),
+                }),
+            },
+            vec![],
+        ),
     ]
 }
 
@@ -260,9 +302,9 @@ fn assert_all_refused(s: &mut Suite, games: &[(Route, u64)]) -> usize {
 fn every_terminal_route_refuses_every_game_message() {
     let mut s = Suite::new();
     let games = terminal_games(&mut s);
-    assert_eq!(games.len(), 12, "every route into a terminal state");
+    assert_eq!(games.len(), 14, "every route into a terminal state");
     let checked = assert_all_refused(&mut s, &games);
-    assert_eq!(checked, 12 * 14 * 6);
+    assert_eq!(checked, 14 * 15 * 6);
     s.pause();
     assert_all_refused(&mut s, &games);
     s.assert_custody();
@@ -279,12 +321,14 @@ fn terminal_states_by_route() {
             | Route::Finalized
             | Route::ResolverUphold
             | Route::ResolverReplace
-            | Route::ResolverTimeoutPayout => GameState::Settled,
+            | Route::ResolverTimeoutPayout
+            | Route::SettleableTimeoutPayout => GameState::Settled,
             Route::ResolverAnnul | Route::AnnulByConsent => GameState::Annulled,
             Route::CreatorCancel
             | Route::DeadlineCancel
             | Route::LivenessRefund
-            | Route::ResolverTimeoutRefund => GameState::Cancelled,
+            | Route::ResolverTimeoutRefund
+            | Route::SettleableTimeoutRefund => GameState::Cancelled,
         };
         assert_eq!(s.state(id), expected, "{route:?}");
     }

@@ -82,7 +82,7 @@
           "type": "boolean"
         },
         "resolver": {
-          "description": "The only address that may `Resolve` a disputed game.",
+          "description": "The resolver a game adopts at `Start`. `SetResolver` therefore only changes the adjudicator of games started afterwards.",
           "allOf": [
             {
               "$ref": "#/definitions/Addr"

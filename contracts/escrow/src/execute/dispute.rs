@@ -6,16 +6,16 @@ use cosmwasm_std::{
 
 use crate::crypto::{annul_digest, settle_digest};
 use crate::error::ContractError;
+use crate::execute::play::{accept_signed_payload, store_checkpoint};
 use crate::helpers::{
-    add_secs, best_checkpoint, check_payload_for_game, game_domain, key_usable_for_liveness,
-    load_game, nonpayable, pay_out, payload_record, refund_all, require_seated, require_state,
-    save_game, send, verify_seat_signatures,
+    add_secs, best_checkpoint, check_payload_for_game, game_domain, key_is_trusted, load_game,
+    nonpayable, pay_out, payload_record, refund_all, require_seated, require_state, save_game,
+    send, trusted_checkpoint_seq, trusted_seq, verify_seat_signatures,
 };
-use crate::msg::{ResolveOutcome, SeatSignature};
+use crate::msg::{ResolveOutcome, SeatSignature, SignedCheckpoint};
 use crate::payload::{fixed_bytes, Payload, PayloadUse};
 use crate::state::{
     DisputeRecord, DisputeResolution, Game, GameState, Route, SettlementRecord, SettlementSource,
-    CONFIG,
 };
 
 /// A seated wallet challenges the stored settlement before the window closes,
@@ -118,8 +118,9 @@ fn stored_weights(game: &Game) -> Result<Vec<Uint128>, ContractError> {
         })
 }
 
-/// The resolver adjudicates a disputed game. Not blocked by pause (the frozen
-/// transition table gives `Resolve` no pause prerequisite).
+/// The game's resolver — the address it adopted at `Start`, not the current
+/// `CONFIG.resolver` (OD-ESC2-5) — adjudicates a disputed game. Not blocked by
+/// pause (the frozen transition table gives `Resolve` no pause prerequisite).
 pub fn resolve(
     deps: DepsMut,
     env: Env,
@@ -128,10 +129,15 @@ pub fn resolve(
     outcome: ResolveOutcome,
 ) -> Result<Response, ContractError> {
     nonpayable(&info)?;
-    let config = CONFIG.load(deps.storage)?;
     let mut game = load_game(deps.storage, chain_game_id)?;
     require_state(&game, &[GameState::Disputed])?;
-    if info.sender != config.resolver {
+    let resolver = game
+        .resolver
+        .as_ref()
+        .ok_or_else(|| ContractError::Invariant {
+            reason: "a started game has no resolver".to_string(),
+        })?;
+    if info.sender != *resolver {
         return Err(ContractError::Unauthorized {
             role: "resolver".to_string(),
         });
@@ -157,9 +163,13 @@ pub fn resolve(
         }
         ResolveOutcome::Replace { payload: wire } => {
             // Authorised by this transaction's sender, not by a signature: the
-            // settlement signer may be the party that cheated.
+            // settlement signer may be the party that cheated. The disputed
+            // settlement never constrains its correction (the same log position
+            // is legal, and a compromised signer's seq has no authority); the
+            // correction must only lie beyond the latest trusted checkpoint.
             let payload = Payload::try_from(&wire)?;
-            check_payload_for_game(&game, &payload, PayloadUse::ResolverReplace)?;
+            let floor = trusted_checkpoint_seq(deps.storage, chain_game_id)?;
+            check_payload_for_game(&game, &payload, PayloadUse::ResolverReplace, floor)?;
             let digest = settle_digest(&payload.encode()?);
             let record = payload_record(&payload, &digest);
             let weights = record.settlement_weights.clone();
@@ -169,7 +179,7 @@ pub fn resolve(
                 accepted_at: now,
                 window_end: now,
             });
-            game.last_seq = Uint64::new(payload.seq);
+            game.last_seq = game.last_seq.max(Uint64::new(payload.seq));
             game.consent_bitmap = 0;
             let (bond, bond_msg) =
                 close_dispute(&mut game, DisputeResolution::Replaced, now, true)?;
@@ -209,8 +219,11 @@ pub fn resolve(
         .add_attribute("state", game.state.as_str()))
 }
 
-/// Every seat signs the ANNUL digest over (domain, last_seq). Anyone may submit
-/// it while IN_PROGRESS or SETTLEABLE; works while paused. Net antes refunded.
+/// Every seat signs the ANNUL digest over (domain, trusted_seq): the game's
+/// current sequence authority, so a newer trusted checkpoint voids older annul
+/// signatures while a compromised signer's seq never enters the digest. Anyone
+/// may submit it while IN_PROGRESS or SETTLEABLE; works while paused. Net antes
+/// refunded.
 pub fn annul_by_consent(
     deps: DepsMut,
     env: Env,
@@ -221,7 +234,7 @@ pub fn annul_by_consent(
     nonpayable(&info)?;
     let mut game = load_game(deps.storage, chain_game_id)?;
     require_state(&game, &[GameState::InProgress, GameState::Settleable])?;
-    let digest = annul_digest(&game_domain(&game)?, game.last_seq.u64());
+    let digest = annul_digest(&game_domain(&game)?, trusted_seq(deps.storage, &game)?);
     verify_seat_signatures(deps.api, &game, &digest, &consents, true)?;
     let now = env.block.time;
     let msgs = refund_all(
@@ -268,12 +281,20 @@ fn settle_on_checkpoint_or_refund(
     }
 }
 
-/// The liveness exit, for any seated wallet, working while paused:
+/// The liveness exit, for any seated wallet. It works while paused: a pause may
+/// delay normal operation but never trap funds (OD-ESC2-1).
 ///
 /// * IN_PROGRESS, once `max(started_at, last_activity) + liveness_window` has
-///   passed: SETTLEABLE on the highest-seq checkpoint whose signer key was not
-///   retired as compromised (a fresh challenge window applies), or CANCELLED
-///   with every net ante refunded when there is none.
+///   passed: SETTLEABLE on the highest-seq checkpoint whose signer key is not
+///   compromised (a fresh challenge window applies), or CANCELLED with every
+///   net ante refunded when there is none. An optional newer `checkpoint` is
+///   validated exactly like `Checkpoint` and promoted in the same transaction
+///   (OD-ESC2-4); eligibility is decided before it is processed, and it does
+///   not restart the liveness clock.
+/// * SETTLEABLE, once `window_end + liveness_window` has passed: the stored
+///   settlement is paid, unless its signer key is compromised, in which case the
+///   game falls back to the best usable checkpoint (SETTLEABLE again, consents
+///   reset, fresh window) or refunds everyone (CANCELLED).
 /// * DISPUTED, once `disputed_at + resolver_timeout` has passed: nobody
 ///   adjudicated, so the challenger's bond is returned and the stored settlement
 ///   is paid as if upheld, unless its signer key was retired as compromised, in
@@ -283,89 +304,163 @@ pub fn liveness_settle(
     env: Env,
     info: MessageInfo,
     chain_game_id: u64,
+    checkpoint: Option<SignedCheckpoint>,
 ) -> Result<Response, ContractError> {
     nonpayable(&info)?;
     let mut game = load_game(deps.storage, chain_game_id)?;
-    require_state(&game, &[GameState::InProgress, GameState::Disputed])?;
+    require_state(
+        &game,
+        &[
+            GameState::InProgress,
+            GameState::Settleable,
+            GameState::Disputed,
+        ],
+    )?;
     require_seated(&game, &info.sender)?;
+    if checkpoint.is_some() {
+        // A checkpoint is only accepted where an ordinary Checkpoint would be.
+        require_state(&game, &[GameState::InProgress])?;
+    }
     let now = env.block.time;
     let mut msgs: Vec<BankMsg> = Vec::new();
-    let path: &'static str;
-    if game.state == GameState::InProgress {
-        let started = game.started_at.ok_or_else(|| ContractError::Invariant {
-            reason: "no start time".to_string(),
-        })?;
-        let active = game.last_activity.unwrap_or(started);
-        let reference = if active > started { active } else { started };
-        let available = add_secs(reference, game.terms.liveness_window_secs)?;
-        if now < available {
-            return Err(ContractError::LivenessNotReached { at: available });
-        }
-        let (refund, label) = settle_on_checkpoint_or_refund(
-            deps.storage,
-            &mut game,
-            now,
-            Route::LivenessRefund,
-            Uint128::zero(),
-        )?;
-        msgs.extend(refund);
-        path = label;
-    } else {
-        let disputed_at = game
-            .dispute
-            .as_ref()
-            .map(|d| d.disputed_at)
-            .ok_or_else(|| ContractError::Invariant {
-                reason: "no dispute record".to_string(),
+    let mut supplied_seq: Option<u64> = None;
+    let path: &'static str = match game.state {
+        GameState::InProgress => {
+            // Eligibility is decided on the game as it stood before any
+            // supplied checkpoint is processed.
+            let started = game.started_at.ok_or_else(|| ContractError::Invariant {
+                reason: "no start time".to_string(),
             })?;
-        let available = add_secs(disputed_at, game.terms.resolver_timeout_secs)?;
-        if now < available {
-            return Err(ContractError::ResolverTimeoutNotReached { at: available });
-        }
-        let (bond, bond_msg) =
-            close_dispute(&mut game, DisputeResolution::ResolverTimeout, now, true)?;
-        msgs.extend(bond_msg);
-        let settlement_key = game
-            .settlement
-            .as_ref()
-            .map(|s| s.payload.signer_key_id)
-            .ok_or_else(|| ContractError::Invariant {
-                reason: "no stored settlement".to_string(),
-            })?;
-        if key_usable_for_liveness(deps.storage, settlement_key)? {
-            let weights = stored_weights(&game)?;
-            let pool = game.pool;
-            msgs.extend(pay_out(
-                &mut game,
-                &weights,
-                pool,
-                Route::ResolverTimeoutPayout,
-                now,
-                bond,
-                Uint128::zero(),
-            )?);
-            path = "resolver_timeout_payout";
-        } else {
+            let active = game.last_activity.unwrap_or(started);
+            let reference = if active > started { active } else { started };
+            let available = add_secs(reference, game.terms.liveness_window_secs)?;
+            if now < available {
+                return Err(ContractError::LivenessNotReached { at: available });
+            }
+            if let Some(signed) = checkpoint {
+                let (payload, digest) = accept_signed_payload(
+                    deps.as_ref(),
+                    &game,
+                    &signed.payload,
+                    &signed.signature,
+                    PayloadUse::Checkpoint,
+                )?;
+                // Promoted without refreshing `last_activity`: the eligibility
+                // proven above must not be cancelled by the evidence it carries.
+                store_checkpoint(deps.storage, &mut game, &payload, &digest, now)?;
+                supplied_seq = Some(payload.seq);
+            }
             let (refund, label) = settle_on_checkpoint_or_refund(
                 deps.storage,
                 &mut game,
                 now,
-                Route::ResolverTimeoutRefund,
-                bond,
+                Route::LivenessRefund,
+                Uint128::zero(),
             )?;
             msgs.extend(refund);
-            path = if label == "refund" {
-                "resolver_timeout_refund"
-            } else {
-                "resolver_timeout_checkpoint"
-            };
+            label
         }
-    }
+        GameState::Settleable => {
+            let (window_end, settlement_key) = game
+                .settlement
+                .as_ref()
+                .map(|s| (s.window_end, s.payload.signer_key_id))
+                .ok_or_else(|| ContractError::Invariant {
+                    reason: "no stored settlement".to_string(),
+                })?;
+            let available = add_secs(window_end, game.terms.liveness_window_secs)?;
+            if now < available {
+                return Err(ContractError::LivenessNotReached { at: available });
+            }
+            if key_is_trusted(deps.storage, settlement_key)? {
+                let weights = stored_weights(&game)?;
+                let pool = game.pool;
+                msgs.extend(pay_out(
+                    &mut game,
+                    &weights,
+                    pool,
+                    Route::SettleableTimeoutPayout,
+                    now,
+                    Uint128::zero(),
+                    Uint128::zero(),
+                )?);
+                "settleable_timeout_payout"
+            } else {
+                let (refund, label) = settle_on_checkpoint_or_refund(
+                    deps.storage,
+                    &mut game,
+                    now,
+                    Route::SettleableTimeoutRefund,
+                    Uint128::zero(),
+                )?;
+                msgs.extend(refund);
+                if label == "refund" {
+                    "settleable_timeout_refund"
+                } else {
+                    "settleable_timeout_checkpoint"
+                }
+            }
+        }
+        _ => {
+            let disputed_at = game
+                .dispute
+                .as_ref()
+                .map(|d| d.disputed_at)
+                .ok_or_else(|| ContractError::Invariant {
+                    reason: "no dispute record".to_string(),
+                })?;
+            let available = add_secs(disputed_at, game.terms.resolver_timeout_secs)?;
+            if now < available {
+                return Err(ContractError::ResolverTimeoutNotReached { at: available });
+            }
+            let (bond, bond_msg) =
+                close_dispute(&mut game, DisputeResolution::ResolverTimeout, now, true)?;
+            msgs.extend(bond_msg);
+            let settlement_key = game
+                .settlement
+                .as_ref()
+                .map(|s| s.payload.signer_key_id)
+                .ok_or_else(|| ContractError::Invariant {
+                    reason: "no stored settlement".to_string(),
+                })?;
+            if key_is_trusted(deps.storage, settlement_key)? {
+                let weights = stored_weights(&game)?;
+                let pool = game.pool;
+                msgs.extend(pay_out(
+                    &mut game,
+                    &weights,
+                    pool,
+                    Route::ResolverTimeoutPayout,
+                    now,
+                    bond,
+                    Uint128::zero(),
+                )?);
+                "resolver_timeout_payout"
+            } else {
+                let (refund, label) = settle_on_checkpoint_or_refund(
+                    deps.storage,
+                    &mut game,
+                    now,
+                    Route::ResolverTimeoutRefund,
+                    bond,
+                )?;
+                msgs.extend(refund);
+                if label == "refund" {
+                    "resolver_timeout_refund"
+                } else {
+                    "resolver_timeout_checkpoint"
+                }
+            }
+        }
+    };
     save_game(deps.storage, &game)?;
-    Ok(Response::new()
+    let mut response = Response::new()
         .add_messages(msgs)
         .add_attribute("action", "liveness_settle")
         .add_attribute("chain_game_id", chain_game_id.to_string())
-        .add_attribute("path", path)
-        .add_attribute("state", game.state.as_str()))
+        .add_attribute("path", path);
+    if let Some(seq) = supplied_seq {
+        response = response.add_attribute("supplied_checkpoint_seq", seq.to_string());
+    }
+    Ok(response.add_attribute("state", game.state.as_str()))
 }

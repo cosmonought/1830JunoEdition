@@ -71,6 +71,11 @@ pub enum ContractError {
     #[error("{field} must be a valid 33-byte compressed secp256k1 public key")]
     BadPubkey { field: String },
 
+    /// Consent keys are unique within a game: no two seats hold the same key at
+    /// once.
+    #[error("this consent key is already used by seat {seat_index} of this game")]
+    ConsentKeyInUse { seat_index: u8 },
+
     #[error("the roster hash does not match the on-chain roster")]
     RosterHashMismatch {},
 
@@ -111,8 +116,11 @@ pub enum ContractError {
     #[error("the settlement weights sum to zero")]
     ZeroSumWeights {},
 
-    #[error("seq {seq} is not greater than last_seq {last_seq}")]
-    StaleSeq { seq: u64, last_seq: u64 },
+    /// `trusted_seq` is the game's sequence authority: the highest seq among
+    /// accepted evidence whose signer key is not compromised (for `Replace`,
+    /// among trusted checkpoints only).
+    #[error("seq {seq} does not exceed the trusted sequence {trusted_seq}")]
+    StaleSeq { seq: u64, trusted_seq: u64 },
 
     #[error("payload is malformed: {reason}")]
     MalformedPayload { reason: String },

@@ -8,7 +8,8 @@ use crate::crypto::parse_compressed_pubkey;
 use crate::error::ContractError;
 use crate::helpers::{
     add_secs, load_game, nonpayable, one_coin, refund_all, require_not_paused, require_seated,
-    require_state, save_game, seat_index_of, send, MAX_PLAYERS, MIN_PLAYERS,
+    require_state, require_unique_consent_key, save_game, seat_bit, seat_index_of, send,
+    MAX_PLAYERS, MIN_PLAYERS,
 };
 use crate::msg::CreateGameResponse;
 use crate::payload::fixed_bytes;
@@ -107,6 +108,7 @@ pub fn create_game(
         roster_hash: None,
         domain: None,
         bond: None,
+        resolver: None,
         started_at: None,
         last_activity: None,
         last_seq: Uint64::zero(),
@@ -157,6 +159,7 @@ pub fn join(
         return Err(ContractError::GameFull {});
     }
     parse_compressed_pubkey("consent_pubkey", consent_pubkey.as_slice())?;
+    require_unique_consent_key(&game, &consent_pubkey, None)?;
     fixed_bytes::<32>("join_ticket", &join_ticket)?;
 
     let gross = one_coin(&info, &game.denom)?;
@@ -268,7 +271,10 @@ pub fn cancel(
 
 /// The seat's own wallet replaces its consent key. Allowed in FUNDING, FUNDED,
 /// IN_PROGRESS and SETTLEABLE; works while paused. Setting the current key again
-/// changes nothing.
+/// changes nothing; another seat's current key is refused. A real rotation also
+/// withdraws the seat's recorded consent to the stored settlement: a consent
+/// counts only while the key that gave it is the seat's current key, so a key
+/// that consented for one seat cannot move to another seat and count again.
 pub fn set_consent_key(
     deps: DepsMut,
     env: Env,
@@ -289,6 +295,8 @@ pub fn set_consent_key(
     )?;
     let index = require_seated(&game, &info.sender)?;
     parse_compressed_pubkey("new_pubkey", new_pubkey.as_slice())?;
+    require_unique_consent_key(&game, &new_pubkey, Some(index))?;
+    let bit = seat_bit(index)?;
     let seat = game
         .seats
         .get_mut(index)
@@ -296,14 +304,18 @@ pub fn set_consent_key(
             reason: "seat index".to_string(),
         })?;
     let changed = seat.consent_pubkey != new_pubkey;
+    let mut consent_withdrawn = false;
     if changed {
         seat.consent_pubkey = new_pubkey;
         seat.consent_key_rotated_at = Some(env.block.time);
+        consent_withdrawn = game.consent_bitmap & bit != 0;
+        game.consent_bitmap &= !bit;
         save_game(deps.storage, &game)?;
     }
     Ok(Response::new()
         .add_attribute("action", "set_consent_key")
         .add_attribute("chain_game_id", chain_game_id.to_string())
         .add_attribute("chain_seat_index", index.to_string())
-        .add_attribute("changed", changed.to_string()))
+        .add_attribute("changed", changed.to_string())
+        .add_attribute("consent_withdrawn", consent_withdrawn.to_string()))
 }

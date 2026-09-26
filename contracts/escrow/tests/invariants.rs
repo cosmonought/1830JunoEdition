@@ -1,4 +1,4 @@
-//! The twelve escrow invariants, each with a targeted test, plus a seeded
+//! The escrow invariants, each with a targeted test, plus a seeded
 //! random-sequence checker that drives many games through every message and
 //! re-verifies all of them after every step against an independent model.
 //!
@@ -10,10 +10,19 @@
 //!  6. the subsidy is taken exactly once per deposit
 //!  7. every refund equals the seat's net deposit
 //!  8. a retired signer's payload is never accepted
-//!  9. last_seq never decreases
+//!  9. sequences (split in ESCROW-2.1): (a) raw history — `last_seq` never
+//!     decreases; (b) authority — `trusted_seq ≤ last_seq`, every accepted
+//!     payload exceeds it, and it falls only when a signer key is marked
+//!     compromised
 //! 10. no cross-game replay of payloads, consents or annul signatures
 //! 11. neither the admin nor the creator can take custody of pooled funds
 //! 12. pause never disables a refund or liveness route
+//! 13. a pause cannot permanently trap FUNDING, FUNDED, IN_PROGRESS,
+//!     SETTLEABLE or DISPUTED funds (the checker drains every live game under a
+//!     permanent pause at the end of each sequence)
+//! 14. a compromised signer's seq cannot permanently block trusted progress
+//! 15. a resolver change cannot affect an already-started game
+//! 16. consent keys are unique within a game
 
 mod common;
 
@@ -23,7 +32,9 @@ use common::*;
 use cosmwasm_std::{coins, Addr, Coin, HexBinary, Uint128, Uint256};
 use cw_multi_test::{AppResponse, Executor};
 use eighteen_cosmos_escrow::crypto;
-use eighteen_cosmos_escrow::msg::{ExecuteMsg, ResolveOutcome, SeatSignature};
+use eighteen_cosmos_escrow::msg::{
+    ExecuteMsg, ResolveOutcome, SeatSignature, SettlementPayloadV1, SignedCheckpoint,
+};
 use eighteen_cosmos_escrow::payload::{Payload, KIND_CHECKPOINT, KIND_TERMINAL};
 use eighteen_cosmos_escrow::state::{Game, GameState, Mode, Route, SettlementSource};
 use eighteen_cosmos_escrow::ContractError;
@@ -73,6 +84,8 @@ struct Snap {
     /// Live games only. A game is frozen the step it turns terminal and then
     /// re-verified against the chain periodically (and whenever targeted).
     games: BTreeMap<u64, Game>,
+    /// `GameResponse::trusted_seq` of each live game.
+    trusted: BTreeMap<u64, u64>,
     balances: BTreeMap<String, u128>,
 }
 
@@ -96,8 +109,18 @@ enum Act {
     PauseToggle,
     RotateSigner,
     Replay,
-    /// Leave a checkpoint-less game idle past the liveness window, then exit.
+    /// Leave an IN_PROGRESS, SETTLEABLE or DISPUTED game idle until its exit
+    /// opens (sometimes under pause), then take the exit.
     Stall,
+    /// A leaked key posts a checkpoint at a huge seq; the admin marks it
+    /// compromised and registers a new key; honest progress must resume.
+    ForgeHugeSeq,
+    /// The admin moves the global resolver.
+    RotateResolver,
+    /// OD-ESC2-2 emergency flow: Pause → RetireSignerKey(old, compromised) →
+    /// AddSignerKey(new) → a fresh Checkpoint for every IN_PROGRESS game while
+    /// paused (Settle stays refused) → Unpause.
+    EmergencyRotation,
 }
 
 struct Done {
@@ -113,6 +136,8 @@ struct Done {
     uphold: bool,
     /// Admin message: must never move funds or touch a game.
     admin: bool,
+    /// The step marked a signer key compromised (trusted_seq may fall).
+    compromise: bool,
 }
 
 struct Fuzz {
@@ -135,7 +160,14 @@ struct Fuzz {
     paused: bool,
     frozen: BTreeMap<u64, Game>,
     view: BTreeMap<u64, Game>,
+    view_trusted: BTreeMap<u64, u64>,
     checkpointed: BTreeSet<u64>,
+    /// `CONFIG.resolver` as the model knows it.
+    current_resolver: Addr,
+    /// LivenessSettle calls whose carried checkpoint was promoted (OD-ESC2-4).
+    carried_ok: usize,
+    /// Ordinary checkpoints accepted while paused (OD-ESC2-2).
+    paused_checkpoints: usize,
 }
 
 const MAX_GAMES: usize = 24;
@@ -145,6 +177,7 @@ impl Fuzz {
         let s = Suite::new();
         let treasury_expected = s.balance(&s.treasury);
         let signer = s.signer.clone();
+        let resolver = s.resolver.clone();
         Fuzz {
             s,
             rng: Rng(seed),
@@ -163,7 +196,11 @@ impl Fuzz {
             paused: false,
             frozen: BTreeMap::new(),
             view: BTreeMap::new(),
+            view_trusted: BTreeMap::new(),
             checkpointed: BTreeSet::new(),
+            current_resolver: resolver,
+            carried_ok: 0,
+            paused_checkpoints: 0,
         }
     }
 
@@ -181,13 +218,16 @@ impl Fuzz {
     }
 
     fn snap(&self) -> Snap {
+        let mut games = BTreeMap::new();
+        let mut trusted = BTreeMap::new();
+        for id in self.games.iter().filter(|id| !self.frozen.contains_key(id)) {
+            let r = self.s.game(*id);
+            trusted.insert(*id, r.trusted_seq.u64());
+            games.insert(*id, r.game);
+        }
         Snap {
-            games: self
-                .games
-                .iter()
-                .filter(|id| !self.frozen.contains_key(id))
-                .map(|id| (*id, self.s.game(*id).game))
-                .collect(),
+            games,
+            trusted,
             balances: self
                 .known()
                 .iter()
@@ -365,6 +405,7 @@ impl Fuzz {
             retired_signer: false,
             uphold: false,
             admin: false,
+            compromise: false,
         }
     }
 
@@ -373,7 +414,7 @@ impl Fuzz {
         if self.paused && self.rng.chance(30) {
             return Act::PauseToggle;
         }
-        let table: [(Act, u64); 19] = [
+        let table: [(Act, u64); 22] = [
             (Act::Create, 6),
             (Act::Join, 16),
             (Act::Withdraw, 2),
@@ -392,7 +433,10 @@ impl Fuzz {
             (Act::PauseToggle, 1),
             (Act::RotateSigner, 1),
             (Act::Replay, 4),
-            (Act::Stall, 1),
+            (Act::Stall, 2),
+            (Act::ForgeHugeSeq, 1),
+            (Act::RotateResolver, 1),
+            (Act::EmergencyRotation, 1),
         ];
         let total: u64 = table.iter().map(|(_, w)| w).sum();
         let mut r = self.rng.below(total);
@@ -456,7 +500,14 @@ impl Fuzz {
                     self.rng.below(8) as usize
                 };
                 let who = self.s.players[p].clone();
-                let key = self.fresh_key();
+                // (16) Sometimes try another seat's current key.
+                let reuse = !g.seats.is_empty() && self.rng.chance(10);
+                let key = if reuse {
+                    let seat = self.rng.below(g.seats.len() as u64) as usize;
+                    self.current_key(id, &g, seat)
+                } else {
+                    self.fresh_key()
+                };
                 let amount = if self.rng.chance(90) {
                     g.ante_gross.u128()
                 } else {
@@ -468,6 +519,7 @@ impl Fuzz {
                     join_ticket: ticket("fuzz"),
                 };
                 let res = self.exec(&who, &msg, &coins(amount, DENOM));
+                assert!(!(reuse && res.is_ok()), "a duplicate consent key joined");
                 if res.is_ok() {
                     self.keys.insert((id, p), key);
                 }
@@ -495,12 +547,20 @@ impl Fuzz {
                 let id = self.pick_game(&[Funding, Funded, InProgress, Settleable])?;
                 let g = self.game_of(id);
                 let who = self.seated_caller(&g);
-                let key = self.fresh_key();
+                let own = g.seats.iter().position(|x| x.wallet == who);
+                // (16) Sometimes try another seat's current key.
+                let other = own.and_then(|o| (0..g.seats.len()).find(|i| *i != o));
+                let reuse = other.is_some() && self.rng.chance(10);
+                let key = match (reuse, other) {
+                    (true, Some(i)) => self.current_key(id, &g, i),
+                    _ => self.fresh_key(),
+                };
                 let msg = ExecuteMsg::SetConsentKey {
                     chain_game_id: id,
                     new_pubkey: key.pubkey.clone(),
                 };
                 let res = self.exec(&who, &msg, &[]);
+                assert!(!(reuse && res.is_ok()), "rotated onto another seat's key");
                 if res.is_ok() {
                     let p = self.player_index(&who).unwrap();
                     self.keys.insert((id, p), key);
@@ -529,7 +589,10 @@ impl Fuzz {
             Act::Checkpoint | Act::Settle => {
                 let id = self.pick_game(&[InProgress])?;
                 let g = self.game_of(id);
-                let log_len = g.last_seq.u64() / 2 + self.rng.below(4);
+                // Honest progress builds on the trusted sequence, not on raw
+                // (possibly forged) history.
+                let base = self.view_trusted.get(&id).copied().unwrap_or(0);
+                let log_len = base / 2 + self.rng.below(4);
                 let weights = self.weights(g.seats.len());
                 let (key_id, key) = self.pick_signer();
                 let retired_signer = self.retired.contains(&key_id);
@@ -580,6 +643,9 @@ impl Fuzz {
                 if res.is_ok() {
                     if act == Act::Checkpoint {
                         self.checkpointed.insert(id);
+                        if self.paused {
+                            self.paused_checkpoints += 1;
+                        }
                     }
                     self.accepted.push((id, msg));
                 }
@@ -647,10 +713,17 @@ impl Fuzz {
             Act::Resolve => {
                 let id = self.pick_game(&[Disputed])?;
                 let g = self.game_of(id);
-                let who = if self.rng.chance(90) {
-                    self.s.resolver.clone()
-                } else {
-                    self.any_caller()
+                // (15) Mostly the game's own resolver; sometimes the current
+                // global one (which may differ) or anyone.
+                // (Pre-start games have none; any Resolve on them is refused.)
+                let frozen = g
+                    .resolver
+                    .clone()
+                    .unwrap_or_else(|| self.current_resolver.clone());
+                let who = match self.rng.below(10) {
+                    0..=7 => frozen.clone(),
+                    8 => self.current_resolver.clone(),
+                    _ => self.any_caller(),
                 };
                 let mut uphold = false;
                 let outcome = match self.rng.below(20) {
@@ -660,7 +733,15 @@ impl Fuzz {
                     }
                     8..=12 => ResolveOutcome::Annul {},
                     _ => {
-                        let log_len = g.last_seq.u64() / 2 + 1 + self.rng.below(2);
+                        // Only the trusted checkpoint floor constrains a
+                        // correction; the disputed terminal never does.
+                        let floor = self
+                            .s
+                            .checkpoints(id)
+                            .liveness_candidate_seq
+                            .map(|x| x.u64())
+                            .unwrap_or(0);
+                        let log_len = (floor / 2).saturating_sub(1) + self.rng.below(4);
                         let weights = self.weights(g.seats.len());
                         let p = Self::payload_for(&g, KIND_TERMINAL, 5, log_len, weights, 1);
                         ResolveOutcome::Replace {
@@ -680,7 +761,8 @@ impl Fuzz {
             Act::Annul => {
                 let id = self.pick_game(&[InProgress, Settleable])?;
                 let g = self.game_of(id);
-                let digest = crypto::annul_digest(&Self::domain_of(&g), g.last_seq.u64());
+                let trusted = self.view_trusted.get(&id).copied().unwrap_or(0);
+                let digest = crypto::annul_digest(&Self::domain_of(&g), trusted);
                 let skip = if g.seats.is_empty() || self.rng.chance(85) {
                     usize::MAX
                 } else {
@@ -719,6 +801,10 @@ impl Fuzz {
                             let from = g.last_activity.max(g.started_at).unwrap();
                             from.plus_seconds(g.terms.liveness_window_secs) <= now
                         }
+                        Settleable => {
+                            let end = g.settlement.as_ref().unwrap().window_end;
+                            end.plus_seconds(g.terms.liveness_window_secs) <= now
+                        }
                         Disputed => {
                             let at = g.dispute.as_ref().unwrap().disputed_at;
                             at.plus_seconds(g.terms.resolver_timeout_secs) <= now
@@ -730,12 +816,52 @@ impl Fuzz {
                 let id = if !open.is_empty() && self.rng.chance(70) {
                     self.rng.pick(&open)
                 } else {
-                    self.pick_game(&[InProgress, Disputed])?
+                    self.pick_game(&[InProgress, Settleable, Disputed])?
                 };
                 let g = self.game_of(id);
                 let who = self.seated_caller(&g);
-                let res = self.exec(&who, &ExecuteMsg::LivenessSettle { chain_game_id: id }, &[]);
-                Some(Self::done(act, Some(id), who, res))
+                // OD-ESC2-4: sometimes carry a newer checkpoint (occasionally a
+                // bad one, which must fail the whole transaction).
+                let mut carried: Option<Payload> = None;
+                let mut retired_signer = false;
+                let checkpoint = if g.state == InProgress && self.rng.chance(40) {
+                    let base = self.view_trusted.get(&id).copied().unwrap_or(0);
+                    let log_len = base / 2 + 1 + self.rng.below(3);
+                    let weights = self.weights(g.seats.len());
+                    let (key_id, key) = self.pick_signer();
+                    retired_signer = self.retired.contains(&key_id);
+                    let p = Self::payload_for(&g, KIND_CHECKPOINT, 0, log_len, weights, key_id);
+                    let (payload, mut signature) = self.s.signed_by(&p, &key);
+                    if self.rng.chance(10) {
+                        signature = Key::from_label("18JUNO/TEST/fuzz/forger").sign(&[1u8; 32]);
+                        retired_signer = true; // i.e. must not be accepted
+                    }
+                    carried = Some(p);
+                    Some(SignedCheckpoint { payload, signature })
+                } else {
+                    None
+                };
+                let res = self.exec(
+                    &who,
+                    &ExecuteMsg::LivenessSettle {
+                        chain_game_id: id,
+                        checkpoint,
+                    },
+                    &[],
+                );
+                if let (Ok(_), Some(p)) = (&res, &carried) {
+                    // The carried checkpoint is the one promoted.
+                    let st = self.s.game(id).game.settlement.unwrap();
+                    assert_eq!(
+                        st.payload.payload_digest.to_vec(),
+                        Suite::settle_digest(p).to_vec()
+                    );
+                    self.checkpointed.insert(id);
+                    self.carried_ok += 1;
+                }
+                let mut d = Self::done(act, Some(id), who, res);
+                d.retired_signer = retired_signer;
+                Some(d)
             }
             Act::Advance => {
                 let secs = match self.rng.below(100) {
@@ -797,28 +923,205 @@ impl Fuzz {
                         &[],
                     );
                     self.retired.insert(victim);
-                    Self::done(act, None, admin, res)
+                    let mut d = Self::done(act, None, admin, res);
+                    d.compromise = compromised;
+                    d
                 };
                 d.admin = true;
                 Some(d)
             }
-            Act::Stall => {
+            Act::ForgeHugeSeq => {
+                // (14) A leaked key's far-future checkpoint must not block the
+                // honest next checkpoint once the key is marked compromised.
                 let candidates: Vec<u64> = self
                     .view
                     .iter()
-                    .filter(|(id, g)| g.state == InProgress && !self.checkpointed.contains(id))
+                    .filter(|(_, g)| g.state == InProgress)
+                    .map(|(id, _)| *id)
+                    .collect();
+                let active: Vec<(u16, Key)> = self
+                    .signers
+                    .iter()
+                    .filter(|(id, _)| !self.retired.contains(id))
+                    .cloned()
+                    .collect();
+                if candidates.is_empty() || active.is_empty() {
+                    return None;
+                }
+                let id = self.rng.pick(&candidates);
+                let g = self.game_of(id);
+                let (leaked_id, leaked) = self.rng.pick(&active);
+                let honest_base = self.view_trusted.get(&id).copied().unwrap_or(0);
+                let n = g.seats.len();
+                let huge = u64::MAX / 2 - self.rng.below(3);
+                let forged = Self::payload_for(&g, KIND_CHECKPOINT, 0, huge, vec![1; n], leaked_id);
+                let (payload, signature) = self.s.signed_by(&forged, &leaked);
+                let who = self.any_caller();
+                self.exec(
+                    &who,
+                    &ExecuteMsg::Checkpoint {
+                        chain_game_id: id,
+                        payload,
+                        signature,
+                    },
+                    &[],
+                )
+                .expect("a leaked but still trusted key's checkpoint is accepted");
+                self.checkpointed.insert(id);
+                let admin = self.s.admin.clone();
+                let key = Key::signer(self.next_signer_label);
+                self.next_signer_label += 1;
+                let res = self
+                    .exec(
+                        &admin,
+                        &ExecuteMsg::AddSignerKey {
+                            pubkey: key.pubkey.clone(),
+                        },
+                        &[],
+                    )
+                    .unwrap();
+                let key_id: u16 = attr(&res, "key_id").parse().unwrap();
+                self.signers.push((key_id, key.clone()));
+                self.exec(
+                    &admin,
+                    &ExecuteMsg::RetireSignerKey {
+                        key_id: leaked_id,
+                        compromised: true,
+                    },
+                    &[],
+                )
+                .unwrap();
+                self.retired.insert(leaked_id);
+                let honest = Self::payload_for(
+                    &g,
+                    KIND_CHECKPOINT,
+                    0,
+                    honest_base / 2 + 1,
+                    vec![1; n],
+                    key_id,
+                );
+                let (payload, signature) = self.s.signed_by(&honest, &key);
+                let res = self.exec(
+                    &who,
+                    &ExecuteMsg::Checkpoint {
+                        chain_game_id: id,
+                        payload,
+                        signature,
+                    },
+                    &[],
+                );
+                assert!(
+                    res.is_ok(),
+                    "honest progress blocked by a forged seq: {res:?}"
+                );
+                let mut d = Self::done(act, Some(id), who, res);
+                d.compromise = true;
+                Some(d)
+            }
+            Act::RotateResolver => {
+                let options = [
+                    self.s.resolver.clone(),
+                    self.s.addr("resolver-2"),
+                    self.s.addr("resolver-3"),
+                ];
+                let next = self.rng.pick(&options);
+                let admin = self.s.admin.clone();
+                let res = self.exec(
+                    &admin,
+                    &ExecuteMsg::SetResolver {
+                        resolver: next.to_string(),
+                    },
+                    &[],
+                );
+                self.current_resolver = next;
+                let mut d = Self::done(act, None, admin, res);
+                d.admin = true;
+                Some(d)
+            }
+            Act::Stall => {
+                // Leave a game idle until its exit opens (sometimes under
+                // pause), then exit. IN_PROGRESS without a checkpoint refunds;
+                // otherwise the exit carries a newer checkpoint (OD-ESC2-4) or
+                // promotes the best stored one. SETTLEABLE pays or falls back
+                // (OD-ESC2-1); DISPUTED pays or falls back after the resolver
+                // timeout.
+                let candidates: Vec<u64> = self
+                    .view
+                    .iter()
+                    .filter(|(_, g)| matches!(g.state, InProgress | Settleable | Disputed))
                     .map(|(id, _)| *id)
                     .collect();
                 if candidates.is_empty() {
                     return None;
                 }
                 let id = self.rng.pick(&candidates);
+                if !self.paused && self.rng.chance(30) {
+                    let admin = self.s.admin.clone();
+                    let before = self.begin();
+                    let res = self.exec(&admin, &ExecuteMsg::Pause {}, &[]);
+                    self.paused = true;
+                    let mut d = Self::done(Act::PauseToggle, None, admin, res);
+                    d.admin = true;
+                    self.check(&d, &before);
+                }
                 let g = self.game_of(id);
-                self.s.advance(14 * DAY);
+                let open_at = match g.state {
+                    InProgress => g
+                        .last_activity
+                        .max(g.started_at)
+                        .unwrap()
+                        .plus_seconds(g.terms.liveness_window_secs),
+                    Settleable => g
+                        .settlement
+                        .as_ref()
+                        .unwrap()
+                        .window_end
+                        .plus_seconds(g.terms.liveness_window_secs),
+                    _ => g
+                        .dispute
+                        .as_ref()
+                        .unwrap()
+                        .disputed_at
+                        .plus_seconds(g.terms.resolver_timeout_secs),
+                };
+                let now = self.s.now();
+                if open_at > now {
+                    self.s.advance(open_at.seconds() - now.seconds());
+                }
+                let before = self.begin();
                 let who = g.seats[0].wallet.clone();
-                let res = self.exec(&who, &ExecuteMsg::LivenessSettle { chain_game_id: id }, &[]);
-                assert!(res.is_ok(), "liveness refund refused: {res:?}");
-                Some(Self::done(act, Some(id), who, res))
+                let carry = g.state == InProgress
+                    && (self.checkpointed.contains(&id) || self.rng.chance(50))
+                    && self.rng.chance(70);
+                let (msg, carried) = if carry {
+                    let (p, payload, signature) = self.honest_checkpoint(id, &g);
+                    let msg = ExecuteMsg::LivenessSettle {
+                        chain_game_id: id,
+                        checkpoint: Some(SignedCheckpoint { payload, signature }),
+                    };
+                    (msg, Some(p))
+                } else {
+                    (Suite::liveness_msg(id), None)
+                };
+                let res = self.exec(&who, &msg, &[]);
+                assert!(res.is_ok(), "{:?} exit refused: {res:?}", g.state);
+                if let Some(p) = &carried {
+                    let st = self.s.game(id).game.settlement.unwrap();
+                    assert_eq!(
+                        st.payload.payload_digest.to_vec(),
+                        Suite::settle_digest(p).to_vec(),
+                        "the carried checkpoint is the one promoted"
+                    );
+                    self.checkpointed.insert(id);
+                    self.carried_ok += 1;
+                }
+                let d = Self::done(act, Some(id), who, res);
+                self.check(&d, &before);
+                None
+            }
+            Act::EmergencyRotation => {
+                self.emergency_rotation();
+                None
             }
             Act::Replay => {
                 if self.accepted.is_empty() || self.games.len() < 2 {
@@ -973,6 +1276,7 @@ impl Fuzz {
                     d.act,
                     Act::Withdraw
                         | Act::Cancel
+                        | Act::Checkpoint
                         | Act::Liveness
                         | Act::Stall
                         | Act::Annul
@@ -985,8 +1289,46 @@ impl Fuzz {
             }
             Ok(res) => {
                 *self.ok.entry(d.act).or_default() += 1;
+                // Pause blocks exactly the entries and the paying steps
+                // (Settle stays blocked even though Checkpoint is allowed).
+                assert!(
+                    !(self.paused
+                        && matches!(
+                            d.act,
+                            Act::Create
+                                | Act::Join
+                                | Act::Start
+                                | Act::Settle
+                                | Act::Consent
+                                | Act::Finalize
+                        )),
+                    "{:?} accepted while paused",
+                    d.act
+                );
                 // (8)
                 assert!(!d.retired_signer, "a retired signer's payload was accepted");
+                // (16) a real key rotation withdraws that seat's recorded
+                // consent and nothing else; re-setting the same key is a no-op.
+                if d.act == Act::SetKey {
+                    let id = d.game.unwrap();
+                    let (b, a) = (&before.games[&id], &after.games[&id]);
+                    let i = b.seats.iter().position(|x| x.wallet == d.sender).unwrap();
+                    let bit = 1u8 << i;
+                    if a.seats[i].consent_pubkey == b.seats[i].consent_pubkey {
+                        assert_eq!(a, b, "re-setting the same consent key changed the game");
+                    } else {
+                        assert_eq!(a.consent_bitmap, b.consent_bitmap & !bit);
+                    }
+                }
+                // (15) only the game's own resolver adjudicates.
+                if d.act == Act::Resolve {
+                    let id = d.game.unwrap();
+                    assert_eq!(
+                        before.games[&id].resolver.as_ref(),
+                        Some(&d.sender),
+                        "resolved by someone other than the game's resolver"
+                    );
+                }
                 if d.replay || d.admin {
                     assert_eq!(before.games, after.games, "{:?} changed a game", d.act);
                 }
@@ -1011,13 +1353,43 @@ impl Fuzz {
         );
         for (id, g) in &after.games {
             self.states_seen.insert(g.state.as_str());
+            let trusted = after.trusted[id];
+            // (9b) the authority never exceeds raw history.
+            assert!(
+                trusted <= g.last_seq.u64(),
+                "trusted_seq above last_seq on {id}"
+            );
             if let Some(b) = before.games.get(id) {
                 if b.state.is_terminal() {
                     assert_eq!(b, g, "terminal game {id} changed"); // (2)
                 }
+                // (9a) raw history never decreases.
                 assert!(g.last_seq >= b.last_seq, "last_seq decreased on {id}");
-                // (9)
+                // (9b) the authority only falls when a key is marked compromised.
+                if !d.compromise && !g.state.is_terminal() {
+                    assert!(
+                        trusted >= before.trusted[id],
+                        "trusted_seq fell on {id} without a compromise ({:?})",
+                        d.act
+                    );
+                }
+                // (15) a started game keeps its resolver; a game starting now
+                // adopts the current global one.
+                match (&b.resolver, &g.resolver) {
+                    (Some(r0), r1) => assert_eq!(Some(r0), r1.as_ref(), "resolver of {id} moved"),
+                    (None, Some(r1)) => assert_eq!(r1, &self.current_resolver),
+                    (None, None) => {}
+                }
             }
+            // (16) consent keys are unique within the game.
+            let mut keys: Vec<&[u8]> = g
+                .seats
+                .iter()
+                .map(|x| x.consent_pubkey.as_slice())
+                .collect();
+            keys.sort();
+            keys.dedup();
+            assert_eq!(keys.len(), g.seats.len(), "shared consent key in game {id}");
             for seat in &g.seats {
                 // (6) one subsidy per deposit, recorded on the seat.
                 assert_eq!(seat.gross_deposit, g.ante_gross);
@@ -1075,6 +1447,7 @@ impl Fuzz {
             let act = self.pick_act();
             let before = self.snap();
             self.view = before.games.clone();
+            self.view_trusted = before.trusted.clone();
             if let Some(d) = self.perform(act) {
                 self.check(&d, &before);
             }
@@ -1082,8 +1455,264 @@ impl Fuzz {
                 self.verify_frozen();
             }
         }
+        self.drain_under_permanent_pause();
         self.verify_frozen();
         self.s.assert_custody();
+    }
+
+    /// Snapshot before a sub-step that is checked on its own.
+    fn begin(&mut self) -> Snap {
+        let before = self.snap();
+        self.view = before.games.clone();
+        self.view_trusted = before.trusted.clone();
+        before
+    }
+
+    /// OD-ESC2-2. Every sub-step is checked on its own.
+    fn emergency_rotation(&mut self) {
+        let admin = self.s.admin.clone();
+        if !self.paused {
+            let before = self.begin();
+            let res = self.exec(&admin, &ExecuteMsg::Pause {}, &[]);
+            self.paused = true;
+            let mut d = Self::done(Act::PauseToggle, None, admin.clone(), res);
+            d.admin = true;
+            self.check(&d, &before);
+        }
+        let active: Vec<u16> = self
+            .signers
+            .iter()
+            .map(|(k, _)| *k)
+            .filter(|k| !self.retired.contains(k))
+            .collect();
+        let victim = self.rng.pick(&active);
+        let before = self.begin();
+        let res = self.exec(
+            &admin,
+            &ExecuteMsg::RetireSignerKey {
+                key_id: victim,
+                compromised: true,
+            },
+            &[],
+        );
+        self.retired.insert(victim);
+        let mut d = Self::done(Act::RotateSigner, None, admin.clone(), res);
+        d.admin = true;
+        d.compromise = true;
+        self.check(&d, &before);
+
+        let key = Key::signer(self.next_signer_label);
+        self.next_signer_label += 1;
+        let before = self.begin();
+        let res = self.exec(
+            &admin,
+            &ExecuteMsg::AddSignerKey {
+                pubkey: key.pubkey.clone(),
+            },
+            &[],
+        );
+        let key_id: u16 = attr(res.as_ref().unwrap(), "key_id").parse().unwrap();
+        self.signers.push((key_id, key));
+        let mut d = Self::done(Act::RotateSigner, None, admin.clone(), res);
+        d.admin = true;
+        self.check(&d, &before);
+
+        // Fresh checkpoints for every IN_PROGRESS game, still paused.
+        let in_progress: Vec<u64> = self
+            .games
+            .iter()
+            .copied()
+            .filter(|id| !self.frozen.contains_key(id))
+            .filter(|id| self.s.game(*id).game.state == GameState::InProgress)
+            .collect();
+        for id in in_progress {
+            let before = self.begin();
+            let g = self.game_of(id);
+            let who = self.any_caller();
+            let (_, payload, signature) = self.honest_checkpoint(id, &g);
+            let msg = ExecuteMsg::Checkpoint {
+                chain_game_id: id,
+                payload: payload.clone(),
+                signature: signature.clone(),
+            };
+            let res = self.exec(&who, &msg, &[]);
+            assert!(
+                res.is_ok(),
+                "emergency checkpoint refused under pause: {res:?}"
+            );
+            self.paused_checkpoints += 1;
+            self.checkpointed.insert(id);
+            self.accepted.push((id, msg));
+            let d = Self::done(Act::Checkpoint, Some(id), who, res);
+            self.check(&d, &before);
+
+            // Checkpoint being allowed does not let Settle through.
+            let before = self.begin();
+            let g = self.game_of(id);
+            let n = g.seats.len();
+            let base = self.view_trusted[&id];
+            let (key_id, key) = self.signers.last().cloned().unwrap();
+            let p = Self::payload_for(&g, KIND_TERMINAL, 1, base / 2 + 1, vec![1; n], key_id);
+            let (payload, signature) = self.s.signed_by(&p, &key);
+            let who = self.any_caller();
+            let res = self.exec(
+                &who,
+                &ExecuteMsg::Settle {
+                    chain_game_id: id,
+                    payload,
+                    signature,
+                    consents: vec![],
+                },
+                &[],
+            );
+            assert!(
+                matches!(res, Err(ContractError::Paused {})),
+                "Settle while paused: {res:?}"
+            );
+            let d = Self::done(Act::Settle, Some(id), who, res);
+            self.check(&d, &before);
+        }
+
+        let before = self.begin();
+        let res = self.exec(&admin, &ExecuteMsg::Unpause {}, &[]);
+        self.paused = false;
+        let mut d = Self::done(Act::PauseToggle, None, admin, res);
+        d.admin = true;
+        self.check(&d, &before);
+        *self.ok.entry(Act::EmergencyRotation).or_default() += 1;
+    }
+
+    /// A checkpoint just above the game's trusted sequence, under an active
+    /// key, with a positive weight vector.
+    fn honest_checkpoint(
+        &mut self,
+        id: u64,
+        g: &Game,
+    ) -> (Payload, SettlementPayloadV1, HexBinary) {
+        let base = self.view_trusted.get(&id).copied().unwrap_or(0);
+        let active: Vec<(u16, Key)> = self
+            .signers
+            .iter()
+            .filter(|(k, _)| !self.retired.contains(k))
+            .cloned()
+            .collect();
+        let (key_id, key) = self.rng.pick(&active);
+        let weights = (0..g.seats.len())
+            .map(|_| 1 + u128::from(self.rng.below(6)))
+            .collect();
+        let p = Self::payload_for(g, KIND_CHECKPOINT, 0, base / 2 + 1, weights, key_id);
+        let (payload, signature) = self.s.signed_by(&p, &key);
+        (p, payload, signature)
+    }
+
+    /// (13) Pause the contract for good, then drive every live game to a
+    /// terminal state with player exits only (Cancel after the deadline and
+    /// LivenessSettle), advancing time. Nothing may stay trapped. On the way,
+    /// an ordinary Checkpoint under pause must be accepted and restart the
+    /// liveness clock (OD-ESC2-2), and a checkpoint carried by LivenessSettle
+    /// under pause must be the one promoted (OD-ESC2-4).
+    fn drain_under_permanent_pause(&mut self) {
+        if !self.paused {
+            let admin = self.s.admin.clone();
+            self.exec(&admin, &ExecuteMsg::Pause {}, &[]).unwrap();
+            self.paused = true;
+        }
+        for round in 0..6 {
+            let live: Vec<u64> = self
+                .games
+                .iter()
+                .copied()
+                .filter(|id| !self.frozen.contains_key(id))
+                .collect();
+            if live.is_empty() {
+                break;
+            }
+            self.s.advance(31 * DAY);
+            for id in live {
+                let before = self.snap();
+                self.view = before.games.clone();
+                self.view_trusted = before.trusted.clone();
+                let g = self.game_of(id);
+                if g.state == GameState::InProgress && round == 0 && self.rng.chance(50) {
+                    // An ordinary checkpoint is accepted under pause and
+                    // restarts the clock: the liveness exit is not open yet.
+                    let who = g.seats[0].wallet.clone();
+                    let (_, payload, signature) = self.honest_checkpoint(id, &g);
+                    let msg = ExecuteMsg::Checkpoint {
+                        chain_game_id: id,
+                        payload,
+                        signature,
+                    };
+                    let res = self.exec(&who, &msg, &[]);
+                    assert!(res.is_ok(), "checkpoint refused under pause: {res:?}");
+                    self.paused_checkpoints += 1;
+                    self.checkpointed.insert(id);
+                    let d = Self::done(Act::Checkpoint, Some(id), who.clone(), res);
+                    self.check(&d, &before);
+                    let before = self.snap();
+                    self.view = before.games.clone();
+                    self.view_trusted = before.trusted.clone();
+                    let res = self.exec(&who, &Suite::liveness_msg(id), &[]);
+                    assert!(
+                        matches!(res, Err(ContractError::LivenessNotReached { .. })),
+                        "an ordinary checkpoint must restart the liveness clock: {res:?}"
+                    );
+                    let d = Self::done(Act::Liveness, Some(id), who, res);
+                    self.check(&d, &before);
+                    continue;
+                }
+                let mut carried: Option<Payload> = None;
+                let (act, who, msg) = match g.state {
+                    GameState::Funding | GameState::Funded => (
+                        Act::Cancel,
+                        self.s.outsider.clone(),
+                        ExecuteMsg::Cancel { chain_game_id: id },
+                    ),
+                    GameState::InProgress if self.rng.chance(50) => {
+                        let (p, payload, signature) = self.honest_checkpoint(id, &g);
+                        carried = Some(p);
+                        (
+                            Act::Liveness,
+                            g.seats[0].wallet.clone(),
+                            ExecuteMsg::LivenessSettle {
+                                chain_game_id: id,
+                                checkpoint: Some(SignedCheckpoint { payload, signature }),
+                            },
+                        )
+                    }
+                    _ => (
+                        Act::Liveness,
+                        g.seats[0].wallet.clone(),
+                        Suite::liveness_msg(id),
+                    ),
+                };
+                let res = self.exec(&who, &msg, &[]);
+                assert!(
+                    res.is_ok(),
+                    "{:?} exit refused under pause: {res:?}",
+                    g.state
+                );
+                if let Some(p) = &carried {
+                    let st = self.s.game(id).game.settlement.unwrap();
+                    assert_eq!(
+                        st.payload.payload_digest.to_vec(),
+                        Suite::settle_digest(p).to_vec(),
+                        "the carried checkpoint is the one promoted"
+                    );
+                    self.carried_ok += 1;
+                }
+                let d = Self::done(act, Some(id), who, res);
+                self.check(&d, &before);
+            }
+        }
+        let live = self
+            .games
+            .iter()
+            .filter(|id| !self.frozen.contains_key(id))
+            .count();
+        assert_eq!(live, 0, "games still live after draining under pause");
+        assert_eq!(self.s.contract_balance(), 0, "funds trapped under pause");
+        assert!(self.s.config().config.paused);
     }
 }
 
@@ -1131,10 +1760,14 @@ fn seeded_random_sequences_preserve_every_invariant() {
     let mut states: BTreeSet<&'static str> = BTreeSet::new();
     let mut routes: BTreeSet<String> = BTreeSet::new();
     let mut games = 0;
+    let mut carried = 0;
+    let mut paused_checkpoints = 0;
     for seed in 0..10u64 {
         let mut f = Fuzz::new(0x18_c0_5e_5e_ed ^ seed.wrapping_mul(0x1000_0001));
         f.run(500);
         games += f.games.len();
+        carried += f.carried_ok;
+        paused_checkpoints += f.paused_checkpoints;
         for (act, n) in &f.ok {
             *ok.entry(*act).or_default() += n;
         }
@@ -1144,7 +1777,18 @@ fn seeded_random_sequences_preserve_every_invariant() {
         states.extend(f.states_seen.iter().copied());
         routes.extend(f.routes_seen.iter().cloned());
     }
-    eprintln!("fuzz: {games} games; accepted {ok:?}; refused {err:?}; routes {routes:?}");
+    eprintln!(
+        "fuzz: {games} games; accepted {ok:?}; refused {err:?}; routes {routes:?}; \
+         carried checkpoints promoted {carried}; checkpoints under pause {paused_checkpoints}"
+    );
+    assert!(
+        carried > 0,
+        "no LivenessSettle ever promoted a carried checkpoint"
+    );
+    assert!(
+        paused_checkpoints > 0,
+        "no checkpoint was ever accepted under pause"
+    );
     // The sequences must actually reach deep states for the checks to mean
     // anything.
     for s in [
@@ -1169,6 +1813,8 @@ fn seeded_random_sequences_preserve_every_invariant() {
         "AnnulByConsent",
         "CreatorCancel",
         "LivenessRefund",
+        "SettleableTimeoutPayout",
+        "ResolverTimeoutPayout",
     ] {
         assert!(
             routes.contains(r),
@@ -1190,6 +1836,10 @@ fn seeded_random_sequences_preserve_every_invariant() {
         Act::Resolve,
         Act::Annul,
         Act::Liveness,
+        Act::ForgeHugeSeq,
+        Act::RotateResolver,
+        Act::Stall,
+        Act::EmergencyRotation,
     ] {
         assert!(
             ok.get(&act).copied().unwrap_or(0) > 0,
@@ -1256,7 +1906,10 @@ fn inv02_a_game_pays_out_at_most_once() {
             seat_index: 0,
             signature: Key::seat(0).sign(&digest),
         },
-        ExecuteMsg::LivenessSettle { chain_game_id: id },
+        ExecuteMsg::LivenessSettle {
+            chain_game_id: id,
+            checkpoint: None,
+        },
         ExecuteMsg::AnnulByConsent {
             chain_game_id: id,
             consents: s.annul_sigs(id, &[0, 1, 2], p.seq),
@@ -1451,8 +2104,15 @@ fn inv07_every_refund_equals_the_net_deposit() {
                 let id = s.started(3);
                 s.advance(14 * DAY);
                 let who = s.players[0].clone();
-                s.exec(&who, &ExecuteMsg::LivenessSettle { chain_game_id: id }, &[])
-                    .unwrap();
+                s.exec(
+                    &who,
+                    &ExecuteMsg::LivenessSettle {
+                        chain_game_id: id,
+                        checkpoint: None,
+                    },
+                    &[],
+                )
+                .unwrap();
                 id
             }),
         ),
@@ -1463,8 +2123,15 @@ fn inv07_every_refund_equals_the_net_deposit() {
                 s.retire_key(1, true);
                 s.advance(30 * DAY);
                 let who = s.players[2].clone();
-                s.exec(&who, &ExecuteMsg::LivenessSettle { chain_game_id: id }, &[])
-                    .unwrap();
+                s.exec(
+                    &who,
+                    &ExecuteMsg::LivenessSettle {
+                        chain_game_id: id,
+                        checkpoint: None,
+                    },
+                    &[],
+                )
+                .unwrap();
                 id
             }),
         ),
@@ -1514,7 +2181,7 @@ fn inv08_a_retired_signer_is_never_accepted() {
 }
 
 #[test]
-fn inv09_last_seq_never_decreases() {
+fn inv09a_raw_last_seq_never_decreases() {
     let mut s = Suite::new();
     let id = s.started(2);
     let mut last = 0;
@@ -1530,30 +2197,96 @@ fn inv09_last_seq_never_decreases() {
         last = seq;
     }
     assert_eq!(last, 42);
-    // Settle and Replace move it forward too, never back.
+    // Settle moves it forward. A resolver correction at the disputed
+    // terminal's own log position is legal (OD-ESC2-3) and leaves it where it
+    // is; one at or behind the trusted checkpoint floor is refused.
     let p = s.settle(id, 1, 21, &[1, 1], &[]);
     assert_eq!(s.last_seq(id), p.seq);
     s.challenge(id, 0);
-    let stale = s.terminal_payload(id, 5, 21, &[1, 1]);
-    assert!(matches!(
+    let behind = s.terminal_payload(id, 5, 20, &[1, 1]);
+    assert_eq!(
         s.resolve(
             id,
             ResolveOutcome::Replace {
-                payload: Suite::wire(&stale)
+                payload: Suite::wire(&behind)
             }
         )
         .unwrap_err(),
-        ContractError::StaleSeq { .. }
-    ));
-    let fresh = s.terminal_payload(id, 5, 22, &[1, 1]);
+        ContractError::StaleSeq {
+            seq: 41,
+            trusted_seq: 42
+        }
+    );
+    let same = s.terminal_payload(id, 5, 21, &[2, 1]);
     s.resolve(
         id,
         ResolveOutcome::Replace {
-            payload: Suite::wire(&fresh),
+            payload: Suite::wire(&same),
         },
     )
     .unwrap();
-    assert_eq!(s.last_seq(id), 45);
+    assert_eq!(s.last_seq(id), 43);
+    // Marking the signer compromised afterwards never rewrites raw history.
+    s.add_key(&Key::signer(2));
+    s.retire_key(1, true);
+    assert_eq!(s.last_seq(id), 43);
+}
+
+#[test]
+fn inv09b_trusted_seq_is_the_authority_and_only_falls_on_compromise() {
+    let mut s = Suite::new();
+    let id = s.started(2);
+    let who = s.outsider.clone();
+    let k2 = Key::signer(2);
+    let leaked = s.add_key(&k2);
+    s.post_checkpoint(id, 10, &[1, 1]);
+    assert_eq!((s.last_seq(id), s.trusted_seq(id)), (20, 20));
+    // A leaked key's far-future checkpoint is accepted while the key is still
+    // trusted, and is the authority while it stays trusted.
+    let huge = u64::MAX / 2 - 1;
+    let (_, forged) = s.signed_checkpoint(id, leaked, &k2, huge, &[0, 1]);
+    s.exec(
+        &who,
+        &ExecuteMsg::Checkpoint {
+            chain_game_id: id,
+            payload: forged.payload,
+            signature: forged.signature,
+        },
+        &[],
+    )
+    .unwrap();
+    assert_eq!((s.last_seq(id), s.trusted_seq(id)), (2 * huge, 2 * huge));
+    let next = s.checkpoint_msg(id, &s.checkpoint_payload(id, 11, &[1, 1]));
+    assert_eq!(
+        s.exec(&who, &next, &[]).unwrap_err(),
+        ContractError::StaleSeq {
+            seq: 22,
+            trusted_seq: 2 * huge
+        }
+    );
+    // Retiring a key without compromise never lowers the authority.
+    s.retire_key(leaked, false);
+    assert_eq!(s.trusted_seq(id), 2 * huge);
+    // Marking it compromised does: the authority falls back to the trusted
+    // evidence while raw history keeps the forged maximum.
+    s.retire_key(leaked, true);
+    assert_eq!((s.last_seq(id), s.trusted_seq(id)), (2 * huge, 20));
+    // Anti-replay among trusted evidence is intact.
+    for stale in [10, 9] {
+        let msg = s.checkpoint_msg(id, &s.checkpoint_payload(id, stale, &[1, 1]));
+        assert_eq!(
+            s.exec(&who, &msg, &[]).unwrap_err(),
+            ContractError::StaleSeq {
+                seq: 2 * stale,
+                trusted_seq: 20
+            }
+        );
+    }
+    // Honest progress resumes and the authority rises again, never above raw
+    // history.
+    s.exec(&who, &next, &[]).unwrap();
+    assert_eq!((s.last_seq(id), s.trusted_seq(id)), (2 * huge, 22));
+    assert!(s.trusted_seq(id) <= s.last_seq(id));
 }
 
 #[test]
@@ -1684,6 +2417,7 @@ fn inv11_neither_admin_nor_creator_can_take_custody() {
         },
         ExecuteMsg::LivenessSettle {
             chain_game_id: started,
+            checkpoint: None,
         },
     ] {
         assert!(s.exec(&creator, &msg, &[]).is_err());
@@ -1766,6 +2500,7 @@ fn inv12_pause_never_disables_a_refund_or_liveness_route() {
         &p1,
         &ExecuteMsg::LivenessSettle {
             chain_game_id: liveness,
+            checkpoint: None,
         },
         &[],
     )
@@ -1774,6 +2509,7 @@ fn inv12_pause_never_disables_a_refund_or_liveness_route() {
         &p0,
         &ExecuteMsg::LivenessSettle {
             chain_game_id: timeout,
+            checkpoint: None,
         },
         &[],
     )
@@ -1792,4 +2528,401 @@ fn inv12_pause_never_disables_a_refund_or_liveness_route() {
     }
     assert_eq!(s.game(withdraw).game.seats.len(), 2);
     s.assert_custody();
+}
+
+#[test]
+fn inv13_a_pause_cannot_permanently_trap_any_live_state() {
+    let mut s = Suite::new();
+    let k2 = Key::signer(2);
+    let k2_id = s.add_key(&k2);
+    let funding = s.create(0, 3, Mode::Live, ANTE);
+    s.join(funding, 1, ANTE);
+    let funded = s.funded(3);
+    let bare = s.started(3);
+    let checkpointed = s.started(3);
+    s.post_checkpoint(checkpointed, 10, &[1, 2, 3]);
+    let carried = s.started(3);
+    let (settleable, _) = s.settleable(3);
+    let (disputed, _) = s.disputed(3);
+    // Two settlements under key 2, which is marked compromised during the
+    // pause: one game has a trusted checkpoint to fall back to, one has none.
+    let fallback = s.started(3);
+    s.post_checkpoint(fallback, 10, &[3, 2, 1]);
+    let orphan = s.started(3);
+    let op = s.operator.clone();
+    for id in [fallback, orphan] {
+        let mut p = s.terminal_payload(id, 1, 20, &[1, 0, 0]);
+        p.signer_key_id = k2_id;
+        let (payload, signature) = s.signed_by(&p, &k2);
+        s.exec(
+            &op,
+            &ExecuteMsg::Settle {
+                chain_game_id: id,
+                payload,
+                signature,
+                consents: vec![],
+            },
+            &[],
+        )
+        .unwrap();
+    }
+    assert!(s.contract_balance() > 0);
+
+    // A pause that is never lifted.
+    s.pause();
+    s.retire_key(k2_id, true);
+    let seat0 = s.players[0].clone();
+    let outsider = s.outsider.clone();
+    s.advance(31 * DAY);
+    // The pause still blocks the paying steps...
+    assert_eq!(
+        s.exec(
+            &outsider,
+            &ExecuteMsg::Finalize {
+                chain_game_id: settleable
+            },
+            &[]
+        )
+        .unwrap_err(),
+        ContractError::Paused {}
+    );
+    // ...but every live state has an exit.
+    for id in [funding, funded] {
+        s.exec(&outsider, &ExecuteMsg::Cancel { chain_game_id: id }, &[])
+            .unwrap();
+    }
+    let signer = s.signer.clone();
+    let (p, cp) = s.signed_checkpoint(carried, 1, &signer, 12, &[2, 2, 1]);
+    s.liveness(carried, 0, Some(cp)).unwrap();
+    assert_eq!(
+        s.game(carried)
+            .game
+            .settlement
+            .unwrap()
+            .payload
+            .payload_digest,
+        HexBinary::from(Suite::settle_digest(&p).as_slice())
+    );
+    for id in [bare, checkpointed, settleable, disputed, fallback, orphan] {
+        s.exec(&seat0, &Suite::liveness_msg(id), &[]).unwrap();
+    }
+    let route = |s: &Suite, id: u64| s.game(id).game.outcome.map(|o| o.route);
+    assert_eq!(route(&s, funding), Some(Route::DeadlineCancel));
+    assert_eq!(route(&s, funded), Some(Route::DeadlineCancel));
+    assert_eq!(route(&s, bare), Some(Route::LivenessRefund));
+    assert_eq!(route(&s, settleable), Some(Route::SettleableTimeoutPayout));
+    assert_eq!(route(&s, disputed), Some(Route::ResolverTimeoutPayout));
+    assert_eq!(route(&s, orphan), Some(Route::SettleableTimeoutRefund));
+    for id in [checkpointed, carried, fallback] {
+        assert_eq!(s.state(id), GameState::Settleable);
+    }
+    // The fallback is the trusted checkpoint, never the compromised terminal.
+    assert_eq!(
+        s.game(fallback)
+            .game
+            .settlement
+            .unwrap()
+            .payload
+            .settlement_weights,
+        vec![Uint128::new(3), Uint128::new(2), Uint128::new(1)]
+    );
+    // Round 2: the promoted settlements time out and pay, still paused.
+    s.advance(31 * DAY);
+    for id in [checkpointed, carried, fallback] {
+        s.exec(&seat0, &Suite::liveness_msg(id), &[]).unwrap();
+        assert_eq!(route(&s, id), Some(Route::SettleableTimeoutPayout));
+    }
+    assert!(s.config().config.paused);
+    assert_eq!(s.contract_balance(), 0, "nothing stays trapped");
+    s.assert_custody();
+}
+
+#[test]
+fn inv14_a_compromised_seq_cannot_permanently_block_trusted_progress() {
+    let mut s = Suite::new();
+    let who = s.outsider.clone();
+    let k2 = Key::signer(2);
+    let leaked = s.add_key(&k2);
+    let huge = u64::MAX / 2 - 1;
+    // Every gate: Checkpoint, Settle, the ANNUL digest, LivenessSettle's
+    // choice, and a resolver Replace after a forged terminal.
+    let [a, b, c, d, e] = [0; 5].map(|_| s.started(2));
+    for id in [a, b, c, d, e] {
+        s.post_checkpoint(id, 10, &[1, 1]);
+    }
+    for id in [a, b, c, d] {
+        let (_, forged) = s.signed_checkpoint(id, leaked, &k2, huge, &[0, 1]);
+        s.exec(
+            &who,
+            &ExecuteMsg::Checkpoint {
+                chain_game_id: id,
+                payload: forged.payload,
+                signature: forged.signature,
+            },
+            &[],
+        )
+        .unwrap();
+    }
+    let mut forged_terminal = s.terminal_payload(e, 1, huge, &[0, 1]);
+    forged_terminal.signer_key_id = leaked;
+    let (payload, signature) = s.signed_by(&forged_terminal, &k2);
+    s.exec(
+        &who,
+        &ExecuteMsg::Settle {
+            chain_game_id: e,
+            payload,
+            signature,
+            consents: vec![],
+        },
+        &[],
+    )
+    .unwrap();
+    s.challenge(e, 0);
+    for id in [a, b, c, d] {
+        assert_eq!(s.trusted_seq(id), 2 * huge);
+    }
+    assert_eq!(s.trusted_seq(e), 2 * huge + 1);
+
+    s.retire_key(leaked, true);
+    for id in [a, b, c, d] {
+        assert_eq!((s.trusted_seq(id), s.last_seq(id)), (20, 2 * huge));
+    }
+    // Checkpoint.
+    s.post_checkpoint(a, 11, &[1, 1]);
+    assert_eq!(s.trusted_seq(a), 22);
+    // Settle, with every consent.
+    s.settle(b, 1, 11, &[2, 1], &[0, 1]);
+    assert_eq!(s.state(b), GameState::Settled);
+    // ANNUL binds the trusted seq; signatures over the raw maximum fail.
+    let raw = ExecuteMsg::AnnulByConsent {
+        chain_game_id: c,
+        consents: s.annul_sigs(c, &[0, 1], 2 * huge),
+    };
+    assert_eq!(
+        s.exec(&who, &raw, &[]).unwrap_err(),
+        ContractError::InvalidConsent { seat_index: 0 }
+    );
+    let trusted = ExecuteMsg::AnnulByConsent {
+        chain_game_id: c,
+        consents: s.annul_sigs(c, &[0, 1], 20),
+    };
+    s.exec(&who, &trusted, &[]).unwrap();
+    assert_eq!(s.state(c), GameState::Annulled);
+    // LivenessSettle promotes the trusted checkpoint, never the forged one.
+    s.advance(14 * DAY);
+    s.liveness(d, 0, None).unwrap();
+    let st = s.game(d).game.settlement.unwrap();
+    assert_eq!((st.payload.seq.u64(), st.payload.signer_key_id), (20, 1));
+    // The resolver corrects far below the forged terminal, just above the
+    // trusted checkpoint floor.
+    let fix = s.terminal_payload(e, 5, 10, &[1, 1]);
+    s.resolve(
+        e,
+        ResolveOutcome::Replace {
+            payload: Suite::wire(&fix),
+        },
+    )
+    .unwrap();
+    assert_eq!(s.state(e), GameState::Settled);
+    assert_eq!(s.last_seq(e), 2 * huge + 1, "raw history is kept");
+    s.assert_custody();
+}
+
+#[test]
+fn inv15_a_resolver_change_cannot_affect_a_started_game() {
+    let mut s = Suite::new();
+    let admin = s.admin.clone();
+    let r_a = s.resolver.clone();
+    let r_b = s.addr("resolver-b");
+    let in_progress = s.started(3);
+    let (settleable, _) = s.settleable(3);
+    let (disputed, _) = s.disputed(3);
+    let later = s.funded(3);
+    s.exec(
+        &admin,
+        &ExecuteMsg::SetResolver {
+            resolver: r_b.to_string(),
+        },
+        &[],
+    )
+    .unwrap();
+    for id in [in_progress, settleable, disputed] {
+        assert_eq!(s.game_resolver(id), Some(r_a.clone()));
+    }
+    assert_eq!(s.game_resolver(later), None);
+    s.start(later);
+    assert_eq!(s.game_resolver(later), Some(r_b.clone()));
+    // A dispute opened before the change and one opened after it both answer
+    // to A only.
+    s.challenge(settleable, 1);
+    let uphold = |id| ExecuteMsg::Resolve {
+        chain_game_id: id,
+        outcome: ResolveOutcome::Uphold {},
+    };
+    for id in [disputed, settleable] {
+        assert_eq!(
+            s.exec(&r_b, &uphold(id), &[]).unwrap_err(),
+            ContractError::Unauthorized {
+                role: "resolver".to_string()
+            }
+        );
+        s.exec(&r_a, &uphold(id), &[]).unwrap();
+    }
+    // The game started after the change answers to B only.
+    s.settle(later, 1, 100, &Suite::ramp(3), &[]);
+    s.challenge(later, 1);
+    assert_eq!(
+        s.exec(&r_a, &uphold(later), &[]).unwrap_err(),
+        ContractError::Unauthorized {
+            role: "resolver".to_string()
+        }
+    );
+    s.exec(&r_b, &uphold(later), &[]).unwrap();
+    // Moving it again (even back) never rewrites a started game's resolver.
+    for next in [r_a.clone(), s.addr("resolver-c")] {
+        s.exec(
+            &admin,
+            &ExecuteMsg::SetResolver {
+                resolver: next.to_string(),
+            },
+            &[],
+        )
+        .unwrap();
+        assert_eq!(s.game_resolver(in_progress), Some(r_a.clone()));
+        assert_eq!(s.game_resolver(later), Some(r_b.clone()));
+    }
+    s.assert_custody();
+}
+
+#[test]
+fn inv16_consent_keys_are_unique_within_a_game() {
+    let mut s = Suite::new();
+    let id = s.create(0, 3, Mode::Live, ANTE);
+    let p1 = s.players[1].clone();
+    let p2 = s.players[2].clone();
+    // Join with seat 0's key is refused; a distinct key is accepted.
+    let dup = ExecuteMsg::Join {
+        chain_game_id: id,
+        consent_pubkey: Key::seat(0).pubkey,
+        join_ticket: ticket(PLAYER_LABELS[1]),
+    };
+    assert_eq!(
+        s.exec(&p1, &dup, &coins(ANTE, DENOM)).unwrap_err(),
+        ContractError::ConsentKeyInUse { seat_index: 0 }
+    );
+    s.join(id, 1, ANTE);
+    s.join(id, 2, ANTE);
+    s.start(id);
+    // Rotation onto another seat's current key is refused; onto one's own
+    // current key it is a no-op; onto a fresh key it is accepted.
+    let set = |key: &Key| ExecuteMsg::SetConsentKey {
+        chain_game_id: id,
+        new_pubkey: key.pubkey.clone(),
+    };
+    assert_eq!(
+        s.exec(&p2, &set(&Key::seat(1)), &[]).unwrap_err(),
+        ContractError::ConsentKeyInUse { seat_index: 1 }
+    );
+    let before = s.game(id).game;
+    s.exec(&p2, &set(&Key::seat(2)), &[]).unwrap();
+    assert_eq!(s.game(id).game, before);
+    let fresh = Key::from_label("18JUNO/TEST/inv16/fresh");
+    s.exec(&p2, &set(&fresh), &[]).unwrap();
+    // Seat 2's old key is free again, and seat 1 may take it.
+    s.exec(&p1, &set(&Key::seat(2)), &[]).unwrap();
+    let keys: Vec<HexBinary> = s
+        .game(id)
+        .game
+        .seats
+        .iter()
+        .map(|x| x.consent_pubkey.clone())
+        .collect();
+    assert_eq!(
+        keys,
+        vec![
+            Key::seat(0).pubkey,
+            Key::seat(2).pubkey,
+            fresh.pubkey.clone()
+        ]
+    );
+    // N-of-N needs N distinct keys: one key cannot fill two seats.
+    let p = s.terminal_payload(id, 1, 10, &[1, 1, 1]);
+    let digest = s.consent_digest(id, &p);
+    let (payload, signature) = s.signed(&p);
+    let one_key: Vec<SeatSignature> = (0..3u8)
+        .map(|seat| SeatSignature {
+            seat_index: seat,
+            signature: Key::seat(0).sign(&digest),
+        })
+        .collect();
+    let who = s.outsider.clone();
+    assert_eq!(
+        s.exec(
+            &who,
+            &ExecuteMsg::Settle {
+                chain_game_id: id,
+                payload: payload.clone(),
+                signature: signature.clone(),
+                consents: one_key,
+            },
+            &[],
+        )
+        .unwrap_err(),
+        ContractError::InvalidConsent { seat_index: 1 }
+    );
+    let all = vec![
+        SeatSignature {
+            seat_index: 0,
+            signature: Key::seat(0).sign(&digest),
+        },
+        SeatSignature {
+            seat_index: 1,
+            signature: Key::seat(2).sign(&digest),
+        },
+        SeatSignature {
+            seat_index: 2,
+            signature: fresh.sign(&digest),
+        },
+    ];
+    s.exec(
+        &who,
+        &ExecuteMsg::Settle {
+            chain_game_id: id,
+            payload,
+            signature,
+            consents: all,
+        },
+        &[],
+    )
+    .unwrap();
+    assert_eq!(s.state(id), GameState::Settled);
+
+    // Across a rotation: a key that consented for seat 0 and then moved to
+    // seat 1 still fills one seat only, because seat 0's rotation withdrew its
+    // consent.
+    let id = s.started(3);
+    let p = s.settle(id, 1, 10, &[1, 1, 1], &[0]);
+    let digest = s.consent_digest(id, &p);
+    let (p0, p1) = (s.players[0].clone(), s.players[1].clone());
+    let moved = Key::from_label("18JUNO/TEST/inv16/moved");
+    s.exec(&p0, &set_key(id, &moved), &[]).unwrap();
+    s.exec(&p1, &set_key(id, &Key::seat(0)), &[]).unwrap();
+    s.exec(
+        &who,
+        &ExecuteMsg::Consent {
+            chain_game_id: id,
+            seat_index: 1,
+            signature: Key::seat(0).sign(&digest),
+        },
+        &[],
+    )
+    .unwrap();
+    assert_eq!(s.game(id).game.consent_bitmap, 0b010);
+}
+
+fn set_key(id: u64, key: &Key) -> ExecuteMsg {
+    ExecuteMsg::SetConsentKey {
+        chain_game_id: id,
+        new_pubkey: key.pubkey.clone(),
+    }
 }

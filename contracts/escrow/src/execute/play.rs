@@ -1,6 +1,8 @@
 //! START and the signed-payload path: Checkpoint, Settle, Consent, Finalize.
 
-use cosmwasm_std::{Deps, DepsMut, Env, HexBinary, MessageInfo, Response, Uint128, Uint64};
+use cosmwasm_std::{
+    Deps, DepsMut, Env, HexBinary, MessageInfo, Response, Storage, Timestamp, Uint128, Uint64,
+};
 
 use crate::crypto::{
     roster_hash, settle_digest, settlement_domain, verify_settlement_signature, DomainInputs,
@@ -9,18 +11,19 @@ use crate::error::ContractError;
 use crate::helpers::{
     active_signer_key, add_secs, check_payload_for_game, full_mask, load_game, nonpayable, pay_out,
     payload_record, require_not_paused, require_state, save_game, seat_bit, stored_consent_digest,
-    verify_seat_signatures,
+    trusted_seq, verify_seat_signatures,
 };
 use crate::msg::{SeatSignature, SettlementPayloadV1};
 use crate::payload::{fixed_bytes, Payload, PayloadUse};
 use crate::payout::bond_amount;
 use crate::state::{
-    CheckpointRecord, GameState, PayloadRecord, Route, SettlementRecord, SettlementSource,
+    CheckpointRecord, Game, GameState, PayloadRecord, Route, SettlementRecord, SettlementSource,
     CHECKPOINTS, CONFIG,
 };
 
 /// Operator only, FUNDED, not paused. The operator's roster hash must equal the
-/// hash of the on-chain roster; the domain, bond and start times are frozen.
+/// hash of the on-chain roster; the domain, bond, start times and the game's
+/// resolver (the current `CONFIG.resolver`) are frozen.
 pub fn start(
     deps: DepsMut,
     env: Env,
@@ -60,6 +63,7 @@ pub fn start(
     game.roster_hash = Some(HexBinary::from(computed.as_slice()));
     game.domain = Some(HexBinary::from(domain.as_slice()));
     game.bond = Some(bond);
+    game.resolver = Some(config.resolver.clone());
     game.started_at = Some(now);
     game.last_activity = Some(now);
     game.state = GameState::InProgress;
@@ -70,21 +74,25 @@ pub fn start(
         .add_attribute("roster_hash", HexBinary::from(computed.as_slice()).to_hex())
         .add_attribute("domain", HexBinary::from(domain.as_slice()).to_hex())
         .add_attribute("bond", bond)
+        .add_attribute("resolver", config.resolver.as_str())
         .add_attribute("pool", game.pool)
         .add_attribute("state", game.state.as_str()))
 }
 
-/// Converts, validates against the game and verifies the settlement signature.
-/// Returns the payload and its SETTLE digest.
-fn accept_signed_payload(
+/// Converts, validates against the game (including `seq > trusted_seq`) and
+/// verifies the settlement signature under an active signer key. Returns the
+/// payload and its SETTLE digest. Used by Checkpoint, Settle and the checkpoint
+/// a `LivenessSettle` may carry, so all three validate identically.
+pub(crate) fn accept_signed_payload(
     deps: Deps,
-    game: &crate::state::Game,
+    game: &Game,
     wire: &SettlementPayloadV1,
     signature: &HexBinary,
     usage: PayloadUse,
 ) -> Result<(Payload, [u8; 32]), ContractError> {
     let payload = Payload::try_from(wire)?;
-    check_payload_for_game(game, &payload, usage)?;
+    let floor = trusted_seq(deps.storage, game)?;
+    check_payload_for_game(game, &payload, usage, floor)?;
     let key = active_signer_key(deps.storage, payload.signer_key_id)?;
     let digest = settle_digest(&payload.encode()?);
     verify_settlement_signature(
@@ -96,8 +104,32 @@ fn accept_signed_payload(
     Ok((payload, digest))
 }
 
-/// Anyone may post a validly signed Checkpoint while IN_PROGRESS and not paused.
-/// It supersedes older checkpoints by seq and refreshes `last_activity`.
+/// Stores an accepted checkpoint as the newest one of its signer key and raises
+/// the raw `last_seq` history. Does not touch `last_activity`.
+pub(crate) fn store_checkpoint(
+    storage: &mut dyn Storage,
+    game: &mut Game,
+    payload: &Payload,
+    digest: &[u8; 32],
+    now: Timestamp,
+) -> Result<(), ContractError> {
+    let record = CheckpointRecord {
+        payload: payload_record(payload, digest),
+        accepted_at: now,
+    };
+    CHECKPOINTS.save(
+        storage,
+        (game.chain_game_id, payload.signer_key_id),
+        &record,
+    )?;
+    game.last_seq = game.last_seq.max(Uint64::new(payload.seq));
+    Ok(())
+}
+
+/// Anyone may post a validly signed Checkpoint while IN_PROGRESS. It works while
+/// paused (OD-ESC2-1/2: it moves no funds, and the emergency key rotation
+/// re-posts a fresh checkpoint before unpausing). It supersedes older
+/// checkpoints of its key and refreshes `last_activity`.
 pub fn checkpoint(
     deps: DepsMut,
     env: Env,
@@ -107,10 +139,8 @@ pub fn checkpoint(
     signature: HexBinary,
 ) -> Result<Response, ContractError> {
     nonpayable(&info)?;
-    let config = CONFIG.load(deps.storage)?;
     let mut game = load_game(deps.storage, chain_game_id)?;
     require_state(&game, &[GameState::InProgress])?;
-    require_not_paused(&config)?;
     let (payload, digest) = accept_signed_payload(
         deps.as_ref(),
         &game,
@@ -119,16 +149,7 @@ pub fn checkpoint(
         PayloadUse::Checkpoint,
     )?;
     let now = env.block.time;
-    let record = CheckpointRecord {
-        payload: payload_record(&payload, &digest),
-        accepted_at: now,
-    };
-    CHECKPOINTS.save(
-        deps.storage,
-        (chain_game_id, payload.signer_key_id),
-        &record,
-    )?;
-    game.last_seq = Uint64::new(payload.seq);
+    store_checkpoint(deps.storage, &mut game, &payload, &digest, now)?;
     game.last_activity = Some(now);
     save_game(deps.storage, &game)?;
     Ok(Response::new()
@@ -144,7 +165,8 @@ pub fn checkpoint(
 }
 
 /// Anyone may post a validly signed Terminal payload while IN_PROGRESS and not
-/// paused. Every supplied consent must verify against the seat's current key;
+/// paused (Settle stays blocked by pause). Its seq must exceed the trusted
+/// sequence. Every supplied consent must verify against the seat's current key;
 /// if every seat consented the game settles now, otherwise the settlement is
 /// stored and the challenge window starts.
 pub fn settle(
@@ -176,7 +198,7 @@ pub fn settle(
         accepted_at: now,
         window_end: add_secs(now, game.terms.challenge_window_secs)?,
     });
-    game.last_seq = Uint64::new(payload.seq);
+    game.last_seq = game.last_seq.max(Uint64::new(payload.seq));
     game.consent_bitmap = mask;
 
     let mut response = Response::new()

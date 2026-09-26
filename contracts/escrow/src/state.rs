@@ -20,7 +20,8 @@ pub struct Config {
     pub admin: Addr,
     /// The only address that may `Start` a funded game.
     pub operator: Addr,
-    /// The only address that may `Resolve` a disputed game.
+    /// The resolver a game adopts at `Start`. `SetResolver` therefore only
+    /// changes the adjudicator of games started afterwards.
     pub resolver: Addr,
     /// Receives deposit subsidies and payout dust (snapshotted into each game).
     pub treasury: Addr,
@@ -164,7 +165,8 @@ pub struct PayloadRecord {
 }
 
 /// A checkpoint the contract accepted. The latest one per signer key is kept, so
-/// `LivenessSettle` can fall back past a key retired as compromised.
+/// `LivenessSettle` can fall back past a key retired as compromised and the
+/// trusted sequence floor can ignore a compromised key's evidence.
 #[cw_serde]
 pub struct CheckpointRecord {
     pub payload: PayloadRecord,
@@ -234,6 +236,11 @@ pub enum Route {
     DeadlineCancel,
     /// IN_PROGRESS + liveness window, no usable checkpoint: refund.
     LivenessRefund,
+    /// SETTLEABLE + `window_end` + liveness window, stored settlement paid.
+    SettleableTimeoutPayout,
+    /// SETTLEABLE + `window_end` + liveness window, the stored settlement's key
+    /// is compromised and no usable checkpoint exists: refund.
+    SettleableTimeoutRefund,
 }
 
 /// The terminal money movement of a game.
@@ -280,14 +287,22 @@ pub struct Game {
     pub roster_hash: Option<HexBinary>,
     pub domain: Option<HexBinary>,
     pub bond: Option<Uint128>,
+    /// `CONFIG.resolver` at `Start`: the only address that may `Resolve` this
+    /// game, whatever `SetResolver` does later.
+    pub resolver: Option<Addr>,
     pub started_at: Option<Timestamp>,
-    /// Block time of the last `Start` or accepted `Checkpoint`.
+    /// Block time of the last `Start` or accepted ordinary `Checkpoint` (a
+    /// checkpoint carried by `LivenessSettle` does not refresh it).
     pub last_activity: Option<Timestamp>,
     // ---- signed-payload bookkeeping ----
-    /// Highest accepted payload seq; never decreases.
+    /// Raw history: the highest seq of any payload ever accepted for this game.
+    /// Never decreases. Kept for audit only: it is NOT an authority gate, because
+    /// evidence signed by a key later marked compromised loses its sequence
+    /// authority (see `helpers::trusted_seq`).
     pub last_seq: Uint64,
     pub settlement: Option<SettlementRecord>,
-    /// Bit i set = seat i's consent to the stored settlement verified.
+    /// Bit i set = seat i's consent to the stored settlement verified against
+    /// seat i's current consent key (rotating that key clears the bit).
     pub consent_bitmap: u8,
     pub dispute: Option<DisputeRecord>,
     pub outcome: Option<Outcome>,
@@ -303,7 +318,8 @@ pub struct SignerKey {
     /// `issued_at`.
     pub retired_at: Option<Timestamp>,
     /// Retired as compromised: its stored checkpoints and settlements are not
-    /// usable by `LivenessSettle`. Never cleared.
+    /// usable by `LivenessSettle` and lose their sequence authority (they no
+    /// longer raise the trusted floor). Never cleared.
     pub compromised: bool,
 }
 

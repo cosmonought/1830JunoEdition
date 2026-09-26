@@ -6,7 +6,7 @@ mod common;
 use common::*;
 use cosmwasm_std::{coins, Addr, HexBinary, Uint128, Uint64};
 use cw_multi_test::AppResponse;
-use eighteen_cosmos_escrow::msg::{ExecuteMsg, ResolveOutcome};
+use eighteen_cosmos_escrow::msg::{ExecuteMsg, ResolveOutcome, SignedCheckpoint};
 use eighteen_cosmos_escrow::payload::{Payload, REASON_RESOLVER_CORRECTION};
 use eighteen_cosmos_escrow::state::{DisputeResolution, GameState, Mode, Route, SettlementSource};
 use eighteen_cosmos_escrow::ContractError;
@@ -16,7 +16,14 @@ const RESOLVER_TIMEOUT: u64 = 30 * DAY;
 
 fn liveness(s: &mut Suite, id: u64, seat: usize) -> Result<AppResponse, ContractError> {
     let who = s.players[seat].clone();
-    s.exec(&who, &ExecuteMsg::LivenessSettle { chain_game_id: id }, &[])
+    s.exec(
+        &who,
+        &ExecuteMsg::LivenessSettle {
+            chain_game_id: id,
+            checkpoint: None,
+        },
+        &[],
+    )
 }
 
 fn post_checkpoint_by(
@@ -211,8 +218,15 @@ fn works_while_paused_and_only_for_seated_wallets() {
         s.players[4].clone(),
     ] {
         assert_eq!(
-            s.exec(&who, &ExecuteMsg::LivenessSettle { chain_game_id: id }, &[])
-                .unwrap_err(),
+            s.exec(
+                &who,
+                &ExecuteMsg::LivenessSettle {
+                    chain_game_id: id,
+                    checkpoint: None
+                },
+                &[]
+            )
+            .unwrap_err(),
             ContractError::NotSeated { chain_game_id: id }
         );
     }
@@ -220,7 +234,10 @@ fn works_while_paused_and_only_for_seated_wallets() {
     assert_eq!(
         s.exec(
             &alice,
-            &ExecuteMsg::LivenessSettle { chain_game_id: id },
+            &ExecuteMsg::LivenessSettle {
+                chain_game_id: id,
+                checkpoint: None
+            },
             &coins(1, DENOM)
         )
         .unwrap_err(),
@@ -295,13 +312,14 @@ fn a_planned_retirement_keeps_its_checkpoints_usable() {
 }
 
 #[test]
-fn a_forged_huge_seq_checkpoint_blocks_new_posts_until_liveness_recovers() {
+fn a_forged_huge_seq_checkpoint_loses_authority_once_its_key_is_compromised() {
+    // OD-ESC2-3: compromised signer evidence loses sequence authority.
     let mut s = Suite::new();
     let id = s.started(2);
     let key1 = Key::signer(1);
     let key2 = Key::signer(2);
     s.add_key(&key2);
-    let honest = post_checkpoint_by(&mut s, id, 2, &key2, 40, &[1, 1]);
+    post_checkpoint_by(&mut s, id, 2, &key2, 40, &[1, 1]);
     // Key 1 leaks and posts the largest representable checkpoint.
     let mut forged = s.checkpoint_payload(id, u64::MAX / 2, &[1, 0]);
     forged.signer_key_id = 1;
@@ -318,39 +336,56 @@ fn a_forged_huge_seq_checkpoint_blocks_new_posts_until_liveness_recovers() {
     )
     .unwrap();
     assert_eq!(s.last_seq(id), u64::MAX - 1);
-    s.retire_key(1, true);
-    // The honest key can no longer post (seq is monotone) ...
-    let mut next = s.checkpoint_payload(id, 60, &[2, 1]);
-    next.signer_key_id = 2;
-    let (payload, signature) = s.signed_by(&next, &key2);
-    assert_eq!(
-        s.exec(
-            &who,
-            &ExecuteMsg::Checkpoint {
+    assert_eq!(s.trusted_seq(id), u64::MAX - 1);
+    let next = |s: &Suite| {
+        let mut p = s.checkpoint_payload(id, 60, &[2, 1]);
+        p.signer_key_id = 2;
+        let (payload, signature) = s.signed_by(&p, &Key::signer(2));
+        (
+            p,
+            ExecuteMsg::Checkpoint {
                 chain_game_id: id,
                 payload,
                 signature,
             },
-            &[],
         )
-        .unwrap_err(),
+    };
+    // Until the key is marked compromised, the forgery keeps its authority.
+    let (_, msg) = next(&s);
+    assert_eq!(
+        s.exec(&who, &msg, &[]).unwrap_err(),
         ContractError::StaleSeq {
             seq: 120,
-            last_seq: u64::MAX - 1
+            trusted_seq: u64::MAX - 1
         }
     );
-    // ... but liveness recovers the last honest boundary, not the forgery.
+    // Once it is, the floor falls back to the honest evidence ...
+    s.retire_key(1, true);
+    assert_eq!(s.trusted_seq(id), 80);
+    assert_eq!(
+        s.last_seq(id),
+        u64::MAX - 1,
+        "raw history is kept for audit"
+    );
+    // ... and the honest key resumes forward progress.
+    let (honest_next, msg) = next(&s);
+    s.exec(&who, &msg, &[]).unwrap();
+    assert_eq!(s.trusted_seq(id), 120);
+    // Liveness uses the newest honest boundary, never the forgery.
     s.advance(LIVENESS);
     liveness(&mut s, id, 1).unwrap();
     let st = s.game(id).game.settlement.unwrap();
     assert_eq!(
         st.payload.payload_digest.to_vec(),
-        Suite::settle_digest(&honest).to_vec()
+        Suite::settle_digest(&honest_next).to_vec()
     );
     s.advance(DAY);
     finalize(&mut s, id);
     let o = s.game(id).game.outcome.unwrap();
-    assert_eq!(o.amounts, vec![Uint128::new(NET), Uint128::new(NET)]);
+    assert_eq!(
+        o.amounts,
+        vec![Uint128::new(2_600_000), Uint128::new(1_300_000)]
+    );
 }
 
 #[test]
@@ -422,11 +457,10 @@ fn a_liveness_settlement_can_be_challenged_resolved_or_annulled() {
 }
 
 #[test]
-fn liveness_needs_in_progress_or_disputed() {
+fn liveness_needs_in_progress_settleable_or_disputed() {
     let mut s = Suite::new();
     let funding = s.create(0, 3, Mode::Live, ANTE);
     let funded = s.funded(2);
-    let (settleable, _) = s.settleable(2);
     let settled = s.settled(2);
     let cancelled = s.cancelled(2);
     let annulled = s.annulled(2);
@@ -434,7 +468,6 @@ fn liveness_needs_in_progress_or_disputed() {
     for (id, actual) in [
         (funding, "funding"),
         (funded, "funded"),
-        (settleable, "settleable"),
         (settled, "settled"),
         (cancelled, "cancelled"),
         (annulled, "annulled"),
@@ -442,7 +475,7 @@ fn liveness_needs_in_progress_or_disputed() {
         assert_eq!(
             liveness(&mut s, id, 0).unwrap_err(),
             ContractError::WrongState {
-                expected: "in_progress or disputed".to_string(),
+                expected: "in_progress or settleable or disputed".to_string(),
                 actual: actual.to_string()
             }
         );
@@ -503,8 +536,15 @@ fn resolver_timeout_works_while_paused_for_any_seat() {
     s.advance(RESOLVER_TIMEOUT);
     let who = s.outsider.clone();
     assert_eq!(
-        s.exec(&who, &ExecuteMsg::LivenessSettle { chain_game_id: id }, &[])
-            .unwrap_err(),
+        s.exec(
+            &who,
+            &ExecuteMsg::LivenessSettle {
+                chain_game_id: id,
+                checkpoint: None
+            },
+            &[]
+        )
+        .unwrap_err(),
         ContractError::NotSeated { chain_game_id: id }
     );
     liveness(&mut s, id, 2).unwrap();
@@ -654,4 +694,386 @@ fn liveness_with_every_registry_slot_holding_a_checkpoint() {
         st.payload.payload_digest.to_vec(),
         Suite::settle_digest(&best.unwrap()).to_vec()
     );
+}
+
+// -------------------------------------------------------------- SETTLEABLE
+
+/// How the stored settlement relates to the signer registry at the deadline.
+#[derive(Clone, Copy, Debug)]
+enum Signer {
+    Trusted,
+    CompromisedWithCheckpoint,
+    CompromisedNoCheckpoint,
+}
+
+/// A SETTLEABLE game whose settlement was signed by key 1, seat 0 already
+/// consented. With a checkpoint, key 2 posted one at log 50 first.
+fn settleable_game(s: &mut Suite, with_checkpoint: bool) -> (u64, Option<Payload>) {
+    let id = s.started(3);
+    let cp = if with_checkpoint {
+        let key2 = Key::signer(2);
+        if s.config().next_signer_key_id == 2 {
+            s.add_key(&key2);
+        }
+        Some(post_checkpoint_by(s, id, 2, &key2, 50, &[1, 1, 2]))
+    } else {
+        None
+    };
+    s.settle(id, 1, 100, &[1, 2, 3], &[0]);
+    (id, cp)
+}
+
+#[test]
+fn settleable_liveness_deadline_for_every_signer_case_paused_and_unpaused() {
+    // OD-ESC2-1: now >= window_end + liveness_window, while paused or not.
+    for signer in [
+        Signer::Trusted,
+        Signer::CompromisedWithCheckpoint,
+        Signer::CompromisedNoCheckpoint,
+    ] {
+        for paused in [false, true] {
+            let case = format!("{signer:?} paused={paused}");
+            let mut s = Suite::new();
+            let with_cp = matches!(signer, Signer::CompromisedWithCheckpoint);
+            let (id, cp) = settleable_game(&mut s, with_cp);
+            let window_end = s.game(id).game.settlement.unwrap().window_end;
+            let at = window_end.plus_seconds(LIVENESS);
+            assert_eq!(
+                s.game(id).deadlines.liveness_available_at,
+                Some(at),
+                "{case}"
+            );
+            if !matches!(signer, Signer::Trusted) {
+                s.retire_key(1, true);
+            }
+            if paused {
+                s.pause();
+            }
+            s.advance(DAY + LIVENESS - 1);
+            assert_eq!(
+                liveness(&mut s, id, 2).unwrap_err(),
+                ContractError::LivenessNotReached { at },
+                "{case}: one second early"
+            );
+            s.advance(1);
+            assert_eq!(s.now(), at);
+            let (d, dust, res) = deltas(&mut s, 3, |s| liveness(s, id, 2).unwrap());
+            let g = s.game(id).game;
+            match signer {
+                Signer::Trusted => {
+                    assert_eq!(attr(&res, "path"), "settleable_timeout_payout", "{case}");
+                    assert_eq!(g.state, GameState::Settled);
+                    assert_eq!(g.outcome.unwrap().route, Route::SettleableTimeoutPayout);
+                    let expected = split(3 * NET, &[1, 2, 3]);
+                    assert_eq!(d, expected, "{case}");
+                    assert_eq!(dust, 3 * NET - expected.iter().sum::<u128>());
+                }
+                Signer::CompromisedWithCheckpoint => {
+                    assert_eq!(attr(&res, "path"), "settleable_timeout_checkpoint");
+                    assert!(bank_sends(&res).is_empty(), "{case}: nothing paid");
+                    assert_eq!(g.state, GameState::Settleable);
+                    assert_eq!(g.consent_bitmap, 0, "{case}: consents reset");
+                    let st = g.settlement.unwrap();
+                    assert_eq!(st.source, SettlementSource::LivenessCheckpoint);
+                    assert_eq!(
+                        st.payload.payload_digest.to_vec(),
+                        Suite::settle_digest(cp.as_ref().unwrap()).to_vec()
+                    );
+                    assert_eq!(st.window_end, at.plus_seconds(DAY), "{case}: fresh window");
+                    // Still paused or not, the fallback settlement exits too.
+                    s.advance(DAY + LIVENESS);
+                    let (d, _, res) = deltas(&mut s, 3, |s| liveness(s, id, 0).unwrap());
+                    assert_eq!(attr(&res, "path"), "settleable_timeout_payout");
+                    assert_eq!(d, split(3 * NET, &[1, 1, 2]), "{case}");
+                }
+                Signer::CompromisedNoCheckpoint => {
+                    assert_eq!(attr(&res, "path"), "settleable_timeout_refund");
+                    assert_eq!(g.state, GameState::Cancelled);
+                    assert_eq!(g.outcome.unwrap().route, Route::SettleableTimeoutRefund);
+                    assert_eq!(d, vec![NET, NET, NET], "{case}");
+                    assert_eq!(dust, 0);
+                }
+            }
+            assert!(
+                s.game(id).game.state != GameState::Settleable
+                    || matches!(signer, Signer::CompromisedWithCheckpoint)
+            );
+            assert_eq!(s.contract_balance(), 0, "{case}: nothing trapped");
+            s.assert_custody();
+        }
+    }
+}
+
+#[test]
+fn a_permanent_pause_cannot_trap_a_settleable_game() {
+    // The ESCROW-2 open decision: Finalize and Consent are paused, the window
+    // is closed, and the admin never unpauses.
+    let mut s = Suite::new();
+    let (id, _) = s.settleable(3);
+    s.pause();
+    s.advance(DAY);
+    let who = s.outsider.clone();
+    assert_eq!(
+        s.exec(&who, &ExecuteMsg::Finalize { chain_game_id: id }, &[])
+            .unwrap_err(),
+        ContractError::Paused {}
+    );
+    s.advance(LIVENESS);
+    liveness(&mut s, id, 1).unwrap();
+    assert_eq!(s.state(id), GameState::Settled);
+    assert!(s.config().config.paused);
+    assert_eq!(s.contract_balance(), 0);
+}
+
+#[test]
+fn settleable_liveness_is_for_seated_wallets_and_takes_no_funds() {
+    let mut s = Suite::new();
+    let (id, _) = s.settleable(2);
+    s.advance(DAY + LIVENESS);
+    for who in [
+        s.admin.clone(),
+        s.operator.clone(),
+        s.resolver.clone(),
+        s.outsider.clone(),
+    ] {
+        assert_eq!(
+            s.exec(&who, &Suite::liveness_msg(id), &[]).unwrap_err(),
+            ContractError::NotSeated { chain_game_id: id }
+        );
+    }
+    let alice = s.players[1].clone();
+    assert_eq!(
+        s.exec(&alice, &Suite::liveness_msg(id), &coins(1, DENOM))
+            .unwrap_err(),
+        ContractError::NonPayable {}
+    );
+    liveness(&mut s, id, 1).unwrap();
+    assert_eq!(s.state(id), GameState::Settled);
+}
+
+#[test]
+fn a_liveness_checkpoint_settlement_has_the_settleable_exit_too() {
+    let mut s = Suite::new();
+    let id = s.started(2);
+    s.post_checkpoint(id, 10, &[1, 3]);
+    s.advance(LIVENESS);
+    liveness(&mut s, id, 0).unwrap();
+    let window_end = s.game(id).game.settlement.unwrap().window_end;
+    s.pause();
+    s.advance(DAY + LIVENESS - 1);
+    assert_eq!(
+        liveness(&mut s, id, 0).unwrap_err(),
+        ContractError::LivenessNotReached {
+            at: window_end.plus_seconds(LIVENESS)
+        }
+    );
+    s.advance(1);
+    liveness(&mut s, id, 0).unwrap();
+    assert_eq!(
+        s.game(id).game.outcome.unwrap().amounts,
+        vec![Uint128::new(975_000), Uint128::new(2_925_000)]
+    );
+}
+
+// ------------------------------------------ LivenessSettle + checkpoint (OD-ESC2-4)
+
+#[test]
+fn a_carried_checkpoint_is_promoted_without_restarting_the_clock() {
+    let mut s = Suite::new();
+    let id = s.started(3);
+    s.post_checkpoint(id, 10, &[1, 1, 1]);
+    let activity = s.game(id).game.last_activity;
+    s.advance(LIVENESS);
+    let t = s.now();
+    let (newer, carried) = s.signed_checkpoint(id, 1, &Key::signer(1), 20, &[5, 1, 1]);
+    let res = s.liveness(id, 2, Some(carried)).unwrap();
+    assert_eq!(attr(&res, "path"), "checkpoint");
+    assert_eq!(attr(&res, "supplied_checkpoint_seq"), "40");
+    let g = s.game(id);
+    assert_eq!(g.game.state, GameState::Settleable);
+    assert_eq!(
+        g.game.last_activity, activity,
+        "the liveness clock was not restarted"
+    );
+    assert_eq!(g.game.last_seq.u64(), 40);
+    assert_eq!(g.trusted_seq.u64(), 40);
+    // The newer checkpoint is the one used ...
+    let st = g.game.settlement.unwrap();
+    assert_eq!(st.source, SettlementSource::LivenessCheckpoint);
+    assert_eq!(
+        st.payload.payload_digest.to_vec(),
+        Suite::settle_digest(&newer).to_vec()
+    );
+    assert_eq!(st.window_end, t.plus_seconds(DAY), "normal fresh window");
+    // ... and it is stored like any accepted checkpoint.
+    let cps = s.checkpoints(id);
+    assert_eq!(cps.checkpoints.len(), 1);
+    assert_eq!(cps.checkpoints[0].checkpoint.payload.seq.u64(), 40);
+    assert_eq!(cps.checkpoints[0].checkpoint.accepted_at, t);
+    s.assert_custody();
+}
+
+#[test]
+fn an_ordinary_checkpoint_restarts_the_clock_where_a_carried_one_does_not() {
+    // Same evidence, two routes: posted on its own it refreshes last_activity
+    // and liveness moves 14 days away; carried by an eligible LivenessSettle it
+    // is promoted at once.
+    let mut s = Suite::new();
+    let a = s.started(2);
+    let b = s.started(2);
+    s.advance(LIVENESS);
+    let (_, carried_a) = s.signed_checkpoint(a, 1, &Key::signer(1), 20, &[1, 1]);
+    let (_, carried_b) = s.signed_checkpoint(b, 1, &Key::signer(1), 20, &[1, 1]);
+    let who = s.outsider.clone();
+    s.exec(
+        &who,
+        &ExecuteMsg::Checkpoint {
+            chain_game_id: a,
+            payload: carried_a.payload,
+            signature: carried_a.signature,
+        },
+        &[],
+    )
+    .unwrap();
+    assert_eq!(
+        liveness(&mut s, a, 0).unwrap_err(),
+        ContractError::LivenessNotReached {
+            at: s.now().plus_seconds(LIVENESS)
+        }
+    );
+    s.liveness(b, 0, Some(carried_b)).unwrap();
+    assert_eq!(s.state(b), GameState::Settleable);
+    assert_eq!(s.state(a), GameState::InProgress);
+}
+
+#[test]
+fn eligibility_is_decided_before_a_carried_checkpoint_and_nothing_is_written() {
+    let mut s = Suite::new();
+    let id = s.started(2);
+    let at = s.now().plus_seconds(LIVENESS);
+    s.advance(LIVENESS - 1);
+    let (_, carried) = s.signed_checkpoint(id, 1, &Key::signer(1), 20, &[1, 1]);
+    assert_eq!(
+        s.liveness(id, 0, Some(carried.clone())).unwrap_err(),
+        ContractError::LivenessNotReached { at }
+    );
+    let g = s.game(id).game;
+    assert_eq!(g.state, GameState::InProgress);
+    assert_eq!(g.last_seq.u64(), 0);
+    assert!(s.checkpoints(id).checkpoints.is_empty(), "no partial write");
+    // The very same checkpoint is accepted once the window has passed.
+    s.advance(1);
+    s.liveness(id, 0, Some(carried)).unwrap();
+    assert_eq!(s.state(id), GameState::Settleable);
+}
+
+#[test]
+fn a_bad_carried_checkpoint_fails_the_whole_transaction() {
+    let mut s = Suite::new();
+    let id = s.started(2);
+    let other = s.started(2);
+    s.post_checkpoint(id, 10, &[1, 1]);
+    s.add_key(&Key::signer(2));
+    s.retire_key(1, false);
+    s.advance(LIVENESS);
+    let before = s.game(id).game;
+    let key2 = Key::signer(2);
+    let good = |s: &Suite| s.signed_checkpoint(id, 2, &key2, 20, &[1, 1]).1;
+    let mut cases: Vec<(SignedCheckpoint, ContractError)> = Vec::new();
+    let mut bad_sig = good(&s);
+    bad_sig.signature = Key::signer(9).sign(&[1u8; 32]);
+    cases.push((bad_sig, ContractError::InvalidSignature {}));
+    let mut high_s = good(&s);
+    let (p, _) = s.signed_checkpoint(id, 2, &key2, 20, &[1, 1]);
+    high_s.signature = key2.sign_high_s(&Suite::settle_digest(&p));
+    cases.push((high_s, ContractError::HighS {}));
+    cases.push((
+        s.signed_checkpoint(id, 2, &key2, 10, &[1, 1]).1,
+        ContractError::StaleSeq {
+            seq: 20,
+            trusted_seq: 20,
+        },
+    ));
+    cases.push((
+        s.signed_checkpoint(other, 2, &key2, 20, &[1, 1]).1,
+        ContractError::DomainMismatch {},
+    ));
+    cases.push((
+        s.signed_checkpoint(id, 1, &Key::signer(1), 20, &[1, 1]).1,
+        ContractError::RetiredSignerKey { key_id: 1 },
+    ));
+    cases.push((
+        s.signed_checkpoint(id, 2, &key2, 20, &[0, 0]).1,
+        ContractError::ZeroSumWeights {},
+    ));
+    let terminal = {
+        let mut p = s.terminal_payload(id, 1, 20, &[1, 1]);
+        p.signer_key_id = 2;
+        let (payload, signature) = s.signed_by(&p, &key2);
+        SignedCheckpoint { payload, signature }
+    };
+    cases.push((
+        terminal,
+        ContractError::WrongKind {
+            expected: "checkpoint".to_string(),
+        },
+    ));
+    for (carried, expected) in cases {
+        assert_eq!(s.liveness(id, 0, Some(carried)).unwrap_err(), expected);
+        assert_eq!(s.game(id).game, before, "no partial write");
+        assert_eq!(s.checkpoints(id).checkpoints.len(), 1);
+    }
+    // The plain exit still works and uses the stored (retired, uncompromised)
+    // checkpoint.
+    liveness(&mut s, id, 0).unwrap();
+    assert_eq!(s.game(id).game.settlement.unwrap().payload.seq.u64(), 20);
+}
+
+#[test]
+fn a_carried_checkpoint_works_while_paused() {
+    let mut s = Suite::new();
+    let id = s.started(2);
+    s.pause();
+    s.advance(LIVENESS);
+    let (p, carried) = s.signed_checkpoint(id, 1, &Key::signer(1), 7, &[1, 2]);
+    s.liveness(id, 1, Some(carried)).unwrap();
+    let st = s.game(id).game.settlement.unwrap();
+    assert_eq!(
+        st.payload.payload_digest.to_vec(),
+        Suite::settle_digest(&p).to_vec()
+    );
+}
+
+#[test]
+fn a_carried_checkpoint_is_refused_outside_in_progress() {
+    let mut s = Suite::new();
+    let (settleable, _) = s.settleable(2);
+    let (disputed, _) = s.disputed(2);
+    s.advance(40 * DAY);
+    for (id, actual) in [(settleable, "settleable"), (disputed, "disputed")] {
+        let (_, carried) = s.signed_checkpoint(id, 1, &Key::signer(1), 500, &[1, 1]);
+        assert_eq!(
+            s.liveness(id, 0, Some(carried)).unwrap_err(),
+            ContractError::WrongState {
+                expected: "in_progress".to_string(),
+                actual: actual.to_string()
+            }
+        );
+        // Not seated comes first.
+        let (_, carried) = s.signed_checkpoint(id, 1, &Key::signer(1), 500, &[1, 1]);
+        let who = s.outsider.clone();
+        assert_eq!(
+            s.exec(
+                &who,
+                &ExecuteMsg::LivenessSettle {
+                    chain_game_id: id,
+                    checkpoint: Some(carried),
+                },
+                &[],
+            )
+            .unwrap_err(),
+            ContractError::NotSeated { chain_game_id: id }
+        );
+    }
+    s.assert_custody();
 }

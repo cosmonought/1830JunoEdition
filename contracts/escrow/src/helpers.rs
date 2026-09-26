@@ -5,6 +5,12 @@
 //! 4. the global pause (only for messages the design blocks while paused);
 //! 5. funds, time and payload checks.
 //!
+//! Sequence authority: a payload must exceed [`trusted_seq`], the highest seq
+//! among accepted evidence whose signer key is not compromised. `Game.last_seq`
+//! keeps the raw historical maximum for audit, but is never an authority gate,
+//! so a forged payload under a key later marked compromised cannot block honest
+//! progress (OD-ESC2-3).
+//!
 //! Every payout goes through [`pay_out`] and every refund through [`refund_all`].
 //! Both zero the pool and move the game to a terminal state in the same
 //! transaction as their `BankMsg`s, and neither ever emits a zero-amount coin
@@ -149,11 +155,14 @@ pub fn game_domain(game: &Game) -> Result<[u8; 32], ContractError> {
 }
 
 /// Every payload rule that depends on the game: the A1/A2 shape rules for this
-/// message, the domain, the roster length, Σw > 0 and seq monotonicity.
+/// message, the domain, the roster length, Σw > 0, and `seq > floor`, where
+/// `floor` is the caller's trusted sequence floor ([`trusted_seq`] for
+/// Checkpoint and Settle, [`trusted_checkpoint_seq`] for a resolver Replace).
 pub fn check_payload_for_game(
     game: &Game,
     payload: &Payload,
     usage: PayloadUse,
+    floor: u64,
 ) -> Result<(), ContractError> {
     payload.check_shape(usage)?;
     if payload.domain != game_domain(game)? {
@@ -173,11 +182,10 @@ pub fn check_payload_for_game(
     if !weights_have_positive_sum(&weights)? {
         return Err(ContractError::ZeroSumWeights {});
     }
-    let last_seq = game.last_seq.u64();
-    if payload.seq <= last_seq {
+    if payload.seq <= floor {
         return Err(ContractError::StaleSeq {
             seq: payload.seq,
-            last_seq,
+            trusted_seq: floor,
         });
     }
     Ok(())
@@ -194,12 +202,68 @@ pub fn active_signer_key(storage: &dyn Storage, key_id: u16) -> Result<SignerKey
     Ok(key)
 }
 
-/// `false` if the key was retired as compromised (or is unknown).
-pub fn key_usable_for_liveness(storage: &dyn Storage, key_id: u16) -> Result<bool, ContractError> {
+/// `false` if the key was retired as compromised (or is unknown). Evidence
+/// under an untrusted key is neither usable by `LivenessSettle` nor counted in
+/// the trusted sequence floor.
+pub fn key_is_trusted(storage: &dyn Storage, key_id: u16) -> Result<bool, ContractError> {
     Ok(match SIGNER_KEYS.may_load(storage, key_id)? {
         Some(key) => !key.compromised,
         None => false,
     })
+}
+
+/// The highest seq among this game's stored checkpoints whose signer key is not
+/// compromised (0 when there is none). The floor a resolver `Replace` must
+/// exceed: the disputed settlement itself never constrains its correction.
+pub fn trusted_checkpoint_seq(
+    storage: &dyn Storage,
+    chain_game_id: u64,
+) -> Result<u64, ContractError> {
+    Ok(best_checkpoint(storage, chain_game_id, true)?
+        .map(|c| c.payload.seq.u64())
+        .unwrap_or(0))
+}
+
+/// The game's sequence authority: the highest seq among the evidence it holds
+/// whose signer key is not compromised — every stored checkpoint (the newest
+/// per key) and the stored settlement. It can fall below `game.last_seq` when a
+/// key is marked compromised; that is recovery, not a monotonicity violation.
+/// Checkpoint, Settle and the ANNUL digest use it.
+pub fn trusted_seq(storage: &dyn Storage, game: &Game) -> Result<u64, ContractError> {
+    let mut floor = trusted_checkpoint_seq(storage, game.chain_game_id)?;
+    if let Some(settlement) = &game.settlement {
+        if key_is_trusted(storage, settlement.payload.signer_key_id)? {
+            floor = floor.max(settlement.payload.seq.u64());
+        }
+    }
+    Ok(floor)
+}
+
+/// The index of a seat other than `except` whose current consent key is `key`.
+pub fn consent_key_holder(game: &Game, key: &HexBinary, except: Option<usize>) -> Option<usize> {
+    game.seats
+        .iter()
+        .enumerate()
+        .find(|(i, seat)| Some(*i) != except && seat.consent_pubkey == *key)
+        .map(|(i, _)| i)
+}
+
+/// Consent keys are unique within a game: no two seats hold the same key at
+/// once. Together with `SetConsentKey` withdrawing a rotating seat's recorded
+/// consent, every recorded consent is backed by that seat's own current key, so
+/// N-of-N needs N distinct registered keys. Nothing on chain can stop a seat's
+/// own wallet from delegating (registering a key someone else controls).
+pub fn require_unique_consent_key(
+    game: &Game,
+    key: &HexBinary,
+    except: Option<usize>,
+) -> Result<(), ContractError> {
+    match consent_key_holder(game, key, except) {
+        Some(index) => Err(ContractError::ConsentKeyInUse {
+            seat_index: u8::try_from(index).map_err(|_| ContractError::Overflow {})?,
+        }),
+        None => Ok(()),
+    }
 }
 
 pub fn payload_record(payload: &Payload, digest: &[u8; 32]) -> PayloadRecord {
@@ -302,7 +366,7 @@ pub fn best_checkpoint(
         .range(storage, None, None, Order::Ascending)
     {
         let (key_id, record) = item?;
-        if usable_only && !key_usable_for_liveness(storage, key_id)? {
+        if usable_only && !key_is_trusted(storage, key_id)? {
             continue;
         }
         let better = match &best {

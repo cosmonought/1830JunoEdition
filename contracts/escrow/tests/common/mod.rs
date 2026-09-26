@@ -19,7 +19,7 @@ use eighteen_cosmos_escrow::contract::{execute, instantiate, migrate, query};
 use eighteen_cosmos_escrow::crypto;
 use eighteen_cosmos_escrow::msg::{
     CheckpointsResponse, ConfigResponse, ExecuteMsg, GameResponse, InstantiateMsg, QueryMsg,
-    ResolveOutcome, SeatSignature, SettlementPayloadV1,
+    ResolveOutcome, SeatSignature, SettlementPayloadV1, SignedCheckpoint,
 };
 use eighteen_cosmos_escrow::payload::{Payload, KIND_CHECKPOINT, KIND_TERMINAL};
 use eighteen_cosmos_escrow::state::{GameParams, GameState, Mode};
@@ -344,8 +344,19 @@ impl Suite {
         d.as_slice().try_into().unwrap()
     }
 
+    /// Raw history: the highest seq ever accepted.
     pub fn last_seq(&self, id: u64) -> u64 {
         self.game(id).game.last_seq.u64()
+    }
+
+    /// Sequence authority: the highest seq among evidence whose key is trusted.
+    pub fn trusted_seq(&self, id: u64) -> u64 {
+        self.game(id).trusted_seq.u64()
+    }
+
+    /// The resolver the game adopted at Start.
+    pub fn game_resolver(&self, id: u64) -> Option<Addr> {
+        self.game(id).game.resolver
     }
 
     // ------------------------------------------------------------- funding
@@ -502,6 +513,22 @@ impl Suite {
         }
     }
 
+    /// A checkpoint at `log_len` signed by `key` under `key_id`, ready to be
+    /// carried by `LivenessSettle`.
+    pub fn signed_checkpoint(
+        &self,
+        id: u64,
+        key_id: u16,
+        key: &Key,
+        log_len: u64,
+        weights: &[u128],
+    ) -> (Payload, SignedCheckpoint) {
+        let mut p = self.checkpoint_payload(id, log_len, weights);
+        p.signer_key_id = key_id;
+        let (payload, signature) = self.signed_by(&p, key);
+        (p, SignedCheckpoint { payload, signature })
+    }
+
     pub fn post_checkpoint(&mut self, id: u64, log_len: u64, weights: &[u128]) -> Payload {
         let p = self.checkpoint_payload(id, log_len, weights);
         let msg = self.checkpoint_msg(id, &p);
@@ -560,6 +587,32 @@ impl Suite {
                 signature: Key::seat(i).sign(&digest),
             })
             .collect()
+    }
+
+    /// The plain liveness exit.
+    pub fn liveness_msg(id: u64) -> ExecuteMsg {
+        ExecuteMsg::LivenessSettle {
+            chain_game_id: id,
+            checkpoint: None,
+        }
+    }
+
+    /// `LivenessSettle` by `players[seat]`, optionally carrying a checkpoint.
+    pub fn liveness(
+        &mut self,
+        id: u64,
+        seat: usize,
+        checkpoint: Option<SignedCheckpoint>,
+    ) -> Result<AppResponse, ContractError> {
+        let who = self.players[seat].clone();
+        self.exec(
+            &who,
+            &ExecuteMsg::LivenessSettle {
+                chain_game_id: id,
+                checkpoint,
+            },
+            &[],
+        )
     }
 
     pub fn bond(&self, id: u64) -> u128 {

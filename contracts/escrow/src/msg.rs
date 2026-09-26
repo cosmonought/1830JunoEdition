@@ -64,12 +64,21 @@ pub struct SeatSignature {
     pub signature: HexBinary,
 }
 
+/// A signed Checkpoint payload carried inside `LivenessSettle`.
+#[cw_serde]
+pub struct SignedCheckpoint {
+    pub payload: SettlementPayloadV1,
+    pub signature: HexBinary,
+}
+
 #[cw_serde]
 pub enum ResolveOutcome {
     /// The stored settlement stands; the challenger's bond joins the pool.
     Uphold {},
     /// A corrected payload (reason ResolverCorrection) authorised by the
-    /// resolver's transaction; the bond goes back to the challenger.
+    /// resolver's transaction; the bond goes back to the challenger. Its seq
+    /// must exceed the game's trusted checkpoint floor only: the disputed
+    /// settlement never constrains it, so the same log position is legal.
     Replace { payload: SettlementPayloadV1 },
     /// Refund every seat's net ante; the bond goes back to the challenger.
     Annul {},
@@ -90,7 +99,8 @@ pub enum ExecuteMsg {
         /// 32 bytes, stored verbatim.
         join_ticket: HexBinary,
     },
-    /// Takes the next seat with exactly the creator's gross ante.
+    /// Takes the next seat with exactly the creator's gross ante. The consent
+    /// key must not be another seat's current key.
     Join {
         chain_game_id: u64,
         consent_pubkey: HexBinary,
@@ -105,7 +115,9 @@ pub enum ExecuteMsg {
     Cancel {
         chain_game_id: u64,
     },
-    /// The seat's own wallet replaces its consent key.
+    /// The seat's own wallet replaces its consent key (never with another
+    /// seat's current key). A real rotation withdraws the seat's recorded
+    /// consent to the stored settlement; re-setting the current key is a no-op.
     SetConsentKey {
         chain_game_id: u64,
         new_pubkey: HexBinary,
@@ -116,7 +128,8 @@ pub enum ExecuteMsg {
         /// 32 bytes; must equal the on-chain roster's hash.
         roster_hash: HexBinary,
     },
-    /// Anyone: posts a signed Checkpoint payload.
+    /// Anyone: posts a signed Checkpoint payload. Works while paused (it moves
+    /// no funds).
     Checkpoint {
         chain_game_id: u64,
         payload: SettlementPayloadV1,
@@ -151,15 +164,24 @@ pub enum ExecuteMsg {
         chain_game_id: u64,
         outcome: ResolveOutcome,
     },
-    /// Anyone, with a valid ANNUL signature from every seat.
+    /// Anyone, with a valid ANNUL signature from every seat over the game's
+    /// trusted sequence (`GameResponse::trusted_seq`).
     AnnulByConsent {
         chain_game_id: u64,
         consents: Vec<SeatSignature>,
     },
-    /// A seated wallet: the liveness exit (IN_PROGRESS inactivity, or a
-    /// dispute past the resolver timeout). Works while paused.
+    /// A seated wallet: the liveness exit. Works while paused. Available for
+    /// IN_PROGRESS after the inactivity window, for SETTLEABLE from
+    /// `window_end + liveness_window`, and for DISPUTED after the resolver
+    /// timeout.
     LivenessSettle {
         chain_game_id: u64,
+        /// IN_PROGRESS only: a newer signed checkpoint, validated exactly like
+        /// `Checkpoint` and promoted in the same transaction. Eligibility is
+        /// decided before it is processed, and it does not restart the
+        /// liveness clock. Omit it (or pass null) for the plain exit.
+        #[serde(default)]
+        checkpoint: Option<SignedCheckpoint>,
     },
     // ------------------------------------------------------------- admin
     Pause {},
@@ -168,8 +190,8 @@ pub enum ExecuteMsg {
         pubkey: HexBinary,
     },
     /// Retire a key; `compromised: true` also stops `LivenessSettle` from using
-    /// its checkpoints and settlements. A retired key may be escalated to
-    /// compromised later; never the reverse.
+    /// its checkpoints and settlements and removes their sequence authority. A
+    /// retired key may be escalated to compromised later; never the reverse.
     RetireSignerKey {
         key_id: u16,
         compromised: bool,
@@ -177,6 +199,8 @@ pub enum ExecuteMsg {
     SetOperator {
         operator: String,
     },
+    /// Applies to games started afterwards: a started game keeps the resolver
+    /// it adopted at `Start`.
     SetResolver {
         resolver: String,
     },
@@ -244,7 +268,9 @@ pub struct ConfigResponse {
 pub struct GameDeadlines {
     /// `Join` needs block time before this; anyone may `Cancel` from it on.
     pub funding_deadline: Timestamp,
-    /// IN_PROGRESS: `LivenessSettle` from this time.
+    /// IN_PROGRESS: `LivenessSettle` from this time (last Start/Checkpoint +
+    /// liveness window). SETTLEABLE: from `challenge_window_end` + liveness
+    /// window.
     pub liveness_available_at: Option<Timestamp>,
     /// SETTLEABLE: `Challenge` before, `Finalize` from this time.
     pub challenge_window_end: Option<Timestamp>,
@@ -257,8 +283,15 @@ pub struct GameResponse {
     pub game: Game,
     /// Global pause flag at query time.
     pub paused: bool,
-    /// The highest-seq checkpoint accepted for this game, if any.
+    /// The highest-seq checkpoint accepted for this game, if any (whatever its
+    /// key's status; see `Checkpoints` for the liveness candidate).
     pub latest_checkpoint: Option<CheckpointRecord>,
+    /// The sequence authority now: the highest seq among the game's stored
+    /// evidence whose signer key is not compromised. A new Checkpoint or Settle
+    /// must exceed it, and ANNUL signatures sign over it. While the game is
+    /// live it equals `game.last_seq` unless a signer key was marked
+    /// compromised.
+    pub trusted_seq: Uint64,
     pub deadlines: GameDeadlines,
 }
 

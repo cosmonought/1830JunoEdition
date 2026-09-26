@@ -581,6 +581,7 @@ fn the_admin_has_no_path_to_settle_annul_resolve_withdraw_or_exit() {
         (
             ExecuteMsg::LivenessSettle {
                 chain_game_id: in_progress,
+                checkpoint: None,
             },
             ContractError::NotSeated {
                 chain_game_id: in_progress,
@@ -615,6 +616,7 @@ fn the_admin_has_no_path_to_settle_annul_resolve_withdraw_or_exit() {
         (
             ExecuteMsg::LivenessSettle {
                 chain_game_id: disputed,
+                checkpoint: None,
             },
             ContractError::NotSeated {
                 chain_game_id: disputed,

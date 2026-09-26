@@ -130,7 +130,10 @@ fn seq_must_strictly_increase() {
         let p = s.checkpoint_payload(id, log_len, &[1, 1]);
         assert_eq!(
             sign_and_submit(&mut s, id, &p).unwrap_err(),
-            ContractError::StaleSeq { seq, last_seq: 240 }
+            ContractError::StaleSeq {
+                seq,
+                trusted_seq: 240
+            }
         );
     }
     s.post_checkpoint(id, 121, &[1, 1]);
@@ -148,7 +151,7 @@ fn a_checkpoint_at_log_len_zero_is_stale() {
         sign_and_submit(&mut s, id, &p).unwrap_err(),
         ContractError::StaleSeq {
             seq: 0,
-            last_seq: 0
+            trusted_seq: 0
         }
     );
     s.post_checkpoint(id, 1, &[1, 1]);
@@ -515,16 +518,14 @@ fn newer_checkpoints_supersede_per_key_and_the_newest_is_reported() {
 }
 
 #[test]
-fn refused_while_paused_outside_in_progress_or_with_funds() {
+fn accepted_while_paused_refused_outside_in_progress_or_with_funds() {
+    // OD-ESC2-1/2: a checkpoint moves no funds, so a pause never blocks it.
     let mut s = Suite::new();
     let id = s.started(2);
     s.pause();
+    s.advance(HOUR);
+    let t = s.now();
     let p = s.checkpoint_payload(id, 10, &[1, 1]);
-    assert_eq!(
-        sign_and_submit(&mut s, id, &p).unwrap_err(),
-        ContractError::Paused {}
-    );
-    s.unpause();
     let msg = s.checkpoint_msg(id, &p);
     let who = s.outsider.clone();
     assert_eq!(
@@ -532,6 +533,23 @@ fn refused_while_paused_outside_in_progress_or_with_funds() {
         ContractError::NonPayable {}
     );
     s.exec(&who, &msg, &[]).unwrap();
+    let g = s.game(id);
+    assert!(g.paused);
+    assert_eq!(g.game.last_seq.u64(), 20);
+    assert_eq!(g.trusted_seq.u64(), 20);
+    assert_eq!(
+        g.game.last_activity,
+        Some(t),
+        "it refreshes the liveness clock"
+    );
+    // Settle stays blocked while paused even though Checkpoint is not.
+    let t_p = s.terminal_payload(id, 1, 20, &[1, 1]);
+    let settle = s.settle_msg(id, &t_p, &[0, 1]);
+    assert_eq!(
+        s.exec(&who, &settle, &[]).unwrap_err(),
+        ContractError::Paused {}
+    );
+    s.unpause();
 
     let funded = s.funded(2);
     let err = s

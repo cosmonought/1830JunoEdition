@@ -3536,6 +3536,13 @@ the depot purchase (`trainLifecycle.test.ts`); H5 the escrow `Join` with no coin
 a patch on the ESCROW-2 lineage, which is not yet on `main`). Not rules evidence, left to 2E: the `MOCK_TRAIN_CATALOG`
 "mirror of `hardware::TRAIN_CATALOG`" comment and its unread Diesel `bankQuantity: 20`, and the two `tests.rs:5205` comment
 citations. Record: `claude/rust-retire-2a-harvest-2026-09-26.md`.
+**INTEGRATION-1 (2026-09-26): the certified patch lines are on `main`.** SET-0B, ESCROW-2 0001–0006, SET-0C 0001–0002,
+the H5 escrow `Join` test, GNOLAND-1.1 and this harvest were replayed onto LIVE-2E `8c088cc` as individual commits, so
+"not yet on `main`" above is historical. The integration fixed nothing of rules and left these open: **RR2A-F1**
+(`BeginOperatingRound` on a pinned board, above; scheduled before DA certification); **RR2A-F2**, the stale
+`offerMatrix74Settlement.test.ts` §15 case (:751) that expects a deep `RevertTo(2)` the one-step undo policy (RV-6)
+now refuses — a test awaiting its deliberate repair pass, not a policy to weaken; the three `offerVerify74Final` V§4
+failures are the same class. Record: `claude/INTEGRATION1_CERTIFIED_PATCH_COLLAPSE_2026-09-26.md`.
 
 **S10-7. Engine tests and packaging.** 304 engine-adjacent suites still live in `frontend/src/utils/` (Jest
 `roots` + per-suite classification, Batch 1 §6d); a repo-root `shared/` package needs CRA's `ModuleScopePlugin`,

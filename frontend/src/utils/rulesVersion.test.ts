@@ -226,10 +226,17 @@ describe("a same-version room continues (#1520, tests 3-4)", () => {
     expect(stateDigest(room.state)).toBe(afterDeal);
     // The pin lives in the deal's payload and the revert did not touch that entry.
     expect(setupPayloadOf(room.entries)[RULES_ENGINE_VERSION_FIELD]).toBe(RULES_ENGINE_VERSION);
-    // A revert that kills the deal itself leaves an undealt log: no pin, and no opinion -- not "current".
-    submit(room, { actor: ALICE, msg: { RevertTo: { index: 0, player: ALICE, summary: "undo the deal" } } as never });
-    expect(room.rulesEngineVersion()).toBeUndefined();
-    expect(replayCompatibility(room.entries).kind).toBe("undealt");
+    /* LIVE-2A (LIVE-2 §9.2, RV-5): a LIVE revert of the deal is refused -- the deal is the floor -- and the pin stands.
+       A STORED log that already holds one (any room before LIVE-2A could write it) still reads as undealt: no pin,
+       and no opinion -- not "current". */
+    const refused = submit(room, { actor: ALICE, msg: { RevertTo: { index: 0, player: ALICE, summary: "undo the deal" } } as never });
+    expect(refused.kind).toBe("refused");
+    expect(room.rulesEngineVersion()).toBe(RULES_ENGINE_VERSION);
+    const stored = [
+      ...room.entries,
+      { index: room.nextIndex, id: "stored-deal-revert", actor: ALICE, payload: JSON.stringify({ RevertTo: { index: 0, player: ALICE, summary: "undo the deal" } }), at: 0 },
+    ];
+    expect(replayCompatibility(stored as never).kind).toBe("undealt");
   });
 });
 

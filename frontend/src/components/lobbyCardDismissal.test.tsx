@@ -25,6 +25,9 @@
 // Join Game's Cancel is normalised to `disabled={busy}` -- the smallest change that makes its three visible
 // routes agree with each other -- and then `dismissible={!busy}`. Rejoin passes no `dismissible` at all.
 //
+// LIVE-2A (LIVE-2 §10.5, §15 #6): `RejoinByPinCard` -- #1355's PIN-first lookup -- is DELETED with the server's
+// `find-seats`, and its cases with it. The table above is kept as the record of what was measured.
+//
 // WHAT THIS FILE DOES NOT ASSERT: tab containment, scroll lock, portals, `inert`, backdrop mechanics. None of
 // those is in this batch; the background-Tab defect (audit H1) is deferred to its own.
 
@@ -40,7 +43,6 @@ import { createRoot, type Root } from "react-dom/client";
 import { ModalLayerHost } from "./ModalPortal";
 
 import JoinGameCard from "./JoinGameCard";
-import RejoinByPinCard from "./RejoinByPinCard";
 import { readStripped } from "../utils/sourceScan";
 
 declare global {
@@ -49,16 +51,7 @@ declare global {
 }
 global.IS_REACT_ACT_ENVIRONMENT = true;
 
-/** The PIN card's two network calls, held open so `busy` can be observed rather than raced. */
-let mockLookupCalls: unknown[][] = [];
-let mockSettleLookup: (answer: unknown) => void = () => {};
 jest.mock("../utils/roomDocLink", () => ({
-  findSeatsByPin: (...args: unknown[]) => {
-    mockLookupCalls.push(args);
-    return new Promise((resolve) => {
-      mockSettleLookup = resolve;
-    });
-  },
   claimSeat: () => new Promise(() => {}),
 }));
 
@@ -69,7 +62,6 @@ let keydownListeners = 0;
 let joinCalls: string[] = [];
 let rejoinCalls: string[] = [];
 let clearErrorCalls = 0;
-let byCodeCalls = 0;
 
 function spyListeners() {
   keydownListeners = 0;
@@ -83,7 +75,7 @@ function spyListeners() {
   } as never);
 }
 
-type Which = "join" | "rejoin";
+type Which = "join";
 let setOpen: (open: boolean) => void = () => {};
 let setDoomed: (present: boolean) => void = () => {};
 
@@ -123,15 +115,6 @@ function Harness({ which, busy, extraOpener }: { which: Which; busy: boolean; ex
           }}
         />
       )}
-      {open && which === "rejoin" && (
-        <RejoinByPinCard
-          onClose={close}
-          onRejoinByCode={() => {
-            byCodeCalls += 1;
-            setOpenState(false);
-          }}
-        />
-      )}
     </>
   );
 }
@@ -162,9 +145,7 @@ function mount(which: Which, busy = false, extraOpener = false) {
   closes = 0;
   joinCalls = [];
   rejoinCalls = [];
-  mockLookupCalls = [];
   clearErrorCalls = 0;
-  byCodeCalls = 0;
   spyListeners();
   mountLayer();
   host = document.createElement("div");
@@ -419,129 +400,6 @@ describe("Join by room code, while a join is in flight", () => {
 /*  Rejoin by PIN                                                      */
 /* ================================================================== */
 
-describe("Rejoin a game", () => {
-  beforeEach(() => mount("rejoin"));
-  afterEach(() => unmount());
-
-  it("still opens with the PIN field focused", () => {
-    at("opener").focus();
-    open();
-    expect(document.activeElement).toBe(field());
-    expect(field().getAttribute("aria-label")).toBe("Seat PIN");
-  });
-
-  it("closes on Escape through the same callback the visible controls use", () => {
-    at("opener").focus();
-    open();
-    escape();
-    expect(card()).toBeNull();
-    expect(closes).toBe(1);
-  });
-
-  it("returns focus to the opener from Escape, the x, Cancel and the backdrop", () => {
-    const routes: Array<() => void> = [
-      () => escape(),
-      () => click(closeButton()),
-      () => click(buttonLabelled("Cancel")),
-      () => click(backdrop()),
-    ];
-    routes.forEach((run) => {
-      at("opener").focus();
-      open();
-      field().focus();
-      run();
-      expect(card()).toBeNull();
-      expect(document.activeElement).toBe(at("opener"));
-    });
-    expect(closes).toBe(4);
-  });
-
-  it("returns focus to the opener on the by-code route as well, which is a navigation rather than a close", () => {
-    /* `onRejoinByCode` is not `onClose`, but it unmounts this card -- and the restore lives in the unmount,
-       which is why it covers a route nobody wired it to. */
-    at("opener").focus();
-    open();
-    field().focus();
-    click(buttonLabelled("No PIN yet? Rejoin by room code"));
-    expect(card()).toBeNull();
-    expect(byCodeCalls).toBe(1);
-    expect(document.activeElement).toBe(at("opener"));
-  });
-
-  it("resets the typed PIN by unmounting", () => {
-    at("opener").focus();
-    open();
-    type("1234");
-    expect(field().value).toBe("1234");
-    escape();
-    open();
-    expect(field().value).toBe("");
-  });
-
-  it("adds no window keydown listener at all across ten open/close cycles", () => {
-    /* #1651 SUPERSEDES "nets to zero". The ledger used to swing 0 -> 1 -> 0 per cycle, because the card held
-       a `window` Escape listener while it was up. There is none now: Escape is the `closedby` attribute and
-       the engine enforces it. Flat-at-zero is the stricter assertion -- a leak still fails it, and so does a
-       second Escape path being reintroduced. */
-    expect(keydownListeners).toBe(0);
-    for (let cycle = 0; cycle < 10; cycle += 1) {
-      open();
-      expect(keydownListeners).toBe(0);
-      escape();
-      expect(keydownListeners).toBe(0);
-    }
-  });
-
-  it("does not restore focus to an opener that has left the document", () => {
-    unmount();
-    mount("rejoin", false, true);
-    at("doomed").focus();
-    open();
-    const attempt = jest.spyOn(at("doomed"), "focus");
-    act(() => setDoomed(false));
-    at("bystander").focus();
-    escape();
-    expect(attempt).not.toHaveBeenCalled();
-    expect(document.activeElement).toBe(at("bystander"));
-  });
-
-  it("still validates the PIN before asking the server", () => {
-    open();
-    type("12");
-    submit();
-    expect(mockLookupCalls).toHaveLength(0);
-    expect(openCard().textContent).toContain("A PIN is exactly four digits.");
-    type("1234");
-    submit();
-    expect(mockLookupCalls).toHaveLength(1);
-    expect((mockLookupCalls[0] as unknown[])[1]).toBe("1234");
-  });
-
-  it("still strips non-digits and still caps the PIN at four", () => {
-    open();
-    type("9a8b7c6d5");
-    expect(field().value).toBe("9876");
-  });
-
-  it("stays dismissible while a lookup is in flight, because every visible route is", () => {
-    /* THE READING THAT DECIDED `dismissible` IS NOT PASSED HERE. `busy` on this card gates the submit
-       controls only; the x, Cancel and the backdrop never carried it, so Escape must not either. */
-    at("opener").focus();
-    open();
-    type("1234");
-    submit();
-    expect(buttonLabelled("Find my games")!.disabled).toBe(true);
-    expect(closeButton().disabled).toBe(false);
-    expect(buttonLabelled("Cancel")!.disabled).toBe(false);
-    field().focus();
-    escape();
-    expect(card()).toBeNull();
-    expect(closes).toBe(1);
-    expect(document.activeElement).toBe(at("opener"));
-    mockSettleLookup({ seats: [] });
-  });
-});
-
 /* ================================================================== */
 /*  Structure: the two things that are ordering, not behaviour         */
 /* ================================================================== */
@@ -549,7 +407,6 @@ describe("Rejoin a game", () => {
 describe("the migrated sources keep the ordering the hook depends on", () => {
   const sources = [
     ["JoinGameCard", "components/JoinGameCard.tsx"],
-    ["RejoinByPinCard", "components/RejoinByPinCard.tsx"],
   ] as const;
 
   it("carries no native autoFocus in either migrated dialog", () => {

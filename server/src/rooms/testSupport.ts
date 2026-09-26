@@ -233,6 +233,39 @@ export interface SeenEntry {
  *  server's `close()` waiting (it closes the LOG sockets it knows; a room-doc socket would hold `http.close`). */
 const openClients = new Set<Client>();
 
+/** LIVE-2A (LIVE-2 §15 #9): a room nobody hosted is not dealt. The document a `host` write creates, for seeding a
+ *  store before a server starts. */
+export function hostedDoc(room: string, host: string = ALICE): SandboxRoomDoc {
+  return {
+    code: room,
+    hostId: host,
+    status: "waiting",
+    players: [{ id: host, nickname: host, isReady: false }],
+    variants: {} as SandboxRoomDoc["variants"],
+    forcedSign: null,
+    visibility: "public",
+    playerCount: null,
+    anteUjuno: "0",
+    createdAtMs: 0,
+    kicked: [],
+  };
+}
+
+/** LIVE-2A: host `room` on a running server, as the client does -- `room-hello`, then the `host` write -- and wait
+ *  for the document (or `room-code-taken`: already hosted, which is as good). */
+export async function hostRoom(port: number, room: string, host: string = ALICE): Promise<void> {
+  const client = await Client.open(port, host);
+  client.roomHello(room);
+  client.roomWrite(room, { op: "host", hostId: host, nickname: host, variants: {} });
+  await client.next(
+    (frame) =>
+      (frame.kind === "room" && (frame.doc as { hostId?: string } | null)?.hostId === host) ||
+      (frame.kind === "error" && frame.code === "room-code-taken"),
+    `the room ${room} hosted by ${host}`,
+  );
+  await client.close();
+}
+
 /** Stop a server started by `startServer`, closing every client still open first. */
 export async function stopServer(server: { close(): Promise<void> }): Promise<void> {
   for (const client of [...openClients]) client.socket.terminate();

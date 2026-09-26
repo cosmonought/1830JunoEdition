@@ -308,9 +308,14 @@ describe("each room message has an owner, #1249", () => {
     const undealt = board({ player_addresses: [] });
     expect(withHost(undealt, ALICE, setup, ALICE)).toBeNull();
     expect(withHost(undealt, BOB, setup, ALICE)).toBe("Only the host can start the game.");
-    // No room document (a test, the CLI): the host check is skipped, not failed.
+    // No host handed over at all (a test, the CLI): the host check is skipped, not failed.
     expect(withHost(undealt, BOB, setup, undefined)).toBeNull();
-    expect(withHost(undealt, BOB, setup, null)).toBeNull();
+    /* LIVE-2A (LIVE-2 §15 #9): `null` is the SERVER saying the room has no document -- a hello to an invented code.
+       That room is not dealt by anybody (it was, by anybody, before: LIVE-2 Appendix A.3). */
+    expect(withHost(undealt, BOB, setup, null)).toMatch(/no host, so it cannot be dealt/);
+    // LIVE-2A (§15 #10): one seat per player -- a roster naming a player twice is refused at ingress.
+    const twice = { SetupGame: { players: [{ id: ALICE, nickname: "A" }, { id: ALICE, nickname: "A again" }], variants: {} } };
+    expect(withHost(undealt, ALICE, twice, ALICE)).toBe("Every seat at the table must be a different player.");
   });
 
   it("OpenStockRound: only when the auction is over, by anybody", () => {
@@ -390,18 +395,29 @@ describe("each room message has an owner, #1249", () => {
       payload: JSON.stringify({ PassTurn: { game_id: 0 } }),
       ...(derived ? { derived: true } : {}),
     });
-    const log = [entry(0, ALICE), entry(1, BOB), entry(2, BOB, true)];
+    /* LIVE-2A (LIVE-2 §9.2): the log is DEALT -- the deal is the floor (RV-5) -- and the host reaches the last
+       action whoever took it, one step at a time (RV-6), not any index. */
+    const deal = { index: 0, id: "e0", actor: ALICE, payload: JSON.stringify({ SetupGame: { players: [] } }) };
+    const log = [deal, entry(1, ALICE), entry(2, BOB), entry(3, BOB, true)];
     const revert = (index: number, player: string) => ({ RevertTo: { index, player, summary: "" } });
     // Bob's own last action, with only the game's bookkeeping on top of it: Bob's to undo.
-    expect(withHost(board(), BOB, revert(1, BOB), ALICE, log)).toBeNull();
-    // Alice's action has Bob's on top of it: only the host reaches it -- and Alice IS the host here.
-    expect(withHost(board(), ALICE, revert(0, ALICE), ALICE, log)).toBeNull();
-    expect(withHost(board(), ALICE, revert(0, ALICE), CAROL, log)).toBe(
+    expect(withHost(board(), BOB, revert(2, BOB), ALICE, log)).toBeNull();
+    // Bob's action is the last one: the host (Alice) reaches it -- and Carol, not the host, does not.
+    expect(withHost(board(), ALICE, revert(2, ALICE), ALICE, log)).toBeNull();
+    expect(withHost(board(), CAROL, revert(2, CAROL), ALICE, log)).toMatch(/Only the host can undo/);
+    // Alice's action has Bob's on top of it: not the last one, so not anybody's to undo now (RV-6).
+    expect(withHost(board(), ALICE, revert(1, ALICE), ALICE, log)).toBe("Only the most recent action can be undone.");
+    expect(withHost(board(), ALICE, revert(1, ALICE), CAROL, log)).toBe(
       "Other players have acted since your last move. Only the host can undo past somebody else's turn.",
     );
-    // Carol never acted; Bob's entry is not hers.
-    expect(withHost(board(), CAROL, revert(1, CAROL), ALICE, log)).toMatch(/Only the host can undo/);
+    // The deal, and before it, are the floor -- for the host too (RV-5, RV-4).
+    expect(withHost(board(), ALICE, revert(0, ALICE), ALICE, log)).toBe("The deal cannot be undone.");
+    expect(withHost(board(), ALICE, revert(-5, ALICE), ALICE, log)).toBe("There is nothing at that point in the log to undo.");
     expect(withHost(board(), BOB, revert(7, BOB), ALICE, log)).toBe("There is nothing at that point in the log to undo.");
+    // An ended game takes no undo at all (RV-3).
+    expect(withHost(board({ current_round_type: "GameEnd" }), ALICE, revert(2, ALICE), ALICE, log)).toBe(
+      "The game has ended \u2014 nothing can be undone.",
+    );
     // No log handed over: nothing to judge against, so nothing refused (the CLI, a test).
     expect(withHost(board(), CAROL, revert(1, CAROL), ALICE, undefined)).toBeNull();
   });

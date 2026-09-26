@@ -161,7 +161,11 @@ describe("the flag crosses the machine it was armed on", () => {
     const fs = require("fs") as typeof import("fs");
     const path = require("path") as typeof import("path");
     const SERVER = fs.readFileSync(path.join(__dirname, "../../../server/src/gameServer.ts"), "utf8");
-    expect(SERVER).toContain('write.stage === "mark" || write.stage === "carcosa" || write.stage === "fog" ? write.stage : null');
+    /* LIVE-2A (LIVE-2 §9.4, §15 #13): the `forced-sign` write is DELETED -- a pinned (server-dealt) table drops and
+       refuses the waiver anyway -- so no stage is taken from the wire at all: the frame schema has no such op
+       (`bad-frame`) and the document's `forcedSign` stays null. */
+    expect(SERVER).not.toContain('case "forced-sign"');
+    expect(SERVER).toContain("forcedSign: null,");
   });
 
   it("clears on the stage that fired, not on the attempt", () => {

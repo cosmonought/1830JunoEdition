@@ -50,11 +50,16 @@ import { isSetupGameMsg } from "../gameEngine/gameSetup";
 import { stampRulesEngineVersion } from "../gameEngine/rulesVersion";
 import { randomTurnSeed } from "../gameEngine/gameVariants";
 import { seedAlreadyRolled, turnSeedKey, type SeededEntry } from "./turnSeed";
+import { MAX_NARRATION_LENGTH, MAX_SUMMARY_LENGTH, sanitizeText } from "../gameEngine/messageSchema";
 
 /** What the normalizer needs from the server's board: the two round coordinates the turn key is built from. */
 export interface IngressBoard {
   macro_round_number?: number;
   sub_round_index?: number;
+  /** LIVE-2A (§11.2): the narration a proposal carries is re-derived from these -- the private's name and owner, a
+   *  corporation's ticker and president -- rather than committed as the client typed it. */
+  private_companies?: ReadonlyArray<{ private_id: number; name?: string | null; owner?: string | null }>;
+  public_companies?: ReadonlyArray<{ company_id: number; ticker?: string | null; president?: string | null }>;
 }
 
 export interface IngressContext {
@@ -64,6 +69,54 @@ export interface IngressContext {
   rawLog: readonly SeededEntry[];
   /** The server's draw. Injected like `mintId`, so a test is deterministic without the normalizer being. */
   mintSeed?: () => number;
+  /** LIVE-2A (§9.2): who sent it -- the connection's actor, never the frame's -- so a `RevertTo` names who pressed
+   *  Undo. `undefined` (a caller with no actor) leaves the field as sent. */
+  actor?: string;
+}
+
+/* ==================================================================
+    LIVE-2 §11.2 (LIVE-2A): NARRATION THE SERVER CAN DERIVE IS NOT CLIENT TEXT
+   ==================================================================
+   The log is permanent and hashed (#1251), and later committed for escrow. A proposal's narration -- the
+   private's name, the tickers, the owner, the selling president -- is shown to the other player and is read by
+   nothing that decides anything (the reducer re-derives each from the board, `sandboxSession.ts` #1597, and the
+   authority reads the board's). An honest client already sends exactly the board's values (`App.tsx`), so
+   overwriting them with the board's is byte-neutral for it; what it removes is free text a crafted client chose.
+   A field the board has no value for is dropped when it is optional, and sanitized (the single sanitizer) when
+   the schema requires it. `RevertTo.player` is the actor, and its `summary` is sanitized and capped at 160. */
+function narrate(board: IngressBoard, record: Record<string, unknown>, actor: string | undefined): Record<string, unknown> | null {
+  const privateOf = (id: unknown) => board.private_companies?.find((entry) => entry.private_id === id);
+  const companyOf = (id: unknown) => board.public_companies?.find((entry) => entry.company_id === id);
+  const setOrDrop = (body: Record<string, unknown>, field: string, value: string | null | undefined, nullable = false) => {
+    if (typeof value === "string") body[field] = value;
+    else if (nullable && value === null) body[field] = null;
+    else delete body[field];
+  };
+  const clean = (value: unknown, max: number) => (typeof value === "string" ? sanitizeText(value, max) : value);
+
+  if ("ProposePrivatePurchase" in record) {
+    const body = { ...(record.ProposePrivatePurchase as Record<string, unknown>) };
+    const priv = privateOf(body.private_id);
+    if ("private_name" in body) setOrDrop(body, "private_name", priv?.name);
+    body.owner = typeof priv?.owner === "string" ? priv.owner : clean(body.owner, MAX_NARRATION_LENGTH);
+    if ("buyer_ticker" in body) setOrDrop(body, "buyer_ticker", companyOf(body.buyer_protocol_id)?.ticker);
+    return { ...record, ProposePrivatePurchase: body };
+  }
+  if ("ProposeTrainPurchase" in record) {
+    const body = { ...(record.ProposeTrainPurchase as Record<string, unknown>) };
+    const seller = companyOf(body.seller_protocol_id);
+    if ("seller_ticker" in body) setOrDrop(body, "seller_ticker", seller?.ticker);
+    if ("seller_president" in body) setOrDrop(body, "seller_president", seller === undefined ? undefined : seller.president ?? null, true);
+    if ("buyer_ticker" in body) setOrDrop(body, "buyer_ticker", companyOf(body.buyer_protocol_id)?.ticker);
+    return { ...record, ProposeTrainPurchase: body };
+  }
+  if ("RevertTo" in record) {
+    const body = { ...(record.RevertTo as Record<string, unknown>) };
+    if (actor !== undefined) body.player = actor;
+    if ("summary" in body) body.summary = clean(body.summary, MAX_SUMMARY_LENGTH);
+    return { ...record, RevertTo: body };
+  }
+  return null;
 }
 
 /** The payload the server commits, given what the client sent.
@@ -101,6 +154,9 @@ export function normalizeForCommit<T>(msg: T, ctx: IngressContext): T {
     const { debug_force: _dropped, ...rest } = body;
     return { ...record, YellowSignEvent: rest } as unknown as T;
   }
+
+  const narrated = narrate(ctx.board, record, ctx.actor);
+  if (narrated !== null) return narrated as unknown as T;
 
   return msg;
 }

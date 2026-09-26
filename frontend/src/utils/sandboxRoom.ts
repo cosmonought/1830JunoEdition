@@ -19,7 +19,7 @@
 
 import { STANDARD_VARIANTS, type GameVariants } from "../gameEngine/gameVariants";
 // Design note #1215: the room document lives on the server. The routing is in this file so no caller has any.
-import { joinRoomDoc, roomDocOnServer, subscribeRoomDoc, writeRoomDoc } from "./roomDocLink";
+import { hostRoomDoc, joinRoomDoc, retireRoomDocLink, roomDocOnServer, subscribeRoomDoc, writeRoomDoc } from "./roomDocLink";
 import { localPlayerId } from "./seatPin";
 
 /* Design note #530: `GameplayExecuteMsg` is no longer imported here --
@@ -154,20 +154,36 @@ export async function hostSandboxRoom(
      editing. #1213 made the same choice for the log: `serverLink` was shaped like `appendSandboxAction` so
      the shell could not tell them apart.
      THE CODE IS MINTED LOCALLY. There is nothing to ask for: a room code is a name, not an allocation, and a
-     round trip to learn one would be a round trip that can fail. */
+     round trip to learn one would be a round trip that can fail.
+     ==================================================================
+      LIVE-2A (LIVE-2 §13.4 step 1): AND IT MAY ALREADY BE TAKEN
+     ==================================================================
+     The server no longer lets `host` overwrite a room that exists (a host write used to take over any room by its
+     code). So the create is now a write with an answer: the room this tab hosted, or `room-code-taken` -- and on
+     that, a fresh code, up to five times. With 24,389 three-symbol codes a collision is rare; five in a row is
+     a server that is full of rooms, and is said so. LIVE-2C replaces the client-minted code with a server-minted
+     game id and join code. */
   if (!roomDocOnServer()) return null;
-  const code = generateRoomCode();
-  writeRoomDoc(code, hostId, {
-    op: "host",
-    hostId,
-    nickname,
-    variants,
-    visibility: setup.visibility,
-    playerCount: setup.playerCount,
-    anteUjuno: setup.anteUjuno,
-  });
-  return code;
+  for (let attempt = 0; attempt < HOST_CODE_ATTEMPTS; attempt += 1) {
+    const code = generateRoomCode();
+    const answer = await hostRoomDoc(code, hostId, {
+      op: "host",
+      hostId,
+      nickname,
+      variants,
+      visibility: setup.visibility,
+      playerCount: setup.playerCount,
+      anteUjuno: setup.anteUjuno,
+    });
+    if (answer.ok) return code;
+    retireRoomDocLink(code);
+    if (!answer.taken) throw new Error(answer.reason);
+  }
+  throw new Error("Could not find a free room code. Try again in a moment.");
 }
+
+/** LIVE-2A: how many fresh codes a host tries before giving up (LIVE-2 §13.4 step 1). */
+export const HOST_CODE_ATTEMPTS = 5;
 
 /** #1415: the host removes a joiner. Before the game starts only; the server checks who is asking. */
 export async function kickSandboxPlayer(roomCode: string, playerId: string): Promise<void> {
@@ -404,34 +420,24 @@ export async function joinSandboxRoom(
   return joinRoomDoc(roomCode, player.id, player);
 }
 
-/** Latches the room into play. Design note #527: the handover. */
-/** Design note #910: the host rewrites the table's house rules while the room is waiting.
+/** Design note #1128: arms or clears the forced-sign flag.
  *
- *  WHOLE OBJECT, NOT A FIELD PATCH. The variants are one agreement rather than five independent settings, and
- *  a per-field update would let two rapid clicks interleave into a config neither player chose. The caller
- *  already holds the complete resolved object.
- *  NOT GUARDED HERE. Whether the caller may write this is the SHELL's question -- it knows who the host is and
- *  whether the room is still waiting -- and duplicating that judgement in the writer would put the rule in two
- *  places. Firestore rules are the authority that matters, and `firestore.rules` still has no `sandbox_rooms`
- *  match at all, which is flagged for the Phase 5 audit rather than papered over here. */
-export async function setSandboxRoomVariants(
-  roomCode: string,
-  variants: GameVariants,
-): Promise<void> {
-  if (!roomDocOnServer()) return;
-  writeRoomDoc(roomCode, localPlayerId(), { op: "variants", variants });
-}
-
-/** Design note #1128: arms or clears the forced-sign flag. `null` is the clear, written by whichever client
- *  consumed it. */
+ *  LIVE-2A: A NO-OP. The server's `forced-sign` room write is DELETED (LIVE-2 §9.1, §9.4) -- the waiver it armed is
+ *  dropped and refused on every pinned (server-dealt) table anyway, and the chip that calls this renders only on an
+ *  unpinned Unpredictable Revenue board (`forcedSignToolInForce`). Kept as a function so its two callers stand until
+ *  LIVE-2D removes the chip; it sends nothing, so it can never draw a `bad-frame`.
+ *  (`setSandboxRoomVariants`, which had no caller since #1415, is deleted with the `variants` write.) */
 export async function setSandboxForcedSign(
   roomCode: string,
   stage: ForcedSignStage | null,
 ): Promise<void> {
-  if (!roomDocOnServer()) return;
-  writeRoomDoc(roomCode, localPlayerId(), { op: "forced-sign", stage });
+  void roomCode;
+  void stage;
 }
 
+/** Latches the room into play. Design note #527: the handover.
+ *  LIVE-2A: the server now sets `status: "playing"` itself when the deal is committed; this write is answered as a
+ *  server-derived echo (and repairs a room a crash left `waiting` behind its deal). LIVE-2D deletes it. */
 export async function markSandboxRoomPlaying(roomCode: string): Promise<void> {
   if (!roomDocOnServer()) return;
   writeRoomDoc(roomCode, localPlayerId(), { op: "status", status: "playing" });

@@ -66,7 +66,6 @@ jest.mock("../utils/roomDocLink", () => ({
     });
   },
   claimSeat: () => new Promise(() => {}),
-  findSeatsByPin: () => new Promise(() => {}),
 }));
 
 const PLAYERS = [

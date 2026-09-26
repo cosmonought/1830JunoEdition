@@ -221,8 +221,10 @@ describe("§16 message schema and compatibility", () => {
     [{ AnswerPrivateTrade: { private_id: DH } }, "AnswerPrivateTrade.accept is missing."],
     [{ AnswerPrivateTrade: { private_id: DH, accept: "yes" } }, "AnswerPrivateTrade.accept must be true or false."],
     [{ RescindPrivateTrade: { private_id: null } }, "RescindPrivateTrade.private_id must be a whole number."],
-    [{ RescindPrivateTrade: "x" }, "RescindPrivateTrade must carry an object."],
-    [{ RescindPrivateTrade: { private_id: DH }, RescindTrainPurchase: { seller_protocol_id: NYC } }, "A message names one action; that one names 2 (RescindPrivateTrade, RescindTrainPurchase)."],
+    /* LIVE-2A (LIVE-2 §11.4): these two answer with FIXED sentences now -- a refusal never echoes the frame's own
+       discriminants back. */
+    [{ RescindPrivateTrade: "x" }, "That action must carry an object."],
+    [{ RescindPrivateTrade: { private_id: DH }, RescindTrainPurchase: { seller_protocol_id: NYC } }, "A message names one action; that one names several."],
   ];
   for (const [msg, reason] of MALFORMED) {
     it(`structurally refused: ${reason}`, () => {

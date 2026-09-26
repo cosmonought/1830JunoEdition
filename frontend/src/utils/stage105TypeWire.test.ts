@@ -369,7 +369,8 @@ describe("B. the corporation-private offer: canonical new writes, legacy numbers
     // Both well-formed spellings are admitted by the schema.
     expect(validateGameplayMessage(proposeAt("100")).ok).toBe(true);
     expect(validateGameplayMessage(proposeAt(100)).ok).toBe(true);
-    expect(GAMEPLAY_MESSAGE_SCHEMA.ProposePrivatePurchase.price).toBe("finite|string");
+    // LIVE-2A (LIVE-2 §11.3): the string spelling is a bounded `amount` (<= 32) now; the shape is otherwise the same.
+    expect(GAMEPLAY_MESSAGE_SCHEMA.ProposePrivatePurchase.price).toBe("finite|amount");
     expect(isWholeVgp("100") && isWholeVgp(100)).toBe(true);
   });
 
@@ -390,8 +391,9 @@ describe("B. the neighbours are not migrated", () => {
     const owed = nextDerivedAction({ state: accepted, mapGrid: GRID, emitted: new Set() })!;
     expect(owed.msg).toMatchObject({ BuyTrainFromCorporation: { buyer_protocol_id: PRR, seller_protocol_id: NYC, model_type: "3", price: "150" } });
     expect(trainSettlementMatches(accepted.train_purchase_offer!, { buyer_protocol_id: PRR, seller_protocol_id: NYC, model_type: "3", price: "150" })).toBe(true);
-    expect(GAMEPLAY_MESSAGE_SCHEMA.ProposeTrainPurchase.price).toBe("string");
-    expect(GAMEPLAY_MESSAGE_SCHEMA.BuyTrainFromCorporation.price).toBe("string");
+    // LIVE-2A (§11.3): still a string, now a bounded `amount`.
+    expect(GAMEPLAY_MESSAGE_SCHEMA.ProposeTrainPurchase.price).toBe("amount");
+    expect(GAMEPLAY_MESSAGE_SCHEMA.BuyTrainFromCorporation.price).toBe("amount");
   });
 
   it("B6.9: the player <-> player trade keeps its whole-number price (and $0 stays legal there)", () => {

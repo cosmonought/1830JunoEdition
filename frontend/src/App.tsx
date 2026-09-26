@@ -9020,6 +9020,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
       localId,
       sandboxRoom?.hostId === localId,
       describeLoggedAction,
+      /* LIVE-2A (LIVE-2 §9.2): the board, so the button disables at GameEnd with the server's own sentence. */
+      sandboxStateRef.current ?? undefined,
     );
     return reach.index === null ? (reach.blockedReason ?? "There is nothing to undo.") : null;
     // sandboxAppliedCount is the real dependency and the linter cannot see it:
@@ -9039,6 +9041,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
       localId,
       sandboxRoom?.hostId === localId,
       (action) => describeLoggedAction(action),
+      sandboxStateRef.current ?? undefined,
     );
     if (reach.index === null) {
       logInfo("Undo", reach.blockedReason ?? "There is nothing to undo.");

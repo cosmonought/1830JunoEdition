@@ -31,6 +31,7 @@ import {
   Client,
   SETUP,
   controlledStore,
+  hostedDoc,
   probeSession,
   quietConsole,
   sleep,
@@ -49,6 +50,12 @@ const LOG = `${ROOM}.log.jsonl`;
 function tmpDir(tag: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), `live3b-${tag}-`));
 }
+/** LIVE-2A (LIVE-2 §15 #9): the room's document, hosted by Alice, written beside its log before the server starts --
+ *  a deal is taken only by a hosted room now. Written directly, so no store write is counted against a test. */
+function seedHostedRoom(dir: string): void {
+  fs.writeFileSync(path.join(dir, `${ROOM}.room.json`), JSON.stringify(hostedDoc(ROOM, ALICE)));
+}
+
 function withDir<T>(tag: string, body: (dir: string) => Promise<T>): Promise<T> {
   const dir = tmpDir(tag);
   return body(dir).finally(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -603,6 +610,7 @@ describe("durable room-document replacement (§8.7)", () => {
 describe("the server over the hardened store", () => {
   test("E-11 with the real file store: a write held at the disk holds the game, issues no second write, and lands once", () =>
     withDir("e11", async (dir) => {
+      seedHostedRoom(dir); // LIVE-2A: a room nobody hosted is not dealt (§15 #9)
       let release: () => void = () => undefined;
       let holding = false;
       const gate = () => (holding ? new Promise<void>((resolve) => (release = resolve)) : undefined);
@@ -684,6 +692,7 @@ describe("the server over the hardened store", () => {
 
   test("the 3A regressions over the real file store: the smoke shape, a restart, and the file one entry per line", () =>
     withDir("restart", async (dir) => {
+      seedHostedRoom(dir); // LIVE-2A: a room nobody hosted is not dealt (§15 #9)
       const first = await startServer({ store: createFileLogStore(dir, quiet) });
       const alice = await Client.open(first.port, ALICE);
       alice.hello(ROOM);

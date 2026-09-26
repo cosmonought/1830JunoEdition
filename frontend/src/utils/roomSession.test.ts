@@ -274,10 +274,21 @@ describe("a room is pinned to the reducer that dealt it (#1252)", () => {
   });
 
   it("a reverted deal pins nothing", () => {
+    /* LIVE-2A (LIVE-2 §9.2, RV-5): a live submit can no longer revert the deal -- the deal is the floor. The fact
+       this case pins is about STORED history, which is replayed without the authority: a log that already holds
+       a revert of its deal (every room before LIVE-2A could write one) restores to no pin. */
     const room = session();
     submit(room, { msg: dealNaming(BUILD) });
-    submit(room, { actor: ALICE, msg: { RevertTo: { index: 0, player: ALICE, summary: "x" } } as never });
-    expect(room.dealtBuild()).toBeNull();
+    const refused = submit(room, { actor: ALICE, msg: { RevertTo: { index: 0, player: ALICE, summary: "x" } } as never });
+    expect((refused as { kind: string }).kind).toBe("refused");
+    expect(room.dealtBuild()).toBe(BUILD);
+    const stored = [
+      room.entries[0],
+      { index: 1, id: "stored-revert", actor: ALICE, payload: JSON.stringify({ RevertTo: { index: 0, player: ALICE, summary: "x" } }), at: 0 },
+    ];
+    const restored = session();
+    restored.restore(stored as never);
+    expect(restored.dealtBuild()).toBeNull();
   });
 });
 

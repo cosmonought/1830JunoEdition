@@ -209,6 +209,34 @@ async function main(): Promise<void> {
     bound,
   );
 
+  /* LIVE-2A (LIVE-2 §15 #9): A ROOM NOBODY HOSTED IS NOT DEALT. A hello to an invented code used to take a deal
+     from anybody; now the deal is refused and nothing is stored. SMOKE is then hosted by Alice, exactly as the Host
+     button does, before the deal below. */
+  {
+    const stranger = await connect(CAROL, "UNHOSTED");
+    await stranger.next();
+    stranger.send({
+      kind: "submit",
+      build: BUILD,
+      baseIndex: -1,
+      submissionId: "docless-deal",
+      msg: { SetupGame: { players: [{ id: CAROL, nickname: "Carol" }, { id: BOB, nickname: "Bob" }], variants: {} } },
+    });
+    const docless = await stranger.next();
+    check(
+      "a deal in a room nobody hosted is refused, and names why (LIVE-2A)",
+      docless.kind === "refused" && /no host/.test(String(docless.reason)),
+      docless,
+    );
+    stranger.socket.close();
+    const smokeHost = await connectRoom(ALICE, "SMOKE");
+    smokeHost.write({ op: "host", hostId: ALICE, nickname: "Alice", variants: {} });
+    await smokeHost.next(); // the hello's answer: no room yet
+    const smokeHosted = await smokeHost.next();
+    check("Alice hosts SMOKE before dealing it (LIVE-2A)", roster(smokeHosted).length === 1, smokeHosted);
+    smokeHost.socket.close();
+  }
+
   const alice = await connect(ALICE, "SMOKE");
   const bob = await connect(BOB, "SMOKE");
 
@@ -347,6 +375,7 @@ async function main(): Promise<void> {
     kind: "submit",
     build: "some-other-build",
     baseIndex: 2,
+    submissionId: "skew-1", // LIVE-2A (LIVE-2 §11.3): every submit names its submission
     msg: { PassTurn: { game_id: 0 } },
   });
   const skew = await alice.next();
@@ -712,7 +741,23 @@ async function durableBeforeVisible(): Promise<void> {
         await held.opened;
       }
     },
-    loadRoomDoc: async () => null,
+    /* LIVE-2A (LIVE-2 §15 #9): the room is hosted by Alice, so it can be dealt. */
+    loadRoomDoc: async (code) =>
+      code === "LIVE3A"
+        ? ({
+            code,
+            hostId: ALICE,
+            status: "waiting",
+            players: [{ id: ALICE, nickname: "Alice", isReady: false }],
+            variants: {},
+            forcedSign: null,
+            visibility: "public",
+            playerCount: null,
+            anteUjuno: "0",
+            createdAtMs: 0,
+            kicked: [],
+          } as never)
+        : null,
     saveRoomDoc: async () => undefined,
   };
   const server = createGameServer({ port: 0, build: BUILD, resolveIdentity: trustClaimedIdentity, store });

@@ -604,7 +604,6 @@ describe("#1651 three families, on the same boundary", () => {
     const migrated = [
       "HostSetupCard",
       "JoinGameCard",
-      "RejoinByPinCard",
       "MarketPeekModal",
       "BuyLicenseModal",
       "HeraldHomeFloatModal",

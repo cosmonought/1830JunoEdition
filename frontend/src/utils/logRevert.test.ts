@@ -134,10 +134,22 @@ describe("effectiveActions", () => {
   });
 });
 
+/* LIVE-2A (LIVE-2 §9.2, RV-2/RV-5): Undo has a floor at the deal, so every reach below is asked of a DEALT log --
+   the deal sits before the first entry each case builds, marked derived so it is never the entry a press lands on
+   (the deal-floor refusals themselves are `live2aRevert.test.ts`'s). */
+const DEAL: RevertableAction = {
+  index: -1,
+  id: "deal",
+  actor: ADA,
+  payload: JSON.stringify({ SetupGame: { players: [] } }),
+  derived: true,
+};
+const dealt = (log: readonly RevertableAction[]): RevertableAction[] => [DEAL, ...log];
+
 describe("undoReachFor", () => {
   it("lets a player take back their own last action", () => {
     const log = [act(0, BEN), act(1, ADA)];
-    const reach = undoReachFor(log, ADA, false, describe_);
+    const reach = undoReachFor(dealt(log), ADA, false, describe_);
     expect(reach.index).toBe(1);
     expect(reach.summary).toBe("action 1");
   });
@@ -147,7 +159,7 @@ describe("undoReachFor", () => {
        those back too, silently. The message says so rather than the button
        simply failing. */
     const log = [act(0, ADA), act(1, BEN)];
-    const reach = undoReachFor(log, ADA, false, describe_);
+    const reach = undoReachFor(dealt(log), ADA, false, describe_);
     expect(reach.index).toBeNull();
     expect(reach.blockedReason).toMatch(/only the host/i);
   });
@@ -156,7 +168,7 @@ describe("undoReachFor", () => {
     // Design note #592: the protection against a bad host is social, and the
     // log records every revert with the name of whoever asked.
     const log = [act(0, ADA), act(1, BEN)];
-    expect(undoReachFor(log, ADA, true, describe_).index).toBe(1);
+    expect(undoReachFor(dealt(log), ADA, true, describe_).index).toBe(1);
   });
 
   it("says so plainly when nothing has happened yet", () => {
@@ -165,7 +177,7 @@ describe("undoReachFor", () => {
 
   it("distinguishes 'you have not acted' from 'you have been overtaken'", () => {
     const log = [act(0, BEN), act(1, BEN)];
-    expect(undoReachFor(log, ADA, false, describe_).blockedReason).toMatch(/not taken an action/i);
+    expect(undoReachFor(dealt(log), ADA, false, describe_).blockedReason).toMatch(/not taken an action/i);
   });
 
   it("reads the ALREADY-undone log, not the raw one", () => {
@@ -173,7 +185,7 @@ describe("undoReachFor", () => {
        0 -- and if this asked the raw log it would offer to undo an action
        that has already been taken back. */
     const log = [act(0, ADA), act(1, ADA), revert(2, 1, ADA)];
-    expect(undoReachFor(log, ADA, false, describe_).index).toBe(0);
+    expect(undoReachFor(dealt(log), ADA, false, describe_).index).toBe(0);
   });
 
   /* ==================================================================
@@ -199,26 +211,26 @@ describe("undoReachFor", () => {
     /* Ada lays a tile; the game then skips Tokens and Routes for her. The
        press must land on the tile lay -- index 0 -- not on the skip at 2. */
     const log = [act(0, ADA, "LayTile"), derived(1, ADA), derived(2, ADA)];
-    expect(undoReachFor(log, ADA, false, describe_).index).toBe(0);
+    expect(undoReachFor(dealt(log), ADA, false, describe_).index).toBe(0);
   });
 
   it("quotes the decision, not the step the game walked onto", () => {
     const log = [act(0, ADA, "LayTile"), derived(1, ADA)];
-    expect(undoReachFor(log, ADA, false, describe_).summary).toBe("action 0");
+    expect(undoReachFor(dealt(log), ADA, false, describe_).summary).toBe("action 0");
   });
 
   it("still lands on a MANUAL skip, which is a decision", () => {
     /* The Skip button dispatches the same message. #439's split entry points
        are what keep the two apart, and the flag is the whole difference. */
     const log = [act(0, ADA, "LayTile"), act(1, ADA, "AdvanceOperatingSubPhase")];
-    expect(undoReachFor(log, ADA, false, describe_).index).toBe(1);
+    expect(undoReachFor(dealt(log), ADA, false, describe_).index).toBe(1);
   });
 
   it("does not let the host land on a derived action either", () => {
     /* The reported case: Player 1 was the host, so the host branch reached
        the top entry -- the auto-skip -- and reverted that. */
     const log = [act(0, BEN, "LayTile"), derived(1, BEN), derived(2, BEN)];
-    expect(undoReachFor(log, ADA, true, describe_).index).toBe(0);
+    expect(undoReachFor(dealt(log), ADA, true, describe_).index).toBe(0);
   });
 
   it("judges ownership on the action it would land on, not the top entry", () => {
@@ -226,7 +238,7 @@ describe("undoReachFor", () => {
        player id. Judging by the top entry told Ada "other players have acted
        since your last move" about the game's own bookkeeping. */
     const log = [act(0, ADA, "LayTile"), derived(1, "juno1prr")];
-    const reach = undoReachFor(log, ADA, false, describe_);
+    const reach = undoReachFor(dealt(log), ADA, false, describe_);
     expect(reach.index).toBe(0);
     expect(reach.blockedReason).toBeNull();
   });
@@ -235,12 +247,12 @@ describe("undoReachFor", () => {
     // The protection #592 added is unchanged: derived entries are stepped
     // over, another player's move is not.
     const log = [act(0, ADA), act(1, BEN), derived(2, BEN)];
-    expect(undoReachFor(log, ADA, false, describe_).index).toBeNull();
+    expect(undoReachFor(dealt(log), ADA, false, describe_).index).toBeNull();
   });
 
   it("says so plainly when the game has acted and nobody else has", () => {
     const log = [derived(0, ADA), derived(1, ADA)];
-    const reach = undoReachFor(log, ADA, true, describe_);
+    const reach = undoReachFor(dealt(log), ADA, true, describe_);
     expect(reach.index).toBeNull();
     expect(reach.blockedReason).toMatch(/taken by the game/i);
   });
@@ -251,7 +263,7 @@ describe("undoReachFor", () => {
        way round, an old room would have nothing undoable in it. */
     const log = [act(0, ADA, "LayTile"), act(1, ADA, "AdvanceOperatingSubPhase")];
     expect(log.every((entry) => entry.derived === undefined)).toBe(true);
-    expect(undoReachFor(log, ADA, false, describe_).index).toBe(1);
+    expect(undoReachFor(dealt(log), ADA, false, describe_).index).toBe(1);
   });
 
   it("leaves effectiveActions alone -- a derived action still happened", () => {

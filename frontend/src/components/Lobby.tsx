@@ -65,8 +65,8 @@ import {
   type SandboxRoomPlayer,
 } from "../utils/sandboxRoom";
 // Design note #1352: rejoin a seat from the lobby -- the PIN card over this room's roster, then a reload into it.
+// (LIVE-2A: #1355's PIN-first card, `RejoinByPinCard`, is deleted with the server's `find-seats`.)
 import { SeatPinModal } from "./SeatPinModal";
-import { RejoinByPinCard } from "./RejoinByPinCard";
 // #1415: the host's setup card -- type, pace, visibility, then the house rules -- before the room exists; and
 // the join card, the public list with the code box beside it.
 import { HostSetupCard } from "./HostSetupCard";
@@ -434,8 +434,6 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
      card, and on success the next load is pointed at the room (`writeSandboxResume`) before `adoptSeat`
      reloads into it as that seat. */
   const [rejoin, setRejoin] = useState<{ code: string; players: readonly SandboxRoomPlayer[] } | null>(null);
-  /* Design note #1355: the PIN-first card. Its "by room code" link hands off to the join form's path. */
-  const [rejoinByPin, setRejoinByPin] = useState(false);
   useEffect(() => {
     if (!rejoin) return undefined;
     return subscribeSandboxRoom(
@@ -956,7 +954,6 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
                   : undefined
               }
               onRejoin={roomDocOnServer() ? handleRejoinSandboxRoom : undefined}
-              onRejoinByPin={roomDocOnServer() ? () => setRejoinByPin(true) : undefined}
             />
           </div>
         </div>
@@ -1018,15 +1015,6 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
             handleRejoinSandboxRoom(code);
           }}
           onClearError={() => setSandboxRoomError(null)}
-        />
-      )}
-      {rejoinByPin && (
-        <RejoinByPinCard
-          onClose={() => setRejoinByPin(false)}
-          onRejoinByCode={() => {
-            setRejoinByPin(false);
-            setSandboxRoomError("Type the room code, then press Rejoin seat.");
-          }}
         />
       )}
       {/* Design note #1352: the PIN card over the room's roster, from the lobby. */}

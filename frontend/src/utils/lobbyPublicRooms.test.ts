@@ -102,10 +102,13 @@ describe("public is browsed, private is told (design note #1440)", () => {
 
   it("rejoin stays its own door, not a row in the list", () => {
     /* RULED: "Keep Rejoin Game / Rejoin Seat findable as a distinct returning-player path; do not make
-       someone browse public rooms to reclaim a seat." Both survive: the bar's own PIN-first button (#1355)
-       and the by-code rejoin inside the dialog (#1352). */
-    expect(LOBBY).toContain("onRejoinByPin={roomDocOnServer() ? () => setRejoinByPin(true) : undefined}");
-    expect(LOBBY).toContain("<RejoinByPinCard");
+       someone browse public rooms to reclaim a seat." LIVE-2A (LIVE-2 §10.5, §15 #6): the PIN-first button (#1355)
+       is deleted with the server's `find-seats` PIN oracle; the by-code rejoin (#1352) -- code, then the seat's
+       PIN -- stays, in the join dialog and the bar, as the returning player's own door. */
+    expect(LOBBY).toContain("onRejoin={roomDocOnServer() ? handleRejoinSandboxRoom : undefined}");
+    expect(LOBBY).toContain("<SeatPinModal");
+    expect(LOBBY).not.toContain("RejoinByPinCard");
+    expect(LOBBY).not.toContain("onRejoinByPin");
     expect(LIST).not.toContain("Rejoin");
   });
 });

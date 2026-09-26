@@ -119,7 +119,8 @@ describe("the lobby's cards can be clicked (design note #1360)", () => {
     const LOBBY = readStripped("components/Lobby.tsx");
     const sceneOpens = LOBBY.indexOf("<div style={styles.sceneClip}");
     const content = LOBBY.indexOf("<div style={styles.content}>");
-    for (const mount of ["<RejoinByPinCard", "<SeatPinModal"]) {
+    // LIVE-2A: `RejoinByPinCard` (#1355) is deleted; the by-code `SeatPinModal` is the lobby's one PIN card.
+    for (const mount of ["<SeatPinModal"]) {
       const at = LOBBY.indexOf(mount);
       expect(at).toBeGreaterThan(sceneOpens);
       expect(at).toBeLessThan(content);
@@ -127,7 +128,6 @@ describe("the lobby's cards can be clicked (design note #1360)", () => {
       const between = LOBBY.slice(sceneOpens, at);
       expect(between.lastIndexOf("</div>")).toBeGreaterThan(-1);
     }
-    expect(readStripped("components/RejoinByPinCard.tsx")).toContain('pointerEvents: "auto"');
     expect(readStripped("components/SeatPinModal.tsx")).toContain('pointerEvents: "auto"');
   });
 });

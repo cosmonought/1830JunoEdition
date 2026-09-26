@@ -133,10 +133,11 @@ describe("the fields", () => {
     expect(ok({ BuyStock: { protocol_id: 1, source: "Ipo", par_value: 100 } })).toBe(false);
   });
 
-  it("allows a field the table does not name", () => {
+  it("allows a field the table does not name -- and does not carry it (LIVE-2A: strip, not refuse)", () => {
     /* DELIBERATE. The table was built from the declared types and corrected against the logs, and the logs
        carried fields the declarations do not mention. Refusing an unrecognised field would refuse real
-       traffic on the strength of an incomplete list. */
+       traffic on the strength of an incomplete list. LIVE-2 §11.2: it is STRIPPED at the parse instead, so it
+       never reaches the log (`ingressStrip.test.ts`). */
     expect(ok({ PassTurn: { game_id: 0, somethingNew: true } })).toBe(true);
   });
 });
@@ -146,17 +147,21 @@ describe("the frame envelope", () => {
     /* IT SKIPPED THE STALENESS CHECK. `RoomSession.submit` compares `baseIndex` with the log's length; a
        non-number made that comparison false, so a client arbitrarily far behind had its move applied on top
        of a board it had never seen. */
-    for (const baseIndex of ["abc", NaN, Infinity, undefined, null, 1.5, -2]) {
-      expect(validateSubmitEnvelope({ build: "dev", baseIndex }).ok).toBe(false);
+    for (const baseIndex of ["abc", NaN, Infinity, undefined, null, 1.5, -2, 1e300, 10_000_001]) {
+      expect(validateSubmitEnvelope({ build: "dev", baseIndex, submissionId: "x-1" }).ok).toBe(false);
     }
-    expect(validateSubmitEnvelope({ build: "dev", baseIndex: -1 }).ok).toBe(true);
-    expect(validateSubmitEnvelope({ build: "dev", baseIndex: 0 }).ok).toBe(true);
+    expect(validateSubmitEnvelope({ build: "dev", baseIndex: -1, submissionId: "x-1" }).ok).toBe(true);
+    expect(validateSubmitEnvelope({ build: "dev", baseIndex: 0, submissionId: "x-1" }).ok).toBe(true);
   });
 
   it("rejects a frame with no build, and a non-string submissionId", () => {
-    expect(validateSubmitEnvelope({ baseIndex: 0 }).ok).toBe(false);
+    expect(validateSubmitEnvelope({ baseIndex: 0, submissionId: "x-1" }).ok).toBe(false);
     expect(validateSubmitEnvelope({ build: "dev", baseIndex: 0, submissionId: 7 }).ok).toBe(false);
     expect(validateSubmitEnvelope({ build: "dev", baseIndex: 0, submissionId: "x-1" }).ok).toBe(true);
+    // LIVE-2A (LIVE-2 §11.3): `submissionId` is REQUIRED, and bounded to 64 of [A-Za-z0-9_-].
+    expect(validateSubmitEnvelope({ build: "dev", baseIndex: 0 }).ok).toBe(false);
+    expect(validateSubmitEnvelope({ build: "dev", baseIndex: 0, submissionId: "x".repeat(65) }).ok).toBe(false);
+    expect(validateSubmitEnvelope({ build: "dev", baseIndex: 0, submissionId: "a b" }).ok).toBe(false);
   });
 
   it("recognises only the frame kinds the server answers", () => {

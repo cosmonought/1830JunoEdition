@@ -548,6 +548,8 @@ export class RoomSession {
          cannot undo their way to a better face. `this.log` is that log. */
       rawLog: this.log,
       mintSeed: this.options.mintSeed,
+      /* LIVE-2A (LIVE-2 §9.2): the connection's actor, so a `RevertTo` names who pressed Undo. */
+      actor: input.actor ?? undefined,
     });
     const entry: ServerLogEntry = {
       ...mintLogEntry({

@@ -210,7 +210,9 @@ describe("the server enforces the terms (design note #1415)", () => {
     expect(kick).toContain('existing.status !== "waiting"');
     expect(kick).toContain("write.playerId === existing.hostId");
     expect(kick).toContain("kicked: [...(existing.kicked ?? []), write.playerId]");
-    expect(SERVER).toContain("applyRoomWrite(frame.room, frame.write, roomDocActors.get(socket))");
+    // LIVE-2A (§15 #2): applied to the socket's OWN room, read from server state -- never the frame's `room`.
+    expect(SERVER).toContain("applyRoomWrite(room, frame.write, actor, dealt)");
+    expect(SERVER).toContain("const room = roomDocSockets.get(socket);");
   });
 
   it("lists only rooms that chose to be public, and pushes the list on every write", () => {

@@ -49,7 +49,7 @@ import { BO_TICKER } from "./gameConstants";
    once, and the same-turn timing the base game's rule states -- the same predicate the reducer's arm asks, so
    ingress and the arm cannot disagree about a D&H free-station refusal. */
 import { dhStationRefusal } from "./dhStationAuthority";
-import { effectiveActions, type RevertableAction } from "./logRevert";
+import { revertRefusal, type RevertableAction } from "./logRevert";
 import { pendingDiscardBlock, pendingTrainDiscards } from "./trainDiscard";
 import {
   declareBankruptcyRefusal,
@@ -552,7 +552,16 @@ function roomMessageRefusal(input: TurnAuthorityInput, actor: string): string | 
     /* #538's rule read from the other side -- "a room's roster is not the fixture, corrected; it is nothing,
        until the log says otherwise" -- so a non-empty roster IS the record that the deal has happened. */
     if (state.player_addresses.length > 0) return "This game has already been dealt.";
-    if (host !== undefined && host !== null && actor !== host) return "Only the host can start the game.";
+    /* LIVE-2A (LIVE-2 §13.4 step 1, §15 #9): A ROOM NOBODY HOSTED IS NOT DEALT. `null` is the server saying the
+       room has no document -- a `hello` to an invented code -- and the deal used to go through anyway (LIVE-2
+       Appendix A.3). `undefined` (a test, a CLI replay) still skips the host question, on #232's rule. */
+    if (host === null) return "This room has no host, so it cannot be dealt. Host a room and start it from there.";
+    if (host !== undefined && actor !== host) return "Only the host can start the game.";
+    /* LIVE-2A (§15 #10, interim until LIVE-2C builds the deal on the server): ONE SEAT PER PLAYER. The reducer keeps
+       its count-only check -- adding this there would change how stored logs replay -- so ingress refuses a roster
+       that names one player twice. */
+    const ids = msg.SetupGame.players.map((player) => player.id);
+    if (new Set(ids).size !== ids.length) return "Every seat at the table must be a different player.";
     return null;
   }
 
@@ -593,18 +602,19 @@ function roomMessageRefusal(input: TurnAuthorityInput, actor: string): string | 
     return null;
   }
 
+  /* LIVE-2A (LIVE-2 §9.2): THE ONE REVERT PREDICATE, shared with `undoReachFor` -- the deal floor, the ended game,
+     a live non-revert target, one step at a time, and the host's reach over anyone's last action. The host no
+     longer reverts to any index: `index: 0` (the deal), `-5` (every entry) and `99` (a do-nothing entry past the
+     end) were all accepted (LIVE-2 Appendix A.3). */
   if ("RevertTo" in msg) {
     if (log === undefined) return null;
-    if (host !== undefined && host !== null && actor === host) return null;
-    const { index } = msg.RevertTo;
-    const live = effectiveActions(log);
-    const target = live.find((entry) => entry.index === index) ?? null;
-    if (target === null) return "There is nothing at that point in the log to undo.";
-    const last = [...live].reverse().find((entry) => entry.derived !== true) ?? null;
-    if (last === null || last.index !== target.index || target.actor !== actor) {
-      return "Other players have acted since your last move. Only the host can undo past somebody else's turn.";
-    }
-    return null;
+    return revertRefusal({
+      log,
+      index: msg.RevertTo.index,
+      actor,
+      isHost: host !== undefined && host !== null && actor === host,
+      board: state,
+    });
   }
 
   if ("CloseRoom" in msg) {

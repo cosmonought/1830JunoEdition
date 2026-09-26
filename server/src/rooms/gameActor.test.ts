@@ -35,6 +35,8 @@ import {
   PASS,
   SETUP,
   controlledStore,
+  hostRoom,
+  hostedDoc,
   probeSession,
   quietConsole,
   sleep,
@@ -278,6 +280,7 @@ describe("durable before visible", () => {
     control.control.holdAppends = true;
     const { server, port } = await startServer({ store: control.store });
     try {
+      await hostRoom(port, ROOM); // LIVE-2A: a room nobody hosted is not dealt (§15 #9)
       const alice = await Client.open(port, ALICE);
       alice.hello(ROOM);
       assert.deepEqual((await alice.next((f) => f.kind === "catch-up")).inFlight, []);
@@ -326,6 +329,7 @@ describe("durable before visible", () => {
     control.control.holdAppends = true;
     const { server, port } = await startServer({ store: control.store });
     try {
+      await hostRoom(port, ROOM); // LIVE-2A: a room nobody hosted is not dealt (§15 #9)
       const alice = await Client.open(port, ALICE);
       const bob = await Client.open(port, BOB);
       const tab = await Client.open(port, ALICE);
@@ -426,6 +430,7 @@ describe("durable before visible", () => {
         .map((line) => (JSON.parse(line) as SeenEntry).index);
     try {
       const { server, port } = await startServer({ store });
+      await hostRoom(port, ROOM); // LIVE-2A: a room nobody hosted is not dealt (§15 #9)
       const alice = await Client.open(port, ALICE);
       alice.hello(ROOM);
       await alice.next((f) => f.kind === "catch-up");
@@ -569,6 +574,7 @@ describe("sockets that go away (E-8, §4.2)", () => {
     control.control.holdAppends = true;
     const { server, port } = await startServer({ store: control.store });
     try {
+      await hostRoom(port, ROOM); // LIVE-2A: a room nobody hosted is not dealt (§15 #9)
       const alice = await Client.open(port, ALICE);
       alice.hello(ROOM);
       await alice.next((f) => f.kind === "catch-up");
@@ -597,6 +603,7 @@ describe("sockets that go away (E-8, §4.2)", () => {
     control.control.holdAppends = true;
     const { server, port } = await startServer({ store: control.store });
     try {
+      await hostRoom(port, ROOM); // LIVE-2A: a room nobody hosted is not dealt (§15 #9)
       const bob = await Client.open(port, BOB);
       bob.hello(ROOM);
       await bob.next((f) => f.kind === "catch-up");
@@ -634,6 +641,7 @@ describe("sockets that go away (E-8, §4.2)", () => {
     control.control.holdAppends = true;
     const { server, port } = await startServer({ store: control.store });
     try {
+      await hostRoom(port, ROOM); // LIVE-2A: a room nobody hosted is not dealt (§15 #9)
       const alice = await Client.open(port, ALICE);
       alice.hello(ROOM);
       await alice.next((f) => f.kind === "catch-up");
@@ -714,6 +722,7 @@ describe("a reconnect that overtakes its old socket's close (half-open)", () => 
 describe("the point of no return (E-9, E-13)", () => {
   test("20, 21 (F-13): a reducer that throws after the push is rolled back -- refused, and stored and sent nowhere", async () => {
     const control = controlledStore();
+    control.docs.set(ROOM, JSON.stringify(hostedDoc(ROOM))); // LIVE-2A: hosted, so it can be dealt (§15 #9)
     const { server, port } = await startServer({ store: control.store });
     const original = RoomEngine.prototype.submit;
     let armed = true;
@@ -754,6 +763,7 @@ describe("the point of no return (E-9, E-13)", () => {
 
   test("22 (E-13): a commit whose next view cannot be built is published from the store, and answered applied", async () => {
     const control = controlledStore();
+    control.docs.set(ROOM, JSON.stringify(hostedDoc(ROOM))); // LIVE-2A: hosted, so it can be dealt (§15 #9)
     let armed = false;
     const { server, port } = await startServer({
       store: control.store,
@@ -795,6 +805,7 @@ describe("the point of no return (E-9, E-13)", () => {
     control.control.failAppends.push({ landed: false });
     const { server, port } = await startServer({ store: control.store });
     try {
+      await hostRoom(port, ROOM); // LIVE-2A: a room nobody hosted is not dealt (§15 #9)
       const bob = await Client.open(port, BOB);
       bob.hello(ROOM);
       await bob.next((f) => f.kind === "catch-up");
@@ -818,6 +829,7 @@ describe("the point of no return (E-9, E-13)", () => {
 
   test("21 (LIVE-3B): an append the store could not settle is `unavailable` and held for a restart -- never read back, never 'refused but stored'", async () => {
     const control = controlledStore();
+    control.docs.set(ROOM, JSON.stringify(hostedDoc(ROOM))); // LIVE-2A: hosted, so it can be dealt (§15 #9)
     // The bytes reached the file, then an error the store's own redo could not settle.
     control.control.failAppends.push({ landed: true });
     const restarts: string[] = [];
@@ -874,6 +886,7 @@ describe("E-11: a store call that does not answer in time (LIVE-3B)", () => {
     control.control.holdAppends = true;
     const { server, port } = await startServer({ store: control.store, storeTimeoutMs: 60 });
     try {
+      await hostRoom(port, ROOM); // LIVE-2A: a room nobody hosted is not dealt (§15 #9)
       const bob = await Client.open(port, BOB);
       bob.hello(ROOM);
       await bob.next((f) => f.kind === "catch-up");
@@ -931,6 +944,7 @@ describe("E-11: a store call that does not answer in time (LIVE-3B)", () => {
     control.control.holdAppends = true;
     const { server, port } = await startServer({ store: control.store, storeTimeoutMs: 40 });
     try {
+      await hostRoom(port, ROOM); // LIVE-2A: a room nobody hosted is not dealt (§15 #9)
       const alice = await Client.open(port, ALICE);
       alice.hello(ROOM);
       await alice.next((f) => f.kind === "catch-up");
@@ -955,6 +969,7 @@ describe("E-11: a store call that does not answer in time (LIVE-3B)", () => {
 
   test("31: a late append that never settles keeps the game unavailable and asks for a restart", async () => {
     const control = controlledStore();
+    control.docs.set(ROOM, JSON.stringify(hostedDoc(ROOM))); // LIVE-2A: hosted, so it can be dealt (§15 #9)
     control.control.holdAppends = true;
     const restarts: string[] = [];
     const { server, port } = await startServer({
@@ -1005,15 +1020,20 @@ describe("room authority is serialized with the moves (§21 LIVE-3A, F-10)", () 
       host.roomWrite(ROOM, { op: "host", hostId: ALICE, nickname: "Alice", variants: {} });
       await host.next((f) => f.kind === "room" && (f.doc as { hostId?: string } | null)?.hostId === ALICE);
       const usurper = await openRoomDoc(port, BOB, ROOM);
-      control.control.failSaves = 1;
+      /* LIVE-2A (§15 #3): the old takeover -- `host` over a room that exists -- is refused before any save. */
       usurper.roomWrite(ROOM, { op: "host", hostId: BOB, nickname: "Bob", variants: {} });
+      assert.equal((await usurper.next((f) => f.kind === "error")).code, "room-code-taken");
+      assert.equal(control.doc(ROOM)?.hostId, ALICE);
+      // A write the store refuses -- Bob's join -- leaves the previous document authoritative.
+      control.control.failSaves = 1;
+      usurper.roomWrite(ROOM, { op: "upsert-player", player: { id: BOB, nickname: "Bob", isReady: false } });
       const refusal = await usurper.next((f) => f.kind === "error");
       assert.equal(refusal.code, "room-write-refused");
       const unchanged = await usurper.next((f) => f.kind === "room");
-      assert.equal((unchanged.doc as { hostId: string }).hostId, ALICE);
-      assert.equal(control.doc(ROOM)?.hostId, ALICE);
+      assert.deepEqual((unchanged.doc as { players: Array<{ id: string }> }).players.map((p) => p.id), [ALICE]);
+      assert.deepEqual(control.doc(ROOM)?.players.map((p) => p.id), [ALICE]);
       const fresh = await openRoomDoc(port, CAROL, ROOM);
-      assert.equal((fresh.of("room")[0].doc as { hostId: string }).hostId, ALICE);
+      assert.deepEqual((fresh.of("room")[0].doc as { players: Array<{ id: string }> }).players.map((p) => p.id), [ALICE]);
       // The seat PIN is authority too: a PIN the store refused is not set, and the hello gate does not ask for it.
       host.roomWrite(ROOM, { op: "upsert-player", player: { id: ALICE, nickname: "Alice", isReady: false } });
       await host.next((f) => f.kind === "room");
@@ -1045,7 +1065,8 @@ describe("room authority is serialized with the moves (§21 LIVE-3A, F-10)", () 
       const usurper = await openRoomDoc(port, BOB, ROOM);
       const loadsBefore = control.calls.loadRoomDoc;
       control.control.failSavesUncertain = 1; // the rename landed, then an error the redo could not settle
-      usurper.roomWrite(ROOM, { op: "host", hostId: BOB, nickname: "Bob", variants: {} });
+      // LIVE-2A: Bob's own join (a `host` over the room is refused before any save now, §15 #3).
+      usurper.roomWrite(ROOM, { op: "upsert-player", player: { id: BOB, nickname: "Bob", isReady: false } });
       const refusal = await usurper.next((f) => f.kind === "error");
       assert.equal(refusal.code, "room-write-refused");
       assert.match(String(refusal.reason), /could not confirm/);
@@ -1063,38 +1084,35 @@ describe("room authority is serialized with the moves (§21 LIVE-3A, F-10)", () 
   });
 
   test("24: a submit queued behind a room write is judged under the document that write committed -- or not", async () => {
+    /* LIVE-2A: no write can hand the host to somebody else any more (`host` never overwrites a room, §15 #3), so
+       the authority a queued submit depends on is the room's EXISTENCE: a deal is taken only by a hosted room
+       (§15 #9). The room's creation awaits the disk while the deal queues behind it. */
     for (const outcome of ["committed", "refused"] as const) {
       const control = controlledStore();
-      control.logs.set(ROOM, storedLog(1)); // [deal, alice's buy]
       const { server, port } = await startServer({ store: control.store });
       try {
-        const host = await openRoomDoc(port, ALICE, ROOM);
-        host.roomWrite(ROOM, { op: "host", hostId: ALICE, nickname: "Alice", variants: {} });
-        await host.next((f) => f.kind === "room" && f.doc !== null);
-        const bobDoc = await openRoomDoc(port, BOB, ROOM);
-        const bob = await Client.open(port, BOB);
-        bob.hello(ROOM);
-        await bob.next((f) => f.kind === "catch-up");
-
+        const alice = await Client.open(port, ALICE);
+        alice.hello(ROOM);
+        await alice.next((f) => f.kind === "catch-up");
+        const hostDoc = await openRoomDoc(port, ALICE, ROOM);
         control.control.holdSaves = true;
-        bobDoc.roomWrite(ROOM, { op: "host", hostId: BOB, nickname: "Bob", variants: {} }); // takes the host (legacy op)
+        hostDoc.roomWrite(ROOM, { op: "host", hostId: ALICE, nickname: "Alice", variants: {} });
         const save = await control.nextHeldSave();
-        // Bob asks to undo ALICE's move -- the host's power only -- while the host change awaits the disk.
-        bob.submit({ RevertTo: { index: 1, player: BOB, summary: "x" } }, { baseIndex: 1, submissionId: "undo" });
+        alice.submit(SETUP, { baseIndex: -1, submissionId: "deal" });
         await sleep(30);
-        assert.equal(bob.of("applied").length + bob.of("refused").length, 0, "the submit waits behind the room write");
+        assert.equal(alice.of("applied").length + alice.of("refused").length, 0, "the submit waits behind the room write");
         if (outcome === "committed") save.release();
         else save.fail();
-        const answer = await bob.answerTo("undo");
+        const answer = await alice.answerTo("deal");
         if (outcome === "committed") {
-          assert.equal(answer.kind, "applied", "judged under the committed document: Bob is host");
-          assert.deepEqual(control.indices(ROOM), [0, 1, 2]);
+          assert.equal(answer.kind, "applied", "judged under the committed document: the room has a host");
+          assert.deepEqual(control.indices(ROOM), [0]);
         } else {
-          assert.equal(answer.kind, "refused", "the refused save left Alice as host");
-          assert.match(String(answer.reason), /Only the host can undo/);
-          assert.deepEqual(control.indices(ROOM), [0, 1]);
+          assert.equal(answer.kind, "refused", "the refused save left the room without a host");
+          assert.match(String(answer.reason), /no host/);
+          assert.deepEqual(control.indices(ROOM), []);
         }
-        await Promise.all([host.close(), bobDoc.close(), bob.close()]);
+        await Promise.all([alice.close(), hostDoc.close()]);
       } finally {
         await stopServer(server);
       }
@@ -1107,6 +1125,7 @@ describe("restarts", () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "live3a-nonce-"));
     try {
       const first = await startServer({ store: createFileLogStore(directory) });
+      await hostRoom(first.port, ROOM); // LIVE-2A: a room nobody hosted is not dealt (§15 #9)
       const alice = await Client.open(first.port, ALICE);
       alice.hello(ROOM);
       await alice.next((f) => f.kind === "catch-up");

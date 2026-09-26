@@ -62,11 +62,9 @@ describe("the difference that made three controls lag", () => {
   it("leaves the compensated writers compensated", () => {
     /* The proof that this was never "rooms are slow": three writers to the SAME document through the SAME
        listener were always instant. */
-    for (const fn of [
-      "setSandboxRoomVariants",
-      "setSandboxForcedSign",
-      "markSandboxRoomPlaying",
-    ]) {
+    /* LIVE-2A: `setSandboxRoomVariants` is deleted and `setSandboxForcedSign` sends nothing (both server ops are
+       gone, LIVE-2 §9.1/§9.4); the one legacy writer left is the status echo. */
+    for (const fn of ["markSandboxRoomPlaying"]) {
       const body = sliceBetween(ROOM, `export async function ${fn}(`, "\n}");
       // #1361b: every writer is the same frame on the same socket; the echo is the server's fan-out.
       expect([fn, body.includes("writeRoomDoc(")]).toEqual([fn, true]);

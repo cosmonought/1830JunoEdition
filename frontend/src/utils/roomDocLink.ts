@@ -45,7 +45,6 @@
 
 import { CLIENT_BUILD_ID, GAME_SERVER_URL } from "../config";
 import type { GameVariants } from "../gameEngine/gameVariants";
-import type { ForcedSignStage } from "../gameEngine/yellowSign";
 import type { PresenceState } from "./presence";
 import { ROOM_WRITE_REFUSED_CODE, SEAT_SUPERSEDED_CODE, forgetSeat, readSeatPin, readSeatToken } from "./seatPin";
 import type {
@@ -96,8 +95,9 @@ export type RoomDocWrite =
       anteUjuno?: string;
     }
   | { op: "upsert-player"; player: SandboxRoomPlayer }
-  | { op: "variants"; variants: GameVariants }
-  | { op: "forced-sign"; stage: ForcedSignStage | null }
+  /* LIVE-2A: `variants` and `forced-sign` are DELETED -- the variants are fixed when the room is hosted, and the
+     forced sign was a playtest waiver a pinned table never honours. `status` is answered as a server-derived echo
+     (the server marks the room playing when the deal is committed) until LIVE-2D deletes it. */
   | { op: "status"; status: SandboxRoomStatus }
   /* #1415: the host removes a joiner. The server checks the writer is the host and the room is waiting. */
   | { op: "kick"; playerId: string };
@@ -137,21 +137,6 @@ export interface ClaimSeatRequest {
   requestId: string;
   playerId: string;
   pin: string;
-}
-
-/** Design note #1355: one seat that carries the PIN a player typed, anywhere on this server. */
-export interface FoundSeat {
-  room: string;
-  playerId: string;
-  nickname: string;
-  status: string;
-}
-
-export interface SeatsAnswerFrame {
-  kind: "seats";
-  requestId: string;
-  seats: FoundSeat[];
-  reason?: string;
 }
 
 export interface SeatAnswerFrame {
@@ -256,8 +241,6 @@ interface Connection {
   open: boolean;
   /** #1341: seat requests awaiting their answer, by `requestId`. */
   pending: Map<string, (answer: SeatAnswerFrame) => void>;
-  /** #1355: PIN lookups awaiting their answer. */
-  pendingSeats: Map<string, (answer: SeatsAnswerFrame) => void>;
   /** #1361: the reconnect, when one is scheduled; `null` once the connection is let go. */
   reconnect: number | null;
   attempts: number;
@@ -267,7 +250,13 @@ interface Connection {
   hosting: boolean;
   /** #1415: listeners for a write the room did not take (`ROOM_WRITE_REFUSED_CODE`). */
   refusals: Set<(reason: string) => void>;
+  /** LIVE-2A: listeners for the answer to this connection's own `host` write -- the room it created, or
+   *  `room-code-taken` (the code already names a room; the caller picks another). */
+  hostAnswers: Set<(answer: { ok: true } | { ok: false; reason: string; taken: boolean }) => void>;
 }
+
+/** LIVE-2A (LIVE-2 §13.4 step 1): the server's answer to a `host` over a room that already exists. */
+export const ROOM_CODE_TAKEN_CODE = "room-code-taken";
 
 const connections = new Map<string, Connection>();
 
@@ -354,19 +343,18 @@ function attach(room: string, connection: Connection): void {
          connection remembers that it sent a create; the first non-null document clears it. A join sends no
          `host` write and is unaffected; the shell's gate is untouched. */
       if (doc === null && connection.hosting) return;
+      /* LIVE-2A: AND NEITHER IS SOMEBODY ELSE'S ROOM. The server no longer lets `host` overwrite a room, so the
+         hello's answer for a code that is already taken is that room -- which is not this tab's, and must not be
+         painted as its waiting room. Only a room this connection hosts ends the wait; the refusal that follows
+         sends the host to a fresh code. */
+      if (doc !== null && connection.hosting && doc.hostId !== connection.claim) return;
       connection.hosting = false;
+      if (doc !== null && doc.hostId === connection.claim) {
+        connection.hostAnswers.forEach((settle) => settle({ ok: true }));
+      }
       connection.latest = doc;
       connection.heard = true;
       connection.listeners.forEach((listener) => listener(doc));
-      return;
-    }
-    if (frame.kind === "seats") {
-      const answer = frame as SeatsAnswerFrame;
-      const settle = connection.pendingSeats.get(answer.requestId);
-      if (settle) {
-        connection.pendingSeats.delete(answer.requestId);
-        settle(answer);
-      }
       return;
     }
     if (frame.kind === "seat") {
@@ -386,6 +374,12 @@ function attach(room: string, connection: Connection): void {
         return;
       }
       const reason = (frame as { reason?: string }).reason ?? "room error";
+      /* LIVE-2A: the code this tab tried to host is taken -- an answer to the host write, never a banner. */
+      if ((frame as { code?: string }).code === ROOM_CODE_TAKEN_CODE && connection.hostAnswers.size > 0) {
+        connection.hosting = false;
+        connection.hostAnswers.forEach((settle) => settle({ ok: false, reason, taken: true }));
+        return;
+      }
       /* #1415: a refused write is an answer to whoever wrote it, not a fault on the wire -- the join awaiting
          its seat, or the host whose kick was turned away -- so it goes to the refusal listeners and, when
          nobody is waiting, to the error line like any other. */
@@ -412,8 +406,6 @@ function attach(room: string, connection: Connection): void {
     // #1341: a request the wire dropped is answered as a refusal rather than left hanging.
     connection.pending.forEach((settle) => settle({ kind: "seat", requestId: "", ok: false, reason: "lost the connection to the game server" }));
     connection.pending.clear();
-    connection.pendingSeats.forEach((settle) => settle({ kind: "seats", requestId: "", seats: [], reason: "lost the connection to the game server" }));
-    connection.pendingSeats.clear();
     /* #1361: COME BACK IF ANYBODY IS STILL LISTENING. The connection object -- and every listener on it --
        survives the socket; only the socket is replaced. A connection nobody is listening to is let go, and
        the next `connect` for the room starts fresh. */
@@ -451,12 +443,12 @@ function connect(room: string, claim: string): Connection {
     backlog: [],
     open: false,
     pending: new Map(),
-    pendingSeats: new Map(),
     reconnect: null,
     attempts: 0,
     retired: false,
     hosting: false,
     refusals: new Set(),
+    hostAnswers: new Set(),
   };
   connections.set(room, connection);
   attach(room, connection);
@@ -587,6 +579,50 @@ export function writeRoomDoc(room: string, claim: string, write: RoomDocWrite): 
   sendTo(room, claim, { kind: "room-write", room, write });
 }
 
+/** LIVE-2A (LIVE-2 §13.4 step 1): a HOST is a write with an answer, like a join. The server creates the room, or
+ *  answers `room-code-taken` when the code already names one -- it no longer overwrites a room -- and the caller
+ *  (`hostSandboxRoom`) tries a fresh code. Resolved, never rejected, so the caller's sentence is the server's. */
+export function hostRoomDoc(
+  room: string,
+  claim: string,
+  write: Extract<RoomDocWrite, { op: "host" }>,
+): Promise<{ ok: true } | { ok: false; reason: string; taken: boolean }> {
+  const connection = connect(room, claim);
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (answer: { ok: true } | { ok: false; reason: string; taken: boolean }) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      connection.hostAnswers.delete(finish);
+      connection.refusals.delete(onRefused);
+      resolve(answer);
+    };
+    const onRefused = (reason: string) => finish({ ok: false, reason, taken: false });
+    const timer = window.setTimeout(
+      () => finish({ ok: false, reason: "The game server did not answer. Check the connection and try again.", taken: false }),
+      SEAT_REQUEST_TIMEOUT_MS,
+    );
+    connection.hostAnswers.add(finish);
+    connection.refusals.add(onRefused);
+    writeRoomDoc(room, claim, write);
+  });
+}
+
+/** LIVE-2A: let go of a room's connection for good -- the code a host found taken. Its listeners are dropped and
+ *  the socket closed, so it neither reconnects nor delivers the other room to anybody. */
+export function retireRoomDocLink(room: string): void {
+  const connection = connections.get(room);
+  if (!connection) return;
+  connection.retired = true;
+  if (connection.reconnect !== null) window.clearTimeout(connection.reconnect);
+  connection.listeners.clear();
+  connection.frames.clear();
+  connection.errors.clear();
+  connections.delete(room);
+  connection.socket.close();
+}
+
 /** #1415: a JOIN is a write with an answer. The upsert itself is fire-and-forget like every other write; what
  *  the joiner waits for is either the next document that seats them (ok) or the server's refusal (a full table,
  *  a kicked seat, a game already started). Resolved rather than rejected on refusal, like `askSeat`, so the
@@ -674,27 +710,8 @@ export function claimSeat(
   return askSeat(room, claim, { kind: "claim-seat", room, playerId, pin });
 }
 
-/* Design note #1355: THE LOBBY'S OWN SOCKET. A PIN lookup names no room, and every connection here is keyed by
-   one, so the lookup rides a connection to a room that does not exist -- the server answers its `room-hello`
-   with `doc: null` and thinks nothing more of it. Reused for the claim that follows a match. */
+/* Design note #1355: THE LOBBY'S OWN SOCKET. The public room list (`lobby-hello`) names no room, and every
+   connection here is keyed by one, so it rides a connection to a room that does not exist -- the server answers its
+   `room-hello` with `doc: null` and thinks nothing more of it. (LIVE-2A: the PIN lookup that also rode it,
+   `find-seats`, is deleted.) */
 export const LOBBY_ROOM_KEY = "~lobby";
-
-/** Every seat on the server that carries `pin`. */
-export function findSeatsByPin(claim: string, pin: string): Promise<SeatsAnswerFrame> {
-  const connection = connect(LOBBY_ROOM_KEY, claim);
-  const requestId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-  return new Promise((resolve) => {
-    const timer = window.setTimeout(() => {
-      if (!connection.pendingSeats.has(requestId)) return;
-      connection.pendingSeats.delete(requestId);
-      resolve({ kind: "seats", requestId, seats: [], reason: "The game server did not answer. Check the connection and try again." });
-    }, SEAT_REQUEST_TIMEOUT_MS);
-    connection.pendingSeats.set(requestId, (answer) => {
-      window.clearTimeout(timer);
-      resolve(answer);
-    });
-    const text = JSON.stringify({ kind: "find-seats", requestId, pin });
-    if (connection.open) connection.socket.send(text);
-    else connection.backlog.push(text);
-  });
-}

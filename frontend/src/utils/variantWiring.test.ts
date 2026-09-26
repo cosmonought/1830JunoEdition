@@ -51,15 +51,20 @@ describe("the room document carries the table's house rules (design note #910)",
     /* #1361b: the document lives on the game server and reaches every seat as one frame, so there is no
        per-client parse to default in; the writer sends the whole object and the server stores the whole
        object (#910: "one agreement, never a field patch"). */
-    expect(source).toContain('writeRoomDoc(roomCode, localPlayerId(), { op: "variants", variants });');
+    /* LIVE-2A (LIVE-2 §9.1, §13.2): the variants are FIXED WHEN THE ROOM IS HOSTED -- the `host` write carries the
+       whole object, the server stores it with the room, and every seat reads it off the one document. The
+       `variants` rewrite (no caller since #1415) is deleted, so no later write can change a table's terms. */
+    expect(source).toContain('op: "host",');
+    expect(source).not.toContain('op: "variants"');
     const fs = require("fs") as typeof import("fs");
     const path = require("path") as typeof import("path");
     const SERVER = fs.readFileSync(path.join(__dirname, "../../../server/src/gameServer.ts"), "utf8");
-    expect(SERVER).toContain("next = { ...existing, variants: write.variants };");
+    expect(SERVER).toContain("const variants = write.variants ?? STANDARD_VARIANTS;");
+    expect(SERVER).not.toContain("next = { ...existing, variants: write.variants };");
   });
 
-  it("has a writer for them", () => {
-    expect(source).toContain("setSandboxRoomVariants");
+  it("has no writer that rewrites them after the room is hosted (LIVE-2A)", () => {
+    expect(source).not.toContain("setSandboxRoomVariants");
   });
 
   it("opens a new room on the printed game", () => {

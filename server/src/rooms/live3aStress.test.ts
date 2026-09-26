@@ -37,6 +37,7 @@ import {
   probeSession,
   quietConsole,
   sleep,
+  hostedDoc,
   startServer,
   stopServer,
   until,
@@ -70,7 +71,8 @@ const STORE_TIMEOUT_MS = 12;
  *  definitely fail, half each. The log only grows, as a file does. */
 function faultyStore(random: () => number) {
   const log: ServerLogEntry[] = [];
-  let doc: string | null = null;
+  /* LIVE-2A (LIVE-2 §15 #9): the room is hosted by the player who deals it -- a doc-less deal is refused now. */
+  let doc: string | null = JSON.stringify(hostedDoc(ROOM, ALICE));
   const stats = { appends: 0, lost: 0, landed: 0, late: 0, inFlight: 0 };
   const appendBatch = async (_room: string, entries: readonly ServerLogEntry[]): Promise<StoreWriteOutcome> => {
     stats.appends += 1;
